@@ -41,9 +41,16 @@ wait_for(lambda: len(responses) == 1)
 value, metadata = responses.pop()
 assert metadata == {"name": b"README.md"}, metadata
 assert value == b"hello over rns\n"
+from RNS.Utilities.rngit.media import _webp_info
+link.request("/media", data={"key": b"image-key", "path": "/media/group/repo/HEAD/pixel.png"},
+             response_callback=received, timeout=15)
+wait_for(lambda: len(responses) == 1)
+value, metadata = responses.pop()
+assert metadata == {"name": b"pixel.webp"}, metadata
+assert _webp_info(value) == (2, 1)
 link.request("/media", data={"path": "/media/group/repo/HEAD/README.md"},
              response_callback=received, timeout=15)
 wait_for(lambda: len(responses) == 1)
 assert responses[0][0] is False
 link.teardown()
-print(f"Python {RNS.__version__}: media bytes, filename metadata and rejection passed", flush=True)
+print(f"Python {RNS.__version__}: media bytes, PNG-to-WebP conversion, filename metadata and rejection passed", flush=True)

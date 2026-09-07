@@ -774,6 +774,7 @@ fn cfg(root: &Path) -> ServerConfig {
         serve_nomadnet: true,
         templates_dir: root.join("templates"),
         unicode_icons: false,
+        media_conversion: true,
         record_stats: false,
         stats_ignore_identities: Vec::new(),
         stats_push_ignore_identities: Vec::new(),

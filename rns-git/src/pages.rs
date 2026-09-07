@@ -1695,14 +1695,30 @@ pub fn serve_media(
         return Ok(rejected());
     }
     let name = path.rsplit('/').next().unwrap_or(&path);
+    let (data, name) = media_response_data(config.media_conversion, &path, name, output.stdout);
     Ok(RequestResponse::File {
-        data: output.stdout,
+        data,
         metadata: msgpack::pack(&Value::Map(vec![(
             Value::Str("name".into()),
             Value::Bin(name.as_bytes().to_vec()),
         )])),
         auto_compress: false,
     })
+}
+
+fn media_response_data(
+    enabled: bool,
+    path: &str,
+    name: &str,
+    original: Vec<u8>,
+) -> (Vec<u8>, String) {
+    if enabled && is_image_path(path) && !path.to_ascii_lowercase().ends_with(".webp") {
+        if let Some(converted) = crate::media::convert_to_webp(&original) {
+            let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name);
+            return (converted, format!("{stem}.webp"));
+        }
+    }
+    (original, name.to_string())
 }
 
 pub fn download_file(
@@ -3280,6 +3296,21 @@ mod tests {
     use super::*;
     use crate::acl::Access;
     use crate::config::ServerConfig;
+
+    #[test]
+    fn media_preserves_original_for_disabled_webp_nonimage_and_failed_conversion() {
+        for (enabled, name) in [
+            (false, "test.png"),
+            (true, "test.WEBP"),
+            (true, "test.txt"),
+            (true, "bad.png"),
+        ] {
+            let original = b"not an image".to_vec();
+            let (bytes, response_name) = media_response_data(enabled, name, name, original.clone());
+            assert_eq!(bytes, original);
+            assert_eq!(response_name, name);
+        }
+    }
 
     #[test]
     fn media_serves_decoded_blob_with_filename_and_checks_access() {
@@ -4932,6 +4963,7 @@ Unmatched * marker\n\
             serve_nomadnet: true,
             templates_dir: root.join("templates"),
             unicode_icons: false,
+            media_conversion: true,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
             stats_push_ignore_identities: Vec::new(),

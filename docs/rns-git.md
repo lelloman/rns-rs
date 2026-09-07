@@ -58,7 +58,21 @@ Important config paths:
   width handling.
   Blob pages for `.md` and `.mu` files default to rendered output and include
   rendered/raw view controls. Unsupported text blobs remain source views, with
-  binary and oversized blobs kept on safe fallback messages.
+  oversized text and non-image binary blobs kept on fallback messages.
+  Binary image blobs render Micron media previews through `/media`. The media
+  endpoint accepts a MessagePack map with a `key` and a `path` of the form
+  `/media/<group>/<repo>/<ref>/<URL-encoded-file-path>`, checks repository read
+  permissions, and returns raw bytes with binary `name` metadata. Media
+  responses disable Resource compression.
+  `[pages] media_conversion` defaults to `yes`: PNG, JPEG, GIF, TIFF and BMP
+  images are converted to WebP when a backend is installed. Backends are tried
+  for availability in order: `magick`, `convert`, `gm`, `ffmpeg`, `avconv`.
+  `RNGIT_MEDIA_BACKEND` forces one of these names. Conversion has an eight-second
+  timeout; missing backends, failures and invalid output return the original
+  bytes and filename. WebP files pass through unchanged. Set
+  `media_conversion = no` to always serve the original file. Conversion
+  temporary files are cleaned up before returning the response; output bytes
+  remain owned by the Resource for the duration of the transfer.
   Text blob pages and Markdown fenced code blocks are syntax-highlighted by
   default when the file extension or fence language is supported.
   Markdown fenced code blocks tagged `rawmu` are passed through as raw Micron

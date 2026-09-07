@@ -67,6 +67,36 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 8. `27910f25` — Added rngit media conversion
+
+**Upstream change:** Complete diffs for new `media.py`, `pages.py` and the
+`server.py` configuration template reviewed. Depends on rows 6–7. Enabled by
+default, image conversion selects magick/convert/gm/ffmpeg/avconv, supports
+`RNGIT_MEDIA_BACKEND`, enforces an eight-second timeout, checks WebP dimensions,
+renames successful responses to `.webp`, and falls back to original bytes on
+failure. Python retains conversion directories on links and periodically cleans
+stale links. Template log-level comments also change from 0–7 to 0–8.
+
+**Local handling:** Native media conversion implements that backend order,
+override, timeout, validation, filename and fallback behavior. Configuration
+supports `[pages] media_conversion = no` and defaults to enabled. Temporary
+files belong to the conversion call and are closed before it returns; Resource
+bytes are owned by the transfer, eliminating a separate link-directory cleanup
+registry. Both input and output use file spools to avoid pipe deadlocks. Native
+logging already supports levels 0–8 and distinct pathing level 7.
+
+**Evidence:** Full rngit suite passes: 206 unit tests plus 23 integration tests;
+the opt-in installed-backend test passes separately. Regressions cover backend
+preference and forced selection, all three WebP header formats, invalid output,
+encoder failure, bounded timeout, disabled conversion, existing WebP passthrough,
+non-image passthrough, and original-byte fallback. The live Python client at
+`0bb41bf` passes raw file bytes, converted PNG dimensions `(2, 1)`, `.webp`
+filename metadata and missing-key rejection. The same test also exercises row
+7's uncompressed media response. Formatting and warning-free lint pass for
+both rns-git and rns-net.
+
+**Final disposition:** Integrated. This section accompanies the ordered mapping.
+
 ### 7. `602d52f1` — Don't auto-compress media responses
 
 **Upstream change:** Complete diff is a single `/media` registration option,

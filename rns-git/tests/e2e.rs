@@ -113,6 +113,7 @@ impl E2eHarness {
             serve_nomadnet: true,
             templates_dir: tmp.path().join("rngit/templates"),
             unicode_icons: false,
+            media_conversion: true,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
             stats_push_ignore_identities: Vec::new(),
@@ -1018,12 +1019,32 @@ fn create_source_bundle(root: &std::path::Path) -> (String, Vec<u8>) {
     fs::create_dir_all(&work).unwrap();
     run_git(Command::new("git").arg("init").arg(&work));
     fs::write(work.join("README.md"), "hello over rns\n").unwrap();
+    // A 2x1 RGB PNG for exact-target media conversion interoperability.
+    fs::write(
+        work.join("pixel.png"),
+        [
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x7b, 0x40, 0xe8, 0xdd, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xd7, 0x63, 0xfc, 0xcf, 0xc0, 0xc0, 0xc0, 0xc0, 0x00, 0x00, 0x06, 0x08, 0x01, 0x01,
+            0xc3, 0x9a, 0x60, 0xc5, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
+            0x60, 0x82,
+        ],
+    )
+    .unwrap();
     run_git(
         Command::new("git")
             .arg("-C")
             .arg(&work)
             .arg("add")
             .arg("README.md"),
+    );
+    run_git(
+        Command::new("git")
+            .arg("-C")
+            .arg(&work)
+            .arg("add")
+            .arg("pixel.png"),
     );
     run_git(
         Command::new("git")

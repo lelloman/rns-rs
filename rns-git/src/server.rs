@@ -1483,6 +1483,7 @@ mod tests {
             serve_nomadnet: false,
             templates_dir: root.join("templates"),
             unicode_icons: false,
+            media_conversion: true,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
             stats_push_ignore_identities: Vec::new(),
