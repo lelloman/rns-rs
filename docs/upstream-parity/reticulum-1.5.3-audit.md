@@ -67,6 +67,19 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 3. `6b6dd73b` — Updated readme
+
+**Upstream change:** Adds a centered Micron image reference to `README.mu` and
+the binary `docs/source/graphics/rns_logo_512.webp` asset. Complete source diff
+and asset paths reviewed. The URL is repository content; serving it depends on
+the later media-handler commit, row 6.
+
+**Rust applicability and evidence:** Native `render_repo_page` preserves Micron
+README content; rns-rs does not vendor this repository's README or logo assets.
+The new `/media` behavior is explicitly tracked in row 6 rather than claimed here.
+
+**Final disposition:** Non-runtime. This section supplies the ordered mapping.
+
 ### 2. `1a7e9e31` — Fixed typo
 
 **Upstream change:** The complete `RNS/Link.py` diff removes the stray word
