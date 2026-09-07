@@ -8,25 +8,27 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.5.2`
-- Version metadata commit: `943771a3f9cf2318401aa469fa42093e01b2d126`
-- Normative commit: `3bc149e3d587695f52e695f18edb11751b21c005`
-- Commit date: `2026-09-01 17:05:28 +0200`
-- Subject: `Added no_ident template support to rngit`
+- Version: `1.5.3`
+- Version metadata commit: `0bb41bf9486c1469854876a3c1d7c57324efc7c4`
+- Normative commit: `0bb41bf9486c1469854876a3c1d7c57324efc7c4`
+- Commit date: `2026-09-06 17:39:53 +0200`
+- Subject: `Updated version`
 
 The normative baseline is the canonical rgit development tip accepted on
-2026-09-01 while retaining Reticulum version 1.5.2. Its `RNS` tree is
-`7ec05287f5a6d9a476d3aba3aaf5789dd5766011` and root tree is
-`56c3051a72f953fd55f90e09c28ff33c09e1f002`. Exact-target packet, link,
-Resource, and utility interoperability passed before promotion. GitHub still
-points at the preceding signed 1.5.2 release, so the GitHub-backed CI interop
+2026-09-07 with Reticulum version 1.5.3. Its `RNS` tree is
+`86976fc8b62b79d08e2174557744e636be74ed9e` and root tree is
+`9b8fb0e518ed627685c9508773ceca156452cad8`. Exact-target packet, link,
+Resource, utility and rngit media interoperability passed before promotion.
+The integration adds media previews and raw file responses, disables media
+compression, and supports optional WebP conversion with bounded fallback.
+GitHub still points at the preceding signed 1.5.2 release, so the GitHub-backed CI interop
 matrix remains pinned to that fetchable target until the mirror catches up.
 Historical conformance fixtures retain their recorded source provenance.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.2-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.2-rgit-parity.md),
+[`docs/upstream-parity/reticulum-1.5.3-parity.md`](docs/upstream-parity/reticulum-1.5.3-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.2-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.2-rgit-audit.md).
+[`docs/upstream-parity/reticulum-1.5.3-audit.md`](docs/upstream-parity/reticulum-1.5.3-audit.md).
 The hook-enabled host release build, ARMv7 cross-builds, complete Docker matrix,
 and dual-VPS daily smoke passed. Physical Weave HIL was not available and is
 explicitly unclaimed.

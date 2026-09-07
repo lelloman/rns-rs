@@ -221,10 +221,10 @@ promotion gates pass. No Cargo version bump or release artifact is required.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Existing conformance fixtures are unchanged and their suites pass; the new 2x1 RGB PNG test input was generated locally with ImageMagick.
 - [x] Exact-target live Python/Rust media interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Rerun required release builds, Docker, cross-build and live dual-VPS gates for this integration; the earlier daily smoke predates it.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required release builds, Docker, cross-build and live dual-VPS gates passed on the integration revision; physical Weave HIL is explicitly unclaimed.
 - [x] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
@@ -277,3 +277,38 @@ promotion gates pass. No Cargo version bump or release artifact is required.
   workspace compilation check, not a claim that the full workspace test or
   Docker/release matrices passed. Both upstream remotes refreshed successfully
   after the final mapping (12:52:17/12:52:25 UTC); the target is unchanged.
+- `2026-09-07`: Promotion validation on integration revision `6a48768` passed
+  `cargo test --workspace --features rns-hooks -- --test-threads=1`, including
+  948 rns-net unit tests and all 54 network E2E tests. The hook WASM examples,
+  warning-free `scripts/lint-host.sh`, 19 Python tool tests and four web UI
+  smoke tests passed. Historical fixture inputs remain unchanged.
+- `2026-09-07`: Full `cargo build --release --workspace --features rns-hooks`
+  passed. ARMv7 release builds passed for rnsd and rns-ctl both without hooks
+  and with native hooks, plus rns-server with built-in hooks. Cross-builds used
+  the installed arm-linux-gnueabihf compiler/linker and archiver.
+- `2026-09-07`: All 11 full Docker matrix runs passed: 102 assertions passed,
+  zero failed, 29 topology-dependent skips, including 30-node scale, reconnect,
+  process supervision, NAT punching and privileged tunnel tests. The suite
+  cleaned up its containers; unrelated existing containers were preserved.
+- `2026-09-07`: The daily live dual-VPS smoke passed with local
+  `rns-server 0.3.1226-6a48768`: all Resource boundaries, concurrent links,
+  controlled impairment and forced reconnect recovery. No VPS deployment was
+  performed. Physical Weave HIL remains unavailable and explicitly unclaimed.
+- `2026-09-07`: Exact-target packet/link/Resource interoperability and all five
+  opted-in utility checks passed with `PYTHONPATH` and `RETICULUM_UPSTREAM_DIR`
+  pinned to detached `0bb41bf`. The initial sandbox socket denial was rerun with
+  local networking enabled and is not recorded as a protocol failure. TLS
+  passed 45 unit, 52 integration and five certificate-compatibility tests;
+  the four built-in network hook E2E cases passed.
+- `2026-09-07`: The default-feature workspace suite passed serially, including
+  942 rns-net unit tests and all 54 network E2E tests. The built-in control-plane
+  load/reload/list/unload case passed. Formatting and diff checks passed. All
+  promotion gates are complete with the recorded physical-hardware caveat;
+  [reticulum-1.5.3-parity.md](reticulum-1.5.3-parity.md) is the final acceptance
+  authority for `0bb41bf`. No deployment or crate publication is part of this
+  baseline promotion.
+- `2026-09-07`: After promotion, the clean configured upstream checkout was
+  pinned to `0bb41bf`. Both remotes refreshed successfully at 13:44:05/13:44:11
+  UTC: canonical rgit is at baseline, GitHub remains behind, and there are zero
+  unintegrated commits. The drift tool's overall `behind` label describes the
+  lagging mirror in this result, not an unintegrated canonical change.
