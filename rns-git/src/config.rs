@@ -18,6 +18,7 @@ pub struct ServerConfig {
     pub serve_nomadnet: bool,
     pub templates_dir: PathBuf,
     pub unicode_icons: bool,
+    pub media_conversion: bool,
     pub record_stats: bool,
     pub stats_ignore_identities: Vec<[u8; 16]>,
     pub stats_push_ignore_identities: Vec<[u8; 16]>,
@@ -97,6 +98,9 @@ impl ServerConfig {
         if let Some(v) = get(&ini, "pages", "unicode_icons") {
             cfg.unicode_icons = parse_bool(v, cfg.unicode_icons);
         }
+        if let Some(v) = get(&ini, "pages", "media_conversion") {
+            cfg.media_conversion = parse_bool(v, cfg.media_conversion);
+        }
         if let Some(v) = get(&ini, "logging", "loglevel") {
             cfg.log_level = parse_log_level(v, cfg.log_level);
         }
@@ -123,6 +127,7 @@ impl ServerConfig {
             serve_nomadnet: false,
             templates_dir: dir.join("templates"),
             unicode_icons: false,
+            media_conversion: true,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
             stats_push_ignore_identities: Vec::new(),
@@ -275,7 +280,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n# stats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\n# blocked_identities = 00112233445566778899aabbccddeeff\n# To reject unidentified scrapers and crawlers, add the null identity hash:\n# blocked_identities = d7db22f63b453c23bb0688dde565b7c1\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n# stats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\n# blocked_identities = 00112233445566778899aabbccddeeff\n# To reject unidentified scrapers and crawlers, add the null identity hash:\n# blocked_identities = d7db22f63b453c23bb0688dde565b7c1\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n# media_conversion = yes\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -343,7 +348,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("server_config"),
-            "[rngit]\nnode_name = Public Git Node\n[pages]\nserve_nomadnet = yes\ntemplates_dir = custom_templates\nunicode_icons = yes\n",
+            "[rngit]\nnode_name = Public Git Node\n[pages]\nserve_nomadnet = yes\ntemplates_dir = custom_templates\nunicode_icons = yes\nmedia_conversion = no\n",
         )
         .unwrap();
         let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
@@ -352,6 +357,7 @@ mod tests {
         assert!(cfg.serve_nomadnet);
         assert_eq!(cfg.templates_dir, tmp.path().join("custom_templates"));
         assert!(cfg.unicode_icons);
+        assert!(!cfg.media_conversion);
     }
 
     #[test]
@@ -457,6 +463,7 @@ mod tests {
         assert!(!cfg.serve_nomadnet);
         assert_eq!(cfg.templates_dir, tmp.path().join("templates"));
         assert!(!cfg.unicode_icons);
+        assert!(cfg.media_conversion);
         assert!(!cfg.record_stats);
         assert!(cfg.stats_ignore_identities.is_empty());
         assert_eq!(cfg.allow_stats, vec!["none".to_string()]);
