@@ -67,6 +67,19 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 2. `1a7e9e31` — Fixed typo
+
+**Upstream change:** The complete `RNS/Link.py` diff removes the stray word
+"packet" from `get_expected_rate()`'s return-value docstring. Its ACTIVE-state
+guard and returned rate are unchanged. No earlier unintegrated dependency.
+
+**Rust applicability and evidence:** This is Python API documentation, with no
+wire, rate-estimation, configuration or native API change. Reviewed the complete
+diff and surrounding accessor. No runtime tests are required for this mapping.
+
+**Final disposition:** Non-runtime. This section is the non-empty ordered mapping;
+its commit is identified by the canonical `Upstream-Commit` trailer.
+
 ### 1. `2f29b56e` — Adjusted logging
 
 **Upstream change:** `Packet.send()` no longer emits the debug message claiming
