@@ -67,6 +67,19 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 5. `8a82a50f` — Updated readme
+
+**Upstream change:** Moves the Micron logo after the introduction, changes its
+display width from 20 to 18, selects `rns_logo_256.webp`, and adds that asset.
+Complete source diff and changed binary paths reviewed; depends on rows 3–4.
+
+**Rust applicability and evidence:** Repository-owned presentation and asset
+data, consumed through existing Micron README passthrough. There is no vendored
+copy to update. The later media endpoint must serve arbitrary repository blobs;
+it must not hardcode this logo path or width.
+
+**Final disposition:** Non-runtime. This section supplies the ordered mapping.
+
 ### 4. `5c1141d1` — Updated readme
 
 **Upstream change:** The complete diff corrects the preceding README image URL
