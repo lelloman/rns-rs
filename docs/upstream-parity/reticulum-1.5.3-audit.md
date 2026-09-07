@@ -67,6 +67,20 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 9. `0bb41bf9` — Updated version
+
+**Upstream change:** The complete `RNS/_version.py` diff changes only
+`__version__` from 1.5.2 to 1.5.3. It identifies the target containing all
+preceding changes; no additional runtime behavior is introduced.
+
+**Rust applicability and evidence:** Cargo packages are versioned independently.
+The target's root/RNS tree hashes and version assertion are pinned in this audit,
+and the exact-target Python media test reports version 1.5.3. `UPSTREAM.md` and
+the README baseline badge remain at the accepted 1.5.2 commit until the remaining
+promotion gates pass. No Cargo version bump or release artifact is required.
+
+**Final disposition:** Non-runtime. This section supplies the ordered mapping.
+
 ### 8. `27910f25` — Added rngit media conversion
 
 **Upstream change:** Complete diffs for new `media.py`, `pages.py` and the
