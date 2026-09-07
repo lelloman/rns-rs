@@ -1701,7 +1701,7 @@ pub fn serve_media(
             Value::Str("name".into()),
             Value::Bin(name.as_bytes().to_vec()),
         )])),
-        auto_compress: true,
+        auto_compress: false,
     })
 }
 
@@ -3299,7 +3299,12 @@ mod tests {
             ),
         ]));
         match serve_media(&config, &access(&config), &request, None).unwrap() {
-            RequestResponse::File { data, metadata, .. } => {
+            RequestResponse::File {
+                data,
+                metadata,
+                auto_compress,
+            } => {
+                assert!(!auto_compress, "media responses must not auto-compress");
                 assert_eq!(data, payload);
                 assert_eq!(
                     msgpack::unpack_exact(&metadata).unwrap(),

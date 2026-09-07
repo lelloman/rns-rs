@@ -67,6 +67,19 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 7. `602d52f1` — Don't auto-compress media responses
+
+**Upstream change:** Complete diff is a single `/media` registration option,
+`auto_compress=False`; depends on row 6. Other handlers are unchanged.
+
+**Local handling and evidence:** Media `RequestResponse::File` sets
+`auto_compress: false`. The focused assertion failed before the change and passes
+afterward. The full rngit suite (202 unit and 23 integration tests), formatting
+and warning-free host lint pass. The real-link media transfer is included in
+that suite; exact-target Python media interoperability passed in row 6.
+
+**Final disposition:** Integrated. This section accompanies the ordered mapping.
+
 ### 6. `7396e399` — Basic rngit media handling
 
 **Upstream change:** Complete `pages.py` diff and surrounding blob/ref/ACL code
