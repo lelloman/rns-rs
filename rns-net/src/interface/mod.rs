@@ -10,6 +10,8 @@ pub mod backbone;
 pub mod i2p;
 #[cfg(feature = "iface-kiss")]
 pub mod kiss_iface;
+#[cfg(all(feature = "iface-kernel-eth", target_os = "linux"))]
+pub mod kernel_eth;
 #[cfg(feature = "iface-local")]
 pub mod local;
 #[cfg(feature = "iface-pipe")]
@@ -357,6 +359,7 @@ pub fn shared_medium_hint(interface_type: &str) -> bool {
         interface_type,
         "AX25KISSInterface"
             | "KISSInterface"
+            | "KernelEthernetInterface"
             | "PipeInterface"
             | "RNodeInterface"
             | "RNodeMultiInterface"
@@ -900,6 +903,7 @@ mod tests {
         for interface_type in [
             "AX25KISSInterface",
             "KISSInterface",
+            "KernelEthernetInterface",
             "PipeInterface",
             "RNodeInterface",
             "RNodeMultiInterface",

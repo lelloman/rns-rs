@@ -23,6 +23,11 @@ iface-serial = []
 iface-kiss = []
 iface-ax25-kiss = ["iface-kiss"]
 iface-pipe = []
+# Talks to /dev/rns from the out-of-tree krns kernel module
+# (https://codeberg.org/ignirtoq/linux-rns). Not upstream rns-rs
+# functionality, so deliberately left out of `default` -- opt in explicitly
+# with --features iface-kernel-eth.
+iface-kernel-eth = []
 iface-rnode = []
 iface-backbone = []
 iface-i2p = []

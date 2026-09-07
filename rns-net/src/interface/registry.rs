@@ -49,6 +49,8 @@ impl InterfaceRegistry {
         reg.register(Box::new(super::ax25_kiss::Ax25KissFactory));
         #[cfg(feature = "iface-pipe")]
         reg.register(Box::new(super::pipe::PipeFactory));
+        #[cfg(all(feature = "iface-kernel-eth", target_os = "linux"))]
+        reg.register(Box::new(super::kernel_eth::KernelEthFactory));
         #[cfg(feature = "iface-local")]
         {
             reg.register(Box::new(super::local::LocalServerFactory));
