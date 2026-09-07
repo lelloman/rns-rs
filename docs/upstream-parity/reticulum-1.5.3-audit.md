@@ -67,6 +67,17 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 4. `5c1141d1` — Updated readme
+
+**Upstream change:** The complete diff corrects the preceding README image URL
+to include `docs/source/graphics/`. Depends on row 3's content addition.
+
+**Rust applicability and evidence:** Only repository-owned `README.mu` content
+changes; native Micron passthrough requires no renderer change. Media path
+resolution is tracked separately in row 6. No executable lines change.
+
+**Final disposition:** Non-runtime. This section supplies the ordered mapping.
+
 ### 3. `6b6dd73b` — Updated readme
 
 **Upstream change:** Adds a centered Micron image reference to `README.mu` and
