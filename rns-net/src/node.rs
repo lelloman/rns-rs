@@ -2171,6 +2171,17 @@ impl RnsNode {
         }
     }
 
+    /// Snapshot one Link, including local send backlog, or None if unknown.
+    pub fn query_link(
+        &self,
+        link_id: [u8; 16],
+    ) -> Result<Option<crate::event::LinkInfoEntry>, SendError> {
+        Ok(self
+            .links()?
+            .into_iter()
+            .find(|link| link.link_id == link_id))
+    }
+
     /// Return the slowest positive bitrate among currently registered interfaces.
     ///
     /// Returns `Ok(None)` when no registered interface advertises a usable
@@ -2646,8 +2657,9 @@ impl RnsNode {
         context: u8,
     ) -> Result<(), crate::link_send::LinkSendError> {
         use crate::link_send::Completion;
+        let tracking = self.tx.link_send_pool().track(link_id, true);
         let permit = self.tx.link_send_pool().acquire().await?;
-        let (completion, receipt) = Completion::new(permit);
+        let (completion, receipt) = Completion::new_tracked(permit, tracking);
         self.tx
             .send_async(Event::SendLinkTracked {
                 link_id,
@@ -2672,7 +2684,8 @@ impl RnsNode {
     ) -> Result<crate::link_send::LinkSendReceipt, crate::link_send::LinkSendError> {
         use crate::link_send::{Completion, LinkSendError};
         let permit = self.tx.link_send_pool().try_acquire()?;
-        let (completion, receipt) = Completion::new(permit);
+        let tracking = self.tx.link_send_pool().track(link_id, false);
+        let (completion, receipt) = Completion::new_tracked(permit, tracking);
         self.tx
             .try_send(Event::SendLinkTracked {
                 link_id,

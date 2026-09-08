@@ -324,6 +324,9 @@ impl EventSender {
         }
         let sequence = state.next_sequence;
         state.next_sequence = state.next_sequence.wrapping_add(1);
+        if let Event::SendLinkTracked { completion, .. } = &event {
+            completion.admit();
+        }
         state.control.push_back(QueuedEvent { sequence, event });
         drop(state);
         self.shared.changed.notify_one();

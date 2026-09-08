@@ -148,7 +148,7 @@ fn run_burst(async_api: bool) {
     let alice = RnsNode::start(
         NodeConfig {
             interface_writer_queue_capacity: queue_capacity,
-            driver_event_queue_capacity: 8192,
+            driver_event_queue_capacity: PACKETS as usize,
             identity: Some(Identity::new(&mut OsRng)),
             registry: Some(registry),
             interfaces: vec![InterfaceConfig {
@@ -209,6 +209,43 @@ fn run_burst(async_api: bool) {
     }
     // FIFO control-event barrier: all SendOnLink events have been dispatched.
     alice.query(QueryRequest::InterfaceStats).unwrap();
+    assert!(alice.query_link([0; 16]).unwrap().is_none());
+    let status = alice.query_link(link).unwrap().unwrap();
+    assert_eq!(status.pending_send_packets, PACKETS as usize);
+    assert_eq!(status.waiting_send_packets, 0);
+    let listed = alice
+        .links()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.link_id == link)
+        .unwrap();
+    assert_eq!(listed.pending_send_packets, status.pending_send_packets);
+    assert_eq!(listed.waiting_send_packets, status.waiting_send_packets);
+
+    // Every admission slot is held by a send to the paused writer. Merely
+    // constructing a future must not count; polling it must count as waiting.
+    let mut waiting = Box::pin(alice.send_on_link(link, b"cancelled".to_vec(), CONTEXT));
+    assert_eq!(
+        alice
+            .query_link(link)
+            .unwrap()
+            .unwrap()
+            .waiting_send_packets,
+        0
+    );
+    assert!(waiting.as_mut().now_or_never().is_none());
+    let status = alice.query_link(link).unwrap().unwrap();
+    assert_eq!(status.pending_send_packets, PACKETS as usize);
+    assert_eq!(status.waiting_send_packets, 1);
+    drop(waiting);
+    assert_eq!(
+        alice
+            .query_link(link)
+            .unwrap()
+            .unwrap()
+            .waiting_send_packets,
+        0
+    );
     // Admission must never be confused with transmission completion.
     for receipt in &mut receipts {
         assert!(
@@ -223,6 +260,17 @@ fn run_burst(async_api: bool) {
     let marker_receipt = alice
         .try_send_on_link(link, marker.clone(), CONTEXT)
         .unwrap();
+    for receipt in receipts {
+        futures::executor::block_on(receipt).unwrap();
+    }
+    marker_receipt.wait().unwrap();
+    // Check local completion before waiting for the receiver to drain its
+    // callback backlog; remote processing is not part of the send contract.
+    let status = alice.query_link(link).unwrap().unwrap();
+    assert_eq!(
+        (status.pending_send_packets, status.waiting_send_packets),
+        (0, 0)
+    );
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut sequences = Vec::new();
     let mut marker_received = false;
@@ -240,10 +288,6 @@ fn run_burst(async_api: bool) {
         sequences.push(u32::from_be_bytes(payload[..4].try_into().unwrap()));
     }
     eprintln!("issue152: queue capacity={queue_capacity}, {PACKETS} sends returned Ok, {} burst packets received, end marker received={marker_received}", sequences.len());
-    for receipt in receipts {
-        futures::executor::block_on(receipt).unwrap();
-    }
-    marker_receipt.wait().unwrap();
     alice.shutdown();
     bob.shutdown();
     assert!(

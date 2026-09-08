@@ -904,6 +904,10 @@ pub struct LocalDestinationEntry {
 #[derive(Debug, Clone)]
 pub struct LinkInfoEntry {
     pub link_id: [u8; 16],
+    /// Confirmed sends admitted locally but not yet fully written (including the current write).
+    pub pending_send_packets: usize,
+    /// Polled async sends waiting for local admission capacity.
+    pub waiting_send_packets: usize,
     pub state: String,
     pub is_initiator: bool,
     pub dest_hash: [u8; 16],
