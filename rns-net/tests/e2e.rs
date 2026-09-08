@@ -1452,12 +1452,15 @@ fn test_announce_binary_app_data() {
 }
 
 #[test]
-fn test_announce_relay_respects_short_ttl() {
+fn test_announce_relay_respects_zero_ttl() {
     let port = find_free_port();
     let transport = start_transport_node_with_limits(
         port,
         rns_core::constants::HASHLIST_MAXSIZE,
-        Duration::from_millis(50),
+        // A positive TTL can legitimately allow a randomized retransmit
+        // before expiry. Zero ensures expiry before any later relay tick;
+        // positive-TTL boundaries are covered with a controlled core clock.
+        Duration::ZERO,
         rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
     );
 
