@@ -1089,6 +1089,29 @@ fn test_gate_retransmit_actions_expands_broadcast_to_matching_interfaces() {
 }
 
 #[test]
+fn test_tick_short_announce_ttl_allows_only_unexpired_retransmits() {
+    for (now, should_relay) in [(100.025, true), (100.075, false)] {
+        let mut config = make_config(true);
+        config.announce_table_ttl_secs = 0.05;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        let dest = [0x63; 16];
+        engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        let mut entry = make_announce_entry(dest, 100.0, 8);
+        entry.retransmit_timeout = 100.01;
+        assert!(engine.insert_announce_entry(dest, entry, 100.0));
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+        let actions = engine.tick(now, &mut rng);
+        let relayed = actions
+            .iter()
+            .any(|action| matches!(action, TransportAction::SendOnInterface { .. }));
+        assert_eq!(relayed, should_relay, "tick at {now}");
+        assert_eq!(engine.announce_table().contains_key(&dest), should_relay);
+    }
+}
+
+#[test]
 fn test_tick_culls_expired_announce_entries() {
     let mut config = make_config(true);
     config.announce_table_ttl_secs = 10.0;
