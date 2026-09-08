@@ -381,6 +381,22 @@ struct BackboneWriter {
 }
 
 impl Writer for BackboneWriter {
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        // The async writer has already reserved this frame's byte budget.
+        // Once admitted, retain it even if the egress gate subsequently closes.
+        if !self
+            .transmit_buffer
+            .append_with_limit(hdlc::frame(data), Some(EGRESS_HIGH_WATERMARK))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "confirmed frame exceeds backbone buffer",
+            ));
+        }
+        self.transmit_buffer.flush();
+        let timeout = lock_or_recover(&self.runtime, "backbone runtime").write_stall_timeout;
+        self.drain_transmit(timeout)
+    }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.send_frames(&[data.to_vec()])
     }
@@ -1461,6 +1477,27 @@ struct BackboneClientWriter {
 }
 
 impl Writer for BackboneClientWriter {
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        if !self
+            .transmit_buffer
+            .append_with_limit(hdlc::frame(data), Some(EGRESS_HIGH_WATERMARK))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "confirmed frame exceeds backbone buffer",
+            ));
+        }
+        self.transmit_buffer.flush();
+        while self.transmit_buffer.sendable_bytes() > 0 {
+            if self.transmit_buffer.drain_to(&mut self.stream)? == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "backbone writer made no progress",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.send_frames(&[data.to_vec()])
     }

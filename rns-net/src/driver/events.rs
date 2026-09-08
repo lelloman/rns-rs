@@ -945,6 +945,7 @@ impl Driver {
     /// Run the event loop. Blocks until Shutdown or all senders are dropped.
     pub fn run(&mut self) {
         loop {
+            self.flush_pending_link_frames();
             let received = match self.rx.recv_classified() {
                 Ok(e) => e,
                 Err(_) => break, // all senders dropped
@@ -1325,6 +1326,48 @@ impl Driver {
                         Err(err) => {
                             let _ = response_tx.send(Err(err));
                         }
+                    }
+                }
+                Event::LinkWriterReady => {}
+                Event::SendLinkTracked {
+                    link_id,
+                    data,
+                    context,
+                    completion,
+                } => {
+                    use crate::link_send::LinkSendError;
+                    if self.is_draining() {
+                        completion.finish(Err(LinkSendError::Draining));
+                        continue;
+                    }
+                    match self.link_manager.try_send_on_link(
+                        &link_id,
+                        &data,
+                        context,
+                        &mut self.rng,
+                    ) {
+                        Ok(actions) => {
+                            if self.link_manager.get_link_route_hint(&link_id).is_none() {
+                                completion.finish(Err(LinkSendError::NoRoute));
+                                continue;
+                            }
+                            let hash = actions.iter().find_map(|action| match action {
+                                LinkManagerAction::SendPacket { raw, .. } => {
+                                    RawPacket::unpack(raw).ok().map(|p| p.packet_hash)
+                                }
+                                _ => None,
+                            });
+                            if let Some(hash) = hash {
+                                self.tracked_link_send = Some((hash, completion));
+                                self.dispatch_link_actions(actions);
+                                if let Some((_, completion)) = self.tracked_link_send.take() {
+                                    completion.finish(Err(LinkSendError::Rejected));
+                                }
+                            } else {
+                                completion.finish(Err(LinkSendError::Rejected));
+                            }
+                        }
+                        Err(error) => completion.finish(Err(LinkSendError::InvalidPacket(error))),
                     }
                 }
                 Event::SendOnLink {
@@ -2025,11 +2068,15 @@ impl Driver {
                     let _ = (server_interface_id, peer_ip, penalty_level, blacklist_for);
                 }
                 Event::Shutdown => {
+                    self.event_tx.link_send_pool().close();
+                    self.pending_link_frames.clear();
                     self.graceful_shutdown();
                     break;
                 }
             }
         }
+        self.event_tx.link_send_pool().close();
+        self.pending_link_frames.clear();
     }
     pub(crate) fn handle_tunnel_synth_delivery(
         &mut self,

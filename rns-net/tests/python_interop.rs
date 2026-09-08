@@ -648,8 +648,12 @@ fn python_rns_bidirectional_tcp_interop() {
     .expect("Rust should receive Python link data");
     assert_eq!(python_link_data, (0, b"python-to-rust over link".to_vec()));
 
-    node.send_on_link(link_id, b"rust-to-python over link".to_vec(), 0)
-        .expect("Rust should send data over the Python-initiated link");
+    futures::executor::block_on(node.send_on_link(
+        link_id,
+        b"rust-to-python over link".to_vec(),
+        0,
+    ))
+    .expect("Rust should send data over the Python-initiated link");
     let rust_link_data = python.wait_for_event(TIMEOUT, |event| {
         event["event"] == "python_link_packet"
             && event["context"] == 0

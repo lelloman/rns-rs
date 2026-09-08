@@ -1,6 +1,50 @@
 use super::*;
 
 impl Driver {
+    /// Pending frames own admission permits until actual writer completion,
+    /// bounding this queue together with driver events and in-flight writes.
+    pub(crate) fn flush_pending_link_frames(&mut self) {
+        use crate::link_send::LinkSendError;
+        let mut blocked = std::collections::HashSet::new();
+        for _ in 0..self.pending_link_frames.len() {
+            let mut frame = self.pending_link_frames.pop_front().unwrap();
+            if blocked.contains(&frame.interface) {
+                self.pending_link_frames.push_back(frame);
+                continue;
+            }
+            let Some(entry) = self
+                .interfaces
+                .get_mut(&frame.interface)
+                .filter(|e| e.online && e.enabled)
+            else {
+                if let Some(completion) = frame.completion.take() {
+                    completion.finish(Err(LinkSendError::InterfaceUnavailable));
+                }
+                continue;
+            };
+            match entry
+                .writer
+                .enqueue_confirmed(&frame.data, &mut frame.completion)
+            {
+                Ok(()) => {
+                    entry.stats.txb += frame.data.len() as u64;
+                    entry.stats.tx_packets += 1;
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && frame.completion.is_some() =>
+                {
+                    blocked.insert(frame.interface);
+                    self.pending_link_frames.push_back(frame);
+                }
+                Err(error) => {
+                    if let Some(completion) = frame.completion.take() {
+                        completion.finish(Err(LinkSendError::WriteFailed(error.to_string())));
+                    }
+                }
+            }
+        }
+    }
     pub(crate) fn authorize_direct_connect_proposal(
         &mut self,
         policy: crate::event::HolePunchPolicy,
@@ -353,6 +397,23 @@ impl Driver {
                 entry.online,
                 entry.enabled
             );
+            return;
+        }
+        let tracked = self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
+            RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
+        });
+        if tracked {
+            let data = if let Some(ref state) = entry.ifac {
+                ifac::mask_outbound(&raw, state)
+            } else {
+                raw.to_vec()
+            };
+            let (_, completion) = self.tracked_link_send.take().unwrap();
+            self.pending_link_frames.push_back(PendingLinkFrame {
+                interface,
+                data,
+                completion: Some(completion),
+            });
             return;
         }
         if Self::interface_send_deferred(entry, Instant::now()) {

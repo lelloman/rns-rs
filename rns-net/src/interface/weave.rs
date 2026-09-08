@@ -669,6 +669,12 @@ fn hex(bytes: &[u8]) -> String {
 pub struct WeaveFactory;
 struct ParentWriter;
 impl Writer for ParentWriter {
+    fn send_frame_confirmed(&mut self, _data: &[u8]) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Weave parent is not a transmitting peer",
+        ))
+    }
     fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
         Ok(())
     }
