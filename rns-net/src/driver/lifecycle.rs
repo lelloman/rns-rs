@@ -232,6 +232,7 @@ impl Driver {
         let active_resource_transfers = self.link_manager.resource_transfer_count();
         let active_holepunch_sessions = self.holepunch_manager.session_count();
         let interface_writer_queued_frames = self.interface_writer_queued_frames();
+        let link_transmissions = self.event_tx.link_send_pool().in_flight();
         #[cfg(feature = "hooks")]
         let (provider_backlog_events, provider_consumer_queued_events) = self
             .provider_bridge
@@ -277,6 +278,9 @@ impl Driver {
                         "{interface_writer_queued_frames} queued interface writer frame(s)"
                     ));
                 }
+                if link_transmissions > 0 {
+                    remaining.push(format!("{link_transmissions} pending Link transmission(s)"));
+                }
                 if provider_backlog_events > 0 {
                     remaining.push(format!(
                         "{provider_backlog_events} provider backlog event(s)"
@@ -309,6 +313,7 @@ impl Driver {
                     && active_resource_transfers == 0
                     && active_holepunch_sessions == 0
                     && interface_writer_queued_frames == 0
+                    && link_transmissions == 0
                     && provider_backlog_events == 0
                     && provider_consumer_queued_events == 0),
             interface_writer_queued_frames,
@@ -330,6 +335,8 @@ impl Driver {
         }
 
         log::info!("driver drain deadline reached; tearing down remaining links");
+        self.event_tx.link_send_pool().close();
+        self.pending_link_frames.clear();
         self.lifecycle_state = LifecycleState::Stopping;
         let resource_actions = self.link_manager.cancel_all_resources(&mut self.rng);
         self.dispatch_link_actions(resource_actions);

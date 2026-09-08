@@ -136,12 +136,29 @@ impl QueueState {
 }
 
 struct QueueShared {
+    link_sends: Arc<crate::link_send::SendPool>,
+    async_waiters: Mutex<Vec<std::sync::Weak<crate::link_send::Waiter>>>,
     state: Mutex<QueueState>,
     changed: Condvar,
     sender_count: AtomicUsize,
     control_capacity: usize,
     inbound_capacities: [usize; INBOUND_QUEUE_COUNT],
     path_request_dest: [u8; 16],
+}
+
+impl QueueShared {
+    fn wake_async_senders(&self) {
+        let waiters: Vec<_> = self
+            .async_waiters
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .collect();
+        for waiter in waiters {
+            waiter.wake();
+        }
+    }
 }
 
 /// Sender for the prioritized driver event queue.
@@ -200,6 +217,37 @@ impl Drop for EventSender {
 }
 
 impl EventSender {
+    pub(crate) fn link_send_pool(&self) -> &Arc<crate::link_send::SendPool> {
+        &self.shared.link_sends
+    }
+
+    pub(crate) async fn send_async(
+        &self,
+        event: Event,
+    ) -> Result<(), crate::link_send::LinkSendError> {
+        use crate::link_send::{LinkSendError, Waiter};
+        let waiter = Arc::new(Waiter::default());
+        {
+            let mut waiters = self.shared.async_waiters.lock().unwrap();
+            waiters.retain(|w| w.strong_count() > 0);
+            waiters.push(Arc::downgrade(&waiter));
+        }
+        let mut pending = Some(event);
+        futures::future::poll_fn(|cx| {
+            waiter.register(cx);
+            match self.try_send(pending.take().unwrap()) {
+                Ok(()) => std::task::Poll::Ready(Ok(())),
+                Err(std::sync::mpsc::TrySendError::Full(event)) => {
+                    pending = Some(event);
+                    std::task::Poll::Pending
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    std::task::Poll::Ready(Err(LinkSendError::DriverStopped))
+                }
+            }
+        })
+        .await
+    }
     fn classify(&self, event: &Event, state: &QueueState) -> Option<QueueClass> {
         let Event::Frame {
             interface_id, data, ..
@@ -398,6 +446,8 @@ impl Drop for EventReceiver {
         state.receiver_alive = false;
         drop(state);
         self.shared.changed.notify_all();
+        self.shared.link_sends.close();
+        self.shared.wake_async_senders();
     }
 }
 
@@ -418,6 +468,8 @@ impl EventReceiver {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         loop {
             if let Some(event) = self.pop_locked(&mut state) {
+                drop(state);
+                self.shared.wake_async_senders();
                 return Ok(event);
             }
             if self.shared.sender_count.load(Ordering::Acquire) == 0 {
@@ -434,6 +486,8 @@ impl EventReceiver {
     pub fn try_recv(&self) -> Result<Event, std::sync::mpsc::TryRecvError> {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(event) = self.pop_locked(&mut state) {
+            drop(state);
+            self.shared.wake_async_senders();
             return Ok(event.event);
         }
         if self.shared.sender_count.load(Ordering::Acquire) == 0 {
@@ -451,6 +505,8 @@ impl EventReceiver {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         loop {
             if let Some(event) = self.pop_locked(&mut state) {
+                drop(state);
+                self.shared.wake_async_senders();
                 return Ok(event.event);
             }
             if self.shared.sender_count.load(Ordering::Acquire) == 0 {
@@ -492,6 +548,8 @@ pub(crate) fn channel_with_queue_capacities(
     inbound_capacities: InboundQueueCapacities,
 ) -> (EventSender, EventReceiver) {
     let shared = Arc::new(QueueShared {
+        link_sends: crate::link_send::SendPool::new(control_capacity),
+        async_waiters: Mutex::new(Vec::new()),
         state: Mutex::new(QueueState::new()),
         changed: Condvar::new(),
         sender_count: AtomicUsize::new(1),
@@ -520,6 +578,25 @@ mod tests {
     use std::sync::mpsc::TrySendError;
     use std::time::Duration;
 
+    #[test]
+    fn async_control_send_waits_for_space_and_handles_receiver_shutdown() {
+        use futures::{executor::block_on, FutureExt};
+        let (tx, rx) = channel_with_capacity(1);
+        tx.try_send(Event::Tick).unwrap();
+        let mut pending = Box::pin(tx.send_async(Event::Shutdown));
+        assert!(pending.as_mut().now_or_never().is_none());
+        assert!(matches!(rx.try_recv(), Ok(Event::Tick)));
+        block_on(pending).unwrap();
+        assert!(matches!(rx.try_recv(), Ok(Event::Shutdown)));
+        tx.try_send(Event::Tick).unwrap();
+        let mut pending = Box::pin(tx.send_async(Event::Shutdown));
+        assert!(pending.as_mut().now_or_never().is_none());
+        drop(rx);
+        assert_eq!(
+            block_on(pending),
+            Err(crate::link_send::LinkSendError::DriverStopped)
+        );
+    }
     fn frame(interface_id: u64, destination: [u8; 16], packet_type: u8) -> Event {
         let raw = RawPacket::pack(
             PacketFlags {

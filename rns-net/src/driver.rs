@@ -636,6 +636,8 @@ impl TrafficSample {
 
 /// The driver loop. Owns the engine and all interface entries.
 pub struct Driver {
+    pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,
+    pub(crate) pending_link_frames: std::collections::VecDeque<PendingLinkFrame>,
     pub(crate) engine: TransportEngine,
     pub(crate) interfaces: HashMap<InterfaceId, InterfaceEntry>,
     /// Parent listener for dynamically spawned interfaces.
@@ -870,6 +872,8 @@ impl Driver {
                 .queue_max_bytes,
         };
         Driver {
+            tracked_link_send: None,
+            pending_link_frames: std::collections::VecDeque::new(),
             engine,
             interfaces: HashMap::new(),
             dynamic_interface_parents: HashMap::new(),
@@ -1312,4 +1316,10 @@ impl Driver {
         self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
         self.holepunch_manager.set_underlay_mark(self.underlay_mark);
     }
+}
+
+pub(crate) struct PendingLinkFrame {
+    interface: InterfaceId,
+    data: Vec<u8>,
+    completion: Option<crate::link_send::Completion>,
 }

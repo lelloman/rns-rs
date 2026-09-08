@@ -324,7 +324,16 @@ pub enum Event<W: Send> {
         payload: Vec<u8>,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
-    /// Send generic data on a link with a given context.
+    /// Wake the driver after outbound writer capacity changes.
+    LinkWriterReady,
+    /// Send generic data on a link with transmission completion.
+    SendLinkTracked {
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        context: u8,
+        completion: crate::link_send::Completion,
+    },
+    /// Legacy best-effort datagram admission, without transmission completion.
     SendOnLink {
         link_id: [u8; 16],
         data: Vec<u8>,
@@ -1142,7 +1151,14 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("msgtype", msgtype)
                 .field("payload_len", &payload.len())
                 .finish(),
+            Event::LinkWriterReady => f.write_str("LinkWriterReady"),
             Event::SendOnLink {
+                link_id,
+                data,
+                context,
+                ..
+            }
+            | Event::SendLinkTracked {
                 link_id,
                 data,
                 context,

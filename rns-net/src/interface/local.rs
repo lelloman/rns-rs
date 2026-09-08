@@ -80,6 +80,23 @@ struct LocalWriter {
 }
 
 impl Writer for LocalWriter {
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        if self
+            .sleep_hold
+            .as_ref()
+            .is_some_and(ClientSleepHold::should_drop_outbound)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "local client has paused transmission",
+            ));
+        }
+        append_and_drain(
+            &mut self.transmit_buffer,
+            &mut self.stream,
+            &[data.to_vec()],
+        )
+    }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.send_frames(&[data.to_vec()])
     }
@@ -418,6 +435,23 @@ struct UnixLocalWriter {
 
 #[cfg(target_os = "linux")]
 impl Writer for UnixLocalWriter {
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        if self
+            .sleep_hold
+            .as_ref()
+            .is_some_and(ClientSleepHold::should_drop_outbound)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "local client has paused transmission",
+            ));
+        }
+        append_and_drain(
+            &mut self.transmit_buffer,
+            &mut self.stream,
+            &[data.to_vec()],
+        )
+    }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.send_frames(&[data.to_vec()])
     }
@@ -1146,6 +1180,13 @@ mod tests {
         assert!(n > 0);
 
         thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            writer
+                .send_frame_confirmed(b"confirmed")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
         writer.send_frame(b"drop").unwrap();
         let err = client.read(&mut buf).unwrap_err();
         assert!(

@@ -33,6 +33,7 @@ rns-core.workspace = true
 rns-hooks-crate = { package = "rns-hooks", version = "0.1.10", path = "../rns-hooks", optional = true, default-features = false }
 rns-crypto.workspace = true
 log = "0.4"
+futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
 rayon = "1"
 libc = "0.2"
 socket2 = { version = "0.6", features = ["all"] }
