@@ -1891,6 +1891,8 @@ impl LinkManager {
                 };
                 crate::event::LinkInfoEntry {
                     link_id: *link_id,
+                    pending_send_packets: 0,
+                    waiting_send_packets: 0,
                     state: state.to_string(),
                     is_initiator: managed.engine.is_initiator(),
                     dest_hash: managed.dest_hash,

@@ -669,7 +669,17 @@ impl Driver {
                     .collect();
                 QueryResponse::LocalDestinations(entries)
             }
-            QueryRequest::Links => QueryResponse::Links(self.link_manager.link_entries()),
+            QueryRequest::Links => {
+                let counts = self.event_tx.link_send_pool().snapshot();
+                let mut links = self.link_manager.link_entries();
+                for link in &mut links {
+                    if let Some(counts) = counts.get(&link.link_id) {
+                        link.pending_send_packets = counts.pending;
+                        link.waiting_send_packets = counts.waiting;
+                    }
+                }
+                QueryResponse::Links(links)
+            }
             QueryRequest::Resources => {
                 QueryResponse::Resources(self.link_manager.resource_entries())
             }

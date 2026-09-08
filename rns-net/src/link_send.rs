@@ -79,6 +79,58 @@ struct PoolState {
     closed: bool,
     waiters: Vec<Weak<Waiter>>,
     completions: Vec<Weak<CompletionState>>,
+    links: std::collections::HashMap<[u8; 16], SendCounts>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SendCounts {
+    pub pending: usize,
+    pub waiting: usize,
+}
+
+enum SendPhase {
+    Unadmitted,
+    Waiting,
+    Pending,
+}
+
+pub(crate) struct SendTracking {
+    pool: Arc<SendPool>,
+    link_id: [u8; 16],
+    phase: SendPhase,
+}
+
+impl SendTracking {
+    fn admit(&mut self) {
+        let mut state = self.pool.state.lock().unwrap();
+        if state.closed {
+            return;
+        }
+        let counts = state.links.entry(self.link_id).or_default();
+        match self.phase {
+            SendPhase::Waiting => counts.waiting -= 1,
+            SendPhase::Pending => return,
+            SendPhase::Unadmitted => {}
+        }
+        counts.pending += 1;
+        self.phase = SendPhase::Pending;
+    }
+}
+
+impl Drop for SendTracking {
+    fn drop(&mut self) {
+        let mut state = self.pool.state.lock().unwrap();
+        if let Some(counts) = state.links.get_mut(&self.link_id) {
+            match self.phase {
+                SendPhase::Waiting => counts.waiting -= 1,
+                SendPhase::Pending => counts.pending -= 1,
+                SendPhase::Unadmitted => {}
+            }
+            if counts.pending == 0 && counts.waiting == 0 {
+                state.links.remove(&self.link_id);
+            }
+        }
+    }
 }
 
 pub(crate) struct SendPool {
@@ -95,6 +147,7 @@ impl SendPool {
                 closed: false,
                 waiters: Vec::new(),
                 completions: Vec::new(),
+                links: std::collections::HashMap::new(),
             }),
         })
     }
@@ -109,6 +162,25 @@ impl SendPool {
         }
         state.used += 1;
         Ok(Permit(self.clone()))
+    }
+
+    pub(crate) fn track(self: &Arc<Self>, link_id: [u8; 16], waiting: bool) -> SendTracking {
+        let mut state = self.state.lock().unwrap();
+        let phase = if waiting && !state.closed {
+            state.links.entry(link_id).or_default().waiting += 1;
+            SendPhase::Waiting
+        } else {
+            SendPhase::Unadmitted
+        };
+        SendTracking {
+            pool: self.clone(),
+            link_id,
+            phase,
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> std::collections::HashMap<[u8; 16], SendCounts> {
+        self.state.lock().unwrap().links.clone()
     }
 
     pub(crate) async fn acquire(self: &Arc<Self>) -> Result<Permit, LinkSendError> {
@@ -132,6 +204,7 @@ impl SendPool {
         let (waiters, completions) = {
             let mut state = self.state.lock().unwrap();
             state.closed = true;
+            state.links.clear();
             (
                 std::mem::take(&mut state.waiters),
                 std::mem::take(&mut state.completions),
@@ -172,20 +245,43 @@ pub struct Completion {
     _permit: Permit,
 }
 
-struct CompletionState(Mutex<Option<oneshot::Sender<Result<(), LinkSendError>>>>);
+struct CompletionData {
+    tx: oneshot::Sender<Result<(), LinkSendError>>,
+    tracking: Option<SendTracking>,
+}
+struct CompletionState(Mutex<Option<CompletionData>>);
+impl Drop for CompletionState {
+    fn drop(&mut self) {
+        // Clear counters before waking a receipt whose writer/event vanished.
+        self.finish(Err(LinkSendError::Interrupted));
+    }
+}
 impl CompletionState {
     fn finish(&self, result: Result<(), LinkSendError>) {
-        let tx = self.0.lock().unwrap().take();
-        if let Some(tx) = tx {
-            let _ = tx.send(result);
+        let data = self.0.lock().unwrap().take();
+        if let Some(data) = data {
+            drop(data.tracking);
+            let _ = data.tx.send(result);
         }
     }
 }
 
 impl Completion {
+    #[cfg(test)]
     pub(crate) fn new(permit: Permit) -> (Self, LinkSendReceipt) {
+        Self::new_inner(permit, None)
+    }
+
+    pub(crate) fn new_tracked(permit: Permit, tracking: SendTracking) -> (Self, LinkSendReceipt) {
+        Self::new_inner(permit, Some(tracking))
+    }
+
+    fn new_inner(permit: Permit, tracking: Option<SendTracking>) -> (Self, LinkSendReceipt) {
         let (tx, rx) = oneshot::channel();
-        let completion = Arc::new(CompletionState(Mutex::new(Some(tx))));
+        let completion = Arc::new(CompletionState(Mutex::new(Some(CompletionData {
+            tx,
+            tracking,
+        }))));
         {
             let mut pool = permit.0.state.lock().unwrap();
             pool.completions.retain(|w| w.strong_count() > 0);
@@ -212,12 +308,71 @@ impl Completion {
     pub(crate) fn is_finished(&self) -> bool {
         self.state.0.lock().unwrap().is_none()
     }
+
+    pub(crate) fn admit(&self) {
+        if let Some(data) = self.state.0.lock().unwrap().as_mut() {
+            if let Some(tracking) = data.tracking.as_mut() {
+                tracking.admit();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::{executor::block_on, FutureExt};
+
+    #[test]
+    fn per_link_counts_cover_failure_shutdown_and_receipt_cancellation() {
+        let pool = SendPool::new(3);
+        let waiting = pool.track([1; 16], true);
+        let tracking = pool.track([2; 16], true);
+        let (completion, receipt) = Completion::new_tracked(pool.try_acquire().unwrap(), tracking);
+        completion.admit();
+        assert_eq!(
+            pool.snapshot().get(&[1; 16]),
+            Some(&SendCounts {
+                pending: 0,
+                waiting: 1
+            })
+        );
+        assert_eq!(
+            pool.snapshot().get(&[2; 16]),
+            Some(&SendCounts {
+                pending: 1,
+                waiting: 0
+            })
+        );
+        drop(receipt);
+        assert_eq!(
+            pool.snapshot()[&[2; 16]].pending,
+            1,
+            "dropping a receipt does not cancel transmission"
+        );
+        completion.finish(Err(LinkSendError::WriteFailed("broken pipe".into())));
+        assert!(!pool.snapshot().contains_key(&[2; 16]));
+        drop(waiting);
+        assert!(pool.snapshot().is_empty());
+
+        let tracking = pool.track([4; 16], false);
+        let (completion, receipt) = Completion::new_tracked(pool.try_acquire().unwrap(), tracking);
+        completion.admit();
+        drop(completion);
+        assert_eq!(receipt.wait(), Err(LinkSendError::Interrupted));
+        assert!(pool.snapshot().is_empty());
+
+        let tracking = pool.track([3; 16], false);
+        let (completion, receipt) = Completion::new_tracked(pool.try_acquire().unwrap(), tracking);
+        completion.admit();
+        let waiting = pool.track([3; 16], true);
+        pool.close();
+        assert_eq!(receipt.wait(), Err(LinkSendError::DriverStopped));
+        assert!(pool.snapshot().is_empty());
+        drop(waiting);
+        drop(completion);
+        assert!(pool.snapshot().is_empty());
+    }
 
     #[test]
     fn node_try_rejects_full_capacity_and_async_send_wakes_without_blocking() {
@@ -237,6 +392,13 @@ mod tests {
             Arc::new(AtomicU64::new(1000)),
         );
         let receipt = node.try_send_on_link([1; 16], vec![1], 0).unwrap();
+        assert_eq!(
+            tx.link_send_pool().snapshot()[&[1; 16]],
+            SendCounts {
+                pending: 1,
+                waiting: 0
+            }
+        );
         let first = match rx.try_recv().unwrap() {
             Event::SendLinkTracked { completion, .. } => completion,
             _ => panic!("expected a tracked send"),
@@ -250,12 +412,26 @@ mod tests {
         let waker = futures::task::waker(wakes.clone());
         let mut cx = Context::from_waker(&waker);
         assert!(pending.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            tx.link_send_pool().snapshot()[&[1; 16]],
+            SendCounts {
+                pending: 1,
+                waiting: 1
+            }
+        );
         assert!(
             rx.try_recv().is_err(),
             "capacity wait must not enqueue prematurely"
         );
         first.finish(Ok(()));
         receipt.wait().unwrap();
+        assert_eq!(
+            tx.link_send_pool().snapshot()[&[1; 16]],
+            SendCounts {
+                pending: 0,
+                waiting: 1
+            }
+        );
         assert!(
             wakes.0.load(Ordering::SeqCst) > 0,
             "capacity release must wake the task"
@@ -265,7 +441,15 @@ mod tests {
             Event::SendLinkTracked { completion, .. } => completion,
             _ => panic!("expected a tracked send"),
         };
+        assert_eq!(
+            tx.link_send_pool().snapshot()[&[1; 16]],
+            SendCounts {
+                pending: 1,
+                waiting: 0
+            }
+        );
         second.finish(Ok(()));
+        assert!(tx.link_send_pool().snapshot().is_empty());
         assert_eq!(pending.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
         drop(pending);
 
@@ -277,7 +461,15 @@ mod tests {
         ));
         let mut cancelled = Box::pin(node.send_on_link([1; 16], vec![3], 0));
         assert!(cancelled.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            tx.link_send_pool().snapshot()[&[1; 16]],
+            SendCounts {
+                pending: 0,
+                waiting: 1
+            }
+        );
         drop(cancelled);
+        assert!(tx.link_send_pool().snapshot().is_empty());
         assert_eq!(tx.link_send_pool().in_flight(), 0);
         assert!(matches!(rx.try_recv(), Ok(Event::Tick)));
         assert!(
