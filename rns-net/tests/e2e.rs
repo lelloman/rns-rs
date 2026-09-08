@@ -5500,8 +5500,18 @@ fn issue106_shared_clients_keep_link_alive_and_preserve_burst_data() {
     // immediately splits the resulting 4103-byte frames into LINK_MDU chunks.
     // Queue enough consecutive frames to exercise the same sustained burst.
     let expected: Vec<u8> = (0..(4103 * 64)).map(|index| (index % 251) as u8).collect();
-    for chunk in expected.chunks(rns_core::constants::LINK_MDU) {
-        futures::executor::block_on(alice.send_on_link(link_id, chunk.to_vec(), 0)).unwrap();
+    for (index, chunk) in expected.chunks(rns_core::constants::LINK_MDU).enumerate() {
+        // Both confirmed-send APIs must work on the initial shared-client
+        // connection, not only after reconnect installs a new async writer.
+        if index % 2 == 0 {
+            futures::executor::block_on(alice.send_on_link(link_id, chunk.to_vec(), 0)).unwrap();
+        } else {
+            alice
+                .try_send_on_link(link_id, chunk.to_vec(), 0)
+                .unwrap()
+                .wait()
+                .unwrap();
+        }
     }
     let mut received = Vec::new();
     while received.len() < expected.len() {
