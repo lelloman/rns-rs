@@ -565,6 +565,8 @@ fn handle_links(node: &NodeHandle) -> HttpResponse {
                         "channel_window": l.channel_window,
                         "channel_outstanding": l.channel_outstanding,
                         "pending_channel_packets": l.pending_channel_packets,
+                        "pending_send_packets": l.pending_send_packets,
+                        "waiting_send_packets": l.waiting_send_packets,
                         "channel_send_ok": l.channel_send_ok,
                         "channel_send_not_ready": l.channel_send_not_ready,
                         "channel_send_too_big": l.channel_send_too_big,

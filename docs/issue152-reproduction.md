@@ -33,6 +33,25 @@ an error. A write error may follow a partial transmission, so callers must not
 assume arbitrary errors are safe to retry. Routing/policy rejection and invalid
 Links also produce errors instead of successful receipts.
 
+## Per-link send backlog
+
+`node.links()` includes two local send counters on every `LinkInfoEntry`:
+
+- `pending_send_packets`: admitted confirmed sends that have not finished
+  writing, including driver backlog, interface queues, and writes in progress.
+- `waiting_send_packets`: polled async sends waiting for admission capacity
+  (either the outstanding-send budget or the driver event queue).
+
+`node.query_link(link_id)?` returns `Some(LinkInfoEntry)` with the same fields,
+or `None` for an unknown link. The controller's link list exposes both counters
+as well. These are snapshots, not reservations or remote acknowledgement counts.
+They cover `send_on_link` and `try_send_on_link`; Channel counters remain
+separate, and the legacy admission-only datagram API is not included.
+
+Unpolled futures are not counted. Cancelling a send before admission removes
+its waiting count; dropping an admitted receipt does not remove its pending
+count. Completion, failure, and shutdown clear the corresponding counts.
+
 ## Regression tests
 
 ```sh
@@ -47,9 +66,11 @@ paused. After release, every payload and a final marker must arrive, and all
 send completions must succeed. Both tests use the default 256-frame writer
 queue; one exercises async sends and the other the try/receipt API.
 
-The wrapper injects no packet loss and paces writes at 2 ms per frame. Both
-nodes have 8,192-event capacity so the whole test burst can be admitted and
-receiver ingress limits do not obscure the sender regression. Separate unit
+The wrapper injects no packet loss and paces writes at 2 ms per frame. The
+sender has 4,096-event capacity, exactly filled by the burst, and the receiver
+has 8,192-event capacity to isolate sender egress from receiver ingress limits.
+The paused-writer tests also check the single-link/list snapshots and a further
+async send waiting for capacity, including its cancellation. Separate unit
 tests exercise full admission capacity, async wakeups, cancellation, writer
 flush/error handling, and shutdown. KISS/RNode tests verify that confirmed
 sends wait for flow-control readiness before completing.
