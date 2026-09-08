@@ -2629,22 +2629,62 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
-    /// Send data on a link with a given context.
-    pub fn send_on_link(
+    /// Wait for capacity and transmit a Link packet through its interface writer.
+    ///
+    /// Success means the underlying transport accepted the complete packet,
+    /// not that the peer received or acknowledged it. Cancellation before
+    /// admission sends nothing; after admission, dropping this future does not
+    /// cancel transmission. This future is independent of any async runtime.
+    /// The driver's configured event capacity also bounds the total number of
+    /// admitted Link sends, including frames waiting for an interface or write.
+    /// A transmission error can follow a partial write; only QueueFull from the
+    /// try API guarantees that retrying cannot duplicate an admitted packet.
+    pub async fn send_on_link(
         &self,
         link_id: [u8; 16],
         data: Vec<u8>,
         context: u8,
-    ) -> Result<(), SendError> {
-        self.reject_new_work_if_draining()?;
+    ) -> Result<(), crate::link_send::LinkSendError> {
+        use crate::link_send::Completion;
+        let permit = self.tx.link_send_pool().acquire().await?;
+        let (completion, receipt) = Completion::new(permit);
         self.tx
-            .send(Event::SendOnLink {
+            .send_async(Event::SendLinkTracked {
                 link_id,
                 data,
                 context,
-                response_tx: None,
+                completion,
             })
-            .map_err(|_| SendError)
+            .await?;
+        receipt.await
+    }
+
+    /// Try to admit a Link send without waiting for capacity.
+    ///
+    /// A successful return is a receipt, not a transmission result. Await the
+    /// receipt for exactly the same completion contract as `send_on_link`.
+    /// QueueFull means nothing was admitted and the caller may retry.
+    pub fn try_send_on_link(
+        &self,
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        context: u8,
+    ) -> Result<crate::link_send::LinkSendReceipt, crate::link_send::LinkSendError> {
+        use crate::link_send::{Completion, LinkSendError};
+        let permit = self.tx.link_send_pool().try_acquire()?;
+        let (completion, receipt) = Completion::new(permit);
+        self.tx
+            .try_send(Event::SendLinkTracked {
+                link_id,
+                data,
+                context,
+                completion,
+            })
+            .map_err(|error| match error {
+                std::sync::mpsc::TrySendError::Full(_) => LinkSendError::QueueFull,
+                std::sync::mpsc::TrySendError::Disconnected(_) => LinkSendError::DriverStopped,
+            })?;
+        Ok(receipt)
     }
 
     /// Admit a best-effort direct Link datagram without blocking on queue space.

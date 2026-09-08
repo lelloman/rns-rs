@@ -11,6 +11,7 @@ pub mod common;
 pub mod event;
 pub mod hdlc;
 pub mod kiss;
+pub mod link_send;
 pub mod logging;
 pub mod rnode_kiss;
 pub use common::time;
@@ -104,6 +105,7 @@ pub use interface::{
     InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
 };
 pub use link_manager::{LinkManager, LinkManagerAction, RequestFailure, RequestResponse};
+pub use link_send::{LinkSendError, LinkSendReceipt};
 pub use management::ManagementConfig;
 pub use node::{ChannelSendError, IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
 #[cfg(feature = "hooks")]

@@ -207,6 +207,7 @@ pub fn lora_airtime_profile(sub: &RNodeSubConfig) -> AirtimeProfile {
 /// Writer for a specific RNode subinterface.
 /// Wraps a shared serial writer with subinterface-specific data framing.
 struct RNodeSubWriter {
+    confirmed_pending: Option<Vec<u8>>,
     writer: Arc<Mutex<Transport>>,
     index: u8,
     flow_control: bool,
@@ -227,6 +228,7 @@ fn make_sub_writer(
     multi: bool,
 ) -> Box<dyn Writer> {
     Box::new(RNodeSubWriter {
+        confirmed_pending: None,
         writer,
         index,
         flow_control,
@@ -236,6 +238,31 @@ fn make_sub_writer(
 }
 
 impl Writer for RNodeSubWriter {
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        if !self.flow_control {
+            return self.send_frame(data);
+        }
+        self.confirmed_pending = Some(if self.multi {
+            rnode_kiss::rnode_multi_data_frame(self.index, data)
+        } else {
+            rnode_kiss::rnode_data_frame(self.index, data)
+        });
+        self.flush()
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.confirmed_pending.is_none() {
+            return Ok(());
+        }
+        let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
+        if !state.ready || !state.queue.is_empty() {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        state.ready = false;
+        drop(state);
+        lock_or_recover(&self.writer, "rnode shared writer")
+            .write_all(&self.confirmed_pending.take().unwrap())
+    }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         let frame = if self.multi {
             rnode_kiss::rnode_multi_data_frame(self.index, data)
@@ -1385,6 +1412,7 @@ mod tests {
         }));
 
         let mut sub_writer = RNodeSubWriter {
+            confirmed_pending: None,
             writer: shared_writer.clone(),
             index: 0,
             flow_control: true,
@@ -1424,6 +1452,41 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_rnode_frame_waits_for_ready_and_flushes_once() {
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let mut master = unsafe { transport_from_raw_fd(master_fd) };
+        let state = Arc::new(Mutex::new(SubFlowState {
+            ready: false,
+            queue: std::collections::VecDeque::new(),
+        }));
+        let mut writer = RNodeSubWriter {
+            confirmed_pending: None,
+            writer: Arc::new(Mutex::new(unsafe { transport_from_raw_fd(slave_fd) })),
+            index: 0,
+            flow_control: true,
+            flow_state: state.clone(),
+            multi: false,
+        };
+        assert_eq!(
+            writer
+                .send_frame_confirmed(b"confirmed")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(state.lock().unwrap().queue.is_empty());
+        assert!(!poll_read(master.as_raw_fd(), 20));
+        state.lock().unwrap().ready = true;
+        Writer::flush(&mut writer).unwrap();
+        let expected = rnode_kiss::rnode_data_frame(0, b"confirmed");
+        let mut actual = vec![0; expected.len()];
+        master.read_exact(&mut actual).unwrap();
+        assert_eq!(actual, expected);
+        Writer::flush(&mut writer).unwrap();
+        assert!(!poll_read(master.as_raw_fd(), 20));
+    }
+
+    #[test]
     fn rnode_snr_metadata_does_not_depend_on_rssi() {
         let mut last_rssi = None;
         let mut last_snr = None;
@@ -1451,6 +1514,7 @@ mod tests {
         }));
 
         let mut sub_writer = RNodeSubWriter {
+            confirmed_pending: None,
             writer: shared_writer,
             index: 1, // subinterface 1
             flow_control: false,

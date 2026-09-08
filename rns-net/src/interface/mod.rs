@@ -240,6 +240,26 @@ pub fn validate_underlay_mark(mark: Option<u32>) -> io::Result<()> {
 pub trait Writer: Send {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()>;
 
+    /// Write one frame without silently dropping it. WouldBlock means the
+    /// frame was accepted and `flush` must finish it before success is reported.
+    /// Writers with intentional drop policies must override this method.
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        self.send_frame(data)
+    }
+
+    /// Internal async-writer admission. Leaves completion untouched on failure.
+    #[doc(hidden)]
+    fn enqueue_confirmed(
+        &mut self,
+        _data: &[u8],
+        _completion: &mut Option<crate::link_send::Completion>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "confirmed sends require an async interface writer",
+        ))
+    }
+
     fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
         for frame in frames {
             self.send_frame(frame)?;
@@ -429,10 +449,29 @@ struct AsyncWriter {
 struct QueuedFrame {
     data: Vec<u8>,
     reserved_bytes: usize,
+    completion: Option<crate::link_send::Completion>,
 }
 
 impl Writer for AsyncWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        self.enqueue(data, &mut None)
+    }
+
+    fn enqueue_confirmed(
+        &mut self,
+        data: &[u8],
+        completion: &mut Option<crate::link_send::Completion>,
+    ) -> io::Result<()> {
+        self.enqueue(data, completion)
+    }
+}
+
+impl AsyncWriter {
+    fn enqueue(
+        &mut self,
+        data: &[u8],
+        completion: &mut Option<crate::link_send::Completion>,
+    ) -> io::Result<()> {
         if !self.metrics.worker_alive() {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -443,6 +482,18 @@ impl Writer for AsyncWriter {
         let reserved_bytes = if let Some(control) = &self.metrics.egress_control {
             let framed_bytes = crate::hdlc::framed_len(data);
             if !control.try_reserve(framed_bytes) {
+                if completion.is_some() {
+                    if framed_bytes > control.byte_limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "frame exceeds interface byte budget",
+                        ));
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "interface egress budget is full",
+                    ));
+                }
                 control.record_drop(framed_bytes);
                 return Ok(());
             }
@@ -456,9 +507,11 @@ impl Writer for AsyncWriter {
         match self.tx.try_send(QueuedFrame {
             data: data.to_vec(),
             reserved_bytes,
+            completion: completion.take(),
         }) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(frame)) => {
+                *completion = frame.completion;
                 self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
                 if let Some(control) = &self.metrics.egress_control {
                     control.release(frame.reserved_bytes);
@@ -469,6 +522,7 @@ impl Writer for AsyncWriter {
                 ))
             }
             Err(TrySendError::Disconnected(frame)) => {
+                *completion = frame.completion;
                 self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
                 if let Some(control) = &self.metrics.egress_control {
                     control.release(frame.reserved_bytes);
@@ -544,12 +598,70 @@ fn async_writer_loop(
         let mut queued = vec![first];
         queued.extend(rx.try_iter());
         let reserved_bytes = queued.iter().map(|frame| frame.reserved_bytes).sum();
-        let frames: Vec<_> = queued.into_iter().map(|frame| frame.data).collect();
         metrics
             .queued_frames
-            .fetch_sub(frames.len(), Ordering::Relaxed);
+            .fetch_sub(queued.len(), Ordering::Relaxed);
+        if event_tx.link_send_pool().in_flight() > 0 {
+            let _ = event_tx.try_send(crate::event::Event::LinkWriterReady);
+        }
 
-        let mut result = writer.send_frames(&frames);
+        let mut result = Ok(());
+        if queued.iter().any(|frame| frame.completion.is_some()) {
+            for mut frame in queued {
+                let confirmed = frame.completion.is_some();
+                if frame.completion.as_ref().is_some_and(|c| c.is_finished()) {
+                    result = Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "transmission cancelled by shutdown",
+                    ));
+                }
+                if result.is_ok() {
+                    result = if frame.completion.is_some() {
+                        writer.send_frame_confirmed(&frame.data)
+                    } else {
+                        writer.send_frame(&frame.data)
+                    };
+                    while result
+                        .as_ref()
+                        .is_err_and(|e| e.kind() == io::ErrorKind::WouldBlock)
+                    {
+                        if frame.completion.as_ref().is_some_and(|c| c.is_finished()) {
+                            result = Err(io::Error::new(
+                                io::ErrorKind::Interrupted,
+                                "transmission cancelled by shutdown",
+                            ));
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(1));
+                        result = writer.flush();
+                    }
+                }
+                if let Some(completion) = frame.completion.take() {
+                    completion.finish(
+                        result.as_ref().map(|_| ()).map_err(|e| {
+                            crate::link_send::LinkSendError::WriteFailed(e.to_string())
+                        }),
+                    );
+                }
+                // Packet-level policy/validation errors do not imply a broken
+                // connection (e.g. a Local client that temporarily holds TX).
+                if confirmed
+                    && result.as_ref().is_err_and(|error| {
+                        matches!(
+                            error.kind(),
+                            io::ErrorKind::PermissionDenied
+                                | io::ErrorKind::InvalidInput
+                                | io::ErrorKind::Unsupported
+                        )
+                    })
+                {
+                    result = Ok(());
+                }
+            }
+        } else {
+            let frames: Vec<_> = queued.into_iter().map(|frame| frame.data).collect();
+            result = writer.send_frames(&frames);
+        }
         while result
             .as_ref()
             .is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock)
@@ -560,6 +672,9 @@ fn async_writer_loop(
 
         if let Some(control) = &metrics.egress_control {
             control.release(reserved_bytes);
+        }
+        if event_tx.link_send_pool().in_flight() > 0 {
+            let _ = event_tx.try_send(crate::event::Event::LinkWriterReady);
         }
 
         if let Err(err) = result {
@@ -942,6 +1057,75 @@ mod tests {
     struct BlockingWriter {
         entered_tx: mpsc::Sender<()>,
         release_rx: mpsc::Receiver<()>,
+    }
+
+    #[test]
+    fn confirmed_writer_waits_for_flush_and_reports_write_failures() {
+        use crate::link_send::{Completion, LinkSendError, SendPool};
+        use futures::FutureExt;
+        struct FlushWriter {
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            writes: Arc<AtomicUsize>,
+        }
+        impl Writer for FlushWriter {
+            fn send_frame(&mut self, _: &[u8]) -> io::Result<()> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.entered.send(()).unwrap();
+                self.release.recv().unwrap();
+                Ok(())
+            }
+        }
+        let (event_tx, _rx) = crate::event::channel();
+        let (entered, entered_rx) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let pool = SendPool::new(1);
+        let (completion, mut receipt) = Completion::new(pool.try_acquire().unwrap());
+        let (mut writer, _) = wrap_async_writer(
+            Box::new(FlushWriter {
+                entered,
+                release,
+                writes: writes.clone(),
+            }),
+            InterfaceId(999),
+            "flush test",
+            event_tx.clone(),
+            1,
+        );
+        writer
+            .enqueue_confirmed(b"once", &mut Some(completion))
+            .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!((&mut receipt).now_or_never().is_none());
+        release_tx.send(()).unwrap();
+        receipt.wait().unwrap();
+        assert_eq!(
+            writes.load(Ordering::SeqCst),
+            1,
+            "flush must not resubmit the frame"
+        );
+
+        let (completion, receipt) = Completion::new(pool.try_acquire().unwrap());
+        let (mut writer, _) = wrap_async_writer(
+            Box::new(FailingWriter {
+                shutdown_called: Arc::new(AtomicBool::new(false)),
+            }),
+            InterfaceId(998),
+            "failure test",
+            event_tx,
+            1,
+        );
+        writer
+            .enqueue_confirmed(b"fail", &mut Some(completion))
+            .unwrap();
+        assert_eq!(
+            receipt.wait(),
+            Err(LinkSendError::WriteFailed("boom".into()))
+        );
     }
 
     impl Writer for BlockingWriter {

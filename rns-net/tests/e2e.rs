@@ -589,6 +589,9 @@ const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 
 const APP_NAME: &str = "e2e_test";
 
+#[path = "support/issue152.rs"]
+mod issue152;
+
 /// Start a transport node (TCP server) on the given port.
 fn start_transport_node(port: u16) -> RnsNode {
     start_transport_node_with_limits(
@@ -3310,8 +3313,7 @@ fn test_send_on_link() {
         link_id,
     ) = setup_link();
 
-    alice_node
-        .send_on_link(link_id, b"custom data".to_vec(), 0x42)
+    futures::executor::block_on(alice_node.send_on_link(link_id, b"custom data".to_vec(), 0x42))
         .unwrap();
 
     let (ld_lid, ld_ctx, ld_data) =
@@ -5499,7 +5501,7 @@ fn issue106_shared_clients_keep_link_alive_and_preserve_burst_data() {
     // Queue enough consecutive frames to exercise the same sustained burst.
     let expected: Vec<u8> = (0..(4103 * 64)).map(|index| (index % 251) as u8).collect();
     for chunk in expected.chunks(rns_core::constants::LINK_MDU) {
-        alice.send_on_link(link_id, chunk.to_vec(), 0).unwrap();
+        futures::executor::block_on(alice.send_on_link(link_id, chunk.to_vec(), 0)).unwrap();
     }
     let mut received = Vec::new();
     while received.len() < expected.len() {
@@ -5518,7 +5520,7 @@ fn issue106_shared_clients_keep_link_alive_and_preserve_burst_data() {
     // directional 0xff/0xfe keepalive exchange kept both endpoints alive.
     std::thread::sleep(Duration::from_secs(15));
     let after_keepalive = b"issue106 link survived idle keepalive".to_vec();
-    bob.send_on_link(link_id, after_keepalive.clone(), 0)
+    futures::executor::block_on(bob.send_on_link(link_id, after_keepalive.clone(), 0))
         .expect("Bob should still have an active link after the keepalive window");
     let (received_link, context, received_data) = wait_for_link_data(&alice_rx, TIMEOUT)
         .expect("Alice should receive Link data after the keepalive window");

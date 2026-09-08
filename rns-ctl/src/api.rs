@@ -1002,10 +1002,28 @@ fn handle_post_link_send(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     };
     let context = body["context"].as_u64().unwrap_or(0) as u8;
 
-    with_active_node(node, |n| match n.send_on_link(link_id, data, context) {
+    // Release the node handle before waiting for a slow interface, so other
+    // requests can still query, drain, or shut down the node.
+    let receipt = {
+        let guard = lock_node_handle(node);
+        let Some(n) = guard.as_ref() else {
+            return HttpResponse::internal_error("Node is shutting down");
+        };
+        match n.try_send_on_link(link_id, data, context) {
+            Ok(receipt) => receipt,
+            Err(rns_net::LinkSendError::QueueFull) => {
+                return HttpResponse::conflict("Outbound queue is full");
+            }
+            Err(_) => return HttpResponse::internal_error("Send on link failed"),
+        }
+    };
+    match receipt.wait() {
         Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
+        Err(rns_net::LinkSendError::Draining) => {
+            HttpResponse::conflict("Node is draining and not accepting new work")
+        }
         Err(_) => HttpResponse::internal_error("Send on link failed"),
-    })
+    }
 }
 
 fn handle_post_link_close(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {

@@ -77,6 +77,7 @@ struct FlowState {
 /// Writer that sends KISS-framed data over a serial port.
 /// Handles flow control: when enabled, queues packets until CMD_READY.
 struct KissWriter {
+    confirmed_pending: Option<Vec<u8>>,
     file: std::fs::File,
     flow_control: bool,
     flow_state: Arc<Mutex<FlowState>>,
@@ -84,6 +85,32 @@ struct KissWriter {
 }
 
 impl Writer for KissWriter {
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        if !self.flow_control {
+            return self.send_frame(data);
+        }
+        let data = self
+            .ax25_source
+            .as_ref()
+            .map(|source| super::ax25_kiss::encode_ui_frame(source, data))
+            .unwrap_or_else(|| data.to_vec());
+        self.confirmed_pending = Some(kiss::frame(&data));
+        self.flush()
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.confirmed_pending.is_none() {
+            return Ok(());
+        }
+        let mut state = lock_or_recover(&self.flow_state, "kiss flow state");
+        if !state.ready || !state.queue.is_empty() {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        state.ready = false;
+        state.lock_time = Instant::now();
+        drop(state);
+        self.file.write_all(&self.confirmed_pending.take().unwrap())
+    }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         let data = self
             .ax25_source
@@ -157,6 +184,7 @@ pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Wri
         })?;
 
     Ok(Box::new(KissWriter {
+        confirmed_pending: None,
         file: writer_file,
         flow_control: config.flow_control,
         flow_state,
@@ -355,6 +383,7 @@ fn reconnect(
                         drop(state);
 
                         let new_writer: Box<dyn Writer> = Box::new(KissWriter {
+                            confirmed_pending: None,
                             file: cfg_writer,
                             flow_control: config.flow_control,
                             flow_state: flow_state.clone(),
@@ -596,6 +625,7 @@ mod tests {
         }));
 
         let mut writer = KissWriter {
+            confirmed_pending: None,
             file: writer_file,
             flow_control: false,
             flow_state,
@@ -716,6 +746,7 @@ mod tests {
         let writer_file = unsafe { std::fs::File::from_raw_fd(slave_fd) };
 
         let mut writer = KissWriter {
+            confirmed_pending: None,
             file: writer_file,
             flow_control: true,
             flow_state: flow_state.clone(),
@@ -760,6 +791,40 @@ mod tests {
         let state = flow_state.lock().unwrap();
         assert!(!state.ready);
         assert!(state.lock_time.elapsed() > Duration::from_secs(5));
+    }
+
+    #[test]
+    fn confirmed_kiss_frame_waits_for_ready_and_flushes_once() {
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let state = Arc::new(Mutex::new(FlowState {
+            ready: false,
+            queue: VecDeque::new(),
+            lock_time: Instant::now(),
+        }));
+        let mut writer = KissWriter {
+            confirmed_pending: None,
+            file: unsafe { std::fs::File::from_raw_fd(slave_fd) },
+            flow_control: true,
+            flow_state: state.clone(),
+            ax25_source: None,
+        };
+        assert_eq!(
+            writer
+                .send_frame_confirmed(b"confirmed")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(state.lock().unwrap().queue.is_empty());
+        assert!(!poll_read(master.as_raw_fd(), 20));
+        state.lock().unwrap().ready = true;
+        Writer::flush(&mut writer).unwrap();
+        let mut actual = vec![0; kiss::frame(b"confirmed").len()];
+        master.read_exact(&mut actual).unwrap();
+        assert_eq!(actual, kiss::frame(b"confirmed"));
+        Writer::flush(&mut writer).unwrap();
+        assert!(!poll_read(master.as_raw_fd(), 20));
     }
 
     #[test]
