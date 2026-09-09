@@ -155,7 +155,7 @@ impl PrivateNode {
 
     pub fn announce_gateway(&self, destination: &Destination) -> io::Result<()> {
         self.node
-            .announce(destination, &self.identity, Some(b"RNTU\x01"))
+            .announce_queued(destination, &self.identity, Some(b"RNTU\x01"))
             .map(|_| ())
             .map_err(node_error)
     }

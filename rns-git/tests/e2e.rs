@@ -358,7 +358,7 @@ fn rngit_nomadnet_pages_render_over_rns_link() {
             }
             harness
                 .server_node
-                .announce(page_destination, &harness.server_identity, None)
+                .announce_queued(page_destination, &harness.server_identity, None)
                 .unwrap();
             std::thread::sleep(Duration::from_millis(250));
         }
@@ -869,7 +869,7 @@ fn wait_for_announce(
     let deadline = Instant::now() + timeout;
     loop {
         server_node
-            .announce(destination, server_identity, app_data)
+            .announce_queued(destination, server_identity, app_data)
             .expect("reannounce should succeed");
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Event::Announce(announced)) if announced.dest_hash == dest_hash => {

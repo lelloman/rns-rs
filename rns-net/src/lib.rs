@@ -106,6 +106,9 @@ pub use interface::{
 };
 pub use link_manager::{LinkManager, LinkManagerAction, RequestFailure, RequestResponse};
 pub use link_send::{LinkSendError, LinkSendReceipt};
+pub use link_send::{
+    LinkSendError as TransmissionError, LinkSendReceipt as TransmissionReceipt, PacketSendReceipt,
+};
 pub use management::ManagementConfig;
 pub use node::{ChannelSendError, IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
 #[cfg(feature = "hooks")]

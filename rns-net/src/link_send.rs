@@ -1,4 +1,4 @@
-//! Runtime-independent Link transmission completion and bounded admission.
+//! Runtime-independent transmission completion and bounded admission.
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
@@ -14,6 +14,7 @@ pub enum LinkSendError {
     Interrupted,
     Draining,
     InvalidPacket(crate::event::LinkDatagramError),
+    PacketBuildFailed,
     NoRoute,
     Rejected,
     InterfaceUnavailable,
@@ -28,7 +29,8 @@ impl std::fmt::Display for LinkSendError {
             Self::Interrupted => f.write_str("transmission interrupted before completion"),
             Self::Draining => f.write_str("node is draining"),
             Self::InvalidPacket(error) => write!(f, "{error}"),
-            Self::NoRoute => f.write_str("no interface route for Link"),
+            Self::PacketBuildFailed => f.write_str("failed to build or encrypt outbound packet"),
+            Self::NoRoute => f.write_str("no outgoing interface route"),
             Self::Rejected => f.write_str("outbound packet rejected by routing or policy"),
             Self::InterfaceUnavailable => f.write_str("outbound interface is unavailable"),
             Self::WriteFailed(error) => write!(f, "interface write failed: {error}"),
@@ -37,7 +39,7 @@ impl std::fmt::Display for LinkSendError {
 }
 impl std::error::Error for LinkSendError {}
 
-/// Await this receipt to learn whether the interface finished writing the packet.
+/// Await this receipt to learn whether all selected interfaces finished writing.
 /// Obtaining a receipt means admission only; it is not a transmission result.
 /// Dropping a receipt does not cancel an admitted send.
 #[must_use = "await the receipt (or call wait) to observe transmission completion"]
@@ -56,6 +58,33 @@ impl LinkSendReceipt {
     /// Blocking counterpart for synchronous callers. Do not call from a driver callback.
     pub fn wait(self) -> Result<(), LinkSendError> {
         futures::executor::block_on(self)
+    }
+}
+
+/// A packet's hash is available immediately for proof tracking, but successful
+/// transmission is reported only when this receipt resolves. Failure may follow
+/// partial transmission; neither the hash nor success promises remote delivery.
+#[must_use = "await the receipt (or call wait) to observe transmission completion"]
+pub struct PacketSendReceipt {
+    pub(crate) completion: LinkSendReceipt,
+    pub(crate) hash: rns_core::types::PacketHash,
+}
+impl PacketSendReceipt {
+    pub fn packet_hash(&self) -> rns_core::types::PacketHash {
+        self.hash
+    }
+    /// Blocking completion wait. Do not call from a driver callback.
+    pub fn wait(self) -> Result<rns_core::types::PacketHash, LinkSendError> {
+        futures::executor::block_on(self)
+    }
+}
+impl Future for PacketSendReceipt {
+    type Output = Result<rns_core::types::PacketHash, LinkSendError>;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let hash = self.hash;
+        Pin::new(&mut self.completion)
+            .poll(cx)
+            .map(|r| r.map(|()| hash))
     }
 }
 
@@ -242,12 +271,15 @@ impl Drop for Permit {
 #[doc(hidden)]
 pub struct Completion {
     state: Arc<CompletionState>,
-    _permit: Permit,
+    settled: bool,
 }
 
 struct CompletionData {
     tx: oneshot::Sender<Result<(), LinkSendError>>,
     tracking: Option<SendTracking>,
+    permit: Permit,
+    remaining: usize,
+    error: Option<LinkSendError>,
 }
 struct CompletionState(Mutex<Option<CompletionData>>);
 impl Drop for CompletionState {
@@ -261,13 +293,13 @@ impl CompletionState {
         let data = self.0.lock().unwrap().take();
         if let Some(data) = data {
             drop(data.tracking);
+            drop(data.permit);
             let _ = data.tx.send(result);
         }
     }
 }
 
 impl Completion {
-    #[cfg(test)]
     pub(crate) fn new(permit: Permit) -> (Self, LinkSendReceipt) {
         Self::new_inner(permit, None)
     }
@@ -278,12 +310,16 @@ impl Completion {
 
     fn new_inner(permit: Permit, tracking: Option<SendTracking>) -> (Self, LinkSendReceipt) {
         let (tx, rx) = oneshot::channel();
+        let pool = permit.0.clone();
         let completion = Arc::new(CompletionState(Mutex::new(Some(CompletionData {
             tx,
             tracking,
+            permit,
+            remaining: 1,
+            error: None,
         }))));
         {
-            let mut pool = permit.0.state.lock().unwrap();
+            let mut pool = pool.state.lock().unwrap();
             pool.completions.retain(|w| w.strong_count() > 0);
             if pool.closed {
                 drop(pool);
@@ -295,15 +331,47 @@ impl Completion {
         (
             Self {
                 state: completion,
-                _permit: permit,
+                settled: false,
             },
             LinkSendReceipt(rx),
         )
     }
-    pub(crate) fn finish(self, result: Result<(), LinkSendError>) {
-        let Self { state, _permit } = self;
-        drop(_permit);
-        state.finish(result);
+    pub(crate) fn finish(mut self, result: Result<(), LinkSendError>) {
+        self.settle(result);
+    }
+
+    /// Each selected interface gets a branch. The permit and receipt remain
+    /// live until every branch settles, even if one branch fails early.
+    pub(crate) fn branch(&self) -> Self {
+        if let Some(data) = self.state.0.lock().unwrap().as_mut() {
+            data.remaining += 1;
+        }
+        Self {
+            state: self.state.clone(),
+            settled: false,
+        }
+    }
+
+    fn settle(&mut self, result: Result<(), LinkSendError>) {
+        self.settled = true;
+        let final_data = {
+            let mut guard = self.state.0.lock().unwrap();
+            let Some(data) = guard.as_mut() else { return };
+            if data.error.is_none() {
+                data.error = result.err();
+            }
+            data.remaining -= 1;
+            if data.remaining == 0 {
+                guard.take()
+            } else {
+                None
+            }
+        };
+        if let Some(data) = final_data {
+            drop(data.tracking);
+            drop(data.permit);
+            let _ = data.tx.send(data.error.map_or(Ok(()), Err));
+        }
     }
     pub(crate) fn is_finished(&self) -> bool {
         self.state.0.lock().unwrap().is_none()
@@ -318,10 +386,153 @@ impl Completion {
     }
 }
 
+impl Drop for Completion {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.settle(Err(LinkSendError::Interrupted));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::{executor::block_on, FutureExt};
+
+    #[test]
+    fn fanout_keeps_capacity_until_all_writes_settle() {
+        let pool = SendPool::new(1);
+        let (completion, mut receipt) = Completion::new(pool.try_acquire().unwrap());
+        let first = completion.branch();
+        let last = completion.branch();
+        completion.finish(Ok(()));
+        first.finish(Err(LinkSendError::WriteFailed("first failed".into())));
+        assert!((&mut receipt).now_or_never().is_none());
+        assert!(matches!(pool.try_acquire(), Err(LinkSendError::QueueFull)));
+        last.finish(Ok(()));
+        assert_eq!(
+            receipt.wait(),
+            Err(LinkSendError::WriteFailed("first failed".into()))
+        );
+        assert_eq!(pool.in_flight(), 0);
+
+        let (completion, receipt) = Completion::new(pool.try_acquire().unwrap());
+        let child = completion.branch();
+        completion.finish(Ok(()));
+        drop(child);
+        assert_eq!(receipt.wait(), Err(LinkSendError::Interrupted));
+        assert_eq!(pool.in_flight(), 0);
+
+        let (completion, receipt) = Completion::new(pool.try_acquire().unwrap());
+        let child = completion.branch();
+        pool.close();
+        assert_eq!(receipt.wait(), Err(LinkSendError::DriverStopped));
+        assert_eq!(pool.in_flight(), 0);
+        drop((completion, child));
+    }
+
+    #[test]
+    fn packet_and_announce_admission_is_bounded_and_runtime_independent() {
+        use crate::event::Event;
+        let (tx, rx) = crate::event::channel_with_capacity(1);
+        let node = crate::RnsNode::from_parts(
+            tx.clone(),
+            std::thread::spawn(|| {}),
+            None,
+            Arc::new(std::sync::atomic::AtomicU64::new(1000)),
+        );
+        let dest = crate::Destination::plain("confirmed", &["packet"]);
+        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let announce_dest = crate::Destination::single_in(
+            "confirmed",
+            &["announce"],
+            crate::IdentityHash(*identity.hash()),
+        );
+        drop(node.announce(&announce_dest, &identity, None));
+        assert!(
+            rx.try_recv().is_err(),
+            "unpolled sends must have no side effects"
+        );
+        tx.send(Event::Tick).unwrap();
+        assert!(matches!(
+            node.try_announce(&announce_dest, &identity, None),
+            Err(LinkSendError::QueueFull)
+        ));
+        let mut cancelled = Box::pin(node.announce(&announce_dest, &identity, None));
+        assert!(cancelled.as_mut().now_or_never().is_none());
+        drop(cancelled);
+        assert_eq!(tx.link_send_pool().in_flight(), 0);
+        assert!(matches!(rx.try_recv(), Ok(Event::Tick)));
+        assert!(
+            rx.try_recv().is_err(),
+            "cancelled admission must not update replay state"
+        );
+        let receipt = node.try_send_packet(&dest, b"first").unwrap();
+        let hash = receipt.packet_hash();
+        let Event::SendOutboundTracked {
+            completion: first, ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected tracked packet")
+        };
+        assert!(matches!(
+            node.try_announce(&announce_dest, &identity, None),
+            Err(LinkSendError::QueueFull)
+        ));
+        let mut announce = Box::pin(node.announce(&announce_dest, &identity, None));
+        assert!(announce.as_mut().now_or_never().is_none());
+        assert!(rx.try_recv().is_err());
+        first.finish(Ok(()));
+        assert_eq!(receipt.wait().unwrap(), hash);
+        assert!(announce.as_mut().now_or_never().is_none());
+        let Event::SendOutboundTracked {
+            completion, replay, ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected tracked announce")
+        };
+        assert_eq!(replay.unwrap().dest_hash, announce_dest.hash.0);
+        assert!(matches!(
+            node.try_send_packet(&dest, b"full"),
+            Err(LinkSendError::QueueFull)
+        ));
+        completion.finish(Ok(()));
+        block_on(announce).unwrap();
+        let receipt = node.try_announce(&announce_dest, &identity, None).unwrap();
+        let Event::SendOutboundTracked { completion, .. } = rx.try_recv().unwrap() else {
+            panic!("expected tracked announce")
+        };
+        completion.finish(Ok(()));
+        receipt.wait().unwrap();
+        let mut packet = Box::pin(node.send_packet(&dest, b"async"));
+        assert!(packet.as_mut().now_or_never().is_none());
+        let Event::SendOutboundTracked {
+            completion, raw, ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected tracked packet")
+        };
+        let hash = rns_core::types::PacketHash(
+            rns_core::packet::RawPacket::unpack(&raw)
+                .unwrap()
+                .packet_hash,
+        );
+        completion.finish(Ok(()));
+        assert_eq!(block_on(packet).unwrap(), hash);
+        assert!(
+            tx.link_send_pool().snapshot().is_empty(),
+            "non-Link sends must not affect per-Link counts"
+        );
+        drop(rx);
+        assert!(matches!(
+            node.try_send_packet(&dest, b"stopped"),
+            Err(LinkSendError::DriverStopped)
+        ));
+        assert_eq!(
+            block_on(node.announce(&announce_dest, &identity, None)),
+            Err(LinkSendError::DriverStopped)
+        );
+    }
 
     #[test]
     fn per_link_counts_cover_failure_shutdown_and_receipt_cancellation() {
@@ -544,6 +755,53 @@ mod tests {
                 .unwrap()
                 .wait(),
             expected
+        );
+        let dest = crate::Destination::plain("confirmed", &["no_route"]);
+        assert_eq!(
+            block_on(node.send_packet(&dest, b"data")),
+            Err(LinkSendError::NoRoute)
+        );
+        assert_eq!(
+            node.try_send_packet(&dest, b"data").unwrap().wait(),
+            Err(LinkSendError::NoRoute)
+        );
+        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let announce_dest = crate::Destination::single_in(
+            "confirmed",
+            &["announce"],
+            crate::IdentityHash(*identity.hash()),
+        );
+        assert_eq!(
+            block_on(node.announce(&announce_dest, &identity, None)),
+            Err(LinkSendError::NoRoute)
+        );
+        assert_eq!(
+            node.try_announce(&announce_dest, &identity, None)
+                .unwrap()
+                .wait(),
+            Err(LinkSendError::NoRoute)
+        );
+        let oversized = vec![0; rns_core::constants::MTU * 2];
+        assert_eq!(
+            block_on(node.send_packet(&dest, &oversized)),
+            Err(LinkSendError::PacketBuildFailed)
+        );
+        assert!(matches!(
+            node.try_send_packet(&dest, &oversized),
+            Err(LinkSendError::PacketBuildFailed)
+        ));
+        node.begin_drain(std::time::Duration::from_secs(30))
+            .unwrap();
+        node.drain_status().unwrap();
+        assert_eq!(
+            block_on(node.send_packet(&dest, b"data")),
+            Err(LinkSendError::Draining)
+        );
+        assert_eq!(
+            node.try_announce(&announce_dest, &identity, None)
+                .unwrap()
+                .wait(),
+            Err(LinkSendError::Draining)
         );
         node.shutdown();
     }

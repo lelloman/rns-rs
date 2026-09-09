@@ -2647,7 +2647,8 @@ impl RnsNode {
     /// admission sends nothing; after admission, dropping this future does not
     /// cancel transmission. This future is independent of any async runtime.
     /// The driver's configured event capacity also bounds the total number of
-    /// admitted Link sends, including frames waiting for an interface or write.
+    /// admitted confirmed sends (Links, packets and announcements), including
+    /// frames waiting for an interface or write.
     /// A transmission error can follow a partial write; only QueueFull from the
     /// try API guarantees that retrying cannot duplicate an admitted packet.
     pub async fn send_on_link(
@@ -2735,17 +2736,162 @@ impl RnsNode {
             })?
     }
 
-    /// Build and broadcast an announce for a destination.
+    /// Wait for capacity, then transmit an announcement on all selected local interfaces.
+    ///
+    /// Success means all selected writers accepted the complete packet, not
+    /// remote delivery or subsequent relay. An error can follow partial delivery
+    /// on one or more interfaces. No eligible interface returns `NoRoute`.
+    /// Cancelling before admission sends nothing; after admission, transmission
+    /// continues. Shared-client replay metadata travels in the same admitted
+    /// event as the packet, never in a separate event from a rejected send.
+    pub async fn announce(
+        &self,
+        dest: &crate::destination::Destination,
+        identity: &Identity,
+        app_data: Option<&[u8]>,
+    ) -> Result<(), crate::TransmissionError> {
+        let permit = self.tx.link_send_pool().acquire().await?;
+        let (packet, replay) = self
+            .build_announce(dest, identity, app_data)
+            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+        let (completion, receipt) = crate::link_send::Completion::new(permit);
+        self.tx
+            .send_async(Event::SendOutboundTracked {
+                raw: packet.raw,
+                dest_type: dest.dest_type.to_wire_constant(),
+                replay,
+                completion,
+            })
+            .await?;
+        receipt.await
+    }
+
+    /// Try admission immediately; await the receipt for the exact same result
+    /// as `announce`. `QueueFull` guarantees nothing was admitted.
+    pub fn try_announce(
+        &self,
+        dest: &crate::destination::Destination,
+        identity: &Identity,
+        app_data: Option<&[u8]>,
+    ) -> Result<crate::TransmissionReceipt, crate::TransmissionError> {
+        let permit = self.tx.link_send_pool().try_acquire()?;
+        let (packet, replay) = self
+            .build_announce(dest, identity, app_data)
+            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+        let (completion, receipt) = crate::link_send::Completion::new(permit);
+        self.try_confirmed_event(Event::SendOutboundTracked {
+            raw: packet.raw,
+            dest_type: dest.dest_type.to_wire_constant(),
+            replay,
+            completion,
+        })?;
+        Ok(receipt)
+    }
+
+    /// Wait for capacity and local transmission, returning the hash for proof tracking.
+    ///
+    /// Uses the same all-selected-writers contract as `announce` and the
+    /// same admission/completion capacity as `send_on_link`. No remote delivery
+    /// is promised; errors may follow partial transmission. Dropping an admitted
+    /// future does not cancel its send. No async runtime is required.
+    pub async fn send_packet(
+        &self,
+        dest: &crate::destination::Destination,
+        data: &[u8],
+    ) -> Result<rns_core::types::PacketHash, crate::TransmissionError> {
+        let permit = self.tx.link_send_pool().acquire().await?;
+        let packet = self
+            .build_packet(dest, data)
+            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+        let hash = rns_core::types::PacketHash(packet.packet_hash);
+        let (completion, receipt) = crate::link_send::Completion::new(permit);
+        self.tx
+            .send_async(Event::SendOutboundTracked {
+                raw: packet.raw,
+                dest_type: dest.dest_type.to_wire_constant(),
+                replay: None,
+                completion,
+            })
+            .await?;
+        receipt.await?;
+        Ok(hash)
+    }
+
+    /// Try admission immediately. The receipt exposes the packet hash and
+    /// resolves to the same result as `send_packet`, after local writes.
+    /// `QueueFull` guarantees nothing was admitted and is safe to retry.
+    pub fn try_send_packet(
+        &self,
+        dest: &crate::destination::Destination,
+        data: &[u8],
+    ) -> Result<crate::PacketSendReceipt, crate::TransmissionError> {
+        let permit = self.tx.link_send_pool().try_acquire()?;
+        let packet = self
+            .build_packet(dest, data)
+            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+        let hash = rns_core::types::PacketHash(packet.packet_hash);
+        let (completion, receipt) = crate::link_send::Completion::new(permit);
+        self.try_confirmed_event(Event::SendOutboundTracked {
+            raw: packet.raw,
+            dest_type: dest.dest_type.to_wire_constant(),
+            replay: None,
+            completion,
+        })?;
+        Ok(crate::PacketSendReceipt {
+            completion: receipt,
+            hash,
+        })
+    }
+
+    fn try_confirmed_event(&self, event: Event) -> Result<(), crate::TransmissionError> {
+        self.tx.try_send(event).map_err(|error| match error {
+            std::sync::mpsc::TrySendError::Full(_) => crate::TransmissionError::QueueFull,
+            std::sync::mpsc::TrySendError::Disconnected(_) => {
+                crate::TransmissionError::DriverStopped
+            }
+        })
+    }
+
+    /// Build and broadcast an announce for a destination (queue-only compatibility API).
+    ///
+    /// Success means driver submission, not transmission. Use `announce`
+    /// or `try_announce` for confirmed local transmission.
     ///
     /// The identity is used to sign the announce. Must be the identity that
     /// owns the destination (i.e. `identity.hash()` matches `dest.identity_hash`).
-    pub fn announce(
+    pub fn announce_queued(
         &self,
         dest: &crate::destination::Destination,
         identity: &Identity,
         app_data: Option<&[u8]>,
     ) -> Result<(), SendError> {
         self.reject_new_work_if_draining()?;
+        let (packet, replay) = self.build_announce(dest, identity, app_data)?;
+        if let Some(replay) = replay {
+            self.tx
+                .send(Event::StoreSharedAnnounce {
+                    dest_hash: replay.dest_hash,
+                    name_hash: replay.name_hash,
+                    identity_prv_key: replay.identity_prv_key,
+                    app_data: replay.app_data,
+                })
+                .map_err(|_| SendError)?;
+        }
+        self.send_raw(packet.raw, dest.dest_type.to_wire_constant(), None)
+    }
+
+    fn build_announce(
+        &self,
+        dest: &crate::destination::Destination,
+        identity: &Identity,
+        app_data: Option<&[u8]>,
+    ) -> Result<
+        (
+            rns_core::packet::RawPacket,
+            Option<Box<crate::common::event::AnnounceReplay>>,
+        ),
+        SendError,
+    > {
         let name_hash = rns_core::destination::name_hash(
             &dest.app_name,
             &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -2792,32 +2938,51 @@ impl RnsNode {
         )
         .map_err(|_| SendError)?;
 
-        if dest.dest_type == rns_core::types::DestinationType::Single {
-            if let Some(identity_prv_key) = identity.get_private_key() {
-                self.tx
-                    .send(Event::StoreSharedAnnounce {
-                        dest_hash: dest.hash.0,
-                        name_hash,
-                        identity_prv_key,
-                        app_data: app_data.map(|d| d.to_vec()),
-                    })
-                    .map_err(|_| SendError)?;
-            }
-        }
-
-        self.send_raw(packet.raw, dest.dest_type.to_wire_constant(), None)
+        let replay = if dest.dest_type == rns_core::types::DestinationType::Single {
+            identity.get_private_key().map(|identity_prv_key| {
+                Box::new(crate::common::event::AnnounceReplay {
+                    dest_hash: dest.hash.0,
+                    name_hash,
+                    identity_prv_key,
+                    app_data: app_data.map(|d| d.to_vec()),
+                })
+            })
+        } else {
+            None
+        };
+        Ok((packet, replay))
     }
 
-    /// Send an encrypted (SINGLE) or plaintext (PLAIN) packet to a destination.
+    /// Queue an encrypted (SINGLE) or plaintext (PLAIN) packet to a destination.
+    ///
+    /// Queue-only compatibility API: use `send_packet` or `try_send_packet`
+    /// for confirmed local transmission. The returned hash does not mean sent.
     ///
     /// For SINGLE destinations, `dest.public_key` must be set (OUT direction).
     /// Returns the packet hash for proof tracking.
-    pub fn send_packet(
+    pub fn send_packet_queued(
         &self,
         dest: &crate::destination::Destination,
         data: &[u8],
     ) -> Result<rns_core::types::PacketHash, SendError> {
         self.reject_new_work_if_draining()?;
+        let packet = self.build_packet(dest, data)?;
+        let packet_hash = rns_core::types::PacketHash(packet.packet_hash);
+        self.tx
+            .send(Event::SendOutbound {
+                raw: packet.raw,
+                dest_type: dest.dest_type.to_wire_constant(),
+                attached_interface: None,
+            })
+            .map_err(|_| SendError)?;
+        Ok(packet_hash)
+    }
+
+    fn build_packet(
+        &self,
+        dest: &crate::destination::Destination,
+        data: &[u8],
+    ) -> Result<rns_core::packet::RawPacket, SendError> {
         use rns_core::types::DestinationType;
 
         let payload = match dest.dest_type {
@@ -2844,17 +3009,7 @@ impl RnsNode {
         )
         .map_err(|_| SendError)?;
 
-        let packet_hash = rns_core::types::PacketHash(packet.packet_hash);
-
-        self.tx
-            .send(Event::SendOutbound {
-                raw: packet.raw,
-                dest_type: dest.dest_type.to_wire_constant(),
-                attached_interface: None,
-            })
-            .map_err(|_| SendError)?;
-
-        Ok(packet_hash)
+        Ok(packet)
     }
 
     fn encrypt_single_payload(
@@ -3572,7 +3727,7 @@ mod tests {
         };
         let dest = crate::destination::Destination::single_out("test", &["ratchet"], &announced);
 
-        node.send_packet(&dest, b"hello").unwrap();
+        node.send_packet_queued(&dest, b"hello").unwrap();
         assert_eq!(
             store.current_calls.lock().unwrap().as_slice(),
             &[dest.hash.0]
@@ -5050,7 +5205,7 @@ enable_transport = False
             .unwrap();
 
         // Announce should succeed (though no interfaces to send on)
-        let result = node.announce(&dest, &identity, Some(b"hello"));
+        let result = node.announce_queued(&dest, &identity, Some(b"hello"));
         assert!(result.is_ok());
 
         node.shutdown();
@@ -5310,7 +5465,7 @@ enable_transport = False
         let dest = crate::destination::Destination::plain("drain-test", &["send"]);
 
         node.begin_drain(Duration::from_secs(1)).unwrap();
-        assert!(node.send_packet(&dest, b"hello").is_err());
+        assert!(node.send_packet_queued(&dest, b"hello").is_err());
 
         node.shutdown();
     }
@@ -5382,7 +5537,7 @@ enable_transport = False
         .unwrap();
 
         let dest = crate::destination::Destination::plain("test", &["echo"]);
-        let result = node.send_packet(&dest, b"hello world");
+        let result = node.send_packet_queued(&dest, b"hello world");
         assert!(result.is_ok());
 
         let packet_hash = result.unwrap();
@@ -5467,7 +5622,7 @@ enable_transport = False
             &["echo"],
             rns_core::types::IdentityHash([0x42; 16]),
         );
-        let result = node.send_packet(&dest, b"hello");
+        let result = node.send_packet_queued(&dest, b"hello");
         assert!(result.is_err(), "single_in has no public_key, should fail");
 
         node.shutdown();
@@ -5554,7 +5709,7 @@ enable_transport = False
         };
         let dest = crate::destination::Destination::single_out("test", &["echo"], &recalled);
 
-        let result = node.send_packet(&dest, b"secret message");
+        let result = node.send_packet_queued(&dest, b"secret message");
         assert!(result.is_ok());
 
         let packet_hash = result.unwrap();

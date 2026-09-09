@@ -450,11 +450,12 @@ fn main() {
     // ─── Announce Both ───────────────────────────────────────────────────
 
     println!("Announcing...");
-    alice_node
-        .announce(&alice_dest, &alice_identity, Some(b"Alice"))
+    futures::executor::block_on(alice_node.announce(&alice_dest, &alice_identity, Some(b"Alice")))
         .expect("Alice announce failed");
     bob_node
-        .announce(&bob_dest, &bob_identity, Some(b"Bob"))
+        .try_announce(&bob_dest, &bob_identity, Some(b"Bob"))
+        .expect("Bob announce admission failed")
+        .wait()
         .expect("Bob announce failed");
 
     // ─── Wait for Cross-Discovery ────────────────────────────────────────
@@ -493,8 +494,7 @@ fn main() {
         "Alice sending: {:?}",
         std::str::from_utf8(alice_msg).unwrap()
     );
-    let alice_pkt = alice_node
-        .send_packet(&dest_to_bob, alice_msg)
+    let alice_pkt = futures::executor::block_on(alice_node.send_packet(&dest_to_bob, alice_msg))
         .expect("Alice send failed");
 
     // Bob → Alice
@@ -502,7 +502,9 @@ fn main() {
     let bob_msg = b"Hello Alice!";
     println!("Bob sending: {:?}", std::str::from_utf8(bob_msg).unwrap());
     let bob_pkt = bob_node
-        .send_packet(&dest_to_alice, bob_msg)
+        .try_send_packet(&dest_to_alice, bob_msg)
+        .expect("Bob send admission failed")
+        .wait()
         .expect("Bob send failed");
 
     // ─── Receive + Decrypt ───────────────────────────────────────────────
