@@ -1,6 +1,78 @@
 use super::*;
 
 impl Driver {
+    pub(crate) fn handle_confirmed_outbound(
+        &mut self,
+        raw: Vec<u8>,
+        dest_type: u8,
+        replay: Option<Box<crate::common::event::AnnounceReplay>>,
+        completion: crate::link_send::Completion,
+    ) {
+        use crate::link_send::LinkSendError;
+        if self.is_draining() {
+            completion.finish(Err(LinkSendError::Draining));
+            return;
+        }
+        let Ok(packet) = RawPacket::unpack(&raw) else {
+            completion.finish(Err(LinkSendError::PacketBuildFailed));
+            return;
+        };
+        if let Some(replay) = replay {
+            let crate::common::event::AnnounceReplay {
+                dest_hash,
+                name_hash,
+                identity_prv_key,
+                app_data,
+            } = *replay;
+            self.shared_announces.insert(
+                dest_hash,
+                SharedAnnounceRecord {
+                    name_hash,
+                    identity_prv_key,
+                    app_data,
+                },
+            );
+        }
+        let now = time::now();
+        if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
+            self.sent_packets
+                .insert(packet.packet_hash, (packet.destination_hash, now));
+        }
+        // These APIs originate hops=0 packets, so announcement relay bandwidth
+        // queues do not apply. Retain the normal routing and per-send hooks.
+        let actions = self.engine.handle_outbound(&packet, dest_type, None, now);
+        let mut selected = 0;
+        for action in actions {
+            match action {
+                TransportAction::SendOnInterface { interface, raw } => {
+                    selected += 1;
+                    self.tracked_link_send = Some((packet.packet_hash, completion.branch()));
+                    self.dispatch_all(vec![TransportAction::SendOnInterface { interface, raw }]);
+                    if let Some((_, branch)) = self.tracked_link_send.take() {
+                        branch.finish(Err(LinkSendError::Rejected));
+                    }
+                }
+                TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
+                    // Broadcast hooks still run in dispatch_broadcast_action.
+                    self.tracked_link_send = Some((packet.packet_hash, completion.branch()));
+                    self.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
+                        raw,
+                        exclude,
+                    }]);
+                    if let Some((_, branch)) = self.tracked_link_send.take() {
+                        branch.finish(Err(LinkSendError::Rejected));
+                    }
+                    selected += 1;
+                }
+                other => self.dispatch_all(vec![other]),
+            }
+        }
+        completion.finish(if selected == 0 {
+            Err(LinkSendError::NoRoute)
+        } else {
+            Ok(())
+        });
+    }
     /// Pending frames own admission permits until actual writer completion,
     /// bounding this queue together with driver events and in-flight writes.
     pub(crate) fn flush_pending_link_frames(&mut self) {
@@ -29,6 +101,11 @@ impl Driver {
                 Ok(()) => {
                     entry.stats.txb += frame.data.len() as u64;
                     entry.stats.tx_packets += 1;
+                    if frame.is_announce {
+                        entry
+                            .stats
+                            .record_outgoing_announce_bytes(time::now(), frame.data.len());
+                    }
                 }
                 Err(error)
                     if error.kind() == std::io::ErrorKind::WouldBlock
@@ -412,6 +489,7 @@ impl Driver {
             self.pending_link_frames.push_back(PendingLinkFrame {
                 interface,
                 data,
+                is_announce,
                 completion: Some(completion),
             });
             return;
@@ -522,6 +600,33 @@ impl Driver {
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
+        if self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
+            RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
+        }) {
+            let (_, completion) = self.tracked_link_send.take().unwrap();
+            let mut selected = 0;
+            for entry in self.interfaces.values() {
+                if entry.online && entry.enabled && Some(entry.id) != exclude {
+                    selected += 1;
+                    let data = entry
+                        .ifac
+                        .as_ref()
+                        .map_or_else(|| raw.to_vec(), |state| ifac::mask_outbound(&raw, state));
+                    self.pending_link_frames.push_back(PendingLinkFrame {
+                        interface: entry.id,
+                        data,
+                        is_announce,
+                        completion: Some(completion.branch()),
+                    });
+                }
+            }
+            completion.finish(if selected == 0 {
+                Err(crate::link_send::LinkSendError::NoRoute)
+            } else {
+                Ok(())
+            });
+            return;
+        }
         for entry in self.interfaces.values_mut() {
             if entry.online && entry.enabled && Some(entry.id) != exclude {
                 if Self::interface_send_deferred(entry, Instant::now()) {

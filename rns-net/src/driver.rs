@@ -1321,5 +1321,6 @@ impl Driver {
 pub(crate) struct PendingLinkFrame {
     interface: InterfaceId,
     data: Vec<u8>,
+    is_announce: bool,
     completion: Option<crate::link_send::Completion>,
 }

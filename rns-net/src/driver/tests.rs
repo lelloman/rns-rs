@@ -1610,6 +1610,101 @@ fn make_entry(id: u64, writer: Box<dyn Writer>, online: bool) -> InterfaceEntry 
 }
 
 #[test]
+fn confirmed_outbound_fanout_waits_for_all_interfaces_and_reports_partial_failure() {
+    use crate::link_send::{Completion, LinkSendError};
+    use futures::FutureExt;
+    struct HeldWriter(Arc<Mutex<Vec<Completion>>>, bool);
+    impl Writer for HeldWriter {
+        fn send_frame(&mut self, _: &[u8]) -> io::Result<()> {
+            panic!("confirmed send bypassed completion tracking")
+        }
+        fn enqueue_confirmed(
+            &mut self,
+            _: &[u8],
+            completion: &mut Option<Completion>,
+        ) -> io::Result<()> {
+            if self.1 {
+                self.1 = false;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            self.0.lock().unwrap().push(completion.take().unwrap());
+            Ok(())
+        }
+    }
+    // PLAIN uses BroadcastOnAllInterfaces, while a local announce produces
+    // individual SendOnInterface actions. Exercise both fanout paths.
+    for (packet_type, fail_first) in [
+        (constants::PACKET_TYPE_DATA, false),
+        (constants::PACKET_TYPE_DATA, true),
+        (constants::PACKET_TYPE_ANNOUNCE, false),
+        (constants::PACKET_TYPE_ANNOUNCE, true),
+    ] {
+        let (tx, rx) = event::channel_with_capacity(1);
+        let (cbs, ..) = MockCallbacks::new();
+        let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
+        let first = Arc::new(Mutex::new(Vec::new()));
+        let second = Arc::new(Mutex::new(Vec::new()));
+        for (id, held) in [(1, first.clone()), (2, second.clone())] {
+            let entry = make_entry(id, Box::new(HeldWriter(held, true)), true);
+            driver.engine.register_interface(entry.info.clone());
+            driver.interfaces.insert(entry.id, entry);
+        }
+        let dest = [0x31; 16];
+        let dest_type = if packet_type == constants::PACKET_TYPE_DATA {
+            constants::DESTINATION_PLAIN
+        } else {
+            constants::DESTINATION_SINGLE
+        };
+        driver.engine.register_destination(dest, dest_type);
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: dest_type,
+                packet_type,
+            },
+            0,
+            &dest,
+            None,
+            constants::CONTEXT_NONE,
+            b"confirmed",
+        )
+        .unwrap();
+        let (completion, mut receipt) = Completion::new(tx.link_send_pool().try_acquire().unwrap());
+        driver.handle_confirmed_outbound(packet.raw, dest_type, None, completion);
+        driver.flush_pending_link_frames();
+        assert!(first.lock().unwrap().is_empty());
+        assert!(second.lock().unwrap().is_empty());
+        assert_eq!(driver.pending_link_frames.len(), 2);
+        assert!((&mut receipt).now_or_never().is_none());
+        driver.flush_pending_link_frames();
+        assert!(driver.pending_link_frames.is_empty());
+        assert_eq!(first.lock().unwrap().len(), 1);
+        assert_eq!(second.lock().unwrap().len(), 1);
+        let expected = if fail_first {
+            Err(LinkSendError::WriteFailed("broken pipe".into()))
+        } else {
+            Ok(())
+        };
+        first
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .finish(expected.clone());
+        assert!((&mut receipt).now_or_never().is_none());
+        assert!(matches!(
+            tx.link_send_pool().try_acquire(),
+            Err(LinkSendError::QueueFull)
+        ));
+        second.lock().unwrap().pop().unwrap().finish(Ok(()));
+        assert_eq!(receipt.wait(), expected);
+        assert_eq!(tx.link_send_pool().in_flight(), 0);
+    }
+}
+
+#[test]
 fn driver_validates_and_routes_mismatched_lrproof_using_known_identity() {
     use rns_crypto::ed25519::Ed25519PrivateKey;
 

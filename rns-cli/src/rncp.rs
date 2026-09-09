@@ -376,7 +376,7 @@ fn listen(
     loop {
         if let Some(period) = options.announce {
             if !announced || period > 0 && last_announce.elapsed() >= Duration::from_secs(period) {
-                node.announce(&destination, identity, None)?;
+                node.announce_queued(&destination, identity, None)?;
                 announced = true;
                 last_announce = Instant::now();
             }

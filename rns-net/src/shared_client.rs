@@ -699,7 +699,8 @@ mod tests {
         );
         node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())
             .unwrap();
-        node.announce(&dest, &identity, Some(b"hello")).unwrap();
+        node.announce_queued(&dest, &identity, Some(b"hello"))
+            .unwrap();
 
         let mut stream1 = accepted1_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         stream1

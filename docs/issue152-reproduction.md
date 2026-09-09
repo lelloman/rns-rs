@@ -1,7 +1,7 @@
-# Issue #152: Link transmission completion
+# Issue #152: local transmission completion
 
-Both APIs report successful transmission only when the interface writer has
-written the complete frame to its underlying transport. Neither promises
+The async/try API pairs report successful transmission only when the selected
+interface writers have written the complete frame to their underlying transports. Neither promises
 remote reception or acknowledgement.
 
 ```rust,ignore
@@ -11,6 +11,14 @@ node.send_on_link(link_id, payload, context).await?;
 // Do not wait for capacity. QueueFull means nothing was admitted.
 let receipt = node.try_send_on_link(link_id, payload, context)?;
 receipt.await?; // Exactly the same transmission result as send_on_link().
+
+let hash = node.send_packet(&destination, &data).await?;
+let receipt = node.try_send_packet(&destination, &data)?;
+let hash_for_proof_tracking = receipt.packet_hash();
+let same_hash_after_transmission = receipt.await?;
+
+node.announce(&destination, &identity, app_data).await?;
+node.try_announce(&destination, &identity, app_data)?.await?;
 ```
 
 The futures work with any executor. Synchronous callers can use
@@ -20,8 +28,25 @@ the receipt's blocking `wait()`. Merely obtaining a receipt is admission, not
 transmission success. The existing `try_send_link_datagram()` remains an
 explicitly admission-only, best-effort API for datagram users such as rntun.
 
-The configured driver event capacity also bounds outstanding confirmed Link
-sends across driver events, pending interface frames, and writes in progress.
+`send_packet` and `announce` are now async too. Their old submission-only
+behavior is explicitly named `send_packet_queued` and `announce_queued` for
+callers that intentionally need best-effort queuing. These compatibility
+methods do not confirm transmission. Synchronous callers needing confirmation
+can use the `try_*` receipt's `wait()` (never from a driver callback).
+
+Packet and announcement success means every selected local interface writer
+completed its write. An error is returned only after all selected writes have
+settled; it may mean partial transmission across interfaces. No eligible route
+returns `TransmissionError::NoRoute`, not success. This does not wait for remote
+delivery, proofs, or announcement relays. Original hops-zero announcements keep
+their normal routing policy; relay bandwidth throttling is unchanged. Shared
+client replay state is stored with the admitted announcement, so queue rejection
+or cancellation before admission cannot update replay state.
+
+The configured driver event capacity bounds outstanding confirmed Link,
+packet, and announcement sends together across driver events, pending interface
+frames, and writes in progress. Broadcast fanout holds one admission slot until
+all selected writes settle. Packet/announcement sends do not affect Link counters.
 The async API waits for admission; the try API returns QueueFull immediately.
 The driver retains accepted frames when a writer queue is full, preserving
 their per-interface order and continuing to process other events. Writer

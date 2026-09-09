@@ -52,9 +52,9 @@ pub fn run_server(config: ServerConfig, identity: Identity) -> Result<()> {
 
     loop {
         thread::sleep(announce_interval);
-        let _ = node.announce(&destinations.repositories, &identity, None);
+        let _ = node.announce_queued(&destinations.repositories, &identity, None);
         if let Some(page_destination) = destinations.nomadnet.as_ref() {
-            let _ = node.announce(
+            let _ = node.announce_queued(
                 page_destination,
                 &identity,
                 Some(config.node_name.as_bytes()),
@@ -129,7 +129,7 @@ pub fn register_repository_destination(
     )
     .map_err(|_| Error::msg("failed to register link destination"))?;
     register_handlers(node, config, access)?;
-    node.announce(&destination, identity, None)
+    node.announce_queued(&destination, identity, None)
         .map_err(|_| Error::msg("failed to announce rngit destination"))?;
     Ok(destination)
 }

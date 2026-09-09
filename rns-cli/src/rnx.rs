@@ -306,7 +306,7 @@ fn listen(
         eprintln!("warning: accepting unauthenticated remote commands");
     }
     if !options.no_announce {
-        node.announce(&destination, identity, None)?;
+        node.announce_queued(&destination, identity, None)?;
     }
     eprintln!("rnx listening on {}", prettyhexrep(&destination.hash.0));
 

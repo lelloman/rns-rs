@@ -295,7 +295,7 @@ fn main() {
 
     // Announce the server destination
     server_node
-        .announce(&server_dest, &server_identity, Some(b"Rust Echo Server"))
+        .announce_queued(&server_dest, &server_identity, Some(b"Rust Echo Server"))
         .expect("Failed to announce");
 
     log::info!("Server announced");
@@ -329,7 +329,7 @@ fn main() {
     log::info!("Sending echo request: {:?}", std::str::from_utf8(message));
 
     let packet_hash = client_node
-        .send_packet(&client_dest, message)
+        .send_packet_queued(&client_dest, message)
         .expect("Failed to send packet");
 
     log::info!("Sent packet: hash={}", packet_hash);
