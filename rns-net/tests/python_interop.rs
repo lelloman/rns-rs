@@ -503,7 +503,7 @@ try:
     for line in sys.stdin:
         command = line.strip()
         if command == "announce_py":
-            destination.announce_queued()
+            destination.announce()
             emit("python_announced", dest_hash=destination.hash.hex())
         elif command == "link_rust":
             if rust_destination is None:
@@ -574,7 +574,7 @@ fn python_rns_bidirectional_tcp_interop() {
     );
 
     let python_out = Destination::single_out(APP_NAME, &[PYTHON_ASPECT], &python_live_announce);
-    node.send_packet_queued(&python_out, RUST_TO_PYTHON_PAYLOAD)
+    futures::executor::block_on(node.send_packet(&python_out, RUST_TO_PYTHON_PAYLOAD))
         .expect("Rust should send encrypted data to Python destination");
     let python_packet = python.wait_for_event(TIMEOUT, |event| {
         event["event"] == "python_packet" && event["data_hex"] == hex(RUST_TO_PYTHON_PAYLOAD)
@@ -598,7 +598,9 @@ fn python_rns_bidirectional_tcp_interop() {
     );
     assert_eq!(python_reannounce.app_data.as_deref(), Some(PYTHON_APP_DATA));
 
-    node.announce_queued(&rust_dest, &rust_identity, Some(RUST_APP_DATA))
+    node.try_announce(&rust_dest, &rust_identity, Some(RUST_APP_DATA))
+        .expect("Rust announce should be admitted")
+        .wait()
         .expect("Rust announce should send to Python");
     let rust_announce = python.wait_for_event(TIMEOUT, |event| {
         event["event"] == "rust_announce"

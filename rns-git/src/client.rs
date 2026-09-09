@@ -1063,7 +1063,7 @@ destination.set_link_established_callback(link_established)
 
 def announce_loop():
     while running:
-        destination.announce_queued()
+        destination.announce()
         time.sleep(0.25)
 
 threading.Thread(target=announce_loop, daemon=True).start()
