@@ -1901,7 +1901,7 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
             let due = period == 0 && !announced_once
                 || period > 0 && last_announce.elapsed() >= Duration::from_secs(period);
             if due {
-                node.announce(&dest, &identity, None)?;
+                node.announce_queued(&dest, &identity, None)?;
                 last_announce = Instant::now();
                 announced_once = true;
             }

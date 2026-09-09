@@ -167,6 +167,15 @@ pub struct DrainStatus {
     pub detail: Option<String>,
 }
 
+/// Replay metadata carried atomically with an explicit announcement.
+#[doc(hidden)]
+pub struct AnnounceReplay {
+    pub dest_hash: [u8; 16],
+    pub name_hash: [u8; 10],
+    pub identity_prv_key: [u8; 64],
+    pub app_data: Option<Vec<u8>>,
+}
+
 /// Events sent to the driver thread.
 ///
 /// `W` is the writer type (e.g. `Box<dyn Writer>` for sync,
@@ -220,6 +229,13 @@ pub enum Event<W: Send> {
         raw: Vec<u8>,
         dest_type: u8,
         attached_interface: Option<InterfaceId>,
+    },
+    /// A locally originated packet with transmission completion tracking.
+    SendOutboundTracked {
+        raw: Vec<u8>,
+        dest_type: u8,
+        replay: Option<Box<AnnounceReplay>>,
+        completion: crate::link_send::Completion,
     },
     /// Register a local destination.
     RegisterDestination { dest_hash: [u8; 16], dest_type: u8 },
@@ -1035,7 +1051,8 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("timeout", timeout)
                 .finish(),
             Event::Shutdown => write!(f, "Shutdown"),
-            Event::SendOutbound { raw, dest_type, .. } => f
+            Event::SendOutbound { raw, dest_type, .. }
+            | Event::SendOutboundTracked { raw, dest_type, .. } => f
                 .debug_struct("SendOutbound")
                 .field("raw_len", &raw.len())
                 .field("dest_type", dest_type)

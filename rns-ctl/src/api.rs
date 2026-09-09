@@ -897,7 +897,7 @@ fn handle_post_announce(req: &HttpRequest, node: &NodeHandle, state: &SharedStat
     };
 
     with_active_node(node, |n| {
-        match n.announce(&dest, &identity, app_data.as_deref()) {
+        match n.announce_queued(&dest, &identity, app_data.as_deref()) {
             Ok(()) => HttpResponse::ok(json!({"status": "announced", "dest_hash": dh_str})),
             Err(_) => HttpResponse::internal_error("Announce failed"),
         }
@@ -944,7 +944,7 @@ fn handle_post_send(req: &HttpRequest, node: &NodeHandle, state: &SharedState) -
         ));
     }
 
-    with_active_node(node, |n| match n.send_packet(&dest, &data) {
+    with_active_node(node, |n| match n.send_packet_queued(&dest, &data) {
         Ok(ph) => HttpResponse::ok(json!({
             "status": "sent",
             "packet_hash": to_hex(&ph.0),

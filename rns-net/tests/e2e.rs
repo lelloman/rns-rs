@@ -373,7 +373,7 @@ fn announce_with_retry(
     remote_rx: &mpsc::Receiver<TestEvent>,
 ) -> Option<AnnouncedIdentity> {
     for _ in 0..10 {
-        let _ = node.announce(dest, identity, app_data);
+        let _ = futures::executor::block_on(node.announce(dest, identity, app_data));
         if let Some(announced) = wait_for_announce(remote_rx, &dest.hash, Duration::from_secs(2)) {
             return Some(announced);
         }
@@ -1394,7 +1394,7 @@ fn test_announce_propagation() {
     std::thread::sleep(SETTLE);
 
     alice_node
-        .announce(&alice_dest, &alice_identity, Some(b"hello"))
+        .announce_queued(&alice_dest, &alice_identity, Some(b"hello"))
         .unwrap();
 
     let announced = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT)
@@ -1438,7 +1438,7 @@ fn test_announce_binary_app_data() {
     OsRng.fill_bytes(&mut binary_data);
 
     alice_node
-        .announce(&alice_dest, &alice_identity, Some(&binary_data))
+        .announce_queued(&alice_dest, &alice_identity, Some(&binary_data))
         .unwrap();
 
     let announced = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT)
@@ -1488,7 +1488,7 @@ fn test_announce_relay_respects_zero_ttl() {
     std::thread::sleep(SETTLE);
 
     alice_node
-        .announce(&alice_dest, &alice_identity, Some(b"ttl-expire"))
+        .announce_queued(&alice_dest, &alice_identity, Some(b"ttl-expire"))
         .unwrap();
 
     let announced = wait_for_announce(&bob_rx, &alice_dest.hash, Duration::from_secs(3));
@@ -1537,7 +1537,7 @@ fn test_announce_relay_respects_max_bytes() {
 
     let large_app_data = vec![0xAB; 32];
     alice_node
-        .announce(&alice_dest, &alice_identity, Some(&large_app_data))
+        .announce_queued(&alice_dest, &alice_identity, Some(&large_app_data))
         .unwrap();
 
     let announced = wait_for_announce(&bob_rx, &alice_dest.hash, Duration::from_secs(3));
@@ -1626,7 +1626,7 @@ fn test_re_announce_updated_app_data() {
 
     // First announce with v1
     alice_node
-        .announce(&alice_dest, &alice_identity, Some(b"v1"))
+        .announce_queued(&alice_dest, &alice_identity, Some(b"v1"))
         .unwrap();
 
     let first = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT)
@@ -1641,7 +1641,7 @@ fn test_re_announce_updated_app_data() {
     let mut got_v2 = false;
     for _attempt in 0..3 {
         alice_node
-            .announce(&alice_dest, &alice_identity, Some(b"v2"))
+            .announce_queued(&alice_dest, &alice_identity, Some(b"v2"))
             .unwrap();
 
         if wait_for_event(&bob_rx, Duration::from_secs(8), |event| match event {
@@ -1724,7 +1724,7 @@ fn test_single_message_delivery() {
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     let plaintext = b"Hello Bob from Alice!";
-    alice_node.send_packet(&dest_to_bob, plaintext).unwrap();
+    futures::executor::block_on(alice_node.send_packet(&dest_to_bob, plaintext)).unwrap();
 
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive message");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
@@ -1753,11 +1753,15 @@ fn test_single_bidirectional() {
 
     // Alice → Bob
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
-    alice_node.send_packet(&dest_to_bob, b"A->B").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"A->B")
+        .unwrap();
 
     // Bob → Alice
     let dest_to_alice = Destination::single_out(APP_NAME, &["msg", "rx"], &alice_announced);
-    bob_node.send_packet(&dest_to_alice, b"B->A").unwrap();
+    bob_node
+        .send_packet_queued(&dest_to_alice, b"B->A")
+        .unwrap();
 
     let (_, bob_raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive");
     let bob_plain = decrypt_delivery(&bob_raw, &bob_id).expect("Bob decrypt failed");
@@ -1793,7 +1797,7 @@ fn test_single_multiple_sequential() {
     for i in 0..5 {
         let msg = format!("Message #{}", i);
         alice_node
-            .send_packet(&dest_to_bob, msg.as_bytes())
+            .send_packet_queued(&dest_to_bob, msg.as_bytes())
             .unwrap();
 
         let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
@@ -1824,7 +1828,7 @@ fn test_single_empty_payload() {
     ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
-    alice_node.send_packet(&dest_to_bob, b"").unwrap();
+    alice_node.send_packet_queued(&dest_to_bob, b"").unwrap();
 
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive empty message");
@@ -1945,7 +1949,11 @@ fn test_plain_message_delivery() {
 
     std::thread::sleep(SETTLE);
 
-    alice_node.send_packet(&plain_dest, b"plain text").unwrap();
+    alice_node
+        .try_send_packet(&plain_dest, b"plain text")
+        .unwrap()
+        .wait()
+        .unwrap();
 
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive plain message");
@@ -1974,7 +1982,9 @@ fn test_single_duplicate_packet_dropped_until_fifo_eviction() {
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
 
-    let hash1 = alice_node.send_packet(&dest_to_bob, b"packet-one").unwrap();
+    let hash1 = alice_node
+        .send_packet_queued(&dest_to_bob, b"packet-one")
+        .unwrap();
     let (_, raw1, recv_hash1) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive first single packet");
     assert_eq!(recv_hash1, hash1);
@@ -1987,11 +1997,13 @@ fn test_single_duplicate_packet_dropped_until_fifo_eviction() {
         "duplicate single packet should be suppressed"
     );
 
-    alice_node.send_packet(&dest_to_bob, b"packet-two").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"packet-two")
+        .unwrap();
     wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive second unique single packet");
 
     alice_node
-        .send_packet(&dest_to_bob, b"packet-three")
+        .send_packet_queued(&dest_to_bob, b"packet-three")
         .unwrap();
     wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive third unique single packet");
 
@@ -2027,12 +2039,16 @@ fn test_single_duplicate_does_not_refresh_recency() {
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
 
-    let oldest_hash = alice_node.send_packet(&dest_to_bob, b"oldest").unwrap();
+    let oldest_hash = alice_node
+        .send_packet_queued(&dest_to_bob, b"oldest")
+        .unwrap();
     let (_, oldest_raw, recv_oldest_hash) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive oldest packet");
     assert_eq!(recv_oldest_hash, oldest_hash);
 
-    let newer_hash = alice_node.send_packet(&dest_to_bob, b"newer").unwrap();
+    let newer_hash = alice_node
+        .send_packet_queued(&dest_to_bob, b"newer")
+        .unwrap();
     let (_, newer_raw, recv_newer_hash) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive newer packet");
     assert_eq!(recv_newer_hash, newer_hash);
@@ -2049,7 +2065,9 @@ fn test_single_duplicate_does_not_refresh_recency() {
         "duplicate oldest packet should be suppressed"
     );
 
-    alice_node.send_packet(&dest_to_bob, b"fresh").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"fresh")
+        .unwrap();
     wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive fresh packet");
 
     alice_node
@@ -2196,7 +2214,7 @@ fn test_group_message_delivery() {
     std::thread::sleep(SETTLE);
 
     alice_node
-        .send_packet(&group_dest_sender, b"group message")
+        .send_packet_queued(&group_dest_sender, b"group message")
         .unwrap();
 
     let (_, raw, _) =
@@ -2325,7 +2343,7 @@ fn test_group_wrong_key_fails() {
     std::thread::sleep(SETTLE);
 
     alice_node
-        .send_packet(&group_dest_sender, b"secret")
+        .send_packet_queued(&group_dest_sender, b"secret")
         .unwrap();
 
     let (_, raw, _) =
@@ -2359,7 +2377,9 @@ fn test_prove_all() {
     ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
-    let pkt_hash = alice_node.send_packet(&dest_to_bob, b"prove me").unwrap();
+    let pkt_hash = alice_node
+        .send_packet_queued(&dest_to_bob, b"prove me")
+        .unwrap();
 
     let (proof_hash, rtt) =
         wait_for_proof(&alice_rx, TIMEOUT).expect("Alice did not receive proof");
@@ -2423,7 +2443,9 @@ fn test_prove_app_conditional() {
 
     // First send: proof_flag=true → should get proof
     let dest_to_bob = Destination::single_out(APP_NAME, &["prove", "app"], &bob_ann);
-    let pkt1 = alice_node.send_packet(&dest_to_bob, b"first").unwrap();
+    let pkt1 = alice_node
+        .send_packet_queued(&dest_to_bob, b"first")
+        .unwrap();
     let proof1 = wait_for_proof(&alice_rx, TIMEOUT);
     assert!(proof1.is_some(), "Should receive proof when flag=true");
     assert_eq!(proof1.unwrap().0, pkt1);
@@ -2433,7 +2455,9 @@ fn test_prove_app_conditional() {
     std::thread::sleep(Duration::from_millis(200));
 
     // Second send: proof_flag=false → no proof
-    let _pkt2 = alice_node.send_packet(&dest_to_bob, b"second").unwrap();
+    let _pkt2 = alice_node
+        .send_packet_queued(&dest_to_bob, b"second")
+        .unwrap();
     let proof2 = wait_for_proof(&alice_rx, Duration::from_secs(3));
     assert!(proof2.is_none(), "Should NOT receive proof when flag=false");
 
@@ -2491,7 +2515,7 @@ fn test_prove_none() {
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["prove", "none"], &bob_ann);
     alice_node
-        .send_packet(&dest_to_bob, b"no proof expected")
+        .send_packet_queued(&dest_to_bob, b"no proof expected")
         .unwrap();
 
     let proof = wait_for_proof(&alice_rx, Duration::from_secs(3));
@@ -2524,7 +2548,9 @@ fn test_multihop_message_delivery() {
     ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
-    alice_node.send_packet(&dest_to_bob, b"multi-hop").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"multi-hop")
+        .unwrap();
 
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive multi-hop message");
@@ -3644,10 +3670,10 @@ fn test_udp_announce_and_message() {
 
     // Announce
     alice_node
-        .announce(&alice_dest, &alice_identity, Some(b"Alice-UDP"))
+        .announce_queued(&alice_dest, &alice_identity, Some(b"Alice-UDP"))
         .unwrap();
     bob_node
-        .announce(&bob_dest, &bob_identity, Some(b"Bob-UDP"))
+        .announce_queued(&bob_dest, &bob_identity, Some(b"Bob-UDP"))
         .unwrap();
 
     let bob_announced = wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT)
@@ -3657,7 +3683,9 @@ fn test_udp_announce_and_message() {
 
     // Send message
     let dest_to_bob = Destination::single_out(APP_NAME, &["udp", "test"], &bob_announced);
-    alice_node.send_packet(&dest_to_bob, b"UDP hello").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"UDP hello")
+        .unwrap();
 
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive UDP message");
     let decrypted = decrypt_delivery(&raw, &bob_identity).expect("UDP decrypt failed");
@@ -3700,7 +3728,7 @@ fn test_rapid_announces() {
     for i in 0..10 {
         let data = format!("rapid-{}", i);
         alice_node
-            .announce(&alice_dest, &alice_identity, Some(data.as_bytes()))
+            .announce_queued(&alice_dest, &alice_identity, Some(data.as_bytes()))
             .unwrap();
     }
 
@@ -5224,7 +5252,7 @@ fn test_issue4_shared_client_announce_reaches_remote() {
 
     // Alice (shared client) announces
     alice_node
-        .announce(&alice_dest, &alice_id, Some(b"issue4"))
+        .announce_queued(&alice_dest, &alice_id, Some(b"issue4"))
         .unwrap();
 
     // Bob should receive Alice's announce
@@ -5298,7 +5326,9 @@ fn test_issue4_shared_client_message_to_remote_peer() {
     // Alice sends an encrypted message to Bob
     let dest_to_bob = Destination::single_out(APP_NAME, &["issue4", "msg"], &bob_announced);
     let plaintext = b"Hello from shared client!";
-    alice_node.send_packet(&dest_to_bob, plaintext).unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, plaintext)
+        .unwrap();
 
     // Bob should receive the message — but currently doesn't (issue #4)
     let delivery = wait_for_delivery(&bob_rx, Duration::from_secs(5));
@@ -5374,7 +5404,9 @@ fn test_issue4_remote_peer_message_to_shared_client() {
     // Bob sends an encrypted message to Alice
     let dest_to_alice = Destination::single_out(APP_NAME, &["issue4", "rev"], &alice_announced);
     let plaintext = b"Hello shared client from remote!";
-    bob_node.send_packet(&dest_to_alice, plaintext).unwrap();
+    bob_node
+        .send_packet_queued(&dest_to_alice, plaintext)
+        .unwrap();
 
     // Alice should receive the message
     let delivery = wait_for_delivery(&alice_rx, Duration::from_secs(5));

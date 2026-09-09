@@ -446,7 +446,7 @@ fn announce_bob_to_alice(
     alice_rx: &mpsc::Receiver<TestEvent>,
 ) -> AnnouncedIdentity {
     for _ in 0..10 {
-        let _ = bob_node.announce(bob_dest, bob_id, Some(b"Bob"));
+        let _ = bob_node.announce_queued(bob_dest, bob_id, Some(b"Bob"));
         if let Some(ann) = wait_for_announce(alice_rx, &bob_dest.hash, Duration::from_secs(2)) {
             return ann;
         }
@@ -894,7 +894,9 @@ fn test_packet_logger_does_not_block_delivery() {
     // Alice sends packet to Bob
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     let plaintext = b"Hello through hook!";
-    alice_node.send_packet(&dest_to_bob, plaintext).unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, plaintext)
+        .unwrap();
 
     // Bob should still receive it (packet_logger returns Continue)
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
@@ -937,7 +939,9 @@ fn test_builtin_hook_does_not_block_delivery() {
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     let plaintext = b"Hello through built-in hook!";
-    alice_node.send_packet(&dest_to_bob, plaintext).unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, plaintext)
+        .unwrap();
 
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
         .expect("Bob did not receive message with built-in hook active");
@@ -1055,7 +1059,7 @@ fn test_load_hook_after_traffic_flowing() {
     // Exchange traffic first (no hooks)
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     alice_node
-        .send_packet(&dest_to_bob, b"before hook")
+        .send_packet_queued(&dest_to_bob, b"before hook")
         .unwrap();
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive pre-hook message");
@@ -1074,7 +1078,9 @@ fn test_load_hook_after_traffic_flowing() {
         .expect("load_hook failed");
 
     // Send another packet — should still be delivered
-    alice_node.send_packet(&dest_to_bob, b"after hook").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"after hook")
+        .unwrap();
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive post-hook message");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
@@ -1115,7 +1121,9 @@ fn test_unload_hook_restores_behavior() {
         .expect("load_hook failed");
 
     // Verify traffic works with hook
-    alice_node.send_packet(&dest_to_bob, b"with hook").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"with hook")
+        .unwrap();
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive message with hook active");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
@@ -1129,7 +1137,7 @@ fn test_unload_hook_restores_behavior() {
 
     // Verify traffic still works after unload
     alice_node
-        .send_packet(&dest_to_bob, b"after unload")
+        .send_packet_queued(&dest_to_bob, b"after unload")
         .unwrap();
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive message after hook unload");
@@ -1180,7 +1188,7 @@ fn test_rate_limiter_drops_excess() {
     // Send a few packets — should pass through (well under threshold)
     for i in 0..3u8 {
         let msg = [b'r', b'l', b'0' + i];
-        alice_node.send_packet(&dest_to_bob, &msg).unwrap();
+        alice_node.send_packet_queued(&dest_to_bob, &msg).unwrap();
         let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
             .expect("Bob did not receive message through rate_limiter");
         let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
@@ -1222,7 +1230,7 @@ fn test_allowlist_blocks_unknown() {
     // Bob announces — his dest hash is random, so it should be dropped by the allowlist.
     // Try a few times; none should get through.
     for _ in 0..3 {
-        let _ = bob_node.announce(&bob_dest, &bob_id, Some(b"Bob"));
+        let _ = bob_node.announce_queued(&bob_dest, &bob_id, Some(b"Bob"));
     }
     std::thread::sleep(Duration::from_secs(3));
 
@@ -1270,7 +1278,7 @@ fn test_packet_mirror_does_not_block() {
 
     // Send a packet — should still be delivered normally
     alice_node
-        .send_packet(&dest_to_bob, b"mirror test")
+        .send_packet_queued(&dest_to_bob, b"mirror test")
         .unwrap();
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
         .expect("Bob did not receive message with packet_mirror active");
@@ -1314,7 +1322,9 @@ fn test_link_guard_loads_and_continues() {
         .expect("load_hook failed");
 
     // Normal traffic should still work (link_guard only acts on link requests)
-    alice_node.send_packet(&dest_to_bob, b"guard test").unwrap();
+    alice_node
+        .send_packet_queued(&dest_to_bob, b"guard test")
+        .unwrap();
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
         .expect("Bob did not receive message with link_guard active");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
@@ -1393,7 +1403,7 @@ fn test_metrics_does_not_interfere() {
     // Send several packets — all should be delivered
     for i in 0..5u8 {
         let msg = [b'm', b'e', b't', b'0' + i];
-        alice_node.send_packet(&dest_to_bob, &msg).unwrap();
+        alice_node.send_packet_queued(&dest_to_bob, &msg).unwrap();
         let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
             .expect("Bob did not receive message with metrics hook active");
         let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");

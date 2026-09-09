@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 parent.peers
             );
             if parent.status && !peers.is_empty() && !announced {
-                node.announce(&destination, &identity, Some(b"rns-rs Weave HIL"))?;
+                node.announce_queued(&destination, &identity, Some(b"rns-rs Weave HIL"))?;
                 announced = true;
             }
         }

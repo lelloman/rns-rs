@@ -1012,6 +1012,14 @@ impl Driver {
                     dest_type,
                     attached_interface,
                 } => self.handle_send_outbound_event(raw, dest_type, attached_interface),
+                Event::SendOutboundTracked {
+                    raw,
+                    dest_type,
+                    replay,
+                    completion,
+                } => {
+                    self.handle_confirmed_outbound(raw, dest_type, replay, completion);
+                }
                 Event::RegisterDestination {
                     dest_hash,
                     dest_type,
