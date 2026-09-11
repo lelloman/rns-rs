@@ -433,6 +433,41 @@ fn rngit_nomadnet_pages_render_over_rns_link() {
 }
 
 #[test]
+#[ignore = "requires PYTHONPATH pointing at the audited Reticulum checkout"]
+fn python_work_lifecycle_interop() {
+    let harness = E2eHarness::start(|config| {
+        config.allow_interact = vec!["all".into()];
+        config.allow_propose = vec!["all".into()];
+    });
+    git::ensure_bare_repository(&harness.server_config.repositories_dir.join("group/repo"))
+        .unwrap();
+    let destination = &harness.destinations.repositories;
+    let mut python = Command::new("python3")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/work_client.py"))
+        .arg(harness.tmp.path().join("client-rns"))
+        .arg(hex(&destination.hash.0))
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(status) = python.try_wait().unwrap() {
+            assert!(status.success(), "Python work client failed: {status}");
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = python.kill();
+            let _ = python.wait();
+            panic!("Python work client timed out");
+        }
+        harness
+            .server_node
+            .announce_queued(destination, &harness.server_identity, None)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+#[test]
 fn rngit_release_management_and_downloads_work_over_rns_link() {
     let harness = E2eHarness::start(|config| {
         config.allow_release = vec!["all".into()];
