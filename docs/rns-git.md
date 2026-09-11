@@ -264,6 +264,12 @@ The server writes document-local interact/write permissions for the proposer so
 they can continue updating their proposal without broader repository write
 access.
 
+`activate --id N` moves a completed or proposed document into the active scope.
+`complete --id N` moves an active document into completed. Both operations
+require repository write+interact access and either authorship or administrator
+permission for the document. An explicit document `admin = none` disables the
+inherited administrator override. Transitions preserve the original author.
+
 Document-local permissions are stored as `<repo>.work/<id>.allowed` and use the
 same syntax as repository `.allowed` files. A document-local `interact` grant
 allows comments on that document without granting edit/delete access. The

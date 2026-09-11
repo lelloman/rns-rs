@@ -1,11 +1,11 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.5.3 rgit Upstream Audit
 
 ## Scope and Baseline
 
 - audit date: `2026-09-11`
 - previous accepted version: `1.5.3`
 - previous normative commit: `0bb41bf9486c1469854876a3c1d7c57324efc7c4`
-- target version: `1.5.3` (tip metadata; final release target not yet selected)
+- target version: `1.5.3`
 - target tag or ref: `rgit/master`
 - target normative commit: `fae64abf05a0ec5afabb2def9076f70d42bfe600`
 - target root tree: `b604b6447b083dc3188acc76a24b7ad063f9b732`
@@ -18,9 +18,8 @@
 
 The rgit tip is nine commits ahead of the accepted baseline. The GitHub mirror
 tip is `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` and remains behind the accepted
-baseline. Both remotes were fetched successfully on 2026-09-11. The target
-version and promotion commit remain provisional until the new upstream release
-metadata is complete and the audit dispositions are resolved.
+baseline. Both remotes were fetched successfully on 2026-09-11. The exact
+promotion target is the recorded rgit commit; no signed-tag claim is made.
 
 ## Audit Vocabulary
 
@@ -50,7 +49,7 @@ metadata is complete and the audit dispositions are resolved.
 | 6 | `f231fdcb4dfc5921423b5d8ab6a3ee2bfed752da` | Added immediate permissions change activation for rngit perms | Integrated | `a0bacdb`; immediate grant/revoke, resolver guard and Python permissions |
 | 7 | `e7a7c48c0a5f785049b1e35852c147840c30daff` | Added importable webp media file conversion helper | Integrated | `cfb946c`; public file API, encoder tests, exact Python media |
 | 8 | `7330c20c6d7e109c97f6e8783ffb321977ef0943` | Updated changelog | Non-runtime | `cf74fd8`; full release-note diff reviewed |
-| 9 | `fae64abf05a0ec5afabb2def9076f70d42bfe600` | Prepare release | Needs decision | Release contents and target version pending |
+| 9 | `fae64abf05a0ec5afabb2def9076f70d42bfe600` | Prepare release | Non-runtime | `eeb629b`; generated documentation and inventory reviewed |
 
 ## Per-Commit Analysis
 
@@ -201,19 +200,10 @@ runtime or native API adjustment follows from this build. Disposition:
 **Non-runtime**. Target pinned to `fae64abf05a0ec5afabb2def9076f70d42bfe600`,
 whose `RNS/_version.py` still asserts 1.5.3. No release signature/tag claim.
 
-## Integration Plan
-
-1. Review the remaining work-document and permission commits individually in
-   ancestry order, preserving one mapping commit per upstream commit.
-2. Determine whether the WebP helper changes the already accepted media-preview
-   compatibility surface.
-3. Resolve release metadata and select the exact promotion target.
-4. Implement applicable changes and record focused evidence per commit.
-
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
 - [ ] Fixture provenance and byte stability are checked where applicable.
 - [ ] Exact-target live Python/Rust interop passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
