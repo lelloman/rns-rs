@@ -124,6 +124,29 @@ from one blank line in `_work_activate`; no executable lines change. Verified
 with `git diff --ignore-all-space <parent> <commit> --exit-code` (exit 0).
 Disposition: **Non-runtime**. No native source or runtime test change required.
 
+### 6. `f231fdcb` — immediate permissions and resolver protection
+
+Changed path: `RNS/Utilities/rngit/server.py`. Reviewed the complete diff and
+the loader, group/repository update and remote setter context. Upstream stages
+group rules before applying them, factors the allowed-file loader, refreshes
+cached permissions after remote writes, and rejects replacement of executable
+resolvers. Rust's `Access` reads and parses sidecars on each permission check,
+and its atomic rename avoids partial file contents, so it needs no cache refresh
+or Python cache-update lock. New tests confirm grant/revoke visibility through
+the same `Access` instance for both group and repository sidecars.
+
+The executable-resolver regression failed before the fix. Both remote setters
+now reject executable sidecars and preserve their contents and mode. Live
+Python permission `set` exposed a pre-existing one-byte response ambiguity;
+the endpoint now explicitly encodes its status response as MessagePack binary,
+so Python receives `b"\x00"` rather than integer zero. This is covered by live
+set/get and executable-resolver rejection checks. Disposition: **Integrated**.
+
+Validation: 210 library and 23 integration tests passed, formatting and
+warning-free host lint passed, and the exact-target live Python administrator
+lifecycle/permissions test passed. Operator behavior is documented in
+`docs/rns-git.md`.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in

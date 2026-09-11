@@ -165,7 +165,9 @@ at `<group>/<repo>` targets `<group>/<repo>.allowed`. Reading or replacing these
 files requires admin access, and the server validates replacement content before
 atomically writing it. Rust `rngit perms` is non-interactive: without
 `--content`, it prints the current permission file; with `--content PATH`, it
-replaces the remote permission file with `PATH`.
+replaces the remote permission file with `PATH`. Changes take effect on the next
+permission check without restarting the server. Executable permission resolvers
+can only be modified locally on the node; remote replacements are rejected.
 
 ## Git Remote Helper
 

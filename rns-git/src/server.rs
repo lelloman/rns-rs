@@ -267,10 +267,10 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
         protocol::PATH_PERMS,
         None,
         move |_link, _path, data, remote| {
-            Some(
+            Some(msgpack::pack(&Value::Bin(
                 handle_perms(&perms_config, &perms_access, data, remote)
                     .unwrap_or_else(error_response),
-            )
+            )))
         },
     )
     .map_err(|_| Error::msg("failed to register permissions handler"))?;
@@ -920,6 +920,12 @@ fn handle_permissions_step(
                 return Ok(protocol::status_bytes(
                     protocol::RES_INVALID_REQ,
                     format!("invalid permissions: {err}"),
+                ));
+            }
+            if allowed_path.exists() && crate::acl::is_executable_file(allowed_path)? {
+                return Ok(protocol::status_bytes(
+                    protocol::RES_DISALLOWED,
+                    b"Executable permission resolvers can only be modified node-side",
                 ));
             }
             write_permissions_file(allowed_path, content)?;
@@ -2955,6 +2961,66 @@ mod tests {
             std::fs::read_to_string(work_path.join("1.allowed")).unwrap(),
             "interact = all\n"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn permissions_updates_preserve_executable_resolvers() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
+        for relative in ["group.allowed", "group/repo.allowed"] {
+            let path = config.repositories_dir.join(relative);
+            let original = "#!/bin/sh\necho 'read = all'\n";
+            std::fs::write(&path, original).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let response = handle_permissions_step(
+                &config,
+                &[
+                    (strv("step"), strv("set")),
+                    (strv("content"), strv("read = none\n")),
+                ],
+                &path,
+            )
+            .unwrap();
+            assert_eq!(response[0], protocol::RES_DISALLOWED);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+    }
+
+    #[test]
+    fn permissions_updates_are_visible_without_rebuilding_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
+        let access = make_access(&config);
+        for relative in ["group.allowed", "group/repo.allowed"] {
+            let path = config.repositories_dir.join(relative);
+            for (content, allowed) in [("write = all\n", true), ("write = none\n", false)] {
+                let response = handle_permissions_step(
+                    &config,
+                    &[
+                        (strv("step"), strv("set")),
+                        (strv("content"), strv(content)),
+                    ],
+                    &path,
+                )
+                .unwrap();
+                assert_eq!(response, vec![protocol::RES_OK]);
+                assert_eq!(
+                    access
+                        .allows(Operation::Write, "group/repo", Some(&REMOTE))
+                        .unwrap(),
+                    allowed
+                );
+            }
+        }
     }
 
     #[test]

@@ -27,14 +27,16 @@ link.identify(identity)
 time.sleep(0.25)
 
 
-def request(operation, **fields):
+def request(operation, path="/mgmt/work", repository="group/repo", expected=0, **fields):
     responses = []
-    link.request("/mgmt/work", data={0: "group/repo", "operation": operation, **fields},
+    link.request(path, data={0: repository, "operation": operation, **fields},
                  response_callback=lambda receipt: responses.append(receipt.response), timeout=15)
     wait_for(lambda: responses)
     response = responses[0]
-    assert response[0] == 0, response
-    return mp.unpackb(response[1:])
+    assert response[0] == expected, response
+    if expected != 0:
+        return response[1:]
+    return mp.unpackb(response[1:]) if len(response) > 1 else None
 
 
 proposal = request("propose", title="Python proposal", content="Keep my content",
@@ -54,5 +56,12 @@ assert document["meta"]["identity"] == identity.get_public_key()
 assert identity.validate(document["meta"]["signature"], document["content"].encode())
 assert request("complete", doc_id=doc_id)["scope"] == "completed"
 assert request("activate", doc_id=doc_id)["scope"] == "active"
+if os.environ.get("RNS_WORK_ADMIN_INTEROP"):
+    request("rperms", path="/mgmt/perms", step="set", content="write = all\n")
+    assert request("rperms", path="/mgmt/perms", step="get")["content"] == "write = all\n"
+    if sys.platform != "win32":
+        denial = request("rperms", path="/mgmt/perms", repository="group/dynamic",
+                         step="set", content="read = none\n", expected=1)
+        assert b"node-side" in denial
 link.teardown()
 print(f"Python {RNS.__version__}: propose/activate/view/complete/reactivate passed", flush=True)
