@@ -63,7 +63,7 @@ rustup target add wasm32-unknown-unknown
 
 ## Running Tests
 
-Committed conformance vectors are generated from the historical, pinned Reticulum 1.4.0 baseline. The current upstream reference is Reticulum 1.4.2, which is exercised separately by the live Python/Rust interop CI lane; see [UPSTREAM.md](UPSTREAM.md) for the exact commits and acceptance scope.
+Committed conformance vectors retain their historical, pinned Reticulum 1.4.0 provenance. The current upstream reference is Reticulum 1.5.3, validated against its exact canonical commit separately from the GitHub-backed interop CI pin; see [UPSTREAM.md](UPSTREAM.md) for the exact commits and acceptance scope.
 
 ```bash
 # Generate fixtures from the pinned Reticulum 1.4.0 checkout
