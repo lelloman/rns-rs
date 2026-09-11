@@ -42,7 +42,7 @@ metadata is complete and the audit dispositions are resolved.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `b0933d5c6f7fa06a5fd2a2cfa887441aa62cbbb7` | activate should work also with proposed work documents | Needs decision | Audit pending |
+| 1 | `b0933d5c6f7fa06a5fd2a2cfa887441aa62cbbb7` | activate should work also with proposed work documents | Integrated | `d07a1c1`; regression, crate suite, live Python lifecycle |
 | 2 | `409380a4581fbb15cf794778da5b45bc90e44575` | Allow admins to activate and complete work docs | Needs decision | Audit pending |
 | 3 | `859dc8180523762310b0aa8ac22c6f9dfc8e64f4` | Cleanup, in-method atomicity of group and repository name derivation to ensure no discrepancies between request data and method invocation parameters | Needs decision | Audit pending |
 | 4 | `36a62e7b1a6c3b6c4d5411410f83e22c000048cd` | Cleanup, align with existing pattern of minimal information disclosure on insufficient permissions | Needs decision | Audit pending |
