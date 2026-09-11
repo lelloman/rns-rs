@@ -184,6 +184,23 @@ changelog is not vendored. This remains a 1.5.3 rgit advancement, so final
 records will use the `reticulum-1.5.3-rgit-*` qualifier to preserve the existing
 point-in-time 1.5.3 records.
 
+### 9. `fae64abf` — prepare release documentation
+
+Changed paths: `docs/markdown/{git,reference}.md` and 24 generated manual files
+(HTML, build metadata, search index and object inventory). Full textual diff
+reviewed, with generated HTML normalized for version/cache-key changes and
+search-index JSON compared recursively. The object inventory's decompressed
+payload is identical; only its version header changes. Runtime `RNS` tree is
+unchanged from the parent.
+
+The authored changes document `no_ident.mu` and correct the expected-rate
+description. Generated HTML reflects those changes plus 1.5.3 version labels
+and the documentation-options cache key. The search index adds the no-ident
+template terms. Rust already documents and tests no-ident templates; no
+runtime or native API adjustment follows from this build. Disposition:
+**Non-runtime**. Target pinned to `fae64abf05a0ec5afabb2def9076f70d42bfe600`,
+whose `RNS/_version.py` still asserts 1.5.3. No release signature/tag claim.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in
