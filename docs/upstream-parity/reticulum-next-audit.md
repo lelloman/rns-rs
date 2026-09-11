@@ -105,6 +105,18 @@ group/repository pair to disagree with it. Disposition: **Structurally covered**
 The existing administrator transition regression was rerun and passed; the
 preceding full crate/lint and live Python evidence covers this unchanged path.
 
+### 4. `36a62e7b` — minimize permission-denial disclosure
+
+Changed path: `RNS/Utilities/rngit/server.py`; follows rows 2–3. The full diff
+only replaces the two lifecycle denial strings with `Not allowed`, retaining
+status `RES_DISALLOWED`. Rust's `ensure_author` produces an internal author
+error, but `server::work_error_response` already replaces it with the generic
+`not allowed` response and the same status. Internal errors are not exposed by
+these handlers. Disposition: **Structurally covered**. Existing server
+non-author management tests and row 2's explicit admin-denial test cover the
+status path; source inspection verifies the generic wire body. Capitalization
+retains the established native response convention.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in
