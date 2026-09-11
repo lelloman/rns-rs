@@ -5,8 +5,25 @@ exact audited Reticulum checkout. No system Reticulum configuration is used.
 """
 import sys
 import time
+import os
+import tempfile
 
 import RNS
+
+from RNS.Utilities.rngit.media import convert_file_to_webp, _webp_info
+
+# Compare resize behavior, not backend-dependent compressed bytes.
+with tempfile.NamedTemporaryFile() as source:
+    source.write(b"P6\n4 2\n255\n" + b"\xff\0\0" * 8)
+    source.flush()
+    for limit, expected in [(2, (2, 1)), (8, (4, 2))]:
+        converted = convert_file_to_webp(source.name, max_dimension=limit)
+        assert converted
+        try:
+            with open(converted, "rb") as image:
+                assert _webp_info(image.read()) == expected
+        finally:
+            os.unlink(converted)
 
 
 def wait_for(predicate):
@@ -41,7 +58,6 @@ wait_for(lambda: len(responses) == 1)
 value, metadata = responses.pop()
 assert metadata == {"name": b"README.md"}, metadata
 assert value == b"hello over rns\n"
-from RNS.Utilities.rngit.media import _webp_info
 link.request("/media", data={"key": b"image-key", "path": "/media/group/repo/HEAD/pixel.png"},
              response_callback=received, timeout=15)
 wait_for(lambda: len(responses) == 1)

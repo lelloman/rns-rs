@@ -4,6 +4,7 @@
 //! to the Resource, so disconnects cannot leave link-owned spool directories.
 use std::ffi::OsStr;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -76,6 +77,81 @@ fn executable_available(name: &str) -> bool {
 }
 
 pub(crate) fn convert_to_webp(input: &[u8]) -> Option<Vec<u8>> {
+    convert_with_options(
+        input,
+        ConversionOptions {
+            quality: None,
+            ..Default::default()
+        },
+    )
+}
+
+/// Encoding controls for standalone file conversion.
+#[derive(Debug, Clone, Copy)]
+pub struct ConversionOptions {
+    /// Encoder quality, clamped to 1–100; None uses the encoder default.
+    pub quality: Option<i32>,
+    /// Preserve aspect ratio and shrink to fit; zero/None disables resizing.
+    pub max_dimension: Option<u32>,
+    pub timeout: Duration,
+}
+
+impl Default for ConversionOptions {
+    fn default() -> Self {
+        Self {
+            quality: Some(85),
+            max_dimension: None,
+            timeout: TIMEOUT,
+        }
+    }
+}
+
+/// Convert a file into an owned temporary WebP file, removed when dropped.
+/// The source is never modified; unavailable backends or conversion failures
+/// return None. Call `persist` on the returned file to retain it permanently.
+pub fn convert_file_to_webp(
+    source: impl AsRef<Path>,
+    options: ConversionOptions,
+) -> Option<tempfile::NamedTempFile> {
+    let input = std::fs::read(source).ok()?;
+    let output = convert_with_options(&input, options)?;
+    let mut file = tempfile::Builder::new()
+        .prefix("rns_media_")
+        .suffix(".webp")
+        .tempfile()
+        .ok()?;
+    file.write_all(&output).ok()?;
+    file.seek(SeekFrom::Start(0)).ok()?;
+    Some(file)
+}
+
+fn configured_args(name: &str, args: &[&str], options: ConversionOptions) -> Vec<String> {
+    let mut result: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    let mut extra = Vec::new();
+    if let Some(quality) = options.quality {
+        extra.extend(["-quality".into(), quality.clamp(1, 100).to_string()]);
+    }
+    let image_magick = matches!(name, "magick" | "convert" | "gm");
+    if let Some(dimension) = options.max_dimension.filter(|dimension| *dimension > 0) {
+        if image_magick {
+            extra.extend(["-resize".into(), format!("{dimension}x{dimension}>")]);
+        } else {
+            extra.extend(["-vf".into(), format!("scale='min(iw,{dimension})':'min(ih,{dimension})':force_original_aspect_ratio=decrease")]);
+        }
+    }
+    let index = if image_magick {
+        result.len() - 1
+    } else {
+        result
+            .iter()
+            .position(|arg| arg == "-f")
+            .unwrap_or(result.len())
+    };
+    result.splice(index..index, extra);
+    result
+}
+
+fn convert_with_options(input: &[u8], options: ConversionOptions) -> Option<Vec<u8>> {
     let forced = std::env::var_os("RNGIT_MEDIA_BACKEND").filter(|value| !value.is_empty());
     let Some((name, args)) = select_backend(forced.as_deref(), executable_available) else {
         if !NO_BACKEND_LOGGED.swap(true, Ordering::Relaxed) {
@@ -84,7 +160,11 @@ pub(crate) fn convert_to_webp(input: &[u8]) -> Option<Vec<u8>> {
         return None;
     };
     NO_BACKEND_LOGGED.store(false, Ordering::Relaxed);
-    match convert(input, Command::new(name).args(args), TIMEOUT) {
+    match convert(
+        input,
+        Command::new(name).args(configured_args(name, args, options)),
+        options.timeout,
+    ) {
         Ok(output) => Some(output),
         Err(err) => {
             log::warn!("Media conversion via {name} failed: {err}; serving original media");
@@ -162,6 +242,69 @@ fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_options_clamp_quality_and_disable_zero_resize() {
+        for (name, args) in BACKENDS {
+            let configured = configured_args(
+                name,
+                args,
+                ConversionOptions {
+                    quality: Some(200),
+                    max_dimension: Some(0),
+                    ..Default::default()
+                },
+            );
+            assert!(configured
+                .windows(2)
+                .any(|pair| pair == ["-quality", "100"]));
+            assert!(!configured
+                .iter()
+                .any(|arg| arg == "-resize" || arg == "-vf"));
+            let configured = configured_args(
+                name,
+                args,
+                ConversionOptions {
+                    quality: Some(-5),
+                    max_dimension: Some(640),
+                    ..Default::default()
+                },
+            );
+            assert!(configured.windows(2).any(|pair| pair == ["-quality", "1"]));
+            assert!(configured.iter().any(|arg| arg.contains("640")));
+            assert_eq!(configured.last().unwrap(), args.last().unwrap());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an installed WebP backend"]
+    fn file_conversion_resizes_without_upscaling_and_owns_cleanup() {
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        let pixels =
+            b"P6\n4 2\n255\n\xff\0\0\0\xff\0\xff\0\0\0\xff\0\xff\0\0\0\xff\0\xff\0\0\0\xff\0";
+        source.write_all(pixels).unwrap();
+        for (limit, dimensions) in [(2, (2, 1)), (8, (4, 2))] {
+            let output = convert_file_to_webp(
+                source.path(),
+                ConversionOptions {
+                    max_dimension: Some(limit),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let path = output.path().to_owned();
+            assert_eq!(
+                webp_dimensions(&std::fs::read(&path).unwrap()),
+                Some(dimensions)
+            );
+            drop(output);
+            assert!(!path.exists());
+            assert_eq!(std::fs::read(source.path()).unwrap(), pixels);
+        }
+        std::fs::write(source.path(), b"not an image").unwrap();
+        assert!(convert_file_to_webp(source.path(), Default::default()).is_none());
+        assert!(convert_file_to_webp(source.path().join("missing"), Default::default()).is_none());
+    }
 
     #[test]
     fn backend_preference_and_forced_selection() {

@@ -73,6 +73,12 @@ Important config paths:
   `media_conversion = no` to always serve the original file. Conversion
   temporary files are cleaned up before returning the response; output bytes
   remain owned by the Resource for the duration of the transfer.
+  Library callers can use `rns_git::media::convert_file_to_webp` with
+  `ConversionOptions` to convert a local file. Defaults are quality 85 and an
+  eight-second timeout; quality is clamped to 1–100. `max_dimension` shrinks
+  images to fit while retaining aspect ratio and never upscales them. The
+  returned `NamedTempFile` deletes its output when dropped; use `persist` to
+  retain it. Failed conversions return `None` and leave the source untouched.
   Text blob pages and Markdown fenced code blocks are syntax-highlighted by
   default when the file extension or fence language is supported.
   Markdown fenced code blocks tagged `rawmu` are passed through as raw Micron
