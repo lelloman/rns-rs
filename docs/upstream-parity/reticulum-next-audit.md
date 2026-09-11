@@ -47,7 +47,7 @@ metadata is complete and the audit dispositions are resolved.
 | 3 | `859dc8180523762310b0aa8ac22c6f9dfc8e64f4` | Cleanup, in-method atomicity of group and repository name derivation to ensure no discrepancies between request data and method invocation parameters | Structurally covered | `ca5beb6`; single owned request supplies storage and ACL context |
 | 4 | `36a62e7b1a6c3b6c4d5411410f83e22c000048cd` | Cleanup, align with existing pattern of minimal information disclosure on insufficient permissions | Structurally covered | `bcfaf47`; generic response mapping and non-author regression |
 | 5 | `87823c091fd6fb8788de73f4021e4ddd9d13781e` | Cleanup | Non-runtime | `129bc39`; whitespace-insensitive diff empty |
-| 6 | `f231fdcb4dfc5921423b5d8ab6a3ee2bfed752da` | Added immediate permissions change activation for rngit perms | Needs decision | Audit pending |
+| 6 | `f231fdcb4dfc5921423b5d8ab6a3ee2bfed752da` | Added immediate permissions change activation for rngit perms | Integrated | `a0bacdb`; immediate grant/revoke, resolver guard and Python permissions |
 | 7 | `e7a7c48c0a5f785049b1e35852c147840c30daff` | Added importable webp media file conversion helper | Needs decision | Audit pending |
 | 8 | `7330c20c6d7e109c97f6e8783ffb321977ef0943` | Updated changelog | Non-runtime | Upstream metadata only; verify after target selection |
 | 9 | `fae64abf05a0ec5afabb2def9076f70d42bfe600` | Prepare release | Needs decision | Release contents and target version pending |
