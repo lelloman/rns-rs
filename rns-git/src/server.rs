@@ -1177,20 +1177,40 @@ pub fn handle_work(
             let doc_id = request
                 .doc_id
                 .ok_or_else(|| Error::msg("no document ID specified"))?;
+            let admin =
+                !crate::work::document_permission_denies(&work_path, doc_id, Operation::Admin)?
+                    && (access.allows(Operation::Admin, repo, Some(remote_hash))?
+                        || crate::work::document_permission_allows(
+                            &work_path,
+                            doc_id,
+                            Operation::Admin,
+                            Some(remote_hash),
+                        )?);
             work_status_result(
-                crate::work::complete_document(&work_path, doc_id, remote_hash).map(|_| {
-                    crate::work::transition_response(doc_id, crate::work::WorkScope::Completed)
-                }),
+                crate::work::complete_document_authorized(&work_path, doc_id, remote_hash, admin)
+                    .map(|_| {
+                        crate::work::transition_response(doc_id, crate::work::WorkScope::Completed)
+                    }),
             )
         }
         "activate" => {
             let doc_id = request
                 .doc_id
                 .ok_or_else(|| Error::msg("no document ID specified"))?;
+            let admin =
+                !crate::work::document_permission_denies(&work_path, doc_id, Operation::Admin)?
+                    && (access.allows(Operation::Admin, repo, Some(remote_hash))?
+                        || crate::work::document_permission_allows(
+                            &work_path,
+                            doc_id,
+                            Operation::Admin,
+                            Some(remote_hash),
+                        )?);
             work_status_result(
-                crate::work::activate_document(&work_path, doc_id, remote_hash).map(|_| {
-                    crate::work::transition_response(doc_id, crate::work::WorkScope::Active)
-                }),
+                crate::work::activate_document_authorized(&work_path, doc_id, remote_hash, admin)
+                    .map(|_| {
+                        crate::work::transition_response(doc_id, crate::work::WorkScope::Active)
+                    }),
             )
         }
         "perms" => {
@@ -2593,6 +2613,83 @@ mod tests {
         )
         .unwrap();
         assert_eq!(invalid[0], protocol::RES_INVALID_REQ);
+    }
+
+    #[test]
+    fn work_admins_can_transition_another_authors_document() {
+        for document_admin in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut config = cfg(tmp.path());
+            config.allow_interact = vec!["all".into()];
+            if !document_admin {
+                config.allow_admin = vec![crate::util::hex(&OTHER_REMOTE)];
+            }
+            let repo_path = config.repositories_dir.join("group/repo");
+            git::ensure_bare_repository(&repo_path).unwrap();
+            let work_path = crate::work::work_sidecar_path(&repo_path);
+            crate::work::create_document(
+                &work_path,
+                crate::work::WorkInput {
+                    title: "Task".into(),
+                    content: "Body".into(),
+                    format: "plain".into(),
+                    signature: None,
+                    identity: None,
+                    author: REMOTE,
+                },
+            )
+            .unwrap();
+            if document_admin {
+                crate::work::set_document_permissions(
+                    &work_path,
+                    1,
+                    &format!("admin = {}\n", crate::util::hex(&OTHER_REMOTE)),
+                )
+                .unwrap();
+            }
+            let access = make_access(&config);
+            for operation in ["complete", "activate"] {
+                let response = handle_work(
+                    &config,
+                    &access,
+                    &work_request(&[
+                        ("repository", strv("group/repo")),
+                        ("operation", strv(operation)),
+                        ("doc_id", uintv(1)),
+                    ]),
+                    Some(&(OTHER_REMOTE, REMOTE_SIG)),
+                )
+                .unwrap();
+                assert_eq!(response[0], protocol::RES_OK, "{operation}: {response:?}");
+            }
+            assert_eq!(crate::work::document_author(&work_path, 1).unwrap(), REMOTE);
+            crate::work::set_document_permissions(&work_path, 1, "admin = none\n").unwrap();
+            let denied = handle_work(
+                &config,
+                &access,
+                &work_request(&[
+                    ("repository", strv("group/repo")),
+                    ("operation", strv("complete")),
+                    ("doc_id", uintv(1)),
+                ]),
+                Some(&(OTHER_REMOTE, REMOTE_SIG)),
+            )
+            .unwrap();
+            assert_eq!(denied[0], protocol::RES_DISALLOWED);
+            let response = handle_work(
+                &config,
+                &access,
+                &work_request(&[
+                    ("repository", strv("group/repo")),
+                    ("operation", strv("edit")),
+                    ("doc_id", uintv(1)),
+                    ("content", strv("Other edit")),
+                ]),
+                Some(&(OTHER_REMOTE, REMOTE_SIG)),
+            )
+            .unwrap();
+            assert_eq!(response[0], protocol::RES_DISALLOWED);
+        }
     }
 
     #[test]

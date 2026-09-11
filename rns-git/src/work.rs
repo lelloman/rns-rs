@@ -401,16 +401,35 @@ pub fn add_comment(
 }
 
 pub fn complete_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
+    complete_document_authorized(work_path, doc_id, author, false)
+}
+
+pub(crate) fn complete_document_authorized(
+    work_path: &Path,
+    doc_id: u64,
+    author: &[u8; 16],
+    admin: bool,
+) -> Result<()> {
     move_document(
         work_path,
         WorkScope::Active,
         WorkScope::Completed,
         doc_id,
         author,
+        admin,
     )
 }
 
 pub fn activate_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
+    activate_document_authorized(work_path, doc_id, author, false)
+}
+
+pub(crate) fn activate_document_authorized(
+    work_path: &Path,
+    doc_id: u64,
+    author: &[u8; 16],
+    admin: bool,
+) -> Result<()> {
     let source = [WorkScope::Completed, WorkScope::Proposed]
         .into_iter()
         .find(|scope| {
@@ -419,7 +438,7 @@ pub fn activate_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Re
                 .is_dir()
         })
         .ok_or_else(|| Error::msg("document not found"))?;
-    move_document(work_path, source, WorkScope::Active, doc_id, author)
+    move_document(work_path, source, WorkScope::Active, doc_id, author, admin)
 }
 
 pub fn accept_proposal(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
@@ -429,6 +448,7 @@ pub fn accept_proposal(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Resu
         WorkScope::Active,
         doc_id,
         author,
+        false,
     )
 }
 
@@ -467,6 +487,18 @@ pub fn get_document_permissions(work_path: &Path, doc_id: u64) -> Result<String>
     }
 }
 
+pub(crate) fn document_permission_denies(
+    work_path: &Path,
+    doc_id: u64,
+    op: Operation,
+) -> Result<bool> {
+    let path = permissions_path(work_path, doc_id);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    crate::acl::allowed_input_denies(&fs::read_to_string(path)?, op)
+}
+
 pub fn set_document_permissions(work_path: &Path, doc_id: u64, content: &str) -> Result<()> {
     find_document_dir(work_path, doc_id)?.ok_or_else(|| Error::msg("document not found"))?;
     crate::acl::validate_allowed_input(content)?;
@@ -484,10 +516,13 @@ fn move_document(
     to: WorkScope,
     doc_id: u64,
     author: &[u8; 16],
+    admin: bool,
 ) -> Result<()> {
     let from_dir = scope_dir(work_path, from).join(doc_id.to_string());
     let doc = read_existing_document(&from_dir.join("root"))?;
-    ensure_author(&doc, author)?;
+    if !admin {
+        ensure_author(&doc, author)?;
+    }
     let to_base = scope_dir(work_path, to);
     fs::create_dir_all(&to_base)?;
     fs::rename(from_dir, to_base.join(doc_id.to_string()))?;

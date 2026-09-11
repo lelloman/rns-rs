@@ -438,6 +438,9 @@ fn python_work_lifecycle_interop() {
     let harness = E2eHarness::start(|config| {
         config.allow_interact = vec!["all".into()];
         config.allow_propose = vec!["all".into()];
+        if std::env::var_os("RNS_WORK_ADMIN_INTEROP").is_some() {
+            config.allow_admin = vec!["all".into()];
+        }
     });
     git::ensure_bare_repository(&harness.server_config.repositories_dir.join("group/repo"))
         .unwrap();
