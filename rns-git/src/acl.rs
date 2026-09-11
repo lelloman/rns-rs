@@ -224,7 +224,7 @@ fn allowed_input(path: &Path) -> Result<String> {
 }
 
 #[cfg(unix)]
-fn is_executable_file(path: &Path) -> Result<bool> {
+pub(crate) fn is_executable_file(path: &Path) -> Result<bool> {
     use std::os::unix::fs::PermissionsExt;
 
     let metadata = fs::metadata(path)?;
@@ -232,7 +232,7 @@ fn is_executable_file(path: &Path) -> Result<bool> {
 }
 
 #[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> Result<bool> {
+pub(crate) fn is_executable_file(path: &Path) -> Result<bool> {
     Ok(fs::metadata(path)?.is_file() && false)
 }
 

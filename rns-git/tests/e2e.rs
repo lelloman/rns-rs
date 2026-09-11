@@ -444,6 +444,18 @@ fn python_work_lifecycle_interop() {
     });
     git::ensure_bare_repository(&harness.server_config.repositories_dir.join("group/repo"))
         .unwrap();
+    #[cfg(unix)]
+    if std::env::var_os("RNS_WORK_ADMIN_INTEROP").is_some() {
+        use std::os::unix::fs::PermissionsExt;
+        git::ensure_bare_repository(&harness.server_config.repositories_dir.join("group/dynamic"))
+            .unwrap();
+        let path = harness
+            .server_config
+            .repositories_dir
+            .join("group/dynamic.allowed");
+        fs::write(&path, "#!/bin/sh\necho 'read = all'\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let destination = &harness.destinations.repositories;
     let mut python = Command::new("python3")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/work_client.py"))
