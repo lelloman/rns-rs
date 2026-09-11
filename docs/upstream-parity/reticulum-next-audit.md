@@ -49,7 +49,7 @@ metadata is complete and the audit dispositions are resolved.
 | 5 | `87823c091fd6fb8788de73f4021e4ddd9d13781e` | Cleanup | Non-runtime | `129bc39`; whitespace-insensitive diff empty |
 | 6 | `f231fdcb4dfc5921423b5d8ab6a3ee2bfed752da` | Added immediate permissions change activation for rngit perms | Integrated | `a0bacdb`; immediate grant/revoke, resolver guard and Python permissions |
 | 7 | `e7a7c48c0a5f785049b1e35852c147840c30daff` | Added importable webp media file conversion helper | Integrated | `cfb946c`; public file API, encoder tests, exact Python media |
-| 8 | `7330c20c6d7e109c97f6e8783ffb321977ef0943` | Updated changelog | Non-runtime | Upstream metadata only; verify after target selection |
+| 8 | `7330c20c6d7e109c97f6e8783ffb321977ef0943` | Updated changelog | Non-runtime | `cf74fd8`; full release-note diff reviewed |
 | 9 | `fae64abf05a0ec5afabb2def9076f70d42bfe600` | Prepare release | Needs decision | Release contents and target version pending |
 
 ## Per-Commit Analysis
