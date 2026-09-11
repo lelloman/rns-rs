@@ -147,6 +147,31 @@ warning-free host lint passed, and the exact-target live Python administrator
 lifecycle/permissions test passed. Operator behavior is documented in
 `docs/rns-git.md`.
 
+### 7. `e7a7c48c` — importable file conversion helper
+
+Changed paths: `RNS/Utilities/rngit/media.py`, `setup.py`. Reviewed the full
+diff and the backend-selection, validation, process-wait and packaging context.
+The helper adds optional clamped quality and aspect-preserving maximum size,
+a default quality of 85 for standalone files, temporary output and failure
+cleanup. Existing server conversion keeps encoder defaults when options are
+absent. Python packaging excludes the media module from Cython compilation;
+that packaging detail has no Rust counterpart.
+
+Rust exposes `media::convert_file_to_webp` and `ConversionOptions`; returns
+an owned `NamedTempFile`, uses the same backend arguments and eight-second
+default, clamps quality and ignores a zero dimension. Rust types replace
+Python's permissive runtime coercions. RAII deletes output on drop (callers can
+persist it) and preserves the source. Existing server defaults stay unchanged.
+Disposition: **Integrated**.
+
+Validation: 211 library and 23 integration tests, both explicitly enabled real
+encoder tests, formatting and host lint passed. Tests cover quality limits,
+resize/no-upscale, source preservation, cleanup and malformed/missing input;
+the existing process test covers nonzero exit and timeout cleanup. The exact
+upstream helper produced the same expected resize dimensions, and the live
+Python media client verified Rust file bytes, WebP dimensions and filename
+metadata. Native API documentation was added to `docs/rns-git.md`.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in
