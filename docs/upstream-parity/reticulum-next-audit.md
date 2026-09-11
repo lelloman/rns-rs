@@ -54,13 +54,29 @@ metadata is complete and the audit dispositions are resolved.
 
 ## Per-Commit Analysis
 
-Detailed applicability, local handling, and focused evidence remain to be
-recorded as the nine provisional dispositions are reviewed.
+### 1. `b0933d5c` — activate proposed work documents
+
+Changed path: `RNS/Utilities/rngit/server.py`. No unintegrated dependency.
+The complete diff and surrounding lifecycle code show that activation searches
+completed documents first, then proposed documents, retaining the author check.
+Rust previously searched only completed documents. `work::activate_document`
+now performs the same ordered lookup and uses the existing authenticated move.
+The regression `activate_proposed_document_preserves_author_and_content` failed
+before the fix with `document not found` and passes afterward; it also checks
+unauthorized activation and preservation of author/content. Disposition:
+**Integrated**.
+
+Validation: `cargo test -p rns-git` passed (207 library tests, 23 integration
+tests; optional backend and Python checks excluded by default). Formatting and
+`bash scripts/lint-host.sh` passed. The explicit `python_work_lifecycle_interop`
+test passed with `PYTHONPATH=/tmp/rns-upstream-parity-20260911`, exercising signed
+proposal activation, content/signature verification, completion and
+reactivation through an actual Python/Rust link at the pinned target.
 
 ## Integration Plan
 
-1. Inspect the six rngit work-document and permission commits as one behavioral
-   group and map them to the Rust rngit implementation.
+1. Review the remaining work-document and permission commits individually in
+   ancestry order, preserving one mapping commit per upstream commit.
 2. Determine whether the WebP helper changes the already accepted media-preview
    compatibility surface.
 3. Resolve release metadata and select the exact promotion target.

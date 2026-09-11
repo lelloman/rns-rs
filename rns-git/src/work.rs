@@ -411,13 +411,15 @@ pub fn complete_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Re
 }
 
 pub fn activate_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
-    move_document(
-        work_path,
-        WorkScope::Completed,
-        WorkScope::Active,
-        doc_id,
-        author,
-    )
+    let source = [WorkScope::Completed, WorkScope::Proposed]
+        .into_iter()
+        .find(|scope| {
+            scope_dir(work_path, *scope)
+                .join(doc_id.to_string())
+                .is_dir()
+        })
+        .ok_or_else(|| Error::msg("document not found"))?;
+    move_document(work_path, source, WorkScope::Active, doc_id, author)
 }
 
 pub fn accept_proposal(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
@@ -1059,6 +1061,26 @@ mod tests {
         assert_eq!(document.comments[1].format, "micron");
         assert_eq!(document.comments[1].signature, Some(vec![0xAA; 64]));
         assert_eq!(document.comments[1].author_hash, OTHER);
+    }
+
+    #[test]
+    fn activate_proposed_document_preserves_author_and_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work_path = tmp.path().join("repo.work");
+        create_sample(&work_path, "proposal").unwrap();
+        std::fs::create_dir_all(work_path.join("proposed")).unwrap();
+        std::fs::rename(work_path.join("active/1"), work_path.join("proposed/1")).unwrap();
+
+        assert!(activate_document(&work_path, 1, &OTHER).is_err());
+        assert!(work_path.join("proposed/1/root").is_file());
+        activate_document(&work_path, 1, &AUTHOR).unwrap();
+        assert!(!work_path.join("proposed/1").exists());
+        let document = view_document(&work_path, WorkScope::Active, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(document.title, "proposal");
+        assert_eq!(document.author_hash, AUTHOR);
+        assert!(activate_document(&work_path, 1, &AUTHOR).is_err());
     }
 
     #[test]
