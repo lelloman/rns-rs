@@ -204,14 +204,58 @@ whose `RNS/_version.py` still asserts 1.5.3. No release signature/tag claim.
 
 - [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
+
+- `2026-09-11`: After promotion, the clean configured upstream checkout was
+  aligned to `fae64abf`. Both remotes refreshed at 08:18:44/08:18:49 UTC;
+  canonical rgit is at baseline and the deduplicated ahead count is zero.
+  The checker's `behind` comparison label describes the lagging GitHub mirror,
+  not outstanding integration work. Badge/version and local document links
+  were verified.
+
+- `2026-09-11`: All 11 Docker matrix rounds passed in 1,060 seconds. The
+  topology summary reports 102 passed, zero failed and 29 topology-dependent
+  skips; standalone reconnect/supervision/NAT/tunnel suites report 11/84/12/29
+  passed assertions respectively. Log: `/tmp/rns-parity-docker-20260911.log`.
+  Final fresh upstream comparison at 08:16:52/08:17:00 UTC confirmed unchanged
+  tips. [The final parity record](reticulum-1.5.3-rgit-parity.md) is the acceptance
+  authority for this target.
+
+- `2026-09-11`: All nine mapping hashes were checked against canonical ancestry;
+  every canonical hash appears exactly once in local history. No historical
+  fixture changes or regeneration were required by this rngit-only range.
+- `2026-09-11`: Exact-target Python `fae64abf` packet/link/Resource interop and
+  all five opted-in utility cases passed (`/tmp/rns-parity-python-20260911.log`).
+  New live work lifecycle/admin/permissions and existing media interop passed
+  against that same detached checkout. The configured upstream checkout stayed
+  at the accepted baseline during review.
+- `2026-09-11`: Four built-in network hook tests, the built-in control-plane
+  lifecycle test, TLS suites, both real ffmpeg conversion tests, all WASM hook
+  example builds, 19 Python tool tests and four web UI smoke tests passed.
+  Full host release workspace build with native hooks passed. An initial ARM
+  invocation omitted the cross-linker environment and failed at host linking;
+  a corrected invocation with the CI environment is tracked separately.
+- `2026-09-11`: Corrected ARMv7 builds passed for `rnsd` and `rns-ctl` both
+  without hooks and with native hooks, and for `rns-server` with built-in hooks
+  (`/tmp/rns-parity-arm-corrected-20260911.log`). The integration daily VPS smoke
+  passed every stage, including Resource boundaries, concurrent links and
+  forced reconnect, with diagnostics at `/tmp/rns-backbone-smoke.NtL8wX` and
+  output in `/tmp/rns-parity-vps-20260911.log`. No serial hardware was available;
+  physical Weave HIL remains explicitly unclaimed.
+- `2026-09-11`: Both serial workspace runs completed successfully (default and
+  `--features rns-hooks`), including 955/961 network unit tests respectively and
+  all 56 network E2E cases in each run. Logs are
+  `/tmp/rns-parity-default-20260911.log` and
+  `/tmp/rns-parity-hooks-20260911.log`. Acceptance used the runtime source last
+  changed in `cfb946c`, with documentation-only mapping commits through
+  `38372a5`; the final live smoke binary was `rns-server 0.3.1252-38372a5`.
 
 - `2026-09-11`: Both upstream remotes refreshed successfully. Daily VPS
   snapshots were healthy and complete. The first impaired dual-VPS smoke run
