@@ -94,6 +94,17 @@ The final crate suite passed with 208 library and 23 integration tests;
 formatting and warning-free host lint passed. The live administrator check
 passed again after adding explicit document-denial precedence.
 
+### 3. `859dc818` — derive permission context from the request
+
+Changed path: `RNS/Utilities/rngit/server.py`; depends on row 2. Complete diff
+and handler review shows removal of separate group/repository parameters and
+derivation from the request inside each lifecycle handler. Rust already parses
+one owned `WorkRequest`; `handle_work` derives `repo`, the storage path and all
+permission checks from that same value. There is no independently supplied
+group/repository pair to disagree with it. Disposition: **Structurally covered**.
+The existing administrator transition regression was rerun and passed; the
+preceding full crate/lint and live Python evidence covers this unchanged path.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in
