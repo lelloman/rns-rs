@@ -172,6 +172,18 @@ upstream helper produced the same expected resize dimensions, and the live
 Python media client verified Rust file bytes, WebP dimensions and filename
 metadata. Native API documentation was added to `docs/rns-git.md`.
 
+### 8. `7330c20c` — 1.5.3 changelog
+
+Changed path: `Changelog.md`. Full diff and surrounding retrieval instructions
+reviewed. The new 1.5.3 section summarizes media, permissions, administrator
+lifecycle and previously accepted HDLC/no-ident changes, while retaining the
+1.5.2 notes below it. No runtime code changes. Disposition: **Non-runtime**.
+The version/changelog identifies the release line, not acceptance evidence;
+runtime claims are supported by the source mappings and tests. The upstream
+changelog is not vendored. This remains a 1.5.3 rgit advancement, so final
+records will use the `reticulum-1.5.3-rgit-*` qualifier to preserve the existing
+point-in-time 1.5.3 records.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in
