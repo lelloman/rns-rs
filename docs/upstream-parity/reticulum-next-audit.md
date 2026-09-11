@@ -117,6 +117,13 @@ non-author management tests and row 2's explicit admin-denial test cover the
 status path; source inspection verifies the generic wire body. Capitalization
 retains the established native response convention.
 
+### 5. `87823c09` — whitespace cleanup
+
+Changed path: `RNS/Utilities/rngit/server.py`. The entire diff removes spaces
+from one blank line in `_work_activate`; no executable lines change. Verified
+with `git diff --ignore-all-space <parent> <commit> --exit-code` (exit 0).
+Disposition: **Non-runtime**. No native source or runtime test change required.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in
