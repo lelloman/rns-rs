@@ -1,6 +1,7 @@
 """Live audited Python client exercising the Rust work lifecycle endpoint."""
 import sys
 import time
+import os
 
 import RNS
 from RNS.vendor import umsgpack as mp
@@ -40,6 +41,12 @@ proposal = request("propose", title="Python proposal", content="Keep my content"
                    format="plain", signature=identity.sign(b"Keep my content"))
 doc_id = proposal["id"]
 assert proposal["scope"] == "proposed"
+if os.environ.get("RNS_WORK_ADMIN_INTEROP"):
+    link.teardown()
+    link = RNS.Link(destination)
+    wait_for(lambda: link.status == RNS.Link.ACTIVE)
+    link.identify(RNS.Identity())
+    time.sleep(0.25)
 assert request("activate", doc_id=doc_id)["scope"] == "active"
 document = request("view", doc_id=doc_id, scope="active")
 assert document["content"] == "Keep my content"

@@ -193,6 +193,13 @@ pub(crate) fn validate_allowed_input(input: &str) -> Result<()> {
     validate_allowed_input_with_aliases(input, &BTreeMap::new())
 }
 
+pub(crate) fn allowed_input_denies(input: &str, op: Operation) -> Result<bool> {
+    Ok(matches!(
+        parse_allowed_file_with_aliases(input, &BTreeMap::new())?.get(operation_key(op)),
+        Some(Rule::None)
+    ))
+}
+
 pub(crate) fn validate_allowed_input_with_aliases(
     input: &str,
     aliases: &BTreeMap<String, [u8; 16]>,

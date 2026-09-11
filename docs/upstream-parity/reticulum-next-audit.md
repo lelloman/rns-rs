@@ -73,6 +73,27 @@ test passed with `PYTHONPATH=/tmp/rns-upstream-parity-20260911`, exercising sign
 proposal activation, content/signature verification, completion and
 reactivation through an actual Python/Rust link at the pinned target.
 
+### 2. `409380a4` — administrators may transition work documents
+
+Changed path: `RNS/Utilities/rngit/server.py`; depends on row 1's proposed
+activation. The complete diff passes repository context into lifecycle handlers
+and permits an author or a resolved document administrator to complete or
+activate. The outer repository read/interact/write checks remain required.
+Rust now resolves repository/document admin access for those two operations;
+an explicit document `admin = none` overrides inherited admin authority.
+Existing public author-only storage APIs retain their signatures and checks;
+internal authorized transitions preserve the stored author. Edit/delete are
+unaffected. Disposition: **Integrated**.
+
+The new administrator regression failed before implementation. It covers
+repository and document admins, both transitions, preservation of authorship,
+explicit document denial and continued rejection of non-author edits. The
+live Python lifecycle test also passed with a second administrator identity
+(`RNS_WORK_ADMIN_INTEROP=1`) activating the first identity's signed proposal.
+The final crate suite passed with 208 library and 23 integration tests;
+formatting and warning-free host lint passed. The live administrator check
+passed again after adding explicit document-denial precedence.
+
 ## Integration Plan
 
 1. Review the remaining work-document and permission commits individually in
