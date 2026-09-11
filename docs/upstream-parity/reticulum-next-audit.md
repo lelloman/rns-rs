@@ -44,7 +44,7 @@ metadata is complete and the audit dispositions are resolved.
 |---:|---|---|---|---|
 | 1 | `b0933d5c6f7fa06a5fd2a2cfa887441aa62cbbb7` | activate should work also with proposed work documents | Integrated | `d07a1c1`; regression, crate suite, live Python lifecycle |
 | 2 | `409380a4581fbb15cf794778da5b45bc90e44575` | Allow admins to activate and complete work docs | Integrated | `4fae3e6`; admin/denial regression and Python lifecycle |
-| 3 | `859dc8180523762310b0aa8ac22c6f9dfc8e64f4` | Cleanup, in-method atomicity of group and repository name derivation to ensure no discrepancies between request data and method invocation parameters | Needs decision | Audit pending |
+| 3 | `859dc8180523762310b0aa8ac22c6f9dfc8e64f4` | Cleanup, in-method atomicity of group and repository name derivation to ensure no discrepancies between request data and method invocation parameters | Structurally covered | `ca5beb6`; single owned request supplies storage and ACL context |
 | 4 | `36a62e7b1a6c3b6c4d5411410f83e22c000048cd` | Cleanup, align with existing pattern of minimal information disclosure on insufficient permissions | Needs decision | Audit pending |
 | 5 | `87823c091fd6fb8788de73f4021e4ddd9d13781e` | Cleanup | Needs decision | Audit pending |
 | 6 | `f231fdcb4dfc5921423b5d8ab6a3ee2bfed752da` | Added immediate permissions change activation for rngit perms | Needs decision | Audit pending |
