@@ -44,7 +44,7 @@ resolved and a promotion target is selected.
 |---:|---|---|---|---|
 | 1 | `0c97853554956bee29ab95f633642b9ce72520f9` | Fix RNode BLE device address acquisition on windows, by Nickie Deuxyeux | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 2 | `996d822393d194030b67ee176766878522f30998` | Fixed RNode BLE re-connection deadlock on desktop. Cleanup. | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
-| 3 | `851c18bc273833e33c02f574c52ad693512b5a40` | Improved RNode BLE reconnect reliability | Needs decision | Audit pending; repository has no host-side BLE client |
+| 3 | `851c18bc273833e33c02f574c52ad693512b5a40` | Improved RNode BLE reconnect reliability | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 4 | `7785fd277aec1cdcfbe5d9f00c6cd104194ad865` | Updated version | Non-runtime | Upstream Python package metadata only; target selection pending |
 | 5 | `9199cc9e4b20189966e157d654dee1c12ea884ba` | Updated changelog | Non-runtime | Upstream release-note text only; verify after target selection |
 | 6 | `0dbc9e90a33c427befd3873aa29bd6e8463ba192` | Prepare release | Non-runtime | Generated `docs/manual` artifacts only; no runtime tree change |
@@ -99,18 +99,22 @@ appropriate for an unimplemented platform path.
 
 ### 3. `851c18b` — RNode BLE reconnect reliability
 
-**Upstream change:** Logs previous-BLE-connection cleanup before closing it and,
-on a BLE detect timeout, stops the run loop and requests disconnect so the next
-attempt starts from clean state.
+**Upstream change:** Logs previous-BLE-connection cleanup before closing it, and
+on a BLE detect timeout stops the connection run loop and requests disconnect so
+the next attempt starts from clean state. Changed path:
+`RNS/Interfaces/RNodeInterface.py`. Full diff and the surrounding BLE detect
+sequence reviewed.
 
-**Rust applicability:** Applies only to the desktop BLE client run loop, which
-is not implemented in Rust. Serial RNode detect and reconnect handling is
-unaffected.
+**Rust applicability:** Applies only to the desktop BLE client run loop and its
+`should_run`/`must_disconnect` teardown flags, which do not exist in Rust.
+Serial RNode detect, timeout and reconnect handling in
+`rns-net/src/interface/rnode/` is a distinct transport and is unaffected.
 
 **Local handling and evidence:** Audit pending; see commit 1 for the absent
-host-side BLE client.
+host-side BLE client. No production change or synthetic regression is
+appropriate for an unimplemented platform path.
 
-**Final disposition:** Needs decision (candidate Non-runtime).
+**Final disposition:** Non-runtime.
 
 ### 4. `7785fd2` — Updated version
 
