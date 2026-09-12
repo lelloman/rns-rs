@@ -1,11 +1,11 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.5.4 Upstream Audit
 
 ## Scope and Baseline
 
 - audit date: `2026-09-12`
 - previous accepted version: `1.5.3`
 - previous normative commit: `fae64abf05a0ec5afabb2def9076f70d42bfe600`
-- target version: `1.5.4` (tip metadata; final release target not yet selected)
+- target version: `1.5.4`
 - target tag or ref: `rgit/master`
 - target normative commit: `0dbc9e90a33c427befd3873aa29bd6e8463ba192`
 - target root tree: `c19f02deaed560e3ac9d9ff8b78704eac3003649`
@@ -20,8 +20,9 @@ The rgit tip is six commits ahead of the accepted baseline. The GitHub mirror
 tip is `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` and remains behind the accepted
 baseline. Both remotes were fetched successfully on 2026-09-12. All six commits
 now have final dispositions and ordered local mappings. The target version is
-`1.5.4` from the rgit tip; baseline promotion remains pending completion of the
-promotion gates below.
+`1.5.4` from the rgit tip, and the baseline was promoted on 2026-09-12. The
+final acceptance record is
+[reticulum-1.5.4-parity.md](reticulum-1.5.4-parity.md).
 
 ## Audit Vocabulary
 
@@ -181,7 +182,8 @@ header only.
   (dual-VPS daily smoke passed `2026-09-12`; Docker E2E not rerun for a
   docs-only advancement; physical Weave HIL remains unclaimed).
 - [x] Native documentation is updated for user-visible behavior (none changed).
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`
+  ([reticulum-1.5.4-parity.md](reticulum-1.5.4-parity.md)).
 
 ## Acceptance Record
 
