@@ -18,9 +18,10 @@
 
 The rgit tip is six commits ahead of the accepted baseline. The GitHub mirror
 tip is `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` and remains behind the accepted
-baseline. Both remotes were fetched successfully on 2026-09-12. The target
-version and promotion commit remain provisional until the audit dispositions are
-resolved and a promotion target is selected.
+baseline. Both remotes were fetched successfully on 2026-09-12. All six commits
+now have final dispositions and ordered local mappings. The target version is
+`1.5.4` from the rgit tip; baseline promotion remains pending completion of the
+promotion gates below.
 
 ## Audit Vocabulary
 
@@ -166,15 +167,6 @@ header only.
 
 **Final disposition:** Non-runtime.
 
-## Integration Plan
-
-1. Decide whether rns-rs should gain a host-side RNode BLE client; if not, record
-   the three BLE commits as `Non-runtime` with a mapping commit and cite the
-   `c6f9ef10` precedent.
-2. Create one non-empty mapping commit per commit once dispositions are final.
-3. Select the exact promotion target and create/rename the versioned audit
-   before completing the promotion gates.
-
 ## Promotion Gates
 
 - [ ] Every upstream commit has a final disposition.
@@ -192,6 +184,12 @@ header only.
   snapshots were healthy and complete with no query failures. The impaired
   dual-VPS `--daily` smoke run passed announces, cross-backbone identity recall,
   bidirectional packets, Links, Channels, concurrent Resources, bidirectional
-  link stress, and one forced Backbone reconnect cycle. Dispositions above are
-  provisional inventory findings; no per-commit mapping commits or promotion
-  target have been created yet.
+  link stress, and one forced Backbone reconnect cycle.
+- `2026-09-12`: All six commits dispositioned `Non-runtime` and mapped in
+  ancestry order: `0c97853`→`c4eaf62`, `996d822`→`42d1aab`,
+  `851c18b`→`813661d`, `7785fd2`→`89b303d`, `9199cc9`→`8afc2d2`,
+  `0dbc9e9`→`455e9ad`. No Rust runtime, wire, configuration, RPC, CLI or
+  persistence surface changed, so focused-regression, fixture, and exact-target
+  interop gates are not applicable. The one-to-one `Upstream-Commit` trailer
+  check passes with no duplicates or omissions. Baseline promotion remains
+  pending the workspace gates below.
