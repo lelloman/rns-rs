@@ -169,13 +169,18 @@ header only.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change (none
+  applicable; no runtime surface changed).
+- [x] Fixture provenance and byte stability are checked where applicable (no
+  fixture changes).
+- [x] Exact-target live Python/Rust interop (not applicable; no wire or
+  externally visible behavior changed, and GitHub has not mirrored 1.5.4).
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly
+  (dual-VPS daily smoke passed `2026-09-12`; Docker E2E not rerun for a
+  docs-only advancement; physical Weave HIL remains unclaimed).
+- [x] Native documentation is updated for user-visible behavior (none changed).
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
@@ -191,5 +196,9 @@ header only.
   `0dbc9e9`→`455e9ad`. No Rust runtime, wire, configuration, RPC, CLI or
   persistence surface changed, so focused-regression, fixture, and exact-target
   interop gates are not applicable. The one-to-one `Upstream-Commit` trailer
-  check passes with no duplicates or omissions. Baseline promotion remains
-  pending the workspace gates below.
+  check passes with no duplicates or omissions.
+- `2026-09-12`: Gate evidence on `dev@58fe08f`: `cargo fmt --check` passed,
+  `scripts/lint-host.sh` (Clippy `-D warnings`, `--all-targets`) passed, and
+  `cargo test --workspace` passed with 2,517 tests passed, 0 failed. The
+  impaired dual-VPS `--daily` smoke passed the same day. Baseline promotion
+  remains the final outstanding gate.
