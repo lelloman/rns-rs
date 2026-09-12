@@ -46,7 +46,7 @@ resolved and a promotion target is selected.
 | 2 | `996d822393d194030b67ee176766878522f30998` | Fixed RNode BLE re-connection deadlock on desktop. Cleanup. | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 3 | `851c18bc273833e33c02f574c52ad693512b5a40` | Improved RNode BLE reconnect reliability | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 4 | `7785fd277aec1cdcfbe5d9f00c6cd104194ad865` | Updated version | Non-runtime | Full one-line diff: Python package metadata `1.5.3` → `1.5.4`; native crate versions remain independently released |
-| 5 | `9199cc9e4b20189966e157d654dee1c12ea884ba` | Updated changelog | Non-runtime | Upstream release-note text only; verify after target selection |
+| 5 | `9199cc9e4b20189966e157d654dee1c12ea884ba` | Updated changelog | Non-runtime | Release notes only; the three listed BLE fixes map to commits 1–3; upstream changelog not vendored |
 | 6 | `0dbc9e90a33c427befd3873aa29bd6e8463ba192` | Prepare release | Non-runtime | Generated `docs/manual` artifacts only; no runtime tree change |
 
 ## Per-Commit Analysis
@@ -135,13 +135,16 @@ remain pending.
 ### 5. `9199cc9` — Updated changelog
 
 **Upstream change:** Prepends the `2026-09-11: RNS 1.5.4` release note and moves
-the `1.5.3` note down.
+the `1.5.3` note down. Changed path: `Changelog.md`. Full diff reviewed.
 
-**Rust applicability:** Upstream `Changelog.md` text is not vendored. The
-release-note claims are not acceptance evidence.
+**Rust applicability:** Upstream `Changelog.md` text is not vendored. The new
+section describes only the RNode BLE connectivity changes in commits 1–3 and
+identifies the release line; it is not acceptance evidence. Each listed behavior
+is independently dispositioned from its source commit above and maps to the
+absent host-side BLE client.
 
-**Local handling and evidence:** Upstream documentation only; each listed BLE
-behavior is independently dispositioned above.
+**Local handling and evidence:** No runtime code change. The changelog does not
+change any compatibility surface.
 
 **Final disposition:** Non-runtime.
 
