@@ -47,7 +47,7 @@ resolved and a promotion target is selected.
 | 3 | `851c18bc273833e33c02f574c52ad693512b5a40` | Improved RNode BLE reconnect reliability | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 4 | `7785fd277aec1cdcfbe5d9f00c6cd104194ad865` | Updated version | Non-runtime | Full one-line diff: Python package metadata `1.5.3` → `1.5.4`; native crate versions remain independently released |
 | 5 | `9199cc9e4b20189966e157d654dee1c12ea884ba` | Updated changelog | Non-runtime | Release notes only; the three listed BLE fixes map to commits 1–3; upstream changelog not vendored |
-| 6 | `0dbc9e90a33c427befd3873aa29bd6e8463ba192` | Prepare release | Non-runtime | Generated `docs/manual` artifacts only; no runtime tree change |
+| 6 | `0dbc9e90a33c427befd3873aa29bd6e8463ba192` | Prepare release | Non-runtime | Generated `docs/manual` artifacts only; `RNS` tree identical to parent (`b4c1cf36`) |
 
 ## Per-Commit Analysis
 
@@ -150,14 +150,19 @@ change any compatibility surface.
 
 ### 6. `0dbc9e9` — Prepare release
 
-**Upstream change:** Regenerates the hosted `docs/manual` HTML, buildinfo,
-search index and intersphinx inventory for the `1.5.4` release.
+**Upstream change:** Regenerates the hosted manual for the `1.5.4` release:
+`docs/manual/.buildinfo`, `_static/documentation_options.js`, twenty HTML pages,
+and the `objects.inv` intersphinx inventory. Full name-status diff reviewed; no
+authored Markdown source is changed at this commit.
 
 **Rust applicability:** Generated upstream manual and release artifacts are not
 vendored by this repository.
 
-**Local handling and evidence:** The commit changes only `docs/manual` artifacts
-and contains no `RNS` runtime tree change.
+**Local handling and evidence:** Verified the `RNS` tree at `0dbc9e9` is
+identical to its parent (`b4c1cf368718971e1dcaf7c1cf2d1459411a360e`), so no
+runtime tree change is present. The changes are version labels, the
+documentation-options cache key, search-index terms and the inventory version
+header only.
 
 **Final disposition:** Non-runtime.
 
