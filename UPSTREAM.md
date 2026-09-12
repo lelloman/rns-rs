@@ -8,31 +8,30 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.5.3`
-- Version metadata commit: `0bb41bf9486c1469854876a3c1d7c57324efc7c4`
-- Normative commit: `fae64abf05a0ec5afabb2def9076f70d42bfe600`
-- Commit date: `2026-09-10 22:00:14 +0200`
+- Version: `1.5.4`
+- Version metadata commit: `7785fd277aec1cdcfbe5d9f00c6cd104194ad865`
+- Normative commit: `0dbc9e90a33c427befd3873aa29bd6e8463ba192`
+- Commit date: `2026-09-11 16:59:21 +0200`
 - Subject: `Prepare release`
 
 The normative baseline is the canonical rgit development tip accepted on
-2026-09-11 with Reticulum version 1.5.3. Its `RNS` tree is
-`d901a4098fa0c17da8c6dc3ce36634793f71d62b` and root tree is
-`b604b6447b083dc3188acc76a24b7ad063f9b732`. Exact-target packet, link,
-Resource, utility, work lifecycle/permissions and media interoperability passed
-before promotion. The nine-commit advancement adds proposed-document activation,
-administrator lifecycle transitions, executable permission-resolver protection,
-unambiguous binary permission responses and a public WebP file-conversion API.
-GitHub still points at the preceding signed 1.5.2 release, so the GitHub-backed CI interop
-matrix remains pinned to that fetchable target until the mirror catches up.
-Historical conformance fixtures retain their recorded source provenance.
+2026-09-12 with Reticulum version 1.5.4. Its `RNS` tree is
+`b4c1cf368718971e1dcaf7c1cf2d1459411a360e` and root tree is
+`c19f02deaed560e3ac9d9ff8b78704eac3003649`. The six-commit advancement fixes
+desktop RNode BLE device-address acquisition and reconnect reliability. rns-rs
+implements RNode over serial only and has no host-side BLE client, so all six
+commits are non-runtime here. Workspace tests, formatting and lint, host
+native-hook release builds and the impaired dual-VPS daily smoke passed before
+promotion. GitHub still points at the preceding signed 1.5.2 release, so the
+GitHub-backed CI interop matrix remains pinned to that fetchable target until
+the mirror catches up. Historical conformance fixtures retain their recorded
+source provenance.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.3-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.3-rgit-parity.md),
+[`docs/upstream-parity/reticulum-1.5.4-parity.md`](docs/upstream-parity/reticulum-1.5.4-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.3-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.3-rgit-audit.md).
-The hook-enabled host release build, ARMv7 cross-builds, complete Docker matrix,
-and dual-VPS daily smoke passed. Physical Weave HIL was not available and is
-explicitly unclaimed.
+[`docs/upstream-parity/reticulum-1.5.4-audit.md`](docs/upstream-parity/reticulum-1.5.4-audit.md).
+Physical Weave HIL was not available and is explicitly unclaimed.
 
 ## Completed 1.5.0 rgit Development Porting Queue
 
