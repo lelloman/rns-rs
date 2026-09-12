@@ -45,7 +45,7 @@ resolved and a promotion target is selected.
 | 1 | `0c97853554956bee29ab95f633642b9ce72520f9` | Fix RNode BLE device address acquisition on windows, by Nickie Deuxyeux | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 2 | `996d822393d194030b67ee176766878522f30998` | Fixed RNode BLE re-connection deadlock on desktop. Cleanup. | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 3 | `851c18bc273833e33c02f574c52ad693512b5a40` | Improved RNode BLE reconnect reliability | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
-| 4 | `7785fd277aec1cdcfbe5d9f00c6cd104194ad865` | Updated version | Non-runtime | Upstream Python package metadata only; target selection pending |
+| 4 | `7785fd277aec1cdcfbe5d9f00c6cd104194ad865` | Updated version | Non-runtime | Full one-line diff: Python package metadata `1.5.3` → `1.5.4`; native crate versions remain independently released |
 | 5 | `9199cc9e4b20189966e157d654dee1c12ea884ba` | Updated changelog | Non-runtime | Upstream release-note text only; verify after target selection |
 | 6 | `0dbc9e90a33c427befd3873aa29bd6e8463ba192` | Prepare release | Non-runtime | Generated `docs/manual` artifacts only; no runtime tree change |
 
@@ -118,14 +118,17 @@ appropriate for an unimplemented platform path.
 
 ### 4. `7785fd2` — Updated version
 
-**Upstream change:** Bumps `RNS/_version.py` from `1.5.3` to `1.5.4`.
+**Upstream change:** Bumps `RNS/_version.py` from `1.5.3` to `1.5.4`. Changed
+path: `RNS/_version.py`. Full one-line diff reviewed; no other file changes.
 
 **Rust applicability:** Rust crate versions are maintained independently from
 the upstream Python package version and are not bumped for upstream release
-markers.
+markers. The version string identifies the release line, not acceptance
+evidence.
 
-**Local handling and evidence:** Upstream metadata only. Target selection and
-baseline promotion remain pending.
+**Local handling and evidence:** Verified `RNS.__version__ == "1.5.4"` at the
+rgit tip. Upstream metadata only; target selection and baseline promotion
+remain pending.
 
 **Final disposition:** Non-runtime.
 
