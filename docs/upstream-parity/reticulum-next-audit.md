@@ -43,7 +43,7 @@ resolved and a promotion target is selected.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `0c97853554956bee29ab95f633642b9ce72520f9` | Fix RNode BLE device address acquisition on windows, by Nickie Deuxyeux | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
-| 2 | `996d822393d194030b67ee176766878522f30998` | Fixed RNode BLE re-connection deadlock on desktop. Cleanup. | Needs decision | Audit pending; repository has no host-side BLE client |
+| 2 | `996d822393d194030b67ee176766878522f30998` | Fixed RNode BLE re-connection deadlock on desktop. Cleanup. | Non-runtime | No host-side BLE client exists; serial-only RNode; `c6f9ef10` precedent |
 | 3 | `851c18bc273833e33c02f574c52ad693512b5a40` | Improved RNode BLE reconnect reliability | Needs decision | Audit pending; repository has no host-side BLE client |
 | 4 | `7785fd277aec1cdcfbe5d9f00c6cd104194ad865` | Updated version | Non-runtime | Upstream Python package metadata only; target selection pending |
 | 5 | `9199cc9e4b20189966e157d654dee1c12ea884ba` | Updated changelog | Non-runtime | Upstream release-note text only; verify after target selection |
@@ -79,17 +79,23 @@ synthetic regression is appropriate for an unimplemented platform path.
 ### 2. `996d822` — RNode BLE reconnect deadlock cleanup
 
 **Upstream change:** Clears `device_disappeared` on a successful BLE connect,
-uses the platform-utils Windows predicate, and collapses a few single-statement
-`if`/`return` blocks.
+switches the Windows check from `platform.system()` to
+`RNS.vendor.platformutils.is_windows()`, and collapses three single-statement
+`if`/`else`/`return` blocks. Changed path:
+`RNS/Interfaces/RNodeInterface.py`. Full diff reviewed for hidden control-flow
+changes: the only behavioral edit is the `device_disappeared` reset plus the
+platform-predicate swap, both inside the desktop BLE client.
 
-**Rust applicability:** The desktop BLE connection state machine and its
-reconnect fields are not implemented locally. The formatting-only portions have
-no Rust equivalent to change.
+**Rust applicability:** The desktop BLE connection state machine, its
+`device_disappeared` reconnect field, and the `platformutils` predicate are not
+implemented locally. The collapsed `if` blocks are Python formatting and have
+no Rust equivalent.
 
 **Local handling and evidence:** Audit pending; see commit 1 for the absent
-host-side BLE client.
+host-side BLE client. No production change or synthetic regression is
+appropriate for an unimplemented platform path.
 
-**Final disposition:** Needs decision (candidate Non-runtime).
+**Final disposition:** Non-runtime.
 
 ### 3. `851c18b` — RNode BLE reconnect reliability
 
