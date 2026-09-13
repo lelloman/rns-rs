@@ -10,6 +10,19 @@ A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), th
 
 This is a faithful port of the Python reference implementation, validated with Python-generated conformance vectors and live Python/Rust interoperability tests. `rns-crypto` and `rns-core` are `no_std`-compatible, making them suitable for embedded/microcontroller targets. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
 
+## Performance
+
+rns-rs prioritises reliability, correctness, security, traffic management, and
+practical performance across constrained and fast links. Upstream's Python
+throughput figures are specific to that implementation and its execution
+environment; they are not measurements or guarantees for this Rust port.
+
+Native performance claims should identify the hardware, build profile, enabled
+features, workload, network conditions, and measurement method. Routing-only
+microbenchmarks and end-to-end application throughput measure different work;
+comparisons need equivalent behaviour and settings, alongside correctness and
+interoperability validation.
+
 ## Workspace Crates
 
 | Crate | `no_std` | Description |
