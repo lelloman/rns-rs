@@ -10,27 +10,26 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.4`
 - Version metadata commit: `7785fd277aec1cdcfbe5d9f00c6cd104194ad865`
-- Normative commit: `0dbc9e90a33c427befd3873aa29bd6e8463ba192`
-- Commit date: `2026-09-11 16:59:21 +0200`
-- Subject: `Prepare release`
+- Normative commit: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e`
+- Commit date: `2026-09-12 10:54:51 +0200`
+- Subject: `Updated readme`
 
 The normative baseline is the canonical rgit development tip accepted on
-2026-09-12 with Reticulum version 1.5.4. Its `RNS` tree is
+2026-09-13 with Reticulum version 1.5.4. Its `RNS` tree is
 `b4c1cf368718971e1dcaf7c1cf2d1459411a360e` and root tree is
-`c19f02deaed560e3ac9d9ff8b78704eac3003649`. The six-commit advancement fixes
-desktop RNode BLE device-address acquisition and reconnect reliability. rns-rs
-implements RNode over serial only and has no host-side BLE client, so all six
-commits are non-runtime here. Workspace tests, formatting and lint, host
-native-hook release builds and the impaired dual-VPS daily smoke passed before
-promotion. GitHub still points at the preceding signed 1.5.2 release, so the
-GitHub-backed CI interop matrix remains pinned to that fetchable target until
-the mirror catches up. Historical conformance fixtures retain their recorded
-source provenance.
+`780e486cf31d518fc84aab5ec5bd9fb823ad6f45`. This one-commit advancement changes
+only upstream README performance guidance; the `RNS` tree is identical to the
+previous baseline. The native README now documents practical performance and
+reproducible comparison expectations without importing Python throughput claims.
+Workspace tests (2,517 passed), formatting, and host lint with native hooks
+passed. Both upstream remotes now agree on this commit. The GitHub-backed CI
+interop pin and historical fixture provenance are unchanged; exact-target
+interop is not applicable to this documentation-only advancement.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.4-parity.md`](docs/upstream-parity/reticulum-1.5.4-parity.md),
+[`docs/upstream-parity/reticulum-1.5.4-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.4-audit.md`](docs/upstream-parity/reticulum-1.5.4-audit.md).
+[`docs/upstream-parity/reticulum-1.5.4-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-audit.md).
 Physical Weave HIL was not available and is explicitly unclaimed.
 
 ## Completed 1.5.0 rgit Development Porting Queue

@@ -1,11 +1,12 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.5.4 rgit Upstream Audit
 
 ## Scope and Baseline
 
 - audit date: `2026-09-13`
 - previous accepted version: `1.5.4`
 - previous normative commit: `0dbc9e90a33c427befd3873aa29bd6e8463ba192`
-- target version and promotion target: pending selection; observed tip still reports `1.5.4`
+- target version: `1.5.4`
+- promotion target: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e` (`rgit/master`)
 - inspected refs: `origin/master` and `rgit/master` in the upstream checkout
 - observed tip: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e`
 - observed root tree: `780e486cf31d518fc84aab5ec5bd9fb823ad6f45`
@@ -30,7 +31,7 @@ normative commit. This daily inventory does not promote the baseline.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `1565126ffd08b9d7bc750ce5df82d5aa3e38183e` | Updated readme | Non-runtime | Complete diff reviewed: only `README.md` and `README.mu`; `RNS` tree identical to accepted baseline. Ordered local mapping pending. |
+| 1 | `1565126ffd08b9d7bc750ce5df82d5aa3e38183e` | Updated readme | Non-runtime | Complete diff reviewed: only `README.md` and `README.mu`; `RNS` tree identical to accepted baseline. Local mapping: `9606dd1`. |
 
 ## Per-Commit Analysis
 
@@ -49,19 +50,24 @@ give different Raspberry Pi throughput figures; neither is imported as evidence.
 **Local handling and evidence:** Full diff inspected with `git show`; both the
 accepted baseline and observed tip have `RNS` tree
 `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`. No runtime port or synthetic regression
-is required. This audit records the no-action rationale; a local mapping commit
-and promotion validation remain pending under the parity workflow.
+is required. Local mapping `9606dd1` adds native README guidance on practical
+performance, reproducible measurements, and equivalent comparison settings,
+without importing Python throughput claims. It carries the full
+`Upstream-Commit` trailer exactly once in local history.
 
 **Final disposition:** Non-runtime.
 
-## Integration Plan
+## Integration Record
 
-1. Record the ordered, non-empty local mapping with the full `Upstream-Commit`
-   trailer when performing the parity update.
-2. Select the exact promotion target and use the qualified same-version audit
-   name if advancing the `1.5.4` rgit baseline.
-3. Complete and record promotion gates before creating the final parity record
-   or updating `UPSTREAM.md`.
+1. Reviewed the complete upstream diff and independently verified identical
+   `RNS` trees on 2026-09-13.
+2. Created the non-empty mapping `9606dd1` with the full `Upstream-Commit`
+   trailer and selected the qualified same-version audit name.
+3. Refreshed both remotes before and after mapping. Both still agree on
+   `1565126ffd08b9d7bc750ce5df82d5aa3e38183e`; the post-mapping refresh
+   completed at `2026-09-13T20:48:26+00:00`.
+4. Promotion checks completed below; acceptance is recorded in
+   [reticulum-1.5.4-rgit-parity.md](reticulum-1.5.4-rgit-parity.md).
 
 ## Promotion Gates
 
@@ -70,12 +76,18 @@ and promotion validation remain pending under the parity workflow.
   documentation-only diff).
 - [x] Fixture provenance and byte stability are checked where applicable (no
   fixture or runtime changes).
-- [ ] Exact-target live Python/Rust interop passes or an applicability decision
-  is recorded for promotion.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [x] Native documentation is updated for user-visible behavior (none changed).
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Exact-target live Python/Rust interop: not applicable; the complete diff
+  changes only README text and the target's `RNS` tree is byte-identical.
+- [x] `cargo test --workspace`: 2,517 passed, 0 failed, 9 ignored.
+  `cargo fmt --check` and host lint passed; lint includes all workspace targets
+  with native hooks. No separate optional-feature test matrix was run for this
+  documentation-only change.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly:
+  the daily report below records the native-hook release build and live smoke;
+  no new release/cross build, Docker E2E, or hardware run is required for this
+  README-only mapping. Physical hardware validation remains unclaimed.
+- [x] Native README performance guidance is updated in `9606dd1`.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
@@ -88,5 +100,11 @@ and promotion validation remain pending under the parity workflow.
   1,048,576 bytes) with concurrency two per direction, two link batches with
   concurrency three per direction, and one forced Backbone reconnect/recovery
   cycle under 150 ms latency, 75 ms jitter and 2,000 kbps per VPS leg.
-- No workspace suite, lint, Docker, physical hardware, or exact-target Python
-  interop run is claimed by this daily report. Baseline promotion remains pending.
+- The initial daily report did not claim workspace, lint, Docker, physical
+  hardware, or exact-target Python interop runs.
+- `2026-09-13`, integration follow-up: workspace tests passed (2,517 passed,
+  0 failed, 9 ignored), formatting passed, and host lint passed with native
+  hooks. The first sandboxed test run failed because loopback socket creation
+  was denied; the unrestricted full rerun passed. Exact-target interop is not
+  applicable to this README-only diff. The qualified parity record accepts
+  `1565126ffd08b9d7bc750ce5df82d5aa3e38183e`.
