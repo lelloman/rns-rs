@@ -7,6 +7,22 @@ pub trait Callbacks: Send {
 
     fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8);
 
+    /// Like [`Callbacks::on_path_updated`], but also identifies which
+    /// interface the path was actually learned via. `on_path_updated`
+    /// alone doesn't carry enough information for an interface-specific
+    /// consumer (e.g. krns's `KernelEthernetInterface`, populating the
+    /// kernel module's own unicast-routing cache) to tell a path update
+    /// that arrived on *this* interface apart from one that arrived on
+    /// some other interface on the same node.
+    ///
+    /// Defaults to calling `on_path_updated`, so this is purely additive:
+    /// existing `Callbacks` implementors are unaffected unless they choose
+    /// to override it.
+    fn on_path_updated_via(&mut self, dest_hash: DestHash, hops: u8, interface: InterfaceId) {
+        let _ = interface;
+        self.on_path_updated(dest_hash, hops);
+    }
+
     fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash);
 
     /// Called when an interface comes online.

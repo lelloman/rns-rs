@@ -1013,12 +1013,12 @@ impl Driver {
                             self.collect_hook_side_effects("PathUpdated", e, &mut hook_injected);
                         }
                     }
-                    #[cfg(not(feature = "hooks"))]
-                    let _ = interface;
-
                     let _ = self.mark_known_destination_used(&destination_hash);
-                    self.callbacks
-                        .on_path_updated(rns_core::types::DestHash(destination_hash), hops);
+                    self.callbacks.on_path_updated_via(
+                        rns_core::types::DestHash(destination_hash),
+                        hops,
+                        interface,
+                    );
                 }
                 TransportAction::ForwardToLocalClients { raw, exclude } => {
                     for entry in self.interfaces.values_mut() {

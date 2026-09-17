@@ -101,6 +101,27 @@ impl Callbacks for DaemonCallbacks {
         );
     }
 
+    #[cfg_attr(
+        not(all(feature = "iface-kernel-eth", target_os = "linux")),
+        allow(unused_variables)
+    )]
+    fn on_path_updated_via(
+        &mut self,
+        dest_hash: rns_net::DestHash,
+        hops: u8,
+        interface: InterfaceId,
+    ) {
+        self.on_path_updated(dest_hash, hops);
+
+        // A no-op unless `interface` is a KernelEthernetInterface with a
+        // recently-seen ANNOUNCE for this destination pending -- see
+        // rns-net/src/interface/kernel_eth.rs's module-level comment for
+        // why this wiring lives at the application level rather than being
+        // self-contained within the interface itself.
+        #[cfg(all(feature = "iface-kernel-eth", target_os = "linux"))]
+        rns_net::interface::kernel_eth::maybe_learn_route(interface, dest_hash.0);
+    }
+
     fn on_local_delivery(
         &mut self,
         dest_hash: rns_net::DestHash,

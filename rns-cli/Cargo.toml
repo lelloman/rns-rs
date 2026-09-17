@@ -10,6 +10,9 @@ authors.workspace = true
 
 [features]
 default = []
+# Talks to /dev/rns from the out-of-tree krns kernel module -- see
+# rns-net/src/interface/kernel_eth.rs. Not upstream rns-rs functionality.
+iface-kernel-eth = ["rns-net/iface-kernel-eth"]
 rns-hooks = ["rns-hooks-native"]
 sidecars = [
     "dep:rns-hooks-abi",
