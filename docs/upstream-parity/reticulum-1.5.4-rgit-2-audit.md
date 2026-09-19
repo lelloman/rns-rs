@@ -52,7 +52,7 @@ open decisions pending full review; none claims integration or acceptance.
 |---:|---|---|---|---|
 | 1 | `28eba69900bf7089a2756396f9bc3f5056f75685` | Added generation notices | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 2 | `0bc132d7df72cdb24acf6dc86b95674a64863f2d` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 3 | `99bfde84bf27a9f1d7ea888f8c7117be6f115dc7` | Added Brandolini's Reference chapter to the manual | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 3 | `99bfde84bf27a9f1d7ea888f8c7117be6f115dc7` | Added Brandolini's Reference chapter to the manual | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 4 | `b67872d946beff2af5b23b5d10228d646a02b99e` | Added Brandolini's Reference chapter to the manual | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 5 | `1e7432af393e2deb28cac6ccf877390e24811a89` | Added AGENTS.md | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 6 | `b043414add099faa588a8af4df3a002541eb24d5` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -114,13 +114,22 @@ preceding generation-notice commit.
 
 **Changed paths:** `docs/manual/_sources/index.rst.txt`, `docs/manual/distributed.html`, `docs/manual/examples.html`, `docs/manual/forhumans.html`, `docs/manual/genindex.html`, `docs/manual/gettingstartedfast.html`, `docs/manual/git.html`, `docs/manual/hardware.html`, `docs/manual/index.html`, `docs/manual/interfaces.html`, `docs/manual/license.html`, `docs/manual/networks.html`, `docs/manual/objects.inv`, `docs/manual/reference.html`, `docs/manual/search.html`, `docs/manual/searchindex.js`, `docs/manual/software.html`, `docs/manual/support.html`, `docs/manual/understanding.html`, `docs/manual/using.html`, `docs/manual/whatis.html`, `docs/manual/zen.html`, `docs/markdown/index.md`, `docs/source/index.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Adds the new chapter to the source TOC, generated HTML and
+Markdown navigation, search data, and Sphinx object inventory. License/API pages
+change navigation only. The chapter body arrives in the next commit.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** No native protocol or public API behavior changes.
+The Rust repository publishes native Markdown documentation and does not vendor
+upstream Sphinx navigation or its generated search index.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Full textual page diffs reviewed; the search
+index parses entirely as `Search.setIndex` JSON data, and the decompressed
+Sphinx inventory adds chapter labels only. No executable JavaScript or license
+text change is introduced. Record the generated-documentation scope here;
+`git diff --check` passes. No regression or runtime port is applicable. The
+new navigation depends on the following chapter-content commit for its target.
+
+**Final disposition:** Non-runtime.
 
 ### 4. `b67872d9` — Added Brandolini's Reference chapter to the manual
 
