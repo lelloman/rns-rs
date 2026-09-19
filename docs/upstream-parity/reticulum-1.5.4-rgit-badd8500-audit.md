@@ -1,17 +1,17 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.5.4 rgit badd8500 Upstream Audit
 
 ## Scope and Baseline
 
 - audit date: `2026-09-19`
 - previous accepted version: `1.5.4`
 - previous normative commit: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e`
-- target version: pending promotion review
-- target tag or ref: observed `origin/master` and `rgit/master`; promotion target pending
-- observed normative tip: `badd850088e25df90d4d08a15a8c0ec68ea5d327`
+- target version: `1.5.4`
+- target tag or ref: canonical `rgit/master`, mirrored by `origin/master`
+- target normative commit: `badd850088e25df90d4d08a15a8c0ec68ea5d327`
 - observed root tree: `d8eaee4ee98b98a0af99787a5a0bea2eb552e124`
 - observed `RNS` tree: `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`
-- version assertion: pending source review
-- audited range (inventory only): `1565126ffd08b9d7bc750ce5df82d5aa3e38183e..badd850088e25df90d4d08a15a8c0ec68ea5d327`
+- version assertion: target `RNS/_version.py` declares `1.5.4`
+- audited range: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e..badd850088e25df90d4d08a15a8c0ec68ea5d327`
 - commits in range: `16`
 - repositories checked: GitHub mirror and normative rgit remote
 - local revision inspected: `4034ea7d6acf863162736a373d1b8760f28e0084`
@@ -20,7 +20,8 @@ Both remote refreshes succeeded: GitHub at `2026-09-19T09:06:00Z`,
 rgit at `2026-09-19T09:06:05Z`. Their tips agree. The configured upstream
 checkout remains at the accepted baseline. This daily-report inventory starts
 the audit; full per-commit diff review, ordered local mappings, and promotion
-acceptance have not been performed. Changed paths are initial evidence only.
+acceptance have not been performed. Per-commit evidence below is updated as review proceeds. The commit-qualified
+filename preserves the immutable earlier 1.5.4 rgit audit and parity record.
 
 ## Audit Vocabulary
 
@@ -45,7 +46,7 @@ open decisions pending full review; none claims integration or acceptance.
 
 | # | Upstream commit | Subject | Disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `28eba69900bf7089a2756396f9bc3f5056f75685` | Added generation notices | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 1 | `28eba69900bf7089a2756396f9bc3f5056f75685` | Added generation notices | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 2 | `0bc132d7df72cdb24acf6dc86b95674a64863f2d` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 3 | `99bfde84bf27a9f1d7ea888f8c7117be6f115dc7` | Added Brandolini's Reference chapter to the manual | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 4 | `b67872d946beff2af5b23b5d10228d646a02b99e` | Added Brandolini's Reference chapter to the manual | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -68,13 +69,21 @@ open decisions pending full review; none claims integration or acceptance.
 
 **Changed paths:** `tests/coalesced_transmit.py`, `tests/egress.py`, `tests/hdlc.py`, `tests/hkdf.py`, `tests/ifac.py`, `tests/throughput.py`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Adds generation and human-review attribution comments to
+six existing Python tests/benchmarks. Complete diff inspection confirms that
+imports, executable statements, scenarios, and assertions are unchanged.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** Attribution belongs to those upstream files, not to
+native tests or Criterion benchmarks. It does not change crypto, framing,
+egress behavior, throughput requirements, or fixture provenance. The local
+README already distinguishes native performance evidence from upstream figures.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** This non-empty audit mapping records the
+upstream provenance without falsely attributing native source generation or
+human approval. `git diff --check` passes. No behavioral regression is needed
+for comment-only additions. No dependency on an earlier unintegrated commit.
+
+**Final disposition:** Non-runtime.
 
 ### 2. `0bc132d7` — Updated readme
 
