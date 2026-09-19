@@ -59,7 +59,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 7 | `3b0425c8a81c86133851cdb3067cf4bb28000230` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 8 | `b79f6e0b1ccb752167ddc895a98e1c7518e6859f` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 9 | `032e14384f11d974e7c3eb40a5d56158aaedcd4c` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 12 | `900b4c607cd70cf4aa14dec7ab2a05428e7ac5e2` | Cleanup | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 13 | `b4c6deee787acc379a7dc1751404f3e2dcd24565` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -257,13 +257,17 @@ source or treated as approval of this work.
 
 **Changed paths:** `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Removes an extraneous article from one sentence in the
+chapter's RST source. Complete diff changes that sentence only.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** Grammar correction in upstream-only prose. No native
+runtime or corresponding native document requires modification.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Record the source-only correction independently
+from the generated-output refresh that follows. Depends on the existing chapter.
+`git diff --check` passes; no behavioral regression is applicable.
+
+**Final disposition:** Non-runtime.
 
 ### 11. `9397114f` — Fixed typo
 
