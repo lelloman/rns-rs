@@ -63,7 +63,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 12 | `900b4c607cd70cf4aa14dec7ab2a05428e7ac5e2` | Cleanup | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 13 | `b4c6deee787acc379a7dc1751404f3e2dcd24565` | Cleanup and formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 15 | `ffad91431a6faed21b8b005e63718d30b969889b` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 16 | `badd850088e25df90d4d08a15a8c0ec68ea5d327` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 17 | `e699bb23f1306ed451568d647b497791a44be95a` | Structural cleanup | Needs decision | Full review pending. |
@@ -329,13 +329,17 @@ Depends on the existing chapter and its earlier editorial revisions.
 
 **Changed paths:** `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Removes a comma from one chapter heading and adjusts its
+RST underline length. Complete diff affects only those two source lines.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** Heading typography in upstream documentation, with no
+native runtime or counterpart document change.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Record the source heading correction separately
+from its following generated-output refresh. Depends on the chapter addition;
+`git diff --check` passes. No behavioral test is applicable.
+
+**Final disposition:** Non-runtime.
 
 ### 15. `ffad9143` — Formatting
 
