@@ -62,7 +62,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 12 | `900b4c607cd70cf4aa14dec7ab2a05428e7ac5e2` | Cleanup | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 13 | `b4c6deee787acc379a7dc1751404f3e2dcd24565` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 13 | `b4c6deee787acc379a7dc1751404f3e2dcd24565` | Cleanup and formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 15 | `ffad91431a6faed21b8b005e63718d30b969889b` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 16 | `badd850088e25df90d4d08a15a8c0ec68ea5d327` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -309,13 +309,21 @@ and preceding edits. `git diff --check` passes; no runtime regression applies.
 
 **Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/manual/searchindex.js`, `docs/markdown/brandolinis.md`, `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Shortens the third-party evaluation, adds mention of formal
+proof claims, generalizes a source-size comparison, removes a repeated benchmark
+advice bullet, and regenerates chapter outputs/search terms. This is substantive
+editorial revision as well as formatting.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** No executable or protocol behavior changes. Removing a
+repeated upstream prose bullet does not rescind native benchmark reproducibility
+requirements or change our acceptance evidence.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Complete textual diffs and JSON-only search
+metadata reviewed. Native README performance guidance remains appropriate.
+No runtime port or regression test is applicable; `git diff --check` passes.
+Depends on the existing chapter and its earlier editorial revisions.
+
+**Final disposition:** Non-runtime.
 
 ### 14. `d0231f6e` — Formatting
 
