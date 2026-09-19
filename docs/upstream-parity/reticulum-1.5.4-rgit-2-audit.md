@@ -58,7 +58,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 6 | `b043414add099faa588a8af4df3a002541eb24d5` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 7 | `3b0425c8a81c86133851cdb3067cf4bb28000230` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 8 | `b79f6e0b1ccb752167ddc895a98e1c7518e6859f` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 9 | `032e14384f11d974e7c3eb40a5d56158aaedcd4c` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 9 | `032e14384f11d974e7c3eb40a5d56158aaedcd4c` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 12 | `900b4c607cd70cf4aa14dec7ab2a05428e7ac5e2` | Cleanup | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -236,13 +236,22 @@ passes; no runtime test is applicable.
 
 **Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/manual/searchindex.js`, `docs/markdown/brandolinis.md`, `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Splits a paragraph, fixes spacing/escaping, adds the author's
+closing signature, and regenerates chapter outputs. The generated search index
+also clears its `indexentries` collection (168 entries to zero); it remains
+JSON search data, not runtime code.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** No Reticulum runtime change or native documentation
+surface uses these Sphinx outputs. The search metadata change is recorded
+explicitly rather than assuming the formatting subject describes every delta.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Reviewed textual source and rendered-page
+diffs, and decoded the complete search-index data change. No native port or
+behavior regression is applicable; `git diff --check` passes. Depends on the
+chapter addition in entry 4. Upstream authorship text is not copied into native
+source or treated as approval of this work.
+
+**Final disposition:** Non-runtime.
 
 ### 10. `16ba292b` — Fixed typo
 
