@@ -53,7 +53,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 1 | `28eba69900bf7089a2756396f9bc3f5056f75685` | Added generation notices | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 2 | `0bc132d7df72cdb24acf6dc86b95674a64863f2d` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 3 | `99bfde84bf27a9f1d7ea888f8c7117be6f115dc7` | Added Brandolini's Reference chapter to the manual | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 4 | `b67872d946beff2af5b23b5d10228d646a02b99e` | Added Brandolini's Reference chapter to the manual | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 4 | `b67872d946beff2af5b23b5d10228d646a02b99e` | Added Brandolini's Reference chapter to the manual | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 5 | `1e7432af393e2deb28cac6ccf877390e24811a89` | Added AGENTS.md | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 6 | `b043414add099faa588a8af4df3a002541eb24d5` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 7 | `3b0425c8a81c86133851cdb3067cf4bb28000230` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -135,13 +135,29 @@ new navigation depends on the following chapter-content commit for its target.
 
 **Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/markdown/brandolinis.md`, `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Adds the complete Brandolini's Reference chapter in RST,
+Markdown, HTML, and the generated source copy. It discusses licensing positions,
+AI assistance and authorship, evaluation of implementations, a third-party
+case study, benchmark methodology, and shared-network coexistence. The sole
+code block contains illustrative module paths, not executable protocol code.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** This is editorial and engineering guidance, not a new
+packet format, routing algorithm, cryptographic primitive, RPC, or configuration
+contract. Assertions about other projects and legal interpretations are not
+independently established by this parity audit and are not adopted as findings.
+Our native README already identifies this implementation as a Rust port and
+requires reproducible, equivalent benchmark conditions. Existing parity records
+distinguish pinned fixtures, exact-target evidence, and unclaimed hardware runs.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Reviewed the complete chapter source and
+inspected its generated representations: the generated RST copy is byte-identical,
+Markdown contains the corresponding chapter structure, and HTML uses the existing
+Sphinx/Furo scripts. No native runtime port or synthetic regression is warranted.
+This mapping records the scope and limits of the review; `git diff --check`
+passes. Completes the chapter linked by the preceding navigation commit. No
+third-party benchmark number is imported as a native result or acceptance gate.
+
+**Final disposition:** Non-runtime.
 
 ### 5. `1e7432af` — Added AGENTS.md
 
