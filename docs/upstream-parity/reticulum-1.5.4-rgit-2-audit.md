@@ -65,7 +65,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 13 | `b4c6deee787acc379a7dc1751404f3e2dcd24565` | Cleanup and formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 15 | `ffad91431a6faed21b8b005e63718d30b969889b` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 16 | `badd850088e25df90d4d08a15a8c0ec68ea5d327` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 16 | `badd850088e25df90d4d08a15a8c0ec68ea5d327` | Cleanup and formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 17 | `e699bb23f1306ed451568d647b497791a44be95a` | Structural cleanup | Needs decision | Full review pending. |
 
 ## Per-Commit Analysis
@@ -363,13 +363,21 @@ No behavioral regression is applicable.
 
 **Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/manual/searchindex.js`, `docs/markdown/brandolinis.md`, `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Revises the third-party case-study quotations and wording,
+renames evaluation bullet labels, formats a copyright string as literal text,
+and edits/splits the network-health discussion. Generated chapter outputs and
+search terms follow those editorial changes.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** No executable behavior changes. The shared-medium
+paragraph edits introduce no new packet, scheduling, or rate-control contract.
+The case-study claims remain upstream commentary, not this audit's findings.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Complete source/rendered-page diffs and the
+JSON-only search update reviewed. Preserve existing native interoperability and
+benchmark evidence requirements. Depends on the chapter and preceding edits;
+`git diff --check` passes. No runtime port or focused regression is applicable.
+
+**Final disposition:** Non-runtime.
 
 ### 17. `e699bb23` — Structural cleanup
 
