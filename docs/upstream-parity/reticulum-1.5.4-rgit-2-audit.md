@@ -51,7 +51,7 @@ open decisions pending full review; none claims integration or acceptance.
 | # | Upstream commit | Subject | Disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `28eba69900bf7089a2756396f9bc3f5056f75685` | Added generation notices | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 2 | `0bc132d7df72cdb24acf6dc86b95674a64863f2d` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 2 | `0bc132d7df72cdb24acf6dc86b95674a64863f2d` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 3 | `99bfde84bf27a9f1d7ea888f8c7117be6f115dc7` | Added Brandolini's Reference chapter to the manual | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 4 | `b67872d946beff2af5b23b5d10228d646a02b99e` | Added Brandolini's Reference chapter to the manual | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 5 | `1e7432af393e2deb28cac6ccf877390e24811a89` | Added AGENTS.md | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -94,13 +94,21 @@ for comment-only additions. No dependency on an earlier unintegrated commit.
 
 **Changed paths:** `README.md`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Adds a community-implementation list, upstream inclusion
+criteria, and cautions about unreviewed or incompatible implementations to the
+README. The complete diff changes prose only.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** Upstream project endorsements and eligibility criteria
+are editorial decisions, not wire, API, or configuration requirements. Native
+parity evidence is maintained in these audits, fixture provenance, tests, and
+interop records; it does not imply upstream recognition or endorsement.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Record that distinction in this audit instead
+of copying the upstream list or claiming inclusion. No native runtime change
+or new test is needed. `git diff --check` passes. No behavior dependency on the
+preceding generation-notice commit.
+
+**Final disposition:** Non-runtime.
 
 ### 3. `99bfde84` — Added Brandolini's Reference chapter to the manual
 
