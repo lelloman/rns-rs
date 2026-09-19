@@ -57,7 +57,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 5 | `1e7432af393e2deb28cac6ccf877390e24811a89` | Added AGENTS.md | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 6 | `b043414add099faa588a8af4df3a002541eb24d5` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 7 | `3b0425c8a81c86133851cdb3067cf4bb28000230` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 8 | `b79f6e0b1ccb752167ddc895a98e1c7518e6859f` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 8 | `b79f6e0b1ccb752167ddc895a98e1c7518e6859f` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 9 | `032e14384f11d974e7c3eb40a5d56158aaedcd4c` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -219,13 +219,18 @@ the preceding README warning and the list introduced in entry 2.
 
 **Changed paths:** `README.md`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Converts the preceding opening paragraph into a GitHub
+Markdown warning callout. The warning's text and links are otherwise unchanged.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** Presentation-only change to upstream's README. No native
+protocol, configuration, command, or application behavior changes.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Complete diff reviewed and separately mapped.
+The local README does not carry that upstream editorial warning, so no callout
+conversion is needed here. Depends on entry 7's paragraph. `git diff --check`
+passes; no runtime test is applicable.
+
+**Final disposition:** Non-runtime.
 
 ### 9. `032e1438` — Formatting
 
