@@ -56,7 +56,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 4 | `b67872d946beff2af5b23b5d10228d646a02b99e` | Added Brandolini's Reference chapter to the manual | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 5 | `1e7432af393e2deb28cac6ccf877390e24811a89` | Added AGENTS.md | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 6 | `b043414add099faa588a8af4df3a002541eb24d5` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 7 | `3b0425c8a81c86133851cdb3067cf4bb28000230` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 7 | `3b0425c8a81c86133851cdb3067cf4bb28000230` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 8 | `b79f6e0b1ccb752167ddc895a98e1c7518e6859f` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 9 | `032e14384f11d974e7c3eb40a5d56158aaedcd4c` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -202,13 +202,18 @@ chapter introduced by entries 3–4. No runtime regression is applicable;
 
 **Changed paths:** `README.md`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Adds one sentence to the opening warning directing readers
+to the README's Community Implementations section. Full diff is prose only.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** This is navigation to upstream's own endorsement list,
+not a compatibility change or recognition of this port.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Preserve the distinct source-history mapping
+and record that no native code or user-facing API needs alteration. Depends on
+the preceding README warning and the list introduced in entry 2.
+`git diff --check` passes; no behavior test is applicable.
+
+**Final disposition:** Non-runtime.
 
 ### 8. `b79f6e0b` — Updated readme
 
