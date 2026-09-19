@@ -1,4 +1,4 @@
-# Reticulum 1.5.4 rgit badd8500 Upstream Audit
+# Reticulum 1.5.4 rgit Follow-up Upstream Audit
 
 ## Scope and Baseline
 
@@ -7,20 +7,24 @@
 - previous normative commit: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e`
 - target version: `1.5.4`
 - target tag or ref: canonical `rgit/master`, mirrored by `origin/master`
-- target normative commit: `badd850088e25df90d4d08a15a8c0ec68ea5d327`
-- observed root tree: `d8eaee4ee98b98a0af99787a5a0bea2eb552e124`
+- target normative commit: `e699bb23f1306ed451568d647b497791a44be95a`
+- observed root tree: `654c79a2e4968c9e514f071f1074db548b680cac`
 - observed `RNS` tree: `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`
 - version assertion: target `RNS/_version.py` declares `1.5.4`
-- audited range: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e..badd850088e25df90d4d08a15a8c0ec68ea5d327`
-- commits in range: `16`
+- audited range: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e..e699bb23f1306ed451568d647b497791a44be95a`
+- commits in range: `17`
 - repositories checked: GitHub mirror and normative rgit remote
 - local revision inspected: `4034ea7d6acf863162736a373d1b8760f28e0084`
 
 Both remote refreshes succeeded: GitHub at `2026-09-19T09:06:00Z`,
-rgit at `2026-09-19T09:06:05Z`. Their tips agree. The configured upstream
+rgit at `2026-09-19T09:06:05Z`. At the initial check their tips agreed. A post-mapping refresh at
+`2026-09-19T09:19:40Z` found canonical rgit one commit ahead of GitHub:
+`e699bb23f1306ed451568d647b497791a44be95a` versus
+`badd850088e25df90d4d08a15a8c0ec68ea5d327`. The target and inventory
+include this seventeenth commit. The configured upstream
 checkout remains at the accepted baseline. This daily-report inventory starts
 the audit; full per-commit diff review, ordered local mappings, and promotion
-acceptance have not been performed. Per-commit evidence below is updated as review proceeds. The commit-qualified
+acceptance have not been performed. Per-commit evidence below is updated as review proceeds. The second qualified
 filename preserves the immutable earlier 1.5.4 rgit audit and parity record.
 
 ## Audit Vocabulary
@@ -62,6 +66,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 15 | `ffad91431a6faed21b8b005e63718d30b969889b` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 16 | `badd850088e25df90d4d08a15a8c0ec68ea5d327` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 17 | `e699bb23f1306ed451568d647b497791a44be95a` | Structural cleanup | Needs decision | Full review pending. |
 
 ## Per-Commit Analysis
 
@@ -262,6 +267,14 @@ subject and path inventory do not establish behavioral equivalence.
 
 **Local handling and evidence:** No implementation mapping or focused acceptance
 test claimed. Review in ancestry order under the directory workflow.
+
+**Disposition:** Needs decision.
+
+### 17. `e699bb23` — Structural cleanup
+
+**Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/manual/index.html`, `docs/manual/objects.inv`, `docs/manual/searchindex.js`, `docs/markdown/brandolinis.md`, `docs/markdown/index.md`, `docs/source/brandolinis.rst`.
+
+**Upstream change and Rust applicability:** Pending review.
 
 **Disposition:** Needs decision.
 
