@@ -173,7 +173,7 @@ fn run(args: Args) -> Result<(), String> {
     let mut aggregator = StatsAggregator::default();
     let mut next_flush = Instant::now() + flush_interval;
     let mut next_maintenance = Instant::now();
-    let mut proc_monitor = ProcessMonitor::new();
+    let mut proc_monitor = ProcessMonitor::new(&stream);
 
     while !SHOULD_STOP.load(Ordering::Relaxed) {
         match read_provider_envelope(&mut stream) {
@@ -194,7 +194,7 @@ fn run(args: Args) -> Result<(), String> {
         if Instant::now() >= next_flush {
             db.flush(&mut aggregator)
                 .map_err(|e| format!("sqlite flush failed: {}", e))?;
-            if let Some(sample) = proc_monitor.sample() {
+            if let Some(sample) = proc_monitor.sample(&stream) {
                 db.insert_process_sample(&sample)
                     .map_err(|e| format!("sqlite process sample failed: {}", e))?;
             }
@@ -909,50 +909,64 @@ struct ProcessMonitor {
 }
 
 impl ProcessMonitor {
-    fn new() -> Self {
-        let pid = find_pid_by_comm("rnsd");
+    fn new(stream: &UnixStream) -> Self {
+        let pid = provider_process_pid(stream);
         if let Some(pid) = pid {
             log::info!("monitoring rnsd process pid={}", pid);
         } else {
-            log::warn!("could not find rnsd process to monitor");
+            log::warn!("could not identify provider bridge process to monitor");
         }
         Self { pid }
     }
 
-    fn sample(&mut self) -> Option<ProcessSample> {
-        let pid = match self.pid {
-            Some(p) => p,
-            None => {
-                self.pid = find_pid_by_comm("rnsd");
-                self.pid?
-            }
-        };
-        match read_proc_sample(pid) {
-            Some(s) => Some(s),
-            None => {
-                log::warn!("rnsd pid={} disappeared, will re-scan", pid);
-                self.pid = None;
-                None
-            }
+    fn sample(&mut self, stream: &UnixStream) -> Option<ProcessSample> {
+        // Resolve the current connection on every flush: the provider stream is
+        // replaced when rnsd restarts, and multiple nodes may run on this host.
+        let pid = provider_process_pid(stream);
+        if pid != self.pid {
+            log::info!(
+                "provider bridge process changed from {:?} to {:?}",
+                self.pid,
+                pid
+            );
+            self.pid = pid;
         }
+        read_proc_sample(pid?)
     }
 }
 
-fn find_pid_by_comm(name: &str) -> Option<u32> {
-    let proc_dir = fs::read_dir("/proc").ok()?;
-    for entry in proc_dir.flatten() {
-        let fname = entry.file_name();
-        let pid_str = fname.to_str()?;
-        if !pid_str.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        let comm_path = entry.path().join("comm");
-        if let Ok(comm) = fs::read_to_string(&comm_path) {
-            if comm.trim() == name {
-                return pid_str.parse().ok();
-            }
-        }
+#[cfg(target_os = "linux")]
+fn provider_process_pid(stream: &UnixStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+
+    // rnsd owns the provider listener, including when rns-server self-spawns
+    // through /proc/self/exe and the process comm is "exe" rather than "rnsd".
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: the stream owns a valid socket descriptor, and credentials and
+    // length point to writable storage of the size passed to getsockopt.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 || length as usize != std::mem::size_of::<libc::ucred>() {
+        return None;
     }
+    u32::try_from(credentials.pid).ok().filter(|pid| *pid != 0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn provider_process_pid(_stream: &UnixStream) -> Option<u32> {
+    // Process sampling uses Linux /proc; other platforms still collect packets.
     None
 }
 
@@ -1177,6 +1191,95 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_monitor_peer_child() {
+        let Some(path) = std::env::var_os("RNS_STATSD_TEST_PROVIDER_SOCKET") else {
+            return;
+        };
+        let mut stream = UnixStream::connect(path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut done = [0];
+        let _ = stream.read_exact(&mut done);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_monitor_tracks_self_spawned_peer_and_reconnection() {
+        use std::os::unix::net::UnixListener;
+        use std::process::{Child, Command, Stdio};
+
+        struct Peer(Child);
+        impl Drop for Peer {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("provider.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let connect_peer = || {
+            // Match the bundled supervisor's exec path: Linux comm becomes
+            // "exe", and two live peers ensure a global name scan cannot work.
+            let peer = Peer(
+                Command::new("/proc/self/exe")
+                    .args(["--exact", "statsd::tests::process_monitor_peer_child"])
+                    .env("RNS_STATSD_TEST_PROVIDER_SOCKET", &socket)
+                    .stdout(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "peer did not connect");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept failed: {err}"),
+                }
+            };
+            assert_eq!(
+                fs::read_to_string(format!("/proc/{}/comm", peer.0.id()))
+                    .unwrap()
+                    .trim(),
+                "exe"
+            );
+            (peer, stream)
+        };
+
+        let (first, first_stream) = connect_peer();
+        let (second, second_stream) = connect_peer();
+        let mut monitor = ProcessMonitor::new(&first_stream);
+        let first_sample = monitor.sample(&first_stream).unwrap();
+        assert_eq!(first_sample.pid, first.0.id());
+        assert!(first_sample.rss_bytes > 0);
+        assert!(first_sample.threads > 0);
+
+        // The old process is still alive, but a replacement provider connection
+        // must select the new peer rather than keep sampling the cached PID.
+        let second_sample = monitor.sample(&second_stream).unwrap();
+        assert_eq!(second_sample.pid, second.0.id());
+        assert_ne!(first_sample.pid, second_sample.pid);
+        assert!(second_sample.rss_bytes > 0);
+        let mut db = StatsDb::open(&dir.path().join("stats.db")).unwrap();
+        db.insert_process_sample(&second_sample).unwrap();
+        let (pid, rss): (u32, i64) = db
+            .conn
+            .query_row("SELECT pid, rss_bytes FROM process_samples", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(pid, second.0.id());
+        assert_eq!(rss as u64, second_sample.rss_bytes);
+    }
 
     fn test_db(name: &str) -> (PathBuf, StatsDb) {
         let path = std::env::temp_dir().join(format!(
