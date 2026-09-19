@@ -54,7 +54,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 2 | `0bc132d7df72cdb24acf6dc86b95674a64863f2d` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 3 | `99bfde84bf27a9f1d7ea888f8c7117be6f115dc7` | Added Brandolini's Reference chapter to the manual | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 4 | `b67872d946beff2af5b23b5d10228d646a02b99e` | Added Brandolini's Reference chapter to the manual | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 5 | `1e7432af393e2deb28cac6ccf877390e24811a89` | Added AGENTS.md | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 5 | `1e7432af393e2deb28cac6ccf877390e24811a89` | Added AGENTS.md | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 6 | `b043414add099faa588a8af4df3a002541eb24d5` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 7 | `3b0425c8a81c86133851cdb3067cf4bb28000230` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 8 | `b79f6e0b1ccb752167ddc895a98e1c7518e6859f` | Updated readme | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -163,13 +163,20 @@ third-party benchmark number is imported as a native result or acceptance gate.
 
 **Changed paths:** `AGENTS.md`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Adds an upstream-root AGENTS.md containing a byte-for-byte
+copy of the preceding chapter's generated Markdown. It adds no runtime code.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** This is upstream repository documentation. The file is
+reviewed as upstream content, not installed as instructions governing the Rust
+workspace. Its commentary does not alter protocol or API compatibility.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Compared the complete added blob with
+`b67872d9:docs/markdown/brandolinis.md`; they are byte-identical. The content and
+applicability analysis from entry 4 therefore applies without a new behavior
+claim. No native AGENTS.md or runtime change is required. `git diff --check`
+passes. Content dependency: the preceding chapter addition.
+
+**Final disposition:** Non-runtime.
 
 ### 6. `b043414a` — Updated readme
 
