@@ -66,7 +66,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 15 | `ffad91431a6faed21b8b005e63718d30b969889b` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 16 | `badd850088e25df90d4d08a15a8c0ec68ea5d327` | Cleanup and formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 17 | `e699bb23f1306ed451568d647b497791a44be95a` | Structural cleanup | Needs decision | Full review pending. |
+| 17 | `e699bb23f1306ed451568d647b497791a44be95a` | Structural cleanup | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 
 ## Per-Commit Analysis
 
@@ -383,9 +383,23 @@ benchmark evidence requirements. Depends on the chapter and preceding edits;
 
 **Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/manual/index.html`, `docs/manual/objects.inv`, `docs/manual/searchindex.js`, `docs/markdown/brandolinis.md`, `docs/markdown/index.md`, `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending review.
+**Upstream change:** Moves the existing third-party case study to the chapter's
+end as Addendum A, changes its generated heading anchor and navigation labels,
+and adjusts one paragraph to call it an addendum. Search data and the Sphinx
+inventory follow the reorganization.
 
-**Disposition:** Needs decision.
+**Rust applicability:** Document structure only; no runtime, protocol, utility,
+or configuration change. The earlier analysis of the case-study prose remains
+applicable. The Rust repository does not vendor these generated pages.
+
+**Local handling and evidence:** Inspected the move and compared all changed
+text files with line multiplicities preserved to isolate additions/deletions
+from relocation; only the heading, anchor/navigation, and addendum paragraph
+change beyond moved content. Decompressed inventory changes one label; search
+index remains JSON-only. Depends on the chapter and its preceding edits.
+`git diff --check` passes. No behavioral regression is applicable.
+
+**Final disposition:** Non-runtime.
 
 ## Integration Plan
 
