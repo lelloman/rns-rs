@@ -16,7 +16,9 @@ filenames:
   when the baseline is promoted.
 - `reticulum-X.Y.Z-rgit-{audit,parity}.md` — qualified records used when the
   normative rgit baseline advances without an upstream version change, so the
-  signed-release records remain immutable.
+  signed-release records remain immutable. For further same-version rgit
+  advancements, use a sequence suffix such as `-rgit-2-{audit,parity}.md` to
+  preserve earlier acceptance records.
 
 Dates, commit hashes, repository tips, and local branch revisions belong inside
 the documents instead of their filenames. Historical versions without a saved
@@ -178,6 +180,7 @@ rns-rs commit must contain exactly one `Upstream-Commit` trailer.
 
 | Version | Audit | Final parity record |
 |---|---|---|
+| 1.5.4 rgit `e699bb23` | [Audit](reticulum-1.5.4-rgit-2-audit.md) | [Parity](reticulum-1.5.4-rgit-2-parity.md) |
 | 1.5.4 rgit `1565126f` | [Audit](reticulum-1.5.4-rgit-audit.md) | [Parity](reticulum-1.5.4-rgit-parity.md) |
 | 1.5.4 | [Audit](reticulum-1.5.4-audit.md) | [Parity](reticulum-1.5.4-parity.md) |
 | 1.5.3 | [Audit](reticulum-1.5.3-audit.md) | [Parity](reticulum-1.5.3-parity.md) |
