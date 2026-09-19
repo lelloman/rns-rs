@@ -61,7 +61,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 9 | `032e14384f11d974e7c3eb40a5d56158aaedcd4c` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 12 | `900b4c607cd70cf4aa14dec7ab2a05428e7ac5e2` | Cleanup | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 12 | `900b4c607cd70cf4aa14dec7ab2a05428e7ac5e2` | Cleanup | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 13 | `b4c6deee787acc379a7dc1751404f3e2dcd24565` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 15 | `ffad91431a6faed21b8b005e63718d30b969889b` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -290,13 +290,20 @@ upstream commit despite its dependence on the preceding source correction.
 
 **Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/markdown/brandolinis.md`, `docs/source/brandolinis.rst`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Cleans punctuation, duplicated words, RST escapes, and
+editorial wording in the chapter and its generated copies. This includes a
+wording change from documenting a record to refuting a claim, not just whitespace.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** These changes describe upstream community commentary;
+no executable statements, wire contracts, or native documentation instructions
+change.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Complete four-file diff reviewed, including
+the wording changes beyond formatting. Retain the chapter's non-runtime scope
+and do not propagate its allegations as local findings. Depends on the chapter
+and preceding edits. `git diff --check` passes; no runtime regression applies.
+
+**Final disposition:** Non-runtime.
 
 ### 13. `b4c6deee` — Cleanup and formatting
 
