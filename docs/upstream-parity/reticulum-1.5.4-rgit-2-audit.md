@@ -60,7 +60,7 @@ open decisions pending full review; none claims integration or acceptance.
 | 8 | `b79f6e0b1ccb752167ddc895a98e1c7518e6859f` | Updated readme | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 9 | `032e14384f11d974e7c3eb40a5d56158aaedcd4c` | Formatting | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 10 | `16ba292bd08c01969e1fc678c735e0269da5e71e` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
-| 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
+| 11 | `9397114f56e0443f43ef27faa742966be9ecf320` | Fixed typo | Non-runtime | Complete diff reviewed; see per-commit evidence below. |
 | 12 | `900b4c607cd70cf4aa14dec7ab2a05428e7ac5e2` | Cleanup | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 13 | `b4c6deee787acc379a7dc1751404f3e2dcd24565` | Cleanup and formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
 | 14 | `d0231f6ee3a81d74bfeabb1cf2ac2f7544a8c443` | Formatting | Needs decision | Changed paths inventoried; full diff and native applicability review pending. |
@@ -273,13 +273,18 @@ from the generated-output refresh that follows. Depends on the existing chapter.
 
 **Changed paths:** `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/markdown/brandolinis.md`.
 
-**Upstream change and Rust applicability:** Pending full diff review. The
-subject and path inventory do not establish behavioral equivalence.
+**Upstream change:** Propagates entry 10's single-word grammar correction into
+the generated RST copy, HTML, and Markdown. Complete diffs contain no other
+changes.
 
-**Local handling and evidence:** No implementation mapping or focused acceptance
-test claimed. Review in ancestry order under the directory workflow.
+**Rust applicability:** Generated documentation only, with no native runtime or
+vendored document to update.
 
-**Disposition:** Needs decision.
+**Local handling and evidence:** Keep a separate non-empty mapping for this
+upstream commit despite its dependence on the preceding source correction.
+`git diff --check` passes. No fixture or behavioral test change is applicable.
+
+**Final disposition:** Non-runtime.
 
 ### 12. `900b4c60` — Cleanup
 
