@@ -10,27 +10,31 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.4`
 - Version metadata commit: `7785fd277aec1cdcfbe5d9f00c6cd104194ad865`
-- Normative commit: `1565126ffd08b9d7bc750ce5df82d5aa3e38183e`
-- Commit date: `2026-09-12 10:54:51 +0200`
-- Subject: `Updated readme`
+- Normative commit: `e699bb23f1306ed451568d647b497791a44be95a`
+- Commit date: `2026-09-19 11:16:58 +0200`
+- Subject: `Structural cleanup`
 
 The normative baseline is the canonical rgit development tip accepted on
-2026-09-13 with Reticulum version 1.5.4. Its `RNS` tree is
+2026-09-19 with Reticulum version 1.5.4. Its `RNS` tree is
 `b4c1cf368718971e1dcaf7c1cf2d1459411a360e` and root tree is
-`780e486cf31d518fc84aab5ec5bd9fb823ad6f45`. This one-commit advancement changes
-only upstream README performance guidance; the `RNS` tree is identical to the
-previous baseline. The native README now documents practical performance and
-reproducible comparison expectations without importing Python throughput claims.
-Workspace tests (2,517 passed), formatting, and host lint with native hooks
-passed. Both upstream remotes now agree on this commit. The GitHub-backed CI
-interop pin and historical fixture provenance are unchanged; exact-target
-interop is not applicable to this documentation-only advancement.
+`654c79a2e4968c9e514f071f1074db548b680cac`. All 17 commits since
+`1565126ffd08b9d7bc750ce5df82d5aa3e38183e` were reviewed and mapped individually.
+They change documentation, generated documentation artifacts, and Python test
+attribution comments; every commit preserves the accepted runtime tree.
+No native runtime port was required.
+
+Workspace tests (2,517 passed, 0 failed, 9 ignored), formatting, and host lint
+with native hooks passed. The daily dual-VPS stress test and release builds
+also passed. Both upstream refreshes succeeded; GitHub was one commit behind
+canonical rgit at acceptance. The GitHub-backed CI interop pin and historical
+fixture provenance are unchanged. Exact-target interop was not rerun for this
+non-runtime advancement. Physical hardware validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-parity.md),
+[`docs/upstream-parity/reticulum-1.5.4-rgit-2-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-2-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-audit.md).
-Physical Weave HIL was not available and is explicitly unclaimed.
+[`docs/upstream-parity/reticulum-1.5.4-rgit-2-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-2-audit.md).
+The earlier 1.5.4 acceptance records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
 
