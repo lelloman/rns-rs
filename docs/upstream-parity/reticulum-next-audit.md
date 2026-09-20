@@ -44,7 +44,7 @@ completed per-commit review or parity acceptance.
 
 | # | Upstream commit | Subject | Disposition | Evidence / remaining work |
 |---:|---|---|---|---|
-| 1 | `484cf2d1a56e657e1310655e15b5a8159b71ce21` | Added history folder | Needs decision | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Runtime tree unchanged; full review and mapping commit pending. |
+| 1 | `484cf2d1a56e657e1310655e15b5a8159b71ce21` | Added history folder | Non-runtime | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 2 | `abf355b4d72d5669496dae3220bf5836c5610bcf` | Formatting, link, wording, typos | Needs decision | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Runtime tree unchanged; full review and mapping commit pending. |
 | 3 | `29f6bc8652e490e6489741c16bdc2b7d142bbcc9` | Done, next chapter | Needs decision | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Runtime tree unchanged; full review and mapping commit pending. |
 | 4 | `7373f813495b8134e3ca3274a1b988c1fa97b106` | Markdown is markdown | Needs decision | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Runtime tree unchanged; full review and mapping commit pending. |
@@ -63,9 +63,28 @@ completed per-commit review or parity acceptance.
 
 ## Per-Commit Analysis
 
-Pending full diff review in ancestry order. The inventory records changed paths
-and verifies runtime-tree equality independently for every commit. No integration
-mapping commits or final dispositions have been claimed by this daily report.
+Per-commit reviews are recorded below in upstream ancestry order. Mapping hashes
+will be consolidated after the last mapping commit.
+
+### 1. `484cf2d1` — Added history folder
+
+**Upstream change:** Adds a dated history essay responding to external commentary on licensing, project governance, distribution, and other implementations. This is an editorial archive, not a protocol or licensing-file change.
+
+**Changed paths:** `docs/history/2026_09_18_Yes_I_am_Angry.md`.
+
+**Dependency:** Initial history document; no earlier unintegrated dependency.
+
+**Rust applicability and evidence:** Full diff reviewed. This changes upstream
+editorial material or its generated presentation; no native protocol, API,
+configuration, CLI, or persistence change is required. Every changed path is
+under `docs/` or is `README.md`. The commit retains the exact accepted `RNS`
+tree `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`. Existing native compatibility
+claims remain governed by test and parity evidence. Upstream opinions and
+third-party allegations are not adopted as independently verified findings.
+No runtime regression is applicable and no generated upstream prose is vendored.
+
+**Final disposition:** Non-runtime. This analysis is the non-empty local mapping
+whose sole `Upstream-Commit` trailer is `484cf2d1a56e657e1310655e15b5a8159b71ce21`.
 
 ## Integration Plan
 
