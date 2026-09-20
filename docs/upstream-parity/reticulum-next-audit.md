@@ -51,7 +51,7 @@ completed per-commit review or parity acceptance.
 | 5 | `58881af30703ad74d80e4e9135713abdba6b26dd` | Updates | Non-runtime | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 6 | `9d85931c9d85c7a6549364c572fe2532ca5a9d99` | Updates | Non-runtime | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 7 | `3c479ddb65bf86c0bbaa3565861db97171bb2a4a` | Updated readme | Non-runtime | Paths: `README.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
-| 8 | `2289a8effae984d63bc69d10aa4e1d01a3088ed3` | Updated readme | Needs decision | Paths: `README.md`. Runtime tree unchanged; full review and mapping commit pending. |
+| 8 | `2289a8effae984d63bc69d10aa4e1d01a3088ed3` | Updated readme | Non-runtime | Paths: `README.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 9 | `23101e45f6013d0f54aa2f8651bcde271c0b7ae9` | Updated readme | Needs decision | Paths: `README.md`. Runtime tree unchanged; full review and mapping commit pending. |
 | 10 | `8743ddcbe52be7f88e764b1cdd7af009bd4d62a2` | Updated readme | Needs decision | Paths: `README.md`. Runtime tree unchanged; full review and mapping commit pending. |
 | 11 | `cb66b3d10fd34a6aedb16c78f00a720383dbb122` | Updated readme | Needs decision | Paths: `README.md`. Runtime tree unchanged; full review and mapping commit pending. |
@@ -205,6 +205,26 @@ No runtime regression is applicable and no generated upstream prose is vendored.
 
 **Final disposition:** Non-runtime. This analysis is the non-empty local mapping
 whose sole `Upstream-Commit` trailer is `3c479ddb65bf86c0bbaa3565861db97171bb2a4a`.
+
+### 8. `2289a8ef` — Updated readme
+
+**Upstream change:** Removes the README essay link added by 3c479ddb, restoring the prior README blob. This reverses only upstream navigation; the history essay remains present.
+
+**Changed paths:** `README.md`.
+
+**Dependency:** Follows the preceding upstream commits in ancestry order; documentation context only.
+
+**Rust applicability and evidence:** Full diff reviewed. This changes upstream
+editorial material or its generated presentation; no native protocol, API,
+configuration, CLI, or persistence change is required. Every changed path is
+under `docs/` or is `README.md`. The commit retains the exact accepted `RNS`
+tree `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`. Existing native compatibility
+claims remain governed by test and parity evidence. Upstream opinions and
+third-party allegations are not adopted as independently verified findings.
+No runtime regression is applicable and no generated upstream prose is vendored.
+
+**Final disposition:** Non-runtime. This analysis is the non-empty local mapping
+whose sole `Upstream-Commit` trailer is `2289a8effae984d63bc69d10aa4e1d01a3088ed3`.
 
 ## Integration Plan
 
