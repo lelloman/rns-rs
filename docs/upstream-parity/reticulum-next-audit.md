@@ -55,7 +55,7 @@ completed per-commit review or parity acceptance.
 | 9 | `23101e45f6013d0f54aa2f8651bcde271c0b7ae9` | Updated readme | Non-runtime | Paths: `README.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 10 | `8743ddcbe52be7f88e764b1cdd7af009bd4d62a2` | Updated readme | Non-runtime | Paths: `README.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 11 | `cb66b3d10fd34a6aedb16c78f00a720383dbb122` | Updated readme | Non-runtime | Paths: `README.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
-| 12 | `ddd55d50cc30c49bec99d359a0f73a9cc15d436d` | Updated readme | Needs decision | Paths: `README.md`. Runtime tree unchanged; full review and mapping commit pending. |
+| 12 | `ddd55d50cc30c49bec99d359a0f73a9cc15d436d` | Updated readme | Non-runtime | Paths: `README.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 13 | `34b36362ab9b2ef9b20bafb3db146261e1d75191` | Scratch that | Needs decision | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Runtime tree unchanged; full review and mapping commit pending. |
 | 14 | `15e6dd4a882f0cea81b4e899120f46787aaeb8a2` | Updated docs | Needs decision | Paths: `docs/manual/searchindex.js`. Runtime tree unchanged; full review and mapping commit pending. |
 | 15 | `395241b190ae4bc6e5d8070c8ff0a01afd24bdc9` | Updated docs | Needs decision | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`, `docs/source/brandolinis.rst`. Runtime tree unchanged; full review and mapping commit pending. |
@@ -285,6 +285,26 @@ No runtime regression is applicable and no generated upstream prose is vendored.
 
 **Final disposition:** Non-runtime. This analysis is the non-empty local mapping
 whose sole `Upstream-Commit` trailer is `cb66b3d10fd34a6aedb16c78f00a720383dbb122`.
+
+### 12. `ddd55d50` — Updated readme
+
+**Upstream change:** Replaces a numeric word-count description of the linked chapter with general length/detail wording and changes designed to intended.
+
+**Changed paths:** `README.md`.
+
+**Dependency:** Follows the preceding upstream commits in ancestry order; documentation context only.
+
+**Rust applicability and evidence:** Full diff reviewed. This changes upstream
+editorial material or its generated presentation; no native protocol, API,
+configuration, CLI, or persistence change is required. Every changed path is
+under `docs/` or is `README.md`. The commit retains the exact accepted `RNS`
+tree `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`. Existing native compatibility
+claims remain governed by test and parity evidence. Upstream opinions and
+third-party allegations are not adopted as independently verified findings.
+No runtime regression is applicable and no generated upstream prose is vendored.
+
+**Final disposition:** Non-runtime. This analysis is the non-empty local mapping
+whose sole `Upstream-Commit` trailer is `ddd55d50cc30c49bec99d359a0f73a9cc15d436d`.
 
 ## Integration Plan
 
