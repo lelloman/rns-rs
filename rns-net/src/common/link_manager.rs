@@ -34,6 +34,10 @@ use crate::resource::{
 use resource_handling::ResourceSendParams;
 use state::*;
 
+// Bound deferred handshake traffic even when an initiator never sends LRRTT.
+const MAX_PRE_RTT_PACKETS: usize = 8;
+const MAX_PRE_RTT_BYTES: usize = 64 * 1024;
+
 /// Resource acceptance strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResourceStrategy {
@@ -567,6 +571,7 @@ impl LinkManager {
         let managed = ManagedLink {
             engine,
             channel: None,
+            pre_rtt_packets: Vec::new(),
             pending_channel_packets: HashMap::new(),
             channel_send_ok: 0,
             channel_send_not_ready: 0,
@@ -703,6 +708,7 @@ impl LinkManager {
         let managed = ManagedLink {
             engine,
             channel: None,
+            pre_rtt_packets: Vec::new(),
             pending_channel_packets: HashMap::new(),
             channel_send_ok: 0,
             channel_send_not_ready: 0,
@@ -1055,6 +1061,35 @@ impl LinkManager {
                 None => return Vec::new(),
             };
 
+            // Python exposes ACTIVE to its utility thread before the proof thread
+            // sends LRRTT. Preserve early identity/request ordering, but do not
+            // invoke application handlers until the responder handshake completes.
+            if !link.engine.is_initiator()
+                && link.engine.state() == LinkState::Handshake
+                && matches!(
+                    packet.context,
+                    constants::CONTEXT_LINKIDENTIFY | constants::CONTEXT_REQUEST
+                )
+            {
+                let packet_bytes = packet.raw.len() + packet.data.len();
+                let queued_bytes: usize = link
+                    .pre_rtt_packets
+                    .iter()
+                    .map(|pending| pending.packet.raw.len() + pending.packet.data.len())
+                    .sum();
+                if link.pre_rtt_packets.len() < MAX_PRE_RTT_PACKETS
+                    && packet_bytes <= MAX_PRE_RTT_BYTES.saturating_sub(queued_bytes)
+                    && link.engine.decrypt(&packet.data).is_ok()
+                {
+                    link.pre_rtt_packets.push(PreRttPacket {
+                        packet: packet.clone(),
+                        packet_hash,
+                        receiving_interface,
+                    });
+                }
+                return Vec::new();
+            }
+
             link.route_interface = Some(receiving_interface);
             if packet.flags.header_type == constants::HEADER_2 {
                 if let Some(transport_id) = packet.transport_id {
@@ -1272,6 +1307,20 @@ impl LinkManager {
                         let rtt = link.engine.rtt().unwrap_or(1.0);
                         link.channel = Some(Channel::new(rtt));
                     }
+                }
+                let pending = self
+                    .links
+                    .get_mut(&link_id)
+                    .map(|link| std::mem::take(&mut link.pre_rtt_packets))
+                    .unwrap_or_default();
+                for pending in pending {
+                    actions.extend(self.handle_link_data(
+                        &link_id,
+                        &pending.packet,
+                        pending.packet_hash,
+                        pending.receiving_interface,
+                        rng,
+                    ));
                 }
             }
             LinkDataResult::Identify {

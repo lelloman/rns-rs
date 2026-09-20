@@ -978,9 +978,9 @@ fn setup_active_link() -> (LinkManager, LinkManager, LinkId) {
     setup_active_link_with_max_request_size(None)
 }
 
-fn setup_active_link_with_max_request_size(
+fn setup_link_awaiting_rtt(
     max_request_size: Option<usize>,
-) -> (LinkManager, LinkManager, LinkId) {
+) -> (LinkManager, LinkManager, LinkId, Vec<u8>) {
     let mut rng = OsRng;
     let dest_hash = [0xDD; 16];
     let mut resp_mgr = LinkManager::new();
@@ -1020,6 +1020,14 @@ fn setup_active_link_with_max_request_size(
         &mut rng,
     );
     let lrrtt_raw = extract_any_send_packet(&init_actions2);
+    (init_mgr, resp_mgr, link_id, lrrtt_raw)
+}
+
+fn setup_active_link_with_max_request_size(
+    max_request_size: Option<usize>,
+) -> (LinkManager, LinkManager, LinkId) {
+    let (init_mgr, mut resp_mgr, link_id, lrrtt_raw) = setup_link_awaiting_rtt(max_request_size);
+    let mut rng = OsRng;
     let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
     resp_mgr.handle_local_delivery(
         lrrtt_pkt.destination_hash,
@@ -4170,4 +4178,166 @@ fn test_large_management_response_uses_resource_fallback() {
         !has_direct_response,
         "large management responses should not use a direct CONTEXT_RESPONSE packet"
     );
+}
+
+#[test]
+fn identify_and_request_before_rtt_wait_for_handshake() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let (mut initiator, mut responder, link_id, rtt) = setup_link_awaiting_rtt(None);
+    let mut rng = OsRng;
+    let identity = Identity::new(&mut rng);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    responder.register_request_handler("/early", None, move |_, _, _, remote| {
+        assert!(
+            remote.is_some(),
+            "identity must be processed before the request"
+        );
+        observed.fetch_add(1, Ordering::SeqCst);
+        Some(b"\xc3".to_vec())
+    });
+    for actions in [
+        initiator.identify(&link_id, &identity, &mut rng),
+        initiator.send_request(&link_id, "/early", b"\xc0", &mut rng),
+    ] {
+        let raw = extract_any_send_packet(&actions);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        let delivered = responder.handle_local_delivery(
+            link_id,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(7),
+            &mut rng,
+        );
+        assert!(
+            delivered.is_empty(),
+            "application traffic must wait for LRRTT"
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(responder.link_state(&link_id), Some(LinkState::Handshake));
+    let packet = RawPacket::unpack(&rtt).unwrap();
+    let actions = responder.handle_local_delivery(
+        link_id,
+        &rtt,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(7),
+        &mut rng,
+    );
+    assert_eq!(responder.link_state(&link_id), Some(LinkState::Active));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, LinkManagerAction::SendPacket { .. })));
+}
+
+#[test]
+fn pre_rtt_requests_are_bounded_and_require_authenticated_handshake() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let (mut initiator, mut responder, link_id, rtt) = setup_link_awaiting_rtt(None);
+    let mut rng = OsRng;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    responder.register_request_handler("/early", None, move |_, _, _, _| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        None
+    });
+    let interface = rns_core::transport::types::InterfaceId(7);
+    let request =
+        extract_any_send_packet(&initiator.send_request(&link_id, "/early", b"\xc0", &mut rng));
+    let mut unauthenticated = request.clone();
+    *unauthenticated.last_mut().unwrap() ^= 1;
+    let packet = RawPacket::unpack(&unauthenticated).unwrap();
+    responder.handle_local_delivery(
+        link_id,
+        &unauthenticated,
+        packet.packet_hash,
+        interface,
+        &mut rng,
+    );
+    assert!(responder.links[&link_id].pre_rtt_packets.is_empty());
+
+    for _ in 0..MAX_PRE_RTT_PACKETS + 2 {
+        let raw =
+            extract_any_send_packet(&initiator.send_request(&link_id, "/early", b"\xc0", &mut rng));
+        let packet = RawPacket::unpack(&raw).unwrap();
+        assert!(responder
+            .handle_local_delivery(link_id, &raw, packet.packet_hash, interface, &mut rng)
+            .is_empty());
+    }
+    assert_eq!(
+        responder.links[&link_id].pre_rtt_packets.len(),
+        MAX_PRE_RTT_PACKETS
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let mut invalid_rtt = rtt.clone();
+    *invalid_rtt.last_mut().unwrap() ^= 1;
+    let packet = RawPacket::unpack(&invalid_rtt).unwrap();
+    responder.handle_local_delivery(
+        link_id,
+        &invalid_rtt,
+        packet.packet_hash,
+        interface,
+        &mut rng,
+    );
+    assert_eq!(responder.link_state(&link_id), Some(LinkState::Handshake));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let packet = RawPacket::unpack(&rtt).unwrap();
+    responder.handle_local_delivery(link_id, &rtt, packet.packet_hash, interface, &mut rng);
+    assert_eq!(calls.load(Ordering::SeqCst), MAX_PRE_RTT_PACKETS);
+    assert!(responder.links[&link_id].pre_rtt_packets.is_empty());
+    // A duplicate final handshake cannot execute the queued requests again.
+    responder.handle_local_delivery(link_id, &rtt, packet.packet_hash, interface, &mut rng);
+    assert_eq!(calls.load(Ordering::SeqCst), MAX_PRE_RTT_PACKETS);
+}
+
+#[test]
+fn pre_rtt_requests_have_a_byte_budget() {
+    let (initiator, mut responder, link_id, _) = setup_link_awaiting_rtt(None);
+    let mut rng = OsRng;
+    let plaintext = rns_core::msgpack::pack(&rns_core::msgpack::Value::Array(vec![
+        rns_core::msgpack::Value::UInt(1),
+        rns_core::msgpack::Value::Bin(vec![0; 16]),
+        rns_core::msgpack::Value::Bin(vec![0; 20_000]),
+    ]));
+    let encrypted = initiator.links[&link_id]
+        .engine
+        .encrypt(&plaintext, &mut rng)
+        .unwrap();
+    let packet = RawPacket::pack_with_max_mtu(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &link_id,
+        None,
+        constants::CONTEXT_REQUEST,
+        &encrypted,
+        32_768,
+    )
+    .unwrap();
+    for _ in 0..2 {
+        responder.handle_local_delivery(
+            link_id,
+            &packet.raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(7),
+            &mut rng,
+        );
+    }
+    // One large authenticated request fits, but two exceed the byte budget
+    // even though they are well below the packet-count limit.
+    assert_eq!(responder.links[&link_id].pre_rtt_packets.len(), 1);
 }
