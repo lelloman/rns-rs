@@ -9,6 +9,8 @@ type DeferredHandler = dyn Fn(LinkId, &str, [u8; 16], &[u8], Option<&RemoteIdent
 pub(super) struct ManagedLink {
     pub(super) engine: LinkEngine,
     pub(super) channel: Option<Channel>,
+    /// Authenticated identity/request packets received before the responder's LRRTT.
+    pub(super) pre_rtt_packets: Vec<PreRttPacket>,
     pub(super) pending_channel_packets: HashMap<[u8; 32], Sequence>,
     pub(super) channel_send_ok: u64,
     pub(super) channel_send_not_ready: u64,
@@ -79,4 +81,10 @@ pub(super) struct DeferredRequestHandlerEntry {
     pub(super) path_hash: [u8; 16],
     pub(super) allowed_list: Option<Vec<[u8; 16]>>,
     pub(super) handler: Box<DeferredHandler>,
+}
+
+pub(super) struct PreRttPacket {
+    pub(super) packet: RawPacket,
+    pub(super) packet_hash: [u8; 32],
+    pub(super) receiving_interface: rns_core::transport::types::InterfaceId,
 }
