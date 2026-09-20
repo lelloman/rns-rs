@@ -58,7 +58,7 @@ completed per-commit review or parity acceptance.
 | 12 | `ddd55d50cc30c49bec99d359a0f73a9cc15d436d` | Updated readme | Non-runtime | Paths: `README.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 13 | `34b36362ab9b2ef9b20bafb3db146261e1d75191` | Scratch that | Non-runtime | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 14 | `15e6dd4a882f0cea81b4e899120f46787aaeb8a2` | Updated docs | Non-runtime | Paths: `docs/manual/searchindex.js`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
-| 15 | `395241b190ae4bc6e5d8070c8ff0a01afd24bdc9` | Updated docs | Needs decision | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`, `docs/source/brandolinis.rst`. Runtime tree unchanged; full review and mapping commit pending. |
+| 15 | `395241b190ae4bc6e5d8070c8ff0a01afd24bdc9` | Updated docs | Non-runtime | Paths: `docs/history/2026_09_18_Yes_I_am_Angry.md`, `docs/source/brandolinis.rst`. Full diff reviewed; runtime tree unchanged. Mapping identified by the exact upstream trailer; see analysis below. |
 | 16 | `99de23c040d507e3fefca19e87b182302902725d` | Updated docs | Needs decision | Paths: `docs/manual/_sources/brandolinis.rst.txt`, `docs/manual/brandolinis.html`, `docs/manual/searchindex.js`, `docs/markdown/brandolinis.md`. Runtime tree unchanged; full review and mapping commit pending. |
 
 ## Per-Commit Analysis
@@ -345,6 +345,26 @@ No runtime regression is applicable and no generated upstream prose is vendored.
 
 **Final disposition:** Non-runtime. This analysis is the non-empty local mapping
 whose sole `Upstream-Commit` trailer is `15e6dd4a882f0cea81b4e899120f46787aaeb8a2`.
+
+### 15. `395241b1` — Updated docs
+
+**Upstream change:** Corrects history-essay grammar and emphasis, revises an asserted request count, and expands a case-study introduction with an editorial cross-reference while removing escaped spacing. The third-party claims are not compatibility requirements or native findings.
+
+**Changed paths:** `docs/history/2026_09_18_Yes_I_am_Angry.md`, `docs/source/brandolinis.rst`.
+
+**Dependency:** Follows the preceding upstream commits in ancestry order; documentation context only.
+
+**Rust applicability and evidence:** Full diff reviewed. This changes upstream
+editorial material or its generated presentation; no native protocol, API,
+configuration, CLI, or persistence change is required. Every changed path is
+under `docs/` or is `README.md`. The commit retains the exact accepted `RNS`
+tree `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`. Existing native compatibility
+claims remain governed by test and parity evidence. Upstream opinions and
+third-party allegations are not adopted as independently verified findings.
+No runtime regression is applicable and no generated upstream prose is vendored.
+
+**Final disposition:** Non-runtime. This analysis is the non-empty local mapping
+whose sole `Upstream-Commit` trailer is `395241b190ae4bc6e5d8070c8ff0a01afd24bdc9`.
 
 ## Integration Plan
 
