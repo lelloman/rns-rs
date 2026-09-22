@@ -10,30 +10,30 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.4`
 - Version metadata commit: `7785fd277aec1cdcfbe5d9f00c6cd104194ad865`
-- Normative commit: `99de23c040d507e3fefca19e87b182302902725d`
-- Commit date: `2026-09-20 01:58:49 +0200`
-- Subject: `Updated docs`
+- Normative commit: `c7be675739a26bd56fa743678d7dd80ddca39491`
+- Commit date: `2026-09-22 00:56:43 +0200`
+- Subject: `Formatting and wording`
 
 The normative baseline is the canonical rgit development tip accepted on
-2026-09-20 with Reticulum version 1.5.4. Its `RNS` tree is
+2026-09-22 with Reticulum version 1.5.4. Its `RNS` tree is
 `b4c1cf368718971e1dcaf7c1cf2d1459411a360e` and root tree is
-`42e27d27afbed126220bec5ae701a745e0568a10`. All 16 commits since
-`e699bb23f1306ed451568d647b497791a44be95a` were reviewed and mapped individually.
+`8556cdf675d73b2dd0f0e16586c42f2653f41ace`. All three commits since
+`99de23c040d507e3fefca19e87b182302902725d` were reviewed and mapped individually.
 They change upstream editorial documentation and generated documentation
 artifacts; every commit preserves the accepted runtime tree.
 No native runtime port was required.
 
-Workspace tests (2,517 passed, 0 failed, 9 ignored), formatting, and host lint
-with native hooks passed. The daily dual-VPS stress test and release builds
-also passed. Both upstream refreshes succeeded and agree on the
-canonical tip at acceptance. The GitHub-backed CI interop pin and historical
-fixture provenance are unchanged. Exact-target interop was not rerun for this
-non-runtime advancement. Physical hardware validation remains unclaimed.
+Workspace tests, formatting, and host lint passed. The daily dual-VPS stress
+test and native-hook release builds also passed. Both upstream refreshes
+succeeded and agree on the canonical tip at acceptance. The GitHub-backed CI
+interop pin and historical fixture provenance are unchanged. Exact-target
+interop was not rerun for this non-runtime advancement. Physical hardware
+validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-3-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-3-parity.md),
+[`docs/upstream-parity/reticulum-1.5.4-rgit-4-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-4-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-3-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-3-audit.md).
+[`docs/upstream-parity/reticulum-1.5.4-rgit-4-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-4-audit.md).
 The earlier 1.5.4 acceptance records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
