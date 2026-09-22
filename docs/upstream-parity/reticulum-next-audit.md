@@ -44,7 +44,7 @@ Every commit in the audited range must appear exactly once.
 |---:|---|---|---|---|
 | 1 | `21a2365045cbbed82c05f7401da3ccf1779c390f` | Formatting and wording | Non-runtime | `5b996d2`; source-only review. |
 | 2 | `a22de54b4a6dc2f6f11a6908464203424b661139` | Added Void Grants | Non-runtime | `86c319f`; source-only review. |
-| 3 | `c7be675739a26bd56fa743678d7dd80ddca39491` | Formatting and wording | Non-runtime | This mapping records the source-only review. |
+| 3 | `c7be675739a26bd56fa743678d7dd80ddca39491` | Formatting and wording | Non-runtime | `1e3adc5`; source-only review. |
 
 ## Per-Commit Analysis
 
@@ -63,6 +63,21 @@ this mapping; target `RNS` tree remains `b4c1cf368718971e1dcaf7c1cf2d1459411a360
 
 **Final disposition:** Non-runtime.
 
+### 2. `a22de54b` — Added Void Grants
+
+**Upstream change:** Adds an upstream legal/editorial history page and wires
+it into the upstream manual source, generated HTML, Markdown, search index,
+and inventory. All nine changed paths are documentation artifacts.
+
+**Rust applicability:** The change does not alter any `RNS` source, protocol
+encoding, runtime interface, or supported native user workflow. The Rust
+repository has no copy of this upstream legal commentary.
+
+**Local handling and evidence:** Full diff and changed-path review recorded in
+this mapping; the target and prior accepted `RNS` trees are identical.
+
+**Final disposition:** Non-runtime.
+
 ### 3. `c7be6757` — Formatting and wording
 
 **Upstream change:** Adjusts wording in the newly added upstream history page
@@ -78,20 +93,17 @@ this mapping; no native runtime port is applicable.
 
 **Final disposition:** Non-runtime.
 
-### 2. `a22de54b` — Added Void Grants
+## Mapping Verification
 
-**Upstream change:** Adds an upstream legal/editorial history page and wires
-it into the upstream manual source, generated HTML, Markdown, search index,
-and inventory. All nine changed paths are documentation artifacts.
+| Upstream commit | Local mapping commit |
+|---|---|
+| `21a2365045cbbed82c05f7401da3ccf1779c390f` | `5b996d277dbc32cea0b9b3e919fdd39c338eabb5` |
+| `a22de54b4a6dc2f6f11a6908464203424b661139` | `86c319ff68baa854a3313d6eceae15180603f5bf` |
+| `c7be675739a26bd56fa743678d7dd80ddca39491` | `1e3adc548a63cb644d5a970e3f87b05786877332` |
 
-**Rust applicability:** The change does not alter any `RNS` source, protocol
-encoding, runtime interface, or supported native user workflow. The Rust
-repository has no copy of this upstream legal commentary.
-
-**Local handling and evidence:** Full diff and changed-path review recorded in
-this mapping; the target and prior accepted `RNS` trees are identical.
-
-**Final disposition:** Non-runtime.
+The mapping commits are non-empty, appear in the same ancestry order as the
+upstream range, and each reviewed upstream hash appears exactly once in an
+`Upstream-Commit` trailer.
 
 ## Integration Plan
 
