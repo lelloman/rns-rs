@@ -43,8 +43,8 @@ Every commit in the audited range must appear exactly once.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `21a2365045cbbed82c05f7401da3ccf1779c390f` | Formatting and wording | Non-runtime | `5b996d2`; source-only review. |
-| 2 | `a22de54b4a6dc2f6f11a6908464203424b661139` | Added Void Grants | Non-runtime | This mapping records the source-only review. |
-| 3 | `c7be675739a26bd56fa743678d7dd80ddca39491` | Formatting and wording | Pending review | Pending ordered mapping. |
+| 2 | `a22de54b4a6dc2f6f11a6908464203424b661139` | Added Void Grants | Non-runtime | `86c319f`; source-only review. |
+| 3 | `c7be675739a26bd56fa743678d7dd80ddca39491` | Formatting and wording | Non-runtime | This mapping records the source-only review. |
 
 ## Per-Commit Analysis
 
@@ -60,6 +60,21 @@ editorial material, and its protocol source tree is unchanged.
 
 **Local handling and evidence:** Full diff and changed-path review recorded in
 this mapping; target `RNS` tree remains `b4c1cf368718971e1dcaf7c1cf2d1459411a360e`.
+
+**Final disposition:** Non-runtime.
+
+### 3. `c7be6757` — Formatting and wording
+
+**Upstream change:** Adjusts wording in the newly added upstream history page
+and its reStructuredText manual source. The two changed files are editorial
+documentation only.
+
+**Rust applicability:** No `RNS` code, wire behavior, configuration, RPC,
+CLI, storage, or native documentation surface changes. The `RNS` tree remains
+identical to the accepted baseline.
+
+**Local handling and evidence:** Full diff and changed-path review recorded in
+this mapping; no native runtime port is applicable.
 
 **Final disposition:** Non-runtime.
 
@@ -80,8 +95,7 @@ this mapping; the target and prior accepted `RNS` trees are identical.
 
 ## Integration Plan
 
-Review and map commit 3 in ancestry order, then complete the applicable
-same-version rgit promotion gates.
+Complete the applicable same-version rgit promotion gates.
 
 ## Promotion Gates
 
