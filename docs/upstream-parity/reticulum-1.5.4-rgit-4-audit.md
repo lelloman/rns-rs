@@ -105,22 +105,31 @@ The mapping commits are non-empty, appear in the same ancestry order as the
 upstream range, and each reviewed upstream hash appears exactly once in an
 `Upstream-Commit` trailer.
 
-## Integration Plan
-
-Complete the applicable same-version rgit promotion gates.
-
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final Non-runtime disposition and unique mapping.
+- [x] Full diffs reviewed; focused runtime regressions are inapplicable.
+- [x] Runtime-tree identity checked; fixture provenance is unchanged.
+- [x] Exact-target interop assessed as inapplicable to this byte-identical runtime delta; not rerun.
+- [x] Workspace tests, formatting, and warning-free host lint passed.
+- [x] Release builds and daily manual results recorded; Docker, cross-build, and hardware gates explicitly unclaimed.
+- [x] Native tracking documentation updated; no upstream editorial content needs vendoring.
+- [x] Final acceptance record: [reticulum-1.5.4-rgit-4-parity.md](reticulum-1.5.4-rgit-4-parity.md).
 
 ## Acceptance Record
 
-The 2026-09-22 daily dual-VPS stress report passed before this audit began.
-It is operational evidence only; it does not replace the promotion gates.
+Checks performed on 2026-09-22:
+
+- `cargo test --workspace`: passed.
+- `cargo fmt --check`: passed.
+- `bash scripts/lint-host.sh`: passed with its configured warning-denial policy.
+- Native-hook `rns-server` and `rns-ctl` release builds: passed.
+- Daily `scripts/manual-backbone-smoke.sh --daily`: passed before this audit,
+  covering all configured Resource boundaries, concurrent Resources and links,
+  impaired VPS legs, and forced reconnect recovery.
+- The daily VPS snapshots were healthy and published before this audit.
+
+The target `RNS` tree is byte-identical to the prior accepted baseline. No new
+exact-target interop, fixture regeneration, Docker E2E, cross-build, or
+physical-hardware run is claimed. Upstream editorial and legal opinions are not
+independently verified or adopted as native findings.
