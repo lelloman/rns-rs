@@ -42,8 +42,8 @@ Every commit in the audited range must appear exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `21a2365045cbbed82c05f7401da3ccf1779c390f` | Formatting and wording | Non-runtime | This mapping records the source-only review. |
-| 2 | `a22de54b4a6dc2f6f11a6908464203424b661139` | Added Void Grants | Pending review | Pending ordered mapping. |
+| 1 | `21a2365045cbbed82c05f7401da3ccf1779c390f` | Formatting and wording | Non-runtime | `5b996d2`; source-only review. |
+| 2 | `a22de54b4a6dc2f6f11a6908464203424b661139` | Added Void Grants | Non-runtime | This mapping records the source-only review. |
 | 3 | `c7be675739a26bd56fa743678d7dd80ddca39491` | Formatting and wording | Pending review | Pending ordered mapping. |
 
 ## Per-Commit Analysis
@@ -63,9 +63,24 @@ this mapping; target `RNS` tree remains `b4c1cf368718971e1dcaf7c1cf2d1459411a360
 
 **Final disposition:** Non-runtime.
 
+### 2. `a22de54b` — Added Void Grants
+
+**Upstream change:** Adds an upstream legal/editorial history page and wires
+it into the upstream manual source, generated HTML, Markdown, search index,
+and inventory. All nine changed paths are documentation artifacts.
+
+**Rust applicability:** The change does not alter any `RNS` source, protocol
+encoding, runtime interface, or supported native user workflow. The Rust
+repository has no copy of this upstream legal commentary.
+
+**Local handling and evidence:** Full diff and changed-path review recorded in
+this mapping; the target and prior accepted `RNS` trees are identical.
+
+**Final disposition:** Non-runtime.
+
 ## Integration Plan
 
-Review and map commits 2 and 3 in ancestry order, then complete the applicable
+Review and map commit 3 in ancestry order, then complete the applicable
 same-version rgit promotion gates.
 
 ## Promotion Gates
