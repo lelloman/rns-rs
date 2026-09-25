@@ -45,8 +45,8 @@ Every commit in the audited range appears exactly once.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `192898864c008b6287dd56781d89fccef0bb5f7a` | Formatting and typos | Non-runtime | `0c00e33`; source-only review. |
-| 2 | `780b7e6bfc477754b6f7cc263439ef0c7cbded06` | Updated software chapter of the manual | Non-runtime | This mapping records the source-only review. |
-| 3 | `ff4e04099cb180eea84635d9d3846a58dea638fe` | Updated readme | Pending review | Pending ordered mapping. |
+| 2 | `780b7e6bfc477754b6f7cc263439ef0c7cbded06` | Updated software chapter of the manual | Non-runtime | `cb1caa1`; source-only review. |
+| 3 | `ff4e04099cb180eea84635d9d3846a58dea638fe` | Updated readme | Non-runtime | This mapping records the source-only review. |
 | 4 | `0af42a68859d9e3b54bb5040e76eca392885fb65` | Updated readme | Pending review | Pending ordered mapping. |
 | 5 | `1f7dbe6dde57e103998a615db749e0606a48879e` | Updated readme | Pending review | Pending ordered mapping. |
 | 6 | `c963581a6f26d9793e4b6dfe94be65cddc71bf11` | Updated readme | Pending review | Pending ordered mapping. |
@@ -87,9 +87,21 @@ is under upstream `README.md` or `docs/`, and the `RNS` tree is unchanged.
 
 **Final disposition:** Non-runtime.
 
+### 3. `ff4e0409` — Updated readme
+
+**Upstream change:** Expands the README's LLM-generated-fakes warning and adds a
+pointer to the Programs Using Reticulum manual chapter.
+
+**Rust applicability:** README prose only; no runtime surface.
+
+**Local handling and evidence:** No code change is required. The only changed
+path is `README.md`, which rns-rs does not vendor; the `RNS` tree is unchanged.
+
+**Final disposition:** Non-runtime.
+
 ## Integration Plan
 
-Review and map commits 3 through 9 in ancestry order, then complete the
+Review and map commits 4 through 9 in ancestry order, then complete the
 applicable same-version rgit promotion gates.
 
 ## Promotion Gates
