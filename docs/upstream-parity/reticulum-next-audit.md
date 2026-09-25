@@ -50,8 +50,8 @@ Every commit in the audited range appears exactly once.
 | 4 | `0af42a68859d9e3b54bb5040e76eca392885fb65` | Updated readme | Non-runtime | `5ad54e4`; source-only review. |
 | 5 | `1f7dbe6dde57e103998a615db749e0606a48879e` | Updated readme | Non-runtime | `a6bcab5`; source-only review. |
 | 6 | `c963581a6f26d9793e4b6dfe94be65cddc71bf11` | Updated readme | Non-runtime | `282452f`; source-only review. |
-| 7 | `87a75c2553024d3579b152a6b7c126e0c0406839` | Added link | Non-runtime | This mapping records the source-only review. |
-| 8 | `c4be063650939b9a598d58610d2e7678b4fbe1e2` | Fixed typo | Pending review | Pending ordered mapping. |
+| 7 | `87a75c2553024d3579b152a6b7c126e0c0406839` | Added link | Non-runtime | `719defb`; source-only review. |
+| 8 | `c4be063650939b9a598d58610d2e7678b4fbe1e2` | Fixed typo | Non-runtime | This mapping records the source-only review. |
 | 9 | `8a7ad40d649aae1cd755f060fa8f5619f7000b29` | Fixed typo | Pending review | Pending ordered mapping. |
 
 ## Per-Commit Analysis
@@ -148,10 +148,23 @@ path is under upstream `docs/history/`; the `RNS` tree is unchanged.
 
 **Final disposition:** Non-runtime.
 
+### 8. `c4be0636` — Fixed typo
+
+**Upstream change:** Corrects Ren Browser wording in `docs/source/software.rst`
+("Reticulum Network using the ... stack" to "Nomad Network using the ...
+implementation", and "it's embedded" to "it's own embedded").
+
+**Rust applicability:** Manual source prose only; no runtime surface.
+
+**Local handling and evidence:** No code change is required. The only changed
+path is upstream manual source; the `RNS` tree is unchanged.
+
+**Final disposition:** Non-runtime.
+
 ## Integration Plan
 
-Review and map commits 8 through 9 in ancestry order, then complete the
-applicable same-version rgit promotion gates.
+Review and map commit 9 in ancestry order, then complete the applicable
+same-version rgit promotion gates.
 
 ## Promotion Gates
 
