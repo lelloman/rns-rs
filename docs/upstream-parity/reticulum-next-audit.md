@@ -47,8 +47,8 @@ Every commit in the audited range appears exactly once.
 | 1 | `192898864c008b6287dd56781d89fccef0bb5f7a` | Formatting and typos | Non-runtime | `0c00e33`; source-only review. |
 | 2 | `780b7e6bfc477754b6f7cc263439ef0c7cbded06` | Updated software chapter of the manual | Non-runtime | `cb1caa1`; source-only review. |
 | 3 | `ff4e04099cb180eea84635d9d3846a58dea638fe` | Updated readme | Non-runtime | `8ec3640`; source-only review. |
-| 4 | `0af42a68859d9e3b54bb5040e76eca392885fb65` | Updated readme | Non-runtime | This mapping records the source-only review. |
-| 5 | `1f7dbe6dde57e103998a615db749e0606a48879e` | Updated readme | Pending review | Pending ordered mapping. |
+| 4 | `0af42a68859d9e3b54bb5040e76eca392885fb65` | Updated readme | Non-runtime | `5ad54e4`; source-only review. |
+| 5 | `1f7dbe6dde57e103998a615db749e0606a48879e` | Updated readme | Non-runtime | This mapping records the source-only review. |
 | 6 | `c963581a6f26d9793e4b6dfe94be65cddc71bf11` | Updated readme | Pending review | Pending ordered mapping. |
 | 7 | `87a75c2553024d3579b152a6b7c126e0c0406839` | Added link | Pending review | Pending ordered mapping. |
 | 8 | `c4be063650939b9a598d58610d2e7678b4fbe1e2` | Fixed typo | Pending review | Pending ordered mapping. |
@@ -112,9 +112,21 @@ path is `README.md`; the `RNS` tree is unchanged.
 
 **Final disposition:** Non-runtime.
 
+### 5. `1f7dbe6d` — Updated readme
+
+**Upstream change:** Refines the README Brandolini's Reference paragraph and adds
+a direct Void Grants link.
+
+**Rust applicability:** README prose only; no runtime surface.
+
+**Local handling and evidence:** No code change is required. The only changed
+path is `README.md`; the `RNS` tree is unchanged.
+
+**Final disposition:** Non-runtime.
+
 ## Integration Plan
 
-Review and map commits 5 through 9 in ancestry order, then complete the
+Review and map commits 6 through 9 in ancestry order, then complete the
 applicable same-version rgit promotion gates.
 
 ## Promotion Gates
