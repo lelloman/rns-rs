@@ -44,8 +44,8 @@ Every commit in the audited range appears exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `192898864c008b6287dd56781d89fccef0bb5f7a` | Formatting and typos | Non-runtime | This mapping records the source-only review. |
-| 2 | `780b7e6bfc477754b6f7cc263439ef0c7cbded06` | Updated software chapter of the manual | Pending review | Pending ordered mapping. |
+| 1 | `192898864c008b6287dd56781d89fccef0bb5f7a` | Formatting and typos | Non-runtime | `0c00e33`; source-only review. |
+| 2 | `780b7e6bfc477754b6f7cc263439ef0c7cbded06` | Updated software chapter of the manual | Non-runtime | This mapping records the source-only review. |
 | 3 | `ff4e04099cb180eea84635d9d3846a58dea638fe` | Updated readme | Pending review | Pending ordered mapping. |
 | 4 | `0af42a68859d9e3b54bb5040e76eca392885fb65` | Updated readme | Pending review | Pending ordered mapping. |
 | 5 | `1f7dbe6dde57e103998a615db749e0606a48879e` | Updated readme | Pending review | Pending ordered mapping. |
@@ -71,9 +71,25 @@ the accepted baseline and target (`b4c1cf368718971e1dcaf7c1cf2d1459411a360e`).
 
 **Final disposition:** Non-runtime.
 
+### 2. `780b7e6b` — Updated software chapter of the manual
+
+**Upstream change:** Updates the README community-software prose and the manual
+software chapter, including new and replaced screenshots, in the `docs/source`
+tree, then regenerates the `docs/manual` HTML/RST/search artifacts and
+`docs/markdown` Markdown copies.
+
+**Rust applicability:** No runtime, wire, configuration, RPC, or CLI behavior
+changes. rns-rs keeps concise native documentation and does not vendor
+upstream's generated Sphinx manual or screenshot assets.
+
+**Local handling and evidence:** No code change is required. Every changed path
+is under upstream `README.md` or `docs/`, and the `RNS` tree is unchanged.
+
+**Final disposition:** Non-runtime.
+
 ## Integration Plan
 
-Review and map commits 2 through 9 in ancestry order, then complete the
+Review and map commits 3 through 9 in ancestry order, then complete the
 applicable same-version rgit promotion gates.
 
 ## Promotion Gates
