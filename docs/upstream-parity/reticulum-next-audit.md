@@ -51,8 +51,8 @@ Every commit in the audited range appears exactly once.
 | 5 | `1f7dbe6dde57e103998a615db749e0606a48879e` | Updated readme | Non-runtime | `a6bcab5`; source-only review. |
 | 6 | `c963581a6f26d9793e4b6dfe94be65cddc71bf11` | Updated readme | Non-runtime | `282452f`; source-only review. |
 | 7 | `87a75c2553024d3579b152a6b7c126e0c0406839` | Added link | Non-runtime | `719defb`; source-only review. |
-| 8 | `c4be063650939b9a598d58610d2e7678b4fbe1e2` | Fixed typo | Non-runtime | This mapping records the source-only review. |
-| 9 | `8a7ad40d649aae1cd755f060fa8f5619f7000b29` | Fixed typo | Pending review | Pending ordered mapping. |
+| 8 | `c4be063650939b9a598d58610d2e7678b4fbe1e2` | Fixed typo | Non-runtime | `e887463`; source-only review. |
+| 9 | `8a7ad40d649aae1cd755f060fa8f5619f7000b29` | Fixed typo | Non-runtime | This mapping records the source-only review. |
 
 ## Per-Commit Analysis
 
@@ -161,10 +161,21 @@ path is upstream manual source; the `RNS` tree is unchanged.
 
 **Final disposition:** Non-runtime.
 
+### 9. `8a7ad40d` — Fixed typo
+
+**Upstream change:** Regenerates the corrected Ren Browser wording across the
+manual source, HTML, Markdown, and search index.
+
+**Rust applicability:** Generated manual artifacts only; no runtime surface.
+
+**Local handling and evidence:** No code change is required. Changed paths are
+confined to `docs/manual` and `docs/markdown`; the `RNS` tree is unchanged.
+
+**Final disposition:** Non-runtime.
+
 ## Integration Plan
 
-Review and map commit 9 in ancestry order, then complete the applicable
-same-version rgit promotion gates.
+Complete the applicable same-version rgit promotion gates.
 
 ## Promotion Gates
 
