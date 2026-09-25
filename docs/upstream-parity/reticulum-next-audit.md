@@ -52,7 +52,7 @@ Every commit in the audited range appears exactly once.
 | 6 | `c963581a6f26d9793e4b6dfe94be65cddc71bf11` | Updated readme | Non-runtime | `282452f`; source-only review. |
 | 7 | `87a75c2553024d3579b152a6b7c126e0c0406839` | Added link | Non-runtime | `719defb`; source-only review. |
 | 8 | `c4be063650939b9a598d58610d2e7678b4fbe1e2` | Fixed typo | Non-runtime | `e887463`; source-only review. |
-| 9 | `8a7ad40d649aae1cd755f060fa8f5619f7000b29` | Fixed typo | Non-runtime | This mapping records the source-only review. |
+| 9 | `8a7ad40d649aae1cd755f060fa8f5619f7000b29` | Fixed typo | Non-runtime | `4b02c88`; source-only review. |
 
 ## Per-Commit Analysis
 
@@ -172,6 +172,24 @@ manual source, HTML, Markdown, and search index.
 confined to `docs/manual` and `docs/markdown`; the `RNS` tree is unchanged.
 
 **Final disposition:** Non-runtime.
+
+## Mapping Verification
+
+| Upstream commit | Local mapping commit |
+|---|---|
+| `192898864c008b6287dd56781d89fccef0bb5f7a` | `0c00e33f1de2a56f4a1eba779a7b83e2c89278df` |
+| `780b7e6bfc477754b6f7cc263439ef0c7cbded06` | `cb1caa1dbadcebf91737a749e5732b5d8b9fe2e1` |
+| `ff4e04099cb180eea84635d9d3846a58dea638fe` | `8ec36407626888d8a0cc495f35c9d087b304b230` |
+| `0af42a68859d9e3b54bb5040e76eca392885fb65` | `5ad54e46ecc4a901dc2774c39f4ae9ea415577d3` |
+| `1f7dbe6dde57e103998a615db749e0606a48879e` | `a6bcab5ab4c24e20b7d40e09c5f8deff9fd4f847` |
+| `c963581a6f26d9793e4b6dfe94be65cddc71bf11` | `282452f1051fe4c98fc67d7d6d6f4b08766ae187` |
+| `87a75c2553024d3579b152a6b7c126e0c0406839` | `719defb6806ac58d9f9335463d1df4fde0228763` |
+| `c4be063650939b9a598d58610d2e7678b4fbe1e2` | `e88746301048210bbee66220c00044969f4cdea3` |
+| `8a7ad40d649aae1cd755f060fa8f5619f7000b29` | `4b02c8856fe088f67e3cecb3bc63fdfe22286e86` |
+
+The mapping commits are non-empty, appear in the same ancestry order as the
+upstream range, and each reviewed upstream hash appears exactly once in an
+`Upstream-Commit` trailer.
 
 ## Integration Plan
 
