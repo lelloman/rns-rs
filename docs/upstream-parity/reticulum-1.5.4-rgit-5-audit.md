@@ -197,14 +197,14 @@ Complete the applicable same-version rgit promotion gates.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final Non-runtime disposition and unique mapping.
+- [x] Full diffs reviewed; focused runtime regressions are inapplicable.
+- [x] Runtime-tree identity checked; fixture provenance is unchanged.
+- [x] Exact-target interop assessed as inapplicable to this byte-identical runtime delta; not rerun.
+- [x] Workspace tests, formatting, and warning-free host lint passed.
+- [x] Release builds and daily manual results recorded; Docker, cross-build, and hardware gates explicitly unclaimed.
+- [x] Native tracking documentation updated; no upstream editorial content needs vendoring.
+- [x] Final acceptance record: [reticulum-1.5.4-rgit-5-parity.md](reticulum-1.5.4-rgit-5-parity.md).
 
 ## Acceptance Record
 
@@ -258,5 +258,23 @@ Complete the applicable same-version rgit promotion gates.
   identity recall, bidirectional packets, four Resource sizes through 1 MiB,
   concurrent links, and forced Backbone reconnection recovery. The reviewed
   report database was published to `vps-eu`.
-- Physical hardware validation remains unclaimed. No final parity record or
-  baseline promotion is claimed by this daily report.
+- `2026-09-25`: Both upstream remotes refreshed successfully (GitHub 06:08:49
+  UTC, rgit 06:08:54 UTC) and agreed on
+  `8a7ad40d649aae1cd755f060fa8f5619f7000b29`; the nine-commit range and target
+  `RNS` tree (`b4c1cf368718971e1dcaf7c1cf2d1459411a360e`) were unchanged from the
+  `2026-09-24` inventory, and each commit was mapped by a non-empty local commit
+  carrying its unique `Upstream-Commit` trailer.
+- `2026-09-25`: `cargo test --workspace` passed, `cargo fmt --check` passed, and
+  `bash scripts/lint-host.sh` passed under its configured warning-denial policy.
+  Native-hook `rns-server` and `rns-ctl` release builds succeeded.
+- `2026-09-25`: The impaired daily dual-VPS `--daily` Backbone smoke passed
+  announces, cross-backbone identity recall, bidirectional packets, four
+  Resource sizes through 1 MiB, concurrent links, and forced reconnect
+  recovery. The healthy per-host snapshots (EU 53/53 up, US 24/24 up) and the
+  reviewed report database were published to `vps-eu`. Physical hardware
+  validation remains unclaimed.
+
+The target `RNS` tree is byte-identical to the prior accepted baseline. No new
+exact-target interop, fixture regeneration, Docker E2E, cross-build, or
+physical-hardware run is claimed. Upstream editorial and legal opinions are not
+independently verified or adopted as native findings.

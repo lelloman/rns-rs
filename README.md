@@ -4,7 +4,7 @@
 [![rns-core](https://img.shields.io/crates/v/rns-core.svg?label=rns-core)](https://crates.io/crates/rns-core)
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
 [![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
-[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.5.4-blue)](docs/upstream-parity/reticulum-1.5.4-rgit-4-parity.md)
+[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.5.4-blue)](docs/upstream-parity/reticulum-1.5.4-rgit-5-parity.md)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
@@ -76,7 +76,7 @@ rustup target add wasm32-unknown-unknown
 
 ## Running Tests
 
-Committed conformance vectors retain their historical, pinned Reticulum 1.4.0 provenance. The current upstream reference is Reticulum 1.5.4 at canonical commit `c7be6757`, a documentation-only advancement with an unchanged runtime tree. Exact-target interop was not rerun for this advancement; see [UPSTREAM.md](UPSTREAM.md) and the [parity record](docs/upstream-parity/reticulum-1.5.4-rgit-4-parity.md) for the accepted commit, validation evidence, and the separate GitHub-backed interop CI pin.
+Committed conformance vectors retain their historical, pinned Reticulum 1.4.0 provenance. The current upstream reference is Reticulum 1.5.4 at canonical commit `8a7ad40d`, a documentation-only advancement with an unchanged runtime tree. Exact-target interop was not rerun for this advancement; see [UPSTREAM.md](UPSTREAM.md) and the [parity record](docs/upstream-parity/reticulum-1.5.4-rgit-5-parity.md) for the accepted commit, validation evidence, and the separate GitHub-backed interop CI pin.
 
 ```bash
 # Generate fixtures from the pinned Reticulum 1.4.0 checkout
