@@ -10,15 +10,15 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.4`
 - Version metadata commit: `7785fd277aec1cdcfbe5d9f00c6cd104194ad865`
-- Normative commit: `c7be675739a26bd56fa743678d7dd80ddca39491`
-- Commit date: `2026-09-22 00:56:43 +0200`
-- Subject: `Formatting and wording`
+- Normative commit: `8a7ad40d649aae1cd755f060fa8f5619f7000b29`
+- Commit date: `2026-09-24 16:39:04 +0200`
+- Subject: `Fixed typo`
 
 The normative baseline is the canonical rgit development tip accepted on
-2026-09-22 with Reticulum version 1.5.4. Its `RNS` tree is
+2026-09-25 with Reticulum version 1.5.4. Its `RNS` tree is
 `b4c1cf368718971e1dcaf7c1cf2d1459411a360e` and root tree is
-`8556cdf675d73b2dd0f0e16586c42f2653f41ace`. All three commits since
-`99de23c040d507e3fefca19e87b182302902725d` were reviewed and mapped individually.
+`d2edf15bcec20b101e6ecbdba1d2ec6d2a56aad1`. All nine commits since
+`c7be675739a26bd56fa743678d7dd80ddca39491` were reviewed and mapped individually.
 They change upstream editorial documentation and generated documentation
 artifacts; every commit preserves the accepted runtime tree.
 No native runtime port was required.
@@ -31,9 +31,9 @@ interop was not rerun for this non-runtime advancement. Physical hardware
 validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-4-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-4-parity.md),
+[`docs/upstream-parity/reticulum-1.5.4-rgit-5-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-5-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-4-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-4-audit.md).
+[`docs/upstream-parity/reticulum-1.5.4-rgit-5-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-5-audit.md).
 The earlier 1.5.4 acceptance records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
