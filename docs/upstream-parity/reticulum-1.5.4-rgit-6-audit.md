@@ -157,3 +157,11 @@ Complete the applicable same-version rgit promotion gates.
   sizes through 1 MiB, concurrent Resources and links, and forced reconnect
   recovery; both per-host snapshots were healthy. Docker, cross-build, and
   physical-hardware validation were not rerun and remain unclaimed.
+- `2026-09-27`: Follow-up exact-target interop against Reticulum `1.5.4` was
+  run locally at the accepted commit `3f95b472`. `rns-net`'s
+  `python_interop` passed (bidirectional TCP interop) and `rns-cli`'s
+  `utility_interop` passed (five cases: `rncp` and `rnx` in both directions).
+  The CI `reticulum-interop` matrix was updated to replace the `1.5.2` entry
+  with `1.5.4` (`rns_tree` `51f0e922420b47f482df9184b48ade41ac8d6ce3`), so the
+  accepted runtime tree is now continuously exercised. The earlier "not rerun"
+  acceptance rows are preserved as recorded.
