@@ -683,7 +683,7 @@ fn python_rns_bidirectional_tcp_interop() {
 
     let rust_resource: Vec<u8> = (0..100000).map(|index| (index % 239) as u8).collect();
     node.send_resource(link_id, rust_resource.clone(), None)
-        .expect("Rust should send a Resource to Python 1.3.5");
+        .expect("Rust should send a Resource to Python");
     wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
         RustEvent::ResourceCompleted {
             link_id: completed_link,
