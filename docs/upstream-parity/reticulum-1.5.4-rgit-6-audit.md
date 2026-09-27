@@ -20,7 +20,7 @@ Both remotes refreshed successfully during the `2026-09-27` daily check
 (GitHub `06:50:51` UTC, rgit `06:50:55` UTC). GitHub and rgit now agree on
 `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`, two commits ahead of the accepted
 baseline: the previously inventoried `aeccf69f` runtime cleanup and a later
-`3f95b472` edit to the upstream `AGENTS.md` guidance file. The `RNS` tree is
+`3f95b472` edit to the upstream `AGENTS.md` reference document. The `RNS` tree is
 unchanged between `aeccf69f` and `3f95b472`, so only the first commit touches
 runtime source. The promotion target is not decided until every commit has a
 final disposition and the same-version rgit gates are completed, so the active
@@ -77,17 +77,18 @@ a full source diff. A workspace search found no `RNode`, `Bluetooth`, or
 
 ### 2. `3f95b472` — Updated AGENTS.md
 
-**Upstream change:** Rewrites the upstream `AGENTS.md` contributor guidance,
+**Upstream change:** Rewrites the upstream-root `AGENTS.md` reference document,
 `496` insertions and `245` deletions in a single file. The commit touches
 nothing under `RNS/`; the `RNS` tree stays at
 `51f0e922420b47f482df9184b48ade41ac8d6ce3`, the same tree produced by
-`aeccf69f`. `AGENTS.md` is upstream agent/documentation guidance and is not
+`aeccf69f`. `AGENTS.md` is upstream repository documentation and is not
 imported or loaded by the Reticulum runtime.
 
-**Rust applicability:** A documentation and agent-guidance edit cannot change
-runtime behavior, wire format, configuration, or public API. There is no
-compatibility surface that requires a Rust change, and the native workspace
-maintains its own `AGENTS.md` independently.
+**Rust applicability:** A documentation-only edit cannot change runtime
+behavior, wire format, configuration, or public API. The native workspace has
+no `AGENTS.md`; the file is reviewed as upstream content, not imported as
+instructions governing the Rust workspace, so no compatibility surface requires
+a Rust change.
 
 **Local handling and evidence:** No code change is required. The complete diff
 was reviewed with `git show --name-status 3f95b472820ddfb27f736143fb0b4d0d3aa610f1`,

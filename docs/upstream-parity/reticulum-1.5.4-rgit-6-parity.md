@@ -34,7 +34,7 @@ full hashes, changed paths, review rationale, and the verified unique
 | Area | Upstream commits | Final handling |
 |---|---|---|
 | RNode BLE source hygiene | `aeccf69f` | Deleted unused Python-local import; the native workspace has no RNode BLE implementation, so no Rust counterpart exists. |
-| Upstream agent guidance | `3f95b472` | Upstream `AGENTS.md` rewrite only; not loaded by the Reticulum runtime and not vendored. |
+| Upstream repository documentation | `3f95b472` | Upstream-root `AGENTS.md` reference rewrite only; not loaded by the Reticulum runtime and not vendored. |
 
 ## Compatibility Evidence
 
