@@ -27,8 +27,10 @@ requires a native runtime port.
 Workspace tests, formatting, and host lint passed. The daily dual-VPS stress
 test and native-hook release builds also passed. Both upstream refreshes
 succeeded and agree on the canonical tip at acceptance. The GitHub-backed CI
-interop pin and historical fixture provenance are unchanged. Exact-target
-interop was not rerun for this non-runtime advancement. Physical hardware
+interop matrix now pins `1.5.4` at the accepted normative commit, replacing the
+previous `1.5.2` entry; the live Python/Rust interop suites (`rns-net`'s
+`python_interop` and `rns-cli`'s `utility_interop`) were run against `1.5.4` and
+passed. Historical fixture provenance is unchanged. Physical hardware
 validation remains unclaimed.
 
 The current disposition and acceptance record is in
