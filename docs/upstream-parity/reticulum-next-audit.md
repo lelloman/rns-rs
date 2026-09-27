@@ -48,8 +48,8 @@ Every commit in the audited range appears exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `aeccf69fc724c6d245bdbd386a64261444334354` | Cleanup | Non-runtime | This mapping records the source-only review. |
-| 2 | `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | Updated AGENTS.md | Pending review | Pending ordered mapping. |
+| 1 | `aeccf69fc724c6d245bdbd386a64261444334354` | Cleanup | Non-runtime | `5ab3c83`; source-only review. |
+| 2 | `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | Updated AGENTS.md | Non-runtime | This mapping records the source-only review. |
 
 ## Per-Commit Analysis
 
@@ -75,10 +75,30 @@ a full source diff. A workspace search found no `RNode`, `Bluetooth`, or
 
 **Final disposition:** Non-runtime.
 
+### 2. `3f95b472` — Updated AGENTS.md
+
+**Upstream change:** Rewrites the upstream `AGENTS.md` contributor guidance,
+`496` insertions and `245` deletions in a single file. The commit touches
+nothing under `RNS/`; the `RNS` tree stays at
+`51f0e922420b47f482df9184b48ade41ac8d6ce3`, the same tree produced by
+`aeccf69f`. `AGENTS.md` is upstream agent/documentation guidance and is not
+imported or loaded by the Reticulum runtime.
+
+**Rust applicability:** A documentation and agent-guidance edit cannot change
+runtime behavior, wire format, configuration, or public API. There is no
+compatibility surface that requires a Rust change, and the native workspace
+maintains its own `AGENTS.md` independently.
+
+**Local handling and evidence:** No code change is required. The complete diff
+was reviewed with `git show --name-status 3f95b472820ddfb27f736143fb0b4d0d3aa610f1`,
+which reports only `M AGENTS.md`. Tree verification shows the `RNS` tree is
+unchanged from `aeccf69f`.
+
+**Final disposition:** Non-runtime.
+
 ## Integration Plan
 
-Review and map commit 2 in ancestry order, then complete the applicable
-same-version rgit promotion gates.
+Complete the applicable same-version rgit promotion gates.
 
 ## Promotion Gates
 
