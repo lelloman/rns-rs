@@ -48,8 +48,8 @@ Every commit in the audited range appears exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `aeccf69fc724c6d245bdbd386a64261444334354` | Cleanup | Non-runtime | `5ab3c83`; source-only review. |
-| 2 | `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | Updated AGENTS.md | Non-runtime | `ce36b1b`; source-only review. |
+| 1 | `aeccf69fc724c6d245bdbd386a64261444334354` | Cleanup | Non-runtime | `95dc9ca`; source-only review. |
+| 2 | `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | Updated AGENTS.md | Non-runtime | `6260022`; source-only review. |
 
 ## Per-Commit Analysis
 
@@ -101,8 +101,8 @@ unchanged from `aeccf69f`.
 
 | Upstream commit | Local mapping commit |
 |---|---|
-| `aeccf69fc724c6d245bdbd386a64261444334354` | `5ab3c830cc892803f4fce4a2ccd1bd3aa6d163d8` |
-| `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | `ce36b1b2df4846da5754c0a12f0441f03e52de63` |
+| `aeccf69fc724c6d245bdbd386a64261444334354` | `95dc9ca054322efdeaf9642e70ab64865b3ebd07` |
+| `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | `62600223686c5c11153f5cd40e1c5a2c3332b072` |
 
 The mapping commits are non-empty, appear in the same ancestry order as the
 upstream range, and each reviewed upstream hash appears exactly once in an
@@ -147,8 +147,8 @@ Complete the applicable same-version rgit promotion gates.
   commits ahead: `2`. Both remotes agree. No promotion or `UPSTREAM.md` change
   is made by this inventory step.
 - `2026-09-27`: Both commits were mapped in ancestry order by non-empty local
-  commits `5ab3c83` (`Cleanup`) and `ce36b1b` (`Updated AGENTS.md`), each with a
-  unique `Upstream-Commit` trailer, followed by the `da17e7c` mapping-evidence
+  commits `95dc9ca` (`Cleanup`) and `6260022` (`Updated AGENTS.md`), each with a
+  unique `Upstream-Commit` trailer, followed by the `288e3da` mapping-evidence
   summary. The two mappings are recorded in the Mapping Verification table.
 - `2026-09-27`: `cargo test --workspace`, `cargo fmt --check`, and
   `bash scripts/lint-host.sh` passed. Native-hook `rns-server` and `rns-ctl`
