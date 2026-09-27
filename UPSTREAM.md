@@ -27,8 +27,9 @@ requires a native runtime port.
 Workspace tests, formatting, and host lint passed. The daily dual-VPS stress
 test and native-hook release builds also passed. Both upstream refreshes
 succeeded and agree on the canonical tip at acceptance. The GitHub-backed CI
-interop matrix now pins `1.5.4` at the accepted normative commit, replacing the
-previous `1.5.2` entry; the live Python/Rust interop suites (`rns-net`'s
+interop matrix now targets Reticulum `1.4.2` and `1.5.4`, with `1.5.4` pinned at
+the accepted normative commit; the older `1.3.5` and `1.5.2` entries were
+retired. The live Python/Rust interop suites (`rns-net`'s
 `python_interop` and `rns-cli`'s `utility_interop`) were run against `1.5.4` and
 passed. Historical fixture provenance is unchanged. Physical hardware
 validation remains unclaimed.
