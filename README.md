@@ -437,6 +437,22 @@ rns-rs is designed to be fully interoperable with the Python Reticulum implement
 
 The current wire-level protocol is described in [docs/protocol-spec.md](docs/protocol-spec.md).
 
+## Authorship and Provenance
+
+rns-rs is an independent reimplementation of Reticulum's reference
+implementation (RNS). It is not a clean-room design: it is a derivative work
+distributed under the [Reticulum License](LICENSE), retaining the original
+copyright notice and crediting the reference implementation.
+
+The project is developed with substantial machine (LLM) assistance under human
+direction and review. The maintainer sets scope, makes the design decisions, and
+reviews and accepts or rejects every change. The commit history,
+[upstream-parity audits](docs/upstream-parity/), and
+conformance/interop fixtures document how the implementation was produced and
+verified.
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 [Reticulum License](LICENSE)
