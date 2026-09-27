@@ -113,14 +113,14 @@ Complete the applicable same-version rgit promotion gates.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition (`Non-runtime`).
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final `Non-runtime` disposition and a unique mapping.
+- [x] Full diffs reviewed; focused runtime regressions are inapplicable to this non-runtime delta.
+- [x] Runtime-tree identity checked; fixture provenance is unchanged.
+- [x] Exact-target interop assessed as inapplicable to this byte-identical runtime delta; not rerun.
+- [x] Workspace tests, formatting, and warning-free host lint passed (`cargo test --workspace`, `cargo fmt --check`, `bash scripts/lint-host.sh`, 2026-09-27).
+- [x] Native-hook `rns-server` and `rns-ctl` release builds passed; daily manual results recorded below.
+- [x] Native tracking documentation updated; no upstream editorial content needs vendoring.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
@@ -145,3 +145,14 @@ Complete the applicable same-version rgit promotion gates.
   appended to this inventory with a `Non-runtime` disposition. Deduplicated
   commits ahead: `2`. Both remotes agree. No promotion or `UPSTREAM.md` change
   is made by this inventory step.
+- `2026-09-27`: Both commits were mapped in ancestry order by non-empty local
+  commits `5ab3c83` (`Cleanup`) and `ce36b1b` (`Updated AGENTS.md`), each with a
+  unique `Upstream-Commit` trailer, followed by the `da17e7c` mapping-evidence
+  summary. The two mappings are recorded in the Mapping Verification table.
+- `2026-09-27`: `cargo test --workspace`, `cargo fmt --check`, and
+  `bash scripts/lint-host.sh` passed. Native-hook `rns-server` and `rns-ctl`
+  release builds passed. The daily impaired dual-VPS `--daily` Backbone smoke
+  test passed announces, identity recall, bidirectional packets, four Resource
+  sizes through 1 MiB, concurrent Resources and links, and forced reconnect
+  recovery; both per-host snapshots were healthy. Docker, cross-build, and
+  physical-hardware validation were not rerun and remain unclaimed.
