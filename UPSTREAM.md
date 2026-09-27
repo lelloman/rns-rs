@@ -10,18 +10,19 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.4`
 - Version metadata commit: `7785fd277aec1cdcfbe5d9f00c6cd104194ad865`
-- Normative commit: `8a7ad40d649aae1cd755f060fa8f5619f7000b29`
-- Commit date: `2026-09-24 16:39:04 +0200`
-- Subject: `Fixed typo`
+- Normative commit: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`
+- Commit date: `2026-09-26 22:09:29 +0200`
+- Subject: `Updated AGENTS.md`
 
 The normative baseline is the canonical rgit development tip accepted on
-2026-09-25 with Reticulum version 1.5.4. Its `RNS` tree is
-`b4c1cf368718971e1dcaf7c1cf2d1459411a360e` and root tree is
-`d2edf15bcec20b101e6ecbdba1d2ec6d2a56aad1`. All nine commits since
-`c7be675739a26bd56fa743678d7dd80ddca39491` were reviewed and mapped individually.
-They change upstream editorial documentation and generated documentation
-artifacts; every commit preserves the accepted runtime tree.
-No native runtime port was required.
+2026-09-27 with Reticulum version 1.5.4. Its `RNS` tree is
+`51f0e922420b47f482df9184b48ade41ac8d6ce3` and root tree is
+`a843be443c20aa15b5f63f36663a351230a93168`. Both commits since
+`8a7ad40d649aae1cd755f060fa8f5619f7000b29` were reviewed and mapped
+individually. The first removes an unused Python-local `import platform` from
+the RNode BLE connection path, for which the native workspace has no
+implementation; the second rewrites upstream agent guidance. Neither commit
+requires a native runtime port.
 
 Workspace tests, formatting, and host lint passed. The daily dual-VPS stress
 test and native-hook release builds also passed. Both upstream refreshes
@@ -31,9 +32,9 @@ interop was not rerun for this non-runtime advancement. Physical hardware
 validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-5-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-5-parity.md),
+[`docs/upstream-parity/reticulum-1.5.4-rgit-6-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-6-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-5-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-5-audit.md).
+[`docs/upstream-parity/reticulum-1.5.4-rgit-6-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-6-audit.md).
 The earlier 1.5.4 acceptance records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
