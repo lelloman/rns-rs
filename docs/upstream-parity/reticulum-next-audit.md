@@ -49,7 +49,7 @@ Every commit in the audited range appears exactly once.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `aeccf69fc724c6d245bdbd386a64261444334354` | Cleanup | Non-runtime | `5ab3c83`; source-only review. |
-| 2 | `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | Updated AGENTS.md | Non-runtime | This mapping records the source-only review. |
+| 2 | `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | Updated AGENTS.md | Non-runtime | `ce36b1b`; source-only review. |
 
 ## Per-Commit Analysis
 
@@ -95,6 +95,17 @@ which reports only `M AGENTS.md`. Tree verification shows the `RNS` tree is
 unchanged from `aeccf69f`.
 
 **Final disposition:** Non-runtime.
+
+## Mapping Verification
+
+| Upstream commit | Local mapping commit |
+|---|---|
+| `aeccf69fc724c6d245bdbd386a64261444334354` | `5ab3c830cc892803f4fce4a2ccd1bd3aa6d163d8` |
+| `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` | `ce36b1b2df4846da5754c0a12f0441f03e52de63` |
+
+The mapping commits are non-empty, appear in the same ancestry order as the
+upstream range, and each reviewed upstream hash appears exactly once in an
+`Upstream-Commit` trailer.
 
 ## Integration Plan
 
