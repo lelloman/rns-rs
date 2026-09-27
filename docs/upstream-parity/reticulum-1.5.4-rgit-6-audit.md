@@ -161,7 +161,8 @@ Complete the applicable same-version rgit promotion gates.
   run locally at the accepted commit `3f95b472`. `rns-net`'s
   `python_interop` passed (bidirectional TCP interop) and `rns-cli`'s
   `utility_interop` passed (five cases: `rncp` and `rnx` in both directions).
-  The CI `reticulum-interop` matrix was updated to replace the `1.5.2` entry
-  with `1.5.4` (`rns_tree` `51f0e922420b47f482df9184b48ade41ac8d6ce3`), so the
-  accepted runtime tree is now continuously exercised. The earlier "not rerun"
-  acceptance rows are preserved as recorded.
+  The CI `reticulum-interop` matrix now targets `1.4.2` and `1.5.4`: the
+  `1.5.2` entry was replaced by `1.5.4` (`rns_tree`
+  `51f0e922420b47f482df9184b48ade41ac8d6ce3`) and the oldest `1.3.5` entry was
+  retired, so the accepted runtime tree is now continuously exercised. The
+  earlier "not rerun" acceptance rows are preserved as recorded.

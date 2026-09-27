@@ -70,12 +70,12 @@ matrices, Docker, cross-builds, and physical hardware were not rerun at
 acceptance. Upstream editorial and legal opinions are not independently
 verified or adopted as native findings.
 
-Follow-up (`2026-09-27`): the GitHub-backed CI interop matrix was updated to
-pin `1.5.4` at this accepted commit (replacing the previous `1.5.2` entry), and
-the live Python/Rust interop suites (`rns-net`'s `python_interop` and
-`rns-cli`'s `utility_interop`) were run against `1.5.4` and passed. The
-acceptance rows above remain as recorded at acceptance time; see
-[UPSTREAM.md](../../UPSTREAM.md) and the
+Follow-up (`2026-09-27`): the GitHub-backed CI interop matrix now targets
+Reticulum `1.4.2` and `1.5.4`, with `1.5.4` pinned at this accepted commit; the
+older `1.5.2` and `1.3.5` entries were retired. The live Python/Rust interop
+suites (`rns-net`'s `python_interop` and `rns-cli`'s `utility_interop`) were run
+against `1.5.4` and passed. The acceptance rows above remain as recorded at
+acceptance time; see [UPSTREAM.md](../../UPSTREAM.md) and the
 [audit](reticulum-1.5.4-rgit-6-audit.md) for the follow-up evidence.
 
 ## Promotion Result
