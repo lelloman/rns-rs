@@ -2021,6 +2021,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
                 let writer = start_client_with_ifac(cfg, ctx.tx, ifac_size, ctx.underlay_mark)?;
                 Ok(StartResult::Simple {
+                    control: None,
                     id,
                     info,
                     writer,

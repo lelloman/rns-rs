@@ -322,6 +322,7 @@ impl InterfaceFactory for PipeFactory {
         let writer = start(pipe_config, ctx.tx)?;
 
         Ok(StartResult::Simple {
+            control: None,
             id,
             info,
             writer,

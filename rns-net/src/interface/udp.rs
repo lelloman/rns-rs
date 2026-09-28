@@ -273,6 +273,7 @@ impl InterfaceFactory for UdpFactory {
             .ok_or_else(|| io::Error::other("UDPInterface did not provide a writer"))?;
 
         Ok(StartResult::Simple {
+            control: None,
             id,
             info,
             writer,

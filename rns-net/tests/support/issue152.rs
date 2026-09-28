@@ -61,10 +61,12 @@ impl InterfaceFactory for PausedTcpFactory {
                 info,
                 writer,
                 interface_type_name,
+                control,
             } => Ok(StartResult::Simple {
                 id,
                 info,
                 interface_type_name,
+                control,
                 writer: Box::new(PausedWriter {
                     inner: writer,
                     armed: self.armed.clone(),

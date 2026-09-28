@@ -950,6 +950,7 @@ impl InterfaceFactory for LocalClientFactory {
         let writer = start_client(client_config, ctx.tx)?;
 
         Ok(StartResult::Simple {
+            control: None,
             id,
             info,
             writer,

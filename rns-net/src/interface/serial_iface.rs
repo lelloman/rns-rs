@@ -4,6 +4,7 @@
 //! reads with HDLC framing, reconnects on failure.
 
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::thread;
 use std::time::Duration;
 
@@ -11,7 +12,9 @@ use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::Writer;
+use crate::interface::{
+    poll_readable, wait_while_active, ListenerControl, UnavailableWriter, Writer,
+};
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
 /// Configuration for a Serial interface.
@@ -54,6 +57,13 @@ impl Writer for SerialWriter {
 /// Start the serial interface. Opens the port, spawns reader thread.
 /// Returns the writer for the driver.
 pub fn start(config: SerialIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+    start_with_control(config, tx).map(|(writer, _)| writer)
+}
+
+fn start_with_control(
+    config: SerialIfaceConfig,
+    tx: EventSender,
+) -> io::Result<(Box<dyn Writer>, ListenerControl)> {
     let serial_config = SerialConfig {
         path: config.port.clone(),
         baud: config.speed,
@@ -62,7 +72,28 @@ pub fn start(config: SerialIfaceConfig, tx: EventSender) -> io::Result<Box<dyn W
         stop_bits: config.stop_bits,
     };
 
-    let port = SerialPort::open(&serial_config)?;
+    let control = ListenerControl::new();
+    let port = match SerialPort::open(&serial_config) {
+        Ok(port) => port,
+        Err(error) => {
+            log::warn!(
+                "[{}] could not open serial port {}: {}; retrying",
+                config.name,
+                config.port,
+                error
+            );
+            let retry_control = control.clone();
+            thread::Builder::new()
+                .name(format!("serial-reconnect-{}", config.interface_id.0))
+                .spawn(move || {
+                    if let Some(reader) = reconnect(&config, &tx, &retry_control) {
+                        let id = config.interface_id;
+                        reader_loop(reader, id, config, tx, retry_control);
+                    }
+                })?;
+            return Ok((Box::new(UnavailableWriter), control));
+        }
+    };
     let reader_file = port.reader()?;
     let writer_file = port.writer()?;
 
@@ -75,13 +106,14 @@ pub fn start(config: SerialIfaceConfig, tx: EventSender) -> io::Result<Box<dyn W
     thread::sleep(Duration::from_millis(500));
 
     // Spawn reader thread
+    let reader_control = control.clone();
     thread::Builder::new()
         .name(format!("serial-reader-{}", id.0))
         .spawn(move || {
-            reader_loop(reader_file, id, config, tx);
+            reader_loop(reader_file, id, config, tx, reader_control);
         })?;
 
-    Ok(Box::new(SerialWriter { file: writer_file }))
+    Ok((Box::new(SerialWriter { file: writer_file }), control))
 }
 
 /// Reader thread: reads from serial, HDLC-decodes, sends frames to driver.
@@ -90,17 +122,43 @@ fn reader_loop(
     id: InterfaceId,
     config: SerialIfaceConfig,
     tx: EventSender,
+    control: ListenerControl,
 ) {
     let mut decoder = hdlc::Decoder::new();
     let mut buf = [0u8; 4096];
 
     loop {
+        if control.should_stop() {
+            return;
+        }
+        match poll_readable(reader.as_raw_fd(), Duration::from_millis(200)) {
+            Ok(false) => continue,
+            Ok(true) => {}
+            Err(e) => {
+                if control.should_stop() {
+                    return;
+                }
+                log::warn!("[{}] serial poll error: {}", config.name, e);
+                let _ = tx.send(Event::InterfaceDown(id));
+                match reconnect(&config, &tx, &control) {
+                    Some(new_reader) => {
+                        reader = new_reader;
+                        decoder = hdlc::Decoder::new();
+                        continue;
+                    }
+                    None => return,
+                }
+            }
+        }
         match reader.read(&mut buf) {
             Ok(0) => {
+                if control.should_stop() {
+                    return;
+                }
                 // EOF — port closed
                 log::warn!("[{}] serial port closed", config.name);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx) {
+                match reconnect(&config, &tx, &control) {
                     Some(new_reader) => {
                         reader = new_reader;
                         decoder = hdlc::Decoder::new();
@@ -125,9 +183,12 @@ fn reader_loop(
                 }
             }
             Err(e) => {
+                if control.should_stop() {
+                    return;
+                }
                 log::warn!("[{}] serial read error: {}", config.name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx) {
+                match reconnect(&config, &tx, &control) {
                     Some(new_reader) => {
                         reader = new_reader;
                         decoder = hdlc::Decoder::new();
@@ -141,9 +202,15 @@ fn reader_loop(
 }
 
 /// Attempt to reconnect the serial port. Returns new reader file on success.
-fn reconnect(config: &SerialIfaceConfig, tx: &EventSender) -> Option<std::fs::File> {
+fn reconnect(
+    config: &SerialIfaceConfig,
+    tx: &EventSender,
+    control: &ListenerControl,
+) -> Option<std::fs::File> {
     loop {
-        thread::sleep(Duration::from_secs(5));
+        if !wait_while_active(control, Duration::from_secs(5)) {
+            return None;
+        }
         log::info!(
             "[{}] attempting to reconnect serial port {}...",
             config.name,
@@ -161,6 +228,9 @@ fn reconnect(config: &SerialIfaceConfig, tx: &EventSender) -> Option<std::fs::Fi
         match SerialPort::open(&serial_config) {
             Ok(port) => match (port.reader(), port.writer()) {
                 (Ok(reader), Ok(writer_file)) => {
+                    if control.should_stop() {
+                        return None;
+                    }
                     log::info!("[{}] serial port reconnected", config.name);
                     let new_writer: Box<dyn Writer> = Box::new(SerialWriter { file: writer_file });
                     let _ = tx.send(Event::InterfaceUp(
@@ -168,7 +238,9 @@ fn reconnect(config: &SerialIfaceConfig, tx: &EventSender) -> Option<std::fs::Fi
                         Some(new_writer),
                         None,
                     ));
-                    thread::sleep(Duration::from_millis(500));
+                    if !wait_while_active(control, Duration::from_millis(500)) {
+                        return None;
+                    }
                     return Some(reader);
                 }
                 _ => {
@@ -293,9 +365,10 @@ impl InterfaceFactory for SerialFactory {
             started: crate::time::now(),
         };
 
-        let writer = start(serial_config, ctx.tx)?;
+        let (writer, control) = start_with_control(serial_config, ctx.tx)?;
 
         Ok(StartResult::Simple {
+            control: Some(control),
             id,
             info,
             writer,
@@ -468,5 +541,59 @@ mod tests {
         assert!(matches!(event, Event::InterfaceDown(InterfaceId(42))));
 
         let _ = reader_thread.join();
+    }
+
+    #[test]
+    fn detach_stops_idle_serial_reader_without_reconnect() {
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let (tx, rx) = crate::event::channel();
+        let control = ListenerControl::new();
+        let reader_control = control.clone();
+        let config = SerialIfaceConfig {
+            name: "detach-test".into(),
+            interface_id: InterfaceId(71),
+            ..Default::default()
+        };
+
+        let reader =
+            thread::spawn(move || reader_loop(slave, InterfaceId(71), config, tx, reader_control));
+        thread::sleep(Duration::from_millis(50));
+        control.request_stop();
+        reader.join().unwrap();
+        drop(master);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn missing_serial_port_recovers_after_it_appears() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let port_path = tempdir.path().join("serial-port");
+        let (tx, rx) = crate::event::channel();
+        let config = SerialIfaceConfig {
+            name: "late-port".into(),
+            port: port_path.display().to_string(),
+            interface_id: InterfaceId(73),
+            ..Default::default()
+        };
+
+        let (_writer, control) = start_with_control(config, tx).unwrap();
+        assert!(rx.try_recv().is_err());
+
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let slave_path = std::fs::read_link(format!("/proc/self/fd/{slave_fd}")).unwrap();
+        std::os::unix::fs::symlink(slave_path, &port_path).unwrap();
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+
+        let event = rx.recv_timeout(Duration::from_secs(8)).unwrap();
+        assert!(matches!(
+            event,
+            Event::InterfaceUp(InterfaceId(73), Some(_), None)
+        ));
+        control.request_stop();
+        drop(slave);
+        drop(master);
     }
 }

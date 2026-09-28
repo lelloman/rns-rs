@@ -750,6 +750,7 @@ impl InterfaceFactory for WeaveFactory {
             ingress_control: ctx.ingress_control,
         };
         Ok(StartResult::Simple {
+            control: None,
             id: config.interface_id,
             info,
             writer: Box::new(ParentWriter),

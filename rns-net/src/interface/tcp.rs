@@ -458,6 +458,7 @@ impl InterfaceFactory for TcpClientFactory {
         let writer = start_with_ifac(tcp_config, ctx.tx, ifac_size, ctx.underlay_mark)?;
 
         Ok(StartResult::Simple {
+            control: None,
             id,
             info,
             writer,

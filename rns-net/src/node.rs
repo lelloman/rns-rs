@@ -1721,7 +1721,11 @@ impl RnsNode {
                     info,
                     writer,
                     interface_type_name,
+                    control,
                 } => {
+                    if let Some(control) = control {
+                        driver.register_listener_control(control);
+                    }
                     register_started_interface(StartedInterface {
                         driver: &mut driver,
                         tx: &tx,
