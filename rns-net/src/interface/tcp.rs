@@ -13,7 +13,9 @@ use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::{lock_or_recover, Writer};
+use crate::interface::{
+    lock_or_recover, poll_readable, wait_while_active, ListenerControl, Writer,
+};
 
 /// Upstream `TCPInterface.HW_MTU`.
 const HW_MTU: usize = 262_144;
@@ -222,6 +224,15 @@ fn start_with_ifac(
     ifac_size: usize,
     underlay_mark: Option<u32>,
 ) -> io::Result<Box<dyn Writer>> {
+    start_with_ifac_control(config, tx, ifac_size, underlay_mark).map(|(writer, _)| writer)
+}
+
+fn start_with_ifac_control(
+    config: TcpClientConfig,
+    tx: EventSender,
+    ifac_size: usize,
+    underlay_mark: Option<u32>,
+) -> io::Result<(Box<dyn Writer>, ListenerControl)> {
     let stream = try_connect(&config, underlay_mark)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
@@ -233,6 +244,8 @@ fn start_with_ifac(
     // Spawn reader thread
     let reader_config = config;
     let reader_tx = tx;
+    let control = ListenerControl::new();
+    let reader_control = control.clone();
     thread::Builder::new()
         .name(format!("tcp-reader-{}", id.0))
         .spawn(move || {
@@ -242,12 +255,16 @@ fn start_with_ifac(
                 reader_tx,
                 ifac_size,
                 underlay_mark,
+                reader_control,
             );
         })?;
 
-    Ok(Box::new(TcpWriter {
-        stream: writer_stream,
-    }))
+    Ok((
+        Box::new(TcpWriter {
+            stream: writer_stream,
+        }),
+        control,
+    ))
 }
 
 /// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
@@ -258,18 +275,44 @@ fn reader_loop(
     tx: EventSender,
     ifac_size: usize,
     underlay_mark: Option<u32>,
+    control: ListenerControl,
 ) {
     let id = config.interface_id;
     let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
+        if control.should_stop() {
+            return;
+        }
+        match poll_readable(stream.as_raw_fd(), Duration::from_millis(200)) {
+            Ok(false) => continue,
+            Ok(true) => {}
+            Err(error) => {
+                if control.should_stop() {
+                    return;
+                }
+                log::warn!("[{}] TCP poll error: {}", config.name, error);
+                let _ = tx.send(Event::InterfaceDown(id));
+                match reconnect(&config, &tx, underlay_mark, &control) {
+                    Some(new_stream) => {
+                        stream = new_stream;
+                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
+                        continue;
+                    }
+                    None => return,
+                }
+            }
+        }
         match stream.read(&mut buf) {
             Ok(0) => {
+                if control.should_stop() {
+                    return;
+                }
                 // Connection closed by peer
                 log::warn!("[{}] connection closed", config.name);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx, underlay_mark) {
+                match reconnect(&config, &tx, underlay_mark, &control) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -306,9 +349,12 @@ fn reader_loop(
                 }
             }
             Err(e) => {
+                if control.should_stop() {
+                    return;
+                }
                 log::warn!("[{}] read error: {}", config.name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx, underlay_mark) {
+                match reconnect(&config, &tx, underlay_mark, &control) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -330,11 +376,14 @@ fn reconnect(
     config: &TcpClientConfig,
     tx: &EventSender,
     underlay_mark: Option<u32>,
+    control: &ListenerControl,
 ) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
         let runtime = lock_or_recover(&config.runtime, "tcp client runtime").clone();
-        thread::sleep(runtime.reconnect_wait);
+        if !wait_while_active(control, runtime.reconnect_wait) {
+            return None;
+        }
         attempts += 1;
 
         if let Some(max) = runtime.max_reconnect_tries {
@@ -348,6 +397,9 @@ fn reconnect(
 
         match try_connect(config, underlay_mark) {
             Ok(new_stream) => {
+                if control.should_stop() {
+                    return None;
+                }
                 // Clone the stream: one for the reader, one for the writer
                 let writer_stream = match new_stream.try_clone() {
                     Ok(s) => s,
@@ -455,10 +507,11 @@ impl InterfaceFactory for TcpClientFactory {
         };
 
         let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
-        let writer = start_with_ifac(tcp_config, ctx.tx, ifac_size, ctx.underlay_mark)?;
+        let (writer, control) =
+            start_with_ifac_control(tcp_config, ctx.tx, ifac_size, ctx.underlay_mark)?;
 
         Ok(StartResult::Simple {
-            control: None,
+            control: Some(control),
             id,
             info,
             writer,
@@ -480,6 +533,29 @@ pub(crate) fn tcp_client_runtime_handle_from_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detach_stops_idle_tcp_reader_without_reconnect() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (tx, rx) = crate::event::channel();
+        let control = ListenerControl::new();
+        let reader_control = control.clone();
+        let config = TcpClientConfig {
+            name: "detach-test".into(),
+            interface_id: InterfaceId(75),
+            ..Default::default()
+        };
+
+        let reader =
+            thread::spawn(move || reader_loop(server, config, tx, 0, None, reader_control));
+        thread::sleep(Duration::from_millis(50));
+        control.request_stop();
+        reader.join().unwrap();
+        drop(client);
+        assert!(rx.try_recv().is_err());
+    }
     use std::net::TcpListener;
     use std::time::Duration;
 
