@@ -47,14 +47,14 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Non-runtime | `85b85b7`: records README reflow and project-specific editorial corrections; native badge remains gated. |
 | 13 | `1cf176f6e5785f62a87ed0ebe7e5d12dcf3f4bc6` | Added work doc counts to filter links | `RNS/Utilities/rngit/pages.py` | Integrated | `182a47e`: readable scope counts on work-page tabs, with document-level read denial applied to list, detail, and download. |
 | 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Integrated | `d1a444e`: Markdown blob pages link to scoped Micron conversion; downloads include `.mu` name metadata. |
-| 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Non-runtime | This audit-only mapping records the upstream 1.5.5 release description without copying its claims as acceptance evidence. |
+| 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Non-runtime | `9413f8a`: audit-only mapping records the upstream 1.5.5 release description without copying its claims as acceptance evidence. |
 | 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Pending review | Native discovery parse, persistence, RPC, and CLI surfaces identified; port pending. |
 
-The first fourteen canonical commits have one nonempty local mapping with exactly one
+The first fifteen canonical commits have one nonempty local mapping with exactly one
 full `Upstream-Commit` trailer each. The local trailer order matches upstream
 ancestry. The first six short local hashes above were corrected after the
 branch rewrite by checking the committed trailers, not by changing the mapped
-code or test evidence. Commits 15–16 remain to be mapped.
+code or test evidence. Commit 16 remains to be mapped.
 
 ## Integration Plan
 
