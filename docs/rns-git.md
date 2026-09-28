@@ -165,6 +165,13 @@ repository config. `sync` requires read and write access and fetches
 `+refs/*:refs/*` from that recorded upstream source; mirror syncs also update
 `repository.rngit.upstream.sync`.
 
+To select a different primary branch for a newly created repository, set the
+bare repository's `HEAD` on the server before the first push:
+
+```bash
+git -C /path/to/bare/repo.git symbolic-ref HEAD refs/heads/main
+```
+
 `rngit perms` gets or replaces group and repository permission sidecar files over
 `/mgmt/perms`. A URL ending at `<group>` targets `<group>.allowed`; a URL ending
 at `<group>/<repo>` targets `<group>/<repo>.allowed`. Reading or replacing these
