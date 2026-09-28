@@ -134,6 +134,11 @@ jobs:
           - version: 1.5.4
             commit: 3f95b472820ddfb27f736143fb0b4d0d3aa610f1
             rns_tree: 51f0e922420b47f482df9184b48ade41ac8d6ce3
+          # The GitHub mirror currently stops before the canonical 1.5.5 tip.
+          # Advance this pin to cce96d38 once that commit is mirrored.
+          - version: 1.5.5
+            commit: d5962d14eb4fbf4a34a0b83e6942534a4965dd17
+            rns_tree: 52a588c83276ff9271eba238ce854f661ebb0aa1
 
     steps:
       - name: Checkout rns-rs
