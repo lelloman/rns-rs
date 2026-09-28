@@ -563,6 +563,8 @@ fn make_discovered_backbone(
     let discovery_hash = crate::discovery::compute_discovery_hash(&transport_id, name);
     crate::discovery::DiscoveredInterface {
         interface_type: "BackboneInterface".to_string(),
+        impl_name: None,
+        impl_version: None,
         transport: true,
         name: name.to_string(),
         discovered: last_heard,

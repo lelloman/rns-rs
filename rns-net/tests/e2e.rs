@@ -4205,6 +4205,8 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
     let now = rns_net::time::now();
     let cached = rns_net::discovery::DiscoveredInterface {
         interface_type: "TCPServerInterface".into(),
+        impl_name: None,
+        impl_version: None,
         transport: true,
         name: "CachedTarget".into(),
         discovered: now,
@@ -4336,6 +4338,8 @@ fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
     let now = rns_net::time::now();
     let cached = rns_net::discovery::DiscoveredInterface {
         interface_type: "TCPServerInterface".into(),
+        impl_name: None,
+        impl_version: None,
         transport: true,
         name: "CachedPriorityTarget".into(),
         discovered: now,

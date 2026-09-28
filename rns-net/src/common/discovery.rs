@@ -151,6 +151,9 @@ impl DiscoveredStatus {
 pub struct DiscoveredInterface {
     /// Interface type (e.g., "BackboneInterface", "TCPServerInterface", "RNodeInterface")
     pub interface_type: String,
+    /// Implementation and version advertised by the announcing stack.
+    pub impl_name: Option<String>,
+    pub impl_version: Option<String>,
     /// Whether the announcing node has transport enabled
     pub transport: bool,
     /// Human-readable name of the interface
@@ -447,6 +450,9 @@ pub fn parse_interface_announce_with_cache(
         Value::Bool(value) => value,
         _ => return None,
     };
+    let impl_name = get_u8_val(TRANSPORT_IMPL).and_then(|value| value.as_str().map(str::to_owned));
+    let impl_version =
+        get_u8_val(TRANSPORT_VERS).and_then(|value| value.as_str().map(str::to_owned));
     let raw_name = match get_u8_val(NAME) {
         Some(Value::Str(value)) => value,
         Some(_) | None => String::new(),
@@ -525,6 +531,8 @@ pub fn parse_interface_announce_with_cache(
 
     Some(DiscoveredInterface {
         interface_type,
+        impl_name,
+        impl_version,
         transport,
         name,
         discovered: now,
@@ -1136,6 +1144,33 @@ mod tests {
 
         assert_eq!(parsed.name, "Alpha Beta");
         assert!(parsed.config_entry.unwrap().starts_with("[[Alpha Beta]]"));
+    }
+
+    #[test]
+    fn parse_retains_optional_stack_implementation_and_version() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.push((
+            Value::UInt(TRANSPORT_IMPL as u64),
+            Value::Str("Reticulum".into()),
+        ));
+        entries.push((
+            Value::UInt(TRANSPORT_VERS as u64),
+            Value::Str("1.5.5".into()),
+        ));
+        let parsed =
+            parse_interface_announce(&pack_discovery_entries(entries), &[0x11; 16], 1, 0).unwrap();
+        assert_eq!(parsed.impl_name.as_deref(), Some("Reticulum"));
+        assert_eq!(parsed.impl_version.as_deref(), Some("1.5.5"));
+
+        let legacy = parse_interface_announce(
+            &build_discovery_app_data("BackboneInterface", Some("example.com")),
+            &[0x11; 16],
+            1,
+            0,
+        )
+        .unwrap();
+        assert_eq!(legacy.impl_name, None);
+        assert_eq!(legacy.impl_version, None);
     }
 
     #[test]

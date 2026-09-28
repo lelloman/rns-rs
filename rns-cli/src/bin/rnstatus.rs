@@ -1565,6 +1565,7 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
 
             println!("Name         : {}", name);
             println!("Type         : {}", if_type);
+            println!("Stack        : {}", discovered_stack(iface));
             println!("Status       : {}", status);
             println!(
                 "Transport    : {}",
@@ -1639,10 +1640,10 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
     } else {
         // Table view
         println!(
-            "{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
-            "Name", "Type", "Status", "Last Heard", "Value", "Location"
+            "{:<25} {:<10} {:<12} {:<12} {:<7} {:<16} {:<15}",
+            "Name", "Type", "Status", "Last Heard", "Value", "Running", "Location"
         );
-        println!("{}", "-".repeat(89));
+        println!("{}", "-".repeat(110));
 
         let now = rns_net::time::now();
 
@@ -1699,6 +1700,12 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
                 .or_else(|| iface.get("stamp_value"))
                 .and_then(|v| v.as_int())
                 .unwrap_or(0);
+            let stack = discovered_stack(iface);
+            let stack = if stack.chars().count() > 16 {
+                format!("{}…", stack.chars().take(15).collect::<String>())
+            } else {
+                stack
+            };
 
             let lat = iface.get("latitude").and_then(|v| v.as_float());
             let lon = iface.get("longitude").and_then(|v| v.as_float());
@@ -1708,14 +1715,26 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
             };
 
             println!(
-                "{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
-                name, if_type, status_display, last_heard_display, value, location
+                "{:<25} {:<10} {:<12} {:<12} {:<7} {:<16} {:<15}",
+                name, if_type, status_display, last_heard_display, value, stack, location
             );
         }
     }
 }
 
 const DISCOVERY_DETAIL_SEPARATOR_WIDTH: usize = 47;
+
+fn discovered_stack(iface: &PickleValue) -> String {
+    match (
+        iface.get("impl_name").and_then(PickleValue::as_str),
+        iface.get("version").and_then(PickleValue::as_str),
+    ) {
+        (Some(name), Some(version)) if !name.is_empty() && !version.is_empty() => {
+            format!("{name} {version}")
+        }
+        _ => "Unknown".into(),
+    }
+}
 
 fn discovered_operator_lxmf_address(iface: &PickleValue) -> Option<&str> {
     iface
@@ -1960,6 +1979,22 @@ mod tests {
             None
         );
         assert_eq!("=".repeat(DISCOVERY_DETAIL_SEPARATOR_WIDTH).len(), 47);
+    }
+
+    #[test]
+    fn discovered_stack_uses_both_fields_or_unknown_fallback() {
+        let complete = PickleValue::Dict(vec![
+            (
+                PickleValue::String("impl_name".into()),
+                PickleValue::String("Reticulum".into()),
+            ),
+            (
+                PickleValue::String("version".into()),
+                PickleValue::String("1.5.5".into()),
+            ),
+        ]);
+        assert_eq!(discovered_stack(&complete), "Reticulum 1.5.5");
+        assert_eq!(discovered_stack(&PickleValue::Dict(Vec::new())), "Unknown");
     }
 
     #[test]

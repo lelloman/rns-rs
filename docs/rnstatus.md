@@ -45,6 +45,10 @@ For example, after editing an interface section named `Backbone`, run
 `rnstatus --reload Backbone`. Use `rnstatus --attach Backbone` to start it when
 it is not running, or `rnstatus --detach Backbone` to stop it.
 
+Discovered-interface views (`-d` and `-D`) show the announcing stack's
+implementation and version as `Running` in the table or `Stack` in the detail
+view. Older announcements without both fields show `Unknown`.
+
 An optional `FILTER` limits output to interface names containing the supplied
 text. Queue statistics report total, data, announce, path-request, and
 ingress-limited queue occupancy, and append cumulative drop counts when they
