@@ -147,6 +147,16 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Final disposition:** Non-runtime.
 
+### 10. `3b742914` — Fixed outdated meta-docs
+
+**Upstream change:** Replaces the upstream contributor guidance with current project communication and contribution policies, adds a security-reporting contact, removes the public roadmap, adjusts a support appeal, and edits a project essay. The full diff changes no `RNS` source, protocol, release version, or wire-facing documentation.
+
+**Rust applicability:** These are policies and editorial choices of the upstream Reticulum project. This repository has its own `CONTRIBUTING.md`; copying the upstream contact, CLA, or contribution restrictions here would misstate this project's governance. The removed roadmap included a live interface control aspiration, which rows 2–7 already address as implemented behavior rather than a policy promise.
+
+**Local handling and evidence:** This audit records the policy boundary and the full changed-path review. No native runtime change or test is applicable. The current 1.5.5 `RNS` tree remains unchanged.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [ ] Every upstream commit has a final disposition.
