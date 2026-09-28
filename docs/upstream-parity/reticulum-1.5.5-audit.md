@@ -48,13 +48,13 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 13 | `1cf176f6e5785f62a87ed0ebe7e5d12dcf3f4bc6` | Added work doc counts to filter links | `RNS/Utilities/rngit/pages.py` | Integrated | `182a47e`: readable scope counts on work-page tabs, with document-level read denial applied to list, detail, and download. |
 | 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Integrated | `d1a444e`: Markdown blob pages link to scoped Micron conversion; downloads include `.mu` name metadata. |
 | 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Non-runtime | `9413f8a`: audit-only mapping records the upstream 1.5.5 release description without copying its claims as acceptance evidence. |
-| 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Pending review | Native discovery parse, persistence, RPC, and CLI surfaces identified; port pending. |
+| 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Integrated | `0ff9627`: discovery stack fields survive parsing, persistence and RPC; `rnstatus` shows Stack/Running with a legacy fallback. |
 
-The first fifteen canonical commits have one nonempty local mapping with exactly one
+All sixteen canonical commits have one nonempty local mapping with exactly one
 full `Upstream-Commit` trailer each. The local trailer order matches upstream
 ancestry. The first six short local hashes above were corrected after the
 branch rewrite by checking the committed trailers, not by changing the mapped
-code or test evidence. Commit 16 remains to be mapped.
+code or test evidence.
 
 ## Integration Plan
 
@@ -218,6 +218,16 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 **Local handling and evidence:** This audit-only mapping records the full changed-path review and cross-checks the enumerated behavior against rows 4, 7, 13, and 14. The upstream release description is not counted as proof of compatibility; each behavior retains its own test evidence. No independent runtime test applies to this commit.
 
 **Final disposition:** Non-runtime.
+
+### 16. `d3153bd7` — Added stack info to rnstatus discovered interfaces output
+
+**Upstream change:** Reads the optional discovery `TRANSPORT_IMPL` and `TRANSPORT_VERS` fields, includes them in discovery logs and status data, and shows a `Stack` line in detailed `rnstatus` output or a `Running` column in its table. Missing fields display as unknown.
+
+**Rust applicability:** Native announcements already transmitted both fields, but the receiver discarded them. Persistence, RPC, and `rnstatus` therefore could not display the announcing implementation or version.
+
+**Local handling and evidence:** `0ff9627` retains optional fields during announcement parsing, persists them compatibly with older records, includes them in the shared-instance RPC, and adds the detailed and table displays with an `Unknown` fallback. Focused tests cover wire parsing and absent fields, persistence roundtrip, RPC serialization, and CLI formatting. The complete `rns-net` and `rns-cli` suites passed (1,251 tests across 24 suites); formatting and warning-free changed-crate lint passed. `docs/rnstatus.md` describes the output.
+
+**Final disposition:** Integrated.
 
 ## Promotion Gates
 
