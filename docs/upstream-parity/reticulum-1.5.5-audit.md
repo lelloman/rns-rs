@@ -157,6 +157,16 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Final disposition:** Non-runtime.
 
+### 11. `3ad70c63` — Fixed outdated meta-docs
+
+**Upstream change:** Escapes spaces in two links from upstream `Contributing.md` to `This Is Not a Teahouse.md`. The full diff changes only the Markdown destinations; it does not alter the linked document, executable code, or network behavior.
+
+**Rust applicability:** This repository does not carry those upstream policy pages. Its own contribution guide has separate links and governance.
+
+**Local handling and evidence:** This audit records the exact link correction and the absence of a native target. The source-only change needs no runtime test or copied upstream policy.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [ ] Every upstream commit has a final disposition.
