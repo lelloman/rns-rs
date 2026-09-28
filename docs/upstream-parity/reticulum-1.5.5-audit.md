@@ -167,6 +167,16 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Final disposition:** Non-runtime.
 
+### 12. `b8993899` — Fixed outdated meta-docs
+
+**Upstream change:** Reflows much of the upstream README, revises its custom-interface contribution wording, notes that RNode can connect over USB, WiFi, or Bluetooth, and replaces an outdated statement about external security audits with a more general security caution. `README.mu` receives the same caution. The complete diff contains no executable lines; the `RNS` tree is identical to the preceding version commit.
+
+**Rust applicability:** The native README describes a different implementation and release process. It does not repeat the changed RNode connectivity or upstream audit claims, and its contribution policy is independent. Its 1.5.4 badge and reference remain correct until the 1.5.5 promotion gates pass.
+
+**Local handling and evidence:** This audit records the substantive editorial changes and the independent-documentation boundary. No native runtime test is applicable; the README badge and accepted-reference text will be updated by the final promotion commit only after the parity record is complete.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [ ] Every upstream commit has a final disposition.
