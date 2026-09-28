@@ -1741,7 +1741,13 @@ impl RnsNode {
                         driver.register_listener_control(control);
                     }
                 }
-                crate::interface::StartResult::Multi(subs) => {
+                crate::interface::StartResult::Multi {
+                    subinterfaces: subs,
+                    control,
+                } => {
+                    if let Some(control) = control {
+                        driver.register_listener_control(control);
+                    }
                     let ifac_cfg = &iface_config.ifac;
                     let mut first = true;
                     for sub in subs {

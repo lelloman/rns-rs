@@ -9,6 +9,8 @@
 mod transport;
 
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -285,6 +287,8 @@ impl Writer for RNodeSubWriter {
     }
 }
 
+type RNodeWriters = Vec<(InterfaceId, Box<dyn Writer>)>;
+
 /// Start the RNode interface.
 ///
 /// Opens serial port, spawns reader thread which performs detect+configure,
@@ -295,6 +299,13 @@ pub fn start(
     config: RNodeConfig,
     tx: EventSender,
 ) -> io::Result<Vec<(InterfaceId, Box<dyn Writer>)>> {
+    start_with_control(config, tx).map(|(writers, _)| writers)
+}
+
+fn start_with_control(
+    config: RNodeConfig,
+    tx: EventSender,
+) -> io::Result<(RNodeWriters, super::ListenerControl)> {
     // Validate all subinterface configs upfront
     for sub in &config.subinterfaces {
         if let Some(err) = validate_sub_config(sub) {
@@ -360,6 +371,8 @@ pub fn start(
     }
     let reader_config = config.clone();
     let reader_flow_states = flow_states;
+    let running = Arc::new(AtomicBool::new(true));
+    let reader_running = Arc::clone(&running);
     thread::Builder::new()
         .name(format!("rnode-reader-{}", config.base_interface_id.0))
         .spawn(move || {
@@ -369,6 +382,7 @@ pub fn start(
                 reader_config,
                 tx,
                 reader_flow_states,
+                reader_running,
             );
         })?;
 
@@ -376,12 +390,15 @@ pub fn start(
     // bridge idle timeout (ESP32 RNode reverts to standalone after 30s idle).
     let keepalive_writer = shared_writer.clone();
     let keepalive_name = config.name.clone();
+    let keepalive_running = Arc::clone(&running);
     thread::Builder::new()
         .name(format!("rnode-keepalive-{}", config.base_interface_id.0))
         .spawn(move || {
             let detect = rnode_kiss::detect_request();
-            loop {
-                thread::sleep(Duration::from_secs(15));
+            while keepalive_running.load(Ordering::Relaxed) {
+                if !wait_while_running(&keepalive_running, Duration::from_secs(15)) {
+                    break;
+                }
                 if let Err(e) =
                     lock_or_recover(&keepalive_writer, "rnode shared writer").write_all(&detect)
                 {
@@ -390,7 +407,19 @@ pub fn start(
             }
         })?;
 
-    Ok(writers)
+    Ok((writers, super::ListenerControl::with_running_flag(running)))
+}
+
+fn wait_while_running(running: &AtomicBool, duration: Duration) -> bool {
+    let deadline = std::time::Instant::now() + duration;
+    while running.load(Ordering::Relaxed) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return true;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+    false
 }
 
 /// Reader loop: detect device, configure radios, then relay data frames.
@@ -400,11 +429,14 @@ fn reader_loop(
     config: RNodeConfig,
     tx: EventSender,
     flow_states: Vec<Arc<Mutex<SubFlowState>>>,
+    running: Arc<AtomicBool>,
 ) {
     const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(200);
     const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
     // Initial delay for hardware init (matches Python: sleep(2.0))
-    thread::sleep(Duration::from_secs(2));
+    if !wait_while_running(&running, Duration::from_secs(2)) {
+        return;
+    }
     let mut connected_once = false;
     // RNode is the PHY-stat-capable interface: retain each modem report until
     // the matching frame is enqueued, attach it to that frame, then clear it
@@ -417,12 +449,21 @@ fn reader_loop(
     }
     signal_interface_up(&tx, &config, &writer, &flow_states, connected_once);
     connected_once = true;
-    loop {
+    while running.load(Ordering::Relaxed) {
         let mut decoder = rnode_kiss::RNodeDecoder::new();
         let mut buf = [0u8; 4096];
         let disconnected = loop {
+            if !running.load(Ordering::Relaxed) {
+                return;
+            }
+            if !reader_ready(&reader, Duration::from_millis(200)) {
+                continue;
+            }
             match reader.read(&mut buf) {
                 Ok(0) => {
+                    if !running.load(Ordering::Relaxed) {
+                        return;
+                    }
                     log::warn!("[{}] serial port closed", config.name);
                     signal_interface_down(&tx, &config);
                     break true;
@@ -480,6 +521,9 @@ fn reader_loop(
                     }
                 }
                 Err(e) => {
+                    if !running.load(Ordering::Relaxed) {
+                        return;
+                    }
                     log::error!("[{}] serial read error: {}", config.name, e);
                     signal_interface_down(&tx, &config);
                     break true;
@@ -489,19 +533,21 @@ fn reader_loop(
 
         clear_pending_rx_metadata(&mut last_rssi, &mut last_snr);
 
-        if !disconnected || config.pre_opened_fd.is_some() {
+        if !running.load(Ordering::Relaxed) || !disconnected || config.pre_opened_fd.is_some() {
             return;
         }
 
         let mut backoff = RECONNECT_INITIAL_DELAY;
-        loop {
+        while running.load(Ordering::Relaxed) {
             match reopen_connection(&config, &writer) {
                 Ok(new_reader) => {
                     reset_flow_states(&flow_states);
                     reader = new_reader;
                     if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
                         log::warn!("[{}] reconnect configure failed: {}", config.name, e);
-                        thread::sleep(backoff);
+                        if !wait_while_running(&running, backoff) {
+                            return;
+                        }
                         backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
                         continue;
                     }
@@ -510,12 +556,24 @@ fn reader_loop(
                 }
                 Err(e) => {
                     log::warn!("[{}] reconnect open failed: {}", config.name, e);
-                    thread::sleep(backoff);
+                    if !wait_while_running(&running, backoff) {
+                        return;
+                    }
                     backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
                 }
             }
         }
     }
+}
+
+fn reader_ready(reader: &Transport, timeout: Duration) -> bool {
+    let mut pfd = libc::pollfd {
+        fd: reader.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    unsafe { libc::poll(&mut pfd, 1, timeout_ms) > 0 }
 }
 
 fn detect_and_configure(
@@ -975,7 +1033,7 @@ impl InterfaceFactory for RNodeFactory {
             .map(lora_airtime_profile)
             .collect();
 
-        let pairs = start(rnode_config.clone(), ctx.tx)?;
+        let (pairs, control) = start_with_control(rnode_config.clone(), ctx.tx)?;
 
         let mut subs = Vec::with_capacity(pairs.len());
         for (index, (sub_id, writer)) in pairs.into_iter().enumerate() {
@@ -1022,7 +1080,10 @@ impl InterfaceFactory for RNodeFactory {
             });
         }
 
-        Ok(StartResult::Multi(subs))
+        Ok(StartResult::Multi {
+            subinterfaces: subs,
+            control: Some(control),
+        })
     }
 }
 
@@ -1794,7 +1855,7 @@ mod tests {
         };
         config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
 
-        let _writers = start(config, tx).unwrap();
+        let (_writers, control) = start_with_control(config, tx).unwrap();
 
         thread::sleep(Duration::from_secs(3));
         mock_respond_detect(&mut master1);
@@ -1831,5 +1892,12 @@ mod tests {
             up,
             Event::InterfaceUp(InterfaceId(41), Some(_), None)
         ));
+
+        control.request_stop();
+        assert!(control.should_stop());
+        // A stopped reader must not report the intentional serial close as a
+        // hardware failure or start another reconnect attempt.
+        drop(master2);
+        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
     }
 }
