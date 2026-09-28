@@ -1313,8 +1313,12 @@ fn render_work_page(
     let scope = var(vars, "scope").unwrap_or("active");
     let list_scope =
         crate::work::WorkListScope::parse(scope).ok_or_else(|| Error::msg("invalid scope"))?;
-    let lists =
-        crate::work::list_documents(&crate::work::work_sidecar_path(&repository), list_scope)?;
+    let work_path = crate::work::work_sidecar_path(&repository);
+    let mut lists = crate::work::list_documents(&work_path, crate::work::WorkListScope::All)?;
+    retain_readable_work_documents(&work_path, &mut lists.active)?;
+    retain_readable_work_documents(&work_path, &mut lists.completed)?;
+    retain_readable_work_documents(&work_path, &mut lists.proposed)?;
+    let total = lists.active.len() + lists.completed.len() + lists.proposed.len();
     let mut out = format!(
         ">>\n{} / {} / {} / work\n\n>Work Documents\n\n",
         m_link("Node", PATH_INDEX, &[]),
@@ -1323,22 +1327,22 @@ fn render_work_page(
     );
     let tabs = [
         m_link_raw(
-            "Active",
+            &format!("Active ({})", lists.active.len()),
             PATH_WORK,
             &[("g", &group), ("r", &repo), ("scope", "active")],
         ),
         m_link_raw(
-            "Completed",
+            &format!("Completed ({})", lists.completed.len()),
             PATH_WORK,
             &[("g", &group), ("r", &repo), ("scope", "completed")],
         ),
         m_link_raw(
-            "Proposed",
+            &format!("Proposed ({})", lists.proposed.len()),
             PATH_WORK,
             &[("g", &group), ("r", &repo), ("scope", "proposed")],
         ),
         m_link_raw(
-            "All",
+            &format!("All ({total})"),
             PATH_WORK,
             &[("g", &group), ("r", &repo), ("scope", "all")],
         ),
@@ -1386,6 +1390,20 @@ fn render_work_page(
     Ok(out)
 }
 
+fn retain_readable_work_documents(
+    work_path: &Path,
+    docs: &mut Vec<crate::work::WorkSummary>,
+) -> Result<()> {
+    let mut readable = Vec::with_capacity(docs.len());
+    for doc in docs.drain(..) {
+        if !crate::work::document_permission_denies(work_path, doc.id, Operation::Read)? {
+            readable.push(doc);
+        }
+    }
+    *docs = readable;
+    Ok(())
+}
+
 fn append_work_section(
     out: &mut String,
     group: &str,
@@ -1398,7 +1416,7 @@ fn append_work_section(
         crate::work::WorkScope::Completed => "Completed Work Documents",
         crate::work::WorkScope::Proposed => "Proposed Work Documents",
     };
-    out.push_str(&format!(">{title} ({})\n\n", docs.len()));
+    out.push_str(&format!(">{title}\n\n"));
     if docs.is_empty() {
         out.push_str("No work documents found.\n\n");
         return;
@@ -1445,6 +1463,11 @@ fn render_work_doc_page(
             ">Work Document Not Found\n\nThe requested work document was not found.\n".into(),
         );
     };
+    if crate::work::document_permission_denies(&work_path, id, Operation::Read)? {
+        return Ok(
+            ">Work Document Not Found\n\nThe requested work document was not found.\n".into(),
+        );
+    }
     let mut out = format!(
         ">>\n{} / {} / {} / {} / #{}\n\n>{}\n\n",
         m_link("Node", PATH_INDEX, &[]),
@@ -1598,6 +1621,12 @@ pub fn download_work_document(
             b"work document not found",
         )));
     };
+    if crate::work::document_permission_denies(&work_path, id, Operation::Read)? {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"work document not found",
+        )));
+    }
     crate::stats::record_download(config, &format!("{group}/{repo}"), remote);
     Ok(RequestResponse::Resource {
         data: document.content.into_bytes(),
@@ -4847,7 +4876,11 @@ Unmatched * marker\n\
             None,
         )
         .unwrap();
-        assert!(active.contains(">Active Work Documents (1)"));
+        assert!(active.contains(">Active Work Documents"));
+        assert!(active.contains("[Active (1)`:/page/work.mu"));
+        assert!(active.contains("[Completed (1)`:/page/work.mu"));
+        assert!(active.contains("[Proposed (0)`:/page/work.mu"));
+        assert!(active.contains("[All (2)`:/page/work.mu"));
         assert!(active.contains("#1 Active task"));
         assert!(active.contains("1 updates"));
         assert!(!active.contains("Completed task"));
@@ -4864,7 +4897,8 @@ Unmatched * marker\n\
             None,
         )
         .unwrap();
-        assert!(completed_page.contains(">Completed Work Documents (1)"));
+        assert!(completed_page.contains(">Completed Work Documents"));
+        assert!(completed_page.contains("[Active (1)`:/page/work.mu"));
         assert!(completed_page.contains("Completed task"));
 
         let doc = render_page(
@@ -4927,6 +4961,39 @@ Unmatched * marker\n\
         )
         .unwrap();
         assert_resource_response(completed_download, b"Done");
+
+        crate::work::set_document_permissions(&work_path, created.id, "read = none\n").unwrap();
+        let active_after_deny = render_page(
+            PATH_WORK,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "worked")]),
+            None,
+        )
+        .unwrap();
+        assert!(active_after_deny.contains("[Active (0)`:/page/work.mu"));
+        assert!(active_after_deny.contains("[All (1)`:/page/work.mu"));
+        assert!(!active_after_deny.contains("Active task"));
+        let denied_doc = render_page(
+            PATH_WORK_DOC,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "worked"), ("var_id", "1")]),
+            None,
+        )
+        .unwrap();
+        assert!(denied_doc.contains("Work Document Not Found"));
+        let denied_download = download_work_document(
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "worked"), ("var_id", "1")]),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            denied_download,
+            RequestResponse::Bytes(bytes) if bytes.first() == Some(&protocol::RES_NOT_FOUND)
+        ));
     }
 
     #[test]
