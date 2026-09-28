@@ -947,6 +947,9 @@ impl InterfaceFactory for LocalClientFactory {
             started: crate::time::now(),
         };
 
+        // Build the complete interface metadata before connecting: a local peer
+        // can deliver an event as soon as the socket opens. The driver installs
+        // this StartResult before it consumes queued interface events.
         let writer = start_client(client_config, ctx.tx)?;
 
         Ok(StartResult::Simple {
