@@ -47,7 +47,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Non-runtime | `85b85b7`: records README reflow and project-specific editorial corrections; native badge remains gated. |
 | 13 | `1cf176f6e5785f62a87ed0ebe7e5d12dcf3f4bc6` | Added work doc counts to filter links | `RNS/Utilities/rngit/pages.py` | Integrated | `182a47e`: readable scope counts on work-page tabs, with document-level read denial applied to list, detail, and download. |
 | 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Integrated | `d1a444e`: Markdown blob pages link to scoped Micron conversion; downloads include `.mu` name metadata. |
-| 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Pending review | Upstream 1.5.5 release description reviewed; disposition pending. |
+| 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Non-runtime | This audit-only mapping records the upstream 1.5.5 release description without copying its claims as acceptance evidence. |
 | 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Pending review | Native discovery parse, persistence, RPC, and CLI surfaces identified; port pending. |
 
 The first fourteen canonical commits have one nonempty local mapping with exactly one
@@ -208,6 +208,16 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 **Local handling and evidence:** `d1a444e` shares the existing scoped Markdown renderer with the download path, adds the converted link and `.mu` filename metadata, and keeps the original download available. A focused regression verifies rendered-page controls, converted content and link scope, filename metadata, and raw download bytes. The complete `rns-git` suite passed (235 tests across eight suites), as did formatting and warning-free crate lint. `docs/rns-git.md` describes the new option.
 
 **Final disposition:** Integrated.
+
+### 15. `69c425d9` — Updated changelog
+
+**Upstream change:** Retitles the current changelog entry as RNS 1.5.5, preserves the prior 1.5.4 entry below it, and lists live interface management, Micron-converted `rngit` downloads, work-document counts, I2P discovery snippet correction, and documentation updates. It changes no executable source or wire format.
+
+**Rust applicability:** The changelog is upstream release communication. The applicable runtime changes are reviewed and mapped under their own source commits. Native crate versions and historical fixture provenance do not change because of an upstream prose entry.
+
+**Local handling and evidence:** This audit-only mapping records the full changed-path review and cross-checks the enumerated behavior against rows 4, 7, 13, and 14. The upstream release description is not counted as proof of compatibility; each behavior retains its own test evidence. No independent runtime test applies to this commit.
+
+**Final disposition:** Non-runtime.
 
 ## Promotion Gates
 
