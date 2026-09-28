@@ -41,6 +41,10 @@ so edits take effect without restarting `rnsd`. Local, I2P, and shared-instance
 interfaces cannot be detached. Set `enable_interface_management = no` in
 `[reticulum]` to disallow these commands through the shared-instance RPC port.
 
+For example, after editing an interface section named `Backbone`, run
+`rnstatus --reload Backbone`. Use `rnstatus --attach Backbone` to start it when
+it is not running, or `rnstatus --detach Backbone` to stop it.
+
 An optional `FILTER` limits output to interface names containing the supplied
 text. Queue statistics report total, data, announce, path-request, and
 ingress-limited queue occupancy, and append cumulative drop counts when they
