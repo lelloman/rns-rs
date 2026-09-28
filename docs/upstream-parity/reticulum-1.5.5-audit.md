@@ -244,6 +244,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Non-runtime.
 
+### 18. `71583c5c` — Set interface owner before connect
+
+**Upstream change:** Initializes the Python local client's owner and 1 Gbit/s bitrate before `connect()` can invoke a callback. Previously an immediately connected peer could observe a partially initialized interface. No wire fields or connection sequence changed.
+
+**Rust applicability:** Native `LocalClientFactory::start` constructs the complete `InterfaceInfo`, including bitrate, before calling `start_client`. The client config and event sender are complete values before a socket opens; the driver installs the returned interface metadata before consuming queued connection events. There is no mutable Python-style owner field to fill after connection.
+
+**Local handling and evidence:** The mapping documents this ordering at the connection site. The existing `client_send_receive` regression observes immediate client and server `InterfaceUp` events and frame transfer; `client_reconnects_after_tcp_restart` exercises the same configured client after reconnection. The focused immediate-connect test, complete serial `rns-net` suite (971 unit tests, 56 E2E tests and interop/fixture suites), formatting, and warning-free crate lint passed.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [ ] Every upstream commit has a final disposition.
