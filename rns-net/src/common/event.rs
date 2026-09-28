@@ -596,6 +596,8 @@ pub enum QueryRequest {
     LowestInterfaceBitrate,
     /// Estimate an MTU round trip on the slowest interface plus hop grace.
     MediumPathTimeout,
+    /// Estimate the first-hop timeout for a destination using its outbound bitrate.
+    FirstHopTimeout { dest_hash: [u8; 16] },
     /// Look up the next hop for a destination.
     NextHop { dest_hash: [u8; 16] },
     /// Look up the next hop interface name for a destination.
@@ -722,6 +724,7 @@ pub enum QueryResponse {
     RateTable(Vec<RateTableEntry>),
     LowestInterfaceBitrate(Option<u64>),
     MediumPathTimeout(f64),
+    FirstHopTimeout(f64),
     NextHop(Option<NextHopResponse>),
     NextHopIfName(Option<String>),
     LinkCount(usize),

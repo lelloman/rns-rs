@@ -569,6 +569,19 @@ impl Driver {
             QueryRequest::MediumPathTimeout => {
                 QueryResponse::MediumPathTimeout(self.engine.medium_path_timeout())
             }
+            QueryRequest::FirstHopTimeout { dest_hash } => {
+                let bitrate = self
+                    .engine
+                    .next_hop_interface(&dest_hash)
+                    .and_then(|id| self.interfaces.get(&id))
+                    .and_then(|entry| entry.info.bitrate)
+                    .filter(|bitrate| *bitrate > 0);
+                let timeout = rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP
+                    + bitrate
+                        .map(|bitrate| rns_core::constants::MTU as f64 * 8.0 / bitrate as f64)
+                        .unwrap_or(0.0);
+                QueryResponse::FirstHopTimeout(timeout)
+            }
             QueryRequest::NextHop { dest_hash } => {
                 let resp = self
                     .engine

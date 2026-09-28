@@ -517,6 +517,18 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::Int(0))
                     }
                 }
+                "first_hop_timeout" => {
+                    let hash = extract_dest_hash(request, "destination_hash")?;
+                    let resp =
+                        send_query(event_tx, QueryRequest::FirstHopTimeout { dest_hash: hash })?;
+                    if let QueryResponse::FirstHopTimeout(timeout) = resp {
+                        Ok(PickleValue::Float(timeout))
+                    } else {
+                        Ok(PickleValue::Float(
+                            rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
+                        ))
+                    }
+                }
                 "next_hop" => {
                     let hash = extract_dest_hash(request, "destination_hash")?;
                     let resp = send_query(event_tx, QueryRequest::NextHop { dest_hash: hash })?;
@@ -3307,6 +3319,10 @@ mod tests {
                 Ok(Event::Query(QueryRequest::MediumPathTimeout, resp_tx)) => {
                     let _ = resp_tx.send(QueryResponse::MediumPathTimeout(26.0));
                 }
+                Ok(Event::Query(QueryRequest::FirstHopTimeout { dest_hash }, resp_tx)) => {
+                    assert_eq!(dest_hash, [0x77; 16]);
+                    let _ = resp_tx.send(QueryResponse::FirstHopTimeout(6.4));
+                }
                 Ok(Event::Query(QueryRequest::InterfaceStats, resp_tx)) => {
                     let _ = resp_tx.send(QueryResponse::InterfaceStats(InterfaceStatsResponse {
                         interfaces: vec![SingleInterfaceStat {
@@ -3419,6 +3435,21 @@ mod tests {
             )]))
             .unwrap();
         assert_eq!(timeout.as_float(), Some(26.0));
+        drop(timeout_client);
+        let mut timeout_client = RpcClient::connect(&server_addr, &key).unwrap();
+        let first_hop = timeout_client
+            .call(&PickleValue::Dict(vec![
+                (
+                    PickleValue::String("get".into()),
+                    PickleValue::String("first_hop_timeout".into()),
+                ),
+                (
+                    PickleValue::String("destination_hash".into()),
+                    PickleValue::Bytes(vec![0x77; 16]),
+                ),
+            ]))
+            .unwrap();
+        assert_eq!(first_hop.as_float(), Some(6.4));
         drop(timeout_client);
 
         // Client: query interface stats
