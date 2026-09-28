@@ -601,7 +601,7 @@ pub fn start(
     tx: EventSender,
     next_dynamic_id: Arc<AtomicU64>,
 ) -> io::Result<()> {
-    start_with_template(config, tx, next_dynamic_id, None, None)
+    start_with_template(config, tx, next_dynamic_id, None, None).map(|_| ())
 }
 
 fn start_with_template(
@@ -610,7 +610,7 @@ fn start_with_template(
     next_dynamic_id: Arc<AtomicU64>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
-) -> io::Result<()> {
+) -> io::Result<super::ListenerControl> {
     let group_id = config.group_id.clone();
     let mcast_addr_str = derive_multicast_address(
         &group_id,
@@ -689,7 +689,7 @@ fn start_with_template(
 
     log::info!("[{}] AutoInterface online", config.name);
 
-    Ok(())
+    Ok(super::ListenerControl::with_running_flag(running))
 }
 
 fn auto_supervisor_loop(
@@ -1558,7 +1558,7 @@ impl InterfaceFactory for AutoFactory {
 
         auto_config.ingress_control = ctx.ingress_control;
         let parent_id = auto_config.interface_id;
-        start_with_template(
+        let control = start_with_template(
             auto_config,
             ctx.tx,
             ctx.next_dynamic_id,
@@ -1574,7 +1574,9 @@ impl InterfaceFactory for AutoFactory {
             }),
             ctx.underlay_mark,
         )?;
-        Ok(StartResult::Listener { control: None })
+        Ok(StartResult::Listener {
+            control: Some(control),
+        })
     }
 }
 
@@ -1591,6 +1593,17 @@ pub(crate) fn auto_runtime_handle_from_config(config: &AutoConfig) -> AutoRuntim
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listener_control_stops_auto_supervisor() {
+        let running = Arc::new(AtomicBool::new(true));
+        let control = super::super::ListenerControl::with_running_flag(Arc::clone(&running));
+
+        control.request_stop();
+
+        assert!(!running.load(Ordering::Relaxed));
+        assert!(control.should_stop());
+    }
 
     // ── Multicast address derivation ──────────────────────────────────
 
