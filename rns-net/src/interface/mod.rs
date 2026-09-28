@@ -748,7 +748,10 @@ pub enum StartResult {
     /// Spawns a listener; dynamic interfaces arrive via Event::InterfaceUp (TcpServer, Auto, I2P, etc.)
     Listener { control: Option<ListenerControl> },
     /// Multiple subinterfaces from one config (RNode).
-    Multi(Vec<SubInterface>),
+    Multi {
+        subinterfaces: Vec<SubInterface>,
+        control: Option<ListenerControl>,
+    },
 }
 
 /// A single subinterface returned from a multi-interface factory.
