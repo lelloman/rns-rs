@@ -57,7 +57,10 @@ Important config paths:
   escaped pipe support, empty cells, alignment markers, and link/code/emphasis
   width handling.
   Blob pages for `.md` and `.mu` files default to rendered output and include
-  rendered/raw view controls. Unsupported text blobs remain source views, with
+  rendered/raw view controls. Markdown blob pages offer both the original
+  download and an `as micron` download that converts the text to `.mu` while
+  keeping relative repository links scoped to the source directory.
+  Unsupported text blobs remain source views, with
   oversized text and non-image binary blobs kept on fallback messages.
   Binary image blobs render Micron media previews through `/media`. The media
   endpoint accepts a MessagePack map with a `key` and a `path` of the form
