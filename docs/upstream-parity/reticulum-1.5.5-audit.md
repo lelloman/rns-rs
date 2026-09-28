@@ -254,6 +254,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 19. `cce96d38` — Updated changelog
+
+**Upstream change:** Adds one 1.5.5 release-note bullet describing the potential `LocalInterface` initialization race fixed by `71583c5c`. The complete diff touches only `Changelog.md` and changes no executable behavior.
+
+**Rust applicability:** The preceding mapping establishes the native initialization invariant and its regression evidence. The upstream release note is not an independent compatibility claim or native crate release instruction.
+
+**Local handling and evidence:** This audit-only mapping records the full changelog diff and its dependency on row 18. No separate runtime test applies; row 18 carries the relevant complete crate suite and focused evidence.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [ ] Every upstream commit has a final disposition.
