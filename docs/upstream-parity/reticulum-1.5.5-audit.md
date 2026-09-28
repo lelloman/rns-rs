@@ -46,15 +46,15 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 11 | `3ad70c63ea87e94f9dc32486af7845ded9c0e852` | Fixed outdated meta-docs | `Contributing.md` | Non-runtime | `b3d6580`: records the upstream-only Markdown link correction. |
 | 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Non-runtime | `85b85b7`: records README reflow and project-specific editorial corrections; native badge remains gated. |
 | 13 | `1cf176f6e5785f62a87ed0ebe7e5d12dcf3f4bc6` | Added work doc counts to filter links | `RNS/Utilities/rngit/pages.py` | Integrated | `182a47e`: readable scope counts on work-page tabs, with document-level read denial applied to list, detail, and download. |
-| 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Pending review | Native page and download handler identified; conversion behavior pending. |
+| 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Integrated | `d1a444e`: Markdown blob pages link to scoped Micron conversion; downloads include `.mu` name metadata. |
 | 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Pending review | Upstream 1.5.5 release description reviewed; disposition pending. |
 | 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Pending review | Native discovery parse, persistence, RPC, and CLI surfaces identified; port pending. |
 
-The first thirteen canonical commits have one nonempty local mapping with exactly one
+The first fourteen canonical commits have one nonempty local mapping with exactly one
 full `Upstream-Commit` trailer each. The local trailer order matches upstream
 ancestry. The first six short local hashes above were corrected after the
 branch rewrite by checking the committed trailers, not by changing the mapped
-code or test evidence. Commits 14–16 remain to be mapped.
+code or test evidence. Commits 15–16 remain to be mapped.
 
 ## Integration Plan
 
@@ -196,6 +196,16 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 **Rust applicability:** Native `rngit` already lists these scopes but its filter links did not show counts. Its work page also listed documents with explicit document-level read denial despite repository-level read access.
 
 **Local handling and evidence:** `182a47e` lists all scopes for counts, filters explicit document-level read denials from the visible lists, and applies the same denial to detail and download handlers. The focused page regression passed, including counts before and after `read = none`; the complete `rns-git` suite passed (234 tests across eight suites), as did formatting and warning-free crate lint.
+
+**Final disposition:** Integrated.
+
+### 14. `a93c6ba5` — Added ability to download markdown files as converted micron to rngit
+
+**Upstream change:** Offers an `as micron` link on Markdown blob pages and converts a requested `.md` Git blob to Micron with relative links scoped to that blob's directory. The response is named with a `.mu` extension; unrelated files and formats cannot request conversion.
+
+**Rust applicability:** Native `rngit` already converts Markdown for page display but offered only raw blob download. Its download handler did not accept a conversion format or attach a converted filename.
+
+**Local handling and evidence:** `d1a444e` shares the existing scoped Markdown renderer with the download path, adds the converted link and `.mu` filename metadata, and keeps the original download available. A focused regression verifies rendered-page controls, converted content and link scope, filename metadata, and raw download bytes. The complete `rns-git` suite passed (235 tests across eight suites), as did formatting and warning-free crate lint. `docs/rns-git.md` describes the new option.
 
 **Final disposition:** Integrated.
 
