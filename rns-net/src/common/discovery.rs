@@ -668,7 +668,7 @@ fn generate_config_entry(params: ConfigEntryParams<'_>) -> Option<String> {
         "I2PInterface" => {
             let reachable = reachable_on.unwrap_or("unknown");
             Some(format!(
-                "[[{}]]\n  type = I2PInterface\n  enabled = yes\n  peers = {}{}{}{}",
+                "[[{}]]\n  type = I2PInterface\n  enabled = yes\n  peers = {}.b32.i2p{}{}{}",
                 name, reachable, identity_str, netname_str, netkey_str
             ))
         }
@@ -1343,5 +1343,18 @@ mod tests {
                 "{interface_type} should be accepted as a discoverable interface type"
             );
         }
+    }
+
+    #[test]
+    fn i2p_discovery_config_entry_uses_b32_hostname() {
+        let app_data = build_discovery_app_data("I2PInterface", Some("example"));
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.reachable_on.as_deref(), Some("example"));
+        assert!(parsed
+            .config_entry
+            .as_deref()
+            .unwrap()
+            .contains("peers = example.b32.i2p\n"));
     }
 }
