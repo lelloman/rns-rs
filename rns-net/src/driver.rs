@@ -1,6 +1,6 @@
 //! Driver loop: receives events, drives the TransportEngine, dispatches actions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -113,6 +113,7 @@ impl Default for AnnounceRateDefaults {
 
 mod dispatch;
 mod events;
+mod interface_management;
 mod lifecycle;
 mod queries;
 mod runtime_config;
@@ -635,6 +636,13 @@ impl TrafficSample {
 }
 
 /// The driver loop. Owns the engine and all interface entries.
+pub(crate) struct ManagedInterface {
+    pub(crate) parent_id: InterfaceId,
+    pub(crate) type_name: String,
+    pub(crate) control: Option<crate::interface::ListenerControl>,
+    pub(crate) static_ids: Vec<InterfaceId>,
+}
+
 pub struct Driver {
     pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,
     pub(crate) pending_link_frames: std::collections::VecDeque<PendingLinkFrame>,
@@ -652,6 +660,9 @@ pub struct Driver {
     pub(crate) drain_started_at: Option<Instant>,
     pub(crate) drain_deadline: Option<Instant>,
     pub(crate) listener_controls: Vec<crate::interface::ListenerControl>,
+    pub(crate) interface_management: Option<crate::node::InterfaceManagementConfig>,
+    pub(crate) managed_interfaces: HashMap<String, ManagedInterface>,
+    pub(crate) retired_interface_parents: HashSet<InterfaceId>,
     pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
     /// Destination hash for rnstransport.tunnel.synthesize (PLAIN).
     pub(crate) tunnel_synth_dest: [u8; 16],
@@ -728,7 +739,6 @@ pub struct Driver {
     #[cfg(feature = "iface-backbone")]
     backbone_peer_pool: Option<BackbonePeerPool>,
     /// Shared allocator for listener-created and discovery-created dynamic interfaces.
-    #[cfg(feature = "iface-backbone")]
     pub(crate) next_dynamic_interface_id: Arc<AtomicU64>,
     /// Runtime-config handles for TCP server interfaces, keyed by config name.
     #[cfg(feature = "iface-tcp")]
@@ -886,6 +896,9 @@ impl Driver {
             drain_started_at: None,
             drain_deadline: None,
             listener_controls: Vec::new(),
+            interface_management: None,
+            managed_interfaces: HashMap::new(),
+            retired_interface_parents: HashSet::new(),
             announce_cache: None,
             tunnel_synth_dest,
             transport_identity: None,
@@ -927,7 +940,6 @@ impl Driver {
             backbone_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
-            #[cfg(feature = "iface-backbone")]
             next_dynamic_interface_id: Arc::new(AtomicU64::new(10000)),
             #[cfg(feature = "iface-tcp")]
             tcp_server_runtime: HashMap::new(),

@@ -37,6 +37,8 @@ pub struct ReticulumSection {
     pub static_transport_identity: bool,
     pub local_hops_delta: bool,
     pub share_instance: bool,
+    /// Allow local shared-instance clients to attach, detach, and reload interfaces.
+    pub enable_interface_management: bool,
     pub instance_name: String,
     pub shared_instance_port: u16,
     pub instance_control_port: u16,
@@ -173,6 +175,7 @@ impl Default for ReticulumSection {
             static_transport_identity: false,
             local_hops_delta: false,
             share_instance: true,
+            enable_interface_management: true,
             instance_name: "default".into(),
             shared_instance_port: 37428,
             instance_control_port: 37429,
@@ -709,6 +712,13 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             key: "share_instance".into(),
             value: v.clone(),
         })?;
+    }
+    if let Some(v) = kvs.get("enable_interface_management") {
+        section.enable_interface_management =
+            parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: "enable_interface_management".into(),
+                value: v.clone(),
+            })?;
     }
     if let Some(v) = kvs.get("instance_name") {
         section.instance_name = v.clone();

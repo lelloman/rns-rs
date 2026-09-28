@@ -406,6 +406,10 @@ impl ListenerControl {
     pub fn should_stop(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
     }
+
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.stop, &other.stop)
+    }
 }
 
 /// Wait for serial input without keeping a detached reader blocked forever.

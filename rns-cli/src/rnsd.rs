@@ -331,6 +331,8 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   share_instance = true
   shared_instance_port = 37428
   instance_control_port = 37429
+  # Set to false to block rnstatus --attach/--detach/--reload.
+  # enable_interface_management = false
   panic_on_interface_error = false
 
   # Packet deduplication uses a fixed-size table. "eager" prefaults its

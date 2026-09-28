@@ -582,6 +582,10 @@ pub struct ProviderBridgeStats {
 /// Queries that can be sent to the driver.
 #[derive(Debug)]
 pub enum QueryRequest {
+    ManageInterface {
+        operation: InterfaceManagementOperation,
+        name: String,
+    },
     /// Get interface statistics and transport info.
     InterfaceStats,
     /// Get path table entries, optionally filtered by max hops.
@@ -711,6 +715,8 @@ pub enum QueryRequest {
 /// Responses to queries.
 #[derive(Debug)]
 pub enum QueryResponse {
+    /// Python-compatible tri-state result: success, failure, or missing name.
+    InterfaceManagement(Option<bool>),
     InterfaceStats(InterfaceStatsResponse),
     PathTable(Vec<PathTableEntry>),
     RateTable(Vec<RateTableEntry>),
@@ -768,6 +774,13 @@ pub enum QueryResponse {
     ClearBackbonePeerState(bool),
     /// Result of blacklisting a backbone peer.
     BlacklistBackbonePeer(bool),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterfaceManagementOperation {
+    Attach,
+    Detach,
+    Reload,
 }
 
 /// Interface statistics response.

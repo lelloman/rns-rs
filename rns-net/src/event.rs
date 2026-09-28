@@ -11,12 +11,13 @@ use rns_core::transport::types::InterfaceId;
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerPoolMemberStatus,
     BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DrainStatus,
-    DynamicInterfaceRegistration, HolePunchPolicy, HookInfo, InterfaceStatsResponse,
-    InterfaceTelemetry, KnownDestinationEntry, LifecycleState, LinkDatagramError, LinkInfoEntry,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats,
-    ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry,
-    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
-    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat, TrafficDetail,
+    DynamicInterfaceRegistration, HolePunchPolicy, HookInfo, InterfaceManagementOperation,
+    InterfaceStatsResponse, InterfaceTelemetry, KnownDestinationEntry, LifecycleState,
+    LinkDatagramError, LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry,
+    ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
+    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    TrafficDetail,
 };
 
 /// Concrete Event type using boxed sync Writer.

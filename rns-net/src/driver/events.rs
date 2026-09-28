@@ -734,6 +734,9 @@ impl Driver {
         mut registration: crate::event::DynamicInterfaceRegistration,
     ) {
         let parent_id = registration.parent_id;
+        if self.retired_interface_parents.contains(&parent_id) {
+            return;
+        }
         let parent_ifac = self.interfaces.get(&parent_id).and_then(|parent| {
             registration.info.mode = parent.info.mode;
             registration.info.gravity = parent.info.gravity;
