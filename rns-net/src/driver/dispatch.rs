@@ -915,10 +915,22 @@ impl Driver {
                                 {
                                     log::warn!("Failed to store discovered interface: {}", e);
                                 } else {
+                                    let stack = match (
+                                        discovered.impl_name.as_deref(),
+                                        discovered.impl_version.as_deref(),
+                                    ) {
+                                        (Some(name), Some(version))
+                                            if !name.is_empty() && !version.is_empty() =>
+                                        {
+                                            format!("{name} {version}")
+                                        }
+                                        _ => "unknown implementation".into(),
+                                    };
                                     log::debug!(
-                                        "Discovered interface '{}' ({}) at {}:{} [stamp={}]",
+                                        "Discovered interface '{}' ({}; {}) at {}:{} [stamp={}]",
                                         discovered.name,
                                         discovered.interface_type,
+                                        stack,
                                         discovered.reachable_on.as_deref().unwrap_or("?"),
                                         discovered
                                             .port

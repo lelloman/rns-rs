@@ -1957,6 +1957,22 @@ fn discovered_interfaces_to_pickle(
                     PickleValue::String(iface.interface_type.clone()),
                 ),
                 (
+                    PickleValue::String("impl_name".into()),
+                    iface
+                        .impl_name
+                        .clone()
+                        .map(PickleValue::String)
+                        .unwrap_or(PickleValue::None),
+                ),
+                (
+                    PickleValue::String("version".into()),
+                    iface
+                        .impl_version
+                        .clone()
+                        .map(PickleValue::String)
+                        .unwrap_or(PickleValue::None),
+                ),
+                (
                     PickleValue::String("transport".into()),
                     PickleValue::Bool(iface.transport),
                 ),
@@ -3116,6 +3132,8 @@ mod tests {
     fn discovered_interface_rpc_includes_operator_lxmf_address() {
         let interface = crate::discovery::DiscoveredInterface {
             interface_type: "BackboneInterface".into(),
+            impl_name: Some("Reticulum".into()),
+            impl_version: Some("1.5.5".into()),
             transport: true,
             name: "Operator Test".into(),
             discovered: 1.0,
@@ -3147,6 +3165,15 @@ mod tests {
 
         let encoded = discovered_interfaces_to_pickle(&[interface]);
         let first = &encoded.as_list().unwrap()[0];
+
+        assert_eq!(
+            first.get("impl_name").and_then(PickleValue::as_str),
+            Some("Reticulum")
+        );
+        assert_eq!(
+            first.get("version").and_then(PickleValue::as_str),
+            Some("1.5.5")
+        );
 
         assert_eq!(
             first

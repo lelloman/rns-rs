@@ -253,6 +253,12 @@ impl DiscoveredInterfaceStorage {
         if let Some(v) = iface.latitude {
             entries.push((Value::Str("latitude".into()), Value::Float(v)));
         }
+        if let Some(ref value) = iface.impl_name {
+            entries.push((Value::Str("impl_name".into()), Value::Str(value.clone())));
+        }
+        if let Some(ref value) = iface.impl_version {
+            entries.push((Value::Str("version".into()), Value::Str(value.clone())));
+        }
         if let Some(v) = iface.longitude {
             entries.push((Value::Str("longitude".into()), Value::Float(v)));
         }
@@ -401,6 +407,8 @@ impl DiscoveredInterfaceStorage {
 
         Ok(DiscoveredInterface {
             interface_type,
+            impl_name: get_opt_str(&value, "impl_name"),
+            impl_version: get_opt_str(&value, "version"),
             transport: get_bool(&value, "transport")?,
             name,
             discovered: get_float(&value, "discovered")?,
@@ -1343,6 +1351,8 @@ mod tests {
 
         let mut iface = DiscoveredInterface {
             interface_type: "TestInterface".into(),
+            impl_name: None,
+            impl_version: None,
             transport: true,
             name: "Test".into(),
             discovered: now,
@@ -1387,6 +1397,8 @@ mod tests {
     fn test_discovered_interface(name: &str) -> DiscoveredInterface {
         DiscoveredInterface {
             interface_type: "BackboneInterface".into(),
+            impl_name: None,
+            impl_version: None,
             transport: true,
             name: name.into(),
             discovered: 1700000000.0,
@@ -1430,7 +1442,9 @@ mod tests {
 
         let storage = DiscoveredInterfaceStorage::new(dir.clone());
 
-        let iface = test_discovered_interface("TestNode");
+        let mut iface = test_discovered_interface("TestNode");
+        iface.impl_name = Some("Reticulum".into());
+        iface.impl_version = Some("1.5.5".into());
 
         // Store
         storage.store(&iface).unwrap();
@@ -1439,6 +1453,8 @@ mod tests {
         let loaded = storage.load(&iface.discovery_hash).unwrap().unwrap();
 
         assert_eq!(loaded.interface_type, iface.interface_type);
+        assert_eq!(loaded.impl_name, iface.impl_name);
+        assert_eq!(loaded.impl_version, iface.impl_version);
         assert_eq!(loaded.name, iface.name);
         assert_eq!(loaded.stamp_value, iface.stamp_value);
         assert_eq!(loaded.transport_id, iface.transport_id);
@@ -1688,6 +1704,8 @@ mod tests {
         let ifaces = vec![
             DiscoveredInterface {
                 interface_type: "BackboneInterface".into(),
+                impl_name: None,
+                impl_version: None,
                 transport: true,
                 name: "high-value-stale".into(),
                 discovered: now,
@@ -1718,6 +1736,8 @@ mod tests {
             },
             DiscoveredInterface {
                 interface_type: "TCPServerInterface".into(),
+                impl_name: None,
+                impl_version: None,
                 transport: true,
                 name: "low-value-available".into(),
                 discovered: now,
@@ -1748,6 +1768,8 @@ mod tests {
             },
             DiscoveredInterface {
                 interface_type: "I2PInterface".into(),
+                impl_name: None,
+                impl_version: None,
                 transport: false,
                 name: "high-value-available".into(),
                 discovered: now,
