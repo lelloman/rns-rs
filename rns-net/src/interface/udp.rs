@@ -8,11 +8,12 @@ use std::net::{SocketAddr, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
-use crate::interface::{lock_or_recover, Writer};
+use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
 /// Configuration for a UDP interface.
 #[derive(Debug, Clone)]
@@ -95,15 +96,16 @@ impl Writer for UdpWriter {
 /// Start a UDP interface. Spawns a reader thread if listen_ip/port are set.
 /// Returns a writer if forward_ip/port are set.
 pub fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Writer>>> {
-    start_with_mark(config, tx, None)
+    start_with_mark(config, tx, None).map(|(writer, _)| writer)
 }
 
 fn start_with_mark(
     config: UdpConfig,
     tx: EventSender,
     underlay_mark: Option<u32>,
-) -> io::Result<Option<Box<dyn Writer>>> {
+) -> io::Result<(Option<Box<dyn Writer>>, ListenerControl)> {
     let id = config.interface_id;
+    let control = ListenerControl::new();
     {
         let startup = UdpRuntime::from_config(&config);
         *lock_or_recover(&config.runtime, "udp runtime") = startup;
@@ -121,6 +123,7 @@ fn start_with_mark(
         let bind_addr = format!("{}:{}", bind_ip, bind_port);
         let recv_socket = UdpSocket::bind(&bind_addr)?;
         super::apply_underlay_mark(recv_socket.as_raw_fd(), underlay_mark)?;
+        recv_socket.set_read_timeout(Some(Duration::from_millis(200)))?;
 
         log::info!("[{}] UDP listening on {}", config.name, bind_addr);
 
@@ -128,21 +131,31 @@ fn start_with_mark(
         let _ = tx.send(Event::InterfaceUp(id, None, None));
 
         let name = config.name.clone();
+        let reader_control = control.clone();
         thread::Builder::new()
             .name(format!("udp-reader-{}", id.0))
             .spawn(move || {
-                udp_reader_loop(recv_socket, id, name, tx);
+                udp_reader_loop(recv_socket, id, name, tx, reader_control);
             })?;
     }
 
-    Ok(writer)
+    Ok((writer, control))
 }
 
 /// Reader thread: receives UDP datagrams and sends them as frames.
-fn udp_reader_loop(socket: UdpSocket, id: InterfaceId, name: String, tx: EventSender) {
+fn udp_reader_loop(
+    socket: UdpSocket,
+    id: InterfaceId,
+    name: String,
+    tx: EventSender,
+    control: ListenerControl,
+) {
     let mut buf = [0u8; 2048];
 
     loop {
+        if control.should_stop() {
+            return;
+        }
         match socket.recv_from(&mut buf) {
             Ok((n, _src)) => {
                 if n == 0 {
@@ -161,7 +174,18 @@ fn udp_reader_loop(socket: UdpSocket, id: InterfaceId, name: String, tx: EventSe
                     return;
                 }
             }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue;
+            }
             Err(e) => {
+                if control.should_stop() {
+                    return;
+                }
                 log::warn!("[{}] recv error: {}", name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
                 return;
@@ -267,13 +291,13 @@ impl InterfaceFactory for UdpFactory {
             started: crate::time::now(),
         };
 
-        let maybe_writer = start_with_mark(udp_config, ctx.tx, ctx.underlay_mark)?;
+        let (maybe_writer, control) = start_with_mark(udp_config, ctx.tx, ctx.underlay_mark)?;
 
         let writer: Box<dyn Writer> = maybe_writer
             .ok_or_else(|| io::Error::other("UDPInterface did not provide a writer"))?;
 
         Ok(StartResult::Simple {
-            control: None,
+            control: Some(control),
             id,
             info,
             writer,
@@ -293,6 +317,31 @@ pub(crate) fn udp_runtime_handle_from_config(config: &UdpConfig) -> UdpRuntimeCo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detach_stops_idle_udp_listener() {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let (tx, rx) = crate::event::channel();
+        let control = ListenerControl::new();
+        let reader_control = control.clone();
+
+        let reader = thread::spawn(move || {
+            udp_reader_loop(
+                socket,
+                InterfaceId(76),
+                "detach-test".into(),
+                tx,
+                reader_control,
+            )
+        });
+        thread::sleep(Duration::from_millis(50));
+        control.request_stop();
+        reader.join().unwrap();
+        assert!(rx.try_recv().is_err());
+    }
     use std::net::UdpSocket;
     use std::time::Duration;
 
