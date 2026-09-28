@@ -6,15 +6,15 @@
 - previous accepted version: `1.5.4`
 - previous normative commit: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`
 - target version: `1.5.5` (`RNS/_version.py`)
-- target normative commit: `d3153bd7784c6c6d08346b7e3e393bb0007e557f` (`rgit/master`)
-- current rgit tip root tree: `d2739ce7d38f05191b34c0a87ce7df64c54cc445`
-- current rgit tip `RNS` tree: `52a588c83276ff9271eba238ce854f661ebb0aa1`
-- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..d3153bd7784c6c6d08346b7e3e393bb0007e557f`
-- commits in candidate range: `16`
-- repositories checked: normative rgit remote and GitHub mirror, both refreshed on `2026-09-28`; rgit advanced to `d3153bd7` while the mirror remained at `b8993899`
+- target normative commit: `cce96d38c684e8d3e85e8cb311633fb2599515dd` (`rgit/master` snapshot cutoff)
+- target root tree: `f5ddc7ea6dcd988fd075310159a9262a9acb3c47`
+- target `RNS` tree: `f019bc58f0c19452b57b642b6170261695d8295d`
+- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..cce96d38c684e8d3e85e8cb311633fb2599515dd`
+- commits in candidate range: `19`
+- repositories checked: normative rgit remote and GitHub mirror, both refreshed on `2026-09-28`; rgit reached `cce96d38` while the mirror remained at `d5962d14`
 - local branch and revision inspected: `dev@681e3e0ec0cc020dd9a43e8d54705a450a0db2ab`
 
-The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. A later fresh fetch found three subsequent meta-documentation commits on both remotes, extending the candidate to their shared tip `b899389956041693d1cbeee698bcbef2bc1b8858`. A fresh rgit fetch then found four more 1.5.5 commits through `d3153bd7`; the GitHub mirror had not caught up. The later commits include new runtime behavior and are being reviewed before promotion.
+The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. Fresh fetches extended the candidate through `b8993899`, `d3153bd7`, and finally `cce96d38`. The latter is the fixed cutoff for this advancement. The GitHub mirror lagged by two commits at the final complete pre-mapping refresh; the normative rgit history contains all nineteen in ancestry order.
 
 ## Audit Vocabulary
 
@@ -49,8 +49,11 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Integrated | `d1a444e`: Markdown blob pages link to scoped Micron conversion; downloads include `.mu` name metadata. |
 | 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Non-runtime | `9413f8a`: audit-only mapping records the upstream 1.5.5 release description without copying its claims as acceptance evidence. |
 | 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Integrated | `0ff9627`: discovery stack fields survive parsing, persistence and RPC; `rnstatus` shows Stack/Running with a legacy fallback. |
+| 17 | `d5962d14eb4fbf4a34a0b83e6942534a4965dd17` | Updated documentation | generated manual and Markdown support page | Pending review | Pending mapping. |
+| 18 | `71583c5c2d3e953c15ac7a6ce9aef62b3780d186` | Set interface owner before connect | `RNS/Interfaces/LocalInterface.py` | Pending review | Pending mapping. |
+| 19 | `cce96d38c684e8d3e85e8cb311633fb2599515dd` | Updated changelog | `Changelog.md` | Pending review | Pending mapping. |
 
-All sixteen canonical commits have one nonempty local mapping with exactly one
+The first sixteen canonical commits have one nonempty local mapping with exactly one
 full `Upstream-Commit` trailer each. The local trailer order matches upstream
 ancestry. The first six short local hashes above were corrected after the
 branch rewrite by checking the committed trailers, not by changing the mapped
@@ -136,6 +139,8 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 **Local handling and evidence:** `0c7a85c` tracks each configured interface's parent ID, static IDs, type and control, rereads the current config for attach/reload, retires late child events, removes dynamic children and interface runtime state on detach, and updates discovery metadata. An accepted TCP server client now observes the listener stop signal and closes its socket. The node exposes named methods; the authenticated shared-instance RPC accepts the upstream `manage` map and returns the upstream tri-state result; `rnstatus` has matching options. Focused tests cover attaching a disabled UDP section, duplicate/missing names, reload from disk, disabled management, listener port and client-socket release, and actual authenticated RPC calls. The complete elevated `rns-net` suite passed (970 unit tests, 56 E2E tests, and interop/fixture suites); the elevated `rns-cli` suite passed. Formatting, staged diff checks, and warning-free clippy for both changed crates passed. Initial sandboxed full-suite attempts failed in unrelated localhost socket tests with `EPERM`; the complete reruns outside that sandbox passed.
 
 **Post-mapping interop correction:** An exact-target `rnstatus --attach` check against native `rnsd` found that Python 1.5.5 uses an abstract Unix RPC socket on Linux and authenticates both peers with the key derived from `storage/transport_identity`. The native daemon previously exposed TCP RPC only, used its own separate identity for the key, and completed only the first half of the `multiprocessing.connection` authentication exchange. Follow-up `9baa221` adds the Unix endpoint, persists or reads the Python-compatible RPC identity with owner-only permissions, and completes mutual authentication for both native and Python clients. The exact Python 1.5.5 `rnstatus` CLI then successfully attached, reloaded, and detached a disabled UDP interface through the Rust daemon; that sequence is now an ignored exact-target CI interop regression. The final default workspace suite passed 2,532 tests, the hook-enabled suite passed 2,579 tests, and host lint passed. This follow-up has no `Upstream-Commit` trailer and does not change the one-to-one mapping.
+
+An exact-target utility interop rerun subsequently found that Python `rncp` and `rnx` clients call `get_first_hop_timeout` through that newly working RPC transport. An unknown query returned `None` and prevented link setup. Follow-up `51f1d96` serves the numeric first-hop timeout from the selected outbound interface bitrate, falling back to the upstream six-second default. The RPC regression, complete changed-crate suite, warning-free lint, and all six exact-target utility interop cases (serial and CI-parallel) passed. This compatibility correction also has no upstream trailer.
 
 **Final disposition:** Integrated. Final workspace, build, Docker, and promotion gates are tracked below.
 
