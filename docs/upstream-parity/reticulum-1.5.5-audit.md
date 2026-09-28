@@ -50,6 +50,11 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 
 Review each commit's full diff in ancestry order and assign a supported disposition. Complete the per-commit integration and promotion workflow in [README.md](README.md).
 
+The `e2ba876e` commit asserts upstream version `1.5.5` by changing only
+`RNS/_version.py`. Native crate package versions are independent of that
+upstream marker. Keep `UPSTREAM.md` and the README badge at the accepted 1.5.4
+baseline until the final 1.5.5 parity record passes its promotion gates.
+
 ## Per-Commit Analysis
 
 ### 1. `c95fd8e6` — Updated rngit documentation
