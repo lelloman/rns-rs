@@ -6,15 +6,15 @@
 - previous accepted version: `1.5.4`
 - previous normative commit: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`
 - target version: `1.5.5` (`RNS/_version.py`)
-- target normative commit: `e2ba876ebfec386af9f97d844c39e9ca016e956c` (`rgit/master`)
-- current rgit tip root tree: `187adb2d8d12578cba4a7d174c616f587d70458f`
+- target normative commit: `b899389956041693d1cbeee698bcbef2bc1b8858` (`rgit/master`)
+- current rgit tip root tree: `0a29475288cefe43f7fb432ed69a93bf901ecf35`
 - current rgit tip `RNS` tree: `62dc6859a28fc76b064e0c2fa062ff560ad9a343`
-- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..e2ba876ebfec386af9f97d844c39e9ca016e956c`
-- commits in candidate range: `9`
+- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..b899389956041693d1cbeee698bcbef2bc1b8858`
+- commits in candidate range: `12`
 - repositories checked: normative rgit remote and GitHub mirror, both refreshed on `2026-09-28`
 - local branch and revision inspected: `dev@681e3e0ec0cc020dd9a43e8d54705a450a0db2ab`
 
-The GitHub mirror tip is `c95fd8e6ca88c9e3b0e3306c74ff604a36894c67`, the first commit after the accepted baseline. The rgit tip is eight commits further ahead. The normative rgit tip at version 1.5.5 is the exact promotion target. Final dispositions and acceptance still require source review.
+The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. A later fresh fetch found three subsequent meta-documentation commits on both remotes, so the promotion target was extended to their shared tip `b899389956041693d1cbeee698bcbef2bc1b8858`. Its `RNS` tree remains identical to the original 1.5.5 target. Final dispositions and acceptance still require source review.
 
 ## Audit Vocabulary
 
@@ -42,6 +42,9 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 7 | `d23261c8d92323597e567c45580bda2c588e40aa` | Added live interface attach/detach/reload | `Reticulum.py`, `rnsd.py`, `rnstatus.py`, `using.rst` | Integrated | `0c7a85c`: config-backed attach/detach/reload, authenticated shared-instance RPC, `rnstatus` commands, TCP child shutdown, docs, and focused regressions. |
 | 8 | `6ecda49394708c4d4297bb3918bc4d2b11d8e8d6` | Updated documentation | generated and Markdown using guides | Pending review | — |
 | 9 | `e2ba876ebfec386af9f97d844c39e9ca016e956c` | Updated version | `RNS/_version.py` | Pending review | — |
+| 10 | `3b7429149e8fcf13c4310df32264c58647b6e983` | Fixed outdated meta-docs | `Contributing.md`, `Roadmap.md`, `SECURITY.md`, `This Is Not a Teahouse.md`, `docs/source/support.rst` | Pending review | — |
+| 11 | `3ad70c63ea87e94f9dc32486af7845ded9c0e852` | Fixed outdated meta-docs | `Contributing.md` | Pending review | — |
+| 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Pending review | — |
 
 ## Integration Plan
 
