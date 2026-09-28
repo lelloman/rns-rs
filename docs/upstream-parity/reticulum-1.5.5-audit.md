@@ -33,7 +33,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 
 | # | Upstream commit | Subject | Changed paths | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
-| 1 | `c95fd8e6ca88c9e3b0e3306c74ff604a36894c67` | Updated rngit documentation | `docs/source/git.rst`, generated manual docs | Pending review | — |
+| 1 | `c95fd8e6ca88c9e3b0e3306c74ff604a36894c67` | Updated rngit documentation | `docs/source/git.rst`, generated manual docs | Integrated | `34a2e28`: `docs/rns-git.md` documents changing bare `HEAD` before first push. |
 | 2 | `e68f4ff118662a9fe747f956bb96c45695a5ab20` | Prepared AutoInterface for live detach/attach | `RNS/Interfaces/AutoInterface.py`, `Interface.py` | Pending review | — |
 | 3 | `24b1ac521e4a0456d41b3fdd82d4ceb4d330f905` | Prepared RNodeInterface for live detach/attach | RNode, RNodeMulti, Android, Auto, base interfaces | Pending review | — |
 | 4 | `2c30a88e85693bb73e493bfaa56533774507f40d` | Fixed I2P interface discovery config snippet generation not including .b32.i2p | `RNS/Discovery.py` | Pending review | — |
@@ -46,6 +46,18 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 ## Integration Plan
 
 Review each commit's full diff in ancestry order and assign a supported disposition. Complete the per-commit integration and promotion workflow in [README.md](README.md).
+
+## Per-Commit Analysis
+
+### 1. `c95fd8e6` — Updated rngit documentation
+
+**Upstream change:** Adds an operator tip for selecting a primary branch other than `master` by changing the bare repository's `HEAD`. The other changed files are generated manuals and search data.
+
+**Rust applicability:** Native `rngit` also creates and serves bare Git repositories, so the operator tip applies.
+
+**Local handling and evidence:** `34a2e28` adds the command to `docs/rns-git.md` in the repository management section. This is documentation only; no runtime behavior changed.
+
+**Final disposition:** Integrated.
 
 ## Promotion Gates
 
