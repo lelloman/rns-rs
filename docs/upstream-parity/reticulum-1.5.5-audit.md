@@ -49,11 +49,11 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Integrated | `d1a444e`: Markdown blob pages link to scoped Micron conversion; downloads include `.mu` name metadata. |
 | 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Non-runtime | `9413f8a`: audit-only mapping records the upstream 1.5.5 release description without copying its claims as acceptance evidence. |
 | 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Integrated | `0ff9627`: discovery stack fields survive parsing, persistence and RPC; `rnstatus` shows Stack/Running with a legacy fallback. |
-| 17 | `d5962d14eb4fbf4a34a0b83e6942534a4965dd17` | Updated documentation | generated manual and Markdown support page | Pending review | Pending mapping. |
-| 18 | `71583c5c2d3e953c15ac7a6ce9aef62b3780d186` | Set interface owner before connect | `RNS/Interfaces/LocalInterface.py` | Pending review | Pending mapping. |
-| 19 | `cce96d38c684e8d3e85e8cb311633fb2599515dd` | Updated changelog | `Changelog.md` | Pending review | Pending mapping. |
+| 17 | `d5962d14eb4fbf4a34a0b83e6942534a4965dd17` | Updated documentation | generated manual and Markdown support page | Non-runtime | `4943d62`: audit-only review of generated manual and removed upstream support appeal. |
+| 18 | `71583c5c2d3e953c15ac7a6ce9aef62b3780d186` | Set interface owner before connect | `RNS/Interfaces/LocalInterface.py` | Structurally covered | `3697ca4`: documents complete native interface metadata before local connect; focused and full crate suites passed. |
+| 19 | `cce96d38c684e8d3e85e8cb311633fb2599515dd` | Updated changelog | `Changelog.md` | Non-runtime | `7a75921`: audit-only release-note review linked to row 18. |
 
-The first sixteen canonical commits have one nonempty local mapping with exactly one
+All nineteen canonical commits have one nonempty local mapping with exactly one
 full `Upstream-Commit` trailer each. The local trailer order matches upstream
 ancestry. The first six short local hashes above were corrected after the
 branch rewrite by checking the committed trailers, not by changing the mapped
