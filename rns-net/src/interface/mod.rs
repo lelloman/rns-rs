@@ -378,17 +378,29 @@ pub(crate) fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexG
 #[derive(Clone, Default)]
 pub struct ListenerControl {
     stop: Arc<AtomicBool>,
+    running: Option<Arc<AtomicBool>>,
 }
 
 impl ListenerControl {
     pub fn new() -> Self {
         Self {
             stop: Arc::new(AtomicBool::new(false)),
+            running: None,
+        }
+    }
+
+    pub(crate) fn with_running_flag(running: Arc<AtomicBool>) -> Self {
+        Self {
+            stop: Arc::new(AtomicBool::new(false)),
+            running: Some(running),
         }
     }
 
     pub fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(running) = &self.running {
+            running.store(false, Ordering::Relaxed);
+        }
     }
 
     pub fn should_stop(&self) -> bool {
