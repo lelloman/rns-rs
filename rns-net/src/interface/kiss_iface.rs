@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,7 +14,9 @@ use std::time::{Duration, Instant};
 use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
-use crate::interface::{lock_or_recover, Writer};
+use crate::interface::{
+    lock_or_recover, poll_readable, wait_while_active, ListenerControl, UnavailableWriter, Writer,
+};
 use crate::kiss;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
@@ -136,6 +139,13 @@ impl Writer for KissWriter {
 
 /// Start the KISS interface. Opens the port, configures TNC, spawns reader thread.
 pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+    start_with_control(config, tx).map(|(writer, _)| writer)
+}
+
+fn start_with_control(
+    config: KissIfaceConfig,
+    tx: EventSender,
+) -> io::Result<(Box<dyn Writer>, ListenerControl)> {
     let serial_config = SerialConfig {
         path: config.port.clone(),
         baud: config.speed,
@@ -144,7 +154,25 @@ pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Wri
         stop_bits: config.stop_bits,
     };
 
-    let port = SerialPort::open(&serial_config)?;
+    let control = ListenerControl::new();
+    let flow_state = Arc::new(Mutex::new(FlowState {
+        ready: true,
+        queue: VecDeque::new(),
+        lock_time: Instant::now(),
+    }));
+    let port = match SerialPort::open(&serial_config) {
+        Ok(port) => port,
+        Err(error) => {
+            log::warn!(
+                "[{}] could not open KISS port {}: {}; retrying",
+                config.name,
+                config.port,
+                error
+            );
+            spawn_initial_reconnect(config, tx, flow_state, control.clone())?;
+            return Ok((Box::new(UnavailableWriter), control));
+        }
+    };
     let reader_file = port.reader()?;
     let mut writer_file = port.writer()?;
     let flow_writer_file = port.writer()?;
@@ -154,22 +182,27 @@ pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Wri
     // Initial 2-second delay for TNC initialization (matches Python)
     thread::sleep(Duration::from_secs(2));
 
-    // Signal interface up
-    let _ = tx.send(Event::InterfaceUp(id, None, None));
-
     // Send TNC configuration commands
-    configure_tnc(&mut writer_file, &config)?;
+    if let Err(error) = configure_tnc(&mut writer_file, &config) {
+        log::warn!(
+            "[{}] initial TNC configuration failed: {}; retrying",
+            config.name,
+            error
+        );
+        drop(reader_file);
+        drop(writer_file);
+        drop(flow_writer_file);
+        spawn_initial_reconnect(config, tx, flow_state, control.clone())?;
+        return Ok((Box::new(UnavailableWriter), control));
+    }
 
-    let flow_state = Arc::new(Mutex::new(FlowState {
-        ready: true,
-        queue: VecDeque::new(),
-        lock_time: Instant::now(),
-    }));
+    let _ = tx.send(Event::InterfaceUp(id, None, None));
 
     let reader_flow_state = flow_state.clone();
 
     // Spawn reader thread
     let reader_config = config.clone();
+    let reader_control = control.clone();
     thread::Builder::new()
         .name(format!("kiss-reader-{}", id.0))
         .spawn(move || {
@@ -180,16 +213,37 @@ pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Wri
                 reader_config,
                 tx,
                 reader_flow_state,
+                reader_control,
             );
         })?;
 
-    Ok(Box::new(KissWriter {
-        confirmed_pending: None,
-        file: writer_file,
-        flow_control: config.flow_control,
-        flow_state,
-        ax25_source: config.ax25_source.clone(),
-    }))
+    Ok((
+        Box::new(KissWriter {
+            confirmed_pending: None,
+            file: writer_file,
+            flow_control: config.flow_control,
+            flow_state,
+            ax25_source: config.ax25_source.clone(),
+        }),
+        control,
+    ))
+}
+
+fn spawn_initial_reconnect(
+    config: KissIfaceConfig,
+    tx: EventSender,
+    flow_state: Arc<Mutex<FlowState>>,
+    control: ListenerControl,
+) -> io::Result<()> {
+    thread::Builder::new()
+        .name(format!("kiss-reconnect-{}", config.interface_id.0))
+        .spawn(move || {
+            if let Some((reader, flow_writer)) = reconnect(&config, &tx, &flow_state, &control) {
+                let id = config.interface_id;
+                reader_loop(reader, flow_writer, id, config, tx, flow_state, control);
+            }
+        })?;
+    Ok(())
 }
 
 /// Send TNC configuration commands via KISS.
@@ -228,17 +282,44 @@ fn reader_loop(
     config: KissIfaceConfig,
     tx: EventSender,
     flow_state: Arc<Mutex<FlowState>>,
+    control: ListenerControl,
 ) {
     let mut decoder = kiss::Decoder::new();
     let mut buf = [0u8; 4096];
     let mut first_tx: Option<Instant> = None;
 
     loop {
+        if control.should_stop() {
+            return;
+        }
+        match poll_readable(reader.as_raw_fd(), Duration::from_millis(200)) {
+            Ok(false) => continue,
+            Ok(true) => {}
+            Err(e) => {
+                if control.should_stop() {
+                    return;
+                }
+                log::warn!("[{}] KISS poll error: {}", config.name, e);
+                let _ = tx.send(Event::InterfaceDown(id));
+                match reconnect(&config, &tx, &flow_state, &control) {
+                    Some((new_reader, new_flow_writer)) => {
+                        reader = new_reader;
+                        flow_writer = new_flow_writer;
+                        decoder = kiss::Decoder::new();
+                        continue;
+                    }
+                    None => return,
+                }
+            }
+        }
         match reader.read(&mut buf) {
             Ok(0) => {
+                if control.should_stop() {
+                    return;
+                }
                 log::warn!("[{}] KISS port closed", config.name);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx, &flow_state) {
+                match reconnect(&config, &tx, &flow_state, &control) {
                     Some((new_reader, new_flow_writer)) => {
                         reader = new_reader;
                         flow_writer = new_flow_writer;
@@ -279,9 +360,12 @@ fn reader_loop(
                 }
             }
             Err(e) => {
+                if control.should_stop() {
+                    return;
+                }
                 log::warn!("[{}] KISS read error: {}", config.name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx, &flow_state) {
+                match reconnect(&config, &tx, &flow_state, &control) {
                     Some((new_reader, new_flow_writer)) => {
                         reader = new_reader;
                         flow_writer = new_flow_writer;
@@ -349,9 +433,12 @@ fn reconnect(
     config: &KissIfaceConfig,
     tx: &EventSender,
     flow_state: &Arc<Mutex<FlowState>>,
+    control: &ListenerControl,
 ) -> Option<(std::fs::File, std::fs::File)> {
     loop {
-        thread::sleep(Duration::from_secs(5));
+        if !wait_while_active(control, Duration::from_secs(5)) {
+            return None;
+        }
         log::info!(
             "[{}] attempting to reconnect KISS port {}...",
             config.name,
@@ -371,7 +458,9 @@ fn reconnect(
                 match (port.reader(), port.writer(), port.writer()) {
                     (Ok(reader), Ok(mut cfg_writer), Ok(flow_writer)) => {
                         // 2-second init delay
-                        thread::sleep(Duration::from_secs(2));
+                        if !wait_while_active(control, Duration::from_secs(2)) {
+                            return None;
+                        }
                         if let Err(e) = configure_tnc(&mut cfg_writer, config) {
                             log::warn!("[{}] TNC config failed: {}", config.name, e);
                             continue;
@@ -561,9 +650,10 @@ impl InterfaceFactory for KissFactory {
             started: crate::time::now(),
         };
 
-        let writer = start(kiss_config, ctx.tx)?;
+        let (writer, control) = start_with_control(kiss_config, ctx.tx)?;
 
         Ok(StartResult::Simple {
+            control: Some(control),
             id,
             info,
             writer,
@@ -611,6 +701,75 @@ mod tests {
         let events = decoder.feed(&buf[..n]);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0], kiss::KissEvent::DataFrame(payload));
+    }
+
+    #[test]
+    fn detach_stops_idle_kiss_reader_without_reconnect() {
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let flow_writer = unsafe { std::fs::File::from_raw_fd(libc::dup(slave_fd)) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let (tx, rx) = crate::event::channel();
+        let control = ListenerControl::new();
+        let reader_control = control.clone();
+        let flow_state = Arc::new(Mutex::new(FlowState {
+            ready: true,
+            queue: VecDeque::new(),
+            lock_time: Instant::now(),
+        }));
+        let config = KissIfaceConfig {
+            name: "detach-test".into(),
+            interface_id: InterfaceId(72),
+            ..Default::default()
+        };
+
+        let reader = thread::spawn(move || {
+            reader_loop(
+                slave,
+                flow_writer,
+                InterfaceId(72),
+                config,
+                tx,
+                flow_state,
+                reader_control,
+            )
+        });
+        thread::sleep(Duration::from_millis(50));
+        control.request_stop();
+        reader.join().unwrap();
+        drop(master);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn missing_kiss_port_recovers_after_it_appears() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let port_path = tempdir.path().join("kiss-port");
+        let (tx, rx) = crate::event::channel();
+        let config = KissIfaceConfig {
+            name: "late-kiss".into(),
+            port: port_path.display().to_string(),
+            interface_id: InterfaceId(74),
+            ..Default::default()
+        };
+
+        let (_writer, control) = start_with_control(config, tx).unwrap();
+        assert!(rx.try_recv().is_err());
+
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let slave_path = std::fs::read_link(format!("/proc/self/fd/{slave_fd}")).unwrap();
+        std::os::unix::fs::symlink(slave_path, &port_path).unwrap();
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+
+        let event = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(matches!(
+            event,
+            Event::InterfaceUp(InterfaceId(74), Some(_), None)
+        ));
+        control.request_stop();
+        drop(slave);
+        drop(master);
     }
 
     #[test]

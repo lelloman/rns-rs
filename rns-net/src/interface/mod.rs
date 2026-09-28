@@ -408,6 +408,55 @@ impl ListenerControl {
     }
 }
 
+/// Wait for serial input without keeping a detached reader blocked forever.
+pub(crate) fn poll_readable(fd: std::os::fd::RawFd, timeout: Duration) -> io::Result<bool> {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    let result = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::Interrupted {
+            Ok(false)
+        } else {
+            Err(error)
+        };
+    }
+    if pfd.revents & libc::POLLNVAL != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "serial port closed",
+        ));
+    }
+    Ok(result > 0)
+}
+
+pub(crate) fn wait_while_active(control: &ListenerControl, duration: Duration) -> bool {
+    let deadline = Instant::now() + duration;
+    while !control.should_stop() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return true;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+    false
+}
+
+pub(crate) struct UnavailableWriter;
+
+impl Writer for UnavailableWriter {
+    fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "interface is waiting for its port",
+        ))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct AsyncWriterMetrics {
     queued_frames: Arc<AtomicUsize>,
@@ -744,6 +793,7 @@ pub enum StartResult {
         info: InterfaceInfo,
         writer: Box<dyn Writer>,
         interface_type_name: String,
+        control: Option<ListenerControl>,
     },
     /// Spawns a listener; dynamic interfaces arrive via Event::InterfaceUp (TcpServer, Auto, I2P, etc.)
     Listener { control: Option<ListenerControl> },
