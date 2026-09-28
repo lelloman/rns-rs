@@ -40,7 +40,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 5 | `7283cb417aebef9ef94d972ca53806a06fe37b36` | Prepared serial-based interfaces for live detach/attach | AX25 KISS, KISS, Serial, Android interfaces | Integrated | `aa1fac4`: native Serial/KISS/AX25 reader stop and reconnect control, including late port recovery. |
 | 6 | `84709ccf09fddf23a9723c6904c7678159e878af` | Prepared TCP and UDP interfaces for live detach/attach | `TCPInterface.py`, `UDPInterface.py` | Integrated | `0a3b8eb`: TCP reconnect guard and UDP listener stop, with idle detach regressions. |
 | 7 | `d23261c8d92323597e567c45580bda2c588e40aa` | Added live interface attach/detach/reload | `Reticulum.py`, `rnsd.py`, `rnstatus.py`, `using.rst` | Integrated | `0c7a85c`: config-backed attach/detach/reload, authenticated shared-instance RPC, `rnstatus` commands, TCP child shutdown, docs, and focused regressions. |
-| 8 | `6ecda49394708c4d4297bb3918bc4d2b11d8e8d6` | Updated documentation | generated and Markdown using guides | Pending review | — |
+| 8 | `6ecda49394708c4d4297bb3918bc4d2b11d8e8d6` | Updated documentation | generated and Markdown using guides | Non-runtime | `4207119`: native `rnstatus` guide adds an operator example; command reference landed with row 7. |
 | 9 | `e2ba876ebfec386af9f97d844c39e9ca016e956c` | Updated version | `RNS/_version.py` | Pending review | — |
 | 10 | `3b7429149e8fcf13c4310df32264c58647b6e983` | Fixed outdated meta-docs | `Contributing.md`, `Roadmap.md`, `SECURITY.md`, `This Is Not a Teahouse.md`, `docs/source/support.rst` | Pending review | — |
 | 11 | `3ad70c63ea87e94f9dc32486af7845ded9c0e852` | Fixed outdated meta-docs | `Contributing.md` | Pending review | — |
@@ -120,7 +120,17 @@ Review each commit's full diff in ancestry order and assign a supported disposit
 
 **Local handling and evidence:** `0c7a85c` tracks each configured interface's parent ID, static IDs, type and control, rereads the current config for attach/reload, retires late child events, removes dynamic children and interface runtime state on detach, and updates discovery metadata. An accepted TCP server client now observes the listener stop signal and closes its socket. The node exposes named methods; the authenticated shared-instance RPC accepts the upstream `manage` map and returns the upstream tri-state result; `rnstatus` has matching options. Focused tests cover attaching a disabled UDP section, duplicate/missing names, reload from disk, disabled management, listener port and client-socket release, and actual authenticated RPC calls. The complete elevated `rns-net` suite passed (970 unit tests, 56 E2E tests, and interop/fixture suites); the elevated `rns-cli` suite passed. Formatting, staged diff checks, and warning-free clippy for both changed crates passed. Initial sandboxed full-suite attempts failed in unrelated localhost socket tests with `EPERM`; the complete reruns outside that sandbox passed.
 
-**Final disposition:** Integrated. Exact-target Python/Rust interop and promotion gates remain to be run after all nine mappings are complete.
+**Final disposition:** Integrated. Exact-target Python/Rust interop and promotion gates remain to be run after all mappings are complete.
+
+### 8. `6ecda493` — Updated documentation
+
+**Upstream change:** Copies the new `rnstatus` description and attach/detach/reload options into the published manual source, rendered HTML, search index, and Markdown using guide. The full diff contains no executable changes.
+
+**Rust applicability:** The native command reference and control behavior were added with row 7. Native documentation is maintained as Markdown rather than copying upstream's generated manual artifacts.
+
+**Local handling and evidence:** `4207119` adds a concrete attach/detach/reload example to `docs/rnstatus.md`. The command list and management setting were documented in `0c7a85c`. The mapping is documentation-only; the complete `rns-net` and `rns-cli` suites passed on the preceding runtime mapping. No additional runtime test is applicable.
+
+**Final disposition:** Non-runtime.
 
 ## Promotion Gates
 
