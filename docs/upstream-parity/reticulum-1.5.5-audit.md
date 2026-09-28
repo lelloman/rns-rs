@@ -234,6 +234,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Integrated.
 
+### 17. `d5962d14` — Updated documentation
+
+**Upstream change:** Regenerates the published 1.5.5 manual, its search assets and page metadata, removes two unreferenced images, and removes an outdated support appeal from the Markdown and generated support pages. The complete commit contains no `RNS` source change.
+
+**Rust applicability:** The native documentation is maintained independently and does not carry that support appeal or the upstream generated manual. The accepted-version references remain gated on this audit's final parity checks.
+
+**Local handling and evidence:** This audit-only mapping records the generated-document review and the absence of a native runtime or support-page counterpart. No executable test applies to this commit.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [ ] Every upstream commit has a final disposition.
