@@ -34,7 +34,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | # | Upstream commit | Subject | Changed paths | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
 | 1 | `c95fd8e6ca88c9e3b0e3306c74ff604a36894c67` | Updated rngit documentation | `docs/source/git.rst`, generated manual docs | Integrated | `34a2e28`: `docs/rns-git.md` documents changing bare `HEAD` before first push. |
-| 2 | `e68f4ff118662a9fe747f956bb96c45695a5ab20` | Prepared AutoInterface for live detach/attach | `RNS/Interfaces/AutoInterface.py`, `Interface.py` | Pending review | — |
+| 2 | `e68f4ff118662a9fe747f956bb96c45695a5ab20` | Prepared AutoInterface for live detach/attach | `RNS/Interfaces/AutoInterface.py`, `Interface.py` | Integrated | `ae72d50`: AutoInterface exposes listener control that stops its supervisor and workers. |
 | 3 | `24b1ac521e4a0456d41b3fdd82d4ceb4d330f905` | Prepared RNodeInterface for live detach/attach | RNode, RNodeMulti, Android, Auto, base interfaces | Pending review | — |
 | 4 | `2c30a88e85693bb73e493bfaa56533774507f40d` | Fixed I2P interface discovery config snippet generation not including .b32.i2p | `RNS/Discovery.py` | Pending review | — |
 | 5 | `7283cb417aebef9ef94d972ca53806a06fe37b36` | Prepared serial-based interfaces for live detach/attach | AX25 KISS, KISS, Serial, Android interfaces | Pending review | — |
@@ -58,6 +58,16 @@ Review each commit's full diff in ancestry order and assign a supported disposit
 **Local handling and evidence:** `34a2e28` adds the command to `docs/rns-git.md` in the repository management section. This is documentation only; no runtime behavior changed.
 
 **Final disposition:** Integrated.
+
+### 2. `e68f4ff1` — Prepared AutoInterface for live detach/attach
+
+**Upstream change:** Tracks AutoInterface discovery sockets and makes its worker loops stop on detach, closing listeners and sockets so the interface can be attached again.
+
+**Rust applicability:** Native AutoInterface already has per-worker stop flags, but its top-level supervisor's running flag was not exposed to the node lifecycle.
+
+**Local handling and evidence:** `ae72d50` connects the AutoInterface running flag to the listener control returned by the factory. A stop request ends supervision, which stops workers and drops their owned sockets. The focused AutoInterface tests (41) passed. The complete `rns-net` crate suite passed when run serially (959 unit tests, 56 E2E tests, and interop/fixture suites); `cargo fmt --all -- --check` and `cargo clippy -p rns-net --all-targets -- -D warnings` passed. The first parallel E2E attempt hit an unrelated address-in-use conflict in the multihop test; that test passed alone and in the serial suite.
+
+**Final disposition:** Integrated. Runtime interface management will consume this control in the later attach/detach commit.
 
 ## Promotion Gates
 
