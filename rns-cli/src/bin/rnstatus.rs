@@ -71,6 +71,14 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_discovered = args.has("d");
     let show_discovered_config = args.has("D");
     let filter = args.positional.first().cloned();
+    let management_actions: Vec<_> = ["attach", "detach", "reload"]
+        .into_iter()
+        .filter_map(|operation| args.get(operation).map(|name| (operation, name)))
+        .collect();
+    if management_actions.len() > 1 || (remote_hash.is_some() && !management_actions.is_empty()) {
+        eprintln!("Choose one local interface management action");
+        process::exit(1);
+    }
 
     // Remote management query via -R flag
     if let Some(ref hash_str) = remote_hash {
@@ -100,7 +108,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     }
 
     // Discovered interfaces query via -d or -D flag
-    if show_discovered || show_discovered_config {
+    if (show_discovered || show_discovered_config) && management_actions.is_empty() {
         // Load config to get RPC address and auth key
         let config_dir =
             storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
@@ -200,6 +208,43 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     let rpc_port = rns_config.reticulum.instance_control_port;
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
+
+    if let Some((operation, name)) = management_actions.first().copied() {
+        let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
+            Ok(client) => client,
+            Err(error) => {
+                eprintln!("Could not connect to rnsd: {error}");
+                process::exit(1);
+            }
+        };
+        let rpc_operation = format!("{operation}_interface");
+        let request = PickleValue::Dict(vec![
+            (
+                PickleValue::String("manage".into()),
+                PickleValue::String(rpc_operation),
+            ),
+            (
+                PickleValue::String("name".into()),
+                PickleValue::String(name.into()),
+            ),
+        ]);
+        let result = client.call(&request).unwrap_or_else(|error| {
+            eprintln!("RPC error: {error}");
+            process::exit(1);
+        });
+        match result {
+            PickleValue::Bool(true) => println!("Interface {name} was {operation}ed"),
+            PickleValue::None => {
+                eprintln!("The interface {name} does not exist");
+                process::exit(1);
+            }
+            _ => {
+                eprintln!("Could not {operation} interface {name}");
+                process::exit(1);
+            }
+        }
+        return;
+    }
 
     loop {
         let monitor_started = Instant::now();
@@ -1683,6 +1728,9 @@ fn print_usage(usage_name: &str) {
     println!();
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");
+    println!("  --attach NAME           Attach a configured interface");
+    println!("  --detach NAME           Detach a running interface");
+    println!("  --reload NAME           Reload a running interface from config");
     println!("  -a                      Show all interfaces");
     println!("  -j                      JSON output");
     println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx, arxc, atxc, prxc, ptxc, txdrp, txdrb, txbuf");

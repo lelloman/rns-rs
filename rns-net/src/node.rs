@@ -2,7 +2,7 @@
 //!
 //! Wires together the driver, interfaces, and timer thread.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -342,7 +342,7 @@ fn discovery_runtime_ifac_fields(ifac: Option<&IfacConfig>) -> (Option<String>, 
 }
 
 #[cfg(feature = "iface-backbone")]
-fn backbone_discovery_runtime_from_interface(
+pub(crate) fn backbone_discovery_runtime_from_interface(
     interface_name: &str,
     mode: &BackboneMode,
     discovery: Option<&crate::discovery::DiscoveryConfig>,
@@ -374,7 +374,7 @@ fn backbone_discovery_runtime_from_interface(
 }
 
 #[cfg(feature = "iface-tcp")]
-fn tcp_server_discovery_runtime_from_interface(
+pub(crate) fn tcp_server_discovery_runtime_from_interface(
     interface_name: &str,
     config: &crate::interface::tcp_server::TcpServerConfig,
     discovery: Option<&crate::discovery::DiscoveryConfig>,
@@ -400,7 +400,7 @@ fn tcp_server_discovery_runtime_from_interface(
     )
 }
 
-fn ifac_runtime_from_config(
+pub(crate) fn ifac_runtime_from_config(
     ifac: Option<&IfacConfig>,
     default_size: usize,
 ) -> crate::driver::IfacRuntimeConfig {
@@ -411,7 +411,7 @@ fn ifac_runtime_from_config(
     )
 }
 
-fn discoverable_interface_from_config(
+pub(crate) fn discoverable_interface_from_config(
     interface_name: &str,
     discovery: &crate::discovery::DiscoveryConfig,
     transport_enabled: bool,
@@ -426,7 +426,7 @@ fn discoverable_interface_from_config(
     }
 }
 
-fn derive_ifac_state(
+pub(crate) fn derive_ifac_state(
     ifac: Option<&IfacConfig>,
     interface_name: &str,
 ) -> io::Result<Option<crate::ifac::IfacState>> {
@@ -447,19 +447,19 @@ fn derive_ifac_state(
         })
 }
 
-struct StartedInterface<'a> {
-    driver: &'a mut Driver,
-    tx: &'a EventSender,
-    queue_capacity: usize,
-    id: rns_core::transport::types::InterfaceId,
-    info: rns_core::transport::types::InterfaceInfo,
-    writer: Box<dyn crate::interface::Writer>,
-    interface_type_name: String,
-    ifac_state: Option<crate::ifac::IfacState>,
-    ifac_runtime: &'a crate::driver::IfacRuntimeConfig,
+pub(crate) struct StartedInterface<'a> {
+    pub(crate) driver: &'a mut Driver,
+    pub(crate) tx: &'a EventSender,
+    pub(crate) queue_capacity: usize,
+    pub(crate) id: rns_core::transport::types::InterfaceId,
+    pub(crate) info: rns_core::transport::types::InterfaceInfo,
+    pub(crate) writer: Box<dyn crate::interface::Writer>,
+    pub(crate) interface_type_name: String,
+    pub(crate) ifac_state: Option<crate::ifac::IfacState>,
+    pub(crate) ifac_runtime: &'a crate::driver::IfacRuntimeConfig,
 }
 
-fn register_started_interface(params: StartedInterface<'_>) {
+pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
     let StartedInterface {
         driver,
         tx,
@@ -498,6 +498,16 @@ fn register_started_interface(params: StartedInterface<'_>) {
             send_retry_backoff: Duration::ZERO,
         },
     );
+}
+
+/// Sources and startup defaults needed to reread a named interface from disk.
+pub(crate) struct InterfaceManagementConfig {
+    pub(crate) config_file: std::path::PathBuf,
+    pub(crate) storage_dir: std::path::PathBuf,
+    pub(crate) initial_ids: HashMap<String, rns_core::transport::types::InterfaceId>,
+    pub(crate) queue_capacity: usize,
+    pub(crate) transport_enabled: bool,
+    pub(crate) underlay_mark: Option<u32>,
 }
 
 /// Top-level node configuration.
@@ -707,6 +717,91 @@ pub struct InterfaceConfig {
     pub discovery: Option<crate::discovery::DiscoveryConfig>,
 }
 
+pub(crate) fn parse_managed_interface(
+    iface: &config::ParsedInterface,
+    parsed: &config::RnsConfig,
+    storage_dir: &Path,
+    id: rns_core::transport::types::InterfaceId,
+    registry: &crate::interface::registry::InterfaceRegistry,
+) -> io::Result<InterfaceConfig> {
+    let factory = registry.get(&iface.interface_type).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported interface type '{}'", iface.interface_type),
+        )
+    })?;
+    let discoverable = iface
+        .params
+        .get("discoverable")
+        .and_then(|value| config::parse_bool_pub(value))
+        .unwrap_or(false);
+    let ignore_warnings = iface
+        .params
+        .get("ignore_config_warnings")
+        .and_then(|value| config::parse_bool_pub(value))
+        .unwrap_or(false);
+    let mode = normalize_discovery_mode(
+        &iface.interface_type,
+        parse_interface_mode(&iface.mode),
+        discoverable,
+        ignore_warnings,
+    );
+    let ifac = extract_ifac_config(&iface.params, factory.default_ifac_size());
+    let discovery = extract_discovery_config(&iface.name, &iface.interface_type, &iface.params);
+    let ingress_control = parse_ingress_control_config(&iface.interface_type, &iface.params)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let recursive_prs = iface
+        .params
+        .get("recursive_prs")
+        .and_then(|value| config::parse_bool_pub(value))
+        .unwrap_or(false);
+    let announces_from_internal = iface
+        .params
+        .get("announces_from_internal")
+        .and_then(|value| config::parse_bool_pub(value))
+        .unwrap_or(true);
+    let announces_to_internal = iface
+        .params
+        .get("announces_to_internal")
+        .and_then(|value| config::parse_bool_pub(value));
+    let gravity = parse_interface_gravity(
+        iface.params.get("gravity").map(String::as_str),
+        parsed.reticulum.default_gravity,
+    );
+    let mut params = iface.params.clone();
+    params
+        .entry("storage_dir".to_string())
+        .or_insert_with(|| storage_dir.to_string_lossy().to_string());
+    if let Some(device) = &parsed.reticulum.device {
+        params
+            .entry("device".to_string())
+            .or_insert_with(|| device.clone());
+    }
+    let config_data = factory
+        .parse_config_section(
+            &iface.name,
+            id,
+            crate::interface::ConfigSection {
+                params: &params,
+                children: &iface.subinterfaces,
+            },
+        )
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    Ok(InterfaceConfig {
+        name: iface.name.clone(),
+        type_name: iface.interface_type.clone(),
+        config_data,
+        mode,
+        gravity,
+        recursive_prs,
+        announces_from_internal,
+        announces_to_internal,
+        ingress_control,
+        ifac,
+        discovery,
+    })
+}
+
 use crate::event::{QueryRequest, QueryResponse};
 
 /// Error returned when the driver thread has shut down.
@@ -837,6 +932,7 @@ impl RnsNode {
         // Build interface configs from parsed config using registry
         let registry = crate::interface::registry::InterfaceRegistry::with_builtins();
         let mut interface_configs = Vec::new();
+        let mut initial_ids = HashMap::new();
         let mut next_id_val = 1u64;
 
         for iface in &rns_config.interfaces {
@@ -989,6 +1085,7 @@ impl RnsNode {
                 ifac: ifac_config,
                 discovery: discovery_config,
             });
+            initial_ids.insert(iface.name.clone(), iface_id);
         }
 
         // Parse management config
@@ -1076,6 +1173,18 @@ impl RnsNode {
             Err(err) => log::warn!("failed to clean ratchets: {}", err),
         }
 
+        let interface_management = if private || !rns_config.reticulum.enable_interface_management {
+            None
+        } else {
+            Some(InterfaceManagementConfig {
+                config_file: config_file.clone(),
+                storage_dir: paths.storage.clone(),
+                initial_ids,
+                queue_capacity: rns_config.reticulum.interface_writer_queue_capacity,
+                transport_enabled: rns_config.reticulum.enable_transport,
+                underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
+            })
+        };
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
             static_transport_identity: rns_config.reticulum.static_transport_identity,
@@ -1218,6 +1327,7 @@ impl RnsNode {
                 inbound_capacities: rns_config.reticulum.inbound_queue_capacities,
                 link_mtu_discovery,
             },
+            interface_management,
         )?;
 
         node.known_destinations_path = Some(known_destinations_path.clone());
@@ -1256,6 +1366,7 @@ impl RnsNode {
                 inbound_capacities: inbound_queue_capacities,
                 ..NodeQueueConfig::default()
             },
+            None,
         )
     }
 
@@ -1263,6 +1374,7 @@ impl RnsNode {
         config: NodeConfig,
         callbacks: Box<dyn Callbacks>,
         queue_config: NodeQueueConfig,
+        interface_management: Option<InterfaceManagementConfig>,
     ) -> io::Result<Self> {
         let transport_state_dir = if config.transport_enabled {
             config.cache_dir.as_ref().map(|cache_dir| {
@@ -1498,21 +1610,25 @@ impl RnsNode {
 
         // Shared counter for dynamic interface IDs
         let next_dynamic_id = Arc::new(AtomicU64::new(10000));
-        #[cfg(feature = "iface-backbone")]
-        {
-            driver.next_dynamic_interface_id = Arc::clone(&next_dynamic_id);
-        }
+        driver.next_dynamic_interface_id = Arc::clone(&next_dynamic_id);
 
         // Collect discoverable interface configs for the announcer
         let mut discoverable_interfaces = Vec::new();
         #[cfg(feature = "iface-backbone")]
         let mut backbone_peer_pool_candidates = Vec::new();
 
+        let initial_managed_ids = interface_management
+            .as_ref()
+            .map(|management| management.initial_ids.clone())
+            .unwrap_or_default();
+        driver.interface_management = interface_management;
+
         // --- Registry-based startup for interfaces ---
         let registry = config
             .registry
             .unwrap_or_else(crate::interface::registry::InterfaceRegistry::with_builtins);
         for iface_config in config.interfaces {
+            let managed_id = initial_managed_ids.get(&iface_config.name).copied();
             #[cfg(feature = "iface-backbone")]
             if iface_config.type_name == "BackboneInterface" {
                 if let Some(mode) = iface_config
@@ -1723,8 +1839,20 @@ impl RnsNode {
                     interface_type_name,
                     control,
                 } => {
+                    let managed_control = control.clone();
                     if let Some(control) = control {
                         driver.register_listener_control(control);
+                    }
+                    if let Some(parent_id) = managed_id {
+                        driver.managed_interfaces.insert(
+                            iface_config.name.clone(),
+                            crate::driver::ManagedInterface {
+                                parent_id,
+                                type_name: iface_config.type_name.clone(),
+                                control: managed_control,
+                                static_ids: vec![id],
+                            },
+                        );
                     }
                     register_started_interface(StartedInterface {
                         driver: &mut driver,
@@ -1741,16 +1869,41 @@ impl RnsNode {
                 crate::interface::StartResult::Listener { control } => {
                     // Listener-type interface (TcpServer, Auto, I2P, etc.)
                     // registers dynamic interfaces via InterfaceUp events.
+                    let managed_control = control.clone();
                     if let Some(control) = control {
                         driver.register_listener_control(control);
+                    }
+                    if let Some(parent_id) = managed_id {
+                        driver.managed_interfaces.insert(
+                            iface_config.name.clone(),
+                            crate::driver::ManagedInterface {
+                                parent_id,
+                                type_name: iface_config.type_name.clone(),
+                                control: managed_control,
+                                static_ids: Vec::new(),
+                            },
+                        );
                     }
                 }
                 crate::interface::StartResult::Multi {
                     subinterfaces: subs,
                     control,
                 } => {
+                    let managed_control = control.clone();
                     if let Some(control) = control {
                         driver.register_listener_control(control);
+                    }
+                    let static_ids = subs.iter().map(|sub| sub.id).collect();
+                    if let Some(parent_id) = managed_id {
+                        driver.managed_interfaces.insert(
+                            iface_config.name.clone(),
+                            crate::driver::ManagedInterface {
+                                parent_id,
+                                type_name: iface_config.type_name.clone(),
+                                control: managed_control,
+                                static_ids,
+                            },
+                        );
                     }
                     let ifac_cfg = &iface_config.ifac;
                     let mut first = true;
@@ -2171,6 +2324,35 @@ impl RnsNode {
             .send(Event::Query(request, resp_tx))
             .map_err(|_| SendError)?;
         resp_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Attach a named interface from the current on-disk configuration.
+    pub fn attach_interface(&self, name: &str) -> Result<Option<bool>, SendError> {
+        self.manage_interface(crate::event::InterfaceManagementOperation::Attach, name)
+    }
+
+    /// Detach a named interface and its spawned children.
+    pub fn detach_interface(&self, name: &str) -> Result<Option<bool>, SendError> {
+        self.manage_interface(crate::event::InterfaceManagementOperation::Detach, name)
+    }
+
+    /// Detach and attach a named interface using the current on-disk configuration.
+    pub fn reload_interface(&self, name: &str) -> Result<Option<bool>, SendError> {
+        self.manage_interface(crate::event::InterfaceManagementOperation::Reload, name)
+    }
+
+    fn manage_interface(
+        &self,
+        operation: crate::event::InterfaceManagementOperation,
+        name: &str,
+    ) -> Result<Option<bool>, SendError> {
+        match self.query(QueryRequest::ManageInterface {
+            operation,
+            name: name.to_string(),
+        })? {
+            QueryResponse::InterfaceManagement(result) => Ok(result),
+            _ => Err(SendError),
+        }
     }
 
     /// Snapshot active Link metadata, including the negotiated direct-data MDU.
@@ -3531,6 +3713,161 @@ mod tests {
             _: rns_core::types::PacketHash,
         ) {
         }
+    }
+
+    #[test]
+    fn managed_interface_attaches_disabled_section_and_reloads_from_disk() {
+        use crate::event::InterfaceManagementOperation as Operation;
+
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("config");
+        let write_config = |port| {
+            fs::write(&config_file, format!("[reticulum]\nshare_instance = no\n\n[interfaces]\n  [[Managed UDP]]\n    type = UDPInterface\n    enabled = no\n    forward_ip = 127.0.0.1\n    forward_port = {port}\n"))
+            .unwrap();
+        };
+        write_config(9);
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let manage = |operation| {
+            node.query(QueryRequest::ManageInterface {
+                operation,
+                name: "Managed UDP".into(),
+            })
+            .unwrap()
+        };
+        assert!(matches!(
+            manage(Operation::Detach),
+            QueryResponse::InterfaceManagement(None)
+        ));
+        assert!(matches!(
+            manage(Operation::Attach),
+            QueryResponse::InterfaceManagement(Some(true))
+        ));
+        assert!(matches!(
+            manage(Operation::Attach),
+            QueryResponse::InterfaceManagement(Some(false))
+        ));
+        write_config(10);
+        assert!(matches!(
+            manage(Operation::Reload),
+            QueryResponse::InterfaceManagement(Some(true))
+        ));
+        assert!(matches!(
+            manage(Operation::Detach),
+            QueryResponse::InterfaceManagement(Some(true))
+        ));
+        assert!(matches!(
+            manage(Operation::Detach),
+            QueryResponse::InterfaceManagement(None)
+        ));
+        node.shutdown();
+    }
+
+    #[test]
+    fn interface_management_can_be_disabled() {
+        use crate::event::InterfaceManagementOperation as Operation;
+
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("config"),
+            "[reticulum]\nshare_instance = no\nenable_interface_management = no\n",
+        )
+        .unwrap();
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        assert!(matches!(
+            node.query(QueryRequest::ManageInterface {
+                operation: Operation::Attach,
+                name: "missing".into(),
+            })
+            .unwrap(),
+            QueryResponse::InterfaceManagement(Some(false))
+        ));
+        node.shutdown();
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    #[test]
+    fn managed_tcp_listener_releases_port_on_detach() {
+        use crate::event::InterfaceManagementOperation as Operation;
+        use std::io::Read;
+
+        let dir = tempdir().unwrap();
+        let port = crate::test_support::port();
+        fs::write(dir.path().join("config"), format!(
+            "[reticulum]\nshare_instance = no\n\n[interfaces]\n  [[Managed TCP]]\n    type = TCPServerInterface\n    enabled = no\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n"
+        )).unwrap();
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let manage = |operation| {
+            node.query(QueryRequest::ManageInterface {
+                operation,
+                name: "Managed TCP".into(),
+            })
+            .unwrap()
+        };
+        assert!(matches!(
+            manage(Operation::Attach),
+            QueryResponse::InterfaceManagement(Some(true))
+        ));
+        let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(matches!(
+            manage(Operation::Detach),
+            QueryResponse::InterfaceManagement(Some(true))
+        ));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+            && std::time::Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+        assert_eq!(client.read(&mut [0u8; 1]).unwrap(), 0);
+        assert!(matches!(
+            manage(Operation::Attach),
+            QueryResponse::InterfaceManagement(Some(true))
+        ));
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+        node.shutdown();
+    }
+
+    #[test]
+    fn shared_instance_rpc_manages_interface_by_name() {
+        use crate::pickle::PickleValue;
+        use crate::rpc::{derive_auth_key, RpcAddr, RpcClient};
+
+        let dir = tempdir().unwrap();
+        let rpc_port = crate::test_support::port();
+        let shared_port = crate::test_support::port();
+        fs::write(dir.path().join("config"), format!(
+            "[reticulum]\nshare_instance = yes\ninstance_control_port = {rpc_port}\nshared_instance_port = {shared_port}\n\n[interfaces]\n  [[Managed UDP]]\n    type = UDPInterface\n    enabled = no\n    forward_ip = 127.0.0.1\n    forward_port = 9\n"
+        )).unwrap();
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let paths = storage::ensure_storage_dirs(dir.path()).unwrap();
+        let identity = storage::load_or_create_identity(&paths.identities).unwrap();
+        let key = derive_auth_key(&identity.get_private_key().unwrap());
+        let call = |action: &str| {
+            let mut client =
+                RpcClient::connect(&RpcAddr::Tcp("127.0.0.1".into(), rpc_port), &key).unwrap();
+            client
+                .call(&PickleValue::Dict(vec![
+                    (
+                        PickleValue::String("manage".into()),
+                        PickleValue::String(action.into()),
+                    ),
+                    (
+                        PickleValue::String("name".into()),
+                        PickleValue::String("Managed UDP".into()),
+                    ),
+                ]))
+                .unwrap()
+        };
+        assert_eq!(call("attach_interface"), PickleValue::Bool(true));
+        assert_eq!(call("reload_interface"), PickleValue::Bool(true));
+        assert_eq!(call("detach_interface"), PickleValue::Bool(true));
+        assert_eq!(call("detach_interface"), PickleValue::None);
+        node.shutdown();
     }
 
     struct TestWriter;

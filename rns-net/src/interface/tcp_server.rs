@@ -10,6 +10,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use rns_core::constants;
 use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo};
@@ -292,6 +293,7 @@ fn listener_loop(context: ListenerLoopContext) {
         let client_tx = tx.clone();
         let client_name = name.clone();
         let client_active = active_connections.clone();
+        let client_control = control.clone();
         thread::Builder::new()
             .name(format!("tcp-server-reader-{}", client_id.0))
             .spawn(move || {
@@ -302,6 +304,7 @@ fn listener_loop(context: ListenerLoopContext) {
                     client_tx,
                     client_active,
                     ifac_size,
+                    client_control,
                 );
             })
             .ok();
@@ -316,11 +319,17 @@ fn client_reader_loop(
     tx: EventSender,
     active_connections: Arc<AtomicUsize>,
     ifac_size: usize,
+    control: ListenerControl,
 ) {
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
     let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
+        if control.should_stop() {
+            active_connections.fetch_sub(1, Ordering::Relaxed);
+            return;
+        }
         match stream.read(&mut buf) {
             Ok(0) => {
                 log::info!("[{}] client {} disconnected", name, id.0);
@@ -354,6 +363,11 @@ fn client_reader_loop(
                     }
                 }
             }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
             Err(e) => {
                 log::warn!("[{}] client {} read error: {}", name, id.0, e);
                 active_connections.fetch_sub(1, Ordering::Relaxed);

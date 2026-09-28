@@ -1,13 +1,16 @@
 # rnstatus
 
-`rnstatus` displays interface and transport statistics from a local `rnsd`
-instance or, with `-R`, from a remote transport instance.
+`rnstatus` displays and controls interfaces on a local `rnsd` instance, or
+displays statistics from a remote transport instance with `-R`.
 
 ```text
 Usage: rnstatus [OPTIONS] [FILTER]
 
 Options:
   --config PATH, -c PATH  Path to config directory
+  --attach NAME           Attach a configured interface
+  --detach NAME           Detach a running interface
+  --reload NAME           Reload a running interface from config
   -a                      Show all interfaces
   -j                      JSON output
   -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx,
@@ -31,6 +34,12 @@ Options:
   --version               Print version and exit
   --help, -h              Print this help
 ```
+
+`--attach` reads the named interface from the current config file, including
+sections marked disabled. `--reload` detaches it and reads that section again,
+so edits take effect without restarting `rnsd`. Local, I2P, and shared-instance
+interfaces cannot be detached. Set `enable_interface_management = no` in
+`[reticulum]` to disallow these commands through the shared-instance RPC port.
 
 An optional `FILTER` limits output to interface names containing the supplied
 text. Queue statistics report total, data, announce, path-request, and

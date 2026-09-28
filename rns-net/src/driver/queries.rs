@@ -529,6 +529,7 @@ impl Driver {
     /// Handle a query request and produce a response.
     pub(crate) fn handle_query(&self, request: QueryRequest) -> QueryResponse {
         match request {
+            QueryRequest::ManageInterface { .. } => QueryResponse::InterfaceManagement(Some(false)),
             QueryRequest::InterfaceStats => self.handle_interface_stats_query(),
             QueryRequest::BackboneInterfaces => {
                 QueryResponse::BackboneInterfaces(self.list_backbone_interfaces())
@@ -720,6 +721,9 @@ impl Driver {
     /// Handle a mutating query request.
     pub(crate) fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
+            QueryRequest::ManageInterface { operation, name } => {
+                QueryResponse::InterfaceManagement(self.manage_interface(operation, &name))
+            }
             request @ (QueryRequest::BlackholeIdentity { .. }
             | QueryRequest::UnblackholeIdentity { .. }
             | QueryRequest::DropPath { .. }

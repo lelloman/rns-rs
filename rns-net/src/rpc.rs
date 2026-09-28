@@ -367,6 +367,29 @@ fn recv_bytes(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 
 /// Translate an RPC request dict to a query event and get response.
 fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Result<PickleValue> {
+    if let Some(operation) = request.get("manage").and_then(PickleValue::as_str) {
+        let operation = match operation {
+            "attach_interface" => crate::event::InterfaceManagementOperation::Attach,
+            "detach_interface" => crate::event::InterfaceManagementOperation::Detach,
+            "reload_interface" => crate::event::InterfaceManagementOperation::Reload,
+            _ => return Ok(PickleValue::None),
+        };
+        let name = request
+            .get("name")
+            .and_then(PickleValue::as_str)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing interface name"))?;
+        let result = send_query(
+            event_tx,
+            QueryRequest::ManageInterface {
+                operation,
+                name: name.to_string(),
+            },
+        )?;
+        return Ok(match result {
+            QueryResponse::InterfaceManagement(Some(value)) => PickleValue::Bool(value),
+            _ => PickleValue::None,
+        });
+    }
     // Handle "get" requests
     if let Some(get_val) = request.get("get") {
         if let Some(path) = get_val.as_str() {
