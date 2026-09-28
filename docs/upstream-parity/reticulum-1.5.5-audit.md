@@ -6,15 +6,15 @@
 - previous accepted version: `1.5.4`
 - previous normative commit: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`
 - target version: `1.5.5` (`RNS/_version.py`)
-- target normative commit: `b899389956041693d1cbeee698bcbef2bc1b8858` (`rgit/master`)
-- current rgit tip root tree: `0a29475288cefe43f7fb432ed69a93bf901ecf35`
-- current rgit tip `RNS` tree: `62dc6859a28fc76b064e0c2fa062ff560ad9a343`
-- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..b899389956041693d1cbeee698bcbef2bc1b8858`
-- commits in candidate range: `12`
-- repositories checked: normative rgit remote and GitHub mirror, both refreshed on `2026-09-28`
+- target normative commit: `d3153bd7784c6c6d08346b7e3e393bb0007e557f` (`rgit/master`)
+- current rgit tip root tree: `d2739ce7d38f05191b34c0a87ce7df64c54cc445`
+- current rgit tip `RNS` tree: `52a588c83276ff9271eba238ce854f661ebb0aa1`
+- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..d3153bd7784c6c6d08346b7e3e393bb0007e557f`
+- commits in candidate range: `16`
+- repositories checked: normative rgit remote and GitHub mirror, both refreshed on `2026-09-28`; rgit advanced to `d3153bd7` while the mirror remained at `b8993899`
 - local branch and revision inspected: `dev@681e3e0ec0cc020dd9a43e8d54705a450a0db2ab`
 
-The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. A later fresh fetch found three subsequent meta-documentation commits on both remotes, so the promotion target was extended to their shared tip `b899389956041693d1cbeee698bcbef2bc1b8858`. Its `RNS` tree remains identical to the original 1.5.5 target. Final dispositions and acceptance still require source review.
+The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. A later fresh fetch found three subsequent meta-documentation commits on both remotes, extending the candidate to their shared tip `b899389956041693d1cbeee698bcbef2bc1b8858`. A fresh rgit fetch then found four more 1.5.5 commits through `d3153bd7`; the GitHub mirror had not caught up. The later commits include new runtime behavior and are being reviewed before promotion.
 
 ## Audit Vocabulary
 
@@ -45,12 +45,16 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 10 | `3b7429149e8fcf13c4310df32264c58647b6e983` | Fixed outdated meta-docs | `Contributing.md`, `Roadmap.md`, `SECURITY.md`, `This Is Not a Teahouse.md`, `docs/source/support.rst` | Non-runtime | `bab0ebd`: records upstream-only governance and editorial changes without altering native project policies. |
 | 11 | `3ad70c63ea87e94f9dc32486af7845ded9c0e852` | Fixed outdated meta-docs | `Contributing.md` | Non-runtime | `b3d6580`: records the upstream-only Markdown link correction. |
 | 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Non-runtime | `85b85b7`: records README reflow and project-specific editorial corrections; native badge remains gated. |
+| 13 | `1cf176f6e5785f62a87ed0ebe7e5d12dcf3f4bc6` | Added work doc counts to filter links | `RNS/Utilities/rngit/pages.py` | Integrated | `182a47e`: readable scope counts on work-page tabs, with document-level read denial applied to list, detail, and download. |
+| 14 | `a93c6ba5be384558371e24f110c13d61e8a40ef2` | Added ability to download markdown files as converted micron to rngit | `RNS/Utilities/rngit/pages.py` | Pending review | Native page and download handler identified; conversion behavior pending. |
+| 15 | `69c425d9ae024f00f01ec07656abf8c05c35cafd` | Updated changelog | `Changelog.md` | Pending review | Upstream 1.5.5 release description reviewed; disposition pending. |
+| 16 | `d3153bd7784c6c6d08346b7e3e393bb0007e557f` | Added stack info to rnstatus discovered interfaces output | `RNS/Discovery.py`, `RNS/Utilities/rnstatus.py` | Pending review | Native discovery parse, persistence, RPC, and CLI surfaces identified; port pending. |
 
-All twelve canonical commits have one nonempty local mapping with exactly one
+The first thirteen canonical commits have one nonempty local mapping with exactly one
 full `Upstream-Commit` trailer each. The local trailer order matches upstream
 ancestry. The first six short local hashes above were corrected after the
 branch rewrite by checking the committed trailers, not by changing the mapped
-code or test evidence.
+code or test evidence. Commits 14–16 remain to be mapped.
 
 ## Integration Plan
 
@@ -131,7 +135,7 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Local handling and evidence:** `0c7a85c` tracks each configured interface's parent ID, static IDs, type and control, rereads the current config for attach/reload, retires late child events, removes dynamic children and interface runtime state on detach, and updates discovery metadata. An accepted TCP server client now observes the listener stop signal and closes its socket. The node exposes named methods; the authenticated shared-instance RPC accepts the upstream `manage` map and returns the upstream tri-state result; `rnstatus` has matching options. Focused tests cover attaching a disabled UDP section, duplicate/missing names, reload from disk, disabled management, listener port and client-socket release, and actual authenticated RPC calls. The complete elevated `rns-net` suite passed (970 unit tests, 56 E2E tests, and interop/fixture suites); the elevated `rns-cli` suite passed. Formatting, staged diff checks, and warning-free clippy for both changed crates passed. Initial sandboxed full-suite attempts failed in unrelated localhost socket tests with `EPERM`; the complete reruns outside that sandbox passed.
 
-**Post-mapping interop correction:** An exact-target `rnstatus --attach` check against native `rnsd` found that Python 1.5.5 uses an abstract Unix RPC socket on Linux and authenticates both peers with the key derived from `storage/transport_identity`. The native daemon previously exposed TCP RPC only, used its own separate identity for the key, and completed only the first half of the `multiprocessing.connection` authentication exchange. A follow-up compatibility commit adds the Unix endpoint, persists or reads the Python-compatible RPC identity, and completes mutual authentication for both native and Python clients. The exact Python 1.5.5 `rnstatus` CLI then successfully attached, reloaded, and detached a disabled UDP interface through the Rust daemon. This follow-up has no `Upstream-Commit` trailer and does not change the one-to-one mapping.
+**Post-mapping interop correction:** An exact-target `rnstatus --attach` check against native `rnsd` found that Python 1.5.5 uses an abstract Unix RPC socket on Linux and authenticates both peers with the key derived from `storage/transport_identity`. The native daemon previously exposed TCP RPC only, used its own separate identity for the key, and completed only the first half of the `multiprocessing.connection` authentication exchange. Follow-up `9baa221` adds the Unix endpoint, persists or reads the Python-compatible RPC identity with owner-only permissions, and completes mutual authentication for both native and Python clients. The exact Python 1.5.5 `rnstatus` CLI then successfully attached, reloaded, and detached a disabled UDP interface through the Rust daemon; that sequence is now an ignored exact-target CI interop regression. The final default workspace suite passed 2,532 tests, the hook-enabled suite passed 2,579 tests, and host lint passed. This follow-up has no `Upstream-Commit` trailer and does not change the one-to-one mapping.
 
 **Final disposition:** Integrated. Final workspace, build, Docker, and promotion gates are tracked below.
 
@@ -184,6 +188,16 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 **Local handling and evidence:** This audit records the substantive editorial changes and the independent-documentation boundary. No native runtime test is applicable; the README badge and accepted-reference text will be updated by the final promotion commit only after the parity record is complete.
 
 **Final disposition:** Non-runtime.
+
+### 13. `1cf176f6` — Added work doc counts to filter links
+
+**Upstream change:** Counts readable active, completed, and proposed work documents for each filter link and moves counts out of section headings. A document with denied read access must not contribute to a visible count.
+
+**Rust applicability:** Native `rngit` already lists these scopes but its filter links did not show counts. Its work page also listed documents with explicit document-level read denial despite repository-level read access.
+
+**Local handling and evidence:** `182a47e` lists all scopes for counts, filters explicit document-level read denials from the visible lists, and applies the same denial to detail and download handlers. The focused page regression passed, including counts before and after `read = none`; the complete `rns-git` suite passed (234 tests across eight suites), as did formatting and warning-free crate lint.
+
+**Final disposition:** Integrated.
 
 ## Promotion Gates
 
