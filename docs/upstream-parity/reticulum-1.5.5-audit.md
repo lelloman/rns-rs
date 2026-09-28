@@ -42,7 +42,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 7 | `d23261c8d92323597e567c45580bda2c588e40aa` | Added live interface attach/detach/reload | `Reticulum.py`, `rnsd.py`, `rnstatus.py`, `using.rst` | Integrated | `0c7a85c`: config-backed attach/detach/reload, authenticated shared-instance RPC, `rnstatus` commands, TCP child shutdown, docs, and focused regressions. |
 | 8 | `6ecda49394708c4d4297bb3918bc4d2b11d8e8d6` | Updated documentation | generated and Markdown using guides | Non-runtime | `4207119`: native `rnstatus` guide adds an operator example; command reference landed with row 7. |
 | 9 | `e2ba876ebfec386af9f97d844c39e9ca016e956c` | Updated version | `RNS/_version.py` | Non-runtime | `4cf122f`: records the exact upstream version assertion and keeps the accepted native baseline unchanged pending gates. |
-| 10 | `3b7429149e8fcf13c4310df32264c58647b6e983` | Fixed outdated meta-docs | `Contributing.md`, `Roadmap.md`, `SECURITY.md`, `This Is Not a Teahouse.md`, `docs/source/support.rst` | Pending review | — |
+| 10 | `3b7429149e8fcf13c4310df32264c58647b6e983` | Fixed outdated meta-docs | `Contributing.md`, `Roadmap.md`, `SECURITY.md`, `This Is Not a Teahouse.md`, `docs/source/support.rst` | Non-runtime | `bab0ebd`: records upstream-only governance and editorial changes without altering native project policies. |
 | 11 | `3ad70c63ea87e94f9dc32486af7845ded9c0e852` | Fixed outdated meta-docs | `Contributing.md` | Pending review | — |
 | 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Pending review | — |
 
