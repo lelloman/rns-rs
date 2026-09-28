@@ -10,6 +10,10 @@
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
+#[cfg(target_os = "linux")]
+use std::os::linux::net::SocketAddrExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::net::{SocketAddr, UnixListener};
 use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -87,12 +91,81 @@ impl RpcServer {
         })
     }
 
+    /// Listen on the abstract socket used by Python Reticulum on Linux.
+    #[cfg(target_os = "linux")]
+    pub fn start_abstract_unix(
+        instance_name: &str,
+        auth_key: [u8; 32],
+        event_tx: EventSender,
+    ) -> io::Result<Self> {
+        let addr = SocketAddr::from_abstract_name(format!("rns/{instance_name}/rpc"))?;
+        let listener = UnixListener::bind_addr(&addr)?;
+        listener.set_nonblocking(true)?;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown2 = shutdown.clone();
+        let thread = thread::Builder::new()
+            .name("rpc-unix-server".into())
+            .spawn(move || rpc_server_loop_unix(listener, auth_key, event_tx, shutdown2))
+            .map_err(io::Error::other)?;
+        Ok(Self {
+            shutdown,
+            thread: Some(thread),
+        })
+    }
+
     /// Stop the RPC server.
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rpc_server_loop_unix(
+    listener: UnixListener,
+    auth_key: [u8; 32],
+    event_tx: EventSender,
+    shutdown: Arc<AtomicBool>,
+) {
+    let mut workers = Vec::new();
+    loop {
+        reap_finished_rpc_workers(&mut workers);
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if workers.len() >= MAX_CONCURRENT_RPC_CONNECTIONS {
+                    log::warn!("rejecting Unix RPC connection: {MAX_CONCURRENT_RPC_CONNECTIONS} handlers already active");
+                    continue;
+                }
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+                let worker_event_tx = event_tx.clone();
+                match thread::Builder::new()
+                    .name("rpc-unix-client".into())
+                    .spawn(move || {
+                        if let Err(e) = handle_connection(stream, &auth_key, &worker_event_tx) {
+                            log::debug!("Unix RPC connection error: {e}");
+                        }
+                    }) {
+                    Ok(worker) => workers.push(worker),
+                    Err(e) => log::error!("failed to start Unix RPC connection handler: {e}"),
+                }
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10))
+            }
+            Err(e) => {
+                log::error!("Unix RPC accept error: {e}");
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    for worker in workers {
+        let _ = worker.join();
     }
 }
 
@@ -145,7 +218,7 @@ fn rpc_server_loop(
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 // No pending connection, sleep briefly and retry
-                thread::sleep(std::time::Duration::from_millis(100));
+                thread::sleep(std::time::Duration::from_millis(10));
             }
             Err(e) => {
                 log::error!("RPC accept error: {}", e);
@@ -171,13 +244,15 @@ fn reap_finished_rpc_workers(workers: &mut Vec<thread::JoinHandle<()>>) {
     }
 }
 
-fn handle_connection(
-    mut stream: TcpStream,
+fn handle_connection<S: Read + Write>(
+    mut stream: S,
     auth_key: &[u8; 32],
     event_tx: &EventSender,
 ) -> io::Result<()> {
     // Authentication: send challenge, verify response
     server_auth(&mut stream, auth_key)?;
+    // multiprocessing.connection authenticates both peers before requests.
+    answer_challenge(&mut stream, auth_key)?;
 
     // Read request.
     let request_bytes = recv_bytes(&mut stream)?;
@@ -253,7 +328,7 @@ fn msgpack_to_pickle(value: &MsgpackValue) -> PickleValue {
 }
 
 /// Server-side authentication: challenge-response.
-fn server_auth(stream: &mut TcpStream, auth_key: &[u8; 32]) -> io::Result<()> {
+fn server_auth<S: Read + Write>(stream: &mut S, auth_key: &[u8; 32]) -> io::Result<()> {
     // Generate challenge: #CHALLENGE#{sha256}<40 random bytes>
     let mut random_bytes = [0u8; CHALLENGE_LEN];
     // Use /dev/urandom for randomness
@@ -324,7 +399,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Send bytes with 4-byte big-endian length prefix.
-fn send_bytes(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
+fn send_bytes<S: Write>(stream: &mut S, data: &[u8]) -> io::Result<()> {
     let len = data.len() as i32;
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(data)?;
@@ -332,7 +407,7 @@ fn send_bytes(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
 }
 
 /// Receive bytes with 4-byte big-endian length prefix.
-fn recv_bytes(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+fn recv_bytes<S: Read>(stream: &mut S) -> io::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf)?;
     let len = i32::from_be_bytes(len_buf);
@@ -2978,6 +3053,11 @@ fn default_hook_type() -> &'static str {
 
 /// Client-side authentication: answer the server's challenge.
 fn client_auth(stream: &mut TcpStream, auth_key: &[u8; 32]) -> io::Result<()> {
+    answer_challenge(stream, auth_key)?;
+    server_auth(stream, auth_key)
+}
+
+fn answer_challenge<S: Read + Write>(stream: &mut S, auth_key: &[u8; 32]) -> io::Result<()> {
     // Read challenge
     let challenge = recv_bytes(stream)?;
 
@@ -3104,6 +3184,7 @@ mod tests {
         });
 
         server_auth(&mut server, &key).unwrap();
+        answer_challenge(&mut server, &key).unwrap();
         t.join().unwrap();
     }
 

@@ -1009,3 +1009,50 @@ fn python_rns_is_available_for_utility_interop() {
     command.args(["-c", "import RNS, RNS.Utilities.rncp, RNS.Utilities.rnx"]);
     assert_success(&run(command), "import Python RNS utilities");
 }
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnstatus_manages_rust_interface() {
+    let mut version_command = Command::new("python3");
+    version_command.args(["-c", "import RNS; print(RNS.__version__)"]);
+    let version_output = run(version_command);
+    assert_success(&version_output, "read Python Reticulum version");
+    let version = String::from_utf8_lossy(&version_output.stdout);
+    let parts: Vec<u32> = version
+        .trim()
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect();
+    if parts.as_slice() < [1, 5, 5].as_slice() {
+        return;
+    }
+
+    let harness = Harness::start("python-management");
+    let config_path = harness.listener_config.join("config");
+    let mut config = fs::read_to_string(&config_path).unwrap();
+    config.push_str(
+        "\n  [[Managed UDP]]\n    type = UDPInterface\n    enabled = no\n    forward_ip = 127.0.0.1\n    forward_port = 9\n",
+    );
+    fs::write(&config_path, config).unwrap();
+
+    for (action, result) in [
+        ("attach", "attached"),
+        ("reload", "reloaded"),
+        ("detach", "detached"),
+    ] {
+        let mut command = harness.python_command("rnstatus");
+        command.args([
+            "--config",
+            harness.listener_config.to_str().unwrap(),
+            &format!("--{action}"),
+            "Managed UDP",
+        ]);
+        let output = run(command);
+        assert_success(&output, &format!("Python rnstatus --{action}"));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("was {result}")),
+            "unexpected rnstatus output: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}

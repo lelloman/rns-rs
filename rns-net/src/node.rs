@@ -613,6 +613,7 @@ pub struct NodeConfig {
 }
 
 struct NodeQueueConfig {
+    rpc_auth_key: Option<[u8; 32]>,
     announce_max_entries: usize,
     announce_max_interfaces: usize,
     announce_max_bytes: usize,
@@ -625,6 +626,7 @@ struct NodeQueueConfig {
 impl Default for NodeQueueConfig {
     fn default() -> Self {
         Self {
+            rpc_auth_key: None,
             announce_max_entries: 256,
             announce_max_interfaces: 1024,
             announce_max_bytes: 256 * 1024,
@@ -855,6 +857,8 @@ pub struct RnsNode {
     persist_handle: Option<JoinHandle<()>>,
     persist_stop: Option<std::sync::mpsc::Sender<()>>,
     rpc_server: Option<crate::rpc::RpcServer>,
+    #[cfg(target_os = "linux")]
+    rpc_unix_server: Option<crate::rpc::RpcServer>,
     tick_interval_ms: Arc<AtomicU64>,
     #[allow(dead_code)]
     probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
@@ -927,6 +931,28 @@ impl RnsNode {
             }
         } else {
             storage::load_or_create_identity(&paths.identities)?
+        };
+        // Python clients derive their RPC key from this persisted identity, even
+        // when their non-transport instance uses an ephemeral network identity.
+        let rpc_auth_key = if !private && rns_config.reticulum.share_instance {
+            let transport_identity_path = paths.storage.join("transport_identity");
+            let rpc_identity = if transport_identity_path.exists() {
+                storage::load_identity(&transport_identity_path)?
+            } else {
+                storage::save_identity(&identity, &transport_identity_path)?;
+                Identity::from_private_key(
+                    &identity
+                        .get_private_key()
+                        .expect("node identity has private key"),
+                )
+            };
+            Some(crate::rpc::derive_auth_key(
+                &rpc_identity
+                    .get_private_key()
+                    .expect("RPC identity has private key"),
+            ))
+        } else {
+            None
         };
 
         // Build interface configs from parsed config using registry
@@ -1311,6 +1337,7 @@ impl RnsNode {
             node_config,
             callbacks,
             NodeQueueConfig {
+                rpc_auth_key,
                 announce_max_entries: rns_config.reticulum.announce_queue_max_entries,
                 announce_max_interfaces: rns_config.reticulum.announce_queue_max_interfaces,
                 announce_max_bytes: rns_config.reticulum.announce_queue_max_bytes,
@@ -1387,6 +1414,13 @@ impl RnsNode {
             None
         };
         let identity = config.identity.unwrap_or_else(|| Identity::new(&mut OsRng));
+        let rpc_auth_key = queue_config.rpc_auth_key.unwrap_or_else(|| {
+            crate::rpc::derive_auth_key(
+                &identity
+                    .get_private_key()
+                    .expect("node identity has private key"),
+            )
+        });
         let transport_identity = if config.transport_enabled || config.static_transport_identity {
             Identity::from_private_key(
                 &identity
@@ -2141,16 +2175,36 @@ impl RnsNode {
 
         // Start RPC server if share_instance is enabled
         let rpc_server = if config.share_instance {
-            let auth_key =
-                crate::rpc::derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
             let rpc_addr = crate::rpc::RpcAddr::Tcp("127.0.0.1".into(), config.rpc_port);
-            match crate::rpc::RpcServer::start(&rpc_addr, auth_key, tx.clone()) {
+            match crate::rpc::RpcServer::start(&rpc_addr, rpc_auth_key, tx.clone()) {
                 Ok(server) => {
                     log::info!("RPC server started on 127.0.0.1:{}", config.rpc_port);
                     Some(server)
                 }
                 Err(e) => {
                     log::error!("Failed to start RPC server: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(target_os = "linux")]
+        let rpc_unix_server = if config.share_instance {
+            match crate::rpc::RpcServer::start_abstract_unix(
+                &config.instance_name,
+                rpc_auth_key,
+                tx.clone(),
+            ) {
+                Ok(server) => {
+                    log::info!(
+                        "RPC server started on abstract Unix socket for {}",
+                        config.instance_name
+                    );
+                    Some(server)
+                }
+                Err(e) => {
+                    log::error!("Failed to start abstract Unix RPC server: {e}");
                     None
                 }
             }
@@ -2308,6 +2362,8 @@ impl RnsNode {
             persist_handle,
             persist_stop,
             rpc_server,
+            #[cfg(target_os = "linux")]
+            rpc_unix_server,
             tick_interval_ms,
             probe_server,
             known_destinations_path: None,
@@ -3615,6 +3671,8 @@ impl RnsNode {
             persist_handle: None,
             persist_stop: None,
             rpc_server,
+            #[cfg(target_os = "linux")]
+            rpc_unix_server: None,
             tick_interval_ms,
             probe_server: None,
             known_destinations_path: None,
@@ -3661,11 +3719,25 @@ impl RnsNode {
             && self.verify_handle.is_none()
             && self.persist_handle.is_none()
             && self.rpc_server.is_none()
+            && {
+                #[cfg(target_os = "linux")]
+                {
+                    self.rpc_unix_server.is_none()
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    true
+                }
+            }
         {
             return;
         }
         // Stop RPC server first
         if let Some(mut rpc) = self.rpc_server.take() {
+            rpc.stop();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(mut rpc) = self.rpc_unix_server.take() {
             rpc.stop();
         }
         self.persist_known_destinations();
@@ -4104,6 +4176,8 @@ mod tests {
             persist_handle: None,
             persist_stop: None,
             rpc_server: None,
+            #[cfg(target_os = "linux")]
+            rpc_unix_server: None,
             tick_interval_ms: Arc::new(AtomicU64::new(1000)),
             probe_server: None,
             known_destinations_path: None,
