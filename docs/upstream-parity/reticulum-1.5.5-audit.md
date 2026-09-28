@@ -38,7 +38,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 3 | `24b1ac521e4a0456d41b3fdd82d4ceb4d330f905` | Prepared RNodeInterface for live detach/attach | RNode, RNodeMulti, Android, Auto, base interfaces | Integrated | `4155535`: RNode reader and keepalive stop without reconnecting on intentional detach. |
 | 4 | `2c30a88e85693bb73e493bfaa56533774507f40d` | Fixed I2P interface discovery config snippet generation not including .b32.i2p | `RNS/Discovery.py` | Integrated | `c24dc22`: discovery snippets add `.b32.i2p`; focused regression. |
 | 5 | `7283cb417aebef9ef94d972ca53806a06fe37b36` | Prepared serial-based interfaces for live detach/attach | AX25 KISS, KISS, Serial, Android interfaces | Integrated | `aa1fac4`: native Serial/KISS/AX25 reader stop and reconnect control, including late port recovery. |
-| 6 | `84709ccf09fddf23a9723c6904c7678159e878af` | Prepared TCP and UDP interfaces for live detach/attach | `TCPInterface.py`, `UDPInterface.py` | Pending review | — |
+| 6 | `84709ccf09fddf23a9723c6904c7678159e878af` | Prepared TCP and UDP interfaces for live detach/attach | `TCPInterface.py`, `UDPInterface.py` | Integrated | `0a3b8eb`: TCP reconnect guard and UDP listener stop, with idle detach regressions. |
 | 7 | `d23261c8d92323597e567c45580bda2c588e40aa` | Added live interface attach/detach/reload | `Reticulum.py`, `rnsd.py`, `rnstatus.py`, `using.rst` | Pending review | — |
 | 8 | `6ecda49394708c4d4297bb3918bc4d2b11d8e8d6` | Updated documentation | generated and Markdown using guides | Pending review | — |
 | 9 | `e2ba876ebfec386af9f97d844c39e9ca016e956c` | Updated version | `RNS/_version.py` | Pending review | — |
@@ -98,6 +98,16 @@ Review each commit's full diff in ancestry order and assign a supported disposit
 **Local handling and evidence:** `aa1fac4` gives Simple interfaces a lifecycle control, makes serial and KISS readers poll for input so a quiet port can stop, guards reconnect loops against detachment, and treats an initially missing port or failed KISS configuration as an offline interface that retries. Focused PTY tests verify idle detach and recovery when each port appears later. The full `rns-net` suite passed (964 unit tests, 56 E2E tests, interop and fixture suites). Formatting and warning-free clippy passed; the 964 unit tests were also rerun after the final KISS failure-path adjustment.
 
 **Final disposition:** Integrated for native Serial, KISS, and AX.25 KISS transports.
+
+### 6. `84709ccf` — Prepared TCP and UDP interfaces for live detach/attach
+
+**Upstream change:** Prevents a detached TCP client from reconnecting and closes a detached UDP listener. Other edits are formatting and copyright updates.
+
+**Rust applicability:** The native TCP client reader and reconnect loop, and the UDP listener thread, previously lacked an interface-specific stop signal.
+
+**Local handling and evidence:** `0a3b8eb` returns lifecycle controls for TCP and UDP, checks them in idle readers and before TCP reconnect, and gives UDP a bounded receive timeout so its socket is dropped promptly. Focused tests stop both idle readers without a spurious down event. The full `rns-net` suite passed (966 unit tests, 56 E2E tests, interop and fixture suites), as did formatting and warning-free clippy.
+
+**Final disposition:** Integrated. The live management command will invoke these controls in the next mapping.
 
 ## Promotion Gates
 
