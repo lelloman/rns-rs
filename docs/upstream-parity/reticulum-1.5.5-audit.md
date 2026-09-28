@@ -39,7 +39,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 4 | `2c30a88e85693bb73e493bfaa56533774507f40d` | Fixed I2P interface discovery config snippet generation not including .b32.i2p | `RNS/Discovery.py` | Integrated | `c24dc22`: discovery snippets add `.b32.i2p`; focused regression. |
 | 5 | `7283cb417aebef9ef94d972ca53806a06fe37b36` | Prepared serial-based interfaces for live detach/attach | AX25 KISS, KISS, Serial, Android interfaces | Integrated | `aa1fac4`: native Serial/KISS/AX25 reader stop and reconnect control, including late port recovery. |
 | 6 | `84709ccf09fddf23a9723c6904c7678159e878af` | Prepared TCP and UDP interfaces for live detach/attach | `TCPInterface.py`, `UDPInterface.py` | Integrated | `0a3b8eb`: TCP reconnect guard and UDP listener stop, with idle detach regressions. |
-| 7 | `d23261c8d92323597e567c45580bda2c588e40aa` | Added live interface attach/detach/reload | `Reticulum.py`, `rnsd.py`, `rnstatus.py`, `using.rst` | Pending review | — |
+| 7 | `d23261c8d92323597e567c45580bda2c588e40aa` | Added live interface attach/detach/reload | `Reticulum.py`, `rnsd.py`, `rnstatus.py`, `using.rst` | Integrated | `0c7a85c`: config-backed attach/detach/reload, authenticated shared-instance RPC, `rnstatus` commands, TCP child shutdown, docs, and focused regressions. |
 | 8 | `6ecda49394708c4d4297bb3918bc4d2b11d8e8d6` | Updated documentation | generated and Markdown using guides | Pending review | — |
 | 9 | `e2ba876ebfec386af9f97d844c39e9ca016e956c` | Updated version | `RNS/_version.py` | Pending review | — |
 
@@ -108,6 +108,16 @@ Review each commit's full diff in ancestry order and assign a supported disposit
 **Local handling and evidence:** `0a3b8eb` returns lifecycle controls for TCP and UDP, checks them in idle readers and before TCP reconnect, and gives UDP a bounded receive timeout so its socket is dropped promptly. Focused tests stop both idle readers without a spurious down event. The full `rns-net` suite passed (966 unit tests, 56 E2E tests, interop and fixture suites), as did formatting and warning-free clippy.
 
 **Final disposition:** Integrated. The live management command will invoke these controls in the next mapping.
+
+### 7. `d23261c8` — Added live interface attach/detach/reload
+
+**Upstream change:** Adds the default-enabled `enable_interface_management` setting, named attach/detach/reload operations that reread the config on attach, shared-instance `manage` RPC commands, and `rnstatus --attach/--detach/--reload`. Disabled interface sections can be attached explicitly. I2P and local shared-instance interfaces cannot be detached. The documentation and example config describe the commands and control setting.
+
+**Rust applicability:** The native node had no named live-management API or matching RPC/CLI commands. Its interface factories already started each transport, and the preceding mapping commits added stop controls, but listener-only interfaces and spawned clients needed tracking by configured parent name.
+
+**Local handling and evidence:** `0c7a85c` tracks each configured interface's parent ID, static IDs, type and control, rereads the current config for attach/reload, retires late child events, removes dynamic children and interface runtime state on detach, and updates discovery metadata. An accepted TCP server client now observes the listener stop signal and closes its socket. The node exposes named methods; the authenticated shared-instance RPC accepts the upstream `manage` map and returns the upstream tri-state result; `rnstatus` has matching options. Focused tests cover attaching a disabled UDP section, duplicate/missing names, reload from disk, disabled management, listener port and client-socket release, and actual authenticated RPC calls. The complete elevated `rns-net` suite passed (970 unit tests, 56 E2E tests, and interop/fixture suites); the elevated `rns-cli` suite passed. Formatting, staged diff checks, and warning-free clippy for both changed crates passed. Initial sandboxed full-suite attempts failed in unrelated localhost socket tests with `EPERM`; the complete reruns outside that sandbox passed.
+
+**Final disposition:** Integrated. Exact-target Python/Rust interop and promotion gates remain to be run after all nine mappings are complete.
 
 ## Promotion Gates
 
