@@ -60,7 +60,7 @@ Results below were obtained on 2026-09-28 unless marked otherwise.
 
 ## Caveats and Deferred Validation
 
-The GitHub mirror lagged the normative tip by two commits at the final pre-promotion refresh. Its CI interop matrix remains pinned to the previously mirrored 1.5.4 baseline until the exact 1.5.5 commit is available on GitHub; ordinary PR CI therefore does not yet rerun exact-target 1.5.5 interop. Local exact-target interop used the canonical rgit object and passed. The Docker matrix was interrupted and must be rerun for acceptance. The final revision was not redeployed to the dual VPS hosts, and physical hardware validation is unclaimed. Upstream governance, support, and security prose was reviewed as upstream editorial material, not adopted as this project's policy.
+The GitHub mirror lagged the normative tip by two commits at the fresh PR-preparation refresh. The PR CI interop matrix tests a mirrored 1.5.5 snapshot at `d5962d14`, whose `RNS` tree matches the already tested `d3153bd7` runtime; it does not yet test the final `71583c5c` Python local-interface initialization edit. Advance the CI pin to `cce96d38` when GitHub mirrors it. Local exact-target interop used the canonical rgit object and passed. The Docker matrix was interrupted and must be rerun for acceptance. The final revision was not redeployed to the dual VPS hosts, and physical hardware validation is unclaimed. Upstream governance, support, and security prose was reviewed as upstream editorial material, not adopted as this project's policy.
 
 ## Promotion Result
 
