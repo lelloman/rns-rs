@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -296,7 +296,14 @@ pub fn save_identity(identity: &Identity, path: &Path) -> io::Result<()> {
     let private_key = identity
         .get_private_key()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Identity has no private key"))?;
-    fs::write(path, private_key)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(&private_key)
 }
 
 /// Load an identity from a private key file (64 bytes).
@@ -796,6 +803,14 @@ mod tests {
         let original_hash = *identity.hash();
 
         save_identity(&identity, &path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         let loaded = load_identity(&path).unwrap();
 
         assert_eq!(*loaded.hash(), original_hash);
