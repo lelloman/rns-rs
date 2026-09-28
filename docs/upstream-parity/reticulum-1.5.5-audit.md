@@ -33,18 +33,24 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 
 | # | Upstream commit | Subject | Changed paths | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
-| 1 | `c95fd8e6ca88c9e3b0e3306c74ff604a36894c67` | Updated rngit documentation | `docs/source/git.rst`, generated manual docs | Integrated | `34a2e28`: `docs/rns-git.md` documents changing bare `HEAD` before first push. |
-| 2 | `e68f4ff118662a9fe747f956bb96c45695a5ab20` | Prepared AutoInterface for live detach/attach | `RNS/Interfaces/AutoInterface.py`, `Interface.py` | Integrated | `ae72d50`: AutoInterface exposes listener control that stops its supervisor and workers. |
-| 3 | `24b1ac521e4a0456d41b3fdd82d4ceb4d330f905` | Prepared RNodeInterface for live detach/attach | RNode, RNodeMulti, Android, Auto, base interfaces | Integrated | `4155535`: RNode reader and keepalive stop without reconnecting on intentional detach. |
-| 4 | `2c30a88e85693bb73e493bfaa56533774507f40d` | Fixed I2P interface discovery config snippet generation not including .b32.i2p | `RNS/Discovery.py` | Integrated | `c24dc22`: discovery snippets add `.b32.i2p`; focused regression. |
-| 5 | `7283cb417aebef9ef94d972ca53806a06fe37b36` | Prepared serial-based interfaces for live detach/attach | AX25 KISS, KISS, Serial, Android interfaces | Integrated | `aa1fac4`: native Serial/KISS/AX25 reader stop and reconnect control, including late port recovery. |
-| 6 | `84709ccf09fddf23a9723c6904c7678159e878af` | Prepared TCP and UDP interfaces for live detach/attach | `TCPInterface.py`, `UDPInterface.py` | Integrated | `0a3b8eb`: TCP reconnect guard and UDP listener stop, with idle detach regressions. |
+| 1 | `c95fd8e6ca88c9e3b0e3306c74ff604a36894c67` | Updated rngit documentation | `docs/source/git.rst`, generated manual docs | Integrated | `6fba84e`: `docs/rns-git.md` documents changing bare `HEAD` before first push. |
+| 2 | `e68f4ff118662a9fe747f956bb96c45695a5ab20` | Prepared AutoInterface for live detach/attach | `RNS/Interfaces/AutoInterface.py`, `Interface.py` | Integrated | `37aa2c9`: AutoInterface exposes listener control that stops its supervisor and workers. |
+| 3 | `24b1ac521e4a0456d41b3fdd82d4ceb4d330f905` | Prepared RNodeInterface for live detach/attach | RNode, RNodeMulti, Android, Auto, base interfaces | Integrated | `8fd4488`: RNode reader and keepalive stop without reconnecting on intentional detach. |
+| 4 | `2c30a88e85693bb73e493bfaa56533774507f40d` | Fixed I2P interface discovery config snippet generation not including .b32.i2p | `RNS/Discovery.py` | Integrated | `198cdde`: discovery snippets add `.b32.i2p`; focused regression. |
+| 5 | `7283cb417aebef9ef94d972ca53806a06fe37b36` | Prepared serial-based interfaces for live detach/attach | AX25 KISS, KISS, Serial, Android interfaces | Integrated | `cebe473`: native Serial/KISS/AX25 reader stop and reconnect control, including late port recovery. |
+| 6 | `84709ccf09fddf23a9723c6904c7678159e878af` | Prepared TCP and UDP interfaces for live detach/attach | `TCPInterface.py`, `UDPInterface.py` | Integrated | `c3b4cdf`: TCP reconnect guard and UDP listener stop, with idle detach regressions. |
 | 7 | `d23261c8d92323597e567c45580bda2c588e40aa` | Added live interface attach/detach/reload | `Reticulum.py`, `rnsd.py`, `rnstatus.py`, `using.rst` | Integrated | `0c7a85c`: config-backed attach/detach/reload, authenticated shared-instance RPC, `rnstatus` commands, TCP child shutdown, docs, and focused regressions. |
 | 8 | `6ecda49394708c4d4297bb3918bc4d2b11d8e8d6` | Updated documentation | generated and Markdown using guides | Non-runtime | `4207119`: native `rnstatus` guide adds an operator example; command reference landed with row 7. |
 | 9 | `e2ba876ebfec386af9f97d844c39e9ca016e956c` | Updated version | `RNS/_version.py` | Non-runtime | `4cf122f`: records the exact upstream version assertion and keeps the accepted native baseline unchanged pending gates. |
 | 10 | `3b7429149e8fcf13c4310df32264c58647b6e983` | Fixed outdated meta-docs | `Contributing.md`, `Roadmap.md`, `SECURITY.md`, `This Is Not a Teahouse.md`, `docs/source/support.rst` | Non-runtime | `bab0ebd`: records upstream-only governance and editorial changes without altering native project policies. |
 | 11 | `3ad70c63ea87e94f9dc32486af7845ded9c0e852` | Fixed outdated meta-docs | `Contributing.md` | Non-runtime | `b3d6580`: records the upstream-only Markdown link correction. |
 | 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Non-runtime | `85b85b7`: records README reflow and project-specific editorial corrections; native badge remains gated. |
+
+All twelve canonical commits have one nonempty local mapping with exactly one
+full `Upstream-Commit` trailer each. The local trailer order matches upstream
+ancestry. The first six short local hashes above were corrected after the
+branch rewrite by checking the committed trailers, not by changing the mapped
+code or test evidence.
 
 ## Integration Plan
 
@@ -63,7 +69,7 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Rust applicability:** Native `rngit` also creates and serves bare Git repositories, so the operator tip applies.
 
-**Local handling and evidence:** `34a2e28` adds the command to `docs/rns-git.md` in the repository management section. This is documentation only; no runtime behavior changed.
+**Local handling and evidence:** `6fba84e` adds the command to `docs/rns-git.md` in the repository management section. This is documentation only; no runtime behavior changed.
 
 **Final disposition:** Integrated.
 
@@ -73,7 +79,7 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Rust applicability:** Native AutoInterface already has per-worker stop flags, but its top-level supervisor's running flag was not exposed to the node lifecycle.
 
-**Local handling and evidence:** `ae72d50` connects the AutoInterface running flag to the listener control returned by the factory. A stop request ends supervision, which stops workers and drops their owned sockets. The focused AutoInterface tests (41) passed. The complete `rns-net` crate suite passed when run serially (959 unit tests, 56 E2E tests, and interop/fixture suites); `cargo fmt --all -- --check` and `cargo clippy -p rns-net --all-targets -- -D warnings` passed. The first parallel E2E attempt hit an unrelated address-in-use conflict in the multihop test; that test passed alone and in the serial suite.
+**Local handling and evidence:** `37aa2c9` connects the AutoInterface running flag to the listener control returned by the factory. A stop request ends supervision, which stops workers and drops their owned sockets. The focused AutoInterface tests (41) passed. The complete `rns-net` crate suite passed when run serially (959 unit tests, 56 E2E tests, and interop/fixture suites); `cargo fmt --all -- --check` and `cargo clippy -p rns-net --all-targets -- -D warnings` passed. The first parallel E2E attempt hit an unrelated address-in-use conflict in the multihop test; that test passed alone and in the serial suite.
 
 **Final disposition:** Integrated. Runtime interface management will consume this control in the later attach/detach commit.
 
@@ -83,7 +89,7 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Rust applicability:** Native RNode readers and keepalive workers previously had no lifecycle stop signal. A live detach could leave the reader reconnecting and the keepalive holding its transport.
 
-**Local handling and evidence:** `4155535` returns a control for multi-interface RNode startup, uses it to stop the reader and keepalive workers, and polls the reader so a quiet port can stop promptly. The existing reconnect PTY test now also verifies that intentional stop does not produce another disconnect event. The focused RNode tests (15), full serial `rns-net` suite (959 unit tests, 56 E2E tests, interop and fixture suites), formatting, and warning-free `rns-net` clippy passed. The native Android BLE RNode transport does not exist and is outside this implementation.
+**Local handling and evidence:** `8fd4488` returns a control for multi-interface RNode startup, uses it to stop the reader and keepalive workers, and polls the reader so a quiet port can stop promptly. The existing reconnect PTY test now also verifies that intentional stop does not produce another disconnect event. The focused RNode tests (15), full serial `rns-net` suite (959 unit tests, 56 E2E tests, interop and fixture suites), formatting, and warning-free `rns-net` clippy passed. The native Android BLE RNode transport does not exist and is outside this implementation.
 
 **Final disposition:** Integrated for the supported serial and TCP RNode transports. Runtime interface management will consume the control in the later attach/detach commit.
 
@@ -93,7 +99,7 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Rust applicability:** Native discovery generated the same incomplete `peers` value.
 
-**Local handling and evidence:** `c24dc22` adds the suffix and a focused regression. The regression failed before the fix and passed afterward. The full `rns-net` suite passed (960 unit tests, 56 E2E tests, interop and fixture suites), as did formatting and warning-free clippy.
+**Local handling and evidence:** `198cdde` adds the suffix and a focused regression. The regression failed before the fix and passed afterward. The full `rns-net` suite passed (960 unit tests, 56 E2E tests, interop and fixture suites), as did formatting and warning-free clippy.
 
 **Final disposition:** Integrated.
 
@@ -103,7 +109,7 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Rust applicability:** Native Serial and KISS readers previously reconnected forever, and a missing port prevented startup. AX.25 KISS uses the same native KISS implementation. The upstream Android-specific classes have no separate native implementation.
 
-**Local handling and evidence:** `aa1fac4` gives Simple interfaces a lifecycle control, makes serial and KISS readers poll for input so a quiet port can stop, guards reconnect loops against detachment, and treats an initially missing port or failed KISS configuration as an offline interface that retries. Focused PTY tests verify idle detach and recovery when each port appears later. The full `rns-net` suite passed (964 unit tests, 56 E2E tests, interop and fixture suites). Formatting and warning-free clippy passed; the 964 unit tests were also rerun after the final KISS failure-path adjustment.
+**Local handling and evidence:** `cebe473` gives Simple interfaces a lifecycle control, makes serial and KISS readers poll for input so a quiet port can stop, guards reconnect loops against detachment, and treats an initially missing port or failed KISS configuration as an offline interface that retries. Focused PTY tests verify idle detach and recovery when each port appears later. The full `rns-net` suite passed (964 unit tests, 56 E2E tests, interop and fixture suites). Formatting and warning-free clippy passed; the 964 unit tests were also rerun after the final KISS failure-path adjustment.
 
 **Final disposition:** Integrated for native Serial, KISS, and AX.25 KISS transports.
 
@@ -113,7 +119,7 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 
 **Rust applicability:** The native TCP client reader and reconnect loop, and the UDP listener thread, previously lacked an interface-specific stop signal.
 
-**Local handling and evidence:** `0a3b8eb` returns lifecycle controls for TCP and UDP, checks them in idle readers and before TCP reconnect, and gives UDP a bounded receive timeout so its socket is dropped promptly. Focused tests stop both idle readers without a spurious down event. The full `rns-net` suite passed (966 unit tests, 56 E2E tests, interop and fixture suites), as did formatting and warning-free clippy.
+**Local handling and evidence:** `c3b4cdf` returns lifecycle controls for TCP and UDP, checks them in idle readers and before TCP reconnect, and gives UDP a bounded receive timeout so its socket is dropped promptly. Focused tests stop both idle readers without a spurious down event. The full `rns-net` suite passed (966 unit tests, 56 E2E tests, interop and fixture suites), as did formatting and warning-free clippy.
 
 **Final disposition:** Integrated. The live management command will invoke these controls in the next mapping.
 
@@ -191,3 +197,4 @@ baseline until the final 1.5.5 parity record passes its promotion gates.
 ## Acceptance Record
 
 - `2026-09-28`: Daily VPS snapshots were healthy and complete on both hosts. The impaired dual-VPS `--daily` smoke passed Resource boundaries, concurrent links, and forced reconnect recovery. Both upstream remotes refreshed successfully. These are daily operational results, not promotion acceptance for the candidate target.
+- `2026-09-28`: Both remotes freshly fetched and agreed at `b899389956041693d1cbeee698bcbef2bc1b8858` after all twelve mappings. The exact-target disposable worktree asserted Python version `1.5.5`, root tree `0a29475288cefe43f7fb432ed69a93bf901ecf35`, and `RNS` tree `62dc6859a28fc76b064e0c2fa062ff560ad9a343`. Its live `rns-net` Python interop test passed (1/1), as did all five ignored `rns-cli` utility interop cases (5/5).
