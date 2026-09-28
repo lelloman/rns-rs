@@ -785,6 +785,19 @@ fn render_blob_page(
             ("path", path.as_str()),
         ],
     );
+    let converted_download_link = matches!(renderable, Some(RenderableBlob::Markdown)).then(|| {
+        m_link(
+            "as micron",
+            PATH_DOWNLOAD,
+            &[
+                ("g", &group),
+                ("r", &repo),
+                ("ref", reference),
+                ("path", path.as_str()),
+                ("fmt", "mu"),
+            ],
+        )
+    });
     let controls = if renderable.is_some() {
         let render_link = m_link(
             "View rendered",
@@ -809,10 +822,16 @@ fn render_blob_page(
             ],
         );
         let sep = icon_sep(config);
-        Some(if render {
+        let display_controls = if render {
             format!("Displaying Rendered {sep} {raw_link}")
         } else {
-            format!("Displaying Raw {sep} {render_link} {sep} {download_link}")
+            format!("Displaying Raw {sep} {render_link}")
+        };
+        Some(match converted_download_link {
+            Some(converted) => {
+                format!("{display_controls} {sep} {download_link} {sep} {converted}")
+            }
+            None => format!("{display_controls} {sep} {download_link}"),
         })
     } else {
         Some(format!(
@@ -1787,6 +1806,13 @@ pub fn download_file(
 
     let reference = var(&vars, "ref").unwrap_or("HEAD");
     let path = required_var(&vars, "path")?;
+    let format = var(&vars, "fmt");
+    if format.is_some() && (format != Some("mu") || !path.to_ascii_lowercase().ends_with(".md")) {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"unsupported conversion",
+        )));
+    }
     validate_git_path(path)?;
     let resolved = resolve_ref(&repository, reference)?;
     let spec = format!("{resolved}:{path}");
@@ -1804,10 +1830,38 @@ pub fn download_file(
             b"file not found",
         )));
     }
+    let (data, metadata) = if format == Some("mu") {
+        let markdown = String::from_utf8(output.stdout)
+            .map_err(|_| Error::msg("markdown download is not UTF-8"))?;
+        let converted = markdown_to_micron_scoped(
+            &markdown,
+            Some(&markdown_blob_url_scope(&group, &repo, reference, path)),
+        );
+        let filename = path.rsplit('/').next().unwrap_or(path);
+        let stem = filename
+            .rsplit_once('.')
+            .map(|(stem, _)| stem)
+            .unwrap_or(filename);
+        (
+            converted.trim_end().as_bytes().to_vec(),
+            msgpack::pack(&Value::Map(vec![
+                (
+                    Value::UInt(protocol::IDX_RESULT_CODE),
+                    Value::UInt(protocol::RES_OK as u64),
+                ),
+                (
+                    Value::Str("name".into()),
+                    Value::Bin(format!("{stem}.mu").into_bytes()),
+                ),
+            ])),
+        )
+    } else {
+        (output.stdout, protocol::metadata_status(protocol::RES_OK))
+    };
     crate::stats::record_download(config, &format!("{group}/{repo}"), remote);
     Ok(RequestResponse::Resource {
-        data: output.stdout,
-        metadata: Some(protocol::metadata_status(protocol::RES_OK)),
+        data,
+        metadata: Some(metadata),
         auto_compress: true,
     })
 }
@@ -4638,6 +4692,65 @@ Unmatched * marker\n\
         assert!(rendered.contains("Displaying Rendered"));
         assert!(rendered.contains(">Explicit"));
         assert!(!rendered.contains("# Explicit"));
+    }
+
+    #[test]
+    fn markdown_blob_downloads_as_scoped_micron() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/docs"),
+            "docs/readme.md",
+            "# Guide\n\n[Next](next.md)\n",
+        );
+        let access = access(&config);
+        let page = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "docs"),
+                ("var_path", "docs/readme.md"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(page.contains("Download"));
+        assert!(page.contains("as micron"));
+        assert!(page.contains("fmt=mu"));
+
+        let request = page_request(&[
+            ("var_g", "public"),
+            ("var_r", "docs"),
+            ("var_path", "docs/readme.md"),
+            ("var_fmt", "mu"),
+        ]);
+        let response = download_file(&config, &access, &request, None).unwrap();
+        let RequestResponse::Resource { data, metadata, .. } = response else {
+            panic!("expected converted resource");
+        };
+        let converted = String::from_utf8(data).unwrap();
+        assert!(converted.contains(">Guide"));
+        assert!(converted.contains("path=docs/next.md"));
+        let metadata = msgpack::unpack_exact(&metadata.unwrap()).unwrap();
+        assert_eq!(
+            metadata.map_get("name").and_then(Value::as_bin),
+            Some(&b"readme.mu"[..])
+        );
+
+        let raw = download_file(
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "docs"),
+                ("var_path", "docs/readme.md"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert_resource_response(raw, b"# Guide\n\n[Next](next.md)\n");
     }
 
     #[test]
