@@ -44,7 +44,7 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 9 | `e2ba876ebfec386af9f97d844c39e9ca016e956c` | Updated version | `RNS/_version.py` | Non-runtime | `4cf122f`: records the exact upstream version assertion and keeps the accepted native baseline unchanged pending gates. |
 | 10 | `3b7429149e8fcf13c4310df32264c58647b6e983` | Fixed outdated meta-docs | `Contributing.md`, `Roadmap.md`, `SECURITY.md`, `This Is Not a Teahouse.md`, `docs/source/support.rst` | Non-runtime | `bab0ebd`: records upstream-only governance and editorial changes without altering native project policies. |
 | 11 | `3ad70c63ea87e94f9dc32486af7845ded9c0e852` | Fixed outdated meta-docs | `Contributing.md` | Non-runtime | `b3d6580`: records the upstream-only Markdown link correction. |
-| 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Pending review | — |
+| 12 | `b899389956041693d1cbeee698bcbef2bc1b8858` | Fixed outdated meta-docs | `README.md`, `README.mu` | Non-runtime | `85b85b7`: records README reflow and project-specific editorial corrections; native badge remains gated. |
 
 ## Integration Plan
 
