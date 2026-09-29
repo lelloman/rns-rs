@@ -266,16 +266,25 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A candidate parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
 - `2026-09-28`: Daily VPS snapshots were healthy and complete on both hosts. The impaired dual-VPS `--daily` smoke passed Resource boundaries, concurrent links, and forced reconnect recovery. Both upstream remotes refreshed successfully. These are daily operational results, not promotion acceptance for the candidate target.
 - `2026-09-28`: Both remotes freshly fetched and agreed at `b899389956041693d1cbeee698bcbef2bc1b8858` after all twelve mappings. The exact-target disposable worktree asserted Python version `1.5.5`, root tree `0a29475288cefe43f7fb432ed69a93bf901ecf35`, and `RNS` tree `62dc6859a28fc76b064e0c2fa062ff560ad9a343`. Its live `rns-net` Python interop test passed (1/1), as did all five ignored `rns-cli` utility interop cases (5/5).
+- `2026-09-29`: Both VPS snapshots were healthy and complete, and the impaired
+  `--daily` Backbone smoke passed Resource boundaries, concurrent links, and
+  forced reconnect. Fresh GitHub and rgit fetches still found the candidate
+  `cce96d38` at rgit and a mirror two commits behind at `d5962d14`.
+- `2026-09-29`: The complete `./tests/docker/run-all.sh` matrix passed: 11
+  topology and standalone runs, 102 checks passed, 0 failed, and 29 expected
+  topology-specific skips. This includes mesh-4, star-30 scale, shared-client
+  reconnection, server supervision, NAT, and `rntun` tunnel/reconnect coverage.
+  PR CI and final promotion review remain pending.
