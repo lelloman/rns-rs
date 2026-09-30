@@ -425,6 +425,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Integrated.
 
+### 36. `1f749907` — Added auto-connect filtering criteria
+
+**Upstream change:** Adds `autoconnect_qualified(info)`, requiring `impl_name` in `AUTOCONNECT_IMPLS` and a parsed version at least `1.5.2`, unless `autoconnect_unverified_implementations` is enabled, and logs and skips non-qualifying discoveries.
+
+**Rust applicability:** Native discovered auto-connect now applies the same policy before upserting a backbone peer-pool candidate. Because the native implementation advertises its own name and crate version, the native name is trusted without the upstream protocol-version gate; the canonical `"RNS"` implementation still requires `>= 1.5.2`.
+
+**Local handling and evidence:** `autoconnect_qualified` and `parse_version_tuple` live in `rns-net/src/driver/runtime_config.rs` and are consulted by `upsert_discovered_backbone_peer_pool_candidate`. Tests `discovered_peer_pool_requires_verified_implementation_unless_overridden` and `parse_version_tuple_matches_upstream_semantics` cover rejection of missing/foreign/old implementations, acceptance at `1.5.2`, the native bypass, and the unverified override. The peer-pool and discovery e2e tests were updated to advertise `RNS 1.5.5`. The complete `rns-net` suite passed serially (978 tests) and the discovery/peer-pool e2e tests passed.
+
+**Final disposition:** Integrated.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.

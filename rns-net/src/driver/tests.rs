@@ -563,8 +563,8 @@ fn make_discovered_backbone(
     let discovery_hash = crate::discovery::compute_discovery_hash(&transport_id, name);
     crate::discovery::DiscoveredInterface {
         interface_type: "BackboneInterface".to_string(),
-        impl_name: None,
-        impl_version: None,
+        impl_name: Some("RNS".to_string()),
+        impl_version: Some("1.5.5".to_string()),
         transport: true,
         name: name.to_string(),
         discovered: last_heard,
@@ -705,6 +705,91 @@ fn discovered_peer_pool_candidate_uses_autoconnect_overrides() {
     assert_eq!(pool.candidates[0].config.mode, constants::MODE_BOUNDARY);
     assert_eq!(pool.candidates[0].config.gravity, -5);
     assert_eq!(pool.candidates[0].config.announces_to_internal, Some(true));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn discovered_peer_pool_requires_verified_implementation_unless_overridden() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 3,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![],
+    );
+
+    let mut iface = make_discovered_backbone(
+        "unverified",
+        "127.0.0.1",
+        Some(port),
+        0x7b,
+        1,
+        20,
+        time::now(),
+    );
+    iface.impl_name = None;
+    iface.impl_version = None;
+    assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(iface.clone()));
+
+    iface.impl_name = Some("Other".into());
+    iface.impl_version = Some("9.9.9".into());
+    assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(iface.clone()));
+
+    iface.impl_name = Some("RNS".into());
+    iface.impl_version = Some("1.5.1".into());
+    assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(iface.clone()));
+
+    iface.impl_version = Some("1.5.2".into());
+    assert!(driver.upsert_discovered_backbone_peer_pool_candidate(iface));
+
+    // Native discoverers are trusted even though their version tracks the
+    // crate release cycle instead of the upstream protocol version.
+    let mut native_iface = make_discovered_backbone(
+        "native",
+        "127.0.0.1",
+        Some(port + 1),
+        0x7d,
+        1,
+        20,
+        time::now(),
+    );
+    native_iface.impl_name = Some(crate::common::discovery::TRANSPORT_IMPLEMENTATION_NAME.into());
+    native_iface.impl_version = Some("0.7.2".into());
+    assert!(driver.upsert_discovered_backbone_peer_pool_candidate(native_iface));
+
+    let mut override_iface = make_discovered_backbone(
+        "override",
+        "127.0.0.1",
+        Some(port + 2),
+        0x7c,
+        1,
+        20,
+        time::now(),
+    );
+    override_iface.impl_name = None;
+    override_iface.impl_version = None;
+    driver.autoconnect_unverified_implementations = true;
+    assert!(driver.upsert_discovered_backbone_peer_pool_candidate(override_iface));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn parse_version_tuple_matches_upstream_semantics() {
+    let parse = crate::driver::runtime_config::parse_version_tuple;
+    assert_eq!(parse("1.5.2"), Some(vec![1, 5, 2]));
+    assert_eq!(parse("1.5.2-beta"), Some(vec![1, 5, 2]));
+    assert_eq!(parse("  1.6  "), Some(vec![1, 6]));
+    assert_eq!(parse("1.5"), Some(vec![1, 5]));
+    assert_eq!(parse("not-a-version"), None);
+    assert_eq!(parse(""), None);
+    // Missing trailing components compare as smaller.
+    assert!(parse("1.5").unwrap().as_slice() < [1u32, 5, 2].as_slice());
 }
 
 #[cfg(feature = "iface-backbone")]

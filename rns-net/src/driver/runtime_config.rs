@@ -432,6 +432,17 @@ impl Driver {
             return false;
         };
 
+        if !self.autoconnect_unverified_implementations && !Self::autoconnect_qualified(&iface) {
+            log::debug!(
+                "Not auto-connecting discovered {} \"{}\", auto-connect criteria not satisfied (implementation {} version {})",
+                iface.interface_type,
+                iface.name,
+                iface.impl_name.as_deref().unwrap_or("unknown"),
+                iface.impl_version.as_deref().unwrap_or("unknown"),
+            );
+            return false;
+        }
+
         if self.backbone_peer_pool.as_ref().is_some_and(|pool| {
             pool.candidates.iter().any(|candidate| {
                 candidate.config.source == BackbonePeerPoolCandidateSource::Configured
@@ -576,6 +587,33 @@ impl Driver {
             discovery.status != crate::discovery::DiscoveredStatus::Stale
                 && now - discovery.last_heard <= crate::discovery::THRESHOLD_REMOVE
         });
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn autoconnect_qualified(iface: &crate::discovery::DiscoveredInterface) -> bool {
+        use crate::common::discovery::TRANSPORT_IMPLEMENTATION_NAME;
+
+        // The canonical Reticulum implementation and this native implementation
+        // are trusted. Upstream only lists its own name because it does not know
+        // about native discoverers.
+        const AUTOCONNECT_IMPLS: [&str; 2] = ["RNS", TRANSPORT_IMPLEMENTATION_NAME];
+        const AUTOCONNECT_MIN_VERSION: [u32; 3] = [1, 5, 2];
+
+        let Some(impl_name) = iface.impl_name.as_deref() else {
+            return false;
+        };
+        if !AUTOCONNECT_IMPLS.contains(&impl_name) {
+            return false;
+        }
+        // Native versions track the crate release cycle rather than the upstream
+        // Reticulum protocol version, so they are not gated on the minimum.
+        if impl_name == TRANSPORT_IMPLEMENTATION_NAME {
+            return true;
+        }
+        let Some(version) = iface.impl_version.as_deref().and_then(parse_version_tuple) else {
+            return false;
+        };
+        version.as_slice() >= AUTOCONNECT_MIN_VERSION.as_slice()
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -3844,5 +3882,30 @@ impl Driver {
         }
 
         None
+    }
+}
+
+/// Parse a dotted version into its leading numeric components.
+///
+/// Mirrors upstream `version_tuple`: non-numeric leading text stops the scan,
+/// and a value with no leading number is invalid. Missing trailing components
+/// compare as smaller, because the returned slice is compared lexicographically.
+#[cfg(feature = "iface-backbone")]
+pub(crate) fn parse_version_tuple(version: &str) -> Option<Vec<u32>> {
+    let mut components = Vec::new();
+    for component in version.trim().split('.') {
+        let digits: String = component
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            break;
+        }
+        components.push(digits.parse::<u32>().ok()?);
+    }
+    if components.is_empty() {
+        None
+    } else {
+        Some(components)
     }
 }
