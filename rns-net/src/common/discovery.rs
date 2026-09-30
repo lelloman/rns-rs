@@ -495,8 +495,8 @@ pub fn parse_interface_announce_with_cache(
     let coding_rate = get_u8_val(CODINGRATE).and_then(|v| v.as_uint().map(|n| n as u8));
     let modulation = get_u8_val(MODULATION).and_then(|v| v.as_str().map(|s| s.to_string()));
     let channel = get_u8_val(CHANNEL).and_then(|v| v.as_uint().map(|n| n as u8));
-    let ifac_netname = get_u8_val(IFAC_NETNAME).map(|v| discovery_value_to_string(&v));
-    let ifac_netkey = get_u8_val(IFAC_NETKEY).map(|v| discovery_value_to_string(&v));
+    let ifac_netname = get_u8_val(IFAC_NETNAME).and_then(sanitize_ifac_announce_string);
+    let ifac_netkey = get_u8_val(IFAC_NETKEY).and_then(sanitize_ifac_announce_string);
     let operator_lxmf_address = match get_u8_val(OP_ADDR) {
         None | Some(Value::Nil) => None,
         Some(Value::Bin(value)) if value.len() == 16 => {
@@ -733,18 +733,22 @@ fn optional_f64_field(value: Option<Value>) -> Option<Option<f64>> {
     }
 }
 
-fn discovery_value_to_string(value: &Value) -> String {
+/// Sanitize an IFAC value received in an interface discovery announce.
+///
+/// Upstream only accepts non-empty string values and ignores nonsensical
+/// persisted `"None"` values produced by buggy publishers. Non-string msgpack
+/// values are dropped rather than stringified.
+fn sanitize_ifac_announce_string(value: Value) -> Option<String> {
     match value {
-        Value::Nil => "None".to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::UInt(value) => value.to_string(),
-        Value::Int(value) => value.to_string(),
-        Value::Float(value) => value.to_string(),
-        Value::Bin(value) => hex_encode(value),
-        Value::Str(value) => value.clone(),
-        Value::Array(_) => "[]".to_string(),
-        Value::Map(_) => "{}".to_string(),
+        Value::Str(text) if !text.is_empty() && text != "None" => Some(text),
+        _ => None,
     }
+}
+
+/// Sanitize an IFAC string loaded from persisted discovery state, dropping the
+/// historical `"None"` sentinel and empty values.
+pub fn sanitize_persisted_ifac(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.is_empty() && text != "None")
 }
 
 /// Sanitize a discovered interface name like upstream Reticulum.
@@ -1231,16 +1235,45 @@ mod tests {
     }
 
     #[test]
-    fn parse_converts_ifac_fields_to_strings() {
+    fn parse_accepts_valid_string_ifac_fields() {
         let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
-        entries.push((Value::UInt(IFAC_NETNAME as u64), Value::UInt(123)));
-        entries.push((Value::UInt(IFAC_NETKEY as u64), Value::Bool(true)));
+        entries.push((Value::UInt(IFAC_NETNAME as u64), Value::Str("mynet".into())));
+        entries.push((Value::UInt(IFAC_NETKEY as u64), Value::Str("secret".into())));
         let app_data = pack_discovery_entries(entries);
 
         let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
 
-        assert_eq!(parsed.ifac_netname.as_deref(), Some("123"));
-        assert_eq!(parsed.ifac_netkey.as_deref(), Some("true"));
+        assert_eq!(parsed.ifac_netname.as_deref(), Some("mynet"));
+        assert_eq!(parsed.ifac_netkey.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn parse_drops_nonsensical_ifac_fields() {
+        for value in [
+            Value::UInt(123),
+            Value::Bool(true),
+            Value::Nil,
+            Value::Str("None".into()),
+            Value::Str(String::new()),
+        ] {
+            let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+            entries.push((Value::UInt(IFAC_NETNAME as u64), value.clone()));
+            entries.push((Value::UInt(IFAC_NETKEY as u64), value));
+            let app_data = pack_discovery_entries(entries);
+
+            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+            assert_eq!(parsed.ifac_netname, None);
+            assert_eq!(parsed.ifac_netkey, None);
+        }
+    }
+
+    #[test]
+    fn sanitize_persisted_ifac_drops_none_and_empty() {
+        assert_eq!(sanitize_persisted_ifac(Some("net".into())), Some("net".into()));
+        assert_eq!(sanitize_persisted_ifac(Some("None".into())), None);
+        assert_eq!(sanitize_persisted_ifac(Some(String::new())), None);
+        assert_eq!(sanitize_persisted_ifac(None), None);
     }
 
     #[test]

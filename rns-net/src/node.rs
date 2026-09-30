@@ -186,6 +186,26 @@ fn parse_nonnegative_f64(key: &str, value: &str) -> Result<f64, String> {
     Ok(parsed)
 }
 
+/// Reject empty and the nonsensical literal `"None"` IFAC config values.
+///
+/// Upstream treats `"None"` as an unset value and logs a warning, because a
+/// quoted TOML/JSON `None` is commonly mistaken for a real network name or
+/// passphrase. Empty strings are also ignored.
+fn sanitize_ifac_config_string(kind: &str, value: &str) -> Option<String> {
+    if value == "None" {
+        log::warn!(
+            "Ambiguous IFAC {} \"None\", this value is ignored and an IFAC {} has NOT been set",
+            kind,
+            kind
+        );
+        return None;
+    }
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
 /// Extract IFAC configuration from interface params, if present.
 /// Returns None if neither networkname/network_name nor passphrase/pass_phrase is set.
 fn extract_ifac_config(
@@ -195,11 +215,13 @@ fn extract_ifac_config(
     let netname = params
         .get("networkname")
         .or_else(|| params.get("network_name"))
-        .cloned();
+        .cloned()
+        .and_then(|value| sanitize_ifac_config_string("network name", &value));
     let netkey = params
         .get("passphrase")
         .or_else(|| params.get("pass_phrase"))
-        .cloned();
+        .cloned()
+        .and_then(|value| sanitize_ifac_config_string("passphrase", &value));
 
     if netname.is_none() && netkey.is_none() {
         return None;
@@ -5407,6 +5429,20 @@ static_transport_identity = yes
         assert_eq!(ifac.netname.as_deref(), Some("mynet"));
         assert_eq!(ifac.netkey.as_deref(), Some("mykey"));
         assert_eq!(ifac.size, 8);
+
+        // Nonsensical "None" network name and passphrase are ignored.
+        let mut params = HashMap::new();
+        params.insert("networkname".into(), "None".into());
+        params.insert("passphrase".into(), "None".into());
+        assert!(extract_ifac_config(&params, 16).is_none());
+
+        // Empty values are ignored, but a valid sibling value still applies.
+        let mut params = HashMap::new();
+        params.insert("networkname".into(), String::new());
+        params.insert("passphrase".into(), "secret".into());
+        let ifac = extract_ifac_config(&params, 16).unwrap();
+        assert!(ifac.netname.is_none());
+        assert_eq!(ifac.netkey.as_deref(), Some("secret"));
     }
 
     #[test]

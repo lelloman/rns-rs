@@ -440,8 +440,8 @@ impl DiscoveredInterfaceStorage {
             coding_rate: get_opt_uint(&value, "cr").map(|v| v as u8),
             modulation: get_opt_str(&value, "modulation"),
             channel: get_opt_uint(&value, "channel").map(|v| v as u8),
-            ifac_netname: get_opt_str(&value, "ifac_netname"),
-            ifac_netkey: get_opt_str(&value, "ifac_netkey"),
+            ifac_netname: sanitize_persisted_ifac(get_opt_str(&value, "ifac_netname")),
+            ifac_netkey: sanitize_persisted_ifac(get_opt_str(&value, "ifac_netkey")),
             config_entry: get_opt_str(&value, "config_entry"),
             discovery_hash,
         })
@@ -939,16 +939,24 @@ impl InterfaceAnnouncer {
                 msgpack::Value::Bin(address.to_vec()),
             ));
         }
-        if let Some(ref netname) = iface.ifac_netname {
+        if let Some(netname) = iface
+            .ifac_netname
+            .as_deref()
+            .filter(|v| !v.is_empty() && *v != "None")
+        {
             entries.push((
                 msgpack::Value::UInt(IFAC_NETNAME as u64),
-                msgpack::Value::Str(netname.clone()),
+                msgpack::Value::Str(netname.to_string()),
             ));
         }
-        if let Some(ref netkey) = iface.ifac_netkey {
+        if let Some(netkey) = iface
+            .ifac_netkey
+            .as_deref()
+            .filter(|v| !v.is_empty() && *v != "None")
+        {
             entries.push((
                 msgpack::Value::UInt(IFAC_NETKEY as u64),
-                msgpack::Value::Str(netkey.clone()),
+                msgpack::Value::Str(netkey.to_string()),
             ));
         }
 
