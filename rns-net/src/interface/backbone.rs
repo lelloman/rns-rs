@@ -33,8 +33,8 @@ use crate::interface::transmit_buffer::{
     EgressController, TransmitBuffer, EGRESS_DEAD_TIME, EGRESS_HIGH_WATERMARK,
 };
 use crate::interface::{
-    lock_or_recover, DynamicInterfaceTemplate, EgressControl, InterfaceConfigData,
-    InterfaceFactory, StartContext, StartResult, Writer,
+    lock_or_recover, poll_readable, wait_while_active, DynamicInterfaceTemplate, EgressControl,
+    InterfaceConfigData, InterfaceFactory, ListenerControl, StartContext, StartResult, Writer,
 };
 use crate::BackbonePeerStateEntry;
 
@@ -1565,7 +1565,7 @@ fn try_connect_client(
 
 /// Connect and start the reader thread. Returns the writer for the driver.
 pub fn start_client(config: BackboneClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    start_client_with_ifac(config, tx, 0, None)
+    start_client_with_ifac(config, tx, 0, None, ListenerControl::new())
 }
 
 pub(crate) fn start_client_with_ifac(
@@ -1573,6 +1573,7 @@ pub(crate) fn start_client_with_ifac(
     tx: EventSender,
     ifac_size: usize,
     underlay_mark: Option<u32>,
+    control: ListenerControl,
 ) -> io::Result<Box<dyn Writer>> {
     let stream = try_connect_client(&config, underlay_mark)?;
     let reader_stream = stream.try_clone()?;
@@ -1592,7 +1593,7 @@ pub(crate) fn start_client_with_ifac(
     thread::Builder::new()
         .name(format!("backbone-client-{}", id.0))
         .spawn(move || {
-            client_reader_loop(reader_stream, config, tx, ifac_size, underlay_mark);
+            client_reader_loop(reader_stream, config, tx, ifac_size, underlay_mark, control);
         })?;
 
     Ok(Box::new(BackboneClientWriter {
@@ -1612,17 +1613,43 @@ fn client_reader_loop(
     tx: EventSender,
     ifac_size: usize,
     underlay_mark: Option<u32>,
+    control: ListenerControl,
 ) {
     let id = config.interface_id;
     let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
+        if control.should_stop() {
+            return;
+        }
+        match poll_readable(stream.as_raw_fd(), Duration::from_millis(200)) {
+            Ok(false) => continue,
+            Ok(true) => {}
+            Err(error) => {
+                if control.should_stop() {
+                    return;
+                }
+                log::warn!("[{}] backbone poll error: {}", config.name, error);
+                let _ = tx.send(Event::InterfaceDown(id));
+                match client_reconnect(&config, &tx, underlay_mark, &control) {
+                    Some(new_stream) => {
+                        stream = new_stream;
+                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
+                        continue;
+                    }
+                    None => return,
+                }
+            }
+        }
         match stream.read(&mut buf) {
             Ok(0) => {
+                if control.should_stop() {
+                    return;
+                }
                 log::warn!("[{}] connection closed", config.name);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match client_reconnect(&config, &tx, underlay_mark) {
+                match client_reconnect(&config, &tx, underlay_mark, &control) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -1658,9 +1685,12 @@ fn client_reader_loop(
                 }
             }
             Err(e) => {
+                if control.should_stop() {
+                    return;
+                }
                 log::warn!("[{}] read error: {}", config.name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match client_reconnect(&config, &tx, underlay_mark) {
+                match client_reconnect(&config, &tx, underlay_mark, &control) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -1687,6 +1717,7 @@ fn client_reconnect(
     config: &BackboneClientConfig,
     tx: &EventSender,
     underlay_mark: Option<u32>,
+    control: &ListenerControl,
 ) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
@@ -1710,7 +1741,9 @@ fn client_reconnect(
         } else {
             backoff
         };
-        thread::sleep(jitter);
+        if !wait_while_active(control, jitter) {
+            return None;
+        }
 
         attempts += 1;
 
@@ -1730,6 +1763,9 @@ fn client_reconnect(
 
         match try_connect_client(config, underlay_mark) {
             Ok(new_stream) => {
+                if control.should_stop() {
+                    return None;
+                }
                 let writer_stream = match new_stream.try_clone() {
                     Ok(s) => s,
                     Err(e) => {
@@ -2019,9 +2055,16 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     started: crate::time::now(),
                 };
                 let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
-                let writer = start_client_with_ifac(cfg, ctx.tx, ifac_size, ctx.underlay_mark)?;
+                let control = ListenerControl::new();
+                let writer = start_client_with_ifac(
+                    cfg,
+                    ctx.tx,
+                    ifac_size,
+                    ctx.underlay_mark,
+                    control.clone(),
+                )?;
                 Ok(StartResult::Simple {
-                    control: None,
+                    control: Some(control),
                     id,
                     info,
                     writer,
@@ -3021,6 +3064,29 @@ mod tests {
         // Should get InterfaceUp again
         let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceUp(InterfaceId(9300), _, _)));
+    }
+
+    #[test]
+    fn backbone_client_stop_prevents_reconnect() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let (tx, rx) = crate::event::channel();
+
+        let config = make_client_config(port, 9350);
+        let control = ListenerControl::new();
+        let _writer = start_client_with_ifac(config, tx, 0, None, control.clone()).unwrap();
+
+        let (server_stream, _) = listener.accept().unwrap();
+        // Drain the initial InterfaceUp from the successful connect.
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+
+        control.request_stop();
+        drop(server_stream);
+
+        // A detached client must not emit InterfaceDown or reconnect.
+        if let Ok(event) = recv_non_peer_event(&rx, Duration::from_millis(700)) {
+            panic!("unexpected event after stop: {:?}", event);
+        }
     }
 
     #[test]

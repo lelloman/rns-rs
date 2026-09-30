@@ -415,6 +415,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 35. `a714c200` — Set detached immediately on Backbone detach
+
+**Upstream change:** Moves `self.detached = True` to the top of `BackboneClientInterface.detach()` so the reconnect loop observes detachment even before the socket is closed.
+
+**Rust applicability:** The native Backbone client reader and reconnect loop did not observe the interface `ListenerControl`; `StartResult::Simple` returned no control, so `detach_interface` could not stop the reconnect loop and the client kept reconnecting after detach.
+
+**Local handling and evidence:** The client factory now creates a `ListenerControl`, clones it into `start_client_with_ifac`, returns it in `StartResult::Simple`, and registers it for detach. `client_reader_loop` polls with a 200 ms timeout and returns on stop, and `client_reconnect` waits through `wait_while_active` so a stop interrupts backoff. The focused `backbone_client_stop_prevents_reconnect` test verifies that after `request_stop` the reader emits neither `InterfaceDown` nor a reconnect `InterfaceUp`. The complete `rns-net` library suite passed serially (978 tests).
+
+**Final disposition:** Integrated.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.

@@ -789,6 +789,7 @@ impl Driver {
             self.event_tx.clone(),
             wire_ifac_size,
             self.underlay_mark,
+            crate::interface::ListenerControl::new(),
         )?;
         let info = rns_core::transport::types::InterfaceInfo {
             id,
