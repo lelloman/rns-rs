@@ -295,6 +295,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 23. `06dc4ad5` — Fixed announce_cap percent/fraction mismatch
+
+**Upstream change:** Three `hasattr` fallbacks assigned the percent value `RNS.Reticulum.ANNOUNCE_CAP` instead of `ANNOUNCE_CAP/100.0`, so an uninitialized interface could store `2` where a `0.02` fraction was expected.
+
+**Rust applicability:** `InterfaceInfo::announce_cap` is always a fraction and defaults to the compile-time `constants::ANNOUNCE_CAP = 0.02`. There is no percent-valued constant or conversion path, so the upstream mismatch cannot occur.
+
+**Local handling and evidence:** The unit is documented on the field and used directly by `InterfaceAnnounceQueue::calculate_next_allowed` (`rns-core/src/transport/announce_queue.rs`): `delay = time_to_send / announce_cap`. The announce-queue tests cover the cap behavior. No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
