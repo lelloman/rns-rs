@@ -335,6 +335,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Integrated.
 
+### 27. `135e941f` — Improve interface-discovery IFAC sanitization
+
+**Upstream change:** Guards IFAC publication so a discoverable interface without a configured network name or passphrase disables publishing instead of advertising literal `"None"` values; the discovery handler accepts only non-empty string IFAC fields and drops persisted `"None"`; config parsing warns about and ignores the literal `"None"` network name/passphrase.
+
+**Rust applicability:** Native discovery stringified any msgpack IFAC value (including `Nil` as `"None"`), persisted it, and republished it. Native config parsing also accepted empty and literal `"None"` values, deriving a bogus IFAC state. Native code has no separate `discovery_publish_ifac` flag: it publishes IFAC fields only when present, so the publication guard is structural.
+
+**Local handling and evidence:** `sanitize_ifac_announce_string` in `common/discovery.rs` accepts only non-empty `Value::Str` other than `"None"`; `sanitize_persisted_ifac` drops `"None"`/empty values from stored discovery records; the announcer publishes only truthy fields; and `sanitize_ifac_config_string` in `node.rs` ignores empty and `"None"` config values with a warning. Tests `parse_accepts_valid_string_ifac_fields`, `parse_drops_nonsensical_ifac_fields`, `sanitize_persisted_ifac_drops_none_and_empty`, and the extended `test_extract_ifac_config` cover the paths. The complete `rns-net` suite passed serially (978 tests).
+
+**Final disposition:** Integrated.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
