@@ -6,15 +6,15 @@
 - previous accepted version: `1.5.4`
 - previous normative commit: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`
 - target version: `1.5.5` (`RNS/_version.py`)
-- target normative commit: `ddeb44b1debb475aa76861af21f1491d0738110a` (`rgit/master` at the extended review cutoff)
-- target root tree: `6ff50287d3a093015c25c107f5c5e64d7d40bf3d`
+- target normative commit: `7f2b3b9b524c9386316379af1313b43a5e4f7a5d` (`rgit/master` extended plus the GitHub `1.5.5` release commits)
+- target root tree: `73d3c378805a380da5194a13561f904f88d07e69`
 - target `RNS` tree: `192d74c76e5c56046a411492f219db1833c99365`
-- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..ddeb44b1debb475aa76861af21f1491d0738110a`
-- commits in candidate range: `38`
-- repositories checked: normative rgit remote and GitHub mirror; the `2026-09-30` refresh found rgit at `ddeb44b1` and the GitHub mirror at the `1.5.5` release tag `7f2b3b9b`
+- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..7f2b3b9b524c9386316379af1313b43a5e4f7a5d`
+- commits in candidate range: `40`
+- repositories checked: normative rgit remote and GitHub mirror; the `2026-09-30` refresh found rgit at `ddeb44b1` and the GitHub `1.5.5` release tag at `7f2b3b9b`
 - local branch and revision inspected: `dev@263c1e0`, with the extended mappings on top
 
-The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. Fresh fetches extended the candidate through `b8993899`, `d3153bd7`, and finally `cce96d38` for the first nineteen mappings. The `2026-09-30` daily report found rgit advanced to `ddeb44b1`, adding nineteen further commits inventoried below as rows 20–38. The GitHub `1.5.5` tag `7f2b3b9b` is two release-only commits beyond the rgit tip (`0a25e1a9` and `7f2b3b9b`); those are not part of this rgit-reviewed range.
+The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. Fresh fetches extended the candidate through `b8993899`, `d3153bd7`, and finally `cce96d38` for the first nineteen mappings. The `2026-09-30` daily report found rgit advanced to `ddeb44b1`, adding nineteen further commits inventoried below as rows 20–38. The GitHub `1.5.5` release tag `7f2b3b9b` then added two release-only commits (`0a25e1a9`, `7f2b3b9b`), inventoried as rows 39–40; both keep the `RNS` tree at `192d74c7`, so the release tag introduces no runtime change beyond `ddeb44b1`.
 
 ## Audit Vocabulary
 
@@ -71,21 +71,20 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 36 | `1f74990752e3ed455c36c8ee89c9a44d2cd663ea` | Added auto-connect filtering criteria | `RNS/Discovery.py` | Integrated | `4efc155`: `autoconnect_qualified`/`parse_version_tuple` criteria; tests; e2e peers advertise `RNS 1.5.5`. |
 | 37 | `39a888c1e2e9685fb7c74b1c93a333e2994f1eea` | Added --show-stale/--show-unknown to rnstatus | `RNS/Utilities/rnstatus.py`, `using.rst` | Integrated | `ff76d2d`: flags and default stale/unknown filtering; `discovered_has_impl_info` test. |
 | 38 | `ddeb44b1debb475aa76861af21f1491d0738110a` | Updated changelog | `Changelog.md` | Non-runtime | `138ff9e`: audit-only review of the expanded 1.5.5 changelog. |
+| 39 | `0a25e1a9c88cca386adc16d035302a6059aea4cf` | Updated changelog | `Changelog.md` | Non-runtime | `8a04327`: records the final release changelog wording and unchanged `RNS` tree. |
+| 40 | `7f2b3b9b524c9386316379af1313b43a5e4f7a5d` | Prepare release | generated `using` manual, HTML, search index, Markdown | Non-runtime | `4a79b98`: records the generated-document review and identical `RNS` tree. |
 
-All thirty-eight canonical commits have one nonempty local mapping with exactly
-one full `Upstream-Commit` trailer each. The local trailer order matches upstream
-ancestry. Rows 1–19 were rebased on merge in PR #168 and re-checked afterward;
-rows 20–38 were authored and verified in this batch. The GitHub `1.5.5` release
-tag adds two changelog/release commits (`0a25e1a9`, `7f2b3b9b`) beyond the
-reviewed rgit tip and is intentionally outside this range.
+All forty canonical commits through the GitHub `1.5.5` release tag have one
+nonempty local mapping with exactly one full `Upstream-Commit` trailer each. The
+local trailer order matches upstream ancestry. Rows 1–19 were rebased on merge
+in PR #168 and re-checked afterward; rows 20–40 were authored and verified in
+this batch. Rows 39–40 are release-only and keep the `RNS` tree at `192d74c7`.
 
 ## Integration Plan
 
-Per-commit review, dispositions, and mappings are complete for all thirty-eight
-commits through the rgit tip `ddeb44b1`. The remaining promotion work follows
-[README.md](README.md) and the candidate parity record, which still pins the
-earlier `cce96d38` cutoff and must be refreshed for the extended range before
-baseline promotion.
+Per-commit review, dispositions, and mappings are complete for all forty commits
+through the GitHub `1.5.5` release tag `7f2b3b9b`. Baseline promotion is tracked
+in the refreshed [candidate parity record](reticulum-1.5.5-parity.md).
 
 The `e2ba876e` commit asserts upstream version `1.5.5` by changing only
 `RNS/_version.py`. Native crate package versions are independent of that
@@ -523,10 +522,13 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
   reconnection, server supervision, NAT, and `rntun` tunnel/reconnect coverage.
   PR CI and final promotion review remain pending.
 - `2026-09-30`: The daily report found rgit at `ddeb44b1` and the GitHub `1.5.5`
-  tag at `7f2b3b9b`. Rows 20–38 were reviewed, given final dispositions, and
-  mapped in ancestry order with one full `Upstream-Commit` trailer each. The
-  complete `rns-net` library suite passed serially (978 tests), the discovery and
-  peer-pool e2e tests passed, and `cargo test -p rns-cli` passed. The candidate
-  parity record still targets `cce96d38` and must be refreshed for `ddeb44b1`
-  before baseline promotion; exact-target interop for the extended range and the
-  GitHub release-only commits are not yet claimed.
+  tag at `7f2b3b9b` (identical `RNS` tree `192d74c7`). Rows 20–40 were reviewed,
+  given final dispositions, and mapped in ancestry order with one full
+  `Upstream-Commit` trailer each. The complete `rns-net` library suite passed
+  serially; the default workspace suite passed 2,545 tests and the `rns-hooks`
+  feature suite passed 2,592; exact-target Python/Rust interop at `ddeb44b1`
+  passed (1/1 `python_interop`, 6/6 `utility_interop`); the full Docker E2E
+  matrix passed (11 runs, 102 checks, 0 failures, 29 skips); and the impaired
+  dual-VPS `--daily` smoke passed against the freshly built `b37785a`. The
+  refreshed [parity record](reticulum-1.5.5-parity.md) carries the promotion
+  result.
