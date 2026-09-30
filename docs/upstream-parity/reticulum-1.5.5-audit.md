@@ -478,6 +478,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Non-runtime.
 
+### 39. `0a25e1a9` — Updated changelog
+
+**Upstream change:** Edits the `RNS 1.5.5` changelog entry (release date and wording) in `Changelog.md` only. The `RNS` tree is unchanged from `ddeb44b1`.
+
+**Rust applicability:** Upstream release communication; the applicable behavior is mapped under its own source commits.
+
+**Local handling and evidence:** This audit-only mapping records the final changelog wording and the unchanged `RNS` tree. No native runtime or test change applies.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
