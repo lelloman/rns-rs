@@ -305,6 +305,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 24. `5cdff287` — Process timeouts/rejections for single-packet requests
+
+**Upstream change:** `request_timed_out` and `response_rejected` only acted when the request status was `DELIVERED`, so single-packet requests still in `SENT` were never concluded.
+
+**Rust applicability:** Native link requests are not modeled with a `DELIVERED`/`SENT` status. Single-packet requests insert a `PendingRequest` with a computed deadline, and the link tick culls every expired deadline regardless of delivery state. Resource requests use a delivery-proof deadline and separately remove requests whose resource fails.
+
+**Local handling and evidence:** `unanswered_packet_request_expires_from_pending_set` (`rns-net/src/common/link_manager/tests.rs`) sends a packet request and asserts it is removed after its deadline, proving the SENT-equivalent path is concluded. No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
