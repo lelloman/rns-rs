@@ -1270,7 +1270,10 @@ mod tests {
 
     #[test]
     fn sanitize_persisted_ifac_drops_none_and_empty() {
-        assert_eq!(sanitize_persisted_ifac(Some("net".into())), Some("net".into()));
+        assert_eq!(
+            sanitize_persisted_ifac(Some("net".into())),
+            Some("net".into())
+        );
         assert_eq!(sanitize_persisted_ifac(Some("None".into())), None);
         assert_eq!(sanitize_persisted_ifac(Some(String::new())), None);
         assert_eq!(sanitize_persisted_ifac(None), None);
