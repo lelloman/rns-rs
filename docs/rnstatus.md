@@ -25,6 +25,8 @@ Options:
   -q, --queues            Show inbound queue pressure statistics
   -d                      Show discovered interfaces
   -D                      Show discovered interfaces with config entries
+  --show-stale            Include stale discovery entries
+  --show-unknown          Include discovery entries without version info
   -m                      Monitor mode (loop)
   -I SECONDS              Monitor interval (default: 1.0)
   -R HASH                 Query remote transport identity via management link
@@ -47,7 +49,9 @@ it is not running, or `rnstatus --detach Backbone` to stop it.
 
 Discovered-interface views (`-d` and `-D`) show the announcing stack's
 implementation and version as `Running` in the table or `Stack` in the detail
-view. Older announcements without both fields show `Unknown`.
+view. Older announcements without both fields show `Unknown`. By default, stale
+entries and entries without implementation/version information are hidden; pass
+`--show-stale` and/or `--show-unknown` to include them.
 
 An optional `FILTER` limits output to interface names containing the supplied
 text. Queue statistics report total, data, announce, path-request, and
