@@ -365,6 +365,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 30. `6d1409be` — Idempotent auto-connect monitoring on manual detach
+
+**Upstream change:** The discovery monitor detects that a monitored auto-connected interface was removed from `Transport.interfaces` and drops it from monitoring before consulting its online state, and teardown only detaches when the interface is still registered.
+
+**Rust applicability:** Native auto-connected peers are peer-pool candidates keyed by `active_id`. When a connection goes down or is removed, pool handling locates the candidate by `active_id` and clears it once; a missing registration is simply absent from the pool. The "interface no longer registered" condition is already the normal keyed lookup, so no double-detach occurs.
+
+**Local handling and evidence:** Pool down and cull behavior is covered by `backbone_peer_pool_*` tests in `driver/tests.rs` and `tests/e2e.rs`. No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
