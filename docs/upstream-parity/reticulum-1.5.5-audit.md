@@ -375,6 +375,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 31. `fc95caf5` — Atomic sequential naming on auto-connect name collisions
+
+**Upstream change:** Adds an `autoconnect_lock` and an `autoconnect_interface_name` helper that appends ` (n)` so a discovered interface whose announced name collides with an existing interface is connected under a unique name.
+
+**Rust applicability:** Native discovered peers are identified by transport identity and endpoint, not by display name, and the pool deduplicates candidates on the discovery hash or endpoint match. Interface names are cosmetic labels (`discovered_pool_candidate_name`), so a duplicate display name cannot cause the registration collision the upstream fix prevents; no lock or renaming is needed.
+
+**Local handling and evidence:** Candidate deduplication and naming are exercised by `backbone_peer_pool_*` tests. No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
