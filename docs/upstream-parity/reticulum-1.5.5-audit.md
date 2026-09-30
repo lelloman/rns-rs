@@ -488,6 +488,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Non-runtime.
 
+### 40. `7f2b3b9b` — Prepare release
+
+**Upstream change:** Regenerates the published `using` manual, its source text, generated HTML, search index, and Markdown copy for the `--show-stale`, `--show-unknown`, and `autoconnect_unverified_implementations` documentation. The `RNS` tree is unchanged from `ddeb44b1` and `0a25e1a9`.
+
+**Rust applicability:** The native command reference and config option are documented in `docs/rnstatus.md` and the `rnsd` sample config; the native project does not carry upstream's generated manual artifacts.
+
+**Local handling and evidence:** This audit-only mapping records the generated-document review and the identical `RNS` tree, confirming the release tag adds no runtime change beyond `ddeb44b1`. No executable test applies.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
