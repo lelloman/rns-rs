@@ -60,7 +60,7 @@ impl Args {
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
                         | "export-prv" | "pr-stats" | "burst" | "blocked-ips" | "queues"
                         | "pps" | "hex" | "meta" | "daemon" | "disable-auth" | "json"
-                        | "value-only" | "keys-only" => {
+                        | "value-only" | "keys-only" | "show-stale" | "show-unknown" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {

@@ -70,6 +70,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let remote_hash = args.get("R").map(|s| s.to_string());
     let show_discovered = args.has("d");
     let show_discovered_config = args.has("D");
+    let show_stale = args.has("show-stale");
+    let show_unknown = args.has("show-unknown");
     let filter = args.positional.first().cloned();
     let management_actions: Vec<_> = ["attach", "detach", "reload"]
         .into_iter()
@@ -161,7 +163,13 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             }
         };
 
-        show_discovered_interfaces(&mut client, show_discovered_config, json_output);
+        show_discovered_interfaces(
+            &mut client,
+            show_discovered_config,
+            json_output,
+            show_stale,
+            show_unknown,
+        );
         return;
     }
 
@@ -1473,7 +1481,13 @@ fn remote_status(
 }
 
 /// Show discovered interfaces
-fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_output: bool) {
+fn show_discovered_interfaces(
+    client: &mut RpcClient,
+    show_config: bool,
+    json_output: bool,
+    show_stale: bool,
+    show_unknown: bool,
+) {
     let response = match client.call(&PickleValue::Dict(vec![(
         PickleValue::String("get".into()),
         PickleValue::String("discovered_interfaces".into()),
@@ -1503,9 +1517,28 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
         return;
     }
 
+    // Default output hides stale entries and entries with no implementation
+    // information, matching upstream rnstatus. The flags opt them back in.
+    let filtered: Vec<&PickleValue> = interfaces
+        .iter()
+        .filter(|iface| {
+            let status = iface
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            if status == "stale" && !show_stale {
+                return false;
+            }
+            if !discovered_has_impl_info(iface) && !show_unknown {
+                return false;
+            }
+            true
+        })
+        .collect();
+
     if show_config {
         // Detailed view with config entries
-        for (idx, iface) in interfaces.iter().enumerate() {
+        for (idx, iface) in filtered.iter().copied().enumerate() {
             if idx > 0 {
                 println!("{}", "=".repeat(DISCOVERY_DETAIL_SEPARATOR_WIDTH));
             }
@@ -1647,7 +1680,7 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
 
         let now = rns_net::time::now();
 
-        for iface in interfaces {
+        for iface in filtered.iter().copied() {
             let name_full = iface
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -1736,6 +1769,17 @@ fn discovered_stack(iface: &PickleValue) -> String {
     }
 }
 
+fn discovered_has_impl_info(iface: &PickleValue) -> bool {
+    iface
+        .get("impl_name")
+        .and_then(PickleValue::as_str)
+        .is_some_and(|name| !name.is_empty())
+        && iface
+            .get("version")
+            .and_then(PickleValue::as_str)
+            .is_some_and(|version| !version.is_empty())
+}
+
 fn discovered_operator_lxmf_address(iface: &PickleValue) -> Option<&str> {
     iface
         .get("operator_lxmf_address")
@@ -1765,6 +1809,8 @@ fn print_usage(usage_name: &str) {
     println!("  -z, --profiling         Show live profiling results");
     println!("  -d                      Show discovered interfaces");
     println!("  -D                      Show discovered interfaces with config entries");
+    println!("  --show-stale            Include stale discovery entries");
+    println!("  --show-unknown          Include discovery entries without version info");
     println!("  -m                      Monitor mode (loop)");
     println!("  -I SECONDS              Monitor interval (default: 1.0)");
     println!("  -R HASH                 Query remote transport identity via management link");
@@ -1995,6 +2041,41 @@ mod tests {
         ]);
         assert_eq!(discovered_stack(&complete), "Reticulum 1.5.5");
         assert_eq!(discovered_stack(&PickleValue::Dict(Vec::new())), "Unknown");
+    }
+
+    #[test]
+    fn discovered_has_impl_info_requires_both_nonempty_fields() {
+        let complete = PickleValue::Dict(vec![
+            (
+                PickleValue::String("impl_name".into()),
+                PickleValue::String("RNS".into()),
+            ),
+            (
+                PickleValue::String("version".into()),
+                PickleValue::String("1.5.5".into()),
+            ),
+        ]);
+        assert!(discovered_has_impl_info(&complete));
+
+        for missing in [
+            PickleValue::Dict(Vec::new()),
+            PickleValue::Dict(vec![(
+                PickleValue::String("impl_name".into()),
+                PickleValue::String("RNS".into()),
+            )]),
+            PickleValue::Dict(vec![
+                (
+                    PickleValue::String("impl_name".into()),
+                    PickleValue::String("RNS".into()),
+                ),
+                (
+                    PickleValue::String("version".into()),
+                    PickleValue::String(String::new()),
+                ),
+            ]),
+        ] {
+            assert!(!discovered_has_impl_info(&missing));
+        }
     }
 
     #[test]

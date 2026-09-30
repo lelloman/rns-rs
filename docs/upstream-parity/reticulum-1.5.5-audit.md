@@ -435,6 +435,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Integrated.
 
+### 37. `39a888c1` — Added --show-stale and --show-unknown to rnstatus
+
+**Upstream change:** Adds `--show-stale` and `--show-unknown` to `rnstatus`; by default stale discovery entries and entries without implementation/version information are hidden in both table and detailed views.
+
+**Rust applicability:** Native `rnstatus` always listed stale and no-info discovery entries. This mapping adds the two flags and the default filtering.
+
+**Local handling and evidence:** The long options are registered as boolean flags in `rns-cli/src/args.rs`, plumbed through `run_with_args`, and applied in `show_discovered_interfaces` via the new `discovered_has_impl_info` helper. The focused `discovered_has_impl_info_requires_both_nonempty_fields` test covers the predicate; `docs/rnstatus.md` and the usage text document the options. `cargo test -p rns-cli` passed.
+
+**Final disposition:** Integrated.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
