@@ -395,6 +395,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Integrated.
 
+### 33. `47318034` — Auto-connect support on Windows and macOS
+
+**Upstream change:** Detects platforms without Backbone support and auto-connects discovered Backbone peers as `TCPClientInterface` instead, narrowing `AUTOCONNECT_TYPES` to `BackboneInterface` and removing the earlier TCPClient abort branch.
+
+**Rust applicability:** The native Backbone implementation is a cross-platform polling TCP transport and works on Windows and macOS, so no platform degradation is required. Native discovered auto-connect is endpoint-based and already accepts both `BackboneInterface` and `TCPServerInterface` discovered types.
+
+**Local handling and evidence:** Continuing to auto-connect `TCPServerInterface` discoveries is a deliberate native difference because the native transport has no platform limitation to work around. Peer-pool e2e tests cover connection establishment. No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
