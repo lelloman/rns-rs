@@ -746,6 +746,7 @@ impl Driver {
             registration.info.announce_rate_target = parent.info.announce_rate_target;
             registration.info.announce_rate_grace = parent.info.announce_rate_grace;
             registration.info.announce_rate_penalty = parent.info.announce_rate_penalty;
+            registration.info.announce_cap = parent.info.announce_cap;
             registration.info.ingress_control = parent.info.ingress_control;
             parent.ifac.clone()
         });

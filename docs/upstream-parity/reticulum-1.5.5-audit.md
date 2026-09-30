@@ -325,6 +325,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 26. `1d9ebe8c` — Propagate configurable properties to spawned interfaces
+
+**Upstream change:** Copies `recursive_prs`, `announces_from_internal`, `announces_to_internal`, and `announce_cap` from a parent interface to each AutoInterface, BackboneInterface, and TCPServerInterface child it spawns.
+
+**Rust applicability:** Native dynamic-child registration already inherited `mode`, `gravity`, `recursive_prs`, `announces_from_internal`, `announces_to_internal`, `announce_rate_target/grace/penalty`, and `ingress_control`. It did not inherit `announce_cap`, so a spawned peer used the default cap regardless of its parent.
+
+**Local handling and evidence:** `handle_dynamic_interface_up_event` (`rns-net/src/driver/events.rs`) now copies `announce_cap` alongside the other inherited properties. The focused `dynamic_interface_inherits_parent_announce_cap` test sets a parent cap of `0.5` and observes it on the registered child. The complete `rns-net` library suite passed serially (978 tests).
+
+**Final disposition:** Integrated.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
