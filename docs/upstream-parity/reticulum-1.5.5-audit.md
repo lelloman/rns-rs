@@ -285,6 +285,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Non-runtime.
 
+### 22. `6c9d717c` — Fixed ingress control producer selection
+
+**Upstream change:** A mid-watermark producer list comprehension tested the outer `interface` variable instead of each candidate `iface`, so a `LocalClientInterface` could be selected for throttling. The fix filters each producer.
+
+**Rust applicability:** Native Backbone dataplane producer selection (`busiest_ingress_key`) iterates only the spawned peer `ClientState` map. Local client interfaces are never entries in that map, so they cannot be selected as producers; the exclusion holds by construction rather than by a type test.
+
+**Local handling and evidence:** The invariant is in `busiest_ingress_key` and `throttle_busiest_ingress` (`rns-net/src/interface/backbone.rs`). The existing `dataplane_ingress_selects_the_largest_packet_producer` and `backbone_gates_the_largest_producer_before_data_queue_overflow` tests exercise the selection path. No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
