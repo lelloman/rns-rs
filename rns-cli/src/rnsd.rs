@@ -352,6 +352,10 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # Allow auto-connected interfaces to propagate announces to internal mode.
   # autoconnect_announces_to_internal = yes
 
+  # Allow auto-connecting discovered interfaces from unverified or experimental
+  # implementations. Dangerous; leave disabled unless you understand the risk.
+  # autoconnect_unverified_implementations = no
+
 [logging]
   # Valid log levels are 0 through 8:
   #   0: Critical information only

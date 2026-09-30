@@ -789,6 +789,8 @@ pub struct Driver {
     pub(crate) autoconnect_interface_gravity: i64,
     /// Internal announce propagation override for discovered interfaces.
     pub(crate) autoconnect_announces_to_internal: Option<bool>,
+    /// Allow auto-connecting discovered interfaces from unverified implementations.
+    pub(crate) autoconnect_unverified_implementations: bool,
     /// Announcer for discoverable interfaces (None if nothing to announce).
     pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
     /// Shared async announce verification queue.
@@ -971,6 +973,7 @@ impl Driver {
             autoconnect_interface_mode: None,
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: None,
+            autoconnect_unverified_implementations: false,
             interface_announcer: None,
             announce_verify_queue: Arc::new(Mutex::new(AnnounceVerifyQueue::new(
                 announce_queue_max_entries,
