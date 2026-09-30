@@ -315,6 +315,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 25. `4f791109` — Ensure announce_cap is always initialized
+
+**Upstream change:** Initializes `self.announce_cap` in `Interface.__init__` so process-announce-queue always has a value.
+
+**Rust applicability:** `InterfaceInfo::announce_cap` is a non-optional `f64` field constructed by every interface factory, so it can never be absent.
+
+**Local handling and evidence:** The field definition and every constructor set it to `constants::ANNOUNCE_CAP` unless overridden. No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
