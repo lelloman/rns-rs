@@ -265,6 +265,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Non-runtime.
 
+### 20. `73c60e6a` — Updated contribution guidelines
+
+**Upstream change:** Rewrites the upstream development-priorities sentence and adds a mandatory commit-signing requirement to upstream `Contributing.md`. The complete diff changes no executable source.
+
+**Rust applicability:** This repository has its own `CONTRIBUTING.md` with an independent governance and signing policy. Copying upstream's signing mandate here would misstate this project's process.
+
+**Local handling and evidence:** This audit-only mapping records the full changed-file review and the policy boundary. No native runtime or test change applies.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
