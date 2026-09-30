@@ -578,6 +578,8 @@ pub struct NodeConfig {
     pub autoconnect_interface_gravity: i64,
     /// Allow auto-connected interfaces to propagate announces to internal interfaces.
     pub autoconnect_announces_to_internal: bool,
+    /// Allow auto-connecting discovered interfaces from unverified implementations.
+    pub autoconnect_unverified_implementations: bool,
     /// Minimum stamp value for accepting discovered interfaces (default: 16).
     pub discovery_required_value: Option<u8>,
     /// Respond to probe packets with automatic proof (like Python's respond_to_probes).
@@ -687,6 +689,7 @@ impl Default for NodeConfig {
             autoconnect_interface_mode: None,
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
+            autoconnect_unverified_implementations: false,
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
@@ -1275,6 +1278,9 @@ impl RnsNode {
             autoconnect_announces_to_internal: rns_config
                 .reticulum
                 .autoconnect_announces_to_internal,
+            autoconnect_unverified_implementations: rns_config
+                .reticulum
+                .autoconnect_unverified_implementations,
             discovery_required_value: rns_config.reticulum.required_discovery_value,
             respond_to_probes: rns_config.reticulum.respond_to_probes,
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
@@ -1660,6 +1666,7 @@ impl RnsNode {
         driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
         driver.autoconnect_announces_to_internal =
             config.autoconnect_announces_to_internal.then_some(true);
+        driver.autoconnect_unverified_implementations = config.autoconnect_unverified_implementations;
         if let Some(val) = config.discovery_required_value {
             driver.discovery_required_value = val;
         }
@@ -4415,6 +4422,7 @@ mod tests {
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4737,6 +4745,7 @@ share_instance = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4807,6 +4816,7 @@ share_instance = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -5618,6 +5628,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -5697,6 +5708,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -5772,6 +5784,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -5844,6 +5857,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -5956,6 +5970,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -6036,6 +6051,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -6114,6 +6130,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -6205,6 +6222,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -6286,6 +6304,7 @@ enable_transport = False
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
+                autoconnect_unverified_implementations: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,

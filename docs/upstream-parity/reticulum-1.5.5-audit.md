@@ -385,6 +385,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 32. `bb132091` — Add discovered auto-connect criteria constants and config
+
+**Upstream change:** Adds `AUTOCONNECT_IMPLS = ["RNS"]` and `AUTOCONNECT_MIN_V = "1.5.2"` constants and the `autoconnect_unverified_implementations` `[reticulum]` option, exposed through `should_autoconnect_unverified_implementations()`.
+
+**Rust applicability:** Native discovery had no implementation/version policy for auto-connect. This mapping adds the configuration surface and sample-config documentation; the qualification logic itself lands with the next criteria mapping.
+
+**Local handling and evidence:** `ReticulumConfig`, the driver, and `NodeConfig` gain the field, parsed from `autoconnect_unverified_implementations` and defaulting to `false`. The `parse_interface_gravity_defaults_and_autoconnect_options` and new `autoconnect_unverified_implementations_defaults_to_false` tests cover parsing. `rns-cli/src/rnsd.rs` documents the option. The complete `rns-net` suite passed serially (978 tests).
+
+**Final disposition:** Integrated.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.

@@ -70,6 +70,8 @@ pub struct ReticulumSection {
     pub autoconnect_interface_gravity: i64,
     /// Allow auto-connected interfaces to propagate announces to internal interfaces.
     pub autoconnect_announces_to_internal: bool,
+    /// Allow auto-connecting discovered interfaces from unverified implementations.
+    pub autoconnect_unverified_implementations: bool,
     /// Minimum stamp value for accepting discovered interfaces.
     pub required_discovery_value: Option<u8>,
     /// Accept an announce with strictly fewer hops even when the random_blob
@@ -197,6 +199,7 @@ impl Default for ReticulumSection {
             autoconnect_interface_mode: None,
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
+            autoconnect_unverified_implementations: false,
             required_discovery_value: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -853,6 +856,13 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         section.autoconnect_announces_to_internal =
             parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
                 key: "autoconnect_announces_to_internal".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = kvs.get("autoconnect_unverified_implementations") {
+        section.autoconnect_unverified_implementations =
+            parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: "autoconnect_unverified_implementations".into(),
                 value: v.clone(),
             })?;
     }
@@ -1571,6 +1581,7 @@ autoconnect_discovered_mode = full
 autoconnect_interface_mode = boundary
 autoconnect_interface_gravity = 7
 autoconnect_announces_to_internal = yes
+autoconnect_unverified_implementations = yes
 "#,
         )
         .unwrap();
@@ -1582,6 +1593,13 @@ autoconnect_announces_to_internal = yes
         assert_eq!(config.reticulum.default_gravity, -3);
         assert_eq!(config.reticulum.autoconnect_interface_gravity, 7);
         assert!(config.reticulum.autoconnect_announces_to_internal);
+        assert!(config.reticulum.autoconnect_unverified_implementations);
+    }
+
+    #[test]
+    fn autoconnect_unverified_implementations_defaults_to_false() {
+        let config = parse("[reticulum]\n").unwrap();
+        assert!(!config.reticulum.autoconnect_unverified_implementations);
     }
 
     #[test]
