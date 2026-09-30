@@ -8,36 +8,34 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.5.4`
-- Version metadata commit: `7785fd277aec1cdcfbe5d9f00c6cd104194ad865`
-- Normative commit: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`
-- Commit date: `2026-09-26 22:09:29 +0200`
-- Subject: `Updated AGENTS.md`
+- Version: `1.5.5`
+- Version metadata commit: `e2ba876ebfec386af9f97d844c39e9ca016e956c`
+- Normative commit: `7f2b3b9b524c9386316379af1313b43a5e4f7a5d`
+- Commit date: `2026-09-29 21:51:21 +0200`
+- Subject: `Prepare release`
 
-The normative baseline is the canonical rgit development tip accepted on
-2026-09-27 with Reticulum version 1.5.4. Its `RNS` tree is
-`51f0e922420b47f482df9184b48ade41ac8d6ce3` and root tree is
-`a843be443c20aa15b5f63f36663a351230a93168`. Both commits since
-`8a7ad40d649aae1cd755f060fa8f5619f7000b29` were reviewed and mapped
-individually. The first removes an unused Python-local `import platform` from
-the RNode BLE connection path, for which the native workspace has no
-implementation; the second rewrites upstream agent guidance. Neither commit
-requires a native runtime port.
+The normative baseline is the GitHub `1.5.5` release tag accepted on
+2026-09-30. The canonical rgit tip is `ddeb44b1`, with `7f2b3b9b` adding only
+the two release commits `0a25e1a9` and `7f2b3b9b`; all share the `RNS` tree
+`192d74c76e5c56046a411492f219db1833c99365` and root tree
+`73d3c378805a380da5194a13561f904f88d07e69`. All forty commits since the previous
+baseline `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` were reviewed and mapped
+individually; the live interface management, discovery auto-connect criteria,
+IFAC sanitization, spawned announce-cap propagation, Backbone detach, and
+`rnstatus` discovery filters landed in native code.
 
-Workspace tests, formatting, and host lint passed. The daily dual-VPS stress
-test and native-hook release builds also passed. Both upstream refreshes
-succeeded and agree on the canonical tip at acceptance. The GitHub-backed CI
-interop matrix now targets Reticulum `1.4.2` and `1.5.4`, with `1.5.4` pinned at
-the accepted normative commit; the older `1.3.5` and `1.5.2` entries were
-retired. The live Python/Rust interop suites (`rns-net`'s
-`python_interop` and `rns-cli`'s `utility_interop`) were run against `1.5.4` and
-passed. Historical fixture provenance is unchanged. Physical hardware
-validation remains unclaimed.
+The complete `rns-net` library suite, the default workspace suite (2,545
+passed), the `rns-hooks` feature suite (2,592 passed), formatting, host lint,
+native and ARMv7 release/cross builds, the full Docker E2E matrix (11 runs, 102
+checks, 0 failures), exact-target Python/Rust interop at `ddeb44b1` (1/1
+`python_interop`, 6/6 `utility_interop`), and the impaired dual-VPS `--daily`
+smoke all passed on 2026-09-30. Historical fixture provenance is unchanged.
+Physical hardware validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-6-parity.md`](docs/upstream-parity/reticulum-1.5.4-rgit-6-parity.md),
+[`docs/upstream-parity/reticulum-1.5.5-parity.md`](docs/upstream-parity/reticulum-1.5.5-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.4-rgit-6-audit.md`](docs/upstream-parity/reticulum-1.5.4-rgit-6-audit.md).
+[`docs/upstream-parity/reticulum-1.5.5-audit.md`](docs/upstream-parity/reticulum-1.5.5-audit.md).
 The earlier 1.5.4 acceptance records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
