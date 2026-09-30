@@ -3164,6 +3164,36 @@ fn dynamic_interface_register() {
 }
 
 #[test]
+fn dynamic_interface_inherits_parent_announce_cap() {
+    let (callbacks, ..) = MockCallbacks::new();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+
+    let (writer, _) = MockWriter::new();
+    let mut parent = make_entry(10, Box::new(writer), true);
+    parent.info.announce_cap = 0.5;
+    driver.interfaces.insert(InterfaceId(10), parent);
+
+    let mut info = make_interface_info(11);
+    info.announce_cap = rns_core::constants::ANNOUNCE_CAP;
+    let (writer, _) = MockWriter::new();
+    driver.handle_dynamic_interface_up_event(
+        InterfaceId(11),
+        Box::new(writer),
+        event::DynamicInterfaceRegistration {
+            info,
+            interface_type: "BackboneClientInterface".into(),
+            parent_id: InterfaceId(10),
+            telemetry: event::InterfaceTelemetry::default(),
+            ifac: None,
+        },
+    );
+
+    let registered = driver.engine.interface_info(&InterfaceId(11)).unwrap();
+    assert_eq!(registered.announce_cap, 0.5);
+}
+
+#[test]
 fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
     let (callbacks, ..) = MockCallbacks::new();
     let (tx, rx) = event::channel();
