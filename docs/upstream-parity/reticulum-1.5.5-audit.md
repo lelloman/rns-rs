@@ -6,15 +6,15 @@
 - previous accepted version: `1.5.4`
 - previous normative commit: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1`
 - target version: `1.5.5` (`RNS/_version.py`)
-- target normative commit: `cce96d38c684e8d3e85e8cb311633fb2599515dd` (`rgit/master` snapshot cutoff)
-- target root tree: `f5ddc7ea6dcd988fd075310159a9262a9acb3c47`
-- target `RNS` tree: `f019bc58f0c19452b57b642b6170261695d8295d`
-- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..cce96d38c684e8d3e85e8cb311633fb2599515dd`
-- commits in candidate range: `19`
-- repositories checked: normative rgit remote and GitHub mirror, both refreshed on `2026-09-28`; rgit reached `cce96d38` while the mirror remained at `d5962d14`
-- local branch and revision inspected: `dev@681e3e0ec0cc020dd9a43e8d54705a450a0db2ab`
+- target normative commit: `ddeb44b1debb475aa76861af21f1491d0738110a` (`rgit/master` at the extended review cutoff)
+- target root tree: `6ff50287d3a093015c25c107f5c5e64d7d40bf3d`
+- target `RNS` tree: `192d74c76e5c56046a411492f219db1833c99365`
+- candidate audited range: `3f95b472820ddfb27f736143fb0b4d0d3aa610f1..ddeb44b1debb475aa76861af21f1491d0738110a`
+- commits in candidate range: `38`
+- repositories checked: normative rgit remote and GitHub mirror; the `2026-09-30` refresh found rgit at `ddeb44b1` and the GitHub mirror at the `1.5.5` release tag `7f2b3b9b`
+- local branch and revision inspected: `dev@263c1e0`, with the extended mappings on top
 
-The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. Fresh fetches extended the candidate through `b8993899`, `d3153bd7`, and finally `cce96d38`. The latter is the fixed cutoff for this advancement. The GitHub mirror lagged by two commits at the final complete pre-mapping refresh; the normative rgit history contains all nineteen in ancestry order.
+The initial `2026-09-28` audit pinned `e2ba876ebfec386af9f97d844c39e9ca016e956c` as the nine-commit 1.5.5 target while the GitHub mirror stopped at the first commit. Fresh fetches extended the candidate through `b8993899`, `d3153bd7`, and finally `cce96d38` for the first nineteen mappings. The `2026-09-30` daily report found rgit advanced to `ddeb44b1`, adding nineteen further commits inventoried below as rows 20–38. The GitHub `1.5.5` tag `7f2b3b9b` is two release-only commits beyond the rgit tip (`0a25e1a9` and `7f2b3b9b`); those are not part of this rgit-reviewed range.
 
 ## Audit Vocabulary
 
@@ -52,17 +52,40 @@ The rows are in ancestry order. `Pending review` means no final disposition has 
 | 17 | `d5962d14eb4fbf4a34a0b83e6942534a4965dd17` | Updated documentation | generated manual and Markdown support page | Non-runtime | `bef4b04`: audit-only review of generated manual and removed upstream support appeal. |
 | 18 | `71583c5c2d3e953c15ac7a6ce9aef62b3780d186` | Set interface owner before connect | `RNS/Interfaces/LocalInterface.py` | Structurally covered | `53aebeb`: documents complete native interface metadata before local connect; focused and full crate suites passed. |
 | 19 | `cce96d38c684e8d3e85e8cb311633fb2599515dd` | Updated changelog | `Changelog.md` | Non-runtime | `c7b92e0`: audit-only release-note review linked to row 18. |
+| 20 | `73c60e6a497098bc599ed0986308553edbf077cf` | Updated contribution guidelines | `Contributing.md` | Non-runtime | `a190819`: records the upstream-only signing and governance policy change. |
+| 21 | `f25b31702bc06a1081cee4ee9489caf7a92ffe46` | Added disclosure requirements to contribution guidelines | `Contributing.md` | Non-runtime | `6ac640c`: records the upstream-only machine-assistance disclosure policy. |
+| 22 | `6c9d717cd683163adea5392eeba7beddae1ffe8a` | Fixed ingress control producer comprehension | `RNS/Interfaces/BackboneInterface.py` | Structurally covered | `d2108ba`: native producer selection iterates spawned peers only; `busiest_ingress_key` tests. |
+| 23 | `06dc4ad550061f842343cd7a7ee610ce2a6ef87c` | Fixed announce_cap fraction storage | `RNS/Interfaces/Interface.py`, `RNS/Transport.py` | Structurally covered | `a8512cb`: `announce_cap` is a fraction constant used directly by `calculate_next_allowed`. |
+| 24 | `5cdff2870379130a52568c3af64831fd5c94167c` | Fixed single-packet request timeout/response rejects | `RNS/Link.py` | Structurally covered | `e8dc271`: packet-request deadlines are culled unconditionally; `unanswered_packet_request_expires_from_pending_set`. |
+| 25 | `4f79110995dd002bab21c8e5aab0c75703dab3de` | Ensure announce_cap is always initialized | `RNS/Interfaces/Interface.py` | Structurally covered | `3206e36`: `announce_cap` is a non-optional field on every `InterfaceInfo`. |
+| 26 | `1d9ebe8c388171094ec7da44096b9523baf16f0d` | Fixed missing spawned-interface property propagation | Auto, Backbone, TCP interfaces | Integrated | `9b7c133`: spawned children inherit parent `announce_cap`; `dynamic_interface_inherits_parent_announce_cap`. |
+| 27 | `135e941fa2f3f355255a3e20a84b48c8049c9702` | Improved discovery IFAC sanitization | `RNS/Discovery.py`, `RNS/Reticulum.py` | Integrated | `9cbda42`: string-only non-empty IFAC announce/persisted/config sanitization; parsing and config tests. |
+| 28 | `26aec0040e822872531b857dfaf9ae932526039b` | Use canonical detach in auto-connect teardown | `RNS/Discovery.py`, `RNS/Reticulum.py` | Structurally covered | `4e8d0a5`: native auto-connect teardown uses the canonical peer-pool path. |
+| 29 | `0a0e661beb9d9f7d1aedbc6d6bdc2ccbedc7dd2f` | Propagate internal_forced on reload | `RNS/Reticulum.py` | Structurally covered | `0097a22`: native reload is gated once by `enable_interface_management`; no forced bypass exists. |
+| 30 | `6d1409be1c32159cc1dd5a0d24dbeaa4ceaaa741` | Idempotent auto-connect monitoring | `RNS/Discovery.py` | Structurally covered | `7d02914`: peer-pool candidate teardown is keyed by `active_id` and idempotent. |
+| 31 | `fc95caf5191a4cb091db3ff3cab7bab8e22b061a` | Atomic sequential naming on name collisions | `RNS/Discovery.py` | Structurally covered | `e884101`: candidates dedupe by discovery hash/endpoint, not display name. |
+| 32 | `bb1320913ac670a06e4a86a0b02e6febfdc56310` | Add auto-connect criteria constants and config | `RNS/Discovery.py`, `RNS/Reticulum.py`, `using.rst` | Integrated | `36bddfd`: `autoconnect_unverified_implementations` config, driver, `NodeConfig`, sample docs; parse tests. |
+| 33 | `47318034dd4f5caec36076d6240a52cd892b2fb2` | Auto-connect support on Windows and macOS | `RNS/Discovery.py` | Structurally covered | `6a129c1`: native Backbone is cross-platform; endpoint-based auto-connect needs no degradation. |
+| 34 | `942434b288fa06ad4966730aa51c35148bd6ef1c` | Fixed missing detached property handling | `RNS/Interfaces/TCPInterface.py` | Structurally covered | `5b1f46a`: TCP client honors `ListenerControl`; stop/reconnect tests. |
+| 35 | `a714c200439a526ed742a082b675a30c5672e48c` | Set detached immediately | `RNS/Interfaces/BackboneInterface.py` | Integrated | `5149d09`: backbone client returns a stop control honored by reader/reconnect; `backbone_client_stop_prevents_reconnect`. |
+| 36 | `1f74990752e3ed455c36c8ee89c9a44d2cd663ea` | Added auto-connect filtering criteria | `RNS/Discovery.py` | Integrated | `4efc155`: `autoconnect_qualified`/`parse_version_tuple` criteria; tests; e2e peers advertise `RNS 1.5.5`. |
+| 37 | `39a888c1e2e9685fb7c74b1c93a333e2994f1eea` | Added --show-stale/--show-unknown to rnstatus | `RNS/Utilities/rnstatus.py`, `using.rst` | Integrated | `ff76d2d`: flags and default stale/unknown filtering; `discovered_has_impl_info` test. |
+| 38 | `ddeb44b1debb475aa76861af21f1491d0738110a` | Updated changelog | `Changelog.md` | Non-runtime | `138ff9e`: audit-only review of the expanded 1.5.5 changelog. |
 
-All nineteen canonical commits have one nonempty local mapping with exactly one
-full `Upstream-Commit` trailer each. The local trailer order matches upstream
-ancestry. The local hashes above identify the commits on `master` after PR #168
-was rebased on merge. The upstream trailers were checked again after that
-history rewrite; the mapped code and test evidence did not change.
+All thirty-eight canonical commits have one nonempty local mapping with exactly
+one full `Upstream-Commit` trailer each. The local trailer order matches upstream
+ancestry. Rows 1–19 were rebased on merge in PR #168 and re-checked afterward;
+rows 20–38 were authored and verified in this batch. The GitHub `1.5.5` release
+tag adds two changelog/release commits (`0a25e1a9`, `7f2b3b9b`) beyond the
+reviewed rgit tip and is intentionally outside this range.
 
 ## Integration Plan
 
-Per-commit review, dispositions, and mappings are complete. The remaining
-promotion work follows [README.md](README.md) and the candidate parity record.
+Per-commit review, dispositions, and mappings are complete for all thirty-eight
+commits through the rgit tip `ddeb44b1`. The remaining promotion work follows
+[README.md](README.md) and the candidate parity record, which still pins the
+earlier `cce96d38` cutoff and must be refreshed for the extended range before
+baseline promotion.
 
 The `e2ba876e` commit asserts upstream version `1.5.5` by changing only
 `RNS/_version.py`. Native crate package versions are independent of that
@@ -479,3 +502,11 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
   topology-specific skips. This includes mesh-4, star-30 scale, shared-client
   reconnection, server supervision, NAT, and `rntun` tunnel/reconnect coverage.
   PR CI and final promotion review remain pending.
+- `2026-09-30`: The daily report found rgit at `ddeb44b1` and the GitHub `1.5.5`
+  tag at `7f2b3b9b`. Rows 20–38 were reviewed, given final dispositions, and
+  mapped in ancestry order with one full `Upstream-Commit` trailer each. The
+  complete `rns-net` library suite passed serially (978 tests), the discovery and
+  peer-pool e2e tests passed, and `cargo test -p rns-cli` passed. The candidate
+  parity record still targets `cce96d38` and must be refreshed for `ddeb44b1`
+  before baseline promotion; exact-target interop for the extended range and the
+  GitHub release-only commits are not yet claimed.
