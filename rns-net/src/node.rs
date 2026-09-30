@@ -1666,7 +1666,8 @@ impl RnsNode {
         driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
         driver.autoconnect_announces_to_internal =
             config.autoconnect_announces_to_internal.then_some(true);
-        driver.autoconnect_unverified_implementations = config.autoconnect_unverified_implementations;
+        driver.autoconnect_unverified_implementations =
+            config.autoconnect_unverified_implementations;
         if let Some(val) = config.discovery_required_value {
             driver.discovery_required_value = val;
         }
