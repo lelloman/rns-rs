@@ -355,6 +355,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 29. `0a0e661b` — Propagate internal_forced on interface reload
+
+**Upstream change:** `_reload_interface` forwards its `internal_forced` argument to the detach and attach calls it performs.
+
+**Rust applicability:** Native interface reload is implemented as detach followed by attach through the shared `manage_interface` path; it has no `internal_forced` argument because the management policy is gated once by `enable_interface_management`. There is no internal monitor that bypasses the flag, so the dropped-argument bug cannot occur.
+
+**Local handling and evidence:** The reload behavior is covered by the interface-management tests (`managed_interface_attaches_disabled_section_and_reloads_from_disk`, `shared_instance_rpc_manages_interface_by_name`). No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
