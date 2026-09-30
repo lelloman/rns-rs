@@ -275,6 +275,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Non-runtime.
 
+### 21. `f25b3170` — Added disclosure requirements to contribution guidelines
+
+**Upstream change:** Adds a machine-assistance disclosure-header requirement and comment-rewrite rule to upstream `Contributing.md`. The complete diff changes no executable source.
+
+**Rust applicability:** This is upstream contribution policy. This repository documents its own contribution process independently.
+
+**Local handling and evidence:** This audit-only mapping records the disclosure requirement and its upstream-only scope. No native runtime or test change applies.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
