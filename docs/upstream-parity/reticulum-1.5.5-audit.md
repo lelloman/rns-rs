@@ -405,6 +405,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Structurally covered.
 
+### 34. `942434b2` — Fixed missing detached property handling
+
+**Upstream change:** Sets `self.detached = True` in `TCPClientInterface.detach` and checks `not self.detached` in the reconnect loop so an intentionally detached client stops reconnecting.
+
+**Rust applicability:** Native TCP clients have no boolean `detached` field; lifecycle is driven by `ListenerControl`. `detach_interface` calls `control.request_stop()`, the reader polls `should_stop()` with a 200 ms read timeout, and `reconnect` waits through `wait_while_active`, which returns early on stop.
+
+**Local handling and evidence:** The behavior is covered by the TCP client stop/reconnect tests (`rns-net/src/interface/tcp.rs`). No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
