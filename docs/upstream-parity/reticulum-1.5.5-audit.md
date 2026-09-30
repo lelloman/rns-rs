@@ -345,6 +345,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Integrated.
 
+### 28. `26aec004` — Use canonical detach in auto-connect teardown
+
+**Upstream change:** The discovery monitor's `teardown_interface` calls `Reticulum._detach_interface(name, internal_forced=True)` instead of invoking `interface.detach()` plus `Transport.remove_interface` directly.
+
+**Rust applicability:** Native auto-connect does not spawn named monitor interfaces. Discovered backbone peers are managed as backbone peer-pool candidates, and removing a candidate goes through the pool's canonical teardown (`handle_backbone_peer_pool_down`), which deregisters the interface and clears runtime state exactly once. There is no parallel detach path to converge.
+
+**Local handling and evidence:** The canonical teardown is exercised by the peer-pool connect/seed e2e tests (`backbone_peer_pool_connects_live_discovered_peer`, `backbone_peer_pool_seeds_from_cached_discovered_peer`). No code change was required.
+
+**Final disposition:** Structurally covered.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
