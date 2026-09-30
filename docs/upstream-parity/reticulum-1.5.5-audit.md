@@ -445,6 +445,16 @@ An exact-target utility interop rerun subsequently found that Python `rncp` and 
 
 **Final disposition:** Integrated.
 
+### 38. `ddeb44b1` — Updated changelog
+
+**Upstream change:** Retitles the 1.5.5 entry to 2026-09-29 and expands it with discovered-interface auto-connect improvements, Windows/macOS support, `rnstatus` stack and stale/unknown options, auto-connect naming and criteria, the single-packet request and spawned-property and ingress-producer and announce_cap fixes, and documentation updates. The complete diff touches only `Changelog.md`.
+
+**Rust applicability:** The changelog is upstream release communication. The applicable runtime changes are reviewed and mapped under their own source commits.
+
+**Local handling and evidence:** This audit-only mapping cross-checks the enumerated behavior against rows 22–37. The upstream release description is not treated as compatibility evidence; each behavior retains its own test evidence. No independent runtime test applies.
+
+**Final disposition:** Non-runtime.
+
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
