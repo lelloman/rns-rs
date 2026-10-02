@@ -46,7 +46,7 @@ Every commit in the audited range appears exactly once.
 |---:|---|---|---|---|
 | 1 | `fca509ff0418e64be5478118628c581aafc019e0` | Ensure static transport identity is enabled when discoverable interfaces are present on non-transport instances | `Integrated` | Native effective-static-identity wiring; focused regression. |
 | 2 | `d1a7e0c8a0989ebc3bd42d24e895c2f539b8161f` | Ensure only transport-enabled interfaces are autoconnected at discovery time | `Integrated` | Native autoconnect transport gate; focused regression. |
-| 3 | `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62` | Updated version | `Non-runtime` | Upstream Python version metadata only. |
+| 3 | `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62` | Updated version | `Non-runtime` | This mapping records the source-only review. |
 
 ## Per-Commit Analysis
 
