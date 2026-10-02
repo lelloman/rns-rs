@@ -119,20 +119,21 @@ upstream range, and each reviewed upstream hash appears exactly once in an
 
 ## Integration Plan
 
-Land one non-empty ordered mapping commit per upstream commit (`fca509ff`,
-`d1a7e0c8`, `2bae9ff0`), then complete the same-version promotion gates and
-create the `1.5.6` parity record.
+All three in-range commits have ordered, non-empty mappings and every promotion
+gate below is satisfied. The accepted record is
+[reticulum-1.5.6-parity.md](reticulum-1.5.6-parity.md); this audit is retained
+as the detailed work record.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition and a unique mapping.
+- [x] Focused regressions pass for both discovery runtime changes.
+- [x] Runtime-tree provenance checked; historical fixtures are unchanged.
+- [x] Exact-target interop assessed as inapplicable to this discovery-only delta; not rerun.
+- [x] Workspace and `rns-hooks` feature suites, formatting, and warning-free host lint passed (2026-10-02).
+- [x] Native-hook `rns-server` and `rns-ctl` release builds passed; daily manual results recorded.
+- [x] Native documentation checked; no user-facing documentation change required.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
