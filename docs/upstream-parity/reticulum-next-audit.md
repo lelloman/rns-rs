@@ -43,8 +43,8 @@ Every commit in the audited range appears exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `1e6ebd3fa0746c6f3299b0d3f74aaeb05c0e457b` | Updated changelog | `Non-runtime` | This mapping records the source-only review. |
-| 2 | `49ae71e06cadf5d846849661578a8ad9fcede443` | Updated documentation | `Non-runtime` | This mapping records the source-only review. |
+| 1 | `1e6ebd3fa0746c6f3299b0d3f74aaeb05c0e457b` | Updated changelog | `Non-runtime` | `43ea753`; source-only review. |
+| 2 | `49ae71e06cadf5d846849661578a8ad9fcede443` | Updated documentation | `Non-runtime` | `ae9a5c5`; source-only review. |
 
 ## Per-Commit Analysis
 
@@ -80,8 +80,12 @@ unchanged from the accepted baseline
 
 | Upstream commit | Local mapping commit |
 |---|---|
-| `1e6ebd3fa0746c6f3299b0d3f74aaeb05c0e457b` | `pending` |
-| `49ae71e06cadf5d846849661578a8ad9fcede443` | `pending` |
+| `1e6ebd3fa0746c6f3299b0d3f74aaeb05c0e457b` | `43ea753d33a2f2a3627013f46f1dc2c1eb66a3d7` |
+| `49ae71e06cadf5d846849661578a8ad9fcede443` | `ae9a5c5be1f6d8448ec355c69d2eb7c7d5ee1ab1` |
+
+The mapping commits are non-empty, appear in the same ancestry order as the
+upstream range, and each reviewed upstream hash appears exactly once in an
+`Upstream-Commit` trailer.
 
 ## Integration Plan
 
