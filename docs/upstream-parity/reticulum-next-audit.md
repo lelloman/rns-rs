@@ -44,7 +44,7 @@ Every commit in the audited range appears exactly once.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `1e6ebd3fa0746c6f3299b0d3f74aaeb05c0e457b` | Updated changelog | `Non-runtime` | This mapping records the source-only review. |
-| 2 | `49ae71e06cadf5d846849661578a8ad9fcede443` | Updated documentation | `Non-runtime` | Pending ordered mapping. |
+| 2 | `49ae71e06cadf5d846849661578a8ad9fcede443` | Updated documentation | `Non-runtime` | This mapping records the source-only review. |
 
 ## Per-Commit Analysis
 
