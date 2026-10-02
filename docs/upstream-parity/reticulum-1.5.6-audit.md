@@ -44,9 +44,9 @@ Every commit in the audited range appears exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `fca509ff0418e64be5478118628c581aafc019e0` | Ensure static transport identity is enabled when discoverable interfaces are present on non-transport instances | `Integrated` | Native effective-static-identity wiring; focused regression. |
-| 2 | `d1a7e0c8a0989ebc3bd42d24e895c2f539b8161f` | Ensure only transport-enabled interfaces are autoconnected at discovery time | `Integrated` | Native autoconnect transport gate; focused regression. |
-| 3 | `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62` | Updated version | `Non-runtime` | This mapping records the source-only review. |
+| 1 | `fca509ff0418e64be5478118628c581aafc019e0` | Ensure static transport identity is enabled when discoverable interfaces are present on non-transport instances | `Integrated` | `9f71159`; integrated behavior regression. |
+| 2 | `d1a7e0c8a0989ebc3bd42d24e895c2f539b8161f` | Ensure only transport-enabled interfaces are autoconnected at discovery time | `Integrated` | `6dcfc47`; integrated behavior regression. |
+| 3 | `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62` | Updated version | `Non-runtime` | `45d4093`; source-only review. |
 
 ## Per-Commit Analysis
 
@@ -109,9 +109,13 @@ are independently versioned from upstream `RNS/_version.py`; the accepted
 
 | Upstream commit | Local mapping commit |
 |---|---|
-| `fca509ff0418e64be5478118628c581aafc019e0` | `pending` |
-| `d1a7e0c8a0989ebc3bd42d24e895c2f539b8161f` | `pending` |
-| `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62` | `pending` |
+| `fca509ff0418e64be5478118628c581aafc019e0` | `9f711592e56eec8e79bea4d8beee5ed6f3739b81` |
+| `d1a7e0c8a0989ebc3bd42d24e895c2f539b8161f` | `6dcfc473b877209d06c9a4abe76d9bfdef99dfbd` |
+| `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62` | `45d4093f4eb1abb09292970a6c91435735620ef4` |
+
+The mapping commits are non-empty, appear in the same ancestry order as the
+upstream range, and each reviewed upstream hash appears exactly once in an
+`Upstream-Commit` trailer.
 
 ## Integration Plan
 
@@ -136,3 +140,11 @@ create the `1.5.6` parity record.
 `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62` (three commits past the accepted
 `1.5.5` rgit tip `e40191b3`). GitHub still reported `e40191b3`. The three
 commits are two discovery runtime fixes and the `1.5.6` version bump.
+
+2026-10-02: Landed the ordered mapping commits `9f71159` (`fca509ff`),
+`6dcfc47` (`d1a7e0c8`), and `45d4093` (`2bae9ff0`), each carrying a unique
+`Upstream-Commit` trailer. `cargo test --workspace`, `cargo fmt --check`, and
+`bash scripts/lint-host.sh` passed. Native-hook `rns-server` and `rns-ctl`
+release builds passed (`0.3.1413-45d4093` / `0.4.1413-45d4093`), and the
+impaired `--daily` dual-VPS Backbone smoke test passed against the deployed
+`1.5.5` nodes.
