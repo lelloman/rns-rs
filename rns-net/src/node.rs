@@ -241,6 +241,17 @@ fn extract_ifac_config(
     })
 }
 
+/// Upstream enables the static transport identity when a discoverable interface
+/// is configured on a non-transport instance, so the announced transport
+/// identity is stable across restarts instead of ephemeral.
+fn effective_static_transport_identity(
+    configured: bool,
+    transport_enabled: bool,
+    has_discoverable_interface: bool,
+) -> bool {
+    configured || (!transport_enabled && has_discoverable_interface)
+}
+
 /// Extract discovery configuration from interface params, if `discoverable` is set.
 fn extract_discovery_config(
     iface_name: &str,
@@ -1449,7 +1460,21 @@ impl RnsNode {
                     .expect("node identity has private key"),
             )
         });
-        let transport_identity = if config.transport_enabled || config.static_transport_identity {
+        let has_discoverable_interface = config
+            .interfaces
+            .iter()
+            .any(|iface| iface.discovery.is_some());
+        let static_transport_identity = effective_static_transport_identity(
+            config.static_transport_identity,
+            config.transport_enabled,
+            has_discoverable_interface,
+        );
+        if static_transport_identity && !config.static_transport_identity {
+            log::warn!(
+                "Discoverable interface was configured, enabling static transport identity on non-transport instance"
+            );
+        }
+        let transport_identity = if config.transport_enabled || static_transport_identity {
             Identity::from_private_key(
                 &identity
                     .get_private_key()
@@ -5405,6 +5430,15 @@ static_transport_identity = yes
         assert_eq!(hash, stored_hash);
 
         node.shutdown();
+    }
+
+    #[test]
+    fn discoverable_interface_forces_static_transport_identity_on_non_transport() {
+        assert!(!effective_static_transport_identity(false, false, false));
+        assert!(effective_static_transport_identity(true, false, false));
+        assert!(!effective_static_transport_identity(false, true, false));
+        assert!(effective_static_transport_identity(false, false, true));
+        assert!(effective_static_transport_identity(true, false, true));
     }
 
     #[test]
