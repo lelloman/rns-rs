@@ -10,16 +10,20 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.5`
 - Version metadata commit: `e2ba876ebfec386af9f97d844c39e9ca016e956c`
-- Normative commit: `7f2b3b9b524c9386316379af1313b43a5e4f7a5d`
-- Commit date: `2026-09-29 21:51:21 +0200`
-- Subject: `Prepare release`
+- Normative commit: `e40191b3d193b46b7f2d8a44424a594cd758839b`
+- Commit date: `2026-09-30 15:41:49 +0200`
+- Subject: `Added link`
 
-The normative baseline is the GitHub `1.5.5` release tag accepted on
-2026-09-30. The canonical rgit tip is `ddeb44b1`, with `7f2b3b9b` adding only
-the two release commits `0a25e1a9` and `7f2b3b9b`; all share the `RNS` tree
-`192d74c76e5c56046a411492f219db1833c99365` and root tree
-`73d3c378805a380da5194a13561f904f88d07e69`. All forty commits since the previous
-baseline `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` were reviewed and mapped
+The normative baseline is the canonical `rgit/master` tip accepted on
+2026-10-02, a same-version advancement of Reticulum 1.5.5 past the GitHub
+`1.5.5` release tag `7f2b3b9b`. The accepted tip adds a single commit,
+`e40191b3` (`Added link`), which only edits the upstream project-history document
+`docs/history/2026_09_18_Yes_I_am_Angry.md`; the `RNS` tree is unchanged at
+`192d74c76e5c56046a411492f219db1833c99365`, and the root tree is
+`ed83d80cd2ced7b41528f8e3f873b3bb54b62ad9`. The GitHub release-tag baseline
+`7f2b3b9b` had followed the canonical rgit tip `ddeb44b1` with the two release
+commits `0a25e1a9` and `7f2b3b9b`. All forty commits since the previous baseline
+`3f95b472820ddfb27f736143fb0b4d0d3aa610f1` were reviewed and mapped
 individually; the live interface management, discovery auto-connect criteria,
 IFAC sanitization, spawned announce-cap propagation, Backbone detach, and
 `rnstatus` discovery filters landed in native code.
@@ -29,14 +33,18 @@ passed), the `rns-hooks` feature suite (2,592 passed), formatting, host lint,
 native and ARMv7 release/cross builds, the full Docker E2E matrix (11 runs, 102
 checks, 0 failures), exact-target Python/Rust interop at `ddeb44b1` (1/1
 `python_interop`, 6/6 `utility_interop`), and the impaired dual-VPS `--daily`
-smoke all passed on 2026-09-30. Historical fixture provenance is unchanged.
+smoke all passed on 2026-09-30. The 2026-10-02 same-version rgit advancement
+re-ran `cargo test --workspace`, `cargo fmt --check`, `bash scripts/lint-host.sh`,
+native-hook `rns-server` and `rns-ctl` release builds, and the impaired dual-VPS
+`--daily` smoke against the byte-identical runtime tree; Docker, cross-build, and
+exact-target interop were not rerun. Historical fixture provenance is unchanged.
 Physical hardware validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.5-parity.md`](docs/upstream-parity/reticulum-1.5.5-parity.md),
+[`docs/upstream-parity/reticulum-1.5.5-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.5-rgit-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.5-audit.md`](docs/upstream-parity/reticulum-1.5.5-audit.md).
-The earlier 1.5.4 acceptance records remain unchanged.
+[`docs/upstream-parity/reticulum-1.5.5-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.5-rgit-audit.md).
+The earlier 1.5.5 release-tag acceptance and all 1.5.4 records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
 
