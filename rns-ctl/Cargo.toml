@@ -31,5 +31,5 @@ rustls = { version = "0.23", optional = true }
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
-rns-hooks-crate = { package = "rns-hooks", version = "0.1.10", path = "../rns-hooks", default-features = false }
+rns-hooks-crate = { package = "rns-hooks", version = "0.1.11", path = "../rns-hooks", default-features = false }
 rustls = "0.23"
