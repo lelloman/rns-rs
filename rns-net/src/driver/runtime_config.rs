@@ -432,11 +432,12 @@ impl Driver {
             return false;
         };
 
-        if !self.autoconnect_unverified_implementations && !Self::autoconnect_qualified(&iface) {
+        if !Self::autoconnect_qualified(&iface, self.autoconnect_unverified_implementations) {
             log::debug!(
-                "Not auto-connecting discovered {} \"{}\", auto-connect criteria not satisfied (implementation {} version {})",
+                "Not auto-connecting discovered {} \"{}\", auto-connect criteria not satisfied (transport {}, implementation {} version {})",
                 iface.interface_type,
                 iface.name,
+                iface.transport,
                 iface.impl_name.as_deref().unwrap_or("unknown"),
                 iface.impl_version.as_deref().unwrap_or("unknown"),
             );
@@ -590,8 +591,20 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    fn autoconnect_qualified(iface: &crate::discovery::DiscoveredInterface) -> bool {
+    fn autoconnect_qualified(
+        iface: &crate::discovery::DiscoveredInterface,
+        allow_unverified: bool,
+    ) -> bool {
         use crate::common::discovery::TRANSPORT_IMPLEMENTATION_NAME;
+
+        // Only transport-enabled interfaces are auto-connected, even when the
+        // unverified-implementation override is active.
+        if !iface.transport {
+            return false;
+        }
+        if allow_unverified {
+            return true;
+        }
 
         // The canonical Reticulum implementation and this native implementation
         // are trusted. Upstream only lists its own name because it does not know
