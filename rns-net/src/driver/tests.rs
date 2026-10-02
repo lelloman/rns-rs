@@ -780,6 +780,42 @@ fn discovered_peer_pool_requires_verified_implementation_unless_overridden() {
 
 #[cfg(feature = "iface-backbone")]
 #[test]
+fn discovered_peer_pool_requires_transport_enabled_interface() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 3,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![],
+    );
+
+    let mut iface = make_discovered_backbone(
+        "non-transport",
+        "127.0.0.1",
+        Some(port),
+        0x7e,
+        1,
+        20,
+        time::now(),
+    );
+    iface.transport = false;
+    // Even the unverified-implementation override must not auto-connect a
+    // non-transport interface.
+    driver.autoconnect_unverified_implementations = true;
+    assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(iface.clone()));
+
+    iface.transport = true;
+    assert!(driver.upsert_discovered_backbone_peer_pool_candidate(iface));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
 fn parse_version_tuple_matches_upstream_semantics() {
     let parse = crate::driver::runtime_config::parse_version_tuple;
     assert_eq!(parse("1.5.2"), Some(vec![1, 5, 2]));
