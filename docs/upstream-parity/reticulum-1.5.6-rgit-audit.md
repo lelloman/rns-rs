@@ -89,20 +89,21 @@ upstream range, and each reviewed upstream hash appears exactly once in an
 
 ## Integration Plan
 
-Land one non-empty ordered mapping commit per upstream commit (`1e6ebd3f`,
-`49ae71e0`), then complete the same-version rgit promotion gates and create the
-`1.5.6` rgit parity record.
+Both in-range commits have ordered, non-empty mappings and every promotion gate
+below is satisfied. The accepted record is
+[reticulum-1.5.6-rgit-parity.md](reticulum-1.5.6-rgit-parity.md); this audit is
+retained as the detailed work record.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final `Non-runtime` disposition and a unique mapping.
+- [x] Full diffs reviewed; focused runtime regressions are inapplicable to this non-runtime delta.
+- [x] Runtime-tree identity checked (`def82bf5` unchanged); fixture provenance is unchanged.
+- [x] Exact-target interop assessed as inapplicable to this byte-identical runtime delta; not rerun.
+- [x] Workspace and `rns-hooks` feature suites, formatting, and warning-free host lint passed (2026-10-02).
+- [x] Native-hook `rns-server` and `rns-ctl` release builds passed; daily manual results recorded.
+- [x] Native tracking documentation checked; no upstream editorial content needs vendoring.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
@@ -110,3 +111,13 @@ Land one non-empty ordered mapping commit per upstream commit (`1e6ebd3f`,
 `49ae71e06cadf5d846849661578a8ad9fcede443`, two source-only commits past the
 accepted `1.5.6` tip `2bae9ff0`. GitHub still reported `e40191b3`. The commits
 edit `Changelog.md` and regenerate `docs/manual/`; the `RNS` tree is unchanged.
+
+2026-10-02: Landed the ordered mapping commits `43ea753` (`1e6ebd3f`) and
+`ae9a5c5` (`49ae71e0`), each carrying a unique `Upstream-Commit` trailer.
+`cargo test --workspace` passed (2,547) and
+`cargo test --workspace --features rns-hooks` passed (2,594, 0 failed); an
+initial full-workspace run had two transient `rns-git` Python-interop failures
+that passed in isolation and on rerun. `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed. Native-hook `rns-server` and `rns-ctl`
+release builds passed (`0.3.1417-ae9a5c5` / `0.4.1417-ae9a5c5`), and the
+impaired `--daily` dual-VPS Backbone smoke test passed.

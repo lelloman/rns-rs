@@ -4,7 +4,7 @@
 [![rns-core](https://img.shields.io/crates/v/rns-core.svg?label=rns-core)](https://crates.io/crates/rns-core)
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
 [![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
-[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.5.6-blue)](docs/upstream-parity/reticulum-1.5.6-parity.md)
+[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.5.6-blue)](docs/upstream-parity/reticulum-1.5.6-rgit-parity.md)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
@@ -76,7 +76,7 @@ rustup target add wasm32-unknown-unknown
 
 ## Running Tests
 
-Committed conformance vectors retain their historical, pinned Reticulum 1.4.0 provenance. The current upstream reference is Reticulum 1.5.6 at canonical commit `2bae9ff0` (canonical `RNS` tree `def82bf5`), adding discovery auto-connect transport gating and static-transport-identity handling on non-transport instances. Exact-target interop, workspace and feature suites, native and ARMv7 release builds, the full Docker E2E matrix, and the impaired dual-VPS daily smoke all passed at the 1.5.5 release-tag acceptance; the 1.5.6 delta re-ran the workspace and feature suites, formatting, host lint, native-hook release builds, and the live daily smoke. See [UPSTREAM.md](UPSTREAM.md) and the [parity record](docs/upstream-parity/reticulum-1.5.6-parity.md) for the accepted commit and validation evidence.
+Committed conformance vectors retain their historical, pinned Reticulum 1.4.0 provenance. The current upstream reference is Reticulum 1.5.6 at canonical commit `49ae71e0` (canonical `RNS` tree `def82bf5`): the 1.5.6 discovery auto-connect transport gating and static-transport-identity handling, followed by a source-only changelog/manual advancement. Exact-target interop, workspace and feature suites, native and ARMv7 release builds, the full Docker E2E matrix, and the impaired dual-VPS daily smoke all passed at the 1.5.5 release-tag acceptance; the 1.5.6 changes and rgit advancement re-ran the workspace and feature suites, formatting, host lint, native-hook release builds, and the live daily smoke. See [UPSTREAM.md](UPSTREAM.md) and the [parity record](docs/upstream-parity/reticulum-1.5.6-rgit-parity.md) for the accepted commit and validation evidence.
 
 ```bash
 # Generate fixtures from the pinned Reticulum 1.4.0 checkout

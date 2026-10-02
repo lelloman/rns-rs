@@ -10,15 +10,17 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.6`
 - Version metadata commit: `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62`
-- Normative commit: `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62`
-- Commit date: `2026-10-02 11:17:37 +0200`
-- Subject: `Updated version`
+- Normative commit: `49ae71e06cadf5d846849661578a8ad9fcede443`
+- Commit date: `2026-10-02 11:56:21 +0200`
+- Subject: `Updated documentation`
 
 The normative baseline is the canonical `rgit/master` tip accepted on
-2026-10-02 as Reticulum 1.5.6. The three commits since the previously accepted
-rgit tip `e40191b3` are two discovery runtime fixes and the version bump; the
-`RNS` tree is `def82bf5dd3c9686e798ca032927d2e625829b50` and the root tree is
-`b6719f35e27d77d87e31c7ac9591a883948dcf83`. The GitHub mirror still reported
+2026-10-02 as Reticulum 1.5.6. The tip advanced two further source-only commits
+past `2bae9ff0` (the version bump that declared 1.5.6): `1e6ebd3f` edits the
+upstream `Changelog.md` and `49ae71e0` regenerates the upstream `docs/manual/`
+output. The `RNS` tree is unchanged at
+`def82bf5dd3c9686e798ca032927d2e625829b50` and the root tree is
+`6a2af93c968be263dc918c2288f3553e2553c1e5`. The GitHub mirror still reported
 `e40191b3` at acceptance, so this baseline tracks the canonical rgit tip. All
 forty commits since the release baseline
 `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` were reviewed and mapped
@@ -33,19 +35,22 @@ native and ARMv7 release/cross builds, the full Docker E2E matrix (11 runs, 102
 checks, 0 failures), exact-target Python/Rust interop at `ddeb44b1` (1/1
 `python_interop`, 6/6 `utility_interop`), and the impaired dual-VPS `--daily`
 smoke all passed on 2026-09-30 for the 1.5.5 runtime baseline. For the 1.5.6
-discovery fixes, `cargo test --workspace` and
-`cargo test --workspace --features rns-hooks` (2,594 passed), `cargo fmt --check`,
-`bash scripts/lint-host.sh`, native-hook `rns-server` and `rns-ctl` release
-builds, and the impaired dual-VPS `--daily` smoke all passed on 2026-10-02;
-Docker, cross-build, and exact-target interop were not rerun. Historical fixture
-provenance is unchanged. Physical hardware validation remains unclaimed.
+discovery fixes, `cargo test --workspace`, the `rns-hooks` feature suite (2,594
+passed), `cargo fmt --check`, `bash scripts/lint-host.sh`, native-hook
+`rns-server` and `rns-ctl` release builds, and the impaired dual-VPS `--daily`
+smoke all passed on 2026-10-02. The 1.5.6 rgit documentation advancement
+re-ran `cargo test --workspace`, the `rns-hooks` feature suite (2,594 passed),
+`cargo fmt --check`, `bash scripts/lint-host.sh`, native-hook release builds,
+and the impaired dual-VPS `--daily` smoke against the byte-identical runtime
+tree; Docker, cross-build, and exact-target interop were not rerun. Historical
+fixture provenance is unchanged. Physical hardware validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.6-parity.md`](docs/upstream-parity/reticulum-1.5.6-parity.md),
+[`docs/upstream-parity/reticulum-1.5.6-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.6-rgit-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.6-audit.md`](docs/upstream-parity/reticulum-1.5.6-audit.md).
-The earlier 1.5.5 release-tag and rgit acceptances and all 1.5.4 records remain
-unchanged.
+[`docs/upstream-parity/reticulum-1.5.6-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.6-rgit-audit.md).
+The earlier 1.5.6, 1.5.5 release-tag, and 1.5.5 rgit acceptances and all 1.5.4
+records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
 
