@@ -44,7 +44,7 @@ Every commit in the audited range must appear exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `e40191b3d193b46b7f2d8a44424a594cd758839b` | `Added link` | `Non-runtime` | This mapping records the source-only review. |
+| 1 | `e40191b3d193b46b7f2d8a44424a594cd758839b` | `Added link` | `Non-runtime` | `0081b9a`; source-only review. |
 
 ## Per-Commit Analysis
 
@@ -65,6 +65,16 @@ records the source-only review required by
 [docs/upstream-parity/README.md](README.md).
 
 **Final disposition:** `Non-runtime`
+
+## Mapping Verification
+
+| Upstream commit | Local mapping commit |
+|---|---|
+| `e40191b3d193b46b7f2d8a44424a594cd758839b` | `0081b9ad85e6bded60122365b4ea81189b1b0bcd` |
+
+The mapping commit is non-empty, appears in the same ancestry order as the
+upstream range, and the reviewed upstream hash appears exactly once in an
+`Upstream-Commit` trailer.
 
 ## Integration Plan
 
@@ -94,3 +104,9 @@ rgit remotes. Full diff review shows a documentation-only edit under
 `Non-runtime`; the required non-empty mapping commit is not yet created. Both
 VPS snapshots and the impaired `--daily` dual-VPS Backbone smoke test passed on
 this date (see the [operator runbook](../rns-server-operator-runbook.md)).
+
+2026-10-02: Landed the `upstream: Added link` mapping commit `0081b9a` for
+`e40191b3` with the `Upstream-Commit` trailer. No new upstream commits were
+observed. Both VPS experiment nodes were upgraded to `rns-server
+0.3.1406-b93ed92` / `rns-ctl 0.4.1406-b93ed92`, and the impaired `--daily`
+dual-VPS Backbone smoke test passed twice on the new binary.
