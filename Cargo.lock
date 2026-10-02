@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "rns-cli"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -2459,7 +2459,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.17"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "libm",
@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "rns-ctl"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "env_logger",
  "libc",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "rns-git"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "env_logger",
  "log",
@@ -2538,7 +2538,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "bzip2",
  "criterion",
@@ -2570,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "rns-server"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "env_logger",
  "libc",
