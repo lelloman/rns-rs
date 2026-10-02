@@ -30,7 +30,7 @@ iface-weave = []
 
 [dependencies]
 rns-core.workspace = true
-rns-hooks-crate = { package = "rns-hooks", version = "0.1.10", path = "../rns-hooks", optional = true, default-features = false }
+rns-hooks-crate = { package = "rns-hooks", version = "0.1.11", path = "../rns-hooks", optional = true, default-features = false }
 rns-crypto.workspace = true
 log = "0.4"
 futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
