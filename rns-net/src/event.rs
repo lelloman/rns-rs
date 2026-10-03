@@ -137,6 +137,7 @@ impl QueueState {
 }
 
 struct QueueShared {
+    local_ratchets: crate::local_ratchet::Registry,
     link_sends: Arc<crate::link_send::SendPool>,
     async_waiters: Mutex<Vec<std::sync::Weak<crate::link_send::Waiter>>>,
     state: Mutex<QueueState>,
@@ -218,6 +219,10 @@ impl Drop for EventSender {
 }
 
 impl EventSender {
+    pub(crate) fn local_ratchets(&self) -> &crate::local_ratchet::Registry {
+        &self.shared.local_ratchets
+    }
+
     pub(crate) fn link_send_pool(&self) -> &Arc<crate::link_send::SendPool> {
         &self.shared.link_sends
     }
@@ -552,6 +557,7 @@ pub(crate) fn channel_with_queue_capacities(
     inbound_capacities: InboundQueueCapacities,
 ) -> (EventSender, EventReceiver) {
     let shared = Arc::new(QueueShared {
+        local_ratchets: Default::default(),
         link_sends: crate::link_send::SendPool::new(control_capacity),
         async_waiters: Mutex::new(Vec::new()),
         state: Mutex::new(QueueState::new()),

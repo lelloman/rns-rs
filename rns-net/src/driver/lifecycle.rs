@@ -397,7 +397,7 @@ impl Driver {
             .map(|(dest_hash, _)| *dest_hash)
     }
 
-    fn build_shared_announce_raw(
+    pub(super) fn build_shared_announce_raw(
         &mut self,
         dest_hash: &[u8; 16],
         record: &SharedAnnounceRecord,
@@ -413,19 +413,40 @@ impl Driver {
             .as_secs();
         random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
 
-        let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+        let owner = self
+            .event_tx
+            .local_ratchets()
+            .lock()
+            .unwrap()
+            .get(dest_hash)
+            .cloned();
+        let ratchet = match owner {
+            Some(owner) => match owner.public_for_announce(now_secs) {
+                Ok(public) => Some(public),
+                Err(error) => {
+                    log::error!("cannot replay ratcheted announce: {error}");
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let (announce_data, has_ratchet) = rns_core::announce::AnnounceData::pack(
             &identity,
             dest_hash,
             &record.name_hash,
             &random_hash,
-            None,
+            ratchet.as_ref(),
             record.app_data.as_deref(),
         )
         .ok()?;
 
         let flags = rns_core::packet::PacketFlags {
             header_type: rns_core::constants::HEADER_1,
-            context_flag: rns_core::constants::FLAG_UNSET,
+            context_flag: if has_ratchet {
+                rns_core::constants::FLAG_SET
+            } else {
+                rns_core::constants::FLAG_UNSET
+            },
             transport_type: rns_core::constants::TRANSPORT_BROADCAST,
             destination_type: rns_core::constants::DESTINATION_SINGLE,
             packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,

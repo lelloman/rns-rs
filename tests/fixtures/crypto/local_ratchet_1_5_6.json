@@ -1,0 +1,43 @@
+{
+  "reference_commit": "49ae71e06cadf5d846849661578a8ad9fcede443",
+  "reference_version": "1.5.6",
+  "identity_private": "21212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121",
+  "keys_newest_first": [
+    "5252525252525252525252525252525252525252525252525252525252525252",
+    "5151515151515151515151515151515151515151515151515151515151515151"
+  ],
+  "cases": [
+    {
+      "name": "current-empty",
+      "ciphertext": "bc251c1a53083bb4bdd3359dcd8c14f4bc85ba0c94e02499452c0fd95d053d7bb7c731107388a7116844e715381ab068fad2334a5a038bae6701365c41178f1166bbed7ce765b2820e89a630d4d8305505d17af892fd08e7f5ce85045e749e72",
+      "plaintext": "",
+      "ratchet_id": "fb0382d9f4442e041e33",
+      "enforced_accept": true,
+      "fallback_accept": true
+    },
+    {
+      "name": "retained",
+      "ciphertext": "c848c6d04e9e6dd1ef3c6e3cf64f291098cc8e3fd327e1f9325ed4d532feac6e585d4e896160994cad8378107b39be62367dc8f50e9597dd86ea325cf8b2c60e913ebaa7a6ff7269267f3fa1fac6fc76b42d7c1914a7324945f289d02b7e7ad8",
+      "plaintext": "64656c61796564206d657373616765",
+      "ratchet_id": "bd0cb780ba3f1dccb358",
+      "enforced_accept": true,
+      "fallback_accept": true
+    },
+    {
+      "name": "retired",
+      "ciphertext": "92c74a190042056fa01b4ab0ebf1882917b9bfe91c9f786444a46afba88e44035d80253296eb62bc9ee88194d023b3b08c7c47bd69f077c61bbf7d74ebbf3872e44a11bb8934737baa63c2780346de20a317c54aec99eb7fe281b45e2dffd369",
+      "plaintext": "72657469726564206d657373616765",
+      "ratchet_id": "da38705a3262db788f4a",
+      "enforced_accept": false,
+      "fallback_accept": false
+    },
+    {
+      "name": "identity",
+      "ciphertext": "ca70e36cf410354463c526b119b9865fa0ef88913c4dbdb46504e06620b0c04f0ce1d4c6845e3ae6306955643146a038eca32200f63e470e60986bb19979d745257bdb069270a1221a3695f45435f140c2d128f190ae8a586c3d043a9339ca8f",
+      "plaintext": "6c6567616379206d657373616765",
+      "ratchet_id": null,
+      "enforced_accept": false,
+      "fallback_accept": true
+    }
+  ]
+}

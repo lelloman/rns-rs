@@ -10891,3 +10891,113 @@ fn test_extract_dest_hash_other_flags_preserved() {
     raw2.extend_from_slice(&[0xFF; 10]);
     assert_eq!(super::extract_dest_hash(&raw2), dest2);
 }
+
+#[test]
+fn local_ratchets_reconnect_replay_and_writer_queue_retention() {
+    let mut driver = new_test_driver();
+    let identity = Identity::from_private_key(&[73; 64]);
+    let dest = crate::Destination::single_in(
+        "test",
+        &["ratchet"],
+        rns_core::types::IdentityHash(*identity.hash()),
+    );
+    let owner = crate::LocalRatchets::with_store(
+        &dest,
+        identity,
+        Arc::new(crate::MemoryRatchetStore::default()),
+    )
+    .unwrap();
+    owner.set_interval(1).unwrap();
+    owner.set_retained(1).unwrap();
+    driver
+        .event_tx
+        .local_ratchets()
+        .lock()
+        .unwrap()
+        .insert(dest.hash.0, owner.clone());
+    let record = SharedAnnounceRecord {
+        name_hash: rns_core::destination::name_hash("test", &["ratchet"]),
+        identity_prv_key: [73; 64],
+        app_data: Some(b"replay".to_vec()),
+    };
+    let raw = driver
+        .build_shared_announce_raw(&dest.hash.0, &record, true)
+        .unwrap();
+    let packet = RawPacket::unpack(&raw).unwrap();
+    assert_eq!(packet.flags.context_flag, constants::FLAG_SET);
+    assert_eq!(packet.context, constants::CONTEXT_PATH_RESPONSE);
+    let announce = AnnounceData::unpack(&packet.data, true).unwrap();
+    announce.validate(&dest.hash.0).unwrap();
+    assert_eq!(announce.ratchet, owner.current_public());
+    struct RatchetWriter {
+        held: Arc<Mutex<Vec<crate::link_send::Completion>>>,
+        blocked: bool,
+    }
+    impl Writer for RatchetWriter {
+        fn send_frame(&mut self, _: &[u8]) -> io::Result<()> {
+            panic!("ratchet bypassed writer completion")
+        }
+        fn enqueue_confirmed(
+            &mut self,
+            _: &[u8],
+            completion: &mut Option<crate::link_send::Completion>,
+        ) -> io::Result<()> {
+            if self.blocked {
+                self.blocked = false;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            self.held.lock().unwrap().push(completion.take().unwrap());
+            Ok(())
+        }
+    }
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let writer = RatchetWriter {
+        held: held.clone(),
+        blocked: true,
+    };
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let permit = driver.event_tx.link_send_pool().try_acquire().unwrap();
+    let (completion, _receipt) = crate::link_send::Completion::new(permit);
+    driver.tracked_link_send = Some((packet.packet_hash, completion));
+    driver.dispatch_send_on_interface_action(InterfaceId(1), raw.clone().into(), &mut Vec::new());
+    assert_eq!(driver.pending_link_frames.len(), 1);
+    let future = time::now() as u64 + 10;
+    assert_eq!(
+        owner.public_for_announce(future).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    driver.flush_pending_link_frames();
+    assert_eq!(driver.pending_link_frames.len(), 1);
+    assert_eq!(
+        owner.public_for_announce(future).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    driver.flush_pending_link_frames();
+    assert!(driver.pending_link_frames.is_empty());
+    assert_eq!(
+        owner.public_for_announce(future).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    held.lock().unwrap().clear();
+    owner.public_for_announce(future).unwrap();
+    let writer = RatchetWriter {
+        held: held.clone(),
+        blocked: false,
+    };
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    driver.dispatch_send_on_interface_action(InterfaceId(1), raw.into(), &mut Vec::new());
+    assert!(
+        held.lock().unwrap().is_empty(),
+        "cached retired key must not be sent"
+    );
+    let fresh = driver
+        .build_shared_announce_raw(&dest.hash.0, &record, true)
+        .unwrap();
+    driver.dispatch_send_on_interface_action(InterfaceId(1), fresh.into(), &mut Vec::new());
+    driver.flush_pending_link_frames();
+    assert_eq!(held.lock().unwrap().len(), 1);
+}

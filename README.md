@@ -431,6 +431,75 @@ Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook
 | `path_modifier` | Demonstrate the Modify verdict by prepending a marker byte to packet data |
 | `stats_scraper` | Emit packet and announce statistics for collection by the statistics sidecar |
 
+## Local destination ratchets
+
+Applications can opt an IN SINGLE destination into rotating packet-encryption
+keys. The `message` example demonstrates two peers with persistent ratchet files
+in a temporary demo directory:
+
+```bash
+cargo run -p rns-net --example message
+```
+
+For a long-lived application, keep its identity and private ratchet file across
+restarts. Create the owner, attach it before announcing, and use the same owner
+when decrypting delivered packets:
+
+```rust,ignore
+let ratchets = rns_net::LocalRatchets::persistent(
+    &destination,
+    rns_crypto::identity::Identity::from_private_key(&identity.get_private_key().unwrap()),
+    app_state.join("destination-ratchets"),
+)?;
+ratchets.set_interval(30 * 60)?;
+ratchets.set_retained(512)?;
+ratchets.enforce(); // optional: reject packets encrypted to the identity key
+node.attach_local_ratchets(ratchets.clone())?;
+node.register_destination(destination.hash.0, destination.dest_type.to_wire_constant())?;
+node.announce(&destination, &identity, None).await?;
+// Inside the application's receive path, after unpacking the raw packet:
+let decrypted = ratchets.decrypt(&packet.data)?;
+// decrypted.plaintext and decrypted.ratchet_id belong to this result only.
+```
+
+The defaults are 30 minutes between rotations and 512 retained keys, including
+the current key. Reapply interval, retention, and enforcement settings when
+reopening an owner; the file stores key history, not policy. Rotation occurs on a
+fresh announcement when the interval has elapsed; the first announcement after reload rotates too. A backward clock jump
+postpones rotation. Retention accepts 1–4096 keys and is count-based, independent
+of received public-key expiry. Smaller rings reduce decryption work and retain
+less history, but reject delayed packets sooner. Announcements have 32 fewer bytes
+available for application data. Link key exchange remains independent.
+
+Private files use signed MessagePack compatible with Python's retained-key files,
+plus a destination binding that Rust validates when present. Assign legacy Python
+files to the correct destination yourself: their signature identifies the owner,
+not the destination. The filesystem store uses Unix advisory locking, private file
+permissions, atomic replacement and synchronization. Keep these files outside the
+received-public-ratchet cache. They are not encrypted at rest; backups retain keys
+and limit the protection gained from retiring them. In-memory key buffers are
+zeroized on retirement/drop, but that cannot erase backups or filesystem history.
+
+Only one writer may own a private file. Do not share an active file with a Python
+process, which does not honor Rust's lock. Applications on other platforms can
+supply `LocalRatchetStore`; `MemoryRatchetStore` explicitly opts into losing keys
+on restart. A store failure blocks new announcements, preserves existing receive
+state, and leaves enforcement enabled. Fix the storage problem and call
+`ratchets.recover()` to reload and durably reconcile the file. Missing or corrupt
+history requires explicit operator recovery; it is never silently recreated.
+
+The attached owner is shared with reconnect replay and survives destination
+unregistration until node shutdown. Queued announcements keep advertised keys
+retained until local writes complete; rotation/pruning can return `WouldBlock`
+until those writes finish. Obsolete cached announcements are suppressed. Raw
+packet callbacks and transport proofs do not imply successful decryption: apply
+`ratchets.decrypt` before accepting data. Enforcement does not filter raw callbacks.
+
+Sending to a remote ratcheted destination uses `NodeConfig::ratchet_store` for
+received public keys; file-configured nodes initialize this automatically. Custom
+`NodeConfig` applications must configure that cache themselves, as the example
+does. Enabling a local private owner alone does not configure remote-key storage.
+
 ## Interoperability
 
 rns-rs is designed to be fully interoperable with the Python Reticulum implementation. A Rust node can join an existing Reticulum network alongside Python nodes, exchange announces, establish links, and transfer resources.

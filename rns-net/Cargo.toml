@@ -29,6 +29,7 @@ iface-i2p = []
 iface-weave = []
 
 [dependencies]
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
 rns-core.workspace = true
 rns-hooks-crate = { package = "rns-hooks", version = "0.1.11", path = "../rns-hooks", optional = true, default-features = false }
 rns-crypto.workspace = true
