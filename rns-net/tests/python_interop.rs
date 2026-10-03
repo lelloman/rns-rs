@@ -318,6 +318,13 @@ impl Drop for PythonRns {
 }
 
 fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
+    start_rust_node_with_store(port, tx, None)
+}
+fn start_rust_node_with_store(
+    port: u16,
+    tx: Sender<RustEvent>,
+    ratchet_store: Option<std::sync::Arc<dyn rns_net::storage::RatchetStore>>,
+) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
@@ -351,7 +358,7 @@ fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
-            ratchet_store: None,
+            ratchet_store,
             ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
@@ -421,7 +428,7 @@ config_path = os.path.join(config_dir, "config")
 with open(config_path, "w") as f:
     f.write(f"""[reticulum]
   enable_transport = false
-  share_instance = yes
+  share_instance = no
 
 [interfaces]
   [[TCP Server Interface]]
@@ -506,6 +513,36 @@ try:
         if command == "announce_py":
             destination.announce()
             emit("python_announced", dest_hash=destination.hash.hex())
+        elif command == "ratchets_py":
+            destination.enable_ratchets(os.path.join(config_dir, "local-ratchets"))
+            destination.set_retained_ratchets(2)
+            destination.set_ratchet_interval(1)
+            destination.enforce_ratchets()
+            emit("ratchets_enabled", version=RNS.__version__)
+        elif command == "rotate_py":
+            destination.latest_ratchet_time = 0
+            destination.announce()
+            emit("python_rotated")
+        elif command == "export_ratchets":
+            emit("ratchet_export", identity=identity.get_private_key().hex(), data=open(destination.ratchets_path, "rb").read().hex())
+        elif command.startswith("decrypt_ratchet "):
+            data = destination.decrypt(bytes.fromhex(command.split()[1]))
+            emit("ratchet_decrypted", data_hex=None if data is None else data.hex())
+        elif command.startswith("probe_rust "):
+            public = bytes.fromhex(command.split()[1])
+            encrypted = rust_destination.identity.encrypt(b"delayed-reference", ratchet=public)
+            emit("ratchet_probe", ciphertext=encrypted.hex())
+        elif command.startswith("import_ratchets "):
+            _, private, packed, ciphertext = command.split()
+            imported_identity = RNS.Identity(create_keys=False)
+            imported_identity.load_private_key(bytes.fromhex(private))
+            imported = RNS.Destination(imported_identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "rust")
+            imported_path = os.path.join(config_dir, "imported-ratchets")
+            with open(imported_path, "wb") as f: f.write(bytes.fromhex(packed))
+            imported.enable_ratchets(imported_path)
+            imported.enforce_ratchets()
+            data = imported.decrypt(bytes.fromhex(ciphertext))
+            emit("ratchet_imported", data_hex=None if data is None else data.hex())
         elif command == "link_rust":
             if rust_destination is None:
                 emit("python_link_error", reason="rust destination is unknown")
@@ -701,4 +738,154 @@ fn python_rns_bidirectional_tcp_interop() {
     );
 
     node.shutdown();
+}
+
+/// Run with PYTHONPATH pointing at the exact baseline recorded in UPSTREAM.md.
+#[test]
+fn python_rns_local_ratchets_bidirectional_and_restart() {
+    use std::sync::Arc;
+    if !rns_available() {
+        eprintln!("Skipping: Python RNS not available");
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut python = PythonRns::spawn();
+    let ready = python.wait_for_event(TIMEOUT, |e| e["event"] == "ready");
+    python.command("ratchets_py");
+    let enabled = python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchets_enabled");
+    eprintln!("local ratchet reference version: {}", enabled["version"]);
+    let (tx, rx) = mpsc::channel();
+    let node = start_rust_node_with_store(
+        ready["port"].as_u64().unwrap() as u16,
+        tx,
+        Some(Arc::new(rns_net::storage::FsRatchetStore::new(
+            directory.path().join("remote"),
+        ))),
+    );
+    let python_hash = DestHash(parse_hex_16(ready["python_dest_hash"].as_str().unwrap()));
+    let announced = request_python_announce(&mut python, &rx, python_hash, TIMEOUT);
+    let out = Destination::single_out(APP_NAME, &[PYTHON_ASPECT], &announced);
+    futures::executor::block_on(node.send_packet(&out, b"ratcheted Rust to Python")).unwrap();
+    python.wait_for_event(TIMEOUT, |e| {
+        e["event"] == "python_packet" && e["data_hex"] == hex(b"ratcheted Rust to Python")
+    });
+
+    let identity = Identity::from_private_key(&[77; 64]);
+    let dest = Destination::single_in(APP_NAME, &[RUST_ASPECT], IdentityHash(*identity.hash()));
+    let path = directory.path().join("rust-private");
+    let owner =
+        rns_net::LocalRatchets::persistent(&dest, Identity::from_private_key(&[77; 64]), &path)
+            .unwrap();
+    owner.set_retained(2).unwrap();
+    owner.set_interval(1).unwrap();
+    owner.enforce();
+    node.attach_local_ratchets(owner.clone()).unwrap();
+    node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())
+        .unwrap();
+    futures::executor::block_on(node.announce(&dest, &identity, Some(b"ratchets"))).unwrap();
+    let (raw, _) = wait_for_rust_delivery(&rx, dest.hash, TIMEOUT);
+    let packet = RawPacket::unpack(&raw).unwrap();
+    assert!(
+        identity.decrypt(&packet.data).is_err(),
+        "Python must select announced ratchet"
+    );
+    assert_eq!(
+        owner.decrypt(&packet.data).unwrap().plaintext,
+        PYTHON_TO_RUST_PAYLOAD
+    );
+    let first = owner.current_public().unwrap();
+    python.command(&format!("probe_rust {}", hex(&first)));
+    let probe = python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchet_probe");
+    let delayed = decode_hex(probe["ciphertext"].as_str().unwrap());
+    assert_eq!(
+        owner.decrypt(&delayed).unwrap().plaintext,
+        b"delayed-reference"
+    );
+    let now = rns_net::time::now() as u64;
+    owner.public_for_announce(now + 2).unwrap();
+    assert_eq!(
+        owner.decrypt(&delayed).unwrap().plaintext,
+        b"delayed-reference"
+    );
+    let legacy = identity.encrypt(b"legacy", &mut OsRng).unwrap();
+    assert!(owner.decrypt(&legacy).is_err());
+
+    // Restart with the persisted ring, before emitting another announcement.
+    node.shutdown();
+    drop(owner);
+    let owner =
+        rns_net::LocalRatchets::persistent(&dest, Identity::from_private_key(&[77; 64]), &path)
+            .unwrap();
+    owner.enforce();
+    owner.set_retained(2).unwrap();
+    assert_eq!(
+        owner.decrypt(&delayed).unwrap().plaintext,
+        b"delayed-reference"
+    );
+    // Python reads the Rust-written, signed private ring and decrypts its oldest key.
+    python.command(&format!(
+        "import_ratchets {} {} {}",
+        hex(&[77; 64]),
+        hex(&std::fs::read(&path).unwrap()),
+        hex(&delayed)
+    ));
+    python.wait_for_event(TIMEOUT, |e| {
+        e["event"] == "ratchet_imported" && e["data_hex"] == hex(b"delayed-reference")
+    });
+    owner.public_for_announce(now + 4).unwrap();
+    assert!(
+        owner.decrypt(&delayed).is_err(),
+        "retired key must be rejected"
+    );
+
+    // Rust imports a Python-written ring; Python verifies Rust's ciphertext,
+    // including enforcement and retention across two Python rotations.
+    python.command("export_ratchets");
+    let export = python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchet_export");
+    let key: [u8; 64] = decode_hex(export["identity"].as_str().unwrap())
+        .try_into()
+        .unwrap();
+    let py_identity = Identity::from_private_key(&key);
+    let py_dest = Destination::single_in(
+        APP_NAME,
+        &[PYTHON_ASPECT],
+        IdentityHash(*py_identity.hash()),
+    );
+    let imported_path = directory.path().join("python-import");
+    std::fs::write(&imported_path, decode_hex(export["data"].as_str().unwrap())).unwrap();
+    let imported = rns_net::LocalRatchets::persistent(
+        &py_dest,
+        Identity::from_private_key(&key),
+        &imported_path,
+    )
+    .unwrap();
+    imported.enforce();
+    let cipher = py_identity
+        .encrypt_with_ratchet(
+            b"cross-file",
+            imported.current_public().as_ref(),
+            &mut OsRng,
+        )
+        .unwrap();
+    assert_eq!(imported.decrypt(&cipher).unwrap().plaintext, b"cross-file");
+    for rotation in 0..3 {
+        if rotation > 0 {
+            python.command("rotate_py");
+            python.wait_for_event(TIMEOUT, |e| e["event"] == "python_rotated");
+        }
+        python.command(&format!("decrypt_ratchet {}", hex(&cipher)));
+        let decrypted = python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchet_decrypted");
+        if rotation < 2 {
+            assert_eq!(decrypted["data_hex"], hex(b"cross-file"));
+        } else {
+            assert!(decrypted["data_hex"].is_null());
+        }
+    }
+    python.command(&format!(
+        "decrypt_ratchet {}",
+        hex(&py_identity.encrypt(b"legacy", &mut OsRng).unwrap())
+    ));
+    assert!(
+        python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchet_decrypted")["data_hex"].is_null()
+    );
 }

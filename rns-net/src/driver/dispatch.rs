@@ -390,6 +390,17 @@ impl Driver {
         raw: rns_core::transport::types::PacketBytes,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
+        let ratchet_lease = match crate::local_ratchet::AnnouncementLease::acquire(
+            self.event_tx.local_ratchets(),
+            &raw,
+        ) {
+            Ok(lease) => lease,
+            Err(error) => {
+                log::warn!("suppressing local announcement: {error}");
+                return;
+            }
+        };
+
         #[cfg(feature = "hooks")]
         {
             let pkt_ctx = rns_hooks::PacketContext {
@@ -476,6 +487,14 @@ impl Driver {
             );
             return;
         }
+        if ratchet_lease.is_some() && self.tracked_link_send.is_none() {
+            let Ok(permit) = self.event_tx.link_send_pool().try_acquire() else {
+                return;
+            };
+            let (completion, _receipt) = crate::link_send::Completion::new(permit);
+            self.tracked_link_send =
+                Some((RawPacket::unpack(&raw).unwrap().packet_hash, completion));
+        }
         let tracked = self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
             RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
         });
@@ -485,7 +504,8 @@ impl Driver {
             } else {
                 raw.to_vec()
             };
-            let (_, completion) = self.tracked_link_send.take().unwrap();
+            let (_, mut completion) = self.tracked_link_send.take().unwrap();
+            completion.retain_ratchet(ratchet_lease.clone());
             self.pending_link_frames.push_back(PendingLinkFrame {
                 interface,
                 data,
@@ -559,6 +579,17 @@ impl Driver {
         exclude: Option<InterfaceId>,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
+        let ratchet_lease = match crate::local_ratchet::AnnouncementLease::acquire(
+            self.event_tx.local_ratchets(),
+            &raw,
+        ) {
+            Ok(lease) => lease,
+            Err(error) => {
+                log::warn!("suppressing local announcement: {error}");
+                return;
+            }
+        };
+
         #[cfg(feature = "hooks")]
         {
             let pkt_ctx = rns_hooks::PacketContext {
@@ -600,10 +631,19 @@ impl Driver {
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
+        if ratchet_lease.is_some() && self.tracked_link_send.is_none() {
+            let Ok(permit) = self.event_tx.link_send_pool().try_acquire() else {
+                return;
+            };
+            let (completion, _receipt) = crate::link_send::Completion::new(permit);
+            self.tracked_link_send =
+                Some((RawPacket::unpack(&raw).unwrap().packet_hash, completion));
+        }
         if self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
             RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
         }) {
-            let (_, completion) = self.tracked_link_send.take().unwrap();
+            let (_, mut completion) = self.tracked_link_send.take().unwrap();
+            completion.retain_ratchet(ratchet_lease.clone());
             let mut selected = 0;
             for entry in self.interfaces.values() {
                 if entry.online && entry.enabled && Some(entry.id) != exclude {

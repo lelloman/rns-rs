@@ -8,6 +8,7 @@ pub mod hkdf;
 pub mod hmac;
 pub mod identity;
 pub mod pkcs7;
+pub mod ratchet;
 pub mod sha256;
 pub mod sha512;
 pub mod token;

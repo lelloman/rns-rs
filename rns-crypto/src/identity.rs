@@ -33,6 +33,9 @@ impl fmt::Display for CryptoError {
     }
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for CryptoError {}
+
 pub struct Identity {
     prv: Option<X25519PrivateKey>,
     sig_prv: Option<Ed25519PrivateKey>,
@@ -212,22 +215,56 @@ impl Identity {
 
     pub fn decrypt(&self, ciphertext_token: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let prv = self.prv.as_ref().ok_or(CryptoError::NoPrivateKey)?;
+        self.decrypt_with_key(ciphertext_token, prv)
+    }
 
-        if ciphertext_token.len() <= KEYSIZE / 8 / 2 {
+    /// Try newest-first destination keys, optionally forbidding identity-key fallback.
+    /// The identity hash remains the HKDF salt, including for ratchet encryption.
+    pub fn decrypt_with_ratchets(
+        &self,
+        ciphertext: &[u8],
+        ratchets: &crate::ratchet::RatchetRing,
+        enforce: bool,
+    ) -> Result<crate::ratchet::Decrypted, CryptoError> {
+        for key in ratchets.keys() {
+            let private = X25519PrivateKey::from_bytes(key);
+            if let Ok(plaintext) = self.decrypt_with_key(ciphertext, &private) {
+                return Ok(crate::ratchet::Decrypted {
+                    plaintext,
+                    ratchet_id: Some(crate::ratchet::ratchet_id(
+                        &private.public_key().public_bytes(),
+                    )),
+                });
+            }
+        }
+        if enforce {
             return Err(CryptoError::InvalidCiphertext);
         }
+        Ok(crate::ratchet::Decrypted {
+            plaintext: self.decrypt(ciphertext)?,
+            ratchet_id: None,
+        })
+    }
 
+    fn decrypt_with_key(
+        &self,
+        ciphertext_token: &[u8],
+        private: &X25519PrivateKey,
+    ) -> Result<Vec<u8>, CryptoError> {
+        if ciphertext_token.len() <= 32 {
+            return Err(CryptoError::InvalidCiphertext);
+        }
         let peer_pub_bytes: [u8; 32] = ciphertext_token[..32].try_into().unwrap();
         let peer_pub = X25519PublicKey::from_bytes(&peer_pub_bytes);
-        let ciphertext = &ciphertext_token[32..];
-
-        let shared_key = prv.exchange(&peer_pub);
-
-        let derived_key = hkdf::hkdf(DERIVED_KEY_LENGTH, &shared_key, Some(&self.hash), None)
-            .map_err(CryptoError::HkdfError)?;
-
+        let shared_key = zeroize::Zeroizing::new(private.exchange(&peer_pub));
+        let derived_key = zeroize::Zeroizing::new(
+            hkdf::hkdf(DERIVED_KEY_LENGTH, &*shared_key, Some(&self.hash), None)
+                .map_err(CryptoError::HkdfError)?,
+        );
         let token = Token::new(&derived_key).map_err(CryptoError::TokenError)?;
-        token.decrypt(ciphertext).map_err(CryptoError::TokenError)
+        token
+            .decrypt(&ciphertext_token[32..])
+            .map_err(CryptoError::TokenError)
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<[u8; 64], CryptoError> {

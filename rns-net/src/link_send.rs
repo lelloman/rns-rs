@@ -270,6 +270,7 @@ impl Drop for Permit {
 /// Internal writer completion token. Dropping it reports an interrupted send.
 #[doc(hidden)]
 pub struct Completion {
+    ratchet_lease: Option<crate::local_ratchet::AnnouncementLease>,
     state: Arc<CompletionState>,
     settled: bool,
 }
@@ -300,6 +301,13 @@ impl CompletionState {
 }
 
 impl Completion {
+    pub(crate) fn retain_ratchet(
+        &mut self,
+        lease: Option<crate::local_ratchet::AnnouncementLease>,
+    ) {
+        self.ratchet_lease = lease;
+    }
+
     pub(crate) fn new(permit: Permit) -> (Self, LinkSendReceipt) {
         Self::new_inner(permit, None)
     }
@@ -330,6 +338,7 @@ impl Completion {
         }
         (
             Self {
+                ratchet_lease: None,
                 state: completion,
                 settled: false,
             },
@@ -347,12 +356,16 @@ impl Completion {
             data.remaining += 1;
         }
         Self {
+            ratchet_lease: self.ratchet_lease.clone(),
             state: self.state.clone(),
             settled: false,
         }
     }
 
     fn settle(&mut self, result: Result<(), LinkSendError>) {
+        // Release this writer's key lease before waking a successful receipt;
+        // the application may immediately rotate/prune after awaiting it.
+        self.ratchet_lease = None;
         self.settled = true;
         let final_data = {
             let mut guard = self.state.0.lock().unwrap();

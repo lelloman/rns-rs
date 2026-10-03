@@ -21,6 +21,7 @@ pub mod node;
 pub use common::config;
 pub mod announce_cache;
 pub mod ifac;
+pub mod local_ratchet;
 pub mod md5;
 pub mod pickle;
 /// Process-global live profiling.
@@ -38,6 +39,7 @@ pub mod serial;
 pub mod storage;
 pub use common::compressor;
 pub use common::link_manager;
+pub use local_ratchet::{FileRatchetStore, LocalRatchetStore, LocalRatchets, MemoryRatchetStore};
 pub mod management;
 #[cfg(feature = "iface-local")]
 pub mod shared_client;

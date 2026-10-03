@@ -5601,3 +5601,196 @@ fn issue106_shared_clients_keep_link_alive_and_preserve_burst_data() {
     daemon_b.shutdown();
     daemon_a.shutdown();
 }
+
+// A real process exit closes server reader sockets as well as its driver.
+// In-process RnsNode::shutdown only promises to join the driver thread.
+struct RatchetTestDaemon(std::process::Child);
+impl RatchetTestDaemon {
+    fn start(tcp_port: u16, shared_port: u16, instance: &str) -> Self {
+        use std::io::BufRead;
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "local_ratchet_daemon_process", "--nocapture"])
+            .env(
+                "RNS_RATCHET_TEST_DAEMON",
+                format!("{tcp_port},{shared_port},{instance}"),
+            )
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let daemon = Self(child);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if line == "RATCHET_DAEMON_READY" {
+                    let _ = tx.send(());
+                }
+            }
+        });
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("ratchet test daemon startup");
+        daemon
+    }
+    fn shutdown(self) {
+        drop(self);
+    }
+}
+impl Drop for RatchetTestDaemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn local_ratchet_daemon_process() {
+    let Ok(settings) = std::env::var("RNS_RATCHET_TEST_DAEMON") else {
+        return;
+    };
+    let parts: Vec<_> = settings.split(',').collect();
+    let _daemon = start_shared_daemon(
+        parts[0].parse().unwrap(),
+        parts[1].parse().unwrap(),
+        parts[2],
+    );
+    println!("RATCHET_DAEMON_READY");
+    loop {
+        std::thread::park();
+    }
+}
+
+#[test]
+fn local_ratchets_survive_shared_daemon_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("ratchet-restart-{tcp_port}");
+    let mut daemon = RatchetTestDaemon::start(tcp_port, shared_port, &instance_name);
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    let identity = Identity::new(&mut OsRng);
+    let destination = Destination::single_in(
+        APP_NAME,
+        &["ratchet", "restart"],
+        IdentityHash(*identity.hash()),
+    );
+    let owner = rns_net::LocalRatchets::persistent(
+        &destination,
+        Identity::from_private_key(&identity.get_private_key().unwrap()),
+        directory.path().join("private"),
+    )
+    .unwrap();
+    owner.set_interval(1).unwrap();
+    // Retire the old key on reconnect, so using a stale remote cache cannot
+    // accidentally make post-restart delivery pass.
+    owner.set_retained(1).unwrap();
+    owner.enforce();
+    alice.attach_local_ratchets(owner.clone()).unwrap();
+    alice
+        .register_destination(destination.hash.0, destination.dest_type.to_wire_constant())
+        .unwrap();
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob = RnsNode::start(
+        NodeConfig {
+            interfaces: vec![InterfaceConfig {
+                name: "ratchet-remote".into(),
+                type_name: "TCPClientInterface".into(),
+                config_data: Box::new(TcpClientConfig {
+                    target_host: "127.0.0.1".into(),
+                    target_port: tcp_port,
+                    reconnect_wait: Duration::from_millis(100),
+                    max_reconnect_tries: None,
+                    ..Default::default()
+                }),
+                mode: MODE_FULL,
+                gravity: 0,
+                recursive_prs: false,
+                announces_from_internal: true,
+                announces_to_internal: None,
+                ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+                ifac: None,
+                discovery: None,
+            }],
+            ratchet_store: Some(Arc::new(rns_net::storage::FsRatchetStore::new(
+                directory.path().join("remote"),
+            ))),
+            ..Default::default()
+        },
+        Box::new(TestCallbacks::new(bob_tx)),
+    )
+    .unwrap();
+    for rx in [&alice_rx, &bob_rx] {
+        wait_for_event(rx, TIMEOUT, |event| {
+            matches!(event, TestEvent::InterfaceUp(_)).then_some(())
+        })
+        .unwrap();
+    }
+    let announced = announce_with_retry(
+        &alice,
+        &destination,
+        &identity,
+        Some(b"ratchet-reconnect"),
+        &bob_rx,
+    )
+    .unwrap();
+    let first = owner.current_public().unwrap();
+    for phase in 0..2 {
+        let out = Destination::single_out(APP_NAME, &["ratchet", "restart"], &announced);
+        let payload = format!("ratcheted shared-client phase {phase}");
+        futures::executor::block_on(bob.send_packet(&out, payload.as_bytes())).unwrap();
+        let (_, raw, _) = wait_for_delivery(&alice_rx, TIMEOUT).unwrap();
+        let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+        assert!(identity.decrypt(&packet.data).is_err());
+        assert_eq!(
+            owner.decrypt(&packet.data).unwrap().plaintext,
+            payload.as_bytes()
+        );
+        if phase == 0 {
+            daemon.shutdown();
+            wait_for_event(&alice_rx, TIMEOUT, |event| {
+                matches!(event, TestEvent::InterfaceDown(_)).then_some(())
+            })
+            .unwrap();
+            wait_for_event(&bob_rx, TIMEOUT, |event| {
+                matches!(event, TestEvent::InterfaceDown(_)).then_some(())
+            })
+            .unwrap();
+            daemon = RatchetTestDaemon::start(tcp_port, shared_port, &instance_name);
+            // The application does not reannounce: shared-client replay must
+            // include a newly committed ratchet after the minimum interval.
+            wait_for_event(&bob_rx, Duration::from_secs(20), |event| {
+                matches!(event, TestEvent::InterfaceUp(_)).then_some(())
+            })
+            .unwrap();
+            wait_for_event(&alice_rx, Duration::from_secs(20), |event| {
+                matches!(event, TestEvent::InterfaceUp(_)).then_some(())
+            })
+            .unwrap();
+            // Reconnect replay is a PATH_RESPONSE that restores the daemon's
+            // cache; it is intentionally not flooded to every remote peer.
+            let mut refreshed = None;
+            for _ in 0..5 {
+                bob.request_path(&destination.hash).unwrap();
+                refreshed = wait_for_announce(&bob_rx, &destination.hash, Duration::from_secs(2));
+                if refreshed.is_some() {
+                    break;
+                }
+            }
+            assert!(
+                refreshed.is_some(),
+                "daemon must answer from ratcheted replay"
+            );
+            assert_ne!(owner.current_public().unwrap(), first);
+        }
+    }
+    alice.shutdown();
+    bob.shutdown();
+    daemon.shutdown();
+}

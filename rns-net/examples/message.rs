@@ -10,7 +10,7 @@
 //!
 //! Usage: RUST_LOG=info cargo run --example message
 
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use rns_crypto::identity::Identity;
@@ -112,9 +112,12 @@ fn find_free_port() -> u16 {
 
 /// Decrypt a SINGLE packet received via on_local_delivery.
 /// `raw` is the full wire packet — unpack to get the encrypted data, then decrypt.
-fn decrypt_delivery(raw: &[u8], my_identity: &Identity) -> Option<Vec<u8>> {
+fn decrypt_delivery(raw: &[u8], ratchets: &rns_net::LocalRatchets) -> Option<Vec<u8>> {
     let packet = rns_core::packet::RawPacket::unpack(raw).ok()?;
-    my_identity.decrypt(&packet.data).ok()
+    ratchets
+        .decrypt(&packet.data)
+        .ok()
+        .map(|result| result.plaintext)
 }
 
 /// Wait for an announce matching `expected_hash`, discarding others.
@@ -144,6 +147,7 @@ fn wait_for_announce(
 }
 
 fn main() {
+    let ratchet_dir = tempfile::tempdir().expect("ratchet demo directory");
     env_logger::init();
 
     let port = find_free_port();
@@ -286,7 +290,9 @@ fn main() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
-            ratchet_store: None,
+            ratchet_store: Some(Arc::new(rns_net::storage::FsRatchetStore::new(
+                ratchet_dir.path().join("alice-remote"),
+            ))),
             ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
@@ -386,7 +392,9 @@ fn main() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
-            ratchet_store: None,
+            ratchet_store: Some(Arc::new(rns_net::storage::FsRatchetStore::new(
+                ratchet_dir.path().join("bob-remote"),
+            ))),
             ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
@@ -453,6 +461,29 @@ fn main() {
     // ─── Announce Both ───────────────────────────────────────────────────
 
     println!("Announcing...");
+    // Demo identities and storage are temporary. Real applications should retain
+    // both across restarts. Never put private files in the remote-ratchet cache.
+    let alice_ratchets = rns_net::LocalRatchets::persistent(
+        &alice_dest,
+        Identity::from_private_key(&alice_identity.get_private_key().unwrap()),
+        ratchet_dir.path().join("alice-private"),
+    )
+    .unwrap();
+    let bob_ratchets = rns_net::LocalRatchets::persistent(
+        &bob_dest,
+        Identity::from_private_key(&bob_identity.get_private_key().unwrap()),
+        ratchet_dir.path().join("bob-private"),
+    )
+    .unwrap();
+    alice_ratchets.enforce();
+    bob_ratchets.enforce();
+    alice_node
+        .attach_local_ratchets(alice_ratchets.clone())
+        .unwrap();
+    bob_node
+        .attach_local_ratchets(bob_ratchets.clone())
+        .unwrap();
+
     futures::executor::block_on(alice_node.announce(&alice_dest, &alice_identity, Some(b"Alice")))
         .expect("Alice announce failed");
     bob_node
@@ -515,7 +546,7 @@ fn main() {
     println!("Waiting for deliveries...");
 
     match bob_del_rx.recv_timeout(timeout) {
-        Ok(delivery) => match decrypt_delivery(&delivery.raw, &bob_identity) {
+        Ok(delivery) => match decrypt_delivery(&delivery.raw, &bob_ratchets) {
             Some(plaintext) => println!(
                 "Bob received: {:?}",
                 std::str::from_utf8(&plaintext).unwrap_or("<binary>")
@@ -526,7 +557,7 @@ fn main() {
     }
 
     match alice_del_rx.recv_timeout(timeout) {
-        Ok(delivery) => match decrypt_delivery(&delivery.raw, &alice_identity) {
+        Ok(delivery) => match decrypt_delivery(&delivery.raw, &alice_ratchets) {
             Some(plaintext) => println!(
                 "Alice received: {:?}",
                 std::str::from_utf8(&plaintext).unwrap_or("<binary>")

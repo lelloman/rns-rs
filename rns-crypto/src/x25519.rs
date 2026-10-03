@@ -15,6 +15,12 @@ pub struct X25519PrivateKey {
     bytes: [u8; 32], // clamped scalar
 }
 
+impl Drop for X25519PrivateKey {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.bytes);
+    }
+}
+
 impl X25519PrivateKey {
     pub fn from_bytes(data: &[u8; 32]) -> Self {
         X25519PrivateKey {

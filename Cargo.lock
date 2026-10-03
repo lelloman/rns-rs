@@ -2480,6 +2480,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -2557,6 +2558,7 @@ dependencies = [
  "serde_json",
  "socket2",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

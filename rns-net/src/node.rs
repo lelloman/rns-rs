@@ -3039,6 +3039,23 @@ impl RnsNode {
             })?
     }
 
+    /// Attach the same private ratchet owner used by the application's receiver.
+    /// Reattaching that Arc is idempotent; conflicting owners are rejected. The
+    /// owner remains attached across destination deregistration/re-registration.
+    pub fn attach_local_ratchets(&self, owner: Arc<crate::LocalRatchets>) -> io::Result<()> {
+        let mut owners = self.tx.local_ratchets().lock().unwrap();
+        if let Some(existing) = owners.get(&owner.destination_hash()) {
+            if !Arc::ptr_eq(existing, &owner) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "destination already has a ratchet owner",
+                ));
+            }
+        }
+        owners.insert(owner.destination_hash(), owner);
+        Ok(())
+    }
+
     /// Wait for capacity, then transmit an announcement on all selected local interfaces.
     ///
     /// Success means all selected writers accepted the complete packet, not
@@ -3211,17 +3228,41 @@ impl RnsNode {
             .as_secs();
         random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
 
-        let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+        let owner = self
+            .tx
+            .local_ratchets()
+            .lock()
+            .unwrap()
+            .get(&dest.hash.0)
+            .cloned();
+        let ratchet = if let Some(owner) = owner {
+            if dest.direction != rns_core::types::Direction::In
+                || owner.identity_hash() != *identity.hash()
+            {
+                return Err(SendError);
+            }
+            Some(owner.public_for_announce(now_secs).map_err(|error| {
+                log::error!("local ratchet announcement failed: {error}");
+                SendError
+            })?)
+        } else {
+            None
+        };
+        let (announce_data, has_ratchet) = rns_core::announce::AnnounceData::pack(
             identity,
             &dest.hash.0,
             &name_hash,
             &random_hash,
-            None, // no ratchet
+            ratchet.as_ref(),
             app_data,
         )
         .map_err(|_| SendError)?;
 
-        let context_flag = rns_core::constants::FLAG_UNSET;
+        let context_flag = if has_ratchet {
+            rns_core::constants::FLAG_SET
+        } else {
+            rns_core::constants::FLAG_UNSET
+        };
 
         let flags = rns_core::packet::PacketFlags {
             header_type: rns_core::constants::HEADER_1,
@@ -3322,21 +3363,30 @@ impl RnsNode {
     ) -> Result<Vec<u8>, SendError> {
         let pub_key = dest.public_key.ok_or(SendError)?;
         let remote_id = rns_crypto::identity::Identity::from_public_key(&pub_key);
-        let ratchet = self.ratchet_store.as_ref().and_then(|store| {
-            match store.current(&dest.hash.0, time::now(), self.ratchet_expiry.as_secs_f64()) {
-                Ok(entry) => entry.map(|entry| entry.ratchet),
-                Err(err) => {
-                    log::warn!(
-                        "failed to load ratchet for {:02x}{:02x}{:02x}{:02x}..: {}",
-                        dest.hash.0[0],
-                        dest.hash.0[1],
-                        dest.hash.0[2],
-                        dest.hash.0[3],
-                        err
-                    );
-                    None
+        let local_ratchet = self
+            .tx
+            .local_ratchets()
+            .lock()
+            .unwrap()
+            .get(&dest.hash.0)
+            .and_then(|owner| owner.current_public());
+        let ratchet = local_ratchet.or_else(|| {
+            self.ratchet_store.as_ref().and_then(|store| {
+                match store.current(&dest.hash.0, time::now(), self.ratchet_expiry.as_secs_f64()) {
+                    Ok(entry) => entry.map(|entry| entry.ratchet),
+                    Err(err) => {
+                        log::warn!(
+                            "failed to load ratchet for {:02x}{:02x}{:02x}{:02x}..: {}",
+                            dest.hash.0[0],
+                            dest.hash.0[1],
+                            dest.hash.0[2],
+                            dest.hash.0[3],
+                            err
+                        );
+                        None
+                    }
                 }
-            }
+            })
         });
         remote_id
             .encrypt_with_ratchet(data, ratchet.as_ref(), &mut OsRng)
@@ -3808,6 +3858,9 @@ impl RnsNode {
         if let Some(handle) = self.driver_handle.take() {
             let _ = handle.join();
         }
+        // Reader/ticker EventSender clones may outlive the driver. They must not
+        // retain private owners (and their file locks) after node shutdown.
+        self.tx.local_ratchets().lock().unwrap().clear();
         if let Some(handle) = self.verify_handle.take() {
             let _ = handle.join();
         }
@@ -3827,6 +3880,50 @@ mod tests {
     use crate::storage::RatchetStore;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn local_ratchet_announcements_and_self_send() {
+        let node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
+        let identity = Identity::from_private_key(&[42; 64]);
+        let dest = crate::Destination::single_in(
+            "test",
+            &["ratchet"],
+            rns_core::types::IdentityHash(*identity.hash()),
+        );
+        let owner = crate::LocalRatchets::with_store(
+            &dest,
+            Identity::from_private_key(&[42; 64]),
+            Arc::new(crate::MemoryRatchetStore::default()),
+        )
+        .unwrap();
+        owner.enforce();
+        node.attach_local_ratchets(owner.clone()).unwrap();
+        node.attach_local_ratchets(owner.clone()).unwrap();
+        let conflicting = crate::LocalRatchets::with_store(
+            &dest,
+            Identity::from_private_key(&[42; 64]),
+            Arc::new(crate::MemoryRatchetStore::default()),
+        )
+        .unwrap();
+        assert!(node.attach_local_ratchets(conflicting).is_err());
+        let (packet, _) = node.build_announce(&dest, &identity, Some(b"app")).unwrap();
+        assert_eq!(packet.flags.context_flag, rns_core::constants::FLAG_SET);
+        let announce = rns_core::announce::AnnounceData::unpack(&packet.data, true).unwrap();
+        announce.validate(&dest.hash.0).unwrap();
+        assert_eq!(announce.ratchet, owner.current_public());
+        assert!(node
+            .build_announce(&dest, &Identity::from_private_key(&[43; 64]), None)
+            .is_err());
+        assert!(node
+            .build_announce(&dest, &identity, Some(&vec![0; 500]))
+            .is_err());
+        let mut outgoing = dest.clone();
+        outgoing.direction = rns_core::types::Direction::Out;
+        outgoing.public_key = identity.get_public_key();
+        let encrypted = node.encrypt_single_payload(&outgoing, b"self").unwrap();
+        assert_eq!(owner.decrypt(&encrypted).unwrap().plaintext, b"self");
+        assert!(identity.decrypt(&encrypted).is_err());
+    }
 
     struct NoopCallbacks;
 

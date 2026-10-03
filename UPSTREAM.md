@@ -97,8 +97,15 @@ Android/Bluetooth RNode client. The thirteenth commit corrects a Python `rncp`
 local-variable name in interrupt cleanup; Rust's statically checked, typed
 transfer and link identifiers make that failure mode structurally absent. The
 fourteenth commit applies custom retention limits to locally generated
-destination ratchet history. That path is deferred because this port currently
-implements received remote ratchets, not local ratchet generation or rotation.
+destination ratchet history. Initially deferred, this path is now implemented
+with local generation, count-based retention, persistent signed private rings,
+ratcheted announcements/reconnect replay, and optional enforced decryption.
+The 2026-10-03 follow-up is covered by `rns-crypto::ratchet` vectors pinned to this
+1.5.6 baseline, `rns-net::local_ratchet` lifecycle/failure tests, a real shared-daemon
+restart test, and live bidirectional Python tests including private-file exchange.
+See [local destination ratchets](README.md#local-destination-ratchets) for the API,
+storage contract, and bounded retention policy. Historical fixture provenance is
+unchanged; new vectors live in `tests/fixtures/crypto/local_ratchet_1_5_6.json`.
 The fifteenth commit prevents tunnel expiration from being rebound to a path
 expiration during persistence. Rust uses distinct typed fields; the tunnel
 round-trip regression now pins different expiry values through snapshot and
