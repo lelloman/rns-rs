@@ -5,6 +5,9 @@ edition.workspace = true
 license-file.workspace = true
 publish = false
 
+[features]
+allocation-profiler = []
+
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

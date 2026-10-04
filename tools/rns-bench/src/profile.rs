@@ -52,7 +52,7 @@ impl Compressor for TimedCompressor {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Sample {
+pub(crate) struct Sample {
     family: String,
     compression: bool,
     sdu: usize,
@@ -60,7 +60,7 @@ struct Sample {
     payload_bytes: usize,
     compressed_input_bytes: usize,
     compressed_output_bytes: Option<usize>,
-    compression_used: bool,
+    pub(crate) compression_used: bool,
     encrypted_transfer_bytes: usize,
     parts: usize,
     requests: usize,
@@ -80,7 +80,7 @@ struct Sample {
     cpu_seconds: f64,
 }
 
-fn payload(family: &str, bytes: usize) -> Vec<u8> {
+pub(crate) fn payload(family: &str, bytes: usize) -> Vec<u8> {
     scenario::payload(&Case {
         rate_bps: None,
         id: "profile".into(),
@@ -109,6 +109,17 @@ fn cycle(
     sdu: usize,
     repetition: usize,
 ) -> Result<Sample> {
+    cycle_observed(data, family, compression, sdu, repetition, &mut |_| {})
+}
+
+pub(crate) fn cycle_observed(
+    data: &[u8],
+    family: &str,
+    compression: bool,
+    sdu: usize,
+    repetition: usize,
+    checkpoint: &mut impl FnMut(&'static str),
+) -> Result<Sample> {
     let compressor = TimedCompressor::default();
     let encryption_ns = Cell::new(0);
     let decryption_ns = Cell::new(0);
@@ -130,7 +141,12 @@ fn cycle(
     };
     let expected = sha256(data);
     let metadata = 0u64.to_le_bytes();
-    let cpu_before = crate::protocol::metrics()?;
+    let cpu_before = if cfg!(feature = "allocation-profiler") {
+        None
+    } else {
+        Some(crate::protocol::metrics()?)
+    };
+    checkpoint("start");
     let total = Instant::now();
     let t = Instant::now();
     let mut sender = ResourceSender::new(
@@ -152,6 +168,7 @@ fn cycle(
     )
     .map_err(|e| anyhow::anyhow!("sender: {e}"))?;
     let sender_prepare_ns = elapsed(t);
+    checkpoint("sender-prepared");
     let t = Instant::now();
     let adv = sender
         .advertise(1.0)
@@ -168,6 +185,7 @@ fn cycle(
         .map_err(|e| anyhow::anyhow!("receiver: {e}"))?;
     let mut queue: VecDeque<_> = receiver.accept(1.0).into();
     let receiver_setup_ns = elapsed(t);
+    checkpoint("receiver-ready");
     let mut sender_serve_ns = 0;
     let mut receiver_ingest_ns = 0;
     let mut requests = 0;
@@ -208,6 +226,7 @@ fn cycle(
             other => bail!("unexpected transfer action: {other:?}"),
         }
     }
+    checkpoint("parts-delivered");
     let (received, expected_parts) = receiver.progress();
     ensure!(
         received == expected_parts && received > 0 && parts == sender.total_parts(),
@@ -260,7 +279,20 @@ fn cycle(
         "incomplete profile cycle"
     );
     let total_ns = elapsed(total);
-    let cpu_after = crate::protocol::metrics()?;
+    let cpu_after = if cfg!(feature = "allocation-profiler") {
+        None
+    } else {
+        Some(crate::protocol::metrics()?)
+    };
+    checkpoint("settled");
+    let compression_used = sender.flags.compressed;
+    let encrypted_transfer_bytes = sender.transfer_size;
+    drop(sender);
+    drop(receiver);
+    drop(queue);
+    drop(adv);
+    checkpoint("cleaned-up");
+
     Ok(Sample {
         family: family.into(),
         compression,
@@ -269,8 +301,8 @@ fn cycle(
         payload_bytes: data.len(),
         compressed_input_bytes: compressor.input_bytes.get(),
         compressed_output_bytes: compressor.output_bytes.get(),
-        compression_used: sender.flags.compressed,
-        encrypted_transfer_bytes: sender.transfer_size,
+        compression_used,
+        encrypted_transfer_bytes,
         parts,
         requests,
         hashmap_updates,
@@ -286,9 +318,14 @@ fn cycle(
         decompression_ns: compressor.decompress_ns.get(),
         application_verify_ns,
         proof_settlement_ns,
-        cpu_seconds: cpu_after.user_cpu_seconds + cpu_after.system_cpu_seconds
-            - cpu_before.user_cpu_seconds
-            - cpu_before.system_cpu_seconds,
+        cpu_seconds: match (cpu_before, cpu_after) {
+            (Some(before), Some(after)) => {
+                after.user_cpu_seconds + after.system_cpu_seconds
+                    - before.user_cpu_seconds
+                    - before.system_cpu_seconds
+            }
+            _ => 0.0,
+        },
     })
 }
 
