@@ -1,3 +1,7 @@
+#[cfg(feature = "allocation-profiler")]
+mod allocations;
+#[cfg(feature = "allocation-profiler")]
+mod heap;
 mod network;
 mod participant;
 mod probes;
@@ -25,6 +29,29 @@ fn main() {
 fn main_result() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or("help");
+    if command == "allocations" {
+        #[cfg(feature = "allocation-profiler")]
+        {
+            if args.get(1).map(String::as_str) == Some("--help") {
+                println!("./scripts/bench-allocations [--output DIR] | report RUN_DIR\nRust-managed heap only; native malloc excluded; no timing results.");
+                return Ok(());
+            }
+            if args.get(1).map(String::as_str) == Some("report") {
+                anyhow::ensure!(args.len() == 3, "allocations report RUN_DIR");
+                return allocations::report(Path::new(&args[2]));
+            }
+            let output = match args.len() {
+                1 => None,
+                3 if args[1] == "--output" => Some(PathBuf::from(&args[2])),
+                _ => bail!("allocations [--output DIR] | allocations report RUN_DIR"),
+            };
+            return allocations::run(&root(), output);
+        }
+        #[cfg(not(feature = "allocation-profiler"))]
+        bail!("use ./scripts/bench-allocations to build the allocation profiler");
+    }
+    anyhow::ensure!(!cfg!(feature = "allocation-profiler") || matches!(command, "help" | "--help" | "doctor"),
+        "allocation-instrumented executable cannot run timing workloads; rebuild with ./scripts/bench");
     if command == "profile" {
         if args.get(1).map(String::as_str) == Some("report") {
             anyhow::ensure!(args.len() == 3, "profile report RUN_DIR");

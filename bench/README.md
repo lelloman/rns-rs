@@ -324,3 +324,60 @@ Planned extensions include LinkManager-level in-process transfers, crypto/ratche
 scaling, allocation/CPU profiles, more protocols and topologies, network
 impairment, build variants, compatible baseline comparisons and qualified runs.
 Those capabilities are not provided by this initial runner.
+
+## Resource allocation profiling
+
+Allocation observations use a separate instrumented build of the same verified
+core Resource driver as stage profiling:
+
+```sh
+./scripts/bench-allocations --output .local/resource-allocations-run
+./scripts/bench-allocations report .local/resource-allocations-run
+```
+
+The `allocation-profiler` feature is confined to the benchmark package. Its
+`GlobalAlloc` wrapper delegates to `System` and counts successful Rust allocation
+requests. The wrapper builds under `target/allocation-profiler/`, so it does not
+replace the normal benchmark executable. An instrumented executable also refuses
+live and stage timing commands. Ordinary builds do not include the allocator
+wrapper. Do not compare instrumentation-run durations with timing baselines.
+
+The fixed matrix covers 4 KiB, 1 MiB and 2 MiB payloads; all three payload families;
+compression off/on; SDUs 464/16348; one warmup per cell and three observations:
+108 verified measured cycles. This is a core state-machine workload, not a live
+or multi-segment LinkManager memory profile. Payload generation, crypto key/token
+setup and the expected digest precede the allocation window. Within that window,
+checkpoint storage is stack-only and no CPU/RSS polling or JSON reporting occurs.
+Sender, receiver, driver queue and advertisement cleanup end the window. Input
+fixtures and the prepared token remain alive at both boundaries.
+
+Snapshots cover sender preparation, receiver setup, part delivery, assembly/
+verification/proof completion, and cleanup. Reports retain successful allocation
+calls, reallocation calls, total requested bytes, logical peak live heap growth
+relative to the starting baseline, and signed live-byte change after cleanup.
+Reallocation contributes its full new size to requested bytes and its old size
+to freed bytes; logical live size changes by the difference. Peaks do not invent
+an old/new overlap for an in-place reallocation. Raw samples retain absolute
+counters; phase summaries show allocation volume and live-byte changes. Report
+writing and returned sample bookkeeping occur outside the observed window.
+
+**Scope: Rust-managed requested heap bytes, not total process memory.** Native
+bzip2 `malloc` allocations, allocator metadata, reserved pages, stacks and internal
+reallocation overlap are not counted. Compression may reduce Rust buffer storage
+while consuming substantial native memory. A zero post-cleanup delta is evidence
+about this observed Rust window, not proof that the process has no memory leaks.
+Process-global counters are used only by this single-threaded profiling command;
+they are not an attribution mechanism for concurrent applications.
+
+Each run retains a manifest, frozen profiler executable, per-phase raw counters,
+verified sample count and regenerable report. Interrupted/failed or missing cells
+stay visible; inconsistent accounting and duplicate samples are rejected. The
+profile uses versioned dimensions and does not change production allocation,
+compression or cleanup behavior.
+
+Validate the profiler with:
+
+```sh
+cargo test --locked -p rns-bench --features allocation-profiler
+cargo clippy --locked -p rns-bench --all-targets --features allocation-profiler -- -D warnings
+```
