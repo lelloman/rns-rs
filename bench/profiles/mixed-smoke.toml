@@ -1,0 +1,8 @@
+schema_version = 1
+name = "mixed-smoke"
+repetitions = 1
+warmup_operations = 1
+operations = 2
+max_payload_bytes = 1048576
+max_cases = 16
+performance_claims = false

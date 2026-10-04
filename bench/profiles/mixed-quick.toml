@@ -1,8 +1,8 @@
 schema_version = 1
-name = "quick"
+name = "mixed-quick"
 repetitions = 3
-warmup_operations = 2
-operations = 8
+warmup_operations = 1
+operations = 3
 max_payload_bytes = 1048576
 max_cases = 48
 performance_claims = false

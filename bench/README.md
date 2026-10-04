@@ -15,6 +15,9 @@ From the repository root:
 ./scripts/bench plan --profile smoke
 ./scripts/bench run --profile smoke
 ./scripts/bench run --profile quick
+./scripts/bench plan --suite resource-mixed --profile mixed-quick
+./scripts/bench run --suite resource-mixed --profile mixed-smoke
+./scripts/bench run --suite resource-mixed --profile mixed-quick
 ./scripts/bench profile resources
 ./scripts/bench profile report target/bench-results/<profile-run-id>
 ./scripts/bench report target/bench-results/<run-id>
@@ -26,11 +29,15 @@ loopback sockets are required; no administrator privileges or network shaping
 are needed. `doctor` records environment information but installs nothing.
 The binary itself refuses measurements in a debug build. Build time is excluded.
 
-`smoke` runs four 4 KiB cases with one warmup and two measured transfers each.
-`quick` runs 4 KiB and 1 MiB payloads, two payload families, compression on/off,
-and three independent process-pair repetitions: 24 cases, each with two warmups
+`smoke` runs six 4 KiB cases with one warmup and two measured transfers each.
+`quick` runs 4 KiB and 1 MiB payloads, three payload families, compression on/off,
+and three independent process-pair repetitions: 36 cases, each with two warmups
 and eight measured transfers. These are short, functional exploratory samples.
 There is currently no `full` profile or automatic regression gate.
+The default `resource-transfer` workload is version 2: it adds SHA-256-derived
+payloads and records its version in case IDs. Old report artifacts remain readable,
+but compare only compatible workloads and boundaries. Comparison order reverses
+in odd-numbered repetitions; each case still uses fresh processes.
 
 Scenario and profile definitions live in `scenarios/` and `profiles/`. Unknown
 fields, unsupported settings, duplicate cases, and oversized matrices fail
@@ -71,6 +78,8 @@ Payload generation is versioned, deterministic application data. `repeated` uses
 byte `0x5a`; `seeded` uses the documented xorshift64 byte sequence and a fixed
 seed. This seeded fixture is partially compressible (about 11% smaller with bzip2
 in the 1 MiB Resource profile); it must not be labelled incompressible.
+`sha256-counter` uses the same deterministic high-entropy fixture as the stage
+profiler; a golden-vector test fixes its byte sequence across both paths.
 Protocol identities and crypto still use OS randomness. The receiver
 retains its generated payload in this first implementation, so RSS includes that
 fixture as well as stack and verification work. Streaming-memory claims require
@@ -122,6 +131,51 @@ The benchmark package is outside workspace `default-members`. Its tests exercise
 schema and matrix rejection, golden payload vectors, invalid delivery, bounded
 control messages, child failure/timeouts, cleanup, and report completeness.
 The live smoke run is a separate integration check requiring loopback sockets.
+
+## Small-message latency during a Resource transfer
+
+The `resource-mixed` suite establishes a second encrypted link between the same
+nodes. Both links share the same node drivers and TCP interface. It sends
+128 verified 64-byte echo requests at a scheduled interval of 2 ms, starting
+before the bulk transfer. A 1 MiB Resource is submitted after a 20 ms lead-in.
+A baseline case uses the same probe schedule and resident fixture without bulk
+traffic. Payload, compression, and baseline/loaded cases are explicit dimensions.
+
+`mixed-smoke` runs 12 cases, one warmup round and two measured rounds per case.
+`mixed-quick` runs 36 cases across three independent repetitions, one warmup
+round and three measured rounds per case. Compression and baseline/loaded order
+reverse in alternating repetitions. A round completes only after all 128 echoes
+are verified and, when present, the Resource is verified and settled.
+
+Probe submission uses nonblocking admission and does not wait for the preceding
+reply. The run fails on queue rejection, event overflow, missing/duplicate/corrupt
+echoes or mismatched accounting. Delayed scheduling catches up with bounded
+outstanding work; the lateness and resulting burst are retained, not hidden.
+Loaded cases must include actual probe submission during the Resource interval.
+
+The sender records three per-probe values in sequence order:
+
+- RTT: public-API submission to the echoed payload's arrival callback.
+- Scheduled latency: intended send time to that callback, including submission lag.
+- Send lateness: actual submission time minus intended send time.
+
+Echo content and sequence are verified before accepting a result. The arrival
+callback timestamp excludes later controller/report handling. Receiver echo
+handling, node queues, crypto, framing and socket scheduling remain included.
+The receiver's Resource validation/acknowledgement can also delay echo processing.
+Raw results retain Resource start/finish offsets and completion latency for each
+round, allowing probes before/during/after the transfer to be inspected separately.
+
+Report percentiles describe the observed probes within one case; they are not
+independent-trial confidence estimates. Compare the separate process repetitions
+and sender lateness before interpreting tails. A late generator can make a run
+uninformative even though every delivery was correct. There is no qualified
+latency gate. Mixed-suite batch goodput includes the fixed probe schedule and
+must not be interpreted as maximum Resource-transfer capacity.
+
+This suite measures contention between separate links in the same node and
+underlay connection. It does not isolate driver CPU blocking from TCP
+head-of-line blocking, nor model unrelated nodes or rate-limited links.
 
 ## Resource stage profiling
 

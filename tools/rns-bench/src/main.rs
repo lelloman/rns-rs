@@ -1,4 +1,5 @@
 mod participant;
+mod probes;
 mod profile;
 mod protocol;
 mod runner;
@@ -54,7 +55,7 @@ fn main_result() -> Result<()> {
         return result;
     }
     if command == "help" || command == "--help" {
-        println!("rns-bench doctor | list | plan/run [--profile smoke|quick] [--output DIR] | report RUN_DIR\nrns-bench profile resources [--output DIR]\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
+        println!("rns-bench doctor | list | plan/run [--suite resource-transfer|resource-mixed] [--profile NAME] [--output DIR] | report RUN_DIR\nProfiles: smoke, quick, mixed-smoke, mixed-quick\nrns-bench profile resources [--output DIR] | profile report RUN_DIR\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
         return Ok(());
     }
     if command == "doctor" {
@@ -72,24 +73,34 @@ fn main_result() -> Result<()> {
     if !matches!(command, "list" | "plan" | "run") {
         bail!("unknown command {command}");
     }
+    if command == "list" && args.len() == 1 {
+        println!("resource-transfer v2: verified Resources, including SHA-256-derived data\nresource-mixed v1: scheduled echoes on a separate link, with/without a Resource");
+        return Ok(());
+    }
     let mut profile = "smoke";
+    let mut suite = "resource-transfer";
     let mut output = None;
     let mut i = 1;
     while i < args.len() {
         let value = args.get(i + 1).context("option requires a value")?;
         match args[i].as_str() {
             "--profile" if command != "list" => profile = value,
+            "--suite" => suite = value,
             "--output" if command == "run" => output = Some(PathBuf::from(value)),
             other => bail!("unsupported option {other}"),
         }
         i += 2;
     }
     anyhow::ensure!(
-        matches!(profile, "smoke" | "quick"),
-        "only smoke and quick are implemented"
+        matches!(profile, "smoke" | "quick" | "mixed-smoke" | "mixed-quick"),
+        "unsupported profile"
+    );
+    anyhow::ensure!(
+        matches!(suite, "resource-transfer" | "resource-mixed"),
+        "unsupported suite"
     );
     let s: scenario::Scenario =
-        scenario::read(&root().join("bench/scenarios/resource-transfer.toml"))?;
+        scenario::read(&root().join(format!("bench/scenarios/{suite}.toml")))?;
     let p: scenario::Profile =
         scenario::read(&root().join(format!("bench/profiles/{profile}.toml")))?;
     let cases = scenario::expand(&s, &p)?;

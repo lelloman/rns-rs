@@ -81,33 +81,24 @@ struct Sample {
 }
 
 fn payload(family: &str, bytes: usize) -> Vec<u8> {
-    if family == "sha256-counter" {
-        let mut out = Vec::with_capacity(bytes);
-        for i in 0..bytes.div_ceil(32) {
-            let mut input = [0u8; 16];
-            input[..8].copy_from_slice(&87123u64.to_le_bytes());
-            input[8..].copy_from_slice(&(i as u64).to_le_bytes());
-            out.extend_from_slice(&sha256(&input));
-        }
-        out.truncate(bytes);
-        out
-    } else {
-        scenario::payload(&Case {
-            id: "profile".into(),
-            payload: if family == "repeated" {
-                Payload::Repeated
-            } else {
-                Payload::Seeded
-            },
-            bytes,
-            compression: false,
-            seed: 87123,
-            repetition: 0,
-            operations: 1,
-            warmup_operations: 0,
-            timeout_secs: 30,
-        })
-    }
+    scenario::payload(&Case {
+        id: "profile".into(),
+        payload: match family {
+            "repeated" => Payload::Repeated,
+            "seeded" => Payload::Seeded,
+            "sha256-counter" => Payload::Sha256Counter,
+            _ => unreachable!("profile family is fixed by the manifest"),
+        },
+        bytes,
+        compression: false,
+        seed: 87123,
+        repetition: 0,
+        operations: 1,
+        warmup_operations: 0,
+        timeout_secs: 30,
+        probes: None,
+        background: true,
+    })
 }
 
 fn cycle(
