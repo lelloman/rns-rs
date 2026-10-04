@@ -152,14 +152,15 @@ impl Participant {
         }
         Ok(m)
     }
-    fn snapshot(&mut self) -> Result<(Metrics, u64, u64)> {
+    fn snapshot(&mut self) -> Result<(Metrics, u64, u64, u64)> {
         self.send(Command::Snapshot)?;
         match self.receive()? {
             Message::Snapshot {
                 metrics,
                 received,
                 completed,
-            } => Ok((metrics, received, completed)),
+                probes_received,
+            } => Ok((metrics, received, completed, probes_received)),
             other => bail!("expected snapshot, got {other:?}"),
         }
     }
@@ -196,6 +197,10 @@ struct CaseResult {
     elapsed_seconds: Option<f64>,
     verified_bytes: u64,
     latency_ns: Vec<u64>,
+    #[serde(default)]
+    probe_rounds: Vec<crate::probes::Summary>,
+    #[serde(default)]
+    resource_latency_ns: Vec<u64>,
     sender_before: Option<Metrics>,
     sender_after: Option<Metrics>,
     receiver_before: Option<Metrics>,
@@ -203,28 +208,93 @@ struct CaseResult {
     process_ready_seconds: Option<[f64; 2]>,
 }
 
+struct RoundOutcome {
+    elapsed_ns: u64,
+    probes: Option<crate::probes::Summary>,
+    resource_elapsed_ns: Option<u64>,
+}
+
 fn transfer(
     sender: &mut Participant,
     receiver: &mut Participant,
     c: &Case,
     id: u64,
-) -> Result<u64> {
+) -> Result<RoundOutcome> {
     let deadline = Instant::now() + Duration::from_secs(c.timeout_secs);
     sender.send(Command::Transfer { id })?;
-    match receiver.receive_until(deadline)? {
-        Message::Received { id: n, bytes } => ensure!(
-            n == id && bytes == c.bytes,
-            "wrong delivered operation/length"
-        ),
-        other => bail!("expected verified delivery, got {other:?}"),
+    if c.background {
+        match receiver.receive_until(deadline)? {
+            Message::Received { id: n, bytes } => ensure!(
+                n == id && bytes == c.bytes,
+                "wrong delivered operation/length"
+            ),
+            other => bail!("expected verified delivery, got {other:?}"),
+        }
     }
     match sender.receive_until(deadline)? {
-        Message::Completed { id: n, elapsed_ns } => {
+        Message::Completed {
+            id: n,
+            elapsed_ns,
+            probes,
+            resource_elapsed_ns,
+        } => {
             ensure!(n == id && elapsed_ns > 0, "wrong completion");
-            Ok(elapsed_ns)
+            ensure!(
+                resource_elapsed_ns.is_some() == c.background,
+                "incorrect Resource completion boundary"
+            );
+            match (&c.probes, &probes) {
+                (Some(q), Some(p)) => validate_probes(q, p, c.background)?,
+                (None, None) => {}
+                _ => bail!("missing/unexpected probe result"),
+            }
+            Ok(RoundOutcome {
+                elapsed_ns,
+                probes,
+                resource_elapsed_ns,
+            })
         }
         other => bail!("expected settlement, got {other:?}"),
     }
+}
+
+fn validate_probes(
+    q: &crate::scenario::ProbeConfig,
+    p: &crate::probes::Summary,
+    background: bool,
+) -> Result<()> {
+    ensure!(
+        p.rtt_ns.len() == q.count
+            && p.scheduled_latency_ns.len() == q.count
+            && p.send_lateness_ns.len() == q.count,
+        "probe count mismatch"
+    );
+    ensure!(
+        p.rtt_ns
+            .iter()
+            .zip(&p.send_lateness_ns)
+            .zip(&p.scheduled_latency_ns)
+            .all(|((&r, &l), &s)| r > 0 && r.checked_add(l) == Some(s)),
+        "invalid probe timings"
+    );
+    ensure!(
+        p.bulk_started_ns.is_some() == background && p.bulk_finished_ns.is_some() == background,
+        "missing/unexpected background interval"
+    );
+    if background {
+        ensure!(
+            p.bulk_finished_ns > p.bulk_started_ns,
+            "invalid background interval"
+        );
+        ensure!(
+            p.send_lateness_ns.iter().enumerate().any(|(i, late)| {
+                let submitted = i as u64 * q.interval_us * 1000 + late;
+                submitted >= p.bulk_started_ns.unwrap() && submitted <= p.bulk_finished_ns.unwrap()
+            }),
+            "no probe was submitted during the Resource interval"
+        );
+    }
+    Ok(())
 }
 
 fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Result<()> {
@@ -276,18 +346,38 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
         matches!(receiver.receive()?, Message::Linked),
         "receiver link not established"
     );
+    if c.probes.is_some() {
+        sender.send(Command::ConnectProbes)?;
+        ensure!(
+            matches!(sender.receive()?, Message::ProbeLinked),
+            "sender probe link not ready"
+        );
+        ensure!(
+            matches!(receiver.receive()?, Message::ProbeLinked),
+            "receiver probe link not ready"
+        );
+    }
     for id in 0..c.warmup_operations {
         transfer(&mut sender, &mut receiver, c, id as u64)?;
     }
-    let (metrics, _, complete) = sender.snapshot()?;
+    let resource_warmups = if c.background {
+        c.warmup_operations as u64
+    } else {
+        0
+    };
+    let probe_warmups = c
+        .probes
+        .as_ref()
+        .map_or(0, |p| p.count * c.warmup_operations) as u64;
+    let (metrics, _, complete, probes) = sender.snapshot()?;
     ensure!(
-        complete == c.warmup_operations as u64,
+        complete == resource_warmups && probes == probe_warmups,
         "warmup completion mismatch"
     );
     r.sender_before = Some(metrics);
-    let (metrics, received, _) = receiver.snapshot()?;
+    let (metrics, received, _, probes) = receiver.snapshot()?;
     ensure!(
-        received == c.warmup_operations as u64,
+        received == resource_warmups && probes == probe_warmups,
         "warmup delivery mismatch"
     );
     r.receiver_before = Some(metrics);
@@ -299,20 +389,28 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
             c,
             (c.warmup_operations + n) as u64,
         )?;
-        r.latency_ns.push(latency);
-        r.verified_bytes += c.bytes as u64;
+        r.latency_ns.push(latency.elapsed_ns);
+        if let Some(p) = latency.probes {
+            r.probe_rounds.push(p);
+        }
+        if let Some(ns) = latency.resource_elapsed_ns {
+            r.resource_latency_ns.push(ns);
+            r.verified_bytes += c.bytes as u64;
+        }
     }
     r.elapsed_seconds = Some(start.elapsed().as_secs_f64());
-    let expected = (c.operations + c.warmup_operations) as u64;
-    let (metrics, received, completed) = sender.snapshot()?;
+    let rounds = (c.operations + c.warmup_operations) as u64;
+    let expected = if c.background { rounds } else { 0 };
+    let expected_probes = c.probes.as_ref().map_or(0, |p| p.count as u64 * rounds);
+    let (metrics, received, completed, probes) = sender.snapshot()?;
     ensure!(
-        received == 0 && completed == expected,
+        received == 0 && completed == expected && probes == expected_probes,
         "sender ledger mismatch"
     );
     r.sender_after = Some(metrics);
-    let (metrics, received, completed) = receiver.snapshot()?;
+    let (metrics, received, completed, probes) = receiver.snapshot()?;
     ensure!(
-        received == expected && completed == expected,
+        received == expected && completed == expected && probes == expected_probes,
         "receiver ledger mismatch"
     );
     r.receiver_after = Some(metrics);
@@ -356,9 +454,14 @@ pub fn run(
     // Every case uses the same executable even if a developer rebuilds meanwhile.
     let executable = dir.join("participant.bin");
     fs::copy(std::env::current_exe()?, &executable)?;
+    let measurement = if s.probes.is_some() {
+        "fixed-rate 64-byte echoes on a separate link; RTT is submission to verified callback; scheduled latency includes submission lateness; bulk Resource starts after configured lead-in; round ends after all echoes and Resource settlement; batch goodput includes the fixed probe schedule and is not Resource capacity"
+    } else {
+        "sequential controller-driven closed-loop; goodput includes control gaps, cloning and drain; sender latency includes receiver validation, application ack and proof settlement; CPU snapshots bracket whole measured batch"
+    };
     atomic_json(
         &dir.join("manifest.json"),
-        &serde_json::json!({"schema_version":1,"scenario":s,"profile":p,"cases":cases,"environment":env,"measurement":"sequential controller-driven closed-loop; goodput includes control gaps, cloning and drain; sender latency includes receiver validation, application ack and proof settlement; CPU snapshots bracket whole measured batch"}),
+        &serde_json::json!({"schema_version":1,"scenario":s,"profile":p,"cases":cases,"environment":env,"measurement":measurement}),
     )?;
     println!("Artifacts: {}", dir.display());
     let mut failures = 0;
@@ -377,6 +480,8 @@ pub fn run(
             elapsed_seconds: None,
             verified_bytes: 0,
             latency_ns: vec![],
+            probe_rounds: vec![],
+            resource_latency_ns: vec![],
             sender_before: None,
             sender_after: None,
             receiver_before: None,
@@ -457,7 +562,12 @@ pub fn report(dir: &Path) -> Result<()> {
             ensure!(
                 c.operations > 0
                     && r.error.is_none()
-                    && r.verified_bytes == c.bytes as u64 * c.operations as u64
+                    && r.verified_bytes
+                        == if c.background {
+                            c.bytes as u64 * c.operations as u64
+                        } else {
+                            0
+                        }
                     && r.latency_ns.len() == c.operations
                     && r.latency_ns.iter().all(|n| *n > 0),
                 "invalid successful result accounting"
@@ -467,6 +577,53 @@ pub fn report(dir: &Path) -> Result<()> {
             let mut samples = r.latency_ns;
             samples.sort_unstable();
             text.push_str(&format!("; verified={} B; elapsed={elapsed:.6} s; goodput={:.2} B/s; latency n={} median={:.3} ms",r.verified_bytes,r.verified_bytes as f64/elapsed,samples.len(),samples[samples.len()/2] as f64/1e6));
+            if let Some(q) = &c.probes {
+                ensure!(
+                    r.probe_rounds.len() == c.operations
+                        && r.resource_latency_ns.len()
+                            == if c.background { c.operations } else { 0 },
+                    "mixed round accounting mismatch"
+                );
+                for p in &r.probe_rounds {
+                    validate_probes(q, p, c.background)?;
+                }
+                let quantile = |mut ns: Vec<u64>, percent: usize| {
+                    ns.sort_unstable();
+                    ns[(ns.len() * percent).div_ceil(100).saturating_sub(1)] as f64 / 1e6
+                };
+                let rtts: Vec<_> = r
+                    .probe_rounds
+                    .iter()
+                    .flat_map(|p| p.rtt_ns.iter().copied())
+                    .collect();
+                let scheduled: Vec<_> = r
+                    .probe_rounds
+                    .iter()
+                    .flat_map(|p| p.scheduled_latency_ns.iter().copied())
+                    .collect();
+                let lag: Vec<_> = r
+                    .probe_rounds
+                    .iter()
+                    .flat_map(|p| p.send_lateness_ns.iter().copied())
+                    .collect();
+                text.push_str(" (whole probe round, not Resource latency)");
+                text.push_str(&format!("\n  verified echoes={}; RTT p50={:.3} p95={:.3} ms; scheduled p95={:.3} ms; sender-lateness max={:.3} ms",rtts.len(),quantile(rtts.clone(),50),quantile(rtts.clone(),95),quantile(scheduled.clone(),95),quantile(lag,100)));
+                if rtts.len() >= 100 {
+                    text.push_str(&format!(
+                        "; RTT p99={:.3} ms; scheduled p99={:.3} ms",
+                        quantile(rtts, 99),
+                        quantile(scheduled, 99)
+                    ));
+                }
+                if !r.resource_latency_ns.is_empty() {
+                    text.push_str(&format!(
+                        "\n  Resource completion median={:.3} ms",
+                        quantile(r.resource_latency_ns, 50)
+                    ));
+                }
+            } else {
+                ensure!(r.probe_rounds.is_empty(), "unexpected probe samples");
+            }
             if samples.len() >= 100 {
                 text.push_str(&format!(
                     "; p99={:.3} ms",
@@ -506,6 +663,33 @@ pub fn report(dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mixed_accounting_rejects_missing_echoes_and_missing_overlap() {
+        let q = crate::scenario::ProbeConfig {
+            count: 16,
+            interval_us: 2000,
+            bulk_start_us: 10000,
+        };
+        let mut p = crate::probes::Summary {
+            rtt_ns: vec![1000; 16],
+            scheduled_latency_ns: vec![1100; 16],
+            send_lateness_ns: vec![100; 16],
+            bulk_started_ns: Some(10_000_000),
+            bulk_finished_ns: Some(20_000_000),
+        };
+        validate_probes(&q, &p, true).unwrap();
+        p.rtt_ns.pop();
+        assert!(validate_probes(&q, &p, true).is_err());
+        p.rtt_ns.push(1000);
+        p.scheduled_latency_ns[0] = 1;
+        assert!(validate_probes(&q, &p, true).is_err());
+        p.scheduled_latency_ns[0] = 1100;
+        p.bulk_finished_ns = Some(1_000_000);
+        assert!(validate_probes(&q, &p, true).is_err());
+        p.bulk_started_ns = Some(90_000_000);
+        p.bulk_finished_ns = Some(100_000_000);
+        assert!(validate_probes(&q, &p, true).is_err());
+    }
 
     fn fake(text: &str) -> (tempfile::TempDir, Participant) {
         let dir = tempfile::tempdir().unwrap();
@@ -571,6 +755,8 @@ mod tests {
             operations: 2,
             warmup_operations: 1,
             timeout_secs: 1,
+            probes: None,
+            background: true,
         };
         atomic_json(
             &dir.path().join("manifest.json"),
@@ -594,6 +780,8 @@ mod tests {
             elapsed_seconds: None,
             verified_bytes: 0,
             latency_ns: vec![],
+            probe_rounds: vec![],
+            resource_latency_ns: vec![],
             sender_before: None,
             sender_after: None,
             receiver_before: None,

@@ -18,6 +18,18 @@ pub struct Scenario {
     pub concurrency: usize,
     pub timeout_secs: u64,
     pub completion: String,
+    #[serde(default)]
+    pub probes: Option<ProbeConfig>,
+    #[serde(default)]
+    pub background: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeConfig {
+    pub count: usize,
+    pub interval_us: u64,
+    pub bulk_start_us: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +37,8 @@ pub struct Scenario {
 pub enum Payload {
     Repeated,
     Seeded,
+    #[serde(rename = "sha256-counter")]
+    Sha256Counter,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +66,13 @@ pub struct Case {
     pub operations: usize,
     pub warmup_operations: usize,
     pub timeout_secs: u64,
+    #[serde(default)]
+    pub probes: Option<ProbeConfig>,
+    #[serde(default = "default_background")]
+    pub background: bool,
+}
+fn default_background() -> bool {
+    true
 }
 
 pub fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -64,7 +85,8 @@ pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
         "unsupported schema version"
     );
     ensure!(
-        s.workload_version == 1 && s.id == "resource-transfer",
+        (s.workload_version == 2 && s.id == "resource-transfer")
+            || (s.workload_version == 1 && s.id == "resource-mixed"),
         "unsupported workload"
     );
     ensure!(
@@ -73,6 +95,29 @@ pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
             && s.topology == "two-process-loopback",
         "unsupported execution configuration"
     );
+    if let Some(q) = &s.probes {
+        ensure!(
+            s.id == "resource-mixed"
+                && (16..=256).contains(&q.count)
+                && (1000..=10000).contains(&q.interval_us)
+                && q.bulk_start_us >= q.interval_us
+                && q.bulk_start_us < q.interval_us * (q.count as u64 - 1),
+            "invalid probe schedule"
+        );
+        ensure!(
+            s.background == [false, true],
+            "mixed suite requires baseline and loaded cases"
+        );
+        ensure!(
+            q.count as u64 * q.interval_us < s.timeout_secs * 1_000_000,
+            "probe schedule exceeds operation deadline"
+        );
+    } else {
+        ensure!(
+            s.id == "resource-transfer" && s.background.is_empty(),
+            "invalid background configuration"
+        );
+    }
     ensure!(
         s.completion == "receiver-verified-and-sender-settled",
         "unsupported completion boundary"
@@ -113,28 +158,42 @@ pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
     for rep in 0..p.repetitions {
         for &payload in &s.payloads {
             for &bytes in s.sizes.iter().filter(|&&n| n <= p.max_payload_bytes) {
-                for &compression in &s.compression {
-                    let id = format!(
-                        "{}-{:?}-{bytes}-compress{compression}-r{rep}",
-                        s.id, payload
-                    )
-                    .to_lowercase();
-                    ensure!(ids.insert(id.clone()), "duplicate case: {id}");
-                    out.push(Case {
-                        id,
-                        payload,
-                        bytes,
-                        compression,
-                        seed: s.seed,
-                        repetition: rep,
-                        operations: p.operations,
-                        warmup_operations: p.warmup_operations,
-                        timeout_secs: s.timeout_secs,
-                    });
-                    ensure!(
-                        out.len() <= p.max_cases,
-                        "expanded matrix exceeds case budget"
-                    );
+                let mut compression_order = s.compression.clone();
+                let mut background_order = if s.probes.is_some() {
+                    s.background.clone()
+                } else {
+                    vec![true]
+                };
+                if rep % 2 == 1 {
+                    compression_order.reverse();
+                    background_order.reverse();
+                }
+                for &compression in &compression_order {
+                    for &background in &background_order {
+                        let id = format!(
+                            "{}-v{}-{:?}-{bytes}-compress{compression}-bulk{background}-r{rep}",
+                            s.id, s.workload_version, payload
+                        )
+                        .to_lowercase();
+                        ensure!(ids.insert(id.clone()), "duplicate case: {id}");
+                        out.push(Case {
+                            id,
+                            payload,
+                            bytes,
+                            compression,
+                            seed: s.seed,
+                            repetition: rep,
+                            operations: p.operations,
+                            warmup_operations: p.warmup_operations,
+                            timeout_secs: s.timeout_secs,
+                            probes: s.probes.clone(),
+                            background,
+                        });
+                        ensure!(
+                            out.len() <= p.max_cases,
+                            "expanded matrix exceeds case budget"
+                        );
+                    }
                 }
             }
         }
@@ -148,6 +207,17 @@ pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
 // Version 1 payload vector: xorshift64, low byte after each complete step.
 // Only application data is seeded; protocol keys use OsRng.
 pub fn payload(c: &Case) -> Vec<u8> {
+    if c.payload == Payload::Sha256Counter {
+        let mut out = Vec::with_capacity(c.bytes);
+        for i in 0..c.bytes.div_ceil(32) {
+            let mut input = [0; 16];
+            input[..8].copy_from_slice(&c.seed.to_le_bytes());
+            input[8..].copy_from_slice(&(i as u64).to_le_bytes());
+            out.extend_from_slice(&rns_crypto::sha256::sha256(&input));
+        }
+        out.truncate(c.bytes);
+        return out;
+    }
     let mut state = c.seed.max(1);
     (0..c.bytes)
         .map(|_| match c.payload {
@@ -158,6 +228,7 @@ pub fn payload(c: &Case) -> Vec<u8> {
                 state ^= state << 17;
                 state as u8
             }
+            Payload::Sha256Counter => unreachable!(),
         })
         .collect()
 }
@@ -177,7 +248,7 @@ mod tests {
     #[test]
     fn bounded_matrix_and_duplicate_rejection() {
         let (mut s, mut p) = inputs();
-        assert_eq!(expand(&s, &p).unwrap().len(), 4);
+        assert_eq!(expand(&s, &p).unwrap().len(), 6);
         p.max_cases = 3;
         assert!(expand(&s, &p).is_err());
         p.max_cases = 16;
@@ -209,5 +280,34 @@ mod tests {
         c.seed = 1;
         c.bytes = 8;
         assert_eq!(payload(&c), [65, 65, 41, 37, 101, 1, 113, 13]);
+        c.payload = Payload::Sha256Counter;
+        c.seed = 87123;
+        c.bytes = 32;
+        assert_eq!(
+            payload(&c)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+            "d24a43addb8dcc815df00ea91baa5ad4097bb5950619ee4aa82cd5a0075a2304"
+        );
+        c.bytes = 35;
+        let extended = payload(&c);
+        c.bytes = 33;
+        assert_eq!(payload(&c), extended[..33]);
+    }
+    #[test]
+    fn mixed_matrix_requires_baselines_and_valid_probe_schedule() {
+        let mut s: Scenario =
+            toml::from_str(include_str!("../../../bench/scenarios/resource-mixed.toml")).unwrap();
+        let p: Profile =
+            toml::from_str(include_str!("../../../bench/profiles/mixed-quick.toml")).unwrap();
+        let cases = expand(&s, &p).unwrap();
+        assert_eq!(cases.len(), 36);
+        assert!(!cases[0].background && cases[12].background);
+        s.probes.as_mut().unwrap().count = 10000;
+        assert!(expand(&s, &p).is_err());
+        s.probes.as_mut().unwrap().count = 128;
+        s.background = vec![true];
+        assert!(expand(&s, &p).is_err());
     }
 }

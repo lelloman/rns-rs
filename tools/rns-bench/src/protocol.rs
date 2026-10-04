@@ -15,6 +15,7 @@ pub enum Command {
     Transfer {
         id: u64,
     },
+    ConnectProbes,
     Snapshot,
     Stop,
 }
@@ -29,6 +30,7 @@ pub enum Message {
     },
     Connected,
     Linked,
+    ProbeLinked,
     Received {
         id: u64,
         bytes: usize,
@@ -36,11 +38,17 @@ pub enum Message {
     Completed {
         id: u64,
         elapsed_ns: u64,
+        #[serde(default)]
+        probes: Option<crate::probes::Summary>,
+        #[serde(default)]
+        resource_elapsed_ns: Option<u64>,
     },
     Snapshot {
         metrics: Metrics,
         received: u64,
         completed: u64,
+        #[serde(default)]
+        probes_received: u64,
     },
     Stopped,
     Error {

@@ -1,13 +1,19 @@
 schema_version = 1
-workload_version = 2
-id = "resource-transfer"
+workload_version = 1
+id = "resource-mixed"
 layer = "live-applications"
 adapter = "direct-rust-tcp"
 topology = "two-process-loopback"
 payloads = ["repeated", "seeded", "sha256-counter"]
-sizes = [4096, 1048576]
+sizes = [1048576]
 compression = [false, true]
 seed = 87123
 concurrency = 1
 timeout_secs = 30
 completion = "receiver-verified-and-sender-settled"
+background = [false, true]
+
+[probes]
+count = 128
+interval_us = 2000
+bulk_start_us = 20000
