@@ -114,9 +114,41 @@ pub fn extract_metadata(assembled: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((metadata, data))
 }
 
+/// Extract metadata while retaining the owned payload allocation.
+pub(crate) fn extract_metadata_owned(mut assembled: Vec<u8>) -> Option<(Vec<u8>, Vec<u8>)> {
+    let header = assembled.get(..3)?;
+    let size = ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize;
+    let end = 3 + size;
+    let metadata = assembled.get(3..end)?.to_vec();
+    let payload_len = assembled.len() - end;
+    assembled.copy_within(end.., 0);
+    assembled.truncate(payload_len);
+    Some((metadata, assembled))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_metadata_matches_borrowed_for_valid_and_malformed_inputs() {
+        for input in [
+            vec![],
+            vec![0],
+            vec![0, 0],
+            vec![0, 0, 1],
+            vec![255, 255, 255],
+            prepend_metadata(b"payload", b"meta"),
+            prepend_metadata(b"", b""),
+            prepend_metadata(b"", b"meta"),
+            prepend_metadata(b"payload", b""),
+        ] {
+            assert_eq!(
+                extract_metadata_owned(input.clone()),
+                extract_metadata(&input)
+            );
+        }
+    }
 
     #[test]
     fn test_map_hash_basic() {

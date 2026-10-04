@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::advertisement::ResourceAdvertisement;
-use super::parts::{extract_metadata, map_hash};
+use super::parts::{extract_metadata_owned, map_hash};
 use super::proof::{build_proof_data, compute_expected_proof, compute_resource_hash};
 use super::types::*;
 use super::window::WindowState;
@@ -507,7 +507,7 @@ impl ResourceReceiver {
         }
 
         // Decrypt
-        let decrypted = if self.flags.encrypted {
+        let mut decrypted = if self.flags.encrypted {
             match decrypt_fn(&stream) {
                 Ok(d) => d,
                 Err(_) => {
@@ -537,7 +537,10 @@ impl ResourceReceiver {
                 }
             }
         } else {
-            data_after_random.to_vec()
+            let data_len = decrypted.len() - RESOURCE_RANDOM_HASH_SIZE;
+            decrypted.copy_within(RESOURCE_RANDOM_HASH_SIZE.., 0);
+            decrypted.truncate(data_len);
+            decrypted
         };
 
         // Verify hash
@@ -552,7 +555,7 @@ impl ResourceReceiver {
 
         // Extract metadata if present
         let (data, metadata) = if self.has_metadata && self.segment_index == 1 {
-            match extract_metadata(&decompressed) {
+            match extract_metadata_owned(decompressed) {
                 Some((meta, rest)) => (rest, Some(meta)),
                 None => return self.corrupt_actions(ResourceError::InvalidPart),
             }
