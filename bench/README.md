@@ -167,6 +167,56 @@ The runner does not change machine network settings or kill unrelated processes.
 No artifacts are staged, committed, published or deleted automatically. Reports
 are generated from JSON; do not manually edit results to repair a failed run.
 
+## Crypto primitives and retained-ratchet scaling
+
+Crate-local Criterion suites measure crypto costs independently of sockets and
+application scheduling:
+
+```sh
+cargo bench --locked -p rns-crypto --bench primitives --bench ratchets -- --test
+cargo bench --locked -p rns-crypto --bench primitives
+cargo bench --locked -p rns-crypto --bench ratchets
+# Short exploratory run, with ten samples and reduced warmup/measurement budgets:
+cargo bench --locked -p rns-crypto --bench ratchets -- --warm-up-time 0.1 --measurement-time 0.5 --sample-size 10 --noplot
+```
+
+| Suite | Cases | Timed boundary |
+|---|---|---|
+| `primitives` | Ed25519 sign, valid verify, wrong-message rejection at 32 B/1 KiB/64 KiB | Existing identity, prepared message/signature; signing or verification only |
+| `primitives` | X25519 exchange | Existing private/public keys; shared-secret derivation |
+| `primitives` | AES-128/AES-256 Token encrypt, valid decrypt, bad-MAC rejection at 32 B/1 KiB/64 KiB | Existing Token key schedule, prepared data/ciphertext; fixed-IV encryption excludes RNG |
+| `ratchets` | Retention 1/32/512/4096; newest/oldest/no-match, each with enforced or fallback-allowed policy; successful and forbidden identity-key fallback | A complete `decrypt_with_ratchets` call against an existing ring, 128-byte plaintext |
+
+There are 28 primitive cases and 32 ratchet cases. Invalid cases verify rejection
+and are labelled separately from successful operations. Before measurement,
+fixtures verify round trips, signatures, shared-secret agreement, decrypted
+plaintext and the actual matching ratchet ID. Timed successful operations must
+succeed; timed rejection operations must reject. Returned values are black-boxed.
+
+Benchmark IDs carry `crypto-v1` or `ratchets-v1`. Keys, IVs, payloads and fixture
+randomness are deterministic **for these isolated microbenchmarks only**. Ratchet
+private keys derive from SHA-256 of a domain-tagged counter; a separate key outside
+the ring generates the valid-but-unmatched ciphertext. Identity fallback uses
+ciphertext encrypted to the same identity's long-term key. No-match cases use
+complete authenticated ciphertext rather than a cheap malformed-header path.
+These results do not include OS randomness or identity/key generation.
+
+Fixture generation, ring import and ring destruction are outside timings.
+Operation-internal allocation, key derivation, temporary-secret zeroization,
+output destruction and success/rejection guards are inside timings. Thus results
+represent these public operations, not bare cipher instruction costs. Persistence,
+rotation, concurrent destinations and end-to-end ratchet traffic are not covered
+by this slice. The ratchet suite uses flat sampling with ten samples to bound
+expensive full-history scans; actual measurement can exceed the requested budget
+when an operation itself is slow. Short runs remain exploratory.
+
+Criterion artifacts live under `target/criterion/`. Keep the raw samples,
+source revision/diff, toolchain and host conditions with any saved baseline.
+Do not compare changed fixture versions, feature settings or machines as a
+production speedup. These suites run through `scripts/test-benchmarks.sh` in smoke
+mode. Criterion is a dev dependency only; normal library and `no_std` builds do
+not acquire a runtime benchmark dependency.
+
 ## Development and existing benches
 
 ```sh

@@ -2490,6 +2490,7 @@ version = "0.1.10"
 dependencies = [
  "aes",
  "cbc",
+ "criterion",
  "ed25519-dalek",
  "esp-idf-sys",
  "hmac",
