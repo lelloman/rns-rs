@@ -381,3 +381,136 @@ Validate the profiler with:
 cargo test --locked -p rns-bench --features allocation-profiler
 cargo clippy --locked -p rns-bench --all-targets --features allocation-profiler -- -D warnings
 ```
+
+## CPU call-stack capture
+
+The Linux CPU profiling driver samples the existing verified core Resource
+workload in a separate optimized build with debug symbols:
+
+```sh
+./scripts/bench-cpu --output .local/resource-cpu-run
+./scripts/bench-cpu --family seeded --compression on --sdu 464 --seconds 5 --output .local/resource-cpu-seeded
+```
+
+Python 3, Cargo and Linux `perf` are required. The named Cargo `profiling` profile
+inherits `release` and retains full debug information. Its separate build target
+is `target/cpu-profiler/`; no production build defaults or kernel settings change.
+The allocation-profiler feature is not enabled. The normal command runs without
+sudo. If the host denies `perf_event_open`, the run is explicitly `unsupported`
+and retains its diagnostic output; it does not report an empty capture as success.
+
+On hosts where you have permission to run a scoped privileged recorder, authorize
+sudo in your own terminal and explicitly select that mode:
+
+```sh
+sudo -v
+./scripts/bench-cpu --sudo --output .local/resource-cpu-authorized
+```
+
+Run the driver as your regular user: do **not** prefix the whole script with
+`sudo`. Root invocation is rejected before creating artifacts or starting Cargo.
+Cargo is discovered from PATH, `CARGO_HOME/bin`, or the user's `~/.cargo/bin`.
+Child commands retain the terminal session so `sudo -n` can reuse the terminal's
+authentication timestamp, while using an owned process group for cleanup. If a
+previous attempt failed before recording, use a fresh output name; failed evidence
+is retained. For runs with recorded cells, use the recovery commands below.
+
+This uses noninteractive sudo for `perf record` only, including its benchmark
+child. Data files are opened by the ordinary parent process and remain user-owned.
+No system-wide collection, kernel events or sysctl changes are requested. The
+manifest records privileged mode; do not treat it as an identical configuration
+to an unprivileged run. The capability probe precedes compilation and measurement.
+
+Default coverage is three 1 MiB payload families with compression off/on, SDU
+16348, and three seconds of repeated verified cycles per configuration. A warmup
+cycle precedes the bounded loop. Each cycle checks payload/metadata and proof
+settlement. Whole-process sampling includes startup, fixture generation, warmup,
+key setup, metrics polling and teardown; it is **not** the stage profiler's narrow
+timing boundary or a throughput comparison. CPU samples can attribute native
+bzip2 work as well as Rust work when symbols and unwind information are available.
+
+Sampling uses user-space `cpu-clock` events at 99 Hz and 16 KiB DWARF stack dumps.
+The collector must exit successfully and emit exactly one matching verified
+completion record. A valid workload plus a nonempty stack export is required.
+Inspect event statistics, stderr diagnostics, unknown frames and unwind depth
+before interpreting percentages; trace presence alone does not qualify quality.
+Short captures are exploratory, and inclusive percentages must not be added
+across ancestor/descendant frames. Choose longer runs to investigate sparse paths.
+
+Each run retains:
+
+- Resolved commands, tool/source/executable fingerprints and host conditions.
+- A frozen symbolized executable and per-case verification records.
+- `capture.stdout` (raw perf pipe stream), an exact copy as `perf.data`, and diagnostics.
+- `self.stdout` (exclusive/self cost), `callers.stdout` (inclusive caller trees),
+  `stacks.stdout` (raw stack export), `events.stdout` (separate event statistics),
+  and their stderr output.
+- Complete/incomplete/interrupted/failed/unsupported status. Earlier valid cases remain
+  retained if a later case fails; no measured cases are automatically retried.
+
+Per-command deadlines and per-output-file 128 MiB limits bound capture/reporting;
+builds have a separate ten-minute deadline without the trace-file limit. Cancellation
+stops the owned command group. New captures require a new output directory.
+Raw data remains local and is not automatically pruned or uploaded. Reports can
+be regenerated with `perf report --stdio -i CASE_DIR/perf.data` and `perf script`.
+
+Recover reports from retained captures without recording or privileges, then
+resume only configurations that have never started:
+
+```sh
+./scripts/bench-cpu --report-only .local/resource-cpu-authorized
+sudo -v
+./scripts/bench-cpu --sudo --resume .local/resource-cpu-authorized
+```
+
+Resume uses the original manifest and frozen executable (validated by hash),
+without rebuilding or overriding workload settings. Existing recordings must
+validate; failed or partial recordings are not automatically repeated. Recovery
+regenerates derived reports while preserving raw captures; differing legacy
+`perf.data` conversions are archived before replacement with the raw stream.
+`perf` reads that pipe-format stream directly, without `perf inject`. Event
+statistics use a separate report because `--stats` suppresses symbol tables.
+Status history and current load are retained for each recovery/resume session;
+captures across sessions are exploratory, not a controlled timing comparison.
+
+The orchestration checks need no profiling privileges:
+
+```sh
+python3 tools/rns-bench/tests/test_cpu_driver.py
+```
+
+A host that cannot initialize a collector can still validate the bounded workload,
+but such validation must not be presented as CPU call-stack evidence.
+
+## Native allocation tracing
+
+`./scripts/bench-native-allocations --output .local/resource-native-run` uses
+Linux Heaptrack to trace malloc-family allocations, including native bzip2 and
+Rust allocations. Install Heaptrack separately or select a locally extracted
+executable with `--heaptrack PATH`. No sudo or kernel changes are needed.
+
+The driver freezes a symbolized, optimized executable without the Rust allocation
+counter feature. Each of six cells runs exactly three verified 1 MiB Resource
+cycles: repeated, seeded and SHA256-counter payloads, compression off/on, SDU
+16348. `--cycles 1..10` changes the fixed work count. There is no warmup; startup,
+fixture generation, validation, reporting and teardown are included. This
+whole-process boundary differs from the Rust allocator's checkpoint windows.
+Instrumented runtime and RSS are not performance baselines, and malloc tracing
+does not cover arbitrary mmap/custom allocators or prove leak freedom.
+
+Each new output directory retains build/environment records, executable hash,
+commands, compressed Heaptrack traces, validated workload completions, and text
+reports of allocation calls, peak consumers, temporary allocations and outstanding
+allocations at exit. Reports disable backtrace merging (Heaptrack warns merged
+peaks are inaccurate) and leak suppressions. Inspect outstanding allocation stacks
+before interpreting Heaptrack's `leaked` label as a Resource leak. Per-process
+capture/report deadlines are 120 seconds and per-file output limits are 128 MiB;
+failed artifacts remain available and are not automatically retried. Raw traces
+can be reanalyzed with `heaptrack_print -f CASE/heaptrack.zst` (or `.gz`, depending
+on the installed compressor). Keep the frozen executable for symbolization.
+
+Validate both orchestration drivers without profiling privileges:
+
+```sh
+python3 -m unittest discover -s tools/rns-bench/tests
+```
