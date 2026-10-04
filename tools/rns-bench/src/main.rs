@@ -1,4 +1,5 @@
 mod participant;
+mod profile;
 mod protocol;
 mod runner;
 mod scenario;
@@ -22,6 +23,22 @@ fn main() {
 fn main_result() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or("help");
+    if command == "profile" {
+        if args.get(1).map(String::as_str) == Some("report") {
+            anyhow::ensure!(args.len() == 3, "profile report RUN_DIR");
+            return profile::report(Path::new(&args[2]));
+        }
+        anyhow::ensure!(
+            args.get(1).map(String::as_str) == Some("resources"),
+            "profile resources [--output DIR]"
+        );
+        let output = match args.len() {
+            2 => None,
+            4 if args[2] == "--output" => Some(PathBuf::from(&args[3])),
+            _ => bail!("profile resources [--output DIR]"),
+        };
+        return profile::run(&root(), output);
+    }
     if command == "participant" {
         anyhow::ensure!(args.len() == 4, "participant ROLE PORT CASE_FILE");
         let c = serde_json::from_slice(&std::fs::read(&args[3])?)?;
@@ -37,7 +54,7 @@ fn main_result() -> Result<()> {
         return result;
     }
     if command == "help" || command == "--help" {
-        println!("rns-bench doctor | list | plan/run [--profile smoke|quick] [--output DIR] | report RUN_DIR\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
+        println!("rns-bench doctor | list | plan/run [--profile smoke|quick] [--output DIR] | report RUN_DIR\nrns-bench profile resources [--output DIR]\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
         return Ok(());
     }
     if command == "doctor" {

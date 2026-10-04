@@ -67,7 +67,7 @@ pub fn environment(root: &Path) -> Result<serde_json::Value> {
     }))
 }
 
-fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let temp = path.with_extension("json.tmp");
     let mut f = File::create(&temp)?;
     serde_json::to_writer_pretty(&mut f, value)?;

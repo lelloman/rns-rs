@@ -15,6 +15,8 @@ From the repository root:
 ./scripts/bench plan --profile smoke
 ./scripts/bench run --profile smoke
 ./scripts/bench run --profile quick
+./scripts/bench profile resources
+./scripts/bench profile report target/bench-results/<profile-run-id>
 ./scripts/bench report target/bench-results/<run-id>
 ```
 
@@ -67,7 +69,9 @@ have enough samples for useful tail claims. Repetitions are reported separately.
 
 Payload generation is versioned, deterministic application data. `repeated` uses
 byte `0x5a`; `seeded` uses the documented xorshift64 byte sequence and a fixed
-seed. Protocol identities and crypto still use OS randomness. The receiver
+seed. This seeded fixture is partially compressible (about 11% smaller with bzip2
+in the 1 MiB Resource profile); it must not be labelled incompressible.
+Protocol identities and crypto still use OS randomness. The receiver
 retains its generated payload in this first implementation, so RSS includes that
 fixture as well as stack and verification work. Streaming-memory claims require
 a different workload. There is no generator-headroom calibration yet.
@@ -119,12 +123,51 @@ schema and matrix rejection, golden payload vectors, invalid delivery, bounded
 control messages, child failure/timeouts, cleanup, and report completeness.
 The live smoke run is a separate integration check requiring loopback sockets.
 
+## Resource stage profiling
+
+`./scripts/bench profile resources [--output DIR]` instruments real core Resource
+sender/receiver state machines in one process, without sockets or a LinkManager.
+It verifies payload, metadata, part counts and sender proof settlement for every
+cycle. No production code is instrumented or modified. It uses the production
+bzip2 compressor and AES-256 Token operations with OS-generated keys/IVs.
+
+The fixed initial profile has 1 MiB payloads, SDUs of 464 and 16,348 bytes, and
+compression off/on. In addition to the existing fixtures it includes
+`sha256-counter`: concatenated SHA-256 blocks of a 16-byte input containing the
+seed and counter as little-endian u64 values, truncated to the desired size.
+Payload generation is untimed. This fixture tests compression rejection rather
+than assuming the existing seeded fixture has high entropy.
+
+There is one warmup per configuration and five measured cycles per configuration
+(60 samples). Compression order alternates between repetitions. The output has
+`manifest.json`, `samples.json`, `status.json` and `report.txt`. Configuration,
+host/source identity and measurement boundaries are captured in the manifest.
+
+Timers record sender preparation, sender part serving, receiver part ingestion,
+receiver assembly, application verification and proof settlement. Compression
+and encryption are nested inside preparation; decompression and decryption are
+nested inside assembly. Do not add parent and child times together. The total
+also includes the synchronous driver, allocations and intermediate data cleanup;
+final sender/receiver destruction, key setup and payload generation are excluded.
+CPU deltas bracket the cycle; OS counter sampling adds small overhead.
+
+Protocol timestamps are virtual and advance by 10 microseconds per action to
+exercise window/hashmap progression; reported durations use real monotonic time.
+These numbers are stage profiles, not live-link latency or network goodput. SDU
+is explicitly chosen, not claimed to match a negotiated live TCP link. Encrypted
+Resource byte counts exclude packet headers, framing and control messages.
+
+This instrumented profile does not collect call stacks, allocation counts, or
+isolate individual copying/hashing costs. Use its stage attribution to decide
+which narrower profile to run next; do not subtract its times from separate live
+runs and call the remainder socket overhead.
+
 Crate-local Criterion benches remain useful for isolated transport/link/hook
 operations. `scripts/test-benchmarks.sh` is their correctness/API smoke check,
 not a statistical performance run. `three_node/` remains the separate HTTP-facing
 harness and includes its control-API costs.
 
-Planned extensions include in-process completed transfers, crypto/ratchet
+Planned extensions include LinkManager-level in-process transfers, crypto/ratchet
 scaling, allocation/CPU profiles, more protocols and topologies, network
 impairment, build variants, compatible baseline comparisons and qualified runs.
 Those capabilities are not provided by this initial runner.
