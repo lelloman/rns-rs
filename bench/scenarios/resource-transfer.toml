@@ -1,0 +1,13 @@
+schema_version = 1
+workload_version = 1
+id = "resource-transfer"
+layer = "live-applications"
+adapter = "direct-rust-tcp"
+topology = "two-process-loopback"
+payloads = ["repeated", "seeded"]
+sizes = [4096, 1048576]
+compression = [false, true]
+seed = 87123
+concurrency = 1
+timeout_secs = 30
+completion = "receiver-verified-and-sender-settled"

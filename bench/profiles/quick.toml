@@ -1,0 +1,8 @@
+schema_version = 1
+name = "quick"
+repetitions = 3
+warmup_operations = 2
+operations = 8
+max_payload_bytes = 1048576
+max_cases = 32
+performance_claims = false
