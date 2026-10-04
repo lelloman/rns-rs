@@ -57,6 +57,8 @@ pub struct Profile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Case {
+    #[serde(default)]
+    pub rate_bps: Option<u64>,
     pub id: String,
     pub payload: Payload,
     pub bytes: usize,
@@ -177,6 +179,7 @@ pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
                         .to_lowercase();
                         ensure!(ids.insert(id.clone()), "duplicate case: {id}");
                         out.push(Case {
+                            rate_bps: None,
                             id,
                             payload,
                             bytes,
@@ -202,6 +205,35 @@ pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
         bail!("profile excludes every payload size");
     }
     Ok(out)
+}
+
+/// Apply an explicit synthetic network variant without changing unshaped IDs.
+pub fn apply_rate(cases: &mut [Case], rate_bps: Option<u64>) -> Result<()> {
+    if let Some(rate) = rate_bps {
+        ensure!(
+            (64_000..=1_000_000_000).contains(&rate),
+            "rate must be 64000..1000000000 bit/s per direction"
+        );
+        for c in cases.iter() {
+            // Conservative budget for framing/escaping and protocol round trips.
+            let seconds = if c.background {
+                (c.bytes as u64 * 16).div_ceil(rate)
+            } else {
+                0
+            };
+            ensure!(
+                seconds + 10 <= c.timeout_secs,
+                "{}: rate needs a longer operation deadline (at least {} seconds)",
+                c.id,
+                seconds + 10
+            );
+        }
+        for c in cases {
+            c.rate_bps = Some(rate);
+            c.id.push_str(&format!("-rate{rate}-pacer1"));
+        }
+    }
+    Ok(())
 }
 
 // Version 1 payload vector: xorshift64, low byte after each complete step.
@@ -263,6 +295,26 @@ mod tests {
         s.concurrency = 1;
         s.sizes.clear();
         assert!(expand(&s, &p).is_err());
+    }
+    #[test]
+    fn rate_variants_preserve_baselines_and_reject_impossible_budgets() {
+        let (s, p) = inputs();
+        let mut cases = expand(&s, &p).unwrap();
+        let baseline = cases.clone();
+        apply_rate(&mut cases, None).unwrap();
+        assert_eq!(cases, baseline);
+        assert!(apply_rate(&mut cases, Some(0)).is_err());
+        assert_eq!(cases, baseline);
+        apply_rate(&mut cases, Some(64_000)).unwrap();
+        assert!(cases
+            .iter()
+            .all(|c| c.rate_bps == Some(64_000) && c.id.ends_with("-rate64000-pacer1")));
+        let mut large = baseline;
+        large[0].bytes = 1024 * 1024;
+        let before = large.clone();
+        assert!(apply_rate(&mut large, Some(64_000)).is_err());
+        assert_eq!(large, before);
+        apply_rate(&mut large, Some(1_000_000)).unwrap();
     }
     #[test]
     fn unknown_fields_fail() {

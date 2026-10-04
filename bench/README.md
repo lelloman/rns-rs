@@ -45,6 +45,54 @@ validation. Use `plan` to inspect the resolved matrix before running. Each
 transfer has a shared sender/receiver deadline. Setup and shutdown events have
 separate deadlines. Each case gets fresh nodes and one outstanding Resource.
 
+## Synthetic bandwidth constraints
+
+Both live suites accept `--rate-bps`, in **bits per second per direction**:
+
+```sh
+./scripts/bench plan --profile smoke --rate-bps 64000
+./scripts/bench run --profile smoke --rate-bps 64000
+./scripts/bench run --suite resource-mixed --profile mixed-smoke --rate-bps 1000000
+```
+
+This inserts an owned userspace TCP relay between the two participants. The cap
+applies independently in each direction to TCP stream bytes, including RNS
+framing, encryption overhead, probes and acknowledgements. It excludes TCP/IP
+headers and retransmissions. It is a synthetic byte-stream constraint, not a
+kernel bandwidth/delay/loss model or a simulation of a radio. Both protocol links
+in the mixed suite still share one TCP stream and its queues.
+
+The relay pays each chunk's serialization time before forwarding it. Chunks are
+at most 4096 bytes and at most 10 ms of the configured rate. Idle time does not
+accumulate credit; scheduling stalls reduce delivered capacity rather than
+causing catch-up bursts. Socket buffers still exist, and the added TCP hop and
+chunking change latency even at high caps. Compare explicitly named variants;
+a high-cap relay is not an identical substitute for direct loopback.
+
+Each shaped run first verifies raw data in both directions through a separate
+relay. `network-calibration.json` retains actual durations and byte counts. The
+calibration targets 250 ms of serialization per direction, capped at 1 MiB, so
+very high rates have shorter checks. Reports flag a raw rate below 80% of the
+requested cap as pacer-limited; this is a diagnostic threshold, not performance
+qualification. Calibration is outside all workload measurements. It does not
+establish concurrent workload-generator headroom.
+
+Per-case snapshots retain forwarded bytes, chunks and lifetime maximum pacing
+lateness in each direction. Reports give stream-byte deltas and observed rates
+over the measured batch; these can include incidental protocol traffic. Snapshot
+boundaries are not packet barriers, and a chunk already in flight can straddle a
+boundary. Lifetime pacing lateness includes setup and warmup. Endpoint CPU/RSS
+measurements exclude relay threads, which run in the controller process.
+
+Caps must be 64,000–1,000,000,000 bit/s. Planning rejects a Resource whose existing
+operation deadline cannot accommodate twice its raw serialization time plus
+10 seconds. This is a conservative budget check, not a completion guarantee;
+very slow 1 MiB cases need a deliberately longer scenario deadline. The unshaped
+variant remains the default, with unchanged case IDs. Shaped IDs include the
+rate and pacer version, and manifests record the network model explicitly.
+No administrator access or host network changes are required. Relay buffers are
+bounded; case cleanup stops its threads and closes only its own sockets.
+
 ## What is measured
 
 The receiver registers a destination and accepts the TCP connection. Both sides
@@ -123,6 +171,7 @@ are generated from JSON; do not manually edit results to repair a failed run.
 
 ```sh
 cargo test -p rns-bench
+cargo test -p rns-bench network::tests::relay_preserves_bytes_caps_rate_and_stops_without_client -- --ignored
 cargo clippy -p rns-bench --all-targets -- -D warnings
 bash scripts/test-benchmarks.sh
 ```

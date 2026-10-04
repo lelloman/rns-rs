@@ -1,3 +1,4 @@
+mod network;
 mod participant;
 mod probes;
 mod profile;
@@ -55,7 +56,7 @@ fn main_result() -> Result<()> {
         return result;
     }
     if command == "help" || command == "--help" {
-        println!("rns-bench doctor | list | plan/run [--suite resource-transfer|resource-mixed] [--profile NAME] [--output DIR] | report RUN_DIR\nProfiles: smoke, quick, mixed-smoke, mixed-quick\nrns-bench profile resources [--output DIR] | profile report RUN_DIR\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
+        println!("rns-bench doctor | list | plan/run [--suite resource-transfer|resource-mixed] [--profile NAME] [--rate-bps BIT_PER_SECOND] [--output DIR] | report RUN_DIR\nProfiles: smoke, quick, mixed-smoke, mixed-quick\nrns-bench profile resources [--output DIR] | profile report RUN_DIR\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
         return Ok(());
     }
     if command == "doctor" {
@@ -80,12 +81,14 @@ fn main_result() -> Result<()> {
     let mut profile = "smoke";
     let mut suite = "resource-transfer";
     let mut output = None;
+    let mut rate_bps = None;
     let mut i = 1;
     while i < args.len() {
         let value = args.get(i + 1).context("option requires a value")?;
         match args[i].as_str() {
             "--profile" if command != "list" => profile = value,
             "--suite" => suite = value,
+            "--rate-bps" if command != "list" => rate_bps = Some(value.parse::<u64>()?),
             "--output" if command == "run" => output = Some(PathBuf::from(value)),
             other => bail!("unsupported option {other}"),
         }
@@ -103,7 +106,8 @@ fn main_result() -> Result<()> {
         scenario::read(&root().join(format!("bench/scenarios/{suite}.toml")))?;
     let p: scenario::Profile =
         scenario::read(&root().join(format!("bench/profiles/{profile}.toml")))?;
-    let cases = scenario::expand(&s, &p)?;
+    let mut cases = scenario::expand(&s, &p)?;
+    scenario::apply_rate(&mut cases, rate_bps)?;
     match command {
         "list" => println!(
             "{}: verified Resources; direct Rust APIs, two processes, loopback TCP",

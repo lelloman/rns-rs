@@ -82,6 +82,7 @@ struct Sample {
 
 fn payload(family: &str, bytes: usize) -> Vec<u8> {
     scenario::payload(&Case {
+        rate_bps: None,
         id: "profile".into(),
         payload: match family {
             "repeated" => Payload::Repeated,
