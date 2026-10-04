@@ -1,0 +1,8 @@
+schema_version = 1
+name = "smoke"
+repetitions = 1
+warmup_operations = 1
+operations = 2
+max_payload_bytes = 4096
+max_cases = 16
+performance_claims = false

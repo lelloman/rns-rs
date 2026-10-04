@@ -2438,6 +2438,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rns-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ctrlc",
+ "libc",
+ "rns-core",
+ "rns-crypto",
+ "rns-net",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "rns-cli"
 version = "0.4.3"
 dependencies = [
