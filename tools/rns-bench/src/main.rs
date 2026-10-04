@@ -7,6 +7,7 @@ mod participant;
 mod probes;
 mod profile;
 mod protocol;
+mod relay;
 mod runner;
 mod scenario;
 
@@ -95,7 +96,11 @@ fn main_result() -> Result<()> {
     if command == "participant" {
         anyhow::ensure!(args.len() == 4, "participant ROLE PORT CASE_FILE");
         let c = serde_json::from_slice(&std::fs::read(&args[3])?)?;
-        let result = participant::run(&args[1], args[2].parse()?, c);
+        let result = if args[1] == "relay" {
+            relay::run(args[2].parse()?)
+        } else {
+            participant::run(&args[1], args[2].parse()?, c)
+        };
         if let Err(ref e) = result {
             let _ = protocol::write_json(
                 &mut std::io::stdout(),
@@ -107,7 +112,7 @@ fn main_result() -> Result<()> {
         return result;
     }
     if command == "help" || command == "--help" {
-        println!("rns-bench doctor | list | plan/run [--suite resource-transfer|resource-mixed] [--profile NAME] [--rate-bps BIT_PER_SECOND] [--output DIR] | report RUN_DIR\nProfiles: smoke, quick, mixed-smoke, mixed-quick\nrns-bench profile resources [--output DIR] | profile report RUN_DIR\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
+        println!("rns-bench doctor | list | plan/run [--suite resource-transfer|resource-mixed] [--profile NAME] [--rate-bps BIT_PER_SECOND] [--output DIR] | report RUN_DIR\nProfiles: smoke, quick, mixed-smoke, mixed-quick\nAdd --relay for three-process forwarding; run accepts --relay-executable PATH to keep endpoints fixed.\nrns-bench profile resources [--output DIR] | profile report RUN_DIR\nRuns are exploratory; full qualification and baseline comparison are not implemented.");
         return Ok(());
     }
     if command == "doctor" {
@@ -133,14 +138,25 @@ fn main_result() -> Result<()> {
     let mut suite = "resource-transfer";
     let mut output = None;
     let mut rate_bps = None;
+    let mut transport_relay = false;
+    let mut relay_executable = None;
     let mut i = 1;
     while i < args.len() {
+        if args[i] == "--relay" && matches!(command, "plan" | "run") {
+            transport_relay = true;
+            i += 1;
+            continue;
+        }
         let value = args.get(i + 1).context("option requires a value")?;
         match args[i].as_str() {
             "--profile" if command != "list" => profile = value,
             "--suite" => suite = value,
             "--rate-bps" if command != "list" => rate_bps = Some(value.parse::<u64>()?),
             "--output" if command == "run" => output = Some(PathBuf::from(value)),
+            "--relay-executable" if command == "run" => {
+                relay_executable = Some(PathBuf::from(value));
+                transport_relay = true;
+            }
             other => bail!("unsupported option {other}"),
         }
         i += 2;
@@ -153,12 +169,22 @@ fn main_result() -> Result<()> {
         matches!(suite, "resource-transfer" | "resource-mixed"),
         "unsupported suite"
     );
-    let s: scenario::Scenario =
+    anyhow::ensure!(
+        !(transport_relay && rate_bps.is_some()),
+        "relay mode does not support synthetic rate limits"
+    );
+    let mut s: scenario::Scenario =
         scenario::read(&root().join(format!("bench/scenarios/{suite}.toml")))?;
     let p: scenario::Profile =
         scenario::read(&root().join(format!("bench/profiles/{profile}.toml")))?;
     let mut cases = scenario::expand(&s, &p)?;
     scenario::apply_rate(&mut cases, rate_bps)?;
+    if transport_relay {
+        s.topology = "three-process-rns-relay-v1".into();
+        for c in &mut cases {
+            c.id.push_str("-relay-v1");
+        }
+    }
     match command {
         "list" => println!(
             "{}: verified Resources; direct Rust APIs, two processes, loopback TCP",
@@ -170,7 +196,15 @@ fn main_result() -> Result<()> {
                 &serde_json::json!({"scenario":s,"profile":p,"cases":cases,"worst_case_operation_seconds":cases.iter().map(|c| (c.operations+c.warmup_operations) as u64*c.timeout_secs).sum::<u64>()})
             )?
         ),
-        "run" => runner::run(&root(), s, p, cases, output)?,
+        "run" => runner::run_with_relay(
+            &root(),
+            s,
+            p,
+            cases,
+            output,
+            transport_relay,
+            relay_executable,
+        )?,
         _ => unreachable!(),
     }
     Ok(())

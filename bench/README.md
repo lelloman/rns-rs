@@ -514,3 +514,8 @@ Validate both orchestration drivers without profiling privileges:
 ```sh
 python3 -m unittest discover -s tools/rns-bench/tests
 ```
+
+## Relay workload
+
+For a three-process transport relay, persistent Docker runs and version switching,
+see [relay/README.md](relay/README.md).
