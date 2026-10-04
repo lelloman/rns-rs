@@ -94,17 +94,18 @@ fn setup_active_link() -> (LinkManager, LinkManager, [u8; 16]) {
 }
 
 fn bench_send_on_link(c: &mut Criterion) {
+    // Borrow batched state to keep link-manager teardown outside the timed region.
     let payload = vec![0xAB; 256];
     let mut group = c.benchmark_group("link_dispatch");
     group.sample_size(10);
     group.throughput(Throughput::Bytes(payload.len() as u64));
     group.bench_function("send_on_link_256b", |b| {
-        b.iter_batched(
+        b.iter_batched_ref(
             setup_active_link,
             |(init_mgr, _resp_mgr, link_id)| {
                 let mut rng = make_rng(0x41);
                 black_box(init_mgr.send_on_link(
-                    &link_id,
+                    link_id,
                     &payload,
                     constants::CONTEXT_NONE,
                     &mut rng,
@@ -122,16 +123,19 @@ fn bench_send_request(c: &mut Criterion) {
     group.sample_size(10);
     group.throughput(Throughput::Bytes(request_data.len() as u64));
     group.bench_function("send_request_128b", |b| {
-        b.iter_batched(
-            setup_active_link,
-            |(mut init_mgr, mut resp_mgr, link_id)| {
+        b.iter_batched_ref(
+            || {
+                let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
                 resp_mgr.register_request_handler(
                     "/bench",
                     None,
                     |_link_id, _path, _data, _remote| Some(b"OK".to_vec()),
                 );
+                (init_mgr, resp_mgr, link_id)
+            },
+            |(init_mgr, _resp_mgr, link_id)| {
                 let mut rng = make_rng(0x51);
-                black_box(init_mgr.send_request(&link_id, "/bench", &request_data, &mut rng))
+                black_box(init_mgr.send_request(link_id, "/bench", &request_data, &mut rng))
             },
             BatchSize::SmallInput,
         );
@@ -140,16 +144,17 @@ fn bench_send_request(c: &mut Criterion) {
 }
 
 fn bench_send_resource(c: &mut Criterion) {
+    // Measures preparation of a compressible Resource, not completed delivery.
     let payload = vec![0xCD; 4096];
     let mut group = c.benchmark_group("resource_dispatch");
     group.sample_size(10);
     group.throughput(Throughput::Bytes(payload.len() as u64));
     group.bench_function("send_resource_4k", |b| {
-        b.iter_batched(
+        b.iter_batched_ref(
             setup_active_link,
-            |(mut init_mgr, _resp_mgr, link_id)| {
+            |(init_mgr, _resp_mgr, link_id)| {
                 let mut rng = make_rng(0x61);
-                black_box(init_mgr.send_resource(&link_id, &payload, None, &mut rng))
+                black_box(init_mgr.send_resource(link_id, &payload, None, &mut rng))
             },
             BatchSize::SmallInput,
         );
