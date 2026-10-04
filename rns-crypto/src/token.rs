@@ -113,14 +113,16 @@ impl Token {
         let iv: [u8; 16] = token[..16].try_into().unwrap();
         let ciphertext = &token[16..token.len() - 32];
 
-        let decrypted = match &self.mode {
+        let mut decrypted = match &self.mode {
             AesMode::Aes128(aes) => aes.decrypt_cbc(ciphertext, &iv),
             AesMode::Aes256(aes) => aes.decrypt_cbc(ciphertext, &iv),
         };
 
-        pkcs7::unpad(&decrypted, 16)
-            .map(|s| s.to_vec())
-            .map_err(|_| TokenError::DecryptionFailed)
+        let unpadded_len = pkcs7::unpad(&decrypted, 16)
+            .map_err(|_| TokenError::DecryptionFailed)?
+            .len();
+        decrypted.truncate(unpadded_len);
+        Ok(decrypted)
     }
 }
 
