@@ -206,6 +206,10 @@ struct CaseResult {
     receiver_before: Option<Metrics>,
     receiver_after: Option<Metrics>,
     process_ready_seconds: Option<[f64; 2]>,
+    #[serde(default)]
+    network_before: Option<crate::network::Snapshot>,
+    #[serde(default)]
+    network_after: Option<crate::network::Snapshot>,
 }
 
 struct RoundOutcome {
@@ -317,9 +321,20 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
         m => bail!("invalid receiver readiness: {m:?}"),
     };
     let receiver_ready = start.elapsed().as_secs_f64();
+    let relay = c
+        .rate_bps
+        .map(|rate| crate::network::Relay::start(port, rate))
+        .transpose()?;
+    let sender_port = relay.as_ref().map_or(port, |r| r.port());
     let start = Instant::now();
-    let mut sender =
-        Participant::spawn(executable, "sender", port, &casefile, dir, c.timeout_secs)?;
+    let mut sender = Participant::spawn(
+        executable,
+        "sender",
+        sender_port,
+        &casefile,
+        dir,
+        c.timeout_secs,
+    )?;
     ensure!(
         matches!(sender.receive()?, Message::Ready { version: 1, .. }),
         "invalid sender readiness"
@@ -381,6 +396,7 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
         "warmup delivery mismatch"
     );
     r.receiver_before = Some(metrics);
+    r.network_before = relay.as_ref().map(|r| r.snapshot()).transpose()?;
     let start = Instant::now();
     for n in 0..c.operations {
         let latency = transfer(
@@ -399,6 +415,7 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
         }
     }
     r.elapsed_seconds = Some(start.elapsed().as_secs_f64());
+    r.network_after = relay.as_ref().map(|r| r.snapshot()).transpose()?;
     let rounds = (c.operations + c.warmup_operations) as u64;
     let expected = if c.background { rounds } else { 0 };
     let expected_probes = c.probes.as_ref().map_or(0, |p| p.count as u64 * rounds);
@@ -450,7 +467,13 @@ pub fn run(
         &dir.join("status.json"),
         &serde_json::json!({"schema_version":1,"status":"interrupted","expected_cases":cases.len()}),
     )?;
-    let env = environment(root)?;
+    let mut env = environment(root)?;
+    if let Some(rate) = cases.first().and_then(|c| c.rate_bps) {
+        env["network"] = serde_json::json!({"kind":"userspace-paced-tcp-v1", "rate_bps_per_direction":rate,
+            "chunk_max_bytes":4096,"chunk_max_serialization_ms":10,"idle_credit":false,
+            "byte_boundary":"TCP stream bytes including RNS framing; excludes IP/TCP headers",
+            "limitations":"synthetic byte pacing; socket queues remain; not a kernel link model; relay CPU is outside endpoint metrics"});
+    }
     // Every case uses the same executable even if a developer rebuilds meanwhile.
     let executable = dir.join("participant.bin");
     fs::copy(std::env::current_exe()?, &executable)?;
@@ -464,6 +487,25 @@ pub fn run(
         &serde_json::json!({"schema_version":1,"scenario":s,"profile":p,"cases":cases,"environment":env,"measurement":measurement}),
     )?;
     println!("Artifacts: {}", dir.display());
+    if let Some(rate) = cases.first().and_then(|c| c.rate_bps) {
+        match crate::network::calibrate(rate) {
+            Ok(calibration) => {
+                println!(
+                    "Raw relay calibration: {:.1}% of requested cap (slower direction)",
+                    calibration.minimum_rate_fraction * 100.0
+                );
+                atomic_json(&dir.join("network-calibration.json"), &calibration)?;
+            }
+            Err(e) => {
+                atomic_json(
+                    &dir.join("status.json"),
+                    &serde_json::json!({"schema_version":1,"status":"failed","failed_cases":0,"infrastructure_error":format!("network calibration: {e:#}")}),
+                )?;
+                report(&dir)?;
+                return Err(e.context("network calibration failed"));
+            }
+        }
+    }
     let mut failures = 0;
     for c in cases {
         if cancelled() {
@@ -487,6 +529,8 @@ pub fn run(
             receiver_before: None,
             receiver_after: None,
             process_ready_seconds: None,
+            network_before: None,
+            network_after: None,
         };
         atomic_json(&case_dir.join("result.json"), &r)?;
         match execute(&executable, &case_dir, &c, &mut r) {
@@ -548,6 +592,29 @@ pub fn report(dir: &Path) -> Result<()> {
         "incomplete or failed"
     };
     let mut text=format!("rns-rs benchmark report\nStatus: {effective} (recorded: {})\nExploratory measurements; not a saturation or release qualification result.\nGoodput includes controller gaps and drain. Latency includes application acknowledgement.\nRSS high-water marks are full-process peaks, not measurement-window peaks.\n\n",status["status"]);
+    if let Some(error) = status["infrastructure_error"].as_str() {
+        text.push_str(&format!("Infrastructure failure: {error}\n\n"));
+    }
+    if let Some(rate) = cases.first().and_then(|c| c.rate_bps) {
+        let path = dir.join("network-calibration.json");
+        if path.exists() {
+            let calibration: crate::network::Calibration =
+                serde_json::from_slice(&fs::read(path)?)?;
+            ensure!(
+                calibration.rate_bps_per_direction == rate
+                    && calibration.minimum_rate_fraction.is_finite()
+                    && calibration.minimum_rate_fraction > 0.0
+                    && calibration.minimum_rate_fraction <= 1.0,
+                "invalid network calibration"
+            );
+            text.push_str(&format!("Synthetic TCP relay calibration: {:.1}% of requested per-direction cap; {} bytes each direction. {}\nRelay stream bytes include RNS framing, exclude TCP/IP headers. Endpoint CPU excludes relay work. Pacing lateness is lifetime, including warmup.\n\n",
+                calibration.minimum_rate_fraction * 100.0, calibration.bytes_per_direction,
+                if calibration.minimum_rate_fraction < 0.8 { "PACER-LIMITED: observed raw rate below 80% of cap; do not treat requested rate as delivered capacity." } else { "Short raw-stream calibration only; no saturation qualification." }));
+        } else {
+            ensure!(effective != "complete", "missing network calibration");
+            text.push_str("Network calibration: MISSING\n");
+        }
+    }
     for (c, result) in cases.into_iter().zip(results) {
         let Some(r) = result else {
             text.push_str(&format!("{}: MISSING\n", c.id));
@@ -574,6 +641,41 @@ pub fn report(dir: &Path) -> Result<()> {
             );
             let elapsed = r.elapsed_seconds.context("missing elapsed time")?;
             ensure!(elapsed > 0.0 && elapsed.is_finite(), "invalid elapsed time");
+            if let Some(rate) = c.rate_bps {
+                let before = r
+                    .network_before
+                    .as_ref()
+                    .context("missing relay start counters")?;
+                let after = r
+                    .network_after
+                    .as_ref()
+                    .context("missing relay end counters")?;
+                text.push_str(&format!("; synthetic TCP cap={rate} bit/s per direction"));
+                for (name, a, b) in [
+                    (
+                        "sender->receiver",
+                        &before.sender_to_receiver,
+                        &after.sender_to_receiver,
+                    ),
+                    (
+                        "receiver->sender",
+                        &before.receiver_to_sender,
+                        &after.receiver_to_sender,
+                    ),
+                ] {
+                    let bytes = b
+                        .forwarded_bytes
+                        .checked_sub(a.forwarded_bytes)
+                        .context("relay counters went backwards")?;
+                    ensure!(bytes > 0, "empty shaped traffic measurement");
+                    text.push_str(&format!("; {name} stream bytes={bytes} observed={:.0} bit/s lifetime-max-pacing-lateness={:.3} ms", bytes as f64 * 8.0 / elapsed, b.max_pacing_lateness_ns as f64 / 1e6));
+                }
+            } else {
+                ensure!(
+                    r.network_before.is_none() && r.network_after.is_none(),
+                    "unexpected relay counters"
+                );
+            }
             let mut samples = r.latency_ns;
             samples.sort_unstable();
             text.push_str(&format!("; verified={} B; elapsed={elapsed:.6} s; goodput={:.2} B/s; latency n={} median={:.3} ms",r.verified_bytes,r.verified_bytes as f64/elapsed,samples.len(),samples[samples.len()/2] as f64/1e6));
@@ -746,6 +848,7 @@ mod tests {
     fn report_never_hides_missing_or_failed_cases() {
         let dir = tempfile::tempdir().unwrap();
         let c = Case {
+            rate_bps: None,
             id: "test-case".into(),
             payload: crate::scenario::Payload::Repeated,
             bytes: 4096,
@@ -787,6 +890,8 @@ mod tests {
             receiver_before: None,
             receiver_after: None,
             process_ready_seconds: None,
+            network_before: None,
+            network_after: None,
         };
         let path = dir.path().join(&c.id).join("result.json");
         atomic_json(&path, &r).unwrap();
