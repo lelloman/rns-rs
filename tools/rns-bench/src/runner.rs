@@ -39,6 +39,37 @@ fn output(root: &Path, cmd: &str, args: &[&str]) -> Result<Vec<u8>> {
 }
 
 pub fn environment(root: &Path) -> Result<serde_json::Value> {
+    let source = if let Ok(path) = std::env::var("RNS_BENCH_SOURCE_RECORD") {
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+        ensure!(
+            value["source_sha"].as_str().is_some_and(|v| v.len() == 40),
+            "invalid baked source revision"
+        );
+        ensure!(
+            value["lockfile_sha256"] == digest(&fs::read(root.join("Cargo.lock"))?),
+            "baked lockfile differs"
+        );
+        value
+    } else {
+        source_identity(root)?
+    };
+    Ok(serde_json::json!({
+        "schema_version":1,"source_sha":source["source_sha"],
+        "tracked_diff_sha256":source["tracked_diff_sha256"],"dirty":source["dirty"],
+        "untracked_source":source["untracked_source"],"lockfile_sha256":source["lockfile_sha256"],
+        "rustc":String::from_utf8(output(root,"rustc",&["-Vv"])?)?,
+        "executable_sha256":digest(&fs::read(std::env::current_exe()?)?),
+        "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+        "logical_cpus":std::thread::available_parallelism().ok().map(|n|n.get()),
+        "cpuinfo":fs::read_to_string("/proc/cpuinfo").ok(),
+        "loadavg":fs::read_to_string("/proc/loadavg").ok(),
+        "debug_assertions":cfg!(debug_assertions),"network":"unshaped-loopback-tcp",
+        "metrics_backend":"getrusage and Linux /proc; RSS snapshots, not sampled measurement peak",
+        "qualification":"exploratory; uncontrolled host load; no saturation claim"
+    }))
+}
+
+fn source_identity(root: &Path) -> Result<serde_json::Value> {
     let git = |args: &[&str]| output(root, "git", args);
     let diff = git(&["diff", "HEAD", "--binary"])?;
     let untracked = git(&["ls-files", "--others", "--exclude-standard", "-z"])?;
@@ -51,20 +82,11 @@ pub fn environment(root: &Path) -> Result<serde_json::Value> {
         }
         source_files.insert(name.to_string(), digest(&fs::read(root.join(name))?));
     }
-    Ok(serde_json::json!({
-        "schema_version":1,"source_sha":String::from_utf8(git(&["rev-parse","HEAD"])?)?.trim(),
+    Ok(
+        serde_json::json!({"source_sha":String::from_utf8(git(&["rev-parse","HEAD"])?)?.trim(),
         "tracked_diff_sha256":digest(&diff),"dirty":!diff.is_empty()||!source_files.is_empty(),
-        "untracked_source":source_files,"lockfile_sha256":digest(&fs::read(root.join("Cargo.lock"))?),
-        "rustc":String::from_utf8(output(root,"rustc",&["-Vv"])?)?,
-        "executable_sha256":digest(&fs::read(std::env::current_exe()?)?),
-        "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
-        "logical_cpus":std::thread::available_parallelism().ok().map(|n|n.get()),
-        "cpuinfo":fs::read_to_string("/proc/cpuinfo").ok(),
-        "loadavg":fs::read_to_string("/proc/loadavg").ok(),
-        "debug_assertions":cfg!(debug_assertions),"network":"unshaped-loopback-tcp",
-        "metrics_backend":"getrusage and Linux /proc; RSS snapshots, not sampled measurement peak",
-        "qualification":"exploratory; uncontrolled host load; no saturation claim"
-    }))
+        "untracked_source":source_files,"lockfile_sha256":digest(&fs::read(root.join("Cargo.lock"))?)}),
+    )
 }
 
 pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -205,6 +227,10 @@ struct CaseResult {
     sender_after: Option<Metrics>,
     receiver_before: Option<Metrics>,
     receiver_after: Option<Metrics>,
+    #[serde(default)]
+    relay_before: Option<Metrics>,
+    #[serde(default)]
+    relay_after: Option<Metrics>,
     process_ready_seconds: Option<[f64; 2]>,
     #[serde(default)]
     network_before: Option<crate::network::Snapshot>,
@@ -301,7 +327,13 @@ fn validate_probes(
     Ok(())
 }
 
-fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Result<()> {
+fn execute(
+    executable: &Path,
+    relay_executable: Option<&Path>,
+    dir: &Path,
+    c: &Case,
+    r: &mut CaseResult,
+) -> Result<()> {
     let casefile = dir.join("case.json");
     atomic_json(&casefile, c)?;
     // Bind-to-zero allocates a candidate. A bind race fails this case; never reuse
@@ -309,9 +341,29 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
     let reserved = std::net::TcpListener::bind("127.0.0.1:0")?;
     let port = reserved.local_addr()?.port();
     drop(reserved);
+    let mut transport = if let Some(binary) = relay_executable {
+        let child = Participant::spawn(binary, "relay", port, &casefile, dir, c.timeout_secs)?;
+        ensure!(
+            matches!(child.receive()?, Message::Ready { version: 1, .. }),
+            "relay not ready"
+        );
+        Some(child)
+    } else {
+        None
+    };
     let start = Instant::now();
-    let mut receiver =
-        Participant::spawn(executable, "receiver", port, &casefile, dir, c.timeout_secs)?;
+    let mut receiver = Participant::spawn(
+        executable,
+        if transport.is_some() {
+            "receiver-relay"
+        } else {
+            "receiver"
+        },
+        port,
+        &casefile,
+        dir,
+        c.timeout_secs,
+    )?;
     let (destination, signing_key) = match receiver.receive()? {
         Message::Ready {
             version: 1,
@@ -396,6 +448,9 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
         "warmup delivery mismatch"
     );
     r.receiver_before = Some(metrics);
+    if let Some(relay) = transport.as_mut() {
+        r.relay_before = Some(relay.snapshot()?.0);
+    }
     r.network_before = relay.as_ref().map(|r| r.snapshot()).transpose()?;
     let start = Instant::now();
     for n in 0..c.operations {
@@ -431,23 +486,40 @@ fn execute(executable: &Path, dir: &Path, c: &Case, r: &mut CaseResult) -> Resul
         "receiver ledger mismatch"
     );
     r.receiver_after = Some(metrics);
+    if let Some(relay) = transport.as_mut() {
+        r.relay_after = Some(relay.snapshot()?.0);
+    }
     sender.stop()?;
     receiver.stop()?;
+    if let Some(relay) = transport.as_mut() {
+        relay.stop()?;
+    }
     Ok(())
 }
 
-pub fn run(
+pub fn run_with_relay(
     root: &Path,
     s: Scenario,
     p: Profile,
     cases: Vec<Case>,
     requested: Option<PathBuf>,
+    transport_relay: bool,
+    relay_requested: Option<PathBuf>,
 ) -> Result<()> {
     ctrlc::set_handler(|| CANCELLED.store(true, std::sync::atomic::Ordering::Relaxed))?;
     ensure!(
         !cfg!(debug_assertions),
         "measurement requires a release build; use scripts/bench"
     );
+    let relay_source = if transport_relay {
+        Some(
+            relay_requested
+                .unwrap_or(std::env::current_exe()?)
+                .canonicalize()?,
+        )
+    } else {
+        None
+    };
     let dir = requested.unwrap_or_else(|| {
         root.join("target/bench-results").join(format!(
             "{}-{}",
@@ -477,6 +549,19 @@ pub fn run(
     // Every case uses the same executable even if a developer rebuilds meanwhile.
     let executable = dir.join("participant.bin");
     fs::copy(std::env::current_exe()?, &executable)?;
+    let relay_binary = if let Some(path) = relay_source {
+        let frozen = dir.join("relay.bin");
+        fs::copy(path, &frozen)?;
+        Some(frozen)
+    } else {
+        None
+    };
+    let relay_record = relay_binary.as_ref().map(|path| -> Result<_> {
+        Ok(serde_json::json!({"workload_version":1,"executable_sha256":digest(&fs::read(path)?),
+            "allocator":"System for the standard benchmark worker; external binaries must document their allocator",
+            "source_identity":"environment applies to endpoints; relay identity is the frozen executable hash; supply its build provenance separately if different",
+            "configuration":"RnsNode transport enabled; loopback TCP listener; fresh state; no hooks, discovery workers or persistence; ingress control disabled"}))
+    }).transpose()?;
     let measurement = if s.probes.is_some() {
         "fixed-rate 64-byte echoes on a separate link; RTT is submission to verified callback; scheduled latency includes submission lateness; bulk Resource starts after configured lead-in; round ends after all echoes and Resource settlement; batch goodput includes the fixed probe schedule and is not Resource capacity"
     } else {
@@ -484,7 +569,7 @@ pub fn run(
     };
     atomic_json(
         &dir.join("manifest.json"),
-        &serde_json::json!({"schema_version":1,"scenario":s,"profile":p,"cases":cases,"environment":env,"measurement":measurement}),
+        &serde_json::json!({"schema_version":1,"scenario":s,"profile":p,"cases":cases,"environment":env,"measurement":measurement,"relay":relay_record}),
     )?;
     println!("Artifacts: {}", dir.display());
     if let Some(rate) = cases.first().and_then(|c| c.rate_bps) {
@@ -528,12 +613,14 @@ pub fn run(
             sender_after: None,
             receiver_before: None,
             receiver_after: None,
+            relay_before: None,
+            relay_after: None,
             process_ready_seconds: None,
             network_before: None,
             network_after: None,
         };
         atomic_json(&case_dir.join("result.json"), &r)?;
-        match execute(&executable, &case_dir, &c, &mut r) {
+        match execute(&executable, relay_binary.as_deref(), &case_dir, &c, &mut r) {
             Ok(()) => r.status = "valid".into(),
             Err(e) => {
                 failures += 1;
@@ -732,10 +819,19 @@ pub fn report(dir: &Path) -> Result<()> {
                     samples[(samples.len() * 99).div_ceil(100) - 1] as f64 / 1e6
                 ));
             }
-            for (role, before, after) in [
+            let relay_mode = !manifest["relay"].is_null();
+            ensure!(
+                r.relay_before.is_some() == relay_mode && r.relay_after.is_some() == relay_mode,
+                "missing or unexpected relay metrics"
+            );
+            let mut roles = vec![
                 ("sender", r.sender_before, r.sender_after),
                 ("receiver", r.receiver_before, r.receiver_after),
-            ] {
+            ];
+            if relay_mode {
+                roles.push(("relay", r.relay_before, r.relay_after));
+            }
+            for (role, before, after) in roles {
                 let (b, a) = (
                     before.context("missing before metrics")?,
                     after.context("missing after metrics")?,
@@ -889,6 +985,8 @@ mod tests {
             sender_after: None,
             receiver_before: None,
             receiver_after: None,
+            relay_before: None,
+            relay_after: None,
             process_ready_seconds: None,
             network_before: None,
             network_after: None,

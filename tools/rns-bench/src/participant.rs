@@ -89,10 +89,11 @@ impl Callbacks for Callback {
 
 pub fn run(role: &str, port: u16, c: Case) -> Result<()> {
     ensure!(
-        role == "sender" || role == "receiver",
+        matches!(role, "sender" | "receiver" | "receiver-relay"),
         "invalid participant role"
     );
-    let receiver = role == "receiver";
+    let receiver = role != "sender";
+    let listener = role == "receiver";
     let payload = scenario::payload(&c);
     let (tx, rx) = mpsc::sync_channel(if c.probes.is_some() { 512 } else { 64 });
     let overflow = Arc::new(AtomicBool::new(false));
@@ -124,7 +125,7 @@ pub fn run(role: &str, port: u16, c: Case) -> Result<()> {
     let dest = Destination::single_in("rns_bench", &["resource"], IdentityHash(*identity.hash()));
     let public = identity.get_public_key().unwrap();
     let signing: [u8; 32] = public[32..].try_into().unwrap();
-    let config_data: Box<dyn rns_net::interface::InterfaceConfigData> = if receiver {
+    let config_data: Box<dyn rns_net::interface::InterfaceConfigData> = if listener {
         Box::new(TcpServerConfig {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
@@ -143,7 +144,7 @@ pub fn run(role: &str, port: u16, c: Case) -> Result<()> {
         NodeConfig {
             interfaces: vec![InterfaceConfig {
                 name: role.into(),
-                type_name: if receiver {
+                type_name: if listener {
                     "TCPServerInterface"
                 } else {
                     "TCPClientInterface"

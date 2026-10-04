@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Build a frozen rns-rs relay workload and retain its results on the host."""
+import argparse,datetime,hashlib,json,os,shutil,subprocess,tempfile
+from pathlib import Path
+
+def digest(data): return hashlib.sha256(data).hexdigest()
+def git(root,*args): return subprocess.check_output(['git',*args],cwd=root)
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--profile',choices=['smoke','quick','mixed-smoke','mixed-quick'],default='smoke')
+    p.add_argument('--suite',choices=['resource-transfer','resource-mixed'],default='resource-transfer')
+    p.add_argument('--output',type=Path)
+    p.add_argument('--image',help='Saved image tag; use --no-build to switch without rebuilding')
+    p.add_argument('--no-build',action='store_true')
+    p.add_argument('--relay-binary',type=Path,help='Alternate rns-bench executable with the relay worker protocol; endpoints stay fixed')
+    p.add_argument('--cpus',type=float,default=4,help='Quota shared by controller and all three workers')
+    p.add_argument('--cpuset',help='Optional host CPUs; does not reserve them')
+    p.add_argument('--memory',default='2g')
+    a=p.parse_args()
+    if a.cpus<=0: p.error('--cpus must be positive')
+    if a.no_build and not a.image: p.error('--no-build requires --image')
+    root=Path(__file__).resolve().parents[1]
+    output=(a.output or root/'.local/relay-bench'/datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')).resolve()
+    if output.exists(): p.error('output directory must not exist')
+    if any(c in str(output.parent) for c in ',\n'): p.error('unsupported mount path')
+    relay=a.relay_binary.resolve(strict=True) if a.relay_binary else None
+    if relay and (not relay.is_file() or not os.access(relay,os.X_OK)): p.error('relay binary must be executable')
+    with tempfile.TemporaryDirectory(prefix='rns-relay-build-') as temp:
+        context=Path(temp)
+        names=git(root,'ls-files','--cached','--others','--exclude-standard','-z').split(b'\0')
+        untracked={}
+        untracked_names=set(git(root,'ls-files','--others','--exclude-standard','-z').split(b'\0'))
+        for raw in sorted(set(names)):
+            if not raw: continue
+            name=os.fsdecode(raw)
+            if name.startswith('LOCAL-') and name.endswith('.txt'): continue
+            source=root/name;target=context/name
+            if not source.is_file(): continue
+            target.parent.mkdir(parents=True,exist_ok=True)
+            if source.is_symlink(): p.error('source snapshot must not contain symlinks')
+            shutil.copy2(source,target)
+            if raw in untracked_names: untracked[name]=digest(source.read_bytes())
+        diff=git(root,'diff','HEAD','--binary')
+        record={'source_sha':git(root,'rev-parse','HEAD').decode().strip(),'tracked_diff_sha256':digest(diff),'dirty':bool(diff or untracked),'untracked_source':untracked,'lockfile_sha256':digest((context/'Cargo.lock').read_bytes())}
+        (context/'bench/relay/source-record.json').write_text(json.dumps(record,indent=2)+'\n')
+        (context/'bench/relay/tracked.patch').write_bytes(diff)
+        fingerprint=digest(b''.join(name.encode()+b'\0'+hashlib.sha256(path.read_bytes()).digest() for path in sorted(context.rglob('*')) if path.is_file() for name in [str(path.relative_to(context))]))
+        image=a.image or f'rns-relay-bench:{record["source_sha"][:12]}-{fingerprint[:12]}'
+        if not a.no_build:
+            subprocess.run(['docker','build','--progress','plain','-f',str(context/'bench/relay/Dockerfile'),'-t',image,str(context)],check=True)
+        info=json.loads(subprocess.check_output(['docker','image','inspect',image]))[0]
+        output.parent.mkdir(parents=True,exist_ok=True)
+        command=['docker','run','--rm','--init','--network','none','--read-only','--tmpfs','/tmp:rw,nosuid,size=64m','--user',f'{os.getuid()}:{os.getgid()}','--cpus',str(a.cpus),'--memory',a.memory,'--mount',f'type=bind,src={output.parent},dst=/results']
+        if a.cpuset: command+=['--cpuset-cpus',a.cpuset]
+        if relay:
+            if any(c in str(relay) for c in ',\n'): p.error('unsupported relay mount path')
+            command+=['--mount',f'type=bind,src={relay},dst=/relay-candidate,readonly']
+        command += [image,'--profile',a.profile,'--suite',a.suite,'--output','/results/'+output.name]
+        if relay: command+=['--relay-executable','/relay-candidate']
+        print('Image:',image,'ID:',info['Id'],'Results:',output,flush=True)
+        status=subprocess.run(command).returncode
+        if output.exists():
+            (output/'docker-run.json').write_text(json.dumps({'schema_version':1,'image':image,'image_id':info['Id'],'command':command,'exit_code':status,'relay_executable_sha256':digest(relay.read_bytes()) if relay else None},indent=2)+'\n')
+        return status
+
+if __name__=='__main__': raise SystemExit(main())
