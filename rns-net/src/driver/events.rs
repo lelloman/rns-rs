@@ -1,5 +1,5 @@
 use super::*;
-use rns_core::transport::{InboundFrame, RxMetadata};
+use rns_core::transport::{DecodedInboundFrame, DecodedPacket, RxMetadata};
 
 impl Driver {
     #[cfg(test)]
@@ -71,7 +71,7 @@ impl Driver {
             data
         };
 
-        let parsed_packet = match RawPacket::unpack(&packet) {
+        let decoded_packet = match DecodedPacket::unpack(&packet) {
             Ok(packet) => packet,
             Err(_) => {
                 if let Some(entry) = self.interfaces.get_mut(&interface_id) {
@@ -80,6 +80,7 @@ impl Driver {
                 return;
             }
         };
+        let parsed_packet = decoded_packet.packet();
         if parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
             && packet.len() > rns_core::constants::MTU
         {
@@ -90,7 +91,7 @@ impl Driver {
         }
         let is_path_request = parsed_packet.destination_hash == self.path_request_dest;
         let tagless_path_request = is_path_request && parsed_packet.data.len() <= 16;
-        if tagless_path_request || self.engine.is_unvalidated_link_packet(&parsed_packet) {
+        if tagless_path_request || self.engine.is_unvalidated_link_packet(parsed_packet) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
             }
@@ -101,17 +102,14 @@ impl Driver {
                 entry.stats.protocol_violations += 1;
             }
         }
-        let filter_frame = InboundFrame {
-            raw: &packet,
-            iface: interface_id,
-            now: time::now(),
-            rx: RxMetadata { rssi, snr },
-        };
-        if !self.engine.accepts_inbound_frame(filter_frame) {
+        if !self
+            .engine
+            .accepts_decoded_packet(&decoded_packet, interface_id)
+        {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 if self
                     .engine
-                    .is_packet_filter_protocol_violation(&parsed_packet, interface_id)
+                    .is_packet_filter_protocol_violation(parsed_packet, interface_id)
                 {
                     entry.stats.protocol_violations += 1;
                 } else {
@@ -183,7 +181,7 @@ impl Driver {
         // transport engine owns the route mutation.
         if let Some((link_id, destination_hash, packet_hops, proof_data)) = self
             .engine
-            .inbound_lrproof_rebalance_candidate(&packet, interface_id)
+            .decoded_lrproof_rebalance_candidate(&decoded_packet, interface_id)
         {
             if let Some(announced) = self.known_destination_announced(&destination_hash) {
                 let mut sig_pub = [0u8; 32];
@@ -205,8 +203,8 @@ impl Driver {
             }
         }
 
-        let inbound_frame = InboundFrame {
-            raw: &packet,
+        let inbound_frame = DecodedInboundFrame {
+            decoded: decoded_packet,
             iface: interface_id,
             now: time::now(),
             rx: RxMetadata { rssi, snr },
@@ -217,13 +215,17 @@ impl Driver {
                 .announce_verify_queue
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            self.engine.handle_inbound_with_announce_queue(
+            self.engine.handle_decoded_inbound_with_announce_queue(
                 inbound_frame,
                 &mut self.rng,
                 Some(&mut announce_queue),
             )
         } else {
-            self.engine.handle_inbound(inbound_frame, &mut self.rng)
+            self.engine.handle_decoded_inbound_with_announce_queue(
+                inbound_frame,
+                &mut self.rng,
+                None,
+            )
         };
         if actions.iter().any(|action| {
             matches!(

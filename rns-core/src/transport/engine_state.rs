@@ -199,21 +199,26 @@ impl TransportEngine {
         raw: &[u8],
         receiving_interface: InterfaceId,
     ) -> Option<super::LrproofRebalanceCandidate> {
-        let ctx = self.prepare_inbound_packet(InboundFrame {
-            raw,
-            iface: receiving_interface,
-            now: 0.0,
-            rx: RxMetadata::default(),
-        })?;
-        if ctx.packet.flags.packet_type != constants::PACKET_TYPE_PROOF
-            || ctx.packet.context != constants::CONTEXT_LRPROOF
+        let decoded = DecodedPacket::unpack(raw).ok()?;
+        self.decoded_lrproof_rebalance_candidate(&decoded, receiving_interface)
+    }
+
+    pub fn decoded_lrproof_rebalance_candidate(
+        &self,
+        decoded: &DecodedPacket,
+        receiving_interface: InterfaceId,
+    ) -> Option<super::LrproofRebalanceCandidate> {
+        let packet = &decoded.0;
+        let (hops, _) = self.filtered_inbound_hops(packet, receiving_interface)?;
+        if packet.flags.packet_type != constants::PACKET_TYPE_PROOF
+            || packet.context != constants::CONTEXT_LRPROOF
         {
             return None;
         }
-        let link_id = ctx.packet.destination_hash;
+        let link_id = packet.destination_hash;
         let destination_hash =
-            self.link_rebalance_destination(&link_id, ctx.packet.hops, receiving_interface)?;
-        Some((link_id, destination_hash, ctx.packet.hops, ctx.packet.data))
+            self.link_rebalance_destination(&link_id, hops, receiving_interface)?;
+        Some((link_id, destination_hash, hops, packet.data.clone()))
     }
 
     /// Validate a mismatched-hop LRPROOF and update the relay link route and
@@ -504,7 +509,12 @@ impl TransportEngine {
     /// Packet filter: dedup + basic validity.
     ///
     /// Transport.py:1187-1238
+    #[cfg(test)]
     pub(super) fn packet_filter(&self, packet: &RawPacket) -> bool {
+        self.packet_filter_at_hops(packet, packet.hops)
+    }
+
+    pub(super) fn packet_filter_at_hops(&self, packet: &RawPacket, hops: u8) -> bool {
         // Filter packets for other transport instances
         if packet.transport_id.is_some()
             && packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
@@ -532,7 +542,7 @@ impl TransportEngine {
             || packet.flags.destination_type == constants::DESTINATION_GROUP
         {
             if packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE {
-                return packet.hops <= 1;
+                return hops <= 1;
             } else {
                 // PLAIN/GROUP ANNOUNCE is invalid
                 return false;

@@ -4296,3 +4296,88 @@ fn test_issue4_external_data_to_1hop_via_transport_works() {
         "HEADER_2 transport packet should be forwarded (control test)"
     );
 }
+
+#[test]
+fn decoded_admission_rechecks_dedup_state_before_ingestion() {
+    let mut engine = TransportEngine::new(make_config(false));
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let raw = RawPacket::pack(
+        flags,
+        0,
+        &[7; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"payload",
+    )
+    .unwrap();
+    let decoded = DecodedPacket::unpack(&raw.raw).unwrap();
+    assert!(engine.accepts_decoded_packet(&decoded, InterfaceId(1)));
+    engine.packet_hashlist.add(raw.packet_hash);
+    assert!(!engine.accepts_decoded_packet(&decoded, InterfaceId(1)));
+    let mut rng = rns_crypto::FixedRng::new(&[0; 64]);
+    assert!(engine
+        .handle_decoded_inbound_with_announce_queue(
+            DecodedInboundFrame {
+                decoded,
+                iface: InterfaceId(1),
+                now: 1.0,
+                rx: RxMetadata::default()
+            },
+            &mut rng,
+            None,
+        )
+        .is_empty());
+}
+
+#[test]
+fn decoded_admission_rechecks_interface_hops_and_preserves_metadata() {
+    let mut engine = TransportEngine::new(make_config(false));
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_PLAIN,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let raw = RawPacket::pack(
+        flags,
+        1,
+        &[7; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"payload",
+    )
+    .unwrap();
+    let decoded = DecodedPacket::unpack(&raw.raw).unwrap();
+    assert!(!engine.accepts_decoded_packet(&decoded, InterfaceId(1)));
+    let mut iface = make_interface(1, constants::MODE_FULL);
+    iface.is_local_client = true;
+    engine.interfaces.insert(iface.id, iface);
+    assert!(engine.accepts_decoded_packet(&decoded, InterfaceId(1)));
+    assert!(engine.accepts_decoded_packet(&decoded, InterfaceId(1)));
+    assert_eq!(decoded.packet().hops, 1);
+    let rx = RxMetadata {
+        rssi: Some(-70),
+        snr: Some(3.5),
+    };
+    let ctx = engine
+        .prepare_decoded_packet(DecodedInboundFrame {
+            decoded,
+            iface: InterfaceId(1),
+            now: 42.0,
+            rx,
+        })
+        .unwrap();
+    assert_eq!(ctx.packet.hops, 1);
+    assert_eq!(ctx.packet.raw, raw.raw);
+    assert_eq!(ctx.packet.packet_hash, raw.packet_hash);
+    assert_eq!(ctx.packet.rssi, rx.rssi);
+    assert_eq!(ctx.packet.snr, rx.snr);
+    assert_eq!(ctx.now, 42.0);
+}
