@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Bounded Heaptrack capture of fixed, verified Resource work (Linux)."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+COMMON = runpy.run_path(str(ROOT / 'scripts/bench-cpu'))
+execute, write_json = COMMON['execute'], COMMON['write_json']
+PREFIX = 'RNS_BENCH_NATIVE_RESULT '
+
+
+def completion(path, family, compression, cycles):
+    records = [json.loads(line[len(PREFIX):]) for line in path.read_text(errors='replace').splitlines() if line.startswith(PREFIX)]
+    if len(records) != 1:
+        raise ValueError('missing or duplicate native workload completion')
+    result = records[0]
+    expected = dict(schema_version=1, workload_version=1, status='valid', family=family,
+                    compression=compression, sdu=16348, payload_bytes=1048576,
+                    verified_cycles=cycles, warmup_cycles=0)
+    if any(type(result.get(k)) is not type(v) or result[k] != v for k, v in expected.items()):
+        raise ValueError('native workload completion mismatch')
+    used = result.get('compression_used_cycles')
+    if type(used) is not int or not 0 <= used <= cycles or (not compression and used):
+        raise ValueError('invalid compression count')
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--heaptrack', default='heaptrack', help='installed or locally extracted heaptrack executable')
+    parser.add_argument('--cycles', type=int, choices=range(1, 11), default=3)
+    args = parser.parse_args()
+    directory = args.output.resolve()
+    if directory.exists():
+        parser.error('output directory must be new')
+    directory.mkdir(parents=True)
+    cases = []
+    try:
+        if os.geteuid() == 0:
+            raise ValueError('run native allocation profiling without sudo')
+        collector = shutil.which(args.heaptrack)
+        if not collector:
+            write_json(directory / 'status.json', dict(status='unsupported', reason='heaptrack not found'))
+            return 1
+        collector = str(Path(collector).resolve())
+        printer = str(Path(collector).with_name('heaptrack_print'))
+        manifest = dict(schema_version=1, cycles=args.cycles, sdu=16348, payload_bytes=1048576,
+                        expected_cases=6, boundary='whole process malloc tracing; includes Rust and native allocations; not RSS or timing',
+                        collector=collector, collector_version=subprocess.check_output([collector, '--version'], text=True).strip(),
+                        driver_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        write_json(directory / 'manifest.json', manifest)
+        write_json(directory / 'status.json', dict(status='interrupted', verified_cases=cases))
+        build = [COMMON['discover_cargo'](), 'build', '--locked', '--profile', 'profiling', '-p', 'rns-bench',
+                 '--target-dir', str(ROOT / 'target/cpu-profiler')]
+        if execute(build, directory, 'build', 600, cap_files=False):
+            raise RuntimeError('build failed; see build.stderr')
+        binary = directory / 'profiler.bin'
+        shutil.copy2(ROOT / 'target/cpu-profiler/profiling/rns-bench', binary)
+        manifest['executable_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
+        manifest['build_command'] = build
+        if execute([str(binary), 'doctor'], directory, 'environment', 30):
+            raise RuntimeError('environment capture failed')
+        manifest['environment'] = json.loads((directory / 'environment.stdout').read_text())
+        write_json(directory / 'manifest.json', manifest)
+        for family in ['repeated', 'seeded', 'sha256-counter']:
+            for compression in [False, True]:
+                cell = directory / f'{family}-compress{str(compression).lower()}'
+                cell.mkdir()
+                command = [collector, '--record-only', '-o', str(cell / 'heaptrack'), str(binary),
+                           'native-workload', family, str(compression).lower(), '16348', str(args.cycles)]
+                write_json(cell / 'command.json', command)
+                print('Tracing ' + cell.name, flush=True)
+                if execute(command, cell, 'capture', 120):
+                    raise RuntimeError('Heaptrack capture failed: ' + cell.name)
+                result = completion(cell / 'capture.stderr', family, compression, args.cycles)
+                traces = list(cell.glob('heaptrack.*'))
+                if len(traces) != 1 or traces[0].stat().st_size == 0:
+                    raise RuntimeError('missing or ambiguous allocation trace')
+                report = [printer, '-f', str(traces[0]), '--merge-backtraces', '0', '-n', '20',
+                          '--print-leaks', '1', '--disable-builtin-suppressions', '--disable-embedded-suppressions']
+                write_json(cell / 'report-command.json', report)
+                if execute(report, cell, 'report', 120):
+                    raise RuntimeError('Heaptrack report failed: ' + cell.name)
+                if 'calls to allocation functions:' not in (cell / 'report.stdout').read_text():
+                    raise RuntimeError('missing allocation summary')
+                result['trace_sha256'] = hashlib.sha256(traces[0].read_bytes()).hexdigest()
+                write_json(cell / 'result.json', result)
+                cases.append(cell.name)
+                write_json(directory / 'status.json', dict(status='interrupted', verified_cases=cases))
+        write_json(directory / 'status.json', dict(status='complete', verified_cases=cases))
+        print('Native allocation artifacts: ' + str(directory))
+        return 0
+    except (Exception, KeyboardInterrupt) as error:
+        write_json(directory / 'status.json', dict(status='failed', error=str(error), verified_cases=cases))
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

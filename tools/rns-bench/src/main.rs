@@ -52,6 +52,30 @@ fn main_result() -> Result<()> {
     }
     anyhow::ensure!(!cfg!(feature = "allocation-profiler") || matches!(command, "help" | "--help" | "doctor"),
         "allocation-instrumented executable cannot run timing workloads; rebuild with ./scripts/bench");
+    if command == "native-workload" {
+        anyhow::ensure!(
+            args.len() == 5,
+            "native-workload FAMILY COMPRESSION SDU CYCLES"
+        );
+        return profile::native_workload(
+            &args[1],
+            args[2].parse()?,
+            args[3].parse()?,
+            args[4].parse()?,
+        );
+    }
+    if command == "cpu-workload" {
+        anyhow::ensure!(
+            args.len() == 5,
+            "cpu-workload FAMILY COMPRESSION SDU SECONDS"
+        );
+        return profile::cpu_workload(
+            &args[1],
+            args[2].parse()?,
+            args[3].parse()?,
+            args[4].parse()?,
+        );
+    }
     if command == "profile" {
         if args.get(1).map(String::as_str) == Some("report") {
             anyhow::ensure!(args.len() == 3, "profile report RUN_DIR");

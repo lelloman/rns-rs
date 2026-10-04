@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""Record bounded, verified Resource CPU workloads. No kernel settings are changed."""
+import argparse
+import hashlib
+import json
+import math
+import os
+import pwd
+from pathlib import Path
+import resource
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+PREFIX = 'RNS_BENCH_CPU_RESULT '
+
+
+def write_json(path, value):
+    temp = path.with_suffix('.json.tmp')
+    temp.write_text(json.dumps(value, indent=2) + '\n')
+    temp.replace(path)
+
+
+def execute(command, directory, name, timeout, cap_files=True):
+    """Owned process group; bounded output files and wall time, retained on failure."""
+    def setup_child():
+        # Own process group for cleanup, but keep the terminal session so sudo
+        # can reuse the invoking user's terminal-scoped authentication timestamp.
+        os.setpgid(0, 0)
+        if cap_files:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (128 * 1024 * 1024,) * 2)
+    with (directory / (name + '.stdout')).open('wb') as stdout, (directory / (name + '.stderr')).open('wb') as stderr:
+        process = subprocess.Popen(command, cwd=ROOT, stdout=stdout, stderr=stderr,
+                                   preexec_fn=setup_child)
+        try:
+            return process.wait(timeout=timeout)
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            raise
+
+
+def require_user():
+    if os.geteuid() == 0:
+        raise ValueError('Run this driver as your regular user, without outer sudo. '
+                         'Use sudo -v first, then ./scripts/bench-cpu --sudo with a new output directory. '
+                         'Only the recorder should run privileged; Cargo and artifacts must remain user-owned.')
+
+
+def discover_cargo():
+    cargo = shutil.which('cargo')
+    if cargo:
+        return cargo
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    candidates = [home / '.cargo/bin/cargo']
+    if os.environ.get('CARGO_HOME'):
+        candidates.insert(0, Path(os.environ['CARGO_HOME']).expanduser() / 'bin/cargo')
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            # Keep the rustup shim path, not its resolved rustup executable.
+            candidate = candidate.absolute()
+            os.environ['PATH'] = str(candidate.parent) + os.pathsep + os.environ.get('PATH', '')
+            return str(candidate)
+    raise ValueError('Cargo was not found on PATH, in CARGO_HOME/bin or in ~/.cargo/bin; install/source your Rust toolchain first.')
+
+
+def completion(path, family, compression, sdu, seconds):
+    records = [json.loads(line[len(PREFIX):]) for line in path.read_text(errors='replace').splitlines() if line.startswith(PREFIX)]
+    if len(records) != 1:
+        raise ValueError('missing or duplicate verified workload completion')
+    result = records[0]
+    if not (result.get('status') == 'valid' and result.get('schema_version') == 1
+            and result.get('workload_version') == 1 and result.get('family') == family
+            and result.get('compression') == compression and result.get('sdu') == sdu
+            and result.get('requested_seconds') == seconds and result.get('payload_bytes') == 1048576
+            and type(result.get('verified_cycles')) is int and 0 < result['verified_cycles'] <= 10000
+            and type(result.get('compression_used_cycles')) is int
+            and 0 <= result['compression_used_cycles'] <= result['verified_cycles']
+            and (compression or result['compression_used_cycles'] == 0)
+            and result.get('warmup_cycles') == 1 and type(result.get('elapsed_seconds')) in (int, float)
+            and math.isfinite(result['elapsed_seconds']) and result['elapsed_seconds'] >= seconds):
+        raise ValueError('invalid verified workload completion')
+    return result
+
+def matrix(manifest):
+    family, setting = manifest['family'], manifest['compression']
+    if (manifest.get('schema_version') != 1 or manifest.get('cpu_profile_version') != 1
+            or family not in ['all', 'repeated', 'seeded', 'sha256-counter']
+            or setting not in ['both', 'on', 'off'] or manifest['sdu'] not in [464, 16348]
+            or type(manifest['seconds_per_cell']) is not int or not 1 <= manifest['seconds_per_cell'] <= 30):
+        raise ValueError('unsupported CPU manifest')
+    families = ['repeated', 'seeded', 'sha256-counter'] if family == 'all' else [family]
+    settings = [False, True] if setting == 'both' else [setting == 'on']
+    return [(family, compression) for family in families for compression in settings]
+
+
+def postprocess(cell, family, compression, sdu, seconds):
+    capture_status = cell / 'capture-status.json'
+    if capture_status.exists() and json.loads(capture_status.read_text()).get('exit_code') != 0:
+        raise ValueError('recording did not complete successfully: ' + cell.name)
+    result = completion(cell / 'capture.stderr', family, compression, sdu, seconds)
+    raw = cell / 'capture.stdout'
+    # perf understands its pipe-format header even when stored in a regular file.
+    # Do not run inject on a saved pipe: some versions corrupt its output header.
+    data = cell / 'perf.data'
+    raw_hash = hashlib.sha256(raw.read_bytes()).hexdigest()
+    if data.exists() and hashlib.sha256(data.read_bytes()).hexdigest() != raw_hash:
+        data.rename(cell / ('perf.data.before-repair-' + str(time.time_ns())))
+    if not data.exists():
+        shutil.copy2(raw, data)
+    for name, options in [('self', ['--no-children', '--call-graph', 'none', '--sort', 'dso,symbol']),
+                          ('callers', ['--children', '--call-graph', 'graph,0.5,caller']),
+                          ('events', ['--stats'])]:
+        if execute(['perf', 'report', '--stdio', '--percent-limit', '0', '-i', str(data)] + options, cell, name, 60):
+            raise RuntimeError('perf report failed: ' + cell.name)
+    for name in ['self', 'callers']:
+        text = (cell / (name + '.stdout')).read_text(errors='replace')
+        if '# Samples:' not in text or '# Overhead' not in text and '# Children' not in text:
+            raise RuntimeError('missing CPU symbol report: ' + cell.name + '/' + name)
+    if execute(['perf', 'script', '-i', str(data)], cell, 'stacks', 60):
+        raise RuntimeError('perf stack export failed: ' + cell.name)
+    stacks = (cell / 'stacks.stdout').read_text(errors='replace')
+    blocks = [b for b in stacks.split('\n\n') if 'cpu-clock' in b]
+    if not blocks or not any('\n\t' in block for block in blocks):
+        raise RuntimeError('empty CPU call-stack trace: ' + cell.name)
+    result['postprocess_version'] = 2
+    result['capture_sha256'] = raw_hash
+    result['trace_blocks'] = len(blocks)
+    result['unknown_frame_lines'] = sum('[unknown]' in line for line in stacks.splitlines())
+    result['quality_note'] = 'inspect event stats, stderr and caller chains for loss/truncation; nonempty trace is not a quality guarantee'
+    write_json(cell / 'result.json', result)
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--output', type=Path)
+    modes.add_argument('--resume', type=Path, help='reuse recorded cells and capture only cells never started, using the frozen executable')
+    modes.add_argument('--report-only', type=Path, help='repair/regenerate existing captures without recording or privileges')
+    parser.add_argument('--family', choices=['all', 'repeated', 'seeded', 'sha256-counter'])
+    parser.add_argument('--compression', choices=['both', 'on', 'off'])
+    parser.add_argument('--sdu', type=int, choices=[464, 16348])
+    parser.add_argument('--seconds', type=int, choices=range(1, 31), metavar='1..30')
+    parser.add_argument('--sudo', action='store_true', help='explicitly use sudo -n for perf record only; never changes kernel settings')
+    args = parser.parse_args()
+    try:
+        require_user()
+    except ValueError as error:
+        parser.error(str(error))
+    existing = args.resume or args.report_only
+    if existing and any(value is not None for value in [args.family, args.compression, args.sdu, args.seconds]):
+        parser.error('resume/report uses the retained manifest; do not override workload options')
+    directory = (existing or args.output or ROOT / 'target/bench-results' / ('cpu-' + str(time.time_ns()))).resolve()
+    if not existing:
+        try:
+            directory.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            parser.error('output directory must not already exist: ' + str(directory))
+        manifest = {'schema_version': 1, 'cpu_profile_version': 1, 'seconds_per_cell': args.seconds or 3,
+                    'family': args.family or 'all', 'compression': args.compression or 'both', 'sdu': args.sdu or 16348,
+                    'event': 'cpu-clock:u', 'frequency_hz': 99, 'call_graph': 'dwarf,16384',
+                    'privileged_record': args.sudo, 'uid': os.getuid(),
+                    'boundary': 'whole child process including startup, fixture creation, warmup, key setup, metrics polling and teardown',
+                    'qualification': 'sampled CPU attribution, not timing/throughput baseline; inspect lost samples and unknown frames',
+                    'loadavg': Path('/proc/loadavg').read_text().strip(),
+                    'perf_event_paranoid': Path('/proc/sys/kernel/perf_event_paranoid').read_text().strip()}
+        manifest['expected_cases'] = len(matrix(manifest))
+        write_json(directory / 'manifest.json', manifest)
+        write_json(directory / 'status.json', {'status': 'interrupted'})
+    cases = []
+    try:
+        if existing:
+            manifest = json.loads((directory / 'manifest.json').read_text())
+            matrix(manifest)
+            if args.resume and args.sudo != manifest['privileged_record']:
+                raise ValueError('resume must preserve the original --sudo setting')
+            write_json(directory / ('history-' + str(time.time_ns()) + '.json'), {
+                'previous_status': json.loads((directory / 'status.json').read_text()),
+                'action': 'report-only' if args.report_only else 'resume', 'loadavg': Path('/proc/loadavg').read_text().strip(),
+                'driver_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+        if sys.platform != 'linux' or not shutil.which('perf'):
+            raise RuntimeError('Linux perf required')
+        binary = directory / 'profiler.bin'
+        if existing and hashlib.sha256(binary.read_bytes()).hexdigest() != manifest['executable_sha256']:
+            raise ValueError('frozen executable does not match original manifest')
+        seconds, sdu = manifest['seconds_per_cell'], manifest['sdu']
+        pending = []
+        for family, compression in matrix(manifest):
+            cell = directory / f'{family}-compress{str(compression).lower()}-sdu{sdu}'
+            if cell.exists():
+                print('Processing retained capture ' + cell.name, flush=True)
+                postprocess(cell, family, compression, sdu, seconds)
+                cases.append(cell.name)
+            else:
+                pending.append((cell, family, compression))
+        if args.report_only or not pending:
+            write_json(directory / 'status.json', {'status': 'incomplete' if pending else 'complete', 'verified_cases': cases,
+                                                   'pending_cases': [cell.name for cell, _, _ in pending]})
+            print(f'Recovered {len(cases)} cases; {len(pending)} never-started cases remain.')
+            return 0
+        prefix = ['sudo', '-n'] if args.sudo else []
+        probe = prefix + ['perf', 'record', '-q', '--no-buildid-cache', '-e', 'cpu-clock:u',
+                          '-F', '99', '--call-graph', 'dwarf,16384', '-o', '-', '--', '/bin/true']
+        manifest['perf_version'] = subprocess.check_output(['perf', '--version'], text=True).strip()
+        manifest['capability_command'] = probe
+        write_json(directory / 'manifest.json', manifest)
+        probe_name = 'capability-' + str(time.time_ns()) if existing else 'capability'
+        if execute(probe, directory, probe_name, 15):
+            write_json(directory / 'status.json', {'status': 'incomplete' if cases else 'unsupported', 'verified_cases': cases,
+                                                   'reason': 'CPU sampling unavailable; see ' + probe_name + '.stderr'})
+            print('CPU sampling unavailable; diagnostics: ' + str(directory / (probe_name + '.stderr')), file=sys.stderr)
+            return 1
+        if not existing:
+            build = [discover_cargo(), 'build', '--locked', '--profile', 'profiling', '-p', 'rns-bench',
+                     '--target-dir', str(ROOT / 'target/cpu-profiler')]
+            manifest['build_command'] = build
+            write_json(directory / 'manifest.json', manifest)
+            print('Building symbolized profiler...', flush=True)
+            if execute(build, directory, 'build', 600, cap_files=False):
+                raise RuntimeError('profiling build failed; see build.stderr')
+            shutil.copy2(ROOT / 'target/cpu-profiler/profiling/rns-bench', binary)
+            if execute([str(binary), 'doctor'], directory, 'environment', 30):
+                raise RuntimeError('environment capture failed')
+            manifest['environment'] = json.loads((directory / 'environment.stdout').read_text())
+            manifest['executable_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
+            write_json(directory / 'manifest.json', manifest)
+        for cell, family, compression in pending:
+            cell.mkdir()
+            command = prefix + ['perf', 'record', '--no-buildid-cache', '-e', 'cpu-clock:u', '-F', '99',
+                                 '--call-graph', 'dwarf,16384', '-o', '-', '--', str(binary),
+                                 'cpu-workload', family, str(compression).lower(), str(sdu), str(seconds)]
+            write_json(cell / 'command.json', command)
+            print('Sampling ' + cell.name, flush=True)
+            code = execute(command, cell, 'capture', seconds + 65)
+            write_json(cell / 'capture-status.json', {'exit_code': code})
+            if code:
+                raise RuntimeError('perf/workload failed: ' + cell.name)
+            postprocess(cell, family, compression, sdu, seconds)
+            cases.append(cell.name)
+            write_json(directory / 'status.json', {'status': 'interrupted', 'verified_cases': cases})
+        write_json(directory / 'status.json', {'status': 'complete', 'verified_cases': cases})
+        print('CPU artifacts: ' + str(directory))
+        return 0
+    except KeyboardInterrupt:
+        write_json(directory / 'status.json', {'status': 'interrupted', 'verified_cases': cases})
+        print('Interrupted; retained artifacts: ' + str(directory), file=sys.stderr)
+        return 130
+    except Exception as error:
+        write_json(directory / 'status.json', {'status': 'failed', 'error': str(error), 'verified_cases': cases})
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

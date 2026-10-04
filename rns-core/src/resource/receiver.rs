@@ -483,16 +483,27 @@ impl ResourceReceiver {
 
         self.status = ResourceStatus::Assembling;
 
-        // Join all parts
-        let mut stream = Vec::new();
+        // Size from the parts actually held, not the advertised transfer size.
+        // Reserving once avoids geometric growth and copying the joined prefix.
+        let mut stream_len = 0usize;
         for part in &self.parts {
             match part {
-                Some(data) => stream.extend_from_slice(data),
+                Some(data) => match stream_len.checked_add(data.len()) {
+                    Some(len) => stream_len = len,
+                    None => {
+                        self.status = ResourceStatus::Failed;
+                        return vec![ResourceAction::Failed(ResourceError::TooLarge)];
+                    }
+                },
                 None => {
                     self.status = ResourceStatus::Failed;
                     return vec![ResourceAction::Failed(ResourceError::InvalidState)];
                 }
             }
+        }
+        let mut stream = Vec::with_capacity(stream_len);
+        for data in self.parts.iter().flatten() {
+            stream.extend_from_slice(data);
         }
 
         // Decrypt
@@ -742,6 +753,51 @@ mod tests {
                 .unwrap();
 
         (sender, receiver)
+    }
+
+    #[test]
+    fn test_assembly_joins_actual_parts_independent_of_advertised_size() {
+        let (mut sender, mut receiver) = make_sender_receiver();
+        let mut stream = Vec::new();
+        for action in receiver.accept(1001.0) {
+            if let ResourceAction::SendRequest(request) = action {
+                for response in sender.handle_request(&request, 1002.0) {
+                    if let ResourceAction::SendPart(part) = response {
+                        stream.extend_from_slice(&part);
+                    }
+                }
+            }
+        }
+        // Exercise uneven parts and a misleading size without allocating from it.
+        receiver.parts = stream.chunks(7).map(|part| Some(part.to_vec())).collect();
+        receiver.total_parts = receiver.parts.len();
+        receiver.received_count = receiver.total_parts;
+        receiver.transfer_size = u64::MAX;
+        let actions = receiver.assemble(
+            &|joined| {
+                assert_eq!(joined, stream);
+                identity_decrypt(joined)
+            },
+            &NoopCompressor,
+        );
+        assert!(actions.iter().any(|action| matches!(action,
+            ResourceAction::DataReceived { data, .. } if data == b"Hello, Resource Transfer!")));
+        assert_eq!(receiver.status, ResourceStatus::Complete);
+    }
+
+    #[test]
+    fn test_assembly_rejects_missing_part_before_decryption() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.received_count = receiver.total_parts;
+        let actions = receiver.assemble(
+            &|_| panic!("missing part reached decryption"),
+            &NoopCompressor,
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [ResourceAction::Failed(ResourceError::InvalidState)]
+        ));
+        assert_eq!(receiver.status, ResourceStatus::Failed);
     }
 
     #[test]

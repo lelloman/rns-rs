@@ -329,6 +329,79 @@ pub(crate) fn cycle_observed(
     })
 }
 
+/// A bounded, correctness-checked workload for an external process profiler.
+/// Whole-process sampling includes warmup, key setup, metrics and teardown.
+pub fn cpu_workload(family: &str, compression: bool, sdu: usize, seconds: u64) -> Result<()> {
+    ensure!(
+        !cfg!(debug_assertions) && !cfg!(feature = "allocation-profiler"),
+        "CPU sampling requires an optimized, non-allocation-instrumented build"
+    );
+    ensure!(
+        matches!(family, "repeated" | "seeded" | "sha256-counter")
+            && matches!(sdu, 464 | 16348)
+            && (1..=30).contains(&seconds),
+        "unsupported CPU workload configuration"
+    );
+    let data = payload(family, 1048576);
+    cycle(&data, family, compression, sdu, 0)?;
+    let start = Instant::now();
+    let mut verified_cycles = 0;
+    let mut compression_used_cycles = 0;
+    while start.elapsed().as_secs_f64() < seconds as f64 {
+        ensure!(
+            verified_cycles < 10000,
+            "CPU workload iteration budget exceeded"
+        );
+        let sample = cycle(&data, family, compression, sdu, verified_cycles)?;
+        compression_used_cycles += usize::from(sample.compression_used);
+        verified_cycles += 1;
+    }
+    ensure!(verified_cycles > 0, "empty CPU workload");
+    // stderr stays separate from perf's binary stdout when recording a pipe.
+    eprintln!(
+        "RNS_BENCH_CPU_RESULT {}",
+        serde_json::json!({
+            "schema_version":1,"workload_version":1,"status":"valid","family":family,
+            "payload_bytes":data.len(),"compression":compression,"sdu":sdu,
+            "requested_seconds":seconds,"verified_cycles":verified_cycles,
+            "compression_used_cycles":compression_used_cycles,"warmup_cycles":1,
+            "elapsed_seconds":start.elapsed().as_secs_f64(),
+            "boundary":"whole process including fixture generation, warmup, key setup, metrics polling, verified cycles and teardown; not a throughput benchmark"
+        })
+    );
+    Ok(())
+}
+
+/// Fixed work for external malloc tracing, including native codec allocations.
+pub fn native_workload(family: &str, compression: bool, sdu: usize, cycles: usize) -> Result<()> {
+    ensure!(
+        !cfg!(debug_assertions) && !cfg!(feature = "allocation-profiler"),
+        "native allocation tracing requires an optimized, uninstrumented build"
+    );
+    ensure!(
+        matches!(family, "repeated" | "seeded" | "sha256-counter")
+            && matches!(sdu, 464 | 16348)
+            && (1..=10).contains(&cycles),
+        "unsupported native allocation workload"
+    );
+    let data = payload(family, 1048576);
+    let mut used = 0;
+    for repetition in 0..cycles {
+        used += usize::from(cycle(&data, family, compression, sdu, repetition)?.compression_used);
+    }
+    eprintln!(
+        "RNS_BENCH_NATIVE_RESULT {}",
+        serde_json::json!({
+            "schema_version":1,"workload_version":1,"status":"valid",
+            "family":family,"compression":compression,"sdu":sdu,
+            "payload_bytes":data.len(),"verified_cycles":cycles,"compression_used_cycles":used,
+            "warmup_cycles":0,
+            "boundary":"whole process: fixture generation, verified cycles, reporting and teardown; no timing interpretation"
+        })
+    );
+    Ok(())
+}
+
 pub fn run(root: &Path, output: Option<PathBuf>) -> Result<()> {
     ensure!(!cfg!(debug_assertions), "profiling requires release build");
     let dir = output.unwrap_or_else(|| {

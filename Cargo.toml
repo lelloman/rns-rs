@@ -26,3 +26,9 @@ opt-level = 2
 
 [profile.test.package.rns-crypto]
 opt-level = 2
+
+# Optimized benchmark executable with symbols for external CPU profilers.
+[profile.profiling]
+inherits = "release"
+debug = 2
+strip = "none"
