@@ -11,6 +11,8 @@ use rns_crypto::identity::Identity;
 use rns_crypto::FixedRng;
 use std::hint::black_box;
 
+// Borrow batched state so engine teardown is excluded from operation timings.
+
 fn make_config(transport_enabled: bool) -> TransportConfig {
     TransportConfig {
         transport_enabled,
@@ -134,7 +136,7 @@ fn bench_announce_fanout(c: &mut Criterion) {
     group.sample_size(10);
     group.throughput(Throughput::Elements(8));
     group.bench_function("outbound_fanout_8_interfaces", |b| {
-        b.iter_batched(
+        b.iter_batched_ref(
             || {
                 let mut engine = TransportEngine::new(make_config(true));
                 for id in 0..8 {
@@ -142,7 +144,7 @@ fn bench_announce_fanout(c: &mut Criterion) {
                 }
                 engine
             },
-            |mut engine| {
+            |engine| {
                 black_box(engine.handle_outbound(
                     &packet,
                     constants::DESTINATION_SINGLE,
@@ -162,14 +164,14 @@ fn bench_path_table_churn(c: &mut Criterion) {
     group.sample_size(10);
     group.throughput(Throughput::Elements(packets.len() as u64));
     group.bench_function("inbound_announce_insert_128", |b| {
-        b.iter_batched(
+        b.iter_batched_ref(
             || {
                 let mut engine = TransportEngine::new(make_config(true));
                 engine.register_interface(make_interface(1, constants::MODE_FULL, false));
                 let rng = FixedRng::new(&[0x5A; 128]);
                 (engine, rng)
             },
-            |(mut engine, mut rng)| {
+            |(engine, rng)| {
                 for packet in &packets {
                     black_box(engine.handle_inbound(
                         InboundFrame {
@@ -181,7 +183,7 @@ fn bench_path_table_churn(c: &mut Criterion) {
                                 snr: None,
                             },
                         },
-                        &mut rng,
+                        rng,
                     ));
                 }
                 black_box(engine.path_table_count())
