@@ -110,6 +110,28 @@ impl<'a> InboundFrame<'a> {
     }
 }
 
+/// A syntactically decoded packet. Routing/admission is rechecked on every use.
+/// Fields are read-only so cached hashes cannot diverge from the parsed bytes.
+pub struct DecodedPacket(RawPacket);
+
+impl DecodedPacket {
+    pub fn unpack(raw: &[u8]) -> Result<Self, crate::packet::PacketError> {
+        RawPacket::unpack(raw).map(Self)
+    }
+
+    pub fn packet(&self) -> &RawPacket {
+        &self.0
+    }
+}
+
+/// Decoded bytes plus the current receive context; no admission decision cached.
+pub struct DecodedInboundFrame {
+    pub decoded: DecodedPacket,
+    pub iface: InterfaceId,
+    pub now: f64,
+    pub rx: RxMetadata,
+}
+
 struct InboundPacketCtx {
     packet: RawPacket,
     original_raw: Option<Vec<u8>>,

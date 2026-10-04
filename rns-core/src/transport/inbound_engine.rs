@@ -46,7 +46,29 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
     ) -> Vec<TransportAction> {
-        let Some(ctx) = self.prepare_inbound_packet(frame) else {
+        let Ok(decoded) = DecodedPacket::unpack(frame.raw) else {
+            return Vec::new();
+        };
+        self.handle_decoded_inbound_with_announce_queue(
+            DecodedInboundFrame {
+                decoded,
+                iface: frame.iface,
+                now: frame.now,
+                rx: frame.rx,
+            },
+            rng,
+            announce_queue,
+        )
+    }
+
+    /// Recheck current routing/filter state and consume a previously decoded frame.
+    pub fn handle_decoded_inbound_with_announce_queue(
+        &mut self,
+        frame: DecodedInboundFrame,
+        rng: &mut dyn Rng,
+        announce_queue: Option<&mut AnnounceVerifyQueue>,
+    ) -> Vec<TransportAction> {
+        let Some(ctx) = self.prepare_decoded_packet(frame) else {
             return Vec::new();
         };
         let mut actions = Vec::new();
@@ -69,29 +91,50 @@ impl TransportEngine {
         &self,
         frame: InboundFrame<'_>,
     ) -> Option<InboundPacketCtx> {
-        let mut packet = RawPacket::unpack(frame.raw).ok()?;
+        let decoded = DecodedPacket::unpack(frame.raw).ok()?;
+        self.prepare_decoded_packet(DecodedInboundFrame {
+            decoded,
+            iface: frame.iface,
+            now: frame.now,
+            rx: frame.rx,
+        })
+    }
+
+    pub(super) fn filtered_inbound_hops(
+        &self,
+        packet: &RawPacket,
+        iface: InterfaceId,
+    ) -> Option<(u8, bool)> {
         let from_local_client = self
             .interfaces
-            .get(&frame.iface)
-            .map(|i| i.is_local_client)
-            .unwrap_or(false);
-        packet.hops = packet.hops.checked_add(1)?;
+            .get(&iface)
+            .is_some_and(|i| i.is_local_client);
+        let mut hops = packet.hops.checked_add(1)?;
+        if from_local_client {
+            hops = hops.saturating_sub(1);
+        }
+        self.packet_filter_at_hops(packet, hops)
+            .then_some((hops, from_local_client))
+    }
+
+    pub fn accepts_decoded_packet(&self, decoded: &DecodedPacket, iface: InterfaceId) -> bool {
+        self.filtered_inbound_hops(&decoded.0, iface).is_some()
+    }
+
+    pub(super) fn prepare_decoded_packet(
+        &self,
+        frame: DecodedInboundFrame,
+    ) -> Option<InboundPacketCtx> {
+        let mut packet = frame.decoded.0;
+        let (hops, from_local_client) = self.filtered_inbound_hops(&packet, frame.iface)?;
+        packet.hops = hops;
         packet.rssi = frame.rx.rssi;
         packet.snr = frame.rx.snr;
-        if from_local_client {
-            packet.hops = packet.hops.saturating_sub(1);
-        }
-        if !self.packet_filter(&packet) {
-            return None;
-        }
         let retain_original_raw = packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE;
+        let original_raw = retain_original_raw.then(|| packet.raw.clone());
         Some(InboundPacketCtx {
             packet,
-            original_raw: if retain_original_raw {
-                Some(frame.raw.to_vec())
-            } else {
-                None
-            },
+            original_raw,
             iface: frame.iface,
             now: frame.now,
             from_local_client,
