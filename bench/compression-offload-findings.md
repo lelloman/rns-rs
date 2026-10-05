@@ -340,3 +340,135 @@ Local artifacts: `.local/receiver-stages/` contains `instrument.py`, the exact
 host load. The runner's clean-checkout revision alone omits the temporary
 instrumentation; the diagnostic patch and frozen binary hashes identify the
 actual measured executable.
+
+## Bounded receive-worker screening (2026-10-05)
+
+Decision: proceed to production design for receive-side offload. The local
+prototype materially improves compressed-Resource echo responsiveness in both
+affinity modes, especially seeded payloads. It is **not production code**: its
+memory admission, startup/error handling and timeout policy still need work.
+No receive-worker environment switch or source change is retained in the tree.
+
+### Handoff, bounds and validation
+
+The driver joins parts and authenticates/decrypts them before handing owned
+plaintext to a persistent worker. The worker performs bounded decompression,
+Resource hash verification, metadata extraction and proof construction. The
+driver retains an assembling marker and publishes actions only when the link
+is active, its generation matches, the unique job still identifies that
+Resource, and it has not been cancelled. Duplicate parts cannot reassemble the
+marker; periodic cleanup retains it. Unsupported paths stay synchronous.
+
+Eligibility is compressed, nonsplit application Resources delivered to memory,
+with advertised data between 16 KiB and the efficient single-segment limit.
+The advertisement selects eligibility but **does not lower the decode bound**.
+The prototype allows four jobs and 256 MiB of accounting reservations. It charges
+three times retained input/state capacity plus three times the decoder output
+limit and fixed overhead, covering the snapshot, joined/decrypted input,
+output growth and metadata copy. Cancellation and completed-but-unconsumed
+results keep their reservation. Native decoder workspace, thread stack,
+allocator overhead and unrelated node work are additional; this is not a
+whole-node memory cap or a 256 MiB allocation made at startup.
+
+The existing decode limit is 64 MiB, so default-limit jobs each reserve over
+192 MiB and **only one fits**. A small advertised payload cannot justify a
+smaller worst-case reservation. This deliberately conservative design is useful
+for screening, not an adopted admission default. Other-link saturation uses
+synchronous assembly; a same-link barrier finishes older work first, preserving
+completion order but potentially blocking the driver again.
+
+Validation passed: **661 core and 1,007 network unit tests**, plus **59 e2e
+tests with the worker enabled**. Five prototype unit tests cover authentication
+failure, decode bounds, hash/metadata handling, duplicate parts, FIFO/full wake
+queue, job/byte admission, cancelled-result retention, joined shutdown, worker
+panic recovery, stale link generations, cancellation, timeout and tick cleanup.
+A separate live compressed burst verifies 12 payloads/metadata and all 12
+completion proofs; diagnostics confirm all 12 used the receive worker. Synthetic
+queue tests use small reservations to exercise multiple jobs. They do not
+qualify adversarial peak memory or prolonged overload.
+
+### Uninstrumented timing comparison
+
+The baseline is `03f70ac` with only the local custom-case adapter. The candidate
+adds the local prototype. Frozen profiling/System/portable executables run
+three alternating pairs for each of five families in each affinity mode: one
+warmup plus ten measured rounds, 512 KiB Resources, 128 echoes every 2 ms on
+another link, Resource start at 20 ms. One-CPU mode shares a single logical CPU
+between controller and both endpoints. Host load/frequency remain uncontrolled.
+No stage logging, RSS polling, builds or tests overlapped this matrix.
+
+All **60 cases, 528 Resources and 84,480 echoes** passed, including warmups.
+Pooled measured echo RTT p99, milliseconds:
+
+| Payload | Unpinned baseline | Unpinned candidate | One-CPU baseline | One-CPU candidate |
+| --- | ---: | ---: | ---: | ---: |
+| Probes only | 0.42 | 0.44 | 4.60 | 3.68 |
+| Seeded | 111.04 | 3.37 | 23.25 | 5.53 |
+| SHA-256 counter | 3.68 | 4.01 | 6.51 | 4.81 |
+| Random first half | 19.64 | 1.62 | 12.33 | 3.90 |
+| Repeated random block | 9.29 | 6.22 | 6.44 | 3.60 |
+
+Seeded and half-random improve in all three pairs in both modes. All three
+one-CPU repeated-block pairs also improve. Retain the exceptions: unpinned
+repeated-block pairs are 8.28 → 0.38, 13.14 → 3.33 and **7.63 → 10.40 ms**;
+unpinned SHA-256 counter worsens in every pair (3.65 → 3.76, 2.52 → 3.02,
+4.47 → 5.13). SHA-256 counter selects uncompressed transmission and creates
+no receive job. Its comparison still includes the prototype's eager idle
+thread, polling and assembly refactor, so it is an important control.
+
+One-CPU median Resource completion increases by 1.32, 1.15, 0.55 and 0.66 ms
+for seeded, SHA-256 counter, half-random and repeated-block respectively.
+Unpinned repeated-block completion rises from 147.40 to 159.64 ms. This is a
+fairness candidate, not a general throughput/CPU improvement. Receiver CPU
+per train is mixed: unpinned SHA-256 counter rises from 33.53 to 39.69 ms and
+repeated-block from 34.45 to 44.10 ms; one-CPU seeded is almost unchanged,
+45.68 → 45.80 ms. CPU values include all receiver process threads.
+
+### Separate queue and memory diagnostic
+
+Eight additional valid cases compare both binaries across the four loaded
+families, with the same warmup/round count. Candidate job logging and a separate
+controller sampling `/proc` RSS at a target 10 ms run only in this pass. Each
+compressed candidate case records 11 jobs; SHA-256 counter records none.
+Measured queue medians are 0.011–0.019 ms and the largest measured wait is
+0.026 ms. These sequential transfers do not exercise a backed-up receive queue.
+
+Observed receiver RSS maxima, MiB (samples, **not guaranteed peaks**):
+
+| Payload | Baseline | Candidate |
+| --- | ---: | ---: |
+| Seeded | 36.93 | 35.66 |
+| SHA-256 counter | 34.19 | 33.09 |
+| Random first half | 35.59 | 34.02 |
+| Repeated random block | 34.03 | 34.04 |
+
+Maximum polling gaps range from 10.4 to 15.7 ms and can miss shorter allocations.
+In the separate uninstrumented matrices, warm post-load seeded receiver RSS
+instead rises by 2.20 MiB unpinned and 2.42 MiB on one CPU. The two observations
+measure different points in allocation lifetimes; neither establishes a memory
+reduction, strict peak bound, or sustained slow-peer behavior.
+
+### Production work remaining
+
+Replace the prototype's cloned receiver snapshot with a consuming assembly
+handoff and explicit completion state. Keep authentication before decoding and
+the existing output limit; do not shrink that limit using untrusted advertised
+size to make admission look cheaper. Make worker startup lazy, recover from
+startup/disconnection failures, and specify saturation/order behavior. Replace
+the experimental 30-second assembly deadline with a lifecycle policy grounded
+in existing protocol timeouts and drain semantics. The prototype intentionally
+asserts on unexpected worker disconnection; it is not a production fallback.
+
+Then repeat lifecycle/overload tests and a matched timing/memory comparison on
+the actual implementation. Split/file/request/response paths remain outside
+this slice. The results justify this next implementation step, not marking
+all interference or memory qualification complete.
+
+Reproduction artifacts are under `.local/receiver-offload/`: `candidate.patch`
+(including unit tests), `fixture.patch`, `compressed-burst.patch`, `admission-validation.patch`, both frozen
+binaries, build/test logs, host/compiler information, matrix scripts/manifests,
+validated summaries and raw case events. Manifests hash both executables and
+source patches. `diagnostic/` additionally contains per-process RSS samples and
+queue/service timings. The extra compressed-burst test and strengthened byte-admission assertions ran
+after all timing and memory measurements; they do not change the measured
+benchmark code.
