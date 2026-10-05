@@ -472,3 +472,135 @@ source patches. `diagnostic/` additionally contains per-process RSS samples and
 queue/service timings. The extra compressed-burst test and strengthened byte-admission assertions ran
 after all timing and memory measurements; they do not change the measured
 benchmark code.
+
+## Production receiver worker (2026-10-05)
+
+Retained as `436a101` (owning assembly handoff) and `7f8bcf3` (network worker).
+This supersedes the screening prototype for eligible compressed application
+Resources. The reason to retain it is the repeated responsiveness improvement;
+bulk completion and some controls regress, as recorded below.
+
+### Implementation and correctness
+
+The driver joins and authenticates/decrypts parts, then hands owned plaintext
+and fixed verification fields to a lazy, persistent node-owned worker. The
+worker decompresses, verifies the Resource hash, extracts metadata and constructs
+the proof. The receiver keeps a unique assembly identity; consuming results
+cannot be applied to a different receiver, even with the same Resource hash.
+Cancelled, replaced or closed-link results are discarded before delivery/proof
+publication. Synchronous callers use the same assembly logic without allocating
+an asynchronous identity. No cloned receiver snapshot is retained.
+
+Admission is four jobs/256 MiB, charging actual plaintext capacity, three times
+the decode bound and fixed job overhead. The three output bounds cover growable
+output, temporary hash/proof input and metadata extraction; cancellation and
+unconsumed completions remain charged. The unchanged 64 MiB decoder limit
+permits **one default-limit job**. These are accounting reservations, not eager
+allocations. Native decoder workspace, allocator overhead, thread stack and
+unrelated node memory remain additional. Advertised size selects eligibility
+but never reduces the output reservation.
+
+Eligibility remains compressed, nonsplit application data delivered to memory,
+16 KiB through the efficient segment limit. Startup or admission failure uses
+synchronous assembly; failed submission reuses the authenticated handoff.
+Same-link assembly barriers preserve completion order, including unsupported
+paths, and can block under overload. A disconnected worker fails its lost jobs
+locally, releases reservations and permits lazy restart. Codec panics become
+local failures rather than peer protocol violations. Full wake queues cannot
+block result publication or joined shutdown.
+
+There is **no new 30-second assembly timeout**. Part-receive timers stop while
+assembling; existing link cancellation, teardown and node drain deadlines still
+invalidate results. Both forced drain and shutdown stop/join the worker before
+returning. A running native codec call may finish before joining; queued jobs
+are discarded. Standalone LinkManager users without the node wake integration
+remain synchronous.
+
+Validation: **664 core unit tests, 1,014 network unit tests and 60 e2e tests**
+pass; default all-target network Clippy with warnings denied, core Clippy,
+formatting and the core `no_std` check pass. The final minimal-feature network
+check passes with existing feature-specific warnings. Twelve worker tests cover
+admission arithmetic/capacity, FIFO, full wake queues, cancellation, wrong
+link/resource generations, tick retention, corrupt results, panic/disconnection
+recovery, startup failure, saturation, ordering and joined drain/shutdown.
+The e2e compressed burst verifies 12 payloads/metadata and 12 completion proofs.
+
+Review caught an action-conversion bug before retention: a preceding application
+completion could be consumed by a following request/response conversion. A
+regression test failed on that code and now verifies both real request and
+response flows while preserving the earlier application delivery. All final
+measurements below were rebuilt and rerun after this fix.
+
+### Corrected production comparison
+
+Same workload as screening: 512 KiB, 128 echoes every 2 ms, bulk start at 20 ms,
+three alternating pairs, one warmup plus ten measured rounds, five families,
+two affinity modes. Portable profiling/System builds; one-CPU mode shares one
+logical CPU across controller and both endpoints. The unchanged baseline is
+the frozen `03f70ac` executable plus the local case adapter; the candidate
+includes both production commits above. Host load/frequency are uncontrolled.
+No builds, tests, stage logging or RSS sampling overlapped timing measurements.
+
+All **60 cases, 528 Resources and 84,480 echoes** pass, including warmups.
+Pooled measured echo RTT p99, milliseconds:
+
+| Payload | Unpinned baseline | Unpinned worker | One-CPU baseline | One-CPU worker |
+| --- | ---: | ---: | ---: | ---: |
+| Probes only | 0.38 | 0.39 | 0.55 | 0.51 |
+| Seeded | 42.97 | 2.63 | 22.56 | 4.28 |
+| SHA-256 counter | 2.63 | 4.54 | 4.45 | 4.49 |
+| Random first half | 18.12 | 8.92 | 11.20 | 3.47 |
+| Repeated random block | 8.16 | 0.37 | 6.21 | 4.03 |
+
+Every pair improves for each compressed family in both modes. Preserve the
+uncompressed control regression: SHA-256 counter's unpinned pairs are
+3.08 → 6.67, 2.50 → 2.89 and 2.63 → 2.41 ms. That workload creates no receive
+worker; this comparison includes the shared assembly refactor and driver
+integration, not just thread placement. One unpinned half-random baseline pair
+has 261.89 ms p99; its extreme tail is retained in the raw/individual summaries,
+not used as evidence of a stable host-independent gain.
+
+Candidate minus baseline median Resource completion, milliseconds:
+
+| Payload | Unpinned | One shared CPU |
+| --- | ---: | ---: |
+| Seeded | +0.44 | +9.30 |
+| SHA-256 counter | +14.02 | +16.26 |
+| Random first half | +7.25 | +7.48 |
+| Repeated random block | +0.50 | +4.24 |
+
+These costs are larger than in screening and are not hidden or attributed to
+host noise without evidence. In particular, the high-entropy completion
+regression remains a follow-up item. Receiver CPU per train is mixed: seeded
+falls from 57.02 to 52.27 ms unpinned and 44.85 to 43.81 ms on one CPU, while
+unpinned half-random rises from 40.72 to 48.13 ms. No general CPU/throughput
+improvement or latency guarantee is claimed.
+
+### Memory evidence and remaining qualification
+
+A separate eight-case pass uses the corrected binaries with `/proc` RSS sampling
+at a target 10 ms. All cases pass. It adds no worker timing logs and does not
+measure production queue delay; screening queue timings are not relabelled as
+production results. Observed receiver RSS maxima, MiB:
+
+| Payload | Baseline | Worker |
+| --- | ---: | ---: |
+| Seeded | 37.09 | 35.78 |
+| SHA-256 counter | 34.96 | 33.07 |
+| Random first half | 35.44 | 34.11 |
+| Repeated random block | 34.23 | 33.99 |
+
+Sampling gaps reached 17.1 ms; these are not strict peaks. Warm post-load seeded
+receiver RSS in the timing matrices increases by 2.33 MiB unpinned and 2.47 MiB
+on one CPU. Neither set of snapshots qualifies sustained concurrent transfers,
+slow peers, adversarial decode expansion or whole-node memory.
+
+Authoritative production artifacts are under
+`.local/receiver-offload/production/final/`: frozen binaries, complete source
+patch, source hashes, build log, case manifests/results, validated summaries and
+separate RSS samples. The parent directory retains correctness logs and the
+superseded pre-fix matrix; the latter is excluded from the tables above. The
+local adapter and diagnostic scripts remain untracked/ignored. The next
+qualification work is sustained multi-link overload and memory behavior, plus
+attribution of the high-entropy completion cost. Split/file/request/response
+offload remains separate work; broad interference qualification is still open.
