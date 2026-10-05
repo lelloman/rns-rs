@@ -192,7 +192,7 @@ impl MockCallbacks {
     }
 }
 
-fn make_transport_config(transport_enabled: bool) -> TransportConfig {
+pub(super) fn make_transport_config(transport_enabled: bool) -> TransportConfig {
     TransportConfig {
         transport_enabled,
         identity_hash: None,
@@ -423,7 +423,7 @@ fn sent_contains_linkclose(sent: &[Vec<u8>], link_id: [u8; 16]) -> bool {
     })
 }
 
-fn active_link_manager_with_route(
+pub(super) fn active_link_manager_with_route(
     interface_id: InterfaceId,
 ) -> (crate::link_manager::LinkManager, [u8; 16]) {
     let mut rng = OsRng;

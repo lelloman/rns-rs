@@ -951,6 +951,7 @@ impl Driver {
     /// Run the event loop. Blocks until Shutdown or all senders are dropped.
     pub fn run(&mut self) {
         loop {
+            self.poll_resource_preparations();
             self.flush_pending_link_frames();
             let received = match self.rx.recv_classified() {
                 Ok(e) => e,
@@ -1196,6 +1197,7 @@ impl Driver {
                         let _ = (link_id, path, data, max_response_size);
                         continue;
                     }
+                    self.finish_resource_preparations_for(&link_id);
                     let link_actions = self.link_manager.send_request_with_max_response_size(
                         &link_id,
                         &path,
@@ -1210,6 +1212,7 @@ impl Driver {
                     request_id,
                     data,
                 } => {
+                    self.finish_resource_preparations_for(&link_id);
                     let link_actions = self.link_manager.send_deferred_response(
                         &link_id,
                         &request_id,
@@ -1238,6 +1241,7 @@ impl Driver {
                     let link_actions = self.link_manager.teardown_link(&link_id);
                     self.dispatch_link_actions(link_actions);
                 }
+                Event::ResourcePreparationReady => {}
                 Event::SendResource {
                     link_id,
                     data,
@@ -1249,14 +1253,7 @@ impl Driver {
                         let _ = (link_id, data, metadata, auto_compress);
                         continue;
                     }
-                    let link_actions = self.link_manager.send_resource_with_auto_compress(
-                        &link_id,
-                        &data,
-                        metadata.as_deref(),
-                        auto_compress,
-                        &mut self.rng,
-                    );
-                    self.dispatch_link_actions(link_actions);
+                    self.prepare_resource(link_id, data, metadata, auto_compress);
                 }
                 Event::SendResourceStream {
                     link_id,
@@ -1274,6 +1271,7 @@ impl Driver {
                         );
                         continue;
                     }
+                    self.finish_resource_preparations_for(&link_id);
                     let link_actions = self.link_manager.send_resource_stream(
                         &link_id,
                         transfer_id,
@@ -2089,6 +2087,7 @@ impl Driver {
                 }
             }
         }
+        self.stop_resource_preparations();
         self.event_tx.link_send_pool().close();
         self.pending_link_frames.clear();
     }

@@ -4,6 +4,7 @@ pub(super) struct ResourceSendParams<'a> {
     pub(super) data: &'a [u8],
     pub(super) metadata: Option<&'a [u8]>,
     pub(super) auto_compress: bool,
+    pub(super) compressor: &'a dyn rns_core::buffer::types::Compressor,
     pub(super) is_response: bool,
     pub(super) request_id: Option<Vec<u8>>,
     pub(super) rng: &'a mut dyn Rng,
@@ -24,6 +25,7 @@ impl LinkManager {
             data,
             metadata,
             auto_compress,
+            compressor,
             is_response,
             request_id,
             rng,
@@ -46,7 +48,7 @@ impl LinkManager {
                 metadata,
                 resource_sdu,
                 &encrypt_fn,
-                &Bzip2Compressor,
+                compressor,
                 rng,
                 now,
                 auto_compress,
@@ -85,7 +87,7 @@ impl LinkManager {
             metadata,
             resource_sdu,
             &encrypt_fn,
-            &Bzip2Compressor,
+            compressor,
             rng,
             now,
             auto_compress,
@@ -111,7 +113,7 @@ impl LinkManager {
                 None,
                 resource_sdu,
                 &encrypt_fn,
-                &Bzip2Compressor,
+                compressor,
                 rng,
                 now,
                 auto_compress,
@@ -1435,6 +1437,25 @@ impl LinkManager {
         auto_compress: bool,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
+        self.send_resource_with_compressor(
+            link_id,
+            data,
+            metadata,
+            auto_compress,
+            &Bzip2Compressor,
+            rng,
+        )
+    }
+
+    pub(crate) fn send_resource_with_compressor(
+        &mut self,
+        link_id: &LinkId,
+        data: &[u8],
+        metadata: Option<&[u8]>,
+        auto_compress: bool,
+        compressor: &dyn rns_core::buffer::types::Compressor,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
@@ -1452,6 +1473,7 @@ impl LinkManager {
                 data,
                 metadata,
                 auto_compress,
+                compressor,
                 is_response: false,
                 request_id: None,
                 rng,

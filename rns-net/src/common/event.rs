@@ -304,6 +304,8 @@ pub enum Event<W: Send> {
     },
     /// Tear down a link.
     TeardownLink { link_id: [u8; 16] },
+    /// Wake the driver to consume its private Resource preparation mailbox.
+    ResourcePreparationReady,
     /// Send a resource on a link.
     SendResource {
         link_id: [u8; 16],
@@ -1144,6 +1146,7 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("TeardownLink")
                 .field("link_id", link_id)
                 .finish(),
+            Event::ResourcePreparationReady => f.write_str("ResourcePreparationReady"),
             Event::SendResource { link_id, data, .. } => f
                 .debug_struct("SendResource")
                 .field("link_id", link_id)

@@ -251,6 +251,7 @@ impl LinkManager {
         let senders = match Self::build_resource_senders(
             link,
             ResourceSendParams {
+                compressor: &Bzip2Compressor,
                 data: resource_payload,
                 metadata,
                 auto_compress,
@@ -368,6 +369,7 @@ impl LinkManager {
             let senders = match Self::build_resource_senders(
                 link,
                 ResourceSendParams {
+                    compressor: &Bzip2Compressor,
                     data: &plaintext,
                     metadata: None,
                     auto_compress: true,
