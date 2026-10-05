@@ -276,6 +276,18 @@ impl LinkManager {
             }
         };
 
+        // Advertisement retries belong to the existing transfer. A second receiver
+        // would request the same parts and deliver the payload again. Preserve
+        // pending approval, progress and assembly; its normal retry timer handles
+        // lost requests. Completed receivers remain protected until tick cleanup.
+        if link
+            .incoming_resources
+            .iter()
+            .any(|existing| existing.resource_hash == receiver.resource_hash)
+        {
+            return Vec::new();
+        }
+
         let strategy = link.resource_strategy;
         let resource_hash = receiver.resource_hash.clone();
         let transfer_size = receiver.transfer_size;

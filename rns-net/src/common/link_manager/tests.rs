@@ -2112,6 +2112,141 @@ fn test_resource_accept_app_reject() {
 }
 
 #[test]
+fn retried_resource_advertisements_deliver_once() {
+    use std::collections::VecDeque;
+
+    // Exercise both synchronous multi-part assembly and compressed worker assembly.
+    for compressed in [false, true] {
+        let (mut sender, mut receiver, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        receiver.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+        let (wake, _events) = crate::event::channel();
+        receiver.set_receive_worker_wake(wake);
+        let payload = vec![0x42; 32 * 1024];
+        let advertisements = sender.send_resource_with_auto_compress(
+            &link_id,
+            &payload,
+            Some(b"operation"),
+            compressed,
+            &mut rng,
+        );
+        let raw_adv = advertisements
+            .iter()
+            .find_map(|a| match a {
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let mut queue: VecDeque<_> = advertisements.into_iter().map(|a| (true, a)).collect();
+        // A stopped receiver can accumulate several sender advertisement retries.
+        for _ in 0..3 {
+            queue.push_back((
+                true,
+                LinkManagerAction::SendPacket {
+                    raw: raw_adv.clone(),
+                    dest_type: constants::DESTINATION_LINK,
+                    attached_interface: None,
+                },
+            ));
+        }
+        let mut delivered = 0;
+        let mut proofs = 0;
+        let mut repeated_after_part = false;
+        for _ in 0..2000 {
+            let Some((from_sender, action)) = queue.pop_front() else {
+                let ready = receiver.wait_receive_for(&link_id, &mut rng);
+                if ready.is_empty() {
+                    break;
+                }
+                queue.extend(ready.into_iter().map(|a| (false, a)));
+                continue;
+            };
+            match action {
+                LinkManagerAction::SendPacket { raw, .. } => {
+                    let packet = RawPacket::unpack(&raw).unwrap();
+                    let target = if from_sender {
+                        &mut receiver
+                    } else {
+                        &mut sender
+                    };
+                    let actions = target.handle_local_delivery(
+                        packet.destination_hash,
+                        &raw,
+                        packet.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    );
+                    queue.extend(actions.into_iter().map(|a| (!from_sender, a)));
+                    if from_sender
+                        && packet.context == constants::CONTEXT_RESOURCE
+                        && !repeated_after_part
+                    {
+                        repeated_after_part = true;
+                        // Also retry after progress, including while worker assembly may be pending.
+                        queue.push_front((
+                            true,
+                            LinkManagerAction::SendPacket {
+                                raw: raw_adv.clone(),
+                                dest_type: constants::DESTINATION_LINK,
+                                attached_interface: None,
+                            },
+                        ));
+                    }
+                }
+                LinkManagerAction::ResourceReceived { data, metadata, .. } => {
+                    assert!(!from_sender);
+                    assert_eq!(data, payload);
+                    assert_eq!(metadata.as_deref(), Some(b"operation".as_slice()));
+                    delivered += 1;
+                }
+                LinkManagerAction::ResourceCompleted { .. } if from_sender => proofs += 1,
+                LinkManagerAction::ResourceFailed { error, .. } => {
+                    panic!("transfer failed: {error}")
+                }
+                _ => {}
+            }
+        }
+        assert!(queue.is_empty());
+        assert!(repeated_after_part);
+        assert_eq!(
+            delivered, 1,
+            "retries must not duplicate application delivery"
+        );
+        assert_eq!(proofs, 1);
+        assert_eq!(receiver.links[&link_id].incoming_resources.len(), 1);
+    }
+}
+
+#[test]
+fn retried_resource_advertisements_do_not_repeat_application_approval() {
+    let (mut sender, mut receiver, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    receiver.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+    let actions = sender.send_resource(&link_id, b"first", None, &mut rng);
+    let adv = first_resource_advertisement(&receiver, &link_id, &actions).pack(0);
+    let first = receiver.handle_resource_adv(&link_id, &adv, &mut rng);
+    assert!(matches!(
+        first.as_slice(),
+        [LinkManagerAction::ResourceAcceptQuery { .. }]
+    ));
+    for _ in 0..3 {
+        assert!(receiver
+            .handle_resource_adv(&link_id, &adv, &mut rng)
+            .is_empty());
+    }
+    assert_eq!(receiver.links[&link_id].incoming_resources.len(), 1);
+    let actions = sender.send_resource(&link_id, b"second", None, &mut rng);
+    let distinct = first_resource_advertisement(&receiver, &link_id, &actions).pack(0);
+    assert!(matches!(
+        receiver
+            .handle_resource_adv(&link_id, &distinct, &mut rng)
+            .as_slice(),
+        [LinkManagerAction::ResourceAcceptQuery { .. }]
+    ));
+    assert_eq!(receiver.links[&link_id].incoming_resources.len(), 2);
+}
+
+#[test]
 fn test_resource_full_transfer() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
