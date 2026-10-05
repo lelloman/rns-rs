@@ -24,6 +24,7 @@ use rns_crypto::{OsRng, Rng};
 use super::time;
 
 mod channel_handling;
+mod receive_worker;
 mod request_handling;
 mod resource_handling;
 mod state;
@@ -246,6 +247,8 @@ pub enum LinkManagerAction {
 
 /// Manages multiple links, link destinations, and request/response.
 pub struct LinkManager {
+    receive_worker: Option<receive_worker::Worker>,
+    receive_worker_wake: Option<crate::event::EventSender>,
     /// The authoritative O(1) link-id index for pending, active, and closing
     /// links. Link state lives in each `ManagedLink`, so lifecycle transitions
     /// cannot desynchronise separate list and lookup-map representations.
@@ -350,6 +353,8 @@ impl LinkManager {
     /// Create a new empty link manager.
     pub fn new() -> Self {
         LinkManager {
+            receive_worker: None,
+            receive_worker_wake: None,
             links: HashMap::new(),
             link_destinations: HashMap::new(),
             request_handlers: Vec::new(),
@@ -1790,7 +1795,7 @@ impl LinkManager {
             link.outgoing_resources
                 .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
             link.incoming_resources
-                .retain(|r| r.status < rns_core::resource::ResourceStatus::Assembling);
+                .retain(|r| r.status < rns_core::resource::ResourceStatus::Complete);
             let active_split_hashes: Vec<[u8; 32]> = link
                 .outgoing_resources
                 .iter()
@@ -1879,7 +1884,7 @@ impl LinkManager {
                 managed
                     .incoming_resources
                     .iter()
-                    .filter(|resource| !resource.flags.split)
+                    .filter(|resource| !resource.flags.split && resource.assembly_id().is_none())
                     .count()
                     + managed.incoming_splits.len()
                     + managed
@@ -1889,7 +1894,11 @@ impl LinkManager {
                         .count()
                     + managed.outgoing_splits.len()
             })
-            .sum()
+            .sum::<usize>()
+            + self
+                .receive_worker
+                .as_ref()
+                .map_or(0, |worker| worker.len())
     }
 
     /// Cancel all active resource transfers and return the generated actions.
@@ -1916,7 +1925,7 @@ impl LinkManager {
             link.outgoing_resources
                 .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
             link.incoming_resources
-                .retain(|r| r.status < rns_core::resource::ResourceStatus::Assembling);
+                .retain(|r| r.status < rns_core::resource::ResourceStatus::Complete);
             link.outgoing_splits.clear();
             all_actions.extend(link.outgoing_streams.drain().map(|(_, stream)| {
                 LinkManagerAction::ResourceStreamFailed {

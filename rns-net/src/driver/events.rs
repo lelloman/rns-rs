@@ -950,8 +950,12 @@ impl Driver {
 
     /// Run the event loop. Blocks until Shutdown or all senders are dropped.
     pub fn run(&mut self) {
+        self.link_manager
+            .set_receive_worker_wake(self.event_tx.clone());
         loop {
             self.poll_resource_preparations();
+            let actions = self.link_manager.poll_receive_worker(&mut self.rng);
+            self.dispatch_link_actions(actions);
             self.flush_pending_link_frames();
             let received = match self.rx.recv_classified() {
                 Ok(e) => e,
@@ -1241,7 +1245,7 @@ impl Driver {
                     let link_actions = self.link_manager.teardown_link(&link_id);
                     self.dispatch_link_actions(link_actions);
                 }
-                Event::ResourcePreparationReady => {}
+                Event::ResourcePreparationReady | Event::ResourceAssemblyReady => {}
                 Event::SendResource {
                     link_id,
                     data,
@@ -2087,6 +2091,7 @@ impl Driver {
                 }
             }
         }
+        self.link_manager.stop_receive_worker();
         self.stop_resource_preparations();
         self.event_tx.link_send_pool().close();
         self.pending_link_frames.clear();
