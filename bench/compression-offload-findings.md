@@ -1,5 +1,12 @@
 # Sender compression offload
 
+Artifact availability (2026-10-05): most historical ignored `.local/` artifacts
+referenced below were deleted during disk cleanup. The recorded findings remain,
+but those old binary, patch and raw-measurement paths are historical references.
+Only the compact stalled-peer reconstruction described at the end is currently
+retained under `.local/worker-pressure-recovery/`; it does not reproduce the old
+build layouts or restore the deleted evidence.
+
 Screening decision (2026-10-05): proceed to a bounded production-worker design. Moving
 sender compression off the driver substantially reduced echo stalls in all
 three measured pairs for every loaded payload family. The diagnostic is saved
@@ -910,3 +917,88 @@ frozen test executable and hashes, build logs, phase logs and raw RSS samples.
 Both isolated tests passed; each exercised eight worker jobs and eight rejected
 admissions followed by synchronous assembly. The temporary test was restored
 out of the repository source before either measurement.
+
+
+## Continuous load and stalled-peer recovery (2026-10-05)
+
+Four continuous-load runs completed before the local-artifact cleanup. These
+numbers were preserved in session notes; the original raw samples, diagnostic
+counter source and binaries are **no longer available for reanalysis**. They
+used two System-allocator nodes, eight links over direct TCP, 512 KiB payloads,
+45 seconds of replenished load, full drain and 12 seconds of idle recovery.
+The corrected harness tolerated independent Resources completing out of order;
+an earlier harness incorrectly rejected that legitimate behavior.
+
+| Payload / pending per link | Verified Resources | Sender peak / idle / shutdown RSS MiB | Receiver peak / idle / shutdown RSS MiB |
+|---|---:|---:|---:|
+| Repeated byte / 4 | 17,235 | 41.46 / 41.00 / 13.27 | 38.02 / 38.02 / 13.85 |
+| Repeated byte / 16 | 13,273 | 40.14 / 35.10 / 10.94 | 35.84 / 35.84 / 9.27 |
+| Repeated block / 4 | 388 | 45.71 / 33.25 / 9.09 | 36.38 / 36.38 / 12.22 |
+| SHA-256 counter / 4 | 1,209 | 61.67 / 47.83 / 23.67 | 37.42 / 37.29 / 13.18 |
+
+The four valid runs delivered 32,105 Resources. Diagnostic counters observed
+sender admission peaks of seven jobs / 7,340,165 reserved bytes, below the eight
+job / 8 MiB budget. Compressed receive work peaked at one admitted job, reserving
+201,330,768 bytes for repeated-byte payloads or 201,339,264 for repeated blocks.
+Both sender and receiver saturation invoked synchronous fallback in the matrix;
+all current worker reservations returned to zero after drain. High-entropy
+uncompressed receives did not enter the receive worker. These observations do
+not impose a whole-process RSS cap, establish a long-duration leak bound, or
+qualify fully backed-up socket output queues.
+
+The original three-second receiver pause exposed a TCP read returning `EINTR`
+after resume. The server treated that as fatal and removed the interface.
+Commit `e9f251f` retries interrupted reads on both TCP client and server, retaining
+the decoder state. A Linux child-process regression sends a frame split after
+an HDLC escape byte across three stop/resume cycles. It failed before the fix
+and passes afterward. The 1,015 network unit tests, compressed-Resource burst
+e2e regression, formatting and all-target network Clippy passed.
+
+### Compact reconstruction after cleanup
+
+The recreated diagnostic keeps source, a lockfile, small JSONL RSS/phase logs,
+exit statuses, socket snapshots and binary hashes; it uses the existing target
+directory and does not copy build trees or retain profiler captures. Its
+optimized binary uses portable release settings and the System allocator.
+This is a new build, **not a performance comparison with the deleted binaries**.
+No temporary worker admission instrumentation was restored.
+
+The reconstructed harness uses the same eight-link, 512 KiB repeated-byte
+compressed workload, with up to 16 pending transfers per link for 45 seconds.
+It checks payload length/digest, metadata IDs, individual application
+acknowledgements and per-link proof counts; proof callbacks do not expose
+individual Resource IDs. Payloads are dropped after verification, out-of-order
+completion is accepted, and callback queue overflow fails the case. RSS is
+sampled every 50 ms, followed by 12 seconds idle after drain and three seconds
+following node shutdown. Each pause stops the entire isolated peer process,
+including its reader, driver and codec worker; this is broader than pausing only
+socket reads. Builds and tests did not overlap these runs.
+
+The five-second depth-four smoke check completed 1,818 verified Resources.
+The recreated 45-second unpaused run completed 12,521 Resources, drained all
+pending transfers and shut down cleanly. Sender peak / idle / shutdown RSS was
+39.80 / 39.50 / 15.46 MiB; receiver RSS was 35.43 / 35.43 / 11.45 MiB.
+Its maximum sampling gap was 51.1 ms.
+The paused-sender run resumed successfully after 3.02 seconds and completed
+11,585 verified Resources, with zero pending transfers and clean shutdown of
+both nodes. Sender sampled peak / idle / shutdown RSS was
+40.44 / 40.14 / 16.17 MiB; receiver RSS was 35.46 / 35.46 / 11.62 MiB.
+The maximum sampling gap was 67.4 ms; these are sampled maxima, not hard bounds.
+
+**Paused-receiver recovery is still failing.** With the TCP fix present, the
+sender reported `Resource rejected` after the receiver resumed from its
+3.02-second pause. At the last sender snapshot 3,312 transfers were complete
+and 128 pending. The controller stopped the remaining process on failure;
+this case provides no successful drain or idle-recovery evidence. Both TCP
+sockets were still established immediately before resume, and the receiver
+had 47,377 bytes queued in its kernel socket, well below its roughly 2.5 MB
+receive buffer. This did not establish full socket backpressure. The rejection
+has not yet been attributed to a specific protocol path; it must not be
+reported as a worker admission failure or a qualified recovery.
+
+Current artifacts: `.local/worker-pressure-recovery/`. Case summaries include
+the source revision plus the TCP patch, binary SHA-256 and every exit status.
+Keep failed cases alongside passing cases. The next task is to diagnose the
+receiver-pause rejection and rerun recovery after any separately tested fix.
+Broader slow-socket, long-duration, split/file and request/response qualification
+remains open.
