@@ -974,7 +974,7 @@ fn extract_send_packet_from(actions: &[LinkManagerAction]) -> Vec<u8> {
 
 /// Set up two linked managers with an active link.
 /// Returns (initiator_mgr, responder_mgr, link_id).
-fn setup_active_link() -> (LinkManager, LinkManager, LinkId) {
+pub(super) fn setup_active_link() -> (LinkManager, LinkManager, LinkId) {
     setup_active_link_with_max_request_size(None)
 }
 

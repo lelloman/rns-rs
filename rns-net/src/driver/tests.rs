@@ -192,7 +192,7 @@ impl MockCallbacks {
     }
 }
 
-pub(super) fn make_transport_config(transport_enabled: bool) -> TransportConfig {
+pub(crate) fn make_transport_config(transport_enabled: bool) -> TransportConfig {
     TransportConfig {
         transport_enabled,
         identity_hash: None,

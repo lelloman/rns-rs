@@ -120,7 +120,7 @@ mod resource_preparation;
 mod runtime_config;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 fn inject_transport_header(raw: &[u8], next_hop: &[u8; 16]) -> Vec<u8> {
     if raw.len() < 18 {

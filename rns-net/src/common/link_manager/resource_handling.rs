@@ -697,7 +697,7 @@ impl LinkManager {
         let mut storage_failure = None;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
-            if receiver.status >= rns_core::resource::ResourceStatus::Complete {
+            if receiver.status >= rns_core::resource::ResourceStatus::Assembling {
                 continue;
             }
             let resource_actions = receiver.receive_part(raw_data, now);
@@ -737,7 +737,48 @@ impl LinkManager {
             }
         }
 
+        let mut preceding = Vec::new();
         if let Some(idx) = assemble_idx {
+            let eligible = Self::receive_offload_eligible(link, &link.incoming_resources[idx]);
+            let _ = link;
+            preceding = self.wait_receive_for(link_id, rng);
+            if eligible {
+                self.ensure_receive_worker();
+            }
+            // A preceding corrupt assembly may have torn down this link. Completion
+            // polling does not remove receivers, so indices remain stable otherwise.
+            let Some(link) = self
+                .links
+                .get_mut(link_id)
+                .filter(|link| link.engine.state() == LinkState::Active)
+            else {
+                return preceding;
+            };
+            if idx >= link.incoming_resources.len() {
+                return preceding;
+            }
+            if eligible && self.receive_worker.is_some() {
+                let receiver = &mut link.incoming_resources[idx];
+                let actions = match receiver
+                    .prepare_assembly(&|data| link.engine.decrypt(data).map_err(|_| ()))
+                {
+                    Ok(assembly) => match self.receive_worker.as_mut().unwrap().submit(
+                        *link_id,
+                        link.resource_generation.clone(),
+                        assembly,
+                    ) {
+                        Ok(()) => Vec::new(),
+                        // Admission/disconnection fallback uses the already-authenticated
+                        // handoff; no additional decryption or unbounded retry.
+                        Err(assembly) => receiver.complete_assembly(assembly.run(&Bzip2Compressor)),
+                    },
+                    Err(actions) => actions,
+                };
+                all_actions.extend(actions);
+                let _ = link;
+                preceding.extend(self.process_resource_actions(link_id, all_actions, rng));
+                return preceding;
+            }
             let split_key = if link.incoming_resources[idx].flags.split {
                 Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
             } else {
@@ -890,7 +931,6 @@ impl LinkManager {
             all_actions.extend(assemble_actions);
         }
 
-        let _ = link;
         let mut out = self.process_resource_actions(link_id, all_actions, rng);
         if let Some(resource) = completed_file {
             out.push(LinkManagerAction::ResourceFileReceived {
@@ -942,7 +982,10 @@ impl LinkManager {
             out = converted;
         }
 
-        out
+        // Earlier application completions already have their final action types.
+        // Only this Resource's actions pass through request/response conversion.
+        preceding.extend(out);
+        preceding
     }
 
     /// Handle resource proof (CONTEXT_RESOURCE_PRF) — feed to sender.

@@ -220,6 +220,7 @@ impl Driver {
             let _ = handle.join();
         }
 
+        self.link_manager.stop_receive_worker();
         self.lifecycle_state = LifecycleState::Stopped;
     }
 
@@ -350,6 +351,7 @@ impl Driver {
         self.dispatch_link_actions(link_actions);
         let cleanup_actions = self.link_manager.tick(&mut self.rng);
         self.dispatch_link_actions(cleanup_actions);
+        self.link_manager.stop_receive_worker();
         self.holepunch_manager.abort_all_sessions();
     }
 

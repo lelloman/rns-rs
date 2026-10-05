@@ -29,6 +29,16 @@ pub enum ResourceTransferError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceReceiveMode {
     /// Assemble the complete logical Resource in memory.
+    ///
+    /// Nodes can verify compressed, single-segment application Resources of
+    /// 16 KiB through the efficient segment limit on a lazy receive worker.
+    /// Authentication remains on the driver. Worker admission reserves owned
+    /// input and worst-case output/metadata capacity: four jobs and 256 MiB,
+    /// allowing one job at the default 64 MiB decoder limit. This reservation
+    /// is not preallocated memory or a whole-node RSS cap; native codec workspace
+    /// and unrelated transfers are additional. Small, split, request/response
+    /// and saturated work stays synchronous. Earlier same-link assemblies finish
+    /// first, so overload can still stall the driver. Shutdown joins active work.
     Memory { max_bytes: u64 },
     /// Write verified segments to a managed temporary file.
     TemporaryFile {
