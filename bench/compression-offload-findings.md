@@ -866,3 +866,47 @@ local dependency source, original/trial lockfiles, frozen senders, exact build
 logs and codec test output, symbol/disassembly checks, hashes, CPU/compiler
 metadata and every case result. `run.py` uses the frozen crossover controller
 and fixed production receiver; it does not expand permanent benchmark tooling.
+
+
+## Maximum decoder expansion and synchronous fallback (2026-10-05)
+
+The unchanged 64 MiB decompression bound holds for both the receive worker and
+synchronous fallback. A separate assembly-boundary diagnostic used serialized
+113-byte bzip2 streams generated with Python's independent bz2 interface. They
+expand to exactly 64 MiB or 64 MiB plus one byte, while the fixture advertises
+512 KiB. The real `ResourceReceiver`, `ResourceAssembly`, native decoder and
+private production receive `Worker` are exercised. The fixture uses identity
+decryption; this is not a network admission or authentication test.
+
+Each case ran eight rounds. The first job was admitted to the worker; the second
+was rejected by worker admission and executed synchronously while the first
+could still run or retain its result. Each admitted job reserved **201,330,805
+bytes** (about 192 MiB), irrespective of the smaller advertised size. Reservation
+remained charged until result consumption, and jobs/bytes returned to zero each
+round. Sixteen exact-limit assemblies validated every payload byte and the
+reference proof, totaling 1 GiB delivered across the fixture. Sixteen over-limit
+assemblies returned `TooLarge`, with no data delivery or proof.
+
+| Fixture | Sampled max process RSS MiB | RSS after 5 s recovery MiB | RSS after worker shutdown MiB |
+|---|---:|---:|---:|
+| Exactly 64 MiB output | 262.23 | 6.21 | 6.46 |
+| 64 MiB + 1 byte output | 141.66 | 6.22 | 6.41 |
+
+These are System-allocator test-process observations, including one worker and
+one synchronous assembly, not receiver-node RSS or strict peak bounds. Sampling
+targeted 10 ms; maximum observed gaps were 18.8/14.2 ms for the two cases.
+Fixture generation and builds finished before measurement.
+The small compressed input does not imply a small memory demand; verification
+also allocates payload-sized temporary hash/proof inputs. The result confirms
+that **256 MiB worker accounting is not a whole-process memory cap**: synchronous
+fallback, result ownership, native codec workspace and allocator costs are
+additional. Short post-drain recovery does not establish a long-duration leak
+bound. No decoder limit, authentication rule, fallback policy or production
+memory setting was changed from this test.
+
+Artifacts under ignored `.local/worker-pressure/maximum/` include fixture
+construction, compressed bytes, reference hashes/proofs, exact local test source,
+frozen test executable and hashes, build logs, phase logs and raw RSS samples.
+Both isolated tests passed; each exercised eight worker jobs and eight rejected
+admissions followed by synchronous assembly. The temporary test was restored
+out of the repository source before either measurement.
