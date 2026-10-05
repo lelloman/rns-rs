@@ -1002,3 +1002,61 @@ Keep failed cases alongside passing cases. The next task is to diagnose the
 receiver-pause rejection and rerun recovery after any separately tested fix.
 Broader slow-socket, long-duration, split/file and request/response qualification
 remains open.
+
+
+## Receiver-pause duplicate advertisement fix (2026-10-05)
+
+The earlier `Resource rejected` result was a secondary error. The stopped
+receiver accumulated retries of the same Resource advertisements. On resume,
+`handle_resource_adv` created another receiver for each retry; requests and
+parts could then complete the same Resource more than once. The diagnostic
+correctly rejected duplicate application delivery. Node cleanup sent Resource
+cancellations, which made the sender report `Resource rejected`; the controller
+then terminated the receiver before its original error appeared after cleanup.
+The harness now logs validation failures immediately, exposing the first error.
+
+Two deterministic regressions establish the cause. Repeated advertisements
+before parts and after the first part delivered one Resource five times before
+the fix. Pending application approval also produced repeated queries. The fix
+ignores advertisements whose Resource hash already belongs to a retained
+receiver on that link. It preserves approval, received parts and worker assembly;
+normal receiver timers still retry lost requests. This adds no replay cache or
+new timeout policy. Protection lasts while that receiver is retained, including
+its completed state before tick cleanup; it is not an indefinite replay history.
+Advertisement parsing and validation still happen before this check.
+
+After the fix, both regressions pass, including uncompressed multi-part transfer
+and compressed worker assembly, exact metadata/payload delivery and sender
+completion. A distinct Resource still produces its own application approval.
+All 1,017 network unit tests, 60 network e2e tests, formatting and all-target
+network Clippy passed. Temporary production tracing was removed before these
+checks and the final live runs. Diagnostic source, failed cases and before/after
+regression logs remain in `.local/worker-pressure-recovery/`.
+
+The production fix is committed as `2b16017`. Three final 45-second live runs
+used the same uninstrumented production binary, eight links and 16 pending
+Resources per link, with a three-second peer pause after 12 seconds of load.
+Each completed with matching deliveries, acknowledgements and proof counts,
+zero pending application transfers after drain, and clean node/process shutdown.
+
+| Case | Verified Resources | Sender peak / idle / shutdown RSS MiB | Receiver peak / idle / shutdown RSS MiB |
+|---|---:|---:|---:|
+| receiver-fixed-1 | 13,409 | 40.05 / 39.72 / 15.75 | 38.26 / 38.01 / 14.10 |
+| sender-fixed | 11,627 | 39.93 / 39.60 / 15.63 | 35.87 / 35.68 / 11.71 |
+| receiver-fixed-2 | 12,039 | 40.54 / 35.31 / 11.46 | 38.31 / 38.12 / 14.15 |
+
+Together these runs verified **37,075 Resources**. The maximum RSS sampling
+gap was 68.0 ms. Idle samples follow 12 seconds of recovery, with post-shutdown
+samples taken during the three-second process linger. Retained allocator memory
+is visible after drain; these short runs do not establish a leak bound. No
+worker reservation counters were restored, and kernel socket buffers did not
+fill. This qualifies recovery for the tested whole-peer pauses, not arbitrary
+network stalls, permanent backpressure or long-duration memory behavior. These
+runs do not measure a CPU or throughput improvement over the old binary.
+
+Final binary SHA-256:
+`94da273f62297f767d0ed9650d7a38b9571fa4678afd2d2198382e6f0051944e`.
+Cases retain their exact revision/patch and small raw RSS/phase logs. Original
+failures remain alongside the passing runs. The next performance item is
+long-history ratchet decryption; broader worker memory/latency qualification
+remains scoped as described above.
