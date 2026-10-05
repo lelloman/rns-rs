@@ -66,3 +66,66 @@ Evidence under `.local/tcp-output/`: `baseline`, `batch-trace`, `batch-daemon`,
 `batch-bulk`, `batch-mixed`, frozen `rnsd-batch.bin` / `relay-batch.bin`,
 `batch-candidate.patch` (including tests) and build/validation logs. The saved
 patch applies cleanly to the baseline. No batching production code is retained.
+
+## Bounded encoding-buffer reuse: parked
+
+The separate reuse candidate is also not retained. It reduced measured RSS and
+helped bulk System-allocator relay CPU slightly, but did not establish a CPU or
+latency improvement for the actual jemalloc daemon and mixed traffic.
+
+Each TCP writer lazily cached up to 128 KiB of encoded storage. Frames larger
+than that used an exact-sized temporary that was dropped after writing without
+enlarging the cache. The cache remained while an established connection was idle
+and was released when its writer was dropped. Wire bytes, per-frame writes,
+queue behavior and completion semantics were unchanged; no batching was included.
+Tests checked storage reuse, the oversized-frame retention bound, stale bytes
+after errors, interrupted/partial writes and real stalled-peer recovery. All
+994 unit tests, 58 end-to-end tests, formatting and net/bench Clippy passed.
+
+### Actual daemon: CPU and resident memory
+
+Three alternating pairs again passed 2,352 transfers including warmups. The
+baseline was the unchanged production implementation from `7cc2302`; `9a2ad26`
+only added the batching report. Builds/tests finished before these runs.
+
+| Pair | One-link CPU | Eight-link CPU | Eight-link elapsed | Eight-link RSS before → after |
+|---|---:|---:|---:|---:|
+| 0 | −0.77% | +5.61% | +4.43% | 41.86 → 41.34 MiB |
+| 1 | +8.89% | +5.19% | +1.24% | 42.16 → 41.84 MiB |
+| 2 | +21.17% | −0.33% | −3.22% | 42.77 → 41.99 MiB |
+
+One-link elapsed changed −5.86%, +0.77%, +29.07%; pair 2 also had a p99 outlier
+(48.93→96.50 ms). Eight-link p99 changed 33.12→34.27, 33.97→33.43 and
+40.98→37.38 ms. The outlier is retained, not removed from the result.
+
+RSS after two seconds of connected idle matched the eight-link snapshots above.
+After disconnect and a further two seconds, baseline→candidate RSS was
+37.18→36.46, 37.42→37.32 and 37.53→37.47 MiB. These are short process-RSS snapshots,
+not live-buffer accounting or long-term allocator recovery. A lower RSS snapshot
+does not mean the idle connection has no retained cache; the explicit bound
+remains 128 KiB per writer, excluding allocator overhead.
+
+### Standard relay and focused encoder check
+
+Two bulk pairs passed 144 cases: CPU fell 2.19% and 3.99%, elapsed changed
++3.53% and −12.53%, and aggregate p99 changed +13.06% and −66.11%. RSS medians
+were effectively unchanged. Two mixed pairs passed another 144 cases: CPU
+changed +2.16% and −5.70%; pooled probe p99 changed +36.09% and −42.57%.
+Small-message-only p99 changed −9.56% and +20.01%; Resource-active p99 changed
++50.81% and −57.12%. These do not establish a repeatable mixed-latency benefit.
+
+A local System-allocator encoder-only diagnostic then compared fresh allocation,
+the cached buffer and a local-owned-buffer variant. Five alternating rounds of
+10,000 operations used fixed pseudorandom 128-byte and 65,554-byte inputs. Median
+ns/op for fresh/cached/local-owned was 170/160/158 for small inputs and
+88,503/89,818/88,759 for large inputs. Output was passed through `black_box` to a
+sink; this excluded sockets, routing and jemalloc. Moving the buffer locally did
+not establish a compelling large-frame gain, so that variant was not promoted
+to another production trial. This diagnostic does not identify a definitive
+compiler/allocator cause for the end-to-end results.
+
+Evidence: `.local/tcp-output/reuse-daemon`, `reuse-bulk`, `reuse-mixed`, frozen
+`rnsd-reuse.bin` / `relay-reuse.bin`, `reuse-candidate.patch`, `reuse-source.rs`,
+validation logs and `encoder-micro.{rs,bin,csv}`. Applying the saved patch restores
+the source needed by the local encoder diagnostic. Both experiment patches
+apply cleanly to the baseline. Production TCP output remains unchanged.
