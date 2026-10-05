@@ -231,3 +231,112 @@ production source snapshots/patch, the local fixture patch, `compare.py`,
 binary/source hashes, affinity and host load. The later metadata-boundary/saturation tests
 and API documentation do not change the measured production code. No builds
 or separate tests overlapped timing runs. Host load remained uncontrolled.
+
+## Receiver stage attribution (2026-10-05)
+
+Receiver decompression is now a measured driver stall. The next scheduling
+candidate is bounded receive-side offload; its fairness, memory and lifecycle
+behavior still need a separate experiment. This diagnostic does not establish
+an improvement or explain all variation in the earlier sender comparison.
+
+### Method
+
+A frozen profiling/System/portable build of `2b8ae1e` retains the production
+sender worker and adds temporary receiver timing. Around the immediate
+`handle_resource_part` assembly call, it records monotonic wall time and
+**thread** CPU time for total assembly, nested link decryption and bounded
+bzip2 decompression. One log line is emitted after assembly; there is no
+logging inside those intervals. Residual assembly includes joining parts,
+hashes, proof construction and metadata extraction, without separately
+attributing those operations. Subsequent action dispatch is outside the timer.
+
+A single monotonic timestamp per probe train aligns endpoint clocks. The
+recorded clock alignment bound was at most 281 ns; probe submission is
+reconstructed from its scheduled offset plus measured send lateness. The
+assembly timer does not cover the tick fallback, but every loaded round had
+exactly one immediate assembly record, including warmups.
+
+Three repetitions per family/affinity use fresh endpoint pairs, one warmup and
+10 measured rounds each. Each loaded round sends 512 KiB while a separate link
+carries 128 echoes every 2 ms, starting the Resource at 20 ms. Families are
+probes-only, seeded with compression on/off, SHA-256 counter, random first half,
+and repeated random block. The latter two are explicitly local payload
+variants. Family order reverses in the middle repetition. One affinity mode
+inherits the host mask; the other shares **one logical CPU across controller
+and both endpoints**. Host load/frequency remain uncontrolled; timings across
+these modes must not be interpreted as a CPU-scaling comparison.
+
+All **36 cases, 330 Resources and 50,688 echoes** passed, including warmups.
+Tables exclude warmups (30 measured rounds per cell). No builds or tests ran
+alongside measurements. Instrumentation is removed from the working tree;
+these are diagnostic measurements, not an uninstrumented performance baseline.
+
+### Results
+
+Median receiver assembly elapsed / thread CPU / decompression thread CPU,
+all in milliseconds:
+
+| Payload | Unpinned | One shared CPU |
+| --- | ---: | ---: |
+| Seeded, compression enabled | 38.14 / 38.13 / 36.43 | 19.30 / 18.80 / 17.72 |
+| Seeded, compression disabled | 3.02 / 2.97 / 0 | 1.39 / 1.35 / 0 |
+| SHA-256 counter | 2.32 / 2.32 / 0 | 1.40 / 1.37 / 0 |
+| Random first half | 18.76 / 18.76 / 17.36 | 9.91 / 9.68 / 9.00 |
+| Repeated random block | 11.75 / 11.75 / 10.94 | 7.91 / 7.69 / 7.21 |
+
+SHA-256 counter uses the existing uncompressed fallback after the sender's
+compression attempt. For compressed families, the median per-assembly
+fraction of CPU spent decompressing is **93–95%**. Median decryption CPU is
+0.01–1.08 ms across loaded cells; residual assembly CPU is 0.47–1.83 ms.
+
+Pooled diagnostic echo RTT p99, milliseconds:
+
+| Payload | Unpinned | One shared CPU |
+| --- | ---: | ---: |
+| Probes only | 2.60 | 0.51 |
+| Seeded, compression enabled | 121.10 | 21.13 |
+| Seeded, compression disabled | 8.21 | 5.87 |
+| SHA-256 counter | 3.67 | 3.98 |
+| Random first half | 21.16 | 10.56 |
+| Repeated random block | 11.63 | 6.00 |
+
+All 390 unpinned seeded echoes exceeding 20 ms overlap receiver assembly;
+so do all 51 such echoes on one CPU. These echoes share assembly events and
+are not independent samples. The worst echo took 162.69 ms and overlapped an
+entire 149.26 ms assembly: 104.10 ms thread CPU, of which decompression used
+102.18 ms CPU / 147.28 ms elapsed. Approximately 45.16 ms of that assembly
+was off-CPU. Thus the stall combines expensive decompression and scheduling
+interference; it cannot be dismissed as scheduling alone. These clocks do not
+identify why decompression CPU time itself varies across rounds.
+
+The unpinned half-random and repeated-block echoes over 20 ms also overlap
+assembly (48 and one respectively). One uncompressed seeded echo over 20 ms
+finishes before assembly, so receiver assembly does not explain every outlier.
+Compression-disabled runs change sender work and wire size too; their p99
+difference is not an isolated measurement of receiver offload benefit.
+
+### Next experiment and retained evidence
+
+Prototype a bounded receive worker, starting with buffered, compressed,
+single-segment application Resources. Preserve authentication before decode,
+output limits, hash/proof verification, and publish success only after the
+driver validates the current link/resource generation. Explicitly account for
+queued parts/input, output reservation, decoder workspace and retained
+completions; test cancellation, duplicate parts, timeouts, ordering, drain,
+shutdown and saturation. Moving work is a responsiveness hypothesis, not a
+promise of lower CPU cost. Decide the assembly handoff boundary before changing
+production scheduling. Split, reader and request/response extensions remain
+separate work.
+
+Re-run a matched uninstrumented baseline/candidate matrix, with queue-delay
+and memory evidence, before accepting a worker. Keep the earlier adverse
+unpinned sender results: this diagnostic supports a new candidate, not a
+retroactive claim that those results improved.
+
+Local artifacts: `.local/receiver-stages/` contains `instrument.py`, the exact
+`diagnostic.patch`, frozen binary, build log, host/compiler information,
+`run.py`, `summarize.py`, `summary.json` and per-case results/events/stderr.
+`runs/manifest.json` records source revision, binary/patch hashes, affinity and
+host load. The runner's clean-checkout revision alone omits the temporary
+instrumentation; the diagnostic patch and frozen binary hashes identify the
+actual measured executable.
