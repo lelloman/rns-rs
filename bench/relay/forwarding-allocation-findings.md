@@ -194,3 +194,51 @@ Evidence: `.local/perf-opportunities/outbound-header-relay`,
 `relay-outbound-header.bin` and `rnsd-outbound-header.bin`, plus test/build logs.
 The original baseline binaries remain unchanged. Queue classification is next
 and must be evaluated relative to this outbound-only change.
+
+## Inbound queue classification implemented — 2026-10-05
+
+`EventSender::classify` now uses the same borrowed header reader instead of
+allocating and hashing under the queue mutex. Announce precedence, path-request
+address matching, burst-limit classification and malformed-packet fallback to
+the data queue are preserved. No decoded packet is retained in the event queue;
+queue capacities, ordering, drops and driver validation are unchanged.
+Differential coverage includes both burst flags in all combinations. All 991
+network unit tests, 58 network end-to-end tests, formatting and net/bench
+all-target Clippy checks passed before measurement.
+
+These results compare against the outbound-only implementation (`e891e9e`),
+not the original three-parse baseline. Each executable was built separately
+with the same portable profile/package command as its baseline. An initial
+combined-package build was replaced before measurement to avoid differences
+from dependency feature unification. No builds/tests overlapped these captures.
+
+The actual daemon comparison again passed 2,352 verified transfers, including
+warmups, over three alternating pairs:
+
+| Pair | One-link CPU | Eight-link CPU | Eight-link elapsed |
+|---|---:|---:|---:|
+| 0 | −13.94% | −8.05% | −6.01% |
+| 1 | −7.27% | −5.24% | −2.89% |
+| 2 | −9.88% | −9.41% | −3.96% |
+
+One-link elapsed changed −4.81%, +1.28% and −9.96%. Eight-link RSS fell by
+1.00–2.21 MiB; one-link RSS was unchanged or slightly lower. Resource p99
+remained variable: eight-link before→after was 33.20→43.52, 30.88→32.11 and
+32.39→30.36 ms; one-link was 43.41→39.69, 40.47→41.33 and 39.55→40.97 ms.
+These short runs support lower CPU/allocation overhead, not a blanket tail
+latency improvement.
+
+Two bulk and two mixed System-allocator relay pairs passed all 288 cases.
+Bulk CPU fell 5.22% and 7.47%; elapsed changed +0.46% and −6.05%. Bulk p99
+changed +6.04% and −5.71%. Mixed CPU changed −11.62% and +2.39%, while elapsed
+was effectively unchanged. Mixed probe p99 improved in both pairs, separately
+for small-message-only traffic (−87.62%, −62.78%) and with a Resource active
+(−6.07%, −2.78%). RSS medians stayed within 0.2%. Keep the change for the
+consistent daemon CPU and bulk relay improvements, without treating the noisy
+mixed CPU numbers or these exploratory latency results as universal guarantees.
+
+Evidence: `.local/perf-opportunities/inbound-header-daemon`,
+`inbound-header-bulk`, `inbound-header-mixed`, `relay-inbound-header.bin`,
+`rnsd-inbound-header.bin`, and the corresponding test/build logs. Both header
+classification changes are complete; broader forwarding ownership, IFAC/fanout,
+queue-pressure and latency qualification work remains separate.

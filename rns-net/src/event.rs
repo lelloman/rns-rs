@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use rns_core::packet::RawPacket;
+use crate::packet_header::PacketHeader;
 use rns_core::transport::types::InterfaceId;
 
 pub use crate::common::event::{
@@ -261,7 +261,7 @@ impl EventSender {
         else {
             return None;
         };
-        let packet = RawPacket::unpack(data).ok();
+        let packet = PacketHeader::unpack(data);
         if packet.as_ref().is_some_and(|packet| {
             packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
         }) {
@@ -587,6 +587,75 @@ mod tests {
     use rns_core::packet::{PacketFlags, RawPacket};
     use std::sync::mpsc::TrySendError;
     use std::time::Duration;
+
+    #[test]
+    fn inbound_classification_matches_full_unpack_with_burst_limits() {
+        let (tx, _rx) = channel_with_capacity(2);
+        let interface_id = InterfaceId(4);
+        for flags in 0..=u8::MAX {
+            for hops in [
+                0,
+                rns_core::constants::PATHFINDER_M - 1,
+                rns_core::constants::PATHFINDER_M,
+                255,
+            ] {
+                for matching in [false, true] {
+                    let mut raw = [0x31; 80];
+                    raw[0] = flags;
+                    raw[1] = hops;
+                    let start = if flags & 0x40 == 0 { 2 } else { 18 };
+                    if matching {
+                        raw[start..start + 16].copy_from_slice(&tx.shared.path_request_dest);
+                    }
+                    for len in (0..=40).chain([80]) {
+                        let packet = RawPacket::unpack(&raw[..len]).ok();
+                        let event = Event::Frame {
+                            interface_id,
+                            data: raw[..len].to_vec(),
+                            rssi: None,
+                            snr: None,
+                        };
+                        for announce_limited in [false, true] {
+                            for path_limited in [false, true] {
+                                let mut state = QueueState::new();
+                                if announce_limited {
+                                    state.announce_bursts.insert(interface_id, 1.0);
+                                }
+                                if path_limited {
+                                    state.path_request_bursts.insert(interface_id, 1.0);
+                                }
+                                let expected = match packet.as_ref() {
+                                    Some(p)
+                                        if p.flags.packet_type
+                                            == rns_core::constants::PACKET_TYPE_ANNOUNCE =>
+                                    {
+                                        if announce_limited {
+                                            QueueClass::IngressLimited
+                                        } else {
+                                            QueueClass::Announce
+                                        }
+                                    }
+                                    Some(p)
+                                        if p.destination_hash == tx.shared.path_request_dest =>
+                                    {
+                                        if path_limited {
+                                            QueueClass::IngressLimited
+                                        } else {
+                                            QueueClass::PathRequest
+                                        }
+                                    }
+                                    _ => QueueClass::Data,
+                                };
+                                assert_eq!(tx.classify(&event, &state), Some(expected),
+                                    "flags={flags} hops={hops} len={len} matching={matching} announce_limited={announce_limited} path_limited={path_limited}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(tx.classify(&Event::Tick, &QueueState::new()), None);
+    }
 
     #[test]
     fn async_control_send_waits_for_space_and_handles_receiver_shutdown() {
