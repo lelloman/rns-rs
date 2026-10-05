@@ -366,7 +366,9 @@ fn client_reader_loop(
             Err(e)
                 if matches!(
                     e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
                 ) => {}
             Err(e) => {
                 log::warn!("[{}] client {} read error: {}", name, id.0, e);
@@ -493,6 +495,106 @@ mod tests {
         let startup = TcpServerRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));
         config
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stop_resume_preserves_partial_server_frame() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Child, Command, Stdio};
+        use std::sync::mpsc;
+
+        const CHILD_PORT: &str = "RNS_TEST_INTERRUPTED_TCP_SERVER_PORT";
+        const ROUNDS: usize = 3;
+        let payload = vec![0x7e; constants::HEADER_MINSIZE + 16];
+        if let Ok(port) = std::env::var(CHILD_PORT) {
+            let (tx, rx) = crate::event::channel();
+            let control = start(
+                make_server_config(port.parse().unwrap(), 1, None),
+                tx,
+                Arc::new(AtomicU64::new(1200)),
+            )
+            .unwrap();
+            println!("EINTR_READY");
+            let registration = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(matches!(
+                registration,
+                Event::InterfaceUp(InterfaceId(1200), _, _)
+            ));
+            println!("EINTR_CONNECTED");
+            for round in 0..ROUNDS {
+                let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert!(
+                    matches!(event, Event::Frame { interface_id: InterfaceId(1200), data, .. } if data == payload),
+                    "read interruption must preserve the connection and partial frame"
+                );
+                println!("EINTR_FRAME_{round}");
+            }
+            control.request_stop();
+            return;
+        }
+
+        // Signals affect only the isolated child, never the parallel test runner.
+        struct ChildGuard(Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                if matches!(self.0.try_wait(), Ok(None)) {
+                    unsafe { libc::kill(self.0.id() as i32, libc::SIGCONT) };
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+        }
+        let port = find_free_port();
+        let mut child = ChildGuard(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "interface::tcp_server::tests::stop_resume_preserves_partial_server_frame",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env(CHILD_PORT, port.to_string())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let stdout = child.0.stdout.take().unwrap();
+        let (lines_tx, lines_rx) = mpsc::channel();
+        let output = thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if lines_tx.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        let wait_for = |expected: &str| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let line = lines_rx
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .unwrap_or_else(|error| panic!("waiting for {expected}: {error}"));
+                if line == expected {
+                    break;
+                }
+            }
+        };
+        wait_for("EINTR_READY");
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        wait_for("EINTR_CONNECTED");
+        let frame = hdlc::frame(&payload);
+        // Interrupt with an escape byte pending in the HDLC decoder.
+        let split = frame.iter().position(|b| *b == 0x7d).unwrap() + 1;
+        for round in 0..ROUNDS {
+            client.write_all(&frame[..split]).unwrap();
+            thread::sleep(Duration::from_millis(30));
+            assert_eq!(unsafe { libc::kill(child.0.id() as i32, libc::SIGSTOP) }, 0);
+            thread::sleep(Duration::from_millis(200));
+            assert_eq!(unsafe { libc::kill(child.0.id() as i32, libc::SIGCONT) }, 0);
+            client.write_all(&frame[split..]).unwrap();
+            wait_for(&format!("EINTR_FRAME_{round}"));
+        }
+        assert!(child.0.wait().unwrap().success());
+        output.join().unwrap();
     }
 
     #[test]

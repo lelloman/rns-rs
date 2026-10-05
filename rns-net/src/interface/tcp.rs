@@ -348,6 +348,8 @@ fn reader_loop(
                     }
                 }
             }
+            // Retry without dropping the connection or a partially decoded frame.
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
                 if control.should_stop() {
                     return;
