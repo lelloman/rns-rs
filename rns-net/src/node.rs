@@ -2787,6 +2787,13 @@ impl RnsNode {
     }
 
     /// Send a resource on an established link, controlling automatic compression.
+    ///
+    /// Set `auto_compress` to `false` when the application knows its payload is
+    /// already compressed or encrypted. This skips the compression attempt;
+    /// link encryption and Resource integrity checks still apply. With `true`,
+    /// eligible payloads are fully compressed and the result is used only when
+    /// smaller. Even a rejected attempt costs CPU, while disabling compression
+    /// for compressible content can substantially increase transmitted bytes.
     pub fn send_resource_with_auto_compress(
         &self,
         link_id: [u8; 16],
