@@ -179,6 +179,7 @@ impl Driver {
         }
 
         self.lifecycle_state = LifecycleState::Stopping;
+        self.stop_resource_preparations();
         self.stop_listener_accepts();
 
         let resource_actions = self.link_manager.cancel_all_resources(&mut self.rng);
@@ -229,7 +230,11 @@ impl Driver {
     pub(crate) fn drain_status(&self) -> DrainStatus {
         let now = Instant::now();
         let active_links = self.link_manager.link_count();
-        let active_resource_transfers = self.link_manager.resource_transfer_count();
+        let active_resource_transfers = self.link_manager.resource_transfer_count()
+            + self
+                .resource_preparation
+                .as_ref()
+                .map_or(0, |worker| worker.len());
         let active_holepunch_sessions = self.holepunch_manager.session_count();
         let interface_writer_queued_frames = self.interface_writer_queued_frames();
         let link_transmissions = self.event_tx.link_send_pool().in_flight();
@@ -338,6 +343,7 @@ impl Driver {
         self.event_tx.link_send_pool().close();
         self.pending_link_frames.clear();
         self.lifecycle_state = LifecycleState::Stopping;
+        self.stop_resource_preparations();
         let resource_actions = self.link_manager.cancel_all_resources(&mut self.rng);
         self.dispatch_link_actions(resource_actions);
         let link_actions = self.link_manager.teardown_all_links();

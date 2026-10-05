@@ -1,10 +1,10 @@
-# Sender compression offload screening
+# Sender compression offload
 
-Decision (2026-10-05): proceed to a bounded production-worker design. Moving
+Screening decision (2026-10-05): proceed to a bounded production-worker design. Moving
 sender compression off the driver substantially reduced echo stalls in all
 three measured pairs for every loaded payload family. The diagnostic is saved
-locally; no production scheduling change is retained yet. Ordering, overload,
-cancellation and shutdown qualification remain required before adoption.
+locally. The production implementation and its separate validation are recorded
+below; the original screening results describe the earlier diagnostic only.
 
 ## Mechanism and diagnostic scope
 
@@ -131,3 +131,103 @@ metadata in the runner is not this diagnostic's workload definition. No builds
 or separate test jobs ran concurrently with measurement. Host load and thread
 placement were uncontrolled; these are exploratory Linux endpoint results,
 not daemon/jemalloc or constrained-device qualification.
+
+## Production implementation and validation
+
+The implemented scope is buffered application sends of at least 16 KiB whose
+payload plus metadata fits one efficient Resource segment (1 MiB minus one
+byte). One persistent worker starts lazily per node. Admission is capped at
+eight jobs and 8 MiB, charged against actual owned input/metadata capacities
+plus reserved retained compressed output. Completed results and cancelled jobs
+retain their charge until consumed. Native codec workspace, one running job's
+temporary metadata-prefixed input/output and driver finalization are additional;
+this is not a bound on whole-node RSS or existing active Resources.
+
+The driver owns all link state, encryption, hashes, advertisements and proofs.
+Compression stays at level 6 with identical selection/format. Results return
+through a bounded private mailbox; a nonblocking wake event cannot deadlock
+against a full control queue. The driver polls the mailbox before waiting for
+events. Work is FIFO, and link-generation tokens prevent installation after
+teardown/replacement. Queued cancelled jobs skip compression; a running codec
+call finishes before its result is discarded. Shutdown joins the worker and
+drops queued work. Drain accounting includes admitted preparations and allows
+accepted work to finish until shutdown/the drain deadline.
+
+Small, split, reader and response paths retain synchronous preparation. A full
+budget or worker-start failure also uses the synchronous path, after earlier
+buffered preparations on the same link are resolved. Explicit reader/request/
+deferred-response submissions have the same ordering barrier. Independent
+inbound request handlers retain their existing synchronous behavior. There is
+no new overload rejection policy. Saturation can therefore still stall the
+driver; fairness under arbitrary overload is not promised. Joining cannot
+preempt bzip2 and may extend shutdown by the current bounded-size codec call.
+
+Validation passed: 1,002 network unit tests, 59 end-to-end tests, Clippy with
+warnings denied, formatting, and the network crate without default features.
+New tests cover job/byte limits including owned capacity, metadata/segment
+boundaries, FIFO, a full wake queue, cancellation before/during/after preparation,
+stale generations, draining, joined shutdown and worker panic recovery. A live
+12-send burst checks every payload/metadata and all completion proofs. A separate
+deterministic driver test fills admission and verifies synchronous fallback
+ordering without dropping sends.
+
+### Production timing comparison
+
+The unchanged `97fdcdf` baseline and production candidate each use the same
+local custom-case adapter, without diagnostic timing probes or per-job threads.
+The matrix matches the screening workload: 512 KiB payload, 128 echoes at 2 ms,
+bulk starting at 20 ms, one warmup and five measured rounds. Three alternating
+pairs cover four loaded families and a probes-only control. A second identical
+matrix pins the controller and both endpoints to **one shared logical CPU**;
+this is stricter than one CPU per endpoint. Both 30-case matrices passed.
+
+Pooled measured echo RTT p99, milliseconds:
+
+| Workload | Unpinned baseline | Unpinned worker | One-CPU baseline | One-CPU worker |
+| --- | ---: | ---: | ---: | ---: |
+| Probes only | 4.92 | 0.38 | 0.68 | 1.15 |
+| Seeded | 119.02 | 173.33 | 33.41 | 22.64 |
+| SHA-256 counter | 52.96 | 7.00 | 40.92 | 6.80 |
+| Random first half | 62.51 | 14.14 | 52.61 | 15.69 |
+| Repeated random block | 139.17 | 7.85 | 140.52 | 6.59 |
+
+All three one-CPU pairs improved loaded p99 for every family. Resource median
+completion on that CPU increased by 2.69, 5.00, 2.85 and 8.83 ms respectively:
+interactive fairness has a scheduling cost. Sender CPU per train rose slightly
+there; this change is not adopted as a general CPU/throughput optimization.
+The unpinned high-entropy, half-random and repeated-block improvements also
+held in every pair.
+
+The unpinned seeded regression is retained. Its first pair was 133.82 → 193.80
+ms p99; the other pairs improved (45.38 → 27.40 and 41.09 → 39.21). A longer
+follow-up used three more alternating pairs with 20 measured rounds and matched
+probes-only controls: all 12 cases passed, but seeded pooled p99 remained worse,
+78.91 → 86.09 ms. Individual pairs were 80.28 → 25.07, 53.71 → 105.18 and
+104.55 → 89.36 ms. Seeded p95 improved from 51.48 to 22.09 ms and Resource
+median from 97.28 to 65.54 ms. Control p99 also varied widely; no universal
+unpinned-tail improvement is established. Spikes occur during the Resource
+window; the receiver stage was not independently timed, so host contention or
+receiver work cannot be assigned as the cause from these results alone.
+
+Decision: retain the bounded sender implementation for the repeated large
+responsiveness gains, including under one-CPU contention, while explicitly
+leaving seeded extreme-tail behavior and receiver-side attribution open. Do
+not turn these measurements into a general latency guarantee. The worker
+mostly moves work; it does not eliminate compression/decompression costs.
+
+Warm post-load sender RSS increased by up to about 1.7 MiB in the seeded
+comparisons; other families were closer. These snapshots do not qualify peak
+RSS, long-running slow-peer retention or a daemon allocator. The eight-job/
+byte bounds are covered by deterministic tests, not inferred from RSS. The
+existing stalled-writer end-to-end tests also pass, but they do not replace a
+sustained Resource memory qualification.
+
+Across production comparisons and follow-up, **72 valid cases, 414 Resources
+and 78,336 echoes** completed, including warmups (separate from the unit/e2e
+suite and earlier prototype). Raw artifacts are in
+`.local/compression-offload/implementation/`: both binaries and build logs,
+production source snapshots/patch, the local fixture patch, `compare.py`,
+`followup.py`, summaries and per-case events/metrics. Each matrix manifest pins
+binary/source hashes, affinity and host load. The later metadata-boundary/saturation tests
+and API documentation do not change the measured production code. No builds
+or separate tests overlapped timing runs. Host load remained uncontrolled.

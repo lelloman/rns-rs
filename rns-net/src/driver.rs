@@ -116,6 +116,7 @@ mod events;
 mod interface_management;
 mod lifecycle;
 mod queries;
+mod resource_preparation;
 mod runtime_config;
 
 #[cfg(test)]
@@ -644,6 +645,7 @@ pub(crate) struct ManagedInterface {
 }
 
 pub struct Driver {
+    resource_preparation: Option<resource_preparation::Worker>,
     pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,
     pub(crate) pending_link_frames: std::collections::VecDeque<PendingLinkFrame>,
     pub(crate) engine: TransportEngine,
@@ -989,6 +991,7 @@ impl Driver {
                 .known_destinations_cleanup_interval_ticks,
             known_destination_cleanup: None,
             ratchet_cleanup_handle: None,
+            resource_preparation: None,
             known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults
                 .announce_cache_cleanup_interval_ticks,

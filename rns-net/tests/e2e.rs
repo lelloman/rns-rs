@@ -5794,3 +5794,59 @@ fn local_ratchets_survive_shared_daemon_restart() {
     bob.shutdown();
     daemon.shutdown();
 }
+
+#[test]
+fn test_buffered_resource_preparation_burst_preserves_payloads_and_proofs() {
+    let (transport, alice, alice_rx, bob, bob_rx, _, _, _, _, link_id) = setup_link();
+    let payloads: Vec<Vec<u8>> = (0u64..12)
+        .map(|id| {
+            (0u64..1024)
+                .flat_map(|counter| {
+                    let mut input = [0; 16];
+                    input[..8].copy_from_slice(&id.to_le_bytes());
+                    input[8..].copy_from_slice(&counter.to_le_bytes());
+                    rns_crypto::sha256::sha256(&input)
+                })
+                .collect()
+        })
+        .collect();
+    for (id, data) in payloads.iter().enumerate() {
+        alice
+            .send_resource(
+                link_id,
+                data.clone(),
+                Some((id as u64).to_le_bytes().to_vec()),
+            )
+            .unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut seen = std::collections::HashSet::new();
+    while seen.len() < payloads.len() {
+        let event = bob_rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("burst receive timed out");
+        match event {
+            TestEvent::ResourceReceived { data, metadata, .. } => {
+                let id = u64::from_le_bytes(metadata.unwrap().try_into().unwrap()) as usize;
+                assert_eq!(data, payloads[id]);
+                assert!(seen.insert(id), "duplicate Resource delivery");
+            }
+            TestEvent::ResourceFailed { error, .. } => panic!("Resource failed: {error}"),
+            _ => {}
+        }
+    }
+    let mut proofs = 0;
+    while proofs < payloads.len() {
+        match alice_rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("burst proofs timed out")
+        {
+            TestEvent::ResourceCompleted { .. } => proofs += 1,
+            TestEvent::ResourceFailed { error, .. } => panic!("Resource failed: {error}"),
+            _ => {}
+        }
+    }
+    alice.shutdown();
+    bob.shutdown();
+    transport.shutdown();
+}

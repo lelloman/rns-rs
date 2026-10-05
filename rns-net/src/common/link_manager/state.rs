@@ -7,6 +7,7 @@ type DeferredHandler = dyn Fn(LinkId, &str, [u8; 16], &[u8], Option<&RemoteIdent
 
 /// A managed link wrapping LinkEngine + optional Channel + resources.
 pub(super) struct ManagedLink {
+    pub(super) resource_generation: std::sync::Arc<()>,
     pub(super) engine: LinkEngine,
     pub(super) channel: Option<Channel>,
     /// Authenticated identity/request packets received before the responder's LRRTT.

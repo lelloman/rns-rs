@@ -372,6 +372,13 @@ impl LinkManager {
         }
     }
 
+    pub(crate) fn resource_generation(&self, id: &LinkId) -> Option<std::sync::Arc<()>> {
+        self.links
+            .get(id)
+            .filter(|link| link.engine.state() == LinkState::Active)
+            .map(|link| link.resource_generation.clone())
+    }
+
     /// Get the derived session key for a link (needed for hole-punch token derivation).
     pub fn get_derived_key(&self, link_id: &LinkId) -> Option<Vec<u8>> {
         self.links
@@ -569,6 +576,7 @@ impl LinkManager {
 
         engine.record_outbound_traffic(packet.data.len());
         let managed = ManagedLink {
+            resource_generation: std::sync::Arc::new(()),
             engine,
             channel: None,
             pre_rtt_packets: Vec::new(),
@@ -706,6 +714,7 @@ impl LinkManager {
         );
 
         let managed = ManagedLink {
+            resource_generation: std::sync::Arc::new(()),
             engine,
             channel: None,
             pre_rtt_packets: Vec::new(),
