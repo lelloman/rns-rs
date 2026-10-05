@@ -728,3 +728,76 @@ Temporary benchmark source edits were restored before timing. Next: separately
 measure sender queue wait, compression CPU/wall time, finalization and time to
 first advertisement, using diagnostic builds followed by an uninstrumented
 comparison of any proposed fix.
+
+
+## Sender-stage attribution and build sensitivity (2026-10-05)
+
+The original frozen sender penalty reproduces without instrumentation: three
+one-CPU pairs with a fixed baseline receiver give Resource medians of
+50.69/64.76, 49.87/65.22 and 50.18/65.05 ms (baseline/production). The pooled
+medians are 50.03/65.14 ms. Six cases/66 Resources/8,448 echoes passed.
+
+A separate external `/proc` diagnostic sampled the original preparation worker's
+cumulative scheduler CPU runtime every 10 ms. It added no endpoint code or
+breakpoints. Twelve cases/132 Resources/16,896 echoes passed. CPU per transfer
+includes all eleven transfers, including warmup, and worker startup/metadata,
+compression and result handling. It is not a direct codec-only measurement.
+
+| Affinity | Baseline worker CPU ms/transfer, three runs | Production worker CPU ms/transfer, three runs |
+|---|---|---|
+| Unpinned | 35.22 / 36.23 / 34.97 | 49.03 / 49.03 / 49.13 |
+| One shared CPU | 34.98 / 34.82 / 34.88 | 47.99 / 48.11 / 48.01 |
+
+The last observed worker CPU value stayed constant for 157–192 ms before shutdown,
+reducing the risk of missing final compression work. Polling gaps reached 11.45 ms.
+This independently places about 13–14 ms of additional CPU in the preparation
+worker; a completion-queue wait alone cannot explain the original result.
+
+### Why rebuilt stage timings cannot be substituted for the original binaries
+
+The sender worker and compressor sources are identical between the two revisions.
+Temporary instrumentation measured submission-to-worker wait, worker and codec
+wall/thread CPU, completed-result wait, sender finalization and action dispatch.
+Twelve cases/132 Resources/16,896 echoes passed. Rebuilding **reversed** the gap:
+
+| Affinity / stage | Instrumented baseline median ms | Instrumented production median ms |
+|---|---:|---:|
+| Unpinned codec CPU | 49.96 | 35.15 |
+| Unpinned queue wait | 0.015 | 0.026 |
+| Unpinned ready wait | 0.012 | 0.015 |
+| Unpinned finalization wall | 2.83 | 3.56 |
+| One-CPU codec CPU | 49.78 | 35.93 |
+| One-CPU ready wait | 0.005 | 0.005 |
+| One-CPU finalization wall | 2.09 | 2.06 |
+
+These are diagnostic results, not before/after performance improvements. The
+first baseline diagnostic run also had a large codec outlier (81.97 ms median
+wall, 74.85 ms CPU); it remains in the raw evidence. Action dispatch is not a
+measurement of first advertisement bytes reaching the socket.
+
+Debugger breakpoints at native codec initialization and end entry were tried on
+the original frozen executables. Six cases/66 Resources/8,448 echoes passed,
+but the CPU ordering also changed: baseline run medians 55.36/51.93/50.53 ms,
+production 50.11/48.81/46.95 ms. All-stop debugging perturbs execution, so these
+values cannot explain the uninstrumented gap. An initial wrapper invocation
+lost participant arguments and failed before transfers; that failure is retained.
+
+### Concrete alignment hypothesis
+
+The native `mainSort.isra.0` function has 1,887 normalized instructions in all four
+binaries, with the same normalized disassembly digest (absolute branch addresses
+and RIP displacements excluded). Its entry address modulo 64 correlates with
+codec speed: original baseline and instrumented production start at 0; original
+production and instrumented baseline start at 16. The function size is 8,521 bytes
+in each. This supports a native code-placement hypothesis, not a demonstrated
+queueing defect. Alignment still needs a controlled intervention; no global
+compiler flag, CPU-specific default or production scheduling change is justified
+by this correlation alone.
+
+Artifacts: ignored `.local/sender-stages/`, including instrumentation script and
+patch, both diagnostic binaries/build logs, exact baseline source archive,
+stage results, original-binary debugger logs, the uninstrumented `recheck/`,
+external `sampled/` counters, symbol addresses and normalized disassembly.
+The archived baseline build inherits the enclosing checkout's embedded version
+string; its source revision is `03f70ac`, not the embedded git label. Original
+frozen endpoint identities remain the SHA-256 values in the manifests.
