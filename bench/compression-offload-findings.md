@@ -604,3 +604,52 @@ local adapter and diagnostic scripts remain untracked/ignored. The next
 qualification work is sustained multi-link overload and memory behavior, plus
 attribution of the high-entropy completion cost. Split/file/request/response
 offload remains separate work; broad interference qualification is still open.
+
+
+## Multi-link receive memory screening (2026-10-05)
+
+A local diagnostic exercised the retained `2c320ba` revision with eight links
+sharing one receiver and its single receive worker. Four runs each completed
+64 bounded batches of eight 512 KiB Resources: **2,048 Resources / 1 GiB total**.
+Every payload, metadata identifier, receiving link and sender completion proof
+was checked; all four runs passed. Each batch drained before submitting the
+next. This is repeated concurrent work, not an unbounded saturation producer.
+
+The optimized profiling build used the System allocator and the existing e2e
+TCP relay setup. Sender, receiver, relay and test application share **one
+process**: the following RSS values are their aggregate, not receiver-only
+measurements. Each run used a fresh process. Sampling targeted 10 ms; actual
+maximum gaps were 10.7–23.9 ms, so sampled maxima are not strict peaks. No timing
+comparison, other benchmark, build or test overlapped these runs.
+
+| Payload / consumer | Sampled max RSS MiB | Drained RSS, last 16 batches MiB | RSS after 5 s idle MiB | RSS after node shutdown MiB |
+|---|---:|---:|---:|---:|
+| Repeated SHA-derived 4 KiB block | 100.21 | 92.18–92.25 | 92.25 | 19.79 |
+| Same, application waits 1 s before consuming each batch | 102.81 | 93.54–93.63 | 93.63 | 21.17 |
+| Repeated byte, high compression ratio | 90.78 | 90.26–90.48 | 90.49 | 18.10 |
+| SHA-derived high entropy, compression attempted | 100.03 | 98.30–98.61 | 98.61 | 20.68 |
+
+Ready-state aggregate RSS was 78.84–79.15 MiB. Compressed runs observed one
+receive-worker thread; the high-entropy run observed none. Late drained RSS
+spans were below 0.31 MiB, but small growth remains visible. Memory retained
+during the five-second idle period was released substantially at node shutdown.
+These observations do not attribute retention to a particular allocator, cache,
+queue or receiver object, and do not establish absence of a leak over longer
+runs. They also are not evidence of improvement against the old implementation:
+this pass has no baseline variant.
+
+The delayed-consumer case pauses the test application's event consumption;
+callbacks and socket readers keep running. It is **not a stalled network peer**.
+The highly compressible case expands to 512 KiB, not the 64 MiB decoder bound.
+Worker admission/fallback occupancy was not instrumented, so eight active links
+do not prove eight concurrent assembly jobs or quantify saturation. Receiver-only
+RSS, continuous overload, stalled sockets, hostile maximum-bound expansion and
+longer recovery remain open. The 256 MiB worker reservation is still not a
+whole-node memory limit.
+
+Reproduction evidence is retained under ignored `.local/receiver-memory/`:
+`harness.rs`, `harness.patch`, frozen `candidate.bin`, build logs, source revision
+and SHA-256 manifest, `run.py`, `summarize.py`, per-run logs and 10 ms RSS samples.
+The harness was appended temporarily to `rns-net/tests/e2e.rs`, built using
+`cargo test -p rns-net --test e2e --profile profiling --no-run`, then the original
+source was restored before execution. Production code was not changed.
