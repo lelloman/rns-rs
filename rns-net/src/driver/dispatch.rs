@@ -1885,9 +1885,51 @@ impl Driver {
 }
 
 fn is_outbound_path_request(raw: &[u8], path_request_dest: &[u8; 16]) -> bool {
-    RawPacket::unpack(raw).is_ok_and(|packet| {
-        packet.destination_hash == *path_request_dest
+    crate::packet_header::PacketHeader::unpack(raw).is_some_and(|packet| {
+        packet.destination_hash == path_request_dest
             && packet.flags.destination_type == rns_core::constants::DESTINATION_PLAIN
             && packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
     })
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::*;
+
+    #[test]
+    fn outbound_path_request_matches_full_unpack() {
+        let destination = [0x53; 16];
+        for flags in 0..=u8::MAX {
+            for hops in [
+                0,
+                rns_core::constants::PATHFINDER_M - 1,
+                rns_core::constants::PATHFINDER_M,
+                255,
+            ] {
+                for matching in [false, true] {
+                    let mut raw = [0x31; 80];
+                    raw[0] = flags;
+                    raw[1] = hops;
+                    let start = if flags & 0x40 == 0 { 2 } else { 18 };
+                    if matching {
+                        raw[start..start + 16].copy_from_slice(&destination);
+                    }
+                    for len in (0..=40).chain([80]) {
+                        let raw = &raw[..len];
+                        let expected = RawPacket::unpack(raw).is_ok_and(|packet| {
+                            packet.destination_hash == destination
+                                && packet.flags.destination_type
+                                    == rns_core::constants::DESTINATION_PLAIN
+                                && packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
+                        });
+                        assert_eq!(
+                            is_outbound_path_request(raw, &destination),
+                            expected,
+                            "flags={flags} hops={hops} len={len} matching={matching}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

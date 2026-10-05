@@ -23,6 +23,7 @@ pub mod announce_cache;
 pub mod ifac;
 pub mod local_ratchet;
 pub mod md5;
+mod packet_header;
 pub mod pickle;
 /// Process-global live profiling.
 ///

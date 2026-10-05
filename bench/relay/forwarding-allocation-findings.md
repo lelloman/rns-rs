@@ -143,3 +143,54 @@ comes from the installed jemalloc dependency. Original heap dumps are retained;
 `*.symbols.heap` copies only replace the executable mapping path with the matching
 frozen binary path for symbolization. The restored sampled binary's SHA-256
 matches both original manifests. All capture processes were stopped.
+
+## Outbound classification implemented — 2026-10-05
+
+The outbound path-request predicate now uses a crate-private borrowed header
+reader. It preserves `RawPacket::unpack`'s structural acceptance, including
+truncation, empty payloads, hop limits and flag interpretation, without copying
+payloads or hashing. Actual packet validation/authentication is unchanged.
+Differential tests cover all flag bytes and wire-length/hop boundaries. All 990
+network unit tests, 58 network end-to-end tests and net/bench all-target Clippy
+checks passed. An initial sandboxed unit run could not open sockets; the full
+unsandboxed rerun passed.
+
+Normal portable `profiling` builds, with no sampling instrumentation, were used
+for acceptance. Frozen endpoints and alternating run order were retained.
+The standard System-allocator relay comparison passed 576 cases across three
+initial bulk/mixed pairs plus a confirmation pair of each. Initial bulk pair 0
+is excluded from timing conclusions because it overlapped the end-to-end tests.
+The other bulk CPU changes were −12.45%, +0.21% and −9.49%; elapsed changes were
+−2.40%, +7.33% and −0.06%. The bulk latency spike did not repeat in confirmation.
+
+Mixed CPU changes were +4.76%, −6.24%, −1.97% and +2.14%: no consistent mixed CPU
+win. RSS medians stayed within 0.2%. Probe tails varied considerably. Pooled
+small-message-only p95/p99 was 0.634/3.786 ms before and 0.602/4.093 ms after;
+with a Resource active it was 60.320/134.857 ms before and 55.020/91.599 ms after.
+Individual pairs improved and regressed, including a candidate latency outlier;
+these short uncontrolled runs do not establish latency equivalence or a
+universal improvement. All results, including regressions, remain in evidence.
+
+A separate actual `rnsd`/jemalloc comparison used three alternating pairs with
+128 verified 1 MiB transfers at one link and 32 per link at eight links, after
+warmup. All 2,352 transfers including warmups passed. Daemon CPU is measured
+from `/proc/PID/stat` (10 ms accounting resolution); endpoint work is excluded.
+
+| Pair | One-link CPU | Eight-link CPU | Eight-link elapsed |
+|---|---:|---:|---:|
+| 0 | −9.21% | −5.50% | −5.03% |
+| 1 | −15.95% | −4.53% | −4.89% |
+| 2 | +5.26% | −2.30% | −3.59% |
+
+Eight-link RSS was 0.52–0.76 MiB lower and Resource p99 improved in all three
+pairs. One-link pair 2 had an elapsed/p99 outlier (+48% elapsed, 36→94 ms p99);
+one-link RSS stayed within 0.4 MiB. Retain the narrowly scoped allocation/hash
+removal based on the sustained eight-link gain and equivalent behavior, while
+keeping tail-latency qualification open. This is not a completed latency gate,
+a general mixed-workload CPU improvement, or a deployment-scale guarantee.
+
+Evidence: `.local/perf-opportunities/outbound-header-relay`,
+`outbound-header-confirm`, `outbound-header-daemon`, the frozen
+`relay-outbound-header.bin` and `rnsd-outbound-header.bin`, plus test/build logs.
+The original baseline binaries remain unchanged. Queue classification is next
+and must be evaluated relative to this outbound-only change.
