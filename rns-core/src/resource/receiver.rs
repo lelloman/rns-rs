@@ -2,8 +2,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::advertisement::ResourceAdvertisement;
-use super::parts::{extract_metadata_owned, map_hash};
-use super::proof::{build_proof_data, compute_expected_proof, compute_resource_hash};
+use super::assembly::{AssemblyData, AssemblyId, AssemblyResult, ResourceAssembly};
+use super::parts::map_hash;
 use super::types::*;
 use super::window::WindowState;
 use crate::buffer::types::Compressor;
@@ -14,6 +14,7 @@ use crate::constants::*;
 /// Unpacks advertisements, requests parts, receives parts, assembles data.
 /// Returns `Vec<ResourceAction>` — no I/O, no callbacks.
 pub struct ResourceReceiver {
+    assembly_id: Option<AssemblyId>,
     /// Current status
     pub status: ResourceStatus,
     /// Resource hash (from advertisement, 32 bytes)
@@ -153,6 +154,7 @@ impl ResourceReceiver {
         }
 
         Ok(ResourceReceiver {
+            assembly_id: None,
             status: ResourceStatus::None,
             resource_hash: adv.resource_hash,
             random_hash: adv.random_hash,
@@ -196,6 +198,9 @@ impl ResourceReceiver {
 
     /// Accept the advertised resource. Begins transfer.
     pub fn accept(&mut self, now: f64) -> Vec<ResourceAction> {
+        if self.status >= ResourceStatus::Assembling {
+            return vec![];
+        }
         self.status = ResourceStatus::Transferring;
         self.last_activity = now;
         self.request_next(now)
@@ -232,7 +237,7 @@ impl ResourceReceiver {
 
     /// Receive a part. Matches by map hash and stores it.
     pub fn receive_part(&mut self, part_data: &[u8], now: f64) -> Vec<ResourceAction> {
-        if self.status == ResourceStatus::Failed {
+        if self.status >= ResourceStatus::Assembling {
             return vec![];
         }
 
@@ -341,7 +346,7 @@ impl ResourceReceiver {
     ///
     /// HMU format: [resource_hash: 32 bytes][msgpack([segment, hashmap])]
     pub fn handle_hashmap_update(&mut self, hmu_data: &[u8], now: f64) -> Vec<ResourceAction> {
-        if self.status == ResourceStatus::Failed || !self.waiting_for_hmu {
+        if self.status >= ResourceStatus::Assembling || !self.waiting_for_hmu {
             return vec![];
         }
 
@@ -413,6 +418,9 @@ impl ResourceReceiver {
 
     /// Build and return request for next window of parts.
     pub fn request_next(&mut self, now: f64) -> Vec<ResourceAction> {
+        if self.status >= ResourceStatus::Assembling {
+            return vec![];
+        }
         if self.status == ResourceStatus::Failed || self.waiting_for_hmu {
             return vec![];
         }
@@ -477,8 +485,73 @@ impl ResourceReceiver {
         decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
         compressor: &dyn Compressor,
     ) -> Vec<ResourceAction> {
-        if self.received_count != self.total_parts {
-            return vec![ResourceAction::Failed(ResourceError::InvalidState)];
+        match self.prepare_data(decrypt_fn) {
+            Ok(data) => self.finish_data(data.run(compressor)),
+            Err(actions) => actions,
+        }
+    }
+
+    /// Join and authenticate parts, then transfer owned plaintext to an assembly job.
+    /// Keep this receiver alive until completion or cancellation. A pending attempt
+    /// ignores duplicate parts and ordinary part-receive timeouts.
+    #[allow(clippy::type_complexity)]
+    pub fn prepare_assembly(
+        &mut self,
+        decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
+    ) -> Result<ResourceAssembly, Vec<ResourceAction>> {
+        let data = self.prepare_data(decrypt_fn)?;
+        let id = AssemblyId::new();
+        self.assembly_id = Some(id.clone());
+        Ok(ResourceAssembly { id, data })
+    }
+
+    pub fn assembly_id(&self) -> Option<&AssemblyId> {
+        (self.status == ResourceStatus::Assembling)
+            .then_some(self.assembly_id.as_ref())
+            .flatten()
+    }
+
+    /// Publish a result only for the still-pending attempt that produced it.
+    /// Results from another receiver or a cancelled attempt are discarded.
+    pub fn complete_assembly(&mut self, result: AssemblyResult) -> Vec<ResourceAction> {
+        if self.assembly_id() != Some(&result.id) {
+            return Vec::new();
+        }
+        self.assembly_id = None;
+        self.finish_data(result.result)
+    }
+
+    /// Fail a pending worker attempt without blaming the peer for a local failure.
+    pub fn fail_assembly(&mut self, id: &AssemblyId) -> Vec<ResourceAction> {
+        if self.assembly_id() != Some(id) {
+            return Vec::new();
+        }
+        self.assembly_id = None;
+        let mut actions = self.cancel();
+        actions.push(ResourceAction::Failed(ResourceError::InvalidState));
+        actions
+    }
+
+    fn finish_data(
+        &mut self,
+        result: Result<Vec<ResourceAction>, ResourceError>,
+    ) -> Vec<ResourceAction> {
+        match result {
+            Ok(actions) => {
+                self.status = ResourceStatus::Complete;
+                actions
+            }
+            Err(error) => self.corrupt_actions(error),
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn prepare_data(
+        &mut self,
+        decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
+    ) -> Result<AssemblyData, Vec<ResourceAction>> {
+        if self.status >= ResourceStatus::Assembling || self.received_count != self.total_parts {
+            return Err(vec![ResourceAction::Failed(ResourceError::InvalidState)]);
         }
 
         self.status = ResourceStatus::Assembling;
@@ -492,12 +565,12 @@ impl ResourceReceiver {
                     Some(len) => stream_len = len,
                     None => {
                         self.status = ResourceStatus::Failed;
-                        return vec![ResourceAction::Failed(ResourceError::TooLarge)];
+                        return Err(vec![ResourceAction::Failed(ResourceError::TooLarge)]);
                     }
                 },
                 None => {
                     self.status = ResourceStatus::Failed;
-                    return vec![ResourceAction::Failed(ResourceError::InvalidState)];
+                    return Err(vec![ResourceAction::Failed(ResourceError::InvalidState)]);
                 }
             }
         }
@@ -507,69 +580,38 @@ impl ResourceReceiver {
         }
 
         // Decrypt
-        let mut decrypted = if self.flags.encrypted {
+        let decrypted = if self.flags.encrypted {
             match decrypt_fn(&stream) {
                 Ok(d) => d,
                 Err(_) => {
                     self.status = ResourceStatus::Failed;
-                    return vec![ResourceAction::Failed(ResourceError::DecryptionFailed)];
+                    return Err(vec![ResourceAction::Failed(
+                        ResourceError::DecryptionFailed,
+                    )]);
                 }
             }
         } else {
             stream
         };
 
-        // Strip random hash prefix
-        if decrypted.len() < RESOURCE_RANDOM_HASH_SIZE {
-            return self.corrupt_actions(ResourceError::InvalidPart);
-        }
-        let data_after_random = &decrypted[RESOURCE_RANDOM_HASH_SIZE..];
-
-        // Decompress
-        let decompressed = if self.flags.compressed {
-            match compressor.decompress_bounded(data_after_random, self.max_decompressed_size) {
-                Ok(d) => d,
-                Err(crate::buffer::types::DecompressError::TooLarge) => {
-                    return self.corrupt_actions(ResourceError::TooLarge);
-                }
-                Err(crate::buffer::types::DecompressError::InvalidData) => {
-                    return self.corrupt_actions(ResourceError::DecompressionFailed);
-                }
-            }
-        } else {
-            let data_len = decrypted.len() - RESOURCE_RANDOM_HASH_SIZE;
-            decrypted.copy_within(RESOURCE_RANDOM_HASH_SIZE.., 0);
-            decrypted.truncate(data_len);
-            decrypted
+        let (Ok(resource_hash), Ok(random_hash)) = (
+            self.resource_hash.as_slice().try_into(),
+            self.random_hash.as_slice().try_into(),
+        ) else {
+            return Err(self.corrupt_actions(ResourceError::InvalidAdvertisement));
         };
-
-        // Verify hash
-        let calculated_hash = compute_resource_hash(&decompressed, &self.random_hash);
-        if calculated_hash.as_slice() != self.resource_hash.as_slice() {
-            return self.corrupt_actions(ResourceError::HashMismatch);
-        }
-
-        // Compute proof before metadata extraction (proof uses full decompressed data)
-        let expected_proof = compute_expected_proof(&decompressed, &calculated_hash);
-        let proof_data = build_proof_data(&calculated_hash, &expected_proof);
-
-        // Extract metadata if present
-        let (data, metadata) = if self.has_metadata && self.segment_index == 1 {
-            match extract_metadata_owned(decompressed) {
-                Some((meta, rest)) => (rest, Some(meta)),
-                None => return self.corrupt_actions(ResourceError::InvalidPart),
-            }
-        } else {
-            (decompressed, None)
-        };
-
-        self.status = ResourceStatus::Complete;
-
-        vec![
-            ResourceAction::SendProof(proof_data),
-            ResourceAction::DataReceived { data, metadata },
-            ResourceAction::Completed,
-        ]
+        // The pending receiver is now only a protocol marker, not a second owner
+        // of the entire encrypted transfer and its part/hashmap allocations.
+        self.parts = Vec::new();
+        self.hashmap = Vec::new();
+        Ok(AssemblyData {
+            plaintext: decrypted,
+            resource_hash,
+            random_hash,
+            compressed: self.flags.compressed,
+            metadata: self.has_metadata && self.segment_index == 1,
+            limit: self.max_decompressed_size,
+        })
     }
 
     /// Handle cancel from sender (RESOURCE_ICL).
@@ -756,6 +798,88 @@ mod tests {
                 .unwrap();
 
         (sender, receiver)
+    }
+
+    fn ready_receiver() -> ResourceReceiver {
+        let (mut sender, mut receiver) = make_sender_receiver();
+        for action in receiver.accept(1001.0) {
+            if let ResourceAction::SendRequest(request) = action {
+                for action in sender.handle_request(&request, 1002.0) {
+                    if let ResourceAction::SendPart(part) = action {
+                        receiver.receive_part(&part, 1003.0);
+                    }
+                }
+            }
+        }
+        assert_eq!(receiver.received_count, receiver.total_parts);
+        receiver
+    }
+
+    #[test]
+    fn assembly_handoff_matches_synchronous_actions_and_releases_parts() {
+        let mut receiver = ready_receiver();
+        let job = receiver.prepare_assembly(&identity_decrypt).unwrap();
+        assert!(receiver.parts.is_empty() && receiver.hashmap.is_empty());
+        receiver.waiting_for_hmu = true;
+        assert!(receiver
+            .handle_hashmap_update(&receiver.resource_hash.clone(), 1004.0)
+            .is_empty());
+        assert!(receiver.accept(1004.0).is_empty());
+        assert!(receiver.request_next(1004.0).is_empty());
+        assert_eq!(receiver.assembly_id(), Some(job.id()));
+        assert!(receiver.receive_part(b"duplicate", 1004.0).is_empty());
+        assert!(receiver
+            .tick(
+                100000.0,
+                &|_| panic!("pending assembly decrypted again"),
+                &NoopCompressor
+            )
+            .is_empty());
+        assert!(receiver.prepare_assembly(&identity_decrypt).is_err());
+        let actions = receiver.complete_assembly(job.run(&NoopCompressor));
+        let expected = ready_receiver().assemble(&identity_decrypt, &NoopCompressor);
+        assert_eq!(format!("{actions:?}"), format!("{expected:?}"));
+        assert_eq!(receiver.status, ResourceStatus::Complete);
+        assert!(receiver.assembly_id().is_none());
+    }
+
+    #[test]
+    fn assembly_result_requires_original_live_attempt_even_for_same_hash() {
+        let mut first = ready_receiver();
+        let mut second = ready_receiver();
+        assert_eq!(first.resource_hash, second.resource_hash);
+        let first_job = first.prepare_assembly(&identity_decrypt).unwrap();
+        let second_job = second.prepare_assembly(&identity_decrypt).unwrap();
+        assert_ne!(first_job.id(), second_job.id());
+        assert!(first
+            .complete_assembly(second_job.run(&NoopCompressor))
+            .is_empty());
+        first.cancel();
+        assert!(first
+            .complete_assembly(first_job.run(&NoopCompressor))
+            .is_empty());
+        assert_eq!(first.status, ResourceStatus::Failed);
+    }
+
+    #[test]
+    fn assembly_local_failure_and_authentication_failure_cannot_publish_success() {
+        let mut receiver = ready_receiver();
+        assert!(receiver.prepare_assembly(&|_| Err(())).is_err());
+        assert!(receiver.assembly_id().is_none());
+        let mut receiver = ready_receiver();
+        let job = receiver.prepare_assembly(&identity_decrypt).unwrap();
+        let actions = receiver.fail_assembly(job.id());
+        assert!(matches!(
+            actions.as_slice(),
+            [
+                ResourceAction::SendCancelReceiver(_),
+                ResourceAction::Failed(ResourceError::InvalidState)
+            ]
+        ));
+        assert!(receiver.fail_assembly(job.id()).is_empty());
+        assert!(receiver
+            .complete_assembly(job.run(&NoopCompressor))
+            .is_empty());
     }
 
     #[test]
