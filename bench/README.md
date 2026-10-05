@@ -527,3 +527,4 @@ Completed trials and their adoption decisions:
 - [Bounded sampling](compression-sampling-findings.md)
 - [Output-buffer reservation](compression-allocation-findings.md)
 - [Compression levels, workspace and live transfer latency](compression-level-findings.md)
+- [Sender compression offload and echo latency](compression-offload-findings.md)
