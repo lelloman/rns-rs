@@ -801,3 +801,68 @@ external `sampled/` counters, symbol addresses and normalized disassembly.
 The archived baseline build inherits the enclosing checkout's embedded version
 string; its source revision is `03f70ac`, not the embedded git label. Original
 frozen endpoint identities remain the SHA-256 values in the manifests.
+
+
+## Native sorter alignment trial (2026-10-05)
+
+A controlled local dependency trial added `__attribute__((aligned(64)))` only
+to bzip2 1.0.8's native `mainSort` function. The control and candidate use the
+same production Rust source. The native function still has 8,521 bytes and
+1,887 identical normalized instructions; its address modulo 64 changes from
+16 to 0. The trial uses a local `bzip2-sys` Cargo patch, not a production fork.
+All temporary benchmark source and lockfile changes were restored before timing.
+
+Eight codec tests passed, including the fixed reference wire vector, malformed
+streams, decompression limits and multiblock data. Sixty uninstrumented network
+cases passed: **528 Resources and 84,480 echoes**, including warmups. The receiver
+was the same frozen production binary for both senders. Each of five traffic
+families had three alternating pairs in both affinity modes, with the same
+512 KiB / ten measured plus one warmup / 128-echo contract as the earlier runs.
+No profiler, build, test or RSS sampler overlapped timing.
+
+Pooled Resource median completion time and echo p99, milliseconds. CPU is the
+median across three runs of sender process CPU per measured round, including
+probe work; it is not codec-only CPU.
+
+| Affinity | Payload | Completion control → aligned | Sender CPU control → aligned | Echo p99 control → aligned |
+|---|---|---:|---:|---:|
+| normal | control | — | 27.73 → 27.21 | 0.41 → 0.42 |
+| normal | seeded | 68.74 → 62.46 | 69.84 → 66.99 | 2.21 → 2.67 |
+| normal | sha256-counter | 62.71 → 47.85 | 88.49 → 72.02 | 3.34 → 3.74 |
+| normal | random-prefix | 73.09 → 66.81 | 88.13 → 78.79 | 1.93 → 1.75 |
+| normal | repeated-random-block | 145.91 → 146.99 | 165.10 → 169.04 | 0.41 → 0.55 |
+| one-cpu | control | — | 32.71 → 34.40 | 0.56 → 0.51 |
+| one-cpu | seeded | 75.45 → 67.94 | 67.23 → 60.58 | 4.33 → 4.60 |
+| one-cpu | sha256-counter | 66.97 → 52.31 | 78.49 → 66.58 | 4.04 → 4.19 |
+| one-cpu | random-prefix | 80.07 → 74.70 | 81.57 → 75.48 | 3.70 → 3.68 |
+| one-cpu | repeated-random-block | 160.08 → 160.17 | 151.40 → 150.09 | 3.17 → 3.15 |
+
+The native placement intervention removes the high-entropy completion penalty
+in the tested binaries on this AMD Ryzen 9 5950X. Together with unchanged
+normalized sorter instructions and the original worker CPU samples, this is
+strong evidence for a native code-placement effect, rather than a reason to
+change worker scheduling or skip compression.
+
+This remains a **local candidate, not a portable default or a production fix**.
+Alignment also changes surrounding linked code placement, so it does not isolate
+a specific instruction-cache or branch-predictor mechanism. Echo tails vary;
+all per-pair values and unfavorable results remain in `summary.json`. The
+repeated-block unpinned completion median regresses in all three pairs; pooled
+sender CPU rises about 2.4%. Seeded and high-entropy pooled echo p99 also worsen
+in both affinity modes. These trade-offs must be retained. This one host does
+not qualify other Linux CPUs, architectures, compilers or allocator/build
+combinations. No host-specific instruction set was enabled.
+
+A maintainable build-time integration still needs evaluation. The one-function
+attribute is not equivalent to globally passing `-falign-functions=64`: that
+flag changes other native functions too and was **not tested here**. Avoid adding
+an entire dependency fork or a global compiler default solely from this screen.
+Next for this candidate: test a scoped build option across build layouts and
+representative Linux-server targets before adoption. Worker overload/stalled-peer
+memory qualification remains separate and unfinished.
+
+Local artifacts: `.local/sender-alignment/` contains the native one-line patch,
+local dependency source, original/trial lockfiles, frozen senders, exact build
+logs and codec test output, symbol/disassembly checks, hashes, CPU/compiler
+metadata and every case result. `run.py` uses the frozen crossover controller
+and fixed production receiver; it does not expand permanent benchmark tooling.
