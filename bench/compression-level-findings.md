@@ -128,6 +128,11 @@ API/policy design and explicit opt-in; these measurements do not select it for
 all Linux servers. Codec-state reuse remains unmeasured. Scheduling/offload is
 a separate next opportunity.
 
+The live 1 MiB payloads exceed the 1 MiB-minus-one-byte efficient segment limit
+(before metadata), so they exercise split Resources. Isolated codec inputs are
+compressed as one buffer. This is another reason their exact byte counts and
+timings are not interchangeable.
+
 The live binary was built at `1001a1b` with a local diagnostic patch using
 `cargo build --locked --profile profiling -p rns-bench`, System allocator and
 portable settings. Only the diagnostic supports `RNS_TRIAL_LEVEL` and
