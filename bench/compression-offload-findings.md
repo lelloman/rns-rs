@@ -653,3 +653,78 @@ and SHA-256 manifest, `run.py`, `summarize.py`, per-run logs and 10 ms RSS sampl
 The harness was appended temporarily to `rns-net/tests/e2e.rs`, built using
 `cargo test -p rns-net --test e2e --profile profiling --no-run`, then the original
 source was restored before execution. Production code was not changed.
+
+
+## High-entropy completion regression: endpoint isolation (2026-10-05)
+
+The slowdown follows the **production sender executable when compression is
+attempted**, including when it talks to the pre-refactor receiver. Swapping only
+the receiver does not reproduce the prior 14–16 ms completion penalty. This
+narrows the next profile to sender preparation/compression/finalization and
+publication; it does not yet identify the responsible function or source change.
+
+Both experiments reused the exact frozen baseline (`03f70ac` plus local fixture)
+and production (`436a101`/`7f8bcf3` plus fixture) endpoint binaries from
+`.local/receiver-offload/production/final/`. Each case sent 512 KiB SHA256-counter
+data, with one warmup and ten measured transfers, 128 echoes at 2 ms intervals
+on another link, and bulk starting 20 ms into the echo train. Three alternating
+repetitions ran unpinned and with controller and endpoints sharing one logical
+CPU. These were uninstrumented timing passes; no build, test or RSS sampler ran
+alongside them. Host load/frequency were not controlled.
+
+### Compression on/off control
+
+Both endpoints used the same revision in each case. Pooled Resource median
+completion times, milliseconds:
+
+| Affinity | Compression attempted | Baseline | Production |
+|---|---|---:|---:|
+| Unpinned | Yes | 53.80 | 64.28 |
+| Unpinned | No | 13.38 | 10.93 |
+| One shared CPU | Yes | 56.78 | 70.23 |
+| One shared CPU | No | 13.20 | 14.44 |
+
+Compression rejects this high-entropy payload as unhelpful; the receive worker
+is not used. Disabling the attempt removes most of the pooled completion gap,
+but is **not** a proposed default: compressible data still benefits from it.
+The compression-disabled differences are inconsistent across pairs.
+
+All outliers remain: unpinned compression-on first-pair medians were
+141.80/124.78 ms, and one-CPU baseline compression-on second-pair median was
+136.47 ms. The one-CPU production compression-off second-pair median was
+27.80 ms. Those observations prevent describing the aggregate as a uniform
+per-transfer cost or using this rerun to dismiss earlier echo-tail regressions.
+
+### Crossed endpoint binaries
+
+A local controller-only adapter selects independently frozen sender and receiver
+executables. Endpoint code is unchanged; the benchmark's ordinary environment
+manifest identifies the controller, so the separate crossover manifest is the
+authority for endpoint hashes. Baseline/production combinations completed:
+
+| Affinity | Sender | Receiver | Pooled median ms | Three run medians ms |
+|---|---|---|---:|---|
+| normal | baseline | baseline | 50.26 | 51.36 / 47.24 / 50.30 |
+| normal | production | baseline | 61.68 | 61.36 / 61.16 / 63.14 |
+| normal | baseline | production | 47.35 | 48.60 / 45.90 / 48.21 |
+| normal | production | production | 63.08 | 62.38 / 63.41 / 62.45 |
+| one-cpu | baseline | baseline | 52.10 | 52.75 / 51.75 / 52.46 |
+| one-cpu | production | baseline | 68.20 | 69.09 / 67.56 / 67.65 |
+| one-cpu | baseline | production | 52.58 | 52.95 / 52.56 / 52.79 |
+| one-cpu | production | production | 68.82 | 68.82 / 67.65 / 70.16 |
+
+Together these passes validated **48 cases, 528 Resource transfers and 67,584
+echoes**, including warmups. They localize the observed penalty to the sender
+binary and compression-enabled workload, not specifically to codec execution:
+queue wait, setup/finalization, driver scheduling and build/code-layout effects
+still need stage measurements. No production optimization was made from this
+screening alone, and the earlier receiver responsiveness gains and regression
+measurements remain on record.
+
+Raw evidence is under ignored `.local/receiver-regression/` and its `crossover/`
+subdirectory: scripts, frozen controller, exact temporary controller patch,
+build logs, endpoint SHA-256 manifests, all case results/events and summaries.
+Temporary benchmark source edits were restored before timing. Next: separately
+measure sender queue wait, compression CPU/wall time, finalization and time to
+first advertisement, using diagnostic builds followed by an uninstrumented
+comparison of any proposed fix.
