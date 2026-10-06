@@ -2824,6 +2824,10 @@ fn test_duplicate_discovery_path_request_is_suppressed() {
     engine.register_interface(make_interface(2, constants::MODE_FULL));
 
     let dest = [0xD7; 16];
+    engine.path_table.insert(
+        dest,
+        PathSet::from_single(make_path_entry(100.0, 1, InterfaceId(1), dest), 1),
+    );
     let tag = [0x07; 16];
     let data = make_path_request_data(&dest, &tag);
 
@@ -4380,4 +4384,95 @@ fn decoded_admission_rechecks_interface_hops_and_preserves_metadata() {
     assert_eq!(ctx.packet.rssi, rx.rssi);
     assert_eq!(ctx.packet.snr, rx.snr);
     assert_eq!(ctx.now, 42.0);
+}
+
+// Requests and announcements can arrive just before each one-second driver tick.
+// Replacing a due entry must not postpone it beyond every subsequent tick.
+#[test]
+fn repeated_path_requests_do_not_postpone_pending_response() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    let dest = [0xD6; 16];
+    let mut path = make_path_entry(100.0, 1, InterfaceId(2), dest);
+    path.announce_raw = Some(make_announce_raw(&dest, &[0xAB; 32]));
+    engine
+        .path_table
+        .insert(dest, PathSet::from_single(path, 1));
+    engine.handle_path_request(
+        &make_path_request_data(&dest, &[1; 16]),
+        InterfaceId(1),
+        100.8,
+    );
+    let mut rng = rns_crypto::FixedRng::new(&[0x42; 32]);
+    assert!(engine.tick(101.0, &mut rng).is_empty());
+    engine.handle_path_request(
+        &make_path_request_data(&dest, &[2; 16]),
+        InterfaceId(1),
+        101.8,
+    );
+    let actions = engine.tick(102.01, &mut rng);
+    assert!(
+        actions.iter().any(|a| matches!(a,
+            TransportAction::SendOnInterface { interface: InterfaceId(1), raw }
+            if RawPacket::unpack(raw).unwrap().context == constants::CONTEXT_PATH_RESPONSE
+        )),
+        "a repeated request must not defer the already pending response"
+    );
+}
+
+#[test]
+fn refreshed_announce_does_not_postpone_pending_send() {
+    for path_response in [false, true] {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        let dest = [0xD7; 16];
+        engine.path_table.insert(
+            dest,
+            PathSet::from_single(make_path_entry(100.0, 1, InterfaceId(1), dest), 1),
+        );
+        let mut first = make_announce_entry(dest, 100.8, 32);
+        first.retransmit_timeout = 101.2;
+        if path_response {
+            first.block_rebroadcasts = true;
+            first.attached_interface = Some(InterfaceId(1));
+            first.retries = constants::PATHFINDER_R;
+        }
+        engine.insert_announce_entry(dest, first, 100.8);
+        let mut rng = rns_crypto::FixedRng::new(&[0x42; 32]);
+        assert!(engine.tick(101.0, &mut rng).is_empty());
+        let mut fresh = make_announce_entry(dest, 101.8, 32);
+        fresh.retransmit_timeout = 102.2;
+        fresh.packet_data = vec![0xCD; 32];
+        engine.insert_announce_entry(dest, fresh, 101.8);
+        let actions = engine.tick(102.01, &mut rng);
+        assert!(
+            actions.iter().any(|a| matches!(a,
+                TransportAction::SendOnInterface { raw, .. }
+                if RawPacket::unpack(raw).unwrap().data == vec![0xCD; 32]
+            )),
+            "replacement must send fresh data without postponing pending work"
+        );
+    }
+}
+
+#[test]
+fn announce_replacement_does_not_revive_expired_or_completed_deadlines() {
+    for expired in [false, true] {
+        let mut config = make_config(true);
+        config.announce_table_ttl_secs = 10.0;
+        let mut engine = TransportEngine::new(config);
+        let dest = [0xD8; 16];
+        let mut old = make_announce_entry(dest, 100.0, 32);
+        old.retransmit_timeout = 100.2;
+        if !expired {
+            old.retries = constants::PATHFINDER_R + 1;
+        }
+        engine.insert_announce_entry(dest, old, 100.0);
+        let now = if expired { 111.0 } else { 101.0 };
+        let mut fresh = make_announce_entry(dest, now, 32);
+        fresh.retransmit_timeout = now + 0.4;
+        engine.insert_announce_entry(dest, fresh, now);
+        assert_eq!(engine.announce_table[&dest].retransmit_timeout, now + 0.4);
+    }
 }

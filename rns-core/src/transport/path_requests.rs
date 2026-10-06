@@ -238,7 +238,9 @@ impl TransportEngine {
         let Some(raw) = path.announce_raw.as_ref() else {
             return false;
         };
-        if let Some(existing) = self.announce_table.remove(&ctx.destination_hash) {
+        // Leave the active entry in place until replacement so insertion can
+        // preserve its pending send deadline under repeated path requests.
+        if let Some(existing) = self.announce_table.get(&ctx.destination_hash).cloned() {
             self.insert_held_announce(ctx.destination_hash, existing, ctx.now);
         }
         let retransmit_timeout = if let Some(iface_info) = self.interfaces.get(&ctx.interface_id) {

@@ -162,12 +162,20 @@ impl TransportEngine {
     pub(crate) fn insert_announce_entry(
         &mut self,
         dest_hash: [u8; 16],
-        entry: AnnounceEntry,
+        mut entry: AnnounceEntry,
         now: f64,
     ) -> bool {
         self.cull_expired_announce_entries(now);
         if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
             return false;
+        }
+        // Refresh the payload without letting incoming traffic repeatedly move
+        // pending work beyond the next maintenance tick. Completed entries no
+        // longer have a send to preserve; expired entries were culled above.
+        if let Some(pending) = self.announce_table.get(&dest_hash) {
+            if pending.retries <= constants::PATHFINDER_R {
+                entry.retransmit_timeout = entry.retransmit_timeout.min(pending.retransmit_timeout);
+            }
         }
         self.announce_table.insert(dest_hash, entry);
         self.enforce_announce_retention_cap(now);
