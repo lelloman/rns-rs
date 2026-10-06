@@ -71,6 +71,25 @@ two packages; omit it to retain the previous full build. Hooks remain opt-in
 and can be combined with the selected interfaces. This reduces compiled code,
 not runtime queue limits or protocol functionality on retained interfaces.
 
+### Smaller deployment artifacts on Linux
+
+To remove symbol tables from a deployment copy while retaining its matching
+unstripped executable for diagnostics (GNU binutils):
+
+```bash
+cargo build --release -p rns-cli --bin rnsd
+mkdir -p dist
+cp target/release/rnsd dist/rnsd.unstripped
+strip --strip-all -o dist/rnsd dist/rnsd.unstripped
+```
+
+Keep the matching unstripped file with the release artifacts. The default
+release build has symbol names but no full source-level debug information;
+use the existing `profiling` Cargo profile when source-level profiling is
+needed. Stripping reduces disk size, not runtime memory or protocol work.
+See [release-profile measurements](bench/release-profile-findings.md) for the
+size and runtime tradeoffs of compiler options.
+
 ### Selected Workspace Feature Flags
 
 The flags below are common selections accepted by root workspace build commands. This is not an exhaustive list: individual package manifests define additional crate-specific features, including the complete set of `rns-net` `iface-*` flags and the low-level `rns-hooks` backend features.
