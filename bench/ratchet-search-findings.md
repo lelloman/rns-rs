@@ -65,3 +65,70 @@ measurements, all pair outputs/statuses, source patch/revision, toolchain/CPU
 metadata, binary hashes and frozen executables. No build tree or perf capture
 was copied. Further work on full-length scans and lock scope remains open;
 reducing retained history or weakening authentication is not an accepted shortcut.
+
+
+## Shared-owner read-lock trial (2026-10-06): parked
+
+`LocalRatchets::decrypt` holds an exclusive state mutex throughout its newest-first
+search. That serializes concurrent calls sharing one owner. A local candidate
+changed only the owner state to `RwLock`: decryption, current-key lookup and
+retention queries borrowed a read guard; rotation, pruning, enforcement,
+recovery, persistence updates and announcement pins retained exclusive access.
+No history snapshots, secret caches, extra worker threads or search-order
+changes were introduced. Mutations still waited for active readers to release
+history. This prototype is **not retained in production**.
+
+Three alternating pairs on the same 5950X tested histories of 512 and 4,096
+keys with one/four callers sharing an actual `LocalRatchets` owner. Newest,
+oldest, full-length no-match and identity-fallback cases used 128-byte payloads.
+Fallback was allowed in this diagnostic. Each caller performed two operations
+for full scans or 64 for newest-key matches. Thread creation, signed-history
+import and fixture encryption were outside the timed barrier-to-join batches.
+Every successful operation verified its plaintext; no-match operations verified
+rejection. Process CPU time was measured separately from elapsed time. These
+are owner-API measurements, not network throughput or a single driver's latency.
+
+With unrestricted affinity, four-caller full-scan batches improved in all three
+pairs. The table shows medians for 4,096 keys; newest batches contain 256 calls,
+while other rows contain eight calls.
+
+| Case | Mutex elapsed ms | Mutex CPU ms | Read lock elapsed ms | Read lock CPU ms |
+|---|---:|---:|---:|---:|
+| newest | 20.06 | 21.37 | 4.76 | 18.96 |
+| oldest | 1495.25 | 1495.35 | 364.09 | 1446.56 |
+| no-match | 1478.25 | 1478.35 | 363.95 | 1454.20 |
+| fallback | 1463.45 | 1463.60 | 366.06 | 1455.88 |
+
+The improvement is concurrency, not fewer exchanges: four callers can consume
+roughly four CPUs at once. Single-caller full scans remain linear and about the
+same cost. This does not make a node driver issue parallel decryptions.
+
+A further three alternating pairs pinned both binaries to one available CPU,
+without reserving that CPU. Four-caller full-scan batches remained about
+1.43–1.47 seconds. However, newest-key maximum call times at 4,096 keys regressed
+in every pair: **10.274 -> 13.696 ms**, **10.576 -> 13.695 ms**, and
+**10.730 -> 14.042 ms**. Median call time remained about 0.07 ms and batch time
+about 18 ms. These are observed maxima from 256-call batches, not population
+p99 guarantees. Making all callers runnable changes scheduling and removes the
+mutex's serialization; attributing the precise tail increase would need a
+scheduler trace. The repeated regression is retained rather than averaged away.
+
+Decision: park the read-lock default. The multicore benefit is real in this
+workload, but the plan requires interactive-latency trade-offs to be resolved
+before adopting portable defaults. Reconsider only for an explicitly scoped
+concurrent-owner policy or a mechanism that also addresses the single-CPU case.
+Do not infer a universal benefit or silently select a CPU-count threshold.
+
+All 192 case measurements completed successfully. The prototype passed 1,024
+network unit tests, 60 e2e tests, all-target Clippy and formatting. The minimal
+network library build passed with its disabled-interface warnings. A controlled
+shared-history guard regression verified concurrent decryption and that pruning
+and enforcement wait for readers; after retirement, the old ratchet and forbidden
+identity fallback were rejected. Builds/tests did not overlap measurements.
+No production source or prototype test remains in the working tree.
+
+Ignored `.local/ratchet-lock/` retains the candidate patch, baseline source,
+small harness/lockfile, frozen binaries, revision/patch/hashes, CPU/toolchain
+metadata, all per-call timings and exit statuses, and test logs. Local artifacts
+remain compact; no build trees or profiler captures were copied. Single-request
+X25519 cost and broader mutation-wait behavior remain open.
