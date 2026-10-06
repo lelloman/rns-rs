@@ -259,3 +259,110 @@ transfer summaries. The diagnostic is `rnsd-stats`; measured baseline binaries
 were preserved. Rebuilding uses the local manifest and shared `target` directory;
 reruns require fresh output names in the runner. Total local allocator evidence
 is about 193 MiB; no independent target tree or per-allocation trace was created.
+
+
+## Arena-limit screen — revision `1ef8f6d`
+
+Keep the default arena policy. An automatic arena limit of 8 reduces memory in
+this workload, but is not a general performance improvement. All three one-link
+pairs show higher CPU per Resource and worse completion latency; eight-link CPU
+and latency results are mixed. Keep this as an experimental memory tradeoff,
+not a recommended deployment setting or a new Cargo feature.
+
+Only the daemon's `narenas` option changes. The baseline uses its default
+configuration, which reports 128 on this host; the candidate sets
+`_RJEM_MALLOC_CONF=narenas:8`. This limits automatic arenas, not the number of
+arenas actually active. Effective options are read back and asserted on every
+run. Background threads remain disabled, dirty decay remains 10,000 ms, and
+muzzy decay remains zero. Endpoints receive neither the candidate setting nor
+any allocator change.
+
+Two accounting runs (128 then 8) use the previous frozen statistics-enabled
+executable. Six performance runs use one new statistics-disabled executable,
+with a startup options check but no observer thread. The three performance pairs
+run in orders 128/8, 8/128, 128/8. Builds finish before measurements, and frozen
+endpoint and daemon hashes are checked. Runtime library code is unchanged from
+`154a731`; intervening commits contain findings only.
+
+Each run uses the existing verified 512 KiB, compression-disabled Resource
+workload: one then eight links, depth two, 30 seconds per load phase, fresh daemon
+state, ten seconds initial idle and recovery. Accounting alone extends eight-link
+recovery to 60 seconds and follows it with an explicit purge. All eight runs
+succeed: 61,141 accounting transfers plus 167,576 performance transfers, or
+228,717 total. No failures or retries are excluded.
+
+### Accounting mechanism
+
+Values are MiB, default → 8, using the same windows as the preceding accounting
+section. These instrumented measurements explain allocation behavior; they do
+not replace the statistics-disabled RSS measurements below.
+
+| Window | Allocated | Active pages | Metadata | Dirty pages | Process RSS |
+|---|---:|---:|---:|---:|---:|
+| Initial idle | 24.95 → 24.95 | 25.22 → 25.22 | 8.26 → 5.46 | 2.10 → 2.10 | 32.37 → 31.77 |
+| Eight-link load | 27.66 → 27.78 | 30.50 → 29.40 | 13.86 → 8.38 | 5.37 → 4.31 | 44.11 → 38.41 |
+| Recovery, 60 s | 25.03 → 25.06 | 25.75 → 25.73 | 12.99 → 7.51 | 4.12 → 5.00 | 39.50 → 35.71 |
+| After purge | 25.03 → 25.06 | 25.75 → 25.73 | 12.99 → 7.51 | 0.00 → 0.00 | 37.59 → 33.18 |
+
+Lower metadata and active-page overhead are consistent with the intended
+mechanism. Dirty pages after recovery increase rather than decrease; fewer
+arenas do not automatically mean better reclamation. Allocated bytes after
+recovery remain close to initial idle for both settings. As before, allocator
+metadata and resident counters must not be equated with physical RSS.
+
+### Statistics-disabled results
+
+RSS is the load median and the last-three-second recovery median. Values are
+MiB, default → 8. These runs have no forced purge.
+
+| Pair | Eight-link load RSS | Eight-link recovery RSS | Sampled peak RSS |
+|---|---:|---:|---:|
+| 1 | 42.51 → 37.84 | 37.75 → 35.14 | 44.26 → 39.34 |
+| 2 | 43.16 → 37.83 | 37.69 → 35.20 | 44.67 → 39.27 |
+| 3 | 41.80 → 37.93 | 37.31 → 35.53 | 43.69 → 39.00 |
+
+Eight-link load RSS falls by 3.87–5.33 MiB (9.3–12.3%); recovery RSS falls by
+1.78–2.61 MiB. One-link load RSS changes by only −0.26 to +0.004 MiB, and its
+recovery change is inconsistent (−0.50 to +0.19 MiB). Threads return from 10/38
+to 6 in every performance run. Maximum process sample gap is 0.135 seconds.
+
+CPU brackets daemon setup/load/drain and is normalized by verified Resources;
+endpoint CPU is excluded. Completion latency runs from submission return through
+proof/application acknowledgement settlement and includes queued work. Goodput
+is verified payload divided by the whole load-phase duration, including setup
+and drain. Values are default → 8; pairs and link counts are kept separate.
+
+| Pair | Links | CPU ms/Resource | Median completion ms | p99 completion ms | Phase goodput MiB/s |
+|---|---:|---:|---:|---:|---:|
+| 1 | 1 | 4.767 → 5.389 | 14.127 → 16.266 | 19.924 → 26.369 | 59.142 → 51.146 |
+| 1 | 8 | 6.177 → 6.000 | 19.269 → 17.847 | 28.819 → 25.498 | 350.981 → 390.776 |
+| 2 | 1 | 5.116 → 5.325 | 14.370 → 15.713 | 26.664 → 39.314 | 56.942 → 50.421 |
+| 2 | 8 | 6.519 → 5.977 | 21.662 → 17.780 | 33.054 → 24.933 | 322.771 → 383.789 |
+| 3 | 1 | 5.079 → 5.622 | 15.189 → 17.279 | 27.235 → 80.025 | 53.594 → 43.302 |
+| 3 | 8 | 5.692 → 5.810 | 16.678 → 17.001 | 21.530 → 22.010 | 416.870 → 385.609 |
+
+One-link CPU/Resource rises 4.1–13.1%; median completion rises 9.3–15.1%, and
+p99 rises 32.3–193.8%. The largest tail observation is exploratory, not an estimate
+of a universal regression. Eight-link CPU changes by −8.3% to +2.1%, and p99 by
+−24.6% to +2.2%. The worst individual sender's eight-link p99 also improves in
+pairs 1/2 and worsens in pair 3: the worst-sender metric follows the aggregate
+direction. This does not establish that every sender improved.
+
+The host remains the unpinned, non-isolated 5950X with 32 CPUs available,
+`schedutil` and boost enabled. Recorded one-minute load averages range from
+3.39 to 18.69 and include this workload. Scheduling, allocator placement and
+host interference are not isolated causes of the timing differences. Three
+alternating pairs establish a useful memory tradeoff, not a portable performance
+guarantee. No interactive, constrained-CPU, slow-peer or long-soak qualification
+has been added. There is no basis here to promote the candidate to a default.
+
+Next, test background reclamation with the default arena policy, changing only
+that option. Keep arena count fixed so the effects remain distinguishable.
+
+Compact ignored evidence is in `.local/allocator-daemon/`: `arena.rs`,
+`arena-{stats,perf}.py`, `run-arena-screen.py`, the two `summarize-arena-*.py`
+scripts, `arena-provenance.json`, `arena-host.jsonl`, the screen contract,
+`arena-{accounting,perf}-summary.json`, and all eight raw run directories.
+`rnsd-arena` is the statistics-disabled comparison binary; `rnsd-stats` is the
+accounting binary. Reproduction requires fresh output directory names. Total
+local allocator evidence is about 260 MiB, using the existing shared target.
