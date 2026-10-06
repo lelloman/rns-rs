@@ -46,6 +46,31 @@ interoperability validation.
 cargo build
 ```
 
+### Selecting CLI interfaces
+
+`rns-cli` and `rns-ctl` include all network interfaces by default. For a Linux
+server that needs TCP and local shared-instance connections only:
+
+```bash
+cargo build --release -p rns-cli --bin rnsd --no-default-features --features iface-tcp
+cargo build --release -p rns-ctl --no-default-features --features iface-tcp
+```
+
+Both packages expose `iface-tcp`, `iface-udp`, `iface-auto`,
+`iface-serial`, `iface-kiss`, `iface-ax25-kiss`, `iface-pipe`, `iface-rnode`,
+`iface-backbone`, `iface-i2p`, and `iface-weave`. AX.25 KISS also enables KISS;
+Weave is Linux-only. The local interface stays enabled because the CLI tools
+require shared-instance and remote-management APIs.
+Configure only interfaces included in the binary; disabling features does not
+rewrite an existing configuration or its default AutoInterface.
+
+Build the selected packages explicitly: Cargo combines dependency features, so
+building other workspace packages together can enable their interfaces too.
+`--no-default-features` now removes the implicit full interface set from these
+two packages; omit it to retain the previous full build. Hooks remain opt-in
+and can be combined with the selected interfaces. This reduces compiled code,
+not runtime queue limits or protocol functionality on retained interfaces.
+
 ### Selected Workspace Feature Flags
 
 The flags below are common selections accepted by root workspace build commands. This is not an exhaustive list: individual package manifests define additional crate-specific features, including the complete set of `rns-net` `iface-*` flags and the low-level `rns-hooks` backend features.

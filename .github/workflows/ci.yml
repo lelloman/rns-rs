@@ -117,6 +117,11 @@ jobs:
       - name: Build hook WASM examples
         run: ./rns-hooks/build-examples.sh
 
+      - name: Check CLI with selected interfaces
+        run: |
+          cargo check -p rns-cli -p rns-ctl --bins --no-default-features
+          cargo check -p rns-cli -p rns-ctl --bins --no-default-features --features iface-tcp,rns-hooks-native
+
       - name: Run workspace tests
         run: cargo test --workspace
 
@@ -235,8 +240,8 @@ jobs:
           CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
           AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
         run: |
-          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-cli --bin rnsd
-          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-ctl
+          cargo build --release --target armv7-unknown-linux-gnueabihf -p rns-cli --bin rnsd
+          cargo build --release --target armv7-unknown-linux-gnueabihf -p rns-ctl
 
       - name: Build ARMv7 runtime binaries with native hooks
         env:
@@ -244,8 +249,8 @@ jobs:
           CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
           AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
         run: |
-          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-cli --bin rnsd --features rns-hooks-native
-          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-ctl --features rns-hooks-native
+          cargo build --release --target armv7-unknown-linux-gnueabihf -p rns-cli --bin rnsd --features rns-hooks-native
+          cargo build --release --target armv7-unknown-linux-gnueabihf -p rns-ctl --features rns-hooks-native
 
       - name: Build ARMv7 rns-server with built-in hooks
         env:

@@ -9,7 +9,18 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = []
+default = ["iface-tcp", "iface-udp", "iface-auto", "iface-serial", "iface-kiss", "iface-ax25-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p", "iface-weave"]
+iface-tcp = ["rns-cli/iface-tcp"]
+iface-udp = ["rns-cli/iface-udp"]
+iface-auto = ["rns-cli/iface-auto"]
+iface-serial = ["rns-cli/iface-serial"]
+iface-kiss = ["rns-cli/iface-kiss"]
+iface-ax25-kiss = ["rns-cli/iface-ax25-kiss"]
+iface-pipe = ["rns-cli/iface-pipe"]
+iface-rnode = ["rns-cli/iface-rnode"]
+iface-backbone = ["rns-cli/iface-backbone"]
+iface-i2p = ["rns-cli/iface-i2p"]
+iface-weave = ["rns-cli/iface-weave"]
 tls = ["rustls"]
 rns-hooks = ["rns-hooks-native"]
 rns-hooks-wasm = ["rns-net/rns-hooks-wasm"]
@@ -17,8 +28,8 @@ rns-hooks-native = ["rns-net/rns-hooks-native"]
 rns-hooks-builtin = ["rns-net/rns-hooks-builtin"]
 
 [dependencies]
-rns-cli = { path = "../rns-cli", version = "0.4.3" }
-rns-net.workspace = true
+rns-cli = { path = "../rns-cli", version = "0.4.3", default-features = false }
+rns-net = { version = "0.7.3", path = "../rns-net", default-features = false }
 rns-core.workspace = true
 rns-crypto.workspace = true
 libc = "0.2"
