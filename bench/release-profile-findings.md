@@ -4,8 +4,8 @@
 
 Keep the current release defaults. ThinLTO and size-oriented optimization have
 repeatable Resource regressions in this screen. One codegen unit is a smaller
-candidate with near-baseline core-cycle timings, but is not yet qualified for
-live-server latency or other machines. No new Cargo profile is installed.
+candidate with near-baseline core-cycle timings, but the live follow-up below
+finds configuration-specific latency costs on one CPU. No new Cargo profile is installed.
 
 Stripping a deployment copy is an independent disk-size improvement: the default
 full-interface `rnsd` shrinks by **17.7%**, from 6,134,296 to 5,051,152 bytes.
@@ -103,9 +103,8 @@ Use `strip --strip-all -o DEPLOYMENT_COPY ORIGINAL` for the independent strippin
 comparison. Do not combine the compiler options based on these single-setting
 results: combinations have not been measured.
 
-Next candidate qualification is one codegen unit under live mixed traffic,
-including constrained-CPU latency, before proposing an opt-in deployment profile.
-Cold builds, additional architectures, startup/RSS, and scoped native-function
+The live one-CGU qualification is recorded below. Cold builds, additional
+architectures, daemon startup/allocator retention, and scoped native-function
 alignment remain unmeasured here. Do not turn this host's results into portable
 defaults.
 
@@ -115,3 +114,91 @@ per-cycle records, reports and diagnostic scripts (~85 MiB). Compilation reused
 the existing shared target (approximately 1 GiB growth during this slice).
 README documentation changed during the last measurement runs; their source
 manifests record that difference. All measured code was frozen from `e5d9c6a`.
+
+## Live one-codegen-unit qualification (2026-10-06)
+
+The follow-up keeps the release default unchanged and parks one codegen unit
+as a general server-performance recommendation. Its smaller artifact remains a
+real size tradeoff, but aggregate echo statistics hid configuration-specific
+latency costs on one CPU. No new Cargo profile or runtime change is introduced.
+
+The frozen baseline and one-CGU executables from the screen above ran the existing
+`resource-mixed` suite over real loopback TCP. Both endpoints use the selected
+build and the System allocator; this is not a jemalloc daemon measurement.
+A separate link schedules 128 verified 64-byte echoes every 2 ms, with and without
+a 1 MiB Resource starting after 20 ms. Three payload families and both compression
+settings are tested. Resource completion includes receiver verification and
+sender settlement. Scheduled echo latency includes submission lateness.
+
+Three alternating pairs used `mixed-smoke` (one warmup, two measured rounds per
+case) unrestricted, and three pairs used the same suite with the controller,
+both endpoints and all their workers pinned to logical CPU 0. That CPU was not
+reserved; affinity is a contention screen, not an isolated server or a CPU quota.
+The host exposes 32 logical CPUs. No builds/tests ran during the measurements.
+
+Pooled scheduled echo p99 and total endpoint CPU across the six Resource-active
+configurations in each run are below. Each p99 contains 1,536 measured echoes;
+CPU snapshots bracket the measured batches and exclude the controller. Pooling
+is a summary, not a substitute for the per-configuration checks below.
+
+| Affinity | Pair | Echo p99 baseline → one CGU, ms | Endpoint CPU baseline → one CGU, s |
+|---|---:|---:|---:|
+| unrestricted | 1 | 87.293 → 74.757 | 1.6143 → 1.4456 |
+| unrestricted | 2 | 83.422 → 80.429 | 1.6200 → 1.4419 |
+| unrestricted | 3 | 87.111 → 78.464 | 1.5344 → 1.5366 |
+| one-cpu | 1 | 67.670 → 66.561 | 1.1090 → 1.0952 |
+| one-cpu | 2 | 66.343 → 65.640 | 1.1081 → 1.0858 |
+| one-cpu | 3 | 65.104 → 65.016 | 1.1254 → 1.1024 |
+
+Echo-only pooled p99 stays below 0.6 ms in these initial runs, with mixed CPU
+changes. Endpoint post-batch RSS sums are modestly smaller for one CGU (roughly
+0.6–1.0 MiB across the two processes); these snapshots are not a peak-memory or
+long-term retention measurement.
+
+### Checking the configuration hidden by pooling
+
+Uncompressed SHA-256-counter Resource completion on one CPU was 3.9%, 4.3% and
+6.2% slower in the three short pairs. Those medians contain only two completions,
+so two additional alternating pairs used `mixed-quick`: three fresh process-pair
+repetitions and three measured rounds, yielding nine Resource completions per
+configuration per executable per pair. The full matrix was retained, rather than
+changing the workload to favor one observed case.
+
+| Longer pair | Payload | Compression | Resource median baseline → one CGU, ms | Scheduled echo p99 baseline → one CGU, ms |
+|---|---|---|---:|---:|
+| 4 | repeated | off | 24.460 → 25.277 | 9.533 → 10.823 |
+| 4 | repeated | on | 15.979 → 16.340 | 11.341 → 11.474 |
+| 4 | seeded | off | 24.492 → 25.221 | 10.305 → 11.191 |
+| 4 | seeded | on | 120.475 → 119.587 | 64.180 → 64.073 |
+| 4 | sha256-counter | off | 23.992 → 25.121 | 9.917 → 10.160 |
+| 4 | sha256-counter | on | 94.855 → 105.065 | 76.932 → 96.782 |
+| 5 | repeated | off | 25.073 → 25.468 | 10.816 → 10.668 |
+| 5 | repeated | on | 16.654 → 15.001 | 12.170 → 10.203 |
+| 5 | seeded | off | 24.351 → 26.220 | 10.285 → 15.242 |
+| 5 | seeded | on | 121.535 → 126.272 | 65.741 → 725.364 |
+| 5 | sha256-counter | off | 24.524 → 25.385 | 10.146 → 10.347 |
+| 5 | sha256-counter | on | 96.316 → 99.910 | 79.595 → 81.002 |
+
+The uncompressed SHA-256-counter Resource slowdown persists in both longer pairs
+(+4.7% and +3.5%), after +3.9–6.2% in the initial screen. Pair 5's 725 ms seeded
+compressed echo p99 is localized to one of its three process-pair repetitions:
+its Resource completions are 408–1,217 ms, while the other two repetitions remain
+around 125–126 ms. This outlier is retained, but its cause is unresolved on the
+unisolated host; it is not evidence by itself of a deterministic compiler effect.
+
+These are observed short-run medians and empirical p99 values, not population
+estimates or a proof of mechanism. The per-configuration results do not support
+promoting the smaller executable as an unconditional server improvement.
+
+All **288 live cases passed**, with **92,160 measured verified echoes** and
+**360 measured verified Resource transfers**, plus warmups. Run status, payload,
+probe-count, Resource completion and executable hashes were checked. No timeout
+or correctness failure occurred. These tests do not cover a saturated link,
+transport relay, additional hardware, or daemon allocator retention.
+
+Compact ignored evidence is in `.local/cgu-live/`: exact invocations, build
+provenance, baked source identity, affinity, raw case results, paired summaries,
+and logs. The runner's redundant frozen binaries are replaced after worker exit
+by verified hard links to the original retained executables; no builds or new
+target trees were needed. Original code revision remains `e5d9c6a`; subsequent
+commits only document these experiments.
