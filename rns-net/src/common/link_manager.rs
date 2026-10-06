@@ -1060,11 +1060,13 @@ impl LinkManager {
             ResourceIcl {
                 link_id: LinkId,
                 inbound_actions: Vec<LinkAction>,
+                resource_hash: Vec<u8>,
             },
             /// Resource cancel from receiver (link-decrypted).
             ResourceRcl {
                 link_id: LinkId,
                 inbound_actions: Vec<LinkAction>,
+                resource_hash: Vec<u8>,
             },
             Error,
         }
@@ -1272,24 +1274,30 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_ICL => {
-                    let _ = link.engine.decrypt(&packet.data); // decrypt to validate
-                    let inbound_actions = link.engine.record_inbound(time::now());
-                    let link_id = *link.engine.link_id();
-                    LinkDataResult::ResourceIcl {
-                        link_id,
-                        inbound_actions,
+                constants::CONTEXT_RESOURCE_ICL => match link.engine.decrypt(&packet.data) {
+                    Ok(resource_hash) if resource_hash.len() == 32 => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::ResourceIcl {
+                            link_id,
+                            inbound_actions,
+                            resource_hash,
+                        }
                     }
-                }
-                constants::CONTEXT_RESOURCE_RCL => {
-                    let _ = link.engine.decrypt(&packet.data); // decrypt to validate
-                    let inbound_actions = link.engine.record_inbound(time::now());
-                    let link_id = *link.engine.link_id();
-                    LinkDataResult::ResourceRcl {
-                        link_id,
-                        inbound_actions,
+                    _ => LinkDataResult::Error,
+                },
+                constants::CONTEXT_RESOURCE_RCL => match link.engine.decrypt(&packet.data) {
+                    Ok(resource_hash) if resource_hash.len() == 32 => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::ResourceRcl {
+                            link_id,
+                            inbound_actions,
+                            resource_hash,
+                        }
                     }
-                }
+                    _ => LinkDataResult::Error,
+                },
                 _ => match link.engine.decrypt(&packet.data) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
@@ -1505,16 +1513,18 @@ impl LinkManager {
             LinkDataResult::ResourceIcl {
                 link_id,
                 inbound_actions,
+                resource_hash,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_icl(&link_id));
+                actions.extend(self.handle_resource_icl(&link_id, &resource_hash));
             }
             LinkDataResult::ResourceRcl {
                 link_id,
                 inbound_actions,
+                resource_hash,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_rcl(&link_id));
+                actions.extend(self.handle_resource_rcl(&link_id, &resource_hash));
             }
             LinkDataResult::Error => {}
         }

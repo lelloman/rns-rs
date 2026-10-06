@@ -958,7 +958,7 @@ fn extract_send_packet_at(actions: &[LinkManagerAction], idx: usize) -> Vec<u8> 
     }
 }
 
-fn extract_any_send_packet(actions: &[LinkManagerAction]) -> Vec<u8> {
+pub(super) fn extract_any_send_packet(actions: &[LinkManagerAction]) -> Vec<u8> {
     actions
         .iter()
         .find_map(|a| match a {
@@ -2471,6 +2471,312 @@ fn test_split_resource_accept_app_queries_only_first_segment() {
     assert!(sender_completed);
 }
 
+pub(super) fn deliver_cancel_packet(
+    manager: &mut LinkManager,
+    raw: &[u8],
+) -> Vec<LinkManagerAction> {
+    let packet = RawPacket::unpack(raw).unwrap();
+    manager.handle_local_delivery(
+        packet.destination_hash,
+        raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    )
+}
+
+#[test]
+fn resource_cancellation_rejects_unauthenticated_malformed_and_unknown_targets() {
+    for context in [
+        constants::CONTEXT_RESOURCE_ICL,
+        constants::CONTEXT_RESOURCE_RCL,
+    ] {
+        let (mut sender, mut receiver, link) = setup_active_link();
+        receiver.set_resource_strategy(&link, ResourceStrategy::AcceptAll);
+        for body in [b"first".as_slice(), b"second".as_slice()] {
+            let adv = sender.send_resource(&link, body, None, &mut OsRng);
+            deliver_cancel_packet(&mut receiver, &extract_any_send_packet(&adv));
+        }
+        let hash = sender.links[&link].outgoing_resources[0].resource_hash;
+        let (peer, target) = if context == constants::CONTEXT_RESOURCE_ICL {
+            (&sender, &mut receiver)
+        } else {
+            (&receiver, &mut sender)
+        };
+        let mut packets = vec![extract_any_send_packet(
+            &peer.build_link_packet(&link, context, &hash),
+        )];
+        let mut tampered =
+            extract_any_send_packet(&peer.send_on_link(&link, &hash, context, &mut OsRng));
+        *tampered.last_mut().unwrap() ^= 1;
+        packets.push(tampered);
+        for payload in [vec![], vec![1; 31], vec![1; 33], vec![1; 32]] {
+            packets.push(extract_any_send_packet(
+                &peer.send_on_link(&link, &payload, context, &mut OsRng),
+            ));
+        }
+        for raw in packets {
+            let actions = deliver_cancel_packet(target, &raw);
+            assert!(
+                !actions
+                    .iter()
+                    .any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. })),
+                "invalid cancellation must not fail a transfer (context={context})"
+            );
+            assert_eq!(target.resource_transfer_count(), 2);
+        }
+    }
+}
+
+#[test]
+fn resource_cancellation_is_scoped_and_duplicate_cancellation_is_inert() {
+    for context in [
+        constants::CONTEXT_RESOURCE_ICL,
+        constants::CONTEXT_RESOURCE_RCL,
+    ] {
+        let (mut sender, mut receiver, link) = setup_active_link();
+        receiver.set_resource_strategy(&link, ResourceStrategy::AcceptAll);
+        let first = sender.send_resource(&link, b"cancel this", None, &mut OsRng);
+        deliver_cancel_packet(&mut receiver, &extract_any_send_packet(&first));
+        let survivor = b"keep this transfer";
+        let second = sender.send_resource(&link, survivor, None, &mut OsRng);
+        let requests = deliver_cancel_packet(&mut receiver, &extract_any_send_packet(&second));
+        let hash = sender.links[&link].outgoing_resources[0].resource_hash;
+        let survivor_hash = sender.links[&link].outgoing_resources[1].resource_hash;
+        let (peer, target) = if context == constants::CONTEXT_RESOURCE_ICL {
+            (&sender, &mut receiver)
+        } else {
+            (&receiver, &mut sender)
+        };
+        let raw = extract_any_send_packet(&peer.send_on_link(&link, &hash, context, &mut OsRng));
+        let actions = deliver_cancel_packet(target, &raw);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(target.resource_transfer_count(), 1);
+        assert!(deliver_cancel_packet(target, &raw).is_empty());
+        if context == constants::CONTEXT_RESOURCE_ICL {
+            assert_eq!(
+                target.links[&link].incoming_resources[0].resource_hash,
+                survivor_hash
+            );
+        } else {
+            assert_eq!(
+                target.links[&link].outgoing_resources[0].resource_hash,
+                survivor_hash
+            );
+        }
+        let (data, completed, _, failures, _) =
+            drive_link_manager_packets(&mut sender, &mut receiver, requests, 'r', &mut OsRng, 100);
+        assert_eq!(data.as_deref(), Some(survivor.as_slice()));
+        assert!(completed);
+        assert!(failures.is_empty());
+    }
+}
+
+#[test]
+fn resource_cancellation_cleans_only_matching_split_storage_and_stream() {
+    for streaming in [false, true] {
+        let (mut sender, mut receiver, link) = setup_active_link();
+        receiver.set_resource_strategy(&link, ResourceStrategy::AcceptAll);
+        let directory = tempfile::tempdir().unwrap();
+        receiver.set_resource_receive_mode(
+            &link,
+            ResourceReceiveMode::TemporaryFile {
+                directory: directory.path().to_owned(),
+                max_bytes: None,
+            },
+        );
+        let length = constants::RESOURCE_MAX_EFFICIENT_SIZE + 16;
+        for id in 0..2 {
+            let data = vec![42 + id as u8; length];
+            let adv = if streaming {
+                sender.send_resource_stream(
+                    &link,
+                    ResourceTransferId(id),
+                    Box::new(std::io::Cursor::new(data)),
+                    length as u64,
+                    None,
+                    false,
+                    &mut OsRng,
+                )
+            } else {
+                sender.send_resource_with_auto_compress(&link, &data, None, false, &mut OsRng)
+            };
+            deliver_cancel_packet(&mut receiver, &extract_any_send_packet(&adv));
+        }
+        let hashes: Vec<_> = receiver.links[&link]
+            .incoming_resources
+            .iter()
+            .map(|r| r.resource_hash.clone())
+            .collect();
+        let original: Vec<_> = receiver.links[&link]
+            .incoming_resources
+            .iter()
+            .map(|r| LinkManager::resource_hash_key(&r.original_hash).unwrap())
+            .collect();
+        let paths: Vec<_> = original
+            .iter()
+            .map(
+                |hash| match &receiver.links[&link].incoming_splits[hash].storage {
+                    IncomingSplitStorage::File { path, .. } => path.clone(),
+                    _ => panic!("expected file storage"),
+                },
+            )
+            .collect();
+        let icl = extract_any_send_packet(&sender.send_on_link(
+            &link,
+            &hashes[0],
+            constants::CONTEXT_RESOURCE_ICL,
+            &mut OsRng,
+        ));
+        assert_eq!(deliver_cancel_packet(&mut receiver, &icl).len(), 1);
+        assert!(!paths[0].exists());
+        assert!(paths[1].exists());
+        assert_eq!(receiver.links[&link].incoming_splits.len(), 1);
+        assert!(receiver.links[&link]
+            .incoming_splits
+            .contains_key(&original[1]));
+        let rcl = extract_any_send_packet(&receiver.send_on_link(
+            &link,
+            &hashes[0],
+            constants::CONTEXT_RESOURCE_RCL,
+            &mut OsRng,
+        ));
+        let actions = deliver_cancel_packet(&mut sender, &rcl);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| matches!(
+                    a,
+                    LinkManagerAction::ResourceStreamFailed {
+                        transfer_id: ResourceTransferId(0),
+                        ..
+                    }
+                ))
+                .count(),
+            usize::from(streaming)
+        );
+        assert!(deliver_cancel_packet(&mut sender, &rcl).is_empty());
+        assert_eq!(sender.links[&link].outgoing_splits.len(), 1);
+        assert!(sender.links[&link]
+            .outgoing_resources
+            .iter()
+            .all(|r| r.original_hash == original[1]));
+        assert_eq!(
+            sender.links[&link].outgoing_resources.len(),
+            if streaming { 1 } else { 2 }
+        );
+        assert_eq!(
+            sender.links[&link].outgoing_streams.len(),
+            usize::from(streaming)
+        );
+        if streaming {
+            assert!(sender.links[&link]
+                .outgoing_streams
+                .contains_key(&original[1]));
+        }
+    }
+}
+
+#[test]
+fn resource_cancellation_preserves_unrelated_pending_requests() {
+    for context in [
+        constants::CONTEXT_RESOURCE_ICL,
+        constants::CONTEXT_RESOURCE_RCL,
+    ] {
+        let (mut sender, mut receiver, link) = setup_active_link();
+        receiver.set_resource_strategy(&link, ResourceStrategy::AcceptAll);
+        for id in 1..=2 {
+            let adv = sender.send_resource(&link, &[id], None, &mut OsRng);
+            deliver_cancel_packet(&mut receiver, &extract_any_send_packet(&adv));
+        }
+        let hash = sender.links[&link].outgoing_resources[0].resource_hash;
+        let (peer, target) = if context == constants::CONTEXT_RESOURCE_ICL {
+            (&sender, &mut receiver)
+        } else {
+            (&receiver, &mut sender)
+        };
+        let managed = target.links.get_mut(&link).unwrap();
+        for (index, id) in [1u8, 2].into_iter().enumerate() {
+            managed.pending_requests.insert(
+                [id; 16],
+                PendingRequest {
+                    deadline: None,
+                    max_response_size: None,
+                },
+            );
+            if context == constants::CONTEXT_RESOURCE_ICL {
+                managed.incoming_resources[index].flags.is_response = true;
+                managed.incoming_resources[index].request_id = Some(vec![id; 16]);
+            } else {
+                managed.outgoing_resources[index].flags.is_request = true;
+                managed.outgoing_resources[index].request_id = Some(vec![id; 16]);
+            }
+        }
+        let raw = extract_any_send_packet(&peer.send_on_link(&link, &hash, context, &mut OsRng));
+        deliver_cancel_packet(target, &raw);
+        assert!(!target.links[&link].pending_requests.contains_key(&[1; 16]));
+        assert!(target.links[&link].pending_requests.contains_key(&[2; 16]));
+    }
+}
+
+#[test]
+fn resource_cancellation_on_storage_failure_names_the_failed_resource() {
+    let (mut sender, mut receiver, link) = setup_active_link();
+    receiver.set_resource_strategy(&link, ResourceStrategy::AcceptAll);
+    let directory = tempfile::tempdir().unwrap();
+    let blocked = directory.path().join("not-a-directory");
+    std::fs::write(&blocked, b"block file creation").unwrap();
+    receiver.set_resource_receive_mode(
+        &link,
+        ResourceReceiveMode::TemporaryFile {
+            directory: blocked,
+            max_bytes: None,
+        },
+    );
+    let adv = sender.send_resource(&link, b"fails to store", None, &mut OsRng);
+    let requests = deliver_cancel_packet(&mut receiver, &extract_any_send_packet(&adv));
+    let hash = sender.links[&link].outgoing_resources[0].resource_hash;
+    sender.send_resource(&link, b"unrelated", None, &mut OsRng);
+    let parts = deliver_cancel_packet(&mut sender, &extract_any_send_packet(&requests));
+    let actions = deliver_cancel_packet(&mut receiver, &extract_any_send_packet(&parts));
+    let cancellation = actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => {
+                let packet = RawPacket::unpack(raw).unwrap();
+                (packet.context == constants::CONTEXT_RESOURCE_RCL).then_some((raw, packet))
+            }
+            _ => None,
+        })
+        .expect("storage failure must cancel the Resource");
+    assert_eq!(
+        sender.links[&link]
+            .engine
+            .decrypt(&cancellation.1.data)
+            .unwrap(),
+        hash
+    );
+    deliver_cancel_packet(&mut sender, cancellation.0);
+    assert_eq!(sender.links[&link].outgoing_resources.len(), 1);
+    assert_ne!(
+        sender.links[&link].outgoing_resources[0].resource_hash,
+        hash
+    );
+}
+
 #[test]
 fn test_resource_cancel_icl() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
@@ -2505,7 +2811,10 @@ fn test_resource_cancel_icl() {
         .is_empty());
 
     // Simulate ICL (cancel from initiator side) by calling handle_resource_icl
-    let icl_actions = resp_mgr.handle_resource_icl(&link_id);
+    let hash = resp_mgr.links[&link_id].incoming_resources[0]
+        .resource_hash
+        .clone();
+    let icl_actions = resp_mgr.handle_resource_icl(&link_id, &hash);
 
     // Should have resource failed
     let has_failed = icl_actions
@@ -2532,7 +2841,8 @@ fn test_resource_cancel_rcl() {
         .is_empty());
 
     // Simulate RCL (cancel from receiver side)
-    let rcl_actions = init_mgr.handle_resource_rcl(&link_id);
+    let hash = init_mgr.links[&link_id].outgoing_resources[0].resource_hash;
+    let rcl_actions = init_mgr.handle_resource_rcl(&link_id, &hash);
 
     let has_failed = rcl_actions
         .iter()
@@ -2768,7 +3078,8 @@ fn test_resource_tick_cleans_up() {
         .is_empty());
 
     // Cancel the sender to make it Complete
-    init_mgr.handle_resource_rcl(&link_id);
+    let hash = init_mgr.links[&link_id].outgoing_resources[0].resource_hash;
+    init_mgr.handle_resource_rcl(&link_id, &hash);
 
     // Tick should clean up completed resources
     init_mgr.tick(&mut rng);
