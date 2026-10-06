@@ -182,3 +182,80 @@ summaries. Original measured binaries remain at their original paths;
 Use those binaries for a new run of `setup-trace.py` (with fresh output names).
 These runs do not replace the earlier allocator measurements or establish
 long-soak reliability.
+
+
+## Live allocation and reclamation diagnostic — revision `154a731`
+
+Two runs of the corrected daemon verified 59,781 Resources. The workload and
+payload are unchanged: 30-second one/eight-link phases, depth two, ten seconds
+initial idle and one-link recovery. Eight-link recovery now lasts 60 seconds,
+followed by an explicit all-arena purge and ten more seconds idle. Every worker
+exits before recovery; daemon threads return from 39 to 7, including the observer.
+
+This separate executable enables jemalloc statistics in the ignored diagnostic
+manifest, calls the real daemon entry point, and adds one observer thread. It
+refreshes `epoch` and reads counters once per second; the external controller
+samples process RSS every 100 ms. Both runs report 128 arenas, background
+purging disabled, dirty decay 10,000 ms, muzzy decay zero, and 4 KiB pages. Normal
+builds still have statistics disabled. No production allocator settings changed.
+
+Values below are MiB and keep runs separate. Idle/recovery/purge rows are medians
+of the last five seconds; load uses the ten-second window ending two seconds
+before the load phase ends. Recovery-at-10s uses seconds five through ten after
+endpoint exit. Each counter sample is paired with the preceding process sample,
+less than 0.5 seconds apart. Maximum counter sample gap was 1.009 seconds.
+
+| Run | Window | Allocated | Active pages | Metadata | Dirty pages | Process RSS |
+|---|---|---:|---:|---:|---:|---:|
+| 1 | Initial idle | 24.95 | 25.19 | 8.26 | 2.10 | 32.37 |
+| 1 | Eight-link load | 27.78 | 30.54 | 13.86 | 5.59 | 44.41 |
+| 1 | Recovery, 10 s | 25.08 | 25.80 | 12.99 | 3.87 | 39.35 |
+| 1 | Recovery, 60 s | 25.05 | 25.80 | 12.99 | 3.87 | 39.35 |
+| 1 | After purge | 25.05 | 25.80 | 12.99 | 0.00 | 37.66 |
+| 2 | Initial idle | 24.95 | 25.19 | 8.26 | 2.10 | 32.43 |
+| 2 | Eight-link load | 27.77 | 30.41 | 17.86 | 5.88 | 44.38 |
+| 2 | Recovery, 10 s | 25.06 | 25.79 | 16.99 | 4.25 | 39.77 |
+| 2 | Recovery, 60 s | 25.02 | 25.79 | 16.99 | 4.25 | 39.77 |
+| 2 | After purge | 25.02 | 25.79 | 16.99 | 0.00 | 37.71 |
+
+Allocator-reported allocated bytes return to within 0.08–0.10 MiB of initial
+idle, while process RSS remains 6.98–7.34 MiB higher. Active-page overhead also
+remains higher; metadata grows by 4.73–8.73 MiB. Passive recovery from ten to
+60 seconds does not materially reduce RSS or dirty pages. There is no evidence
+here of megabytes of additional application allocations remaining after the
+transfers, but this short diagnostic is not a leak test or a long soak.
+
+The explicit purge clears 3.87–4.25 MiB of dirty pages and reduces RSS by only
+1.69–2.07 MiB. Allocated bytes, active pages and metadata are essentially unchanged;
+RSS remains about 5.3 MiB above initial idle. The purge covers all arenas, including
+pages already dirty before the load, so its effect is not solely reclamation of
+load-induced growth. A more aggressive purge alone does not remove the entire
+post-load footprint.
+
+Interpret these counters carefully. `stats.resident` is an upper accounting bound,
+not process RSS: after passive recovery it reports 42.54/46.91 MiB, versus process
+RSS of 39.35/39.77 MiB. `stats.retained` describes virtual mappings, not resident
+unused pages; it increases after purging even as RSS falls. Metadata accounting
+is also not a direct measurement of its physical residency. Thread caches can
+make allocation counters approximate. Definitions were checked against the
+bundled jemalloc manual and the [jemalloc documentation](https://jemalloc.net/jemalloc.3.html#stats.allocated).
+
+The observer, statistics-enabled allocator, and extra thread affect allocation,
+metadata, CPU and RSS. These values must not be substituted for the original
+uninstrumented allocator comparison, and no CPU or latency improvement is claimed.
+The different metadata totals despite similar RSS reinforce that limitation.
+This remains one Linux x86_64 host, with no constrained-CPU or slow-peer coverage.
+
+Next, screen a smaller arena count (initial candidate: 8 versus the observed 128),
+changing only that setting. Confirm the effective setting and attribution with
+this diagnostic, then measure CPU, completion tails and memory with statistics
+disabled. Test background reclamation separately afterward. Both are hypotheses;
+neither is ready for a default change or a portable Linux-server recommendation.
+
+Ignored evidence is in `.local/allocator-daemon/`: `stats.rs`, `run-stats.py`,
+`summarize-accounting.py`, `accounting-provenance.json`, `accounting-summary.json`,
+and `accounting-{1,2}/` raw counters, process samples, configuration and verified
+transfer summaries. The diagnostic is `rnsd-stats`; measured baseline binaries
+were preserved. Rebuilding uses the local manifest and shared `target` directory;
+reruns require fresh output names in the runner. Total local allocator evidence
+is about 193 MiB; no independent target tree or per-allocation trace was created.
