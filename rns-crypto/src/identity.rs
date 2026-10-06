@@ -226,15 +226,20 @@ impl Identity {
         ratchets: &crate::ratchet::RatchetRing,
         enforce: bool,
     ) -> Result<crate::ratchet::Decrypted, CryptoError> {
-        for key in ratchets.keys() {
-            let private = X25519PrivateKey::from_bytes(key);
-            if let Ok(plaintext) = self.decrypt_with_key(ciphertext, &private) {
-                return Ok(crate::ratchet::Decrypted {
-                    plaintext,
-                    ratchet_id: Some(crate::ratchet::ratchet_id(
-                        &private.public_key().public_bytes(),
-                    )),
-                });
+        // Token length is independent of the candidate key. Do not scan retained
+        // secrets when no candidate can possibly decrypt this input. Keep the
+        // existing enforced/fallback error paths below.
+        if ciphertext.len() > 32 + crate::token::TOKEN_OVERHEAD {
+            for key in ratchets.keys() {
+                let private = X25519PrivateKey::from_bytes(key);
+                if let Ok(plaintext) = self.decrypt_with_key(ciphertext, &private) {
+                    return Ok(crate::ratchet::Decrypted {
+                        plaintext,
+                        ratchet_id: Some(crate::ratchet::ratchet_id(
+                            &private.public_key().public_bytes(),
+                        )),
+                    });
+                }
             }
         }
         if enforce {
@@ -253,6 +258,9 @@ impl Identity {
     ) -> Result<Vec<u8>, CryptoError> {
         if ciphertext_token.len() <= 32 {
             return Err(CryptoError::InvalidCiphertext);
+        }
+        if ciphertext_token.len() <= 32 + crate::token::TOKEN_OVERHEAD {
+            return Err(CryptoError::TokenError(TokenError::InvalidToken));
         }
         let peer_pub_bytes: [u8; 32] = ciphertext_token[..32].try_into().unwrap();
         let peer_pub = X25519PublicKey::from_bytes(&peer_pub_bytes);
@@ -291,6 +299,68 @@ fn truncated_hash(data: &[u8]) -> [u8; 16] {
 mod tests {
     use super::*;
     use crate::FixedRng;
+
+    #[test]
+    fn short_ratchet_ciphertexts_preserve_error_and_fallback_policy() {
+        use crate::ratchet::RatchetRing;
+        let identity = Identity::from_private_key(&[0x37; 64]);
+        let public = Identity::from_public_key(&identity.get_public_key().unwrap());
+        for retained in [0, 1, 32] {
+            let ring = RatchetRing::from_keys(vec![[0x42; 32]; retained]).unwrap();
+            for length in [0, 1, 31, 32, 33, 48, 79, 80] {
+                let ciphertext = vec![0x63; length];
+                for owner in [&identity, &public] {
+                    assert!(matches!(
+                        owner.decrypt_with_ratchets(&ciphertext, &ring, true),
+                        Err(CryptoError::InvalidCiphertext)
+                    ));
+                    let expected = owner.decrypt(&ciphertext).unwrap_err();
+                    let actual = owner
+                        .decrypt_with_ratchets(&ciphertext, &ring, false)
+                        .err()
+                        .unwrap();
+                    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+                }
+                assert!(matches!(
+                    public.decrypt(&ciphertext),
+                    Err(CryptoError::NoPrivateKey)
+                ));
+                if length <= 32 {
+                    assert!(matches!(
+                        identity.decrypt(&ciphertext),
+                        Err(CryptoError::InvalidCiphertext)
+                    ));
+                } else {
+                    assert!(matches!(
+                        identity.decrypt(&ciphertext),
+                        Err(CryptoError::TokenError(TokenError::InvalidToken))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn minimum_valid_ratchet_ciphertext_still_authenticates() {
+        use crate::ratchet::{ratchet_id, RatchetRing};
+        let identity = Identity::from_private_key(&[0x37; 64]);
+        let public_identity = Identity::from_public_key(&identity.get_public_key().unwrap());
+        let ring = RatchetRing::from_keys(vec![[0x42; 32]]).unwrap();
+        let key = ring.current_public().unwrap();
+        let mut ciphertext = identity
+            .encrypt_with_ratchet(b"", Some(&key), &mut crate::FixedRng::new(&[0x63; 64]))
+            .unwrap();
+        assert_eq!(ciphertext.len(), 96);
+        let result = public_identity
+            .decrypt_with_ratchets(&ciphertext, &ring, true)
+            .unwrap();
+        assert!(result.plaintext.is_empty());
+        assert_eq!(result.ratchet_id, Some(ratchet_id(&key)));
+        *ciphertext.last_mut().unwrap() ^= 1;
+        assert!(public_identity
+            .decrypt_with_ratchets(&ciphertext, &ring, true)
+            .is_err());
+    }
 
     #[test]
     fn test_identity_key_roundtrip() {
