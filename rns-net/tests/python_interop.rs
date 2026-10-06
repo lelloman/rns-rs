@@ -740,6 +740,16 @@ fn python_rns_bidirectional_tcp_interop() {
     node.shutdown();
 }
 
+/// Reticulum 1.4.2 truncates retained ratchets to the default count instead of
+/// `retained_ratchets`, so it never retires the oldest key. This was fixed in
+/// 1.5.0.
+fn ratchet_retention_enforced(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let minor = parts.next().and_then(|part| part.parse::<u32>().ok());
+    matches!((major, minor), (Some(major), Some(minor)) if (major, minor) >= (1, 5))
+}
+
 /// Run with PYTHONPATH pointing at the exact baseline recorded in UPSTREAM.md.
 #[test]
 fn python_rns_local_ratchets_bidirectional_and_restart() {
@@ -753,7 +763,9 @@ fn python_rns_local_ratchets_bidirectional_and_restart() {
     let ready = python.wait_for_event(TIMEOUT, |e| e["event"] == "ready");
     python.command("ratchets_py");
     let enabled = python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchets_enabled");
-    eprintln!("local ratchet reference version: {}", enabled["version"]);
+    let reference_version = enabled["version"].as_str().unwrap_or_default();
+    let retention_enforced = ratchet_retention_enforced(reference_version);
+    eprintln!("local ratchet reference version: {reference_version}");
     let (tx, rx) = mpsc::channel();
     let node = start_rust_node_with_store(
         ready["port"].as_u64().unwrap() as u16,
@@ -875,7 +887,7 @@ fn python_rns_local_ratchets_bidirectional_and_restart() {
         }
         python.command(&format!("decrypt_ratchet {}", hex(&cipher)));
         let decrypted = python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchet_decrypted");
-        if rotation < 2 {
+        if rotation < 2 || !retention_enforced {
             assert_eq!(decrypted["data_hex"], hex(b"cross-file"));
         } else {
             assert!(decrypted["data_hex"].is_null());
