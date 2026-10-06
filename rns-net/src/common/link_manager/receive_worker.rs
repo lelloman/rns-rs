@@ -547,6 +547,76 @@ mod tests {
         assert!(manager.receive_worker.is_none());
     }
     #[test]
+    fn resource_cancellation_invalidates_only_matching_receive_job() {
+        let (sender, mut manager, link) = super::super::tests::setup_active_link();
+        let (wake, _rx) = crate::event::channel();
+        let (release, gate) = mpsc::channel();
+        let (entered, started) = mpsc::channel();
+        manager.receive_worker = Some(
+            Worker::start(wake, move |job| {
+                entered.send(()).unwrap();
+                gate.recv().unwrap();
+                job.run(&Bzip2Compressor)
+            })
+            .unwrap(),
+        );
+        for _ in 0..2 {
+            let (receiver, job) = fixture(65536);
+            assert!(manager
+                .receive_worker
+                .as_mut()
+                .unwrap()
+                .submit(link, manager.links[&link].resource_generation.clone(), job)
+                .is_ok());
+            manager
+                .links
+                .get_mut(&link)
+                .unwrap()
+                .incoming_resources
+                .push(receiver);
+        }
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        let hash = manager.links[&link].incoming_resources[0]
+            .resource_hash
+            .clone();
+        let packets =
+            sender.send_on_link(&link, &hash, constants::CONTEXT_RESOURCE_ICL, &mut OsRng);
+        let raw = super::super::tests::extract_any_send_packet(&packets);
+        let actions = super::super::tests::deliver_cancel_packet(&mut manager, &raw);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }))
+                .count(),
+            1
+        );
+        assert!(manager.poll_receive_worker(&mut OsRng).is_empty());
+        let worker = manager.receive_worker.as_ref().unwrap();
+        assert!(worker.pending[&0].cancelled.load(Ordering::Acquire));
+        assert!(!worker.pending[&1].cancelled.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        release.send(()).unwrap();
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            let (pending, ready) = manager
+                .receive_worker
+                .as_mut()
+                .unwrap()
+                .receive(true)
+                .unwrap();
+            actions.extend(manager.finish_receive(pending, ready, &mut OsRng));
+        }
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| matches!(a, LinkManagerAction::ResourceReceived { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(manager.receive_worker.as_ref().unwrap().bytes, 0);
+    }
+
+    #[test]
     fn receive_worker_generation_cancellation_shutdown_and_transfer_accounting() {
         for mode in [
             "success",
@@ -592,7 +662,10 @@ mod tests {
                     manager.links.get_mut(&link).unwrap().resource_generation = Arc::new(())
                 }
                 "cancel" => {
-                    manager.handle_resource_icl(&link);
+                    let hash = manager.links[&link].incoming_resources[0]
+                        .resource_hash
+                        .clone();
+                    manager.handle_resource_icl(&link, &hash);
                 }
                 "cancel_all" => {
                     manager.cancel_all_resources(&mut rng);

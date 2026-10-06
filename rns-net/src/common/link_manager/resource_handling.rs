@@ -888,7 +888,9 @@ impl LinkManager {
                     if storage_failure.is_some() {
                         link.incoming_splits.remove(&key);
                         converted_actions.clear();
-                        converted_actions.push(ResourceAction::SendCancelReceiver(Vec::new()));
+                        converted_actions.push(ResourceAction::SendCancelReceiver(
+                            link.incoming_resources[idx].resource_hash.clone(),
+                        ));
                     }
                 }
 
@@ -936,7 +938,9 @@ impl LinkManager {
                             ResourceAction::SendProof(_) | ResourceAction::Completed
                         )
                     });
-                    converted_actions.push(ResourceAction::SendCancelReceiver(Vec::new()));
+                    converted_actions.push(ResourceAction::SendCancelReceiver(
+                        link.incoming_resources[idx].resource_hash.clone(),
+                    ));
                 }
                 assemble_actions = converted_actions;
             }
@@ -1184,68 +1188,106 @@ impl LinkManager {
         actions
     }
 
-    /// Handle cancel from initiator (CONTEXT_RESOURCE_ICL).
-    pub(super) fn handle_resource_icl(&mut self, link_id: &LinkId) -> Vec<LinkManagerAction> {
-        let link = match self.links.get_mut(link_id) {
-            Some(l) => l,
-            None => return Vec::new(),
+    /// Cancel only the incoming transfer named by an authenticated ICL packet.
+    pub(super) fn handle_resource_icl(
+        &mut self,
+        link_id: &LinkId,
+        resource_hash: &[u8],
+    ) -> Vec<LinkManagerAction> {
+        let Some(hash) = Self::resource_hash_key(resource_hash) else {
+            return Vec::new();
         };
-
-        let mut actions = Vec::new();
-        for receiver in &mut link.incoming_resources {
-            let ra = receiver.handle_cancel();
-            for a in ra {
-                if let ResourceAction::Failed(ref e) = a {
-                    actions.push(LinkManagerAction::ResourceFailed {
-                        link_id: *link_id,
-                        error: format!("{}", e),
-                    });
+        let Some(link) = self.links.get_mut(link_id) else {
+            return Vec::new();
+        };
+        let Some(idx) = link.incoming_resources.iter().position(|receiver| {
+            receiver.resource_hash == hash
+                && receiver.status < rns_core::resource::ResourceStatus::Complete
+        }) else {
+            return Vec::new();
+        };
+        let mut receiver = link.incoming_resources.remove(idx);
+        if receiver.flags.split {
+            if let Some(original) = Self::resource_hash_key(&receiver.original_hash) {
+                link.incoming_resources
+                    .retain(|r| !r.flags.split || r.original_hash != original);
+                if let Some(IncomingSplitTransfer {
+                    storage: IncomingSplitStorage::File { file, path, .. },
+                    ..
+                }) = link.incoming_splits.remove(&original)
+                {
+                    drop(file);
+                    let _ = std::fs::remove_file(path);
                 }
             }
         }
-        link.incoming_resources
-            .retain(|r| r.status < rns_core::resource::ResourceStatus::Complete);
-        link.incoming_splits.clear();
-        actions
+        if receiver.flags.is_response {
+            if let Some(request) = Self::response_request_id(&receiver.request_id) {
+                link.pending_requests.remove(&request);
+            }
+        }
+        // Removing its assembly identity invalidates only this transfer's worker
+        // result. Other transfers retain their link generation and pending work.
+        receiver
+            .handle_cancel()
+            .into_iter()
+            .filter_map(|action| match action {
+                ResourceAction::Failed(error) => Some(LinkManagerAction::ResourceFailed {
+                    link_id: *link_id,
+                    error: error.to_string(),
+                }),
+                _ => None,
+            })
+            .collect()
     }
 
-    /// Handle cancel from receiver (CONTEXT_RESOURCE_RCL).
-    pub(super) fn handle_resource_rcl(&mut self, link_id: &LinkId) -> Vec<LinkManagerAction> {
-        let link = match self.links.get_mut(link_id) {
-            Some(l) => l,
-            None => return Vec::new(),
+    /// Reject only the outgoing transfer named by an authenticated RCL packet.
+    pub(super) fn handle_resource_rcl(
+        &mut self,
+        link_id: &LinkId,
+        resource_hash: &[u8],
+    ) -> Vec<LinkManagerAction> {
+        let Some(hash) = Self::resource_hash_key(resource_hash) else {
+            return Vec::new();
         };
-
-        let request_ids: Vec<[u8; 16]> = link
-            .outgoing_resources
-            .iter()
-            .filter(|sender| sender.flags.is_request)
-            .filter_map(|sender| Self::response_request_id(&sender.request_id))
-            .collect();
-        let mut actions = Vec::new();
-        for sender in &mut link.outgoing_resources {
-            let ra = sender.handle_reject();
-            for a in ra {
-                if let ResourceAction::Failed(ref e) = a {
-                    actions.push(LinkManagerAction::ResourceFailed {
-                        link_id: *link_id,
-                        error: format!("{}", e),
-                    });
-                }
+        let Some(link) = self.links.get_mut(link_id) else {
+            return Vec::new();
+        };
+        let Some(idx) = link.outgoing_resources.iter().position(|sender| {
+            sender.resource_hash == hash
+                && sender.status < rns_core::resource::ResourceStatus::Complete
+        }) else {
+            return Vec::new();
+        };
+        let mut sender = link.outgoing_resources.remove(idx);
+        if sender.flags.split {
+            // Buffered senders may already hold later segments of this transfer.
+            link.outgoing_resources
+                .retain(|s| !s.flags.split || s.original_hash != sender.original_hash);
+            link.outgoing_splits.remove(&sender.original_hash);
+        }
+        if sender.flags.is_request {
+            if let Some(request) = Self::response_request_id(&sender.request_id) {
+                link.pending_requests.remove(&request);
             }
         }
-        link.outgoing_resources
-            .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
-        link.outgoing_splits.clear();
-        actions.extend(link.outgoing_streams.drain().map(|(_, stream)| {
-            LinkManagerAction::ResourceStreamFailed {
+        let mut actions: Vec<_> = sender
+            .handle_reject()
+            .into_iter()
+            .filter_map(|action| match action {
+                ResourceAction::Failed(error) => Some(LinkManagerAction::ResourceFailed {
+                    link_id: *link_id,
+                    error: error.to_string(),
+                }),
+                _ => None,
+            })
+            .collect();
+        if let Some(stream) = link.outgoing_streams.remove(&sender.original_hash) {
+            actions.push(LinkManagerAction::ResourceStreamFailed {
                 link_id: *link_id,
                 transfer_id: stream.transfer_id,
                 error: ResourceTransferError::Cancelled,
-            }
-        }));
-        for request_id in request_ids {
-            link.pending_requests.remove(&request_id);
+            });
         }
         actions
     }
