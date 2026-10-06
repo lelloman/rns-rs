@@ -356,8 +356,8 @@ alternating pairs establish a useful memory tradeoff, not a portable performance
 guarantee. No interactive, constrained-CPU, slow-peer or long-soak qualification
 has been added. There is no basis here to promote the candidate to a default.
 
-Next, test background reclamation with the default arena policy, changing only
-that option. Keep arena count fixed so the effects remain distinguishable.
+The following screen evaluates background reclamation separately with the
+default arena policy.
 
 Compact ignored evidence is in `.local/allocator-daemon/`: `arena.rs`,
 `arena-{stats,perf}.py`, `run-arena-screen.py`, the two `summarize-arena-*.py`
@@ -366,3 +366,119 @@ scripts, `arena-provenance.json`, `arena-host.jsonl`, the screen contract,
 `rnsd-arena` is the statistics-disabled comparison binary; `rnsd-stats` is the
 accounting binary. Reproduction requires fresh output directory names. Total
 local allocator evidence is about 260 MiB, using the existing shared target.
+
+
+## Background-reclamation screen — revision `eb5da8a`
+
+Keep background reclamation disabled by default. It releases dirty pages after
+traffic stops and reduces recovery RSS, but increases loaded RSS and persistent
+thread count in every performance pair. One-link p99 completion worsens in all
+three pairs. CPU and throughput effects are mixed. This is a demonstrated idle
+memory tradeoff, not a generally qualified performance improvement.
+
+Only `background_thread:true` changes, supplied through `_RJEM_MALLOC_CONF` to
+the daemon. The control leaves the environment override unset. Effective startup
+options and the runtime `background_thread` flag are asserted for every run.
+Both settings retain the observed default automatic arena limit of 128, dirty
+decay of 10,000 ms, muzzy decay of zero, and background-thread limit of four.
+The accounting executable additionally records actual background thread count
+and work counters. Endpoints are frozen and receive no allocator override.
+
+Two accounting runs (off/on) use one statistics-enabled executable and the
+previous 60-second recovery/purge sequence. Six performance runs use a separate,
+statistics-disabled executable with startup checks and no observer thread.
+Their three pairs run off/on, on/off, off/on. Each run retains the same verified
+512 KiB Resource workload: one then eight links, depth two, compression disabled,
+30-second load phases, ten seconds initial idle and one-link recovery. Eight-link
+performance recovery is extended to 30 seconds, with no explicit purge. All
+builds finish before timing; hashes and effective settings are verified.
+
+All eight runs pass without retries: 59,658 accounting and 160,471 performance
+transfers, totaling 220,129. This does not add interactive, constrained-CPU,
+slow-peer or long-soak coverage.
+
+### Reclamation mechanism
+
+Accounting values are MiB, off → on. Initial/load windows follow the earlier
+accounting method. Recovery-at-10s uses seconds 5–10, recovery-at-30s uses 25–30,
+and recovery-at-60s uses the last five seconds. The final row follows the
+explicit all-arena purge and ten more seconds idle.
+
+| Window | Allocated | Dirty pages | Process RSS | Background threads |
+|---|---:|---:|---:|---:|
+| Initial idle | 24.97 → 24.97 | 2.10 → 0.05 | 32.50 → 32.29 | 0.00 → 4.00 |
+| Eight-link load | 27.65 → 27.78 | 5.46 → 4.66 | 44.14 → 45.33 | 0.00 → 4.00 |
+| Recovery, 10 s | 25.02 → 25.05 | 4.08 → 4.32 | 39.58 → 40.90 | 0.00 → 4.00 |
+| Recovery, 30 s | 25.00 → 25.03 | 4.08 → 0.00 | 39.58 → 37.65 | 0.00 → 4.00 |
+| Recovery, 60 s | 24.99 → 25.02 | 4.08 → 0.00 | 39.58 → 37.65 | 0.00 → 4.00 |
+| After purge | 24.99 → 25.02 | 0.00 → 0.00 | 37.65 → 37.65 | 0.00 → 4.00 |
+
+The candidate clears dirty pages by the 30-second window; the control retains
+4.08 MiB through 60 seconds. Explicit purge has no further RSS benefit for the
+candidate. Background work counters reach 53 runs versus zero in the control.
+Allocated bytes return near initial idle in both. Allocator metadata differs
+between these runs (12.99 versus 14.98 MiB after recovery), so do not attribute
+all RSS differences directly to dirty-page accounting. Statistics and the
+observer affect these values; use the uninstrumented comparison for performance.
+
+### Statistics-disabled results
+
+RSS values are MiB, off → on. Load is the full load-phase median; the 10-second
+recovery window uses seconds 5–10, and the 30-second window uses the last three
+seconds. CPU in the last column is total daemon CPU over the entire 30-second
+recovery interval, not isolated background-thread CPU.
+
+| Pair | Eight-link load RSS | Recovery RSS, 10 s | Recovery RSS, 30 s | Recovery CPU seconds |
+|---|---:|---:|---:|---:|
+| 1 | 41.770 → 43.125 | 36.531 → 36.008 | 36.531 → 35.254 | 0.030 → 0.040 |
+| 2 | 42.957 → 44.871 | 37.676 → 36.203 | 37.676 → 35.363 | 0.030 → 0.030 |
+| 3 | 42.977 → 43.508 | 37.473 → 37.969 | 37.473 → 35.500 | 0.030 → 0.020 |
+
+Thirty-second recovery RSS improves by 1.28–2.31 MiB (3.5–6.1%). Ten-second
+recovery is not consistently better. Eight-link loaded RSS increases by
+0.53–1.91 MiB; one-link loaded RSS increases by 0.29–1.00 MiB. Performance
+threads rise from 6 to 10 at recovery and from 38 to 42 under eight-link load.
+The idle CPU observations are quantized to 10 ms and cannot establish a precise
+incremental background-worker cost; no zero-overhead claim is supported.
+
+CPU and completion/goodput boundaries are unchanged from the arena screen:
+daemon setup/load/drain CPU per verified Resource, submission-return through
+proof/acknowledgement completion, and payload goodput including setup and drain.
+Values are off → on, without pooling link counts or hiding individual pairs.
+
+| Pair | Links | CPU ms/Resource | Median completion ms | p99 completion ms | Phase goodput MiB/s |
+|---|---:|---:|---:|---:|---:|
+| 1 | 1 | 5.169 → 5.254 | 16.085 → 15.813 | 27.957 → 59.704 | 49.120 → 45.939 |
+| 1 | 8 | 5.578 → 5.844 | 16.372 → 17.635 | 26.008 → 23.496 | 409.561 → 380.472 |
+| 2 | 1 | 5.200 → 5.724 | 16.010 → 15.915 | 24.841 → 42.278 | 50.994 → 50.940 |
+| 2 | 8 | 6.395 → 6.297 | 21.120 → 19.897 | 119.031 → 46.754 | 291.946 → 321.767 |
+| 3 | 1 | 5.162 → 4.774 | 16.077 → 14.463 | 22.291 → 24.308 | 51.999 → 57.353 |
+| 3 | 8 | 6.453 → 5.561 | 21.454 → 16.457 | 31.447 → 21.245 | 320.283 → 387.104 |
+
+One-link CPU changes by −7.5% to +10.1%, while one-link p99 worsens by
+9.0–113.6% in all three pairs. Eight-link CPU changes by −13.8% to +4.8%.
+Eight-link p99 and worst-sender p99 improve in every pair, but the second
+control has a large retained tail outlier (aggregate 119 ms, worst sender
+131 ms). These observations do not establish a general latency benefit.
+
+This remains the non-isolated, unpinned 5950X with `schedutil`, boost enabled,
+and 32 CPUs available. Recorded one-minute load averages span 5.40–19.50 and
+include this workload; one host sample reports 138 runnable tasks. Timing
+variation and outliers cannot be assigned solely to allocator behavior. Maximum
+process sample gap is 0.321 seconds; accounting sample gaps stay below 1.002
+seconds. Sampled RSS peaks can miss short spikes. These are exploratory results,
+not deployment qualification or precise estimates of causal slowdowns.
+
+The allocator screen is complete without a default, feature or production-code
+change. The remaining allocator questions are workload-specific qualification
+and speculative tuning, not demonstrated changes ready to ship. Further tuning
+needs a concrete deployment requirement and a quieter controlled comparison;
+there is no need to keep expanding this benchmark setup by default.
+
+Ignored evidence is in `.local/allocator-daemon/`: `background-{stats,perf}.rs`,
+`background-{stats,perf}.py`, `run-background-screen.py`, the corresponding
+summarizers, provenance/host/summary/validation JSON files, screen contract and
+eight raw run directories. `rnsd-background-stats` and
+`rnsd-background-perf` preserve the separate comparison binaries. Reruns require
+fresh output names. Total allocator evidence is about 359 MiB, with the existing
+shared target reused and no per-allocation trace or independent target tree.
