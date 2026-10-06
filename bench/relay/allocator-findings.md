@@ -119,14 +119,13 @@ adds a barrier for every sender and receiver before starting the load. It improv
 measurement validity, but did not eliminate the setup failure: in the original
 third System trial, only three of eight pairs reached the barrier before the
 25-second setup deadline. No eight-link data traffic had begun. Five earlier
-synchronized trials and the later retry completed. This is an unresolved setup
-or link-establishment issue, not a proven allocator-specific defect. It prevents
-promoting this screen to qualification. The original third System trial's
+synchronized trials and the later retry completed. At the time of this screen,
+the setup failure was unresolved and prevented promoting it to qualification.
+The follow-up below identifies a transport scheduling defect; it does not
+retroactively qualify these allocator trials. The original third System trial's
 completed one-link phase is also excluded from the tables to avoid mixing trials.
 
-Next, reproduce the link-setup timeout with per-link establishment/close reasons
-and targeted control-plane evidence before more allocator tuning. Then inspect
-live/active/resident jemalloc accounting in a separate diagnostic
+Next, inspect live/active/resident jemalloc accounting in a separate diagnostic
 and test reclamation settings one at a time, retaining this untuned allocator as
 the baseline. Actual allocation churn and retained-page attribution remain
 unmeasured here. Interactive probes during bulk traffic, constrained CPUs,
@@ -141,3 +140,45 @@ trace is compressed. Builds reused the existing target directory; no independent
 build trees were created. Reproduce with the retained `run.py` and binaries;
 `barrier-*` retains both the original failed attempt and its later retry;
 `summary.json` identifies the six completed runs used in the tables.
+
+## Setup-timeout follow-up
+
+Lightweight endpoint tracing reproduced the timeout with jemalloc
+(`setup-trace-11`), and relay pathing logs reproduced it with System
+(`setup-trace-12`). Affected senders repeatedly reported no path and never
+created a link. The relay nevertheless learned their destinations and scheduled
+known-path responses. For one destination, it logged 25 path updates and 25
+scheduled responses, with a roughly 22-second gap between actual retransmissions.
+The eight-link load barrier never opened in either failed run.
+
+Announces and path requests arriving near the one-second maintenance tick could
+replace an already-pending announce with a later deadline. Repeating this moved
+the send past successive ticks. Replacement now keeps the earlier pending
+deadline while using the replacement payload and routing metadata. Expired and
+completed entries do not supply deadlines, and the existing interface announce
+queues still govern transmission. Known-path replies retain the active entry
+until replacement so the same rule applies there.
+
+Two deterministic regressions fail against the original code and pass with this
+fix: a repeated known-path request, and an incoming announce replacing either an
+ordinary pending announce or a path response. Another test covers expired and
+completed entries. Core and networking unit suites pass (667 and 1,023 tests),
+as do core Clippy, formatting and no-default-features checks.
+
+Twelve short live runs, alternating allocators, completed all 108 link setups and
+verified 11,490 Resources. These are correctness checks, not allocator performance
+measurements. The diagnostic endpoints retain the original behavior of one link
+attempt per destination; no retry loop or longer setup deadline hides failures.
+
+Two further runs used the original 30-second load and 10-second idle/recovery
+phases, one per allocator (`setup-fixed-long-1` and `setup-fixed-long-2`). Both
+passed, verifying 58,434 more Resources across 18 link setups. Together these
+checks completed 126 link setups and 69,924 verified transfers.
+
+Ignored evidence includes the failed setup traces, compressed relay log,
+before-fix regression output, corrected build diff/hashes, and all validation
+summaries. Original measured binaries remain at their original paths;
+`*-setup-fixed` preserves the corrected daemon builds and diagnostic endpoint.
+Use those binaries for a new run of `setup-trace.py` (with fresh output names).
+These runs do not replace the earlier allocator measurements or establish
+long-soak reliability.
