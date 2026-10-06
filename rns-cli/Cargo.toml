@@ -9,7 +9,18 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = []
+default = ["iface-tcp", "iface-udp", "iface-auto", "iface-serial", "iface-kiss", "iface-ax25-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p", "iface-weave"]
+iface-tcp = ["rns-net/iface-tcp"]
+iface-udp = ["rns-net/iface-udp"]
+iface-auto = ["rns-net/iface-auto"]
+iface-serial = ["rns-net/iface-serial"]
+iface-kiss = ["rns-net/iface-kiss"]
+iface-ax25-kiss = ["rns-net/iface-ax25-kiss"]
+iface-pipe = ["rns-net/iface-pipe"]
+iface-rnode = ["rns-net/iface-rnode"]
+iface-backbone = ["rns-net/iface-backbone"]
+iface-i2p = ["rns-net/iface-i2p"]
+iface-weave = ["rns-net/iface-weave"]
 rns-hooks = ["rns-hooks-native"]
 sidecars = [
     "dep:rns-hooks-abi",
@@ -26,7 +37,8 @@ rns-hooks-native = [
 rns-hooks-builtin = ["sidecars", "rns-net/rns-hooks-builtin"]
 
 [dependencies]
-rns-net.workspace = true
+# CLI tools require shared-instance and remote-management APIs even in minimal builds.
+rns-net = { version = "0.7.3", path = "../rns-net", default-features = false, features = ["iface-local"] }
 rns-core.workspace = true
 rns-crypto.workspace = true
 rns-hooks-abi = { version = "0.1.5", path = "../rns-hooks/sdk/rns-hooks-abi", optional = true }
