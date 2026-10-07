@@ -1,3 +1,4 @@
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -116,8 +117,8 @@ impl ResourceSender {
     ) -> Result<Self, ResourceError> {
         // Build unencrypted data (metadata prefix + data)
         let uncompressed_data = match metadata {
-            Some(meta) => prepend_metadata(data, meta),
-            None => data.to_vec(),
+            Some(meta) => Cow::Owned(prepend_metadata(data, meta)),
+            None => Cow::Borrowed(data),
         };
         let has_metadata = metadata.is_some();
 
@@ -128,12 +129,12 @@ impl ResourceSender {
             if auto_compress && uncompressed_data.len() <= RESOURCE_AUTO_COMPRESS_MAX_SIZE {
                 match compressor.compress(&uncompressed_data) {
                     Some(compressed_data) if compressed_data.len() < uncompressed_data.len() => {
-                        (compressed_data, true)
+                        (Cow::Owned(compressed_data), true)
                     }
-                    _ => (uncompressed_data.clone(), false),
+                    _ => (Cow::Borrowed(uncompressed_data.as_ref()), false),
                 }
             } else {
-                (uncompressed_data.clone(), false)
+                (Cow::Borrowed(uncompressed_data.as_ref()), false)
             };
 
         // Prepend random hash (4 bytes)
@@ -562,6 +563,83 @@ mod tests {
                 (state >> 16) as u8
             })
             .collect()
+    }
+
+    #[test]
+    fn preparation_wire_transcript_matches_owned_buffer_baseline() {
+        // Exercise absent/empty metadata and compression skipped, unavailable,
+        // equal-sized, larger, or accepted. The synthetic codec isolates buffer
+        // selection; full codec round trips are covered separately.
+        struct Codec(u8);
+        impl Compressor for Codec {
+            fn compress(&self, data: &[u8]) -> Option<Vec<u8>> {
+                match self.0 {
+                    0 | 1 => None,
+                    2 => Some(data.to_vec()),
+                    3 => Some([data, &[0]].concat()),
+                    _ => Some(data[..data.len() / 2].to_vec()),
+                }
+            }
+            fn decompress_bounded(
+                &self,
+                _: &[u8],
+                _: usize,
+            ) -> Result<Vec<u8>, crate::buffer::types::DecompressError> {
+                unreachable!("sender-only transcript")
+            }
+        }
+        let mut transcript = Vec::new();
+        for len in [0, 1, 1000] {
+            let data = varying_data(len);
+            for metadata in [None, Some(&b""[..]), Some(&b"metadata"[..])] {
+                for mode in 0..5 {
+                    for response in [false, true] {
+                        let mut rng = rns_crypto::FixedRng::new(&[0x42; 64]);
+                        let mut sender = ResourceSender::new(
+                            &data,
+                            metadata,
+                            RESOURCE_SDU,
+                            &identity_encrypt,
+                            &Codec(mode),
+                            &mut rng,
+                            1000.0,
+                            mode != 0,
+                            response,
+                            Some(vec![0xAB; 16]),
+                            2,
+                            3,
+                            Some([0xCD; 32]),
+                            0.5,
+                            6.0,
+                        )
+                        .unwrap();
+                        transcript.extend_from_slice(&sender.resource_hash);
+                        transcript.extend_from_slice(&sender.expected_proof);
+                        transcript.extend_from_slice(&(sender.data_size as u64).to_be_bytes());
+                        for action in sender.advertise(1000.0) {
+                            if let ResourceAction::SendAdvertisement(raw) = action {
+                                transcript.extend_from_slice(&(raw.len() as u64).to_be_bytes());
+                                transcript.extend_from_slice(&raw);
+                            } else {
+                                panic!("expected advertisement");
+                            }
+                        }
+                        for part in &sender.parts {
+                            transcript.extend_from_slice(&(part.len() as u64).to_be_bytes());
+                            transcript.extend_from_slice(part);
+                        }
+                    }
+                }
+            }
+        }
+        // Recorded from the original preparation code before borrowing buffers.
+        assert_eq!(
+            crate::hash::full_hash(&transcript),
+            [
+                67, 44, 221, 45, 186, 73, 169, 206, 206, 134, 142, 225, 182, 205, 22, 233, 153,
+                131, 88, 228, 84, 36, 149, 65, 72, 213, 69, 130, 12, 198, 159, 159
+            ]
+        );
     }
 
     #[test]
