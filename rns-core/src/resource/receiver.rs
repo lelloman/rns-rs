@@ -574,10 +574,20 @@ impl ResourceReceiver {
                 }
             }
         }
-        let mut stream = Vec::with_capacity(stream_len);
-        for data in self.parts.iter().flatten() {
-            stream.extend_from_slice(data);
-        }
+        let stream = if self.parts.len() == 1 {
+            // Validation above guarantees this part exists. Reuse its allocation.
+            self.parts[0].take().unwrap()
+        } else {
+            let mut stream = Vec::with_capacity(stream_len);
+            for data in self.parts.iter().flatten() {
+                stream.extend_from_slice(data);
+            }
+            stream
+        };
+        // Assembly is terminal for part reception. Release the redundant parts
+        // before authentication allocates plaintext, including on failure.
+        self.parts = Vec::new();
+        self.hashmap = Vec::new();
 
         // Decrypt
         let decrypted = if self.flags.encrypted {
@@ -600,10 +610,6 @@ impl ResourceReceiver {
         ) else {
             return Err(self.corrupt_actions(ResourceError::InvalidAdvertisement));
         };
-        // The pending receiver is now only a protocol marker, not a second owner
-        // of the entire encrypted transfer and its part/hashmap allocations.
-        self.parts = Vec::new();
-        self.hashmap = Vec::new();
         Ok(AssemblyData {
             plaintext: decrypted,
             resource_hash,
@@ -866,6 +872,10 @@ mod tests {
         let mut receiver = ready_receiver();
         assert!(receiver.prepare_assembly(&|_| Err(())).is_err());
         assert!(receiver.assembly_id().is_none());
+        assert!(receiver.parts.is_empty() && receiver.hashmap.is_empty());
+        assert!(receiver
+            .prepare_assembly(&|_| panic!("failed assembly retried"))
+            .is_err());
         let mut receiver = ready_receiver();
         let job = receiver.prepare_assembly(&identity_decrypt).unwrap();
         let actions = receiver.fail_assembly(job.id());

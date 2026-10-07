@@ -123,3 +123,41 @@ The uninstrumented candidate passes all 36 live quick-transfer cases (288
 measured transfers plus 72 warmups) and 12 mixed-smoke cases. Live runs check
 correctness, not a before/after latency claim. No benchmark infrastructure was
 added. Raw evidence and frozen binaries: `.local/resource-parts/`.
+
+## Receiver assembly buffer lifetimes (2026-10-07)
+
+Measured against `35d9fdf`: a single received part becomes the assembly stream
+without a fresh allocation/copy. Multipart assembly still reserves from actual
+part lengths and joins in order. After joining, original parts and the receive
+hashmap are released before decryption rather than afterward. This also releases
+those buffers when authentication fails; failed assembly remains terminal and
+cannot publish data. Authentication, decompression bounds and proof verification
+are unchanged.
+
+The existing allocation matrix passed 108 cycles per build. Every single-part
+case removes one allocation and exactly the encrypted stream length in requested
+bytes: 4,160 B for uncompressed 4 KiB input at SDU 16348, or 112 B for the repeated
+compressed inputs at either SDU. Multipart cases have unchanged allocation counts
+and requested-byte totals. Full-cycle logical peak live bytes are unchanged in
+all 108 comparisons; other phases mask the shorter part-buffer lifetime. Every
+cycle returns to its starting live-byte count after teardown. Early release is
+verified by source/lifecycle checks; no separate decryption-stage peak or process
+RSS improvement was measured. Counters cover Rust/System allocations only.
+
+Three alternating before/after timing pairs yielded 360 verified core cycles.
+Per-configuration assembly median changes range from -3.96% to +5.76%; total
+cycle changes range from -5.92% to +4.13%, with direction varying between pairs.
+There is no established speedup. The retained benefit is narrowly scoped:
+one fewer allocation/copy for single-part assembly and earlier disposal of
+redundant receive storage. Portable settings, lockfile, toolchain and host match
+the preceding experiments; no agent builds or benchmarks overlapped timing.
+
+Validation: all 669 core unit and 56 integration tests pass, including
+single/multipart transfers, malformed assembly and worker completion/cancellation.
+The authentication-failure test additionally checks disposal of receive storage
+and rejects a second assembly attempt without invoking decryption. Formatting,
+Clippy and no-default-features pass. Raw reports and frozen binaries are retained
+in `.local/resource-receiver-lifetime/`; existing benchmark tools were reused.
+The candidate also passes 36 live quick-transfer cases (288 measured transfers
+plus 72 warmups) and 12 mixed-smoke cases. These validate socket-level
+correctness, not before/after latency.
