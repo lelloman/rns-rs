@@ -335,8 +335,8 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # enable_interface_management = false
   panic_on_interface_error = false
 
-  # Packet deduplication uses a fixed-size table. "eager" prefaults its
-  # payload pages at startup; "lazy" commits them as packets arrive.
+  # Packet deduplication uses a bounded table. "eager" prefaults its
+  # payload pages at startup; "lazy" grows storage as packets arrive.
   packet_hashlist_max_entries = 250000
   packet_hashlist_allocation = eager
 

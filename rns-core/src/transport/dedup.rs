@@ -14,6 +14,7 @@ use super::types::PacketHashlistAllocation;
 pub struct PacketHashlist {
     queue: PacketHashQueue,
     set: PacketHashSet,
+    max_size: usize,
 }
 
 impl PacketHashlist {
@@ -22,44 +23,59 @@ impl PacketHashlist {
     }
 
     pub fn with_allocation(max_size: usize, allocation: PacketHashlistAllocation) -> Self {
+        let initial = if allocation == PacketHashlistAllocation::Eager {
+            max_size
+        } else {
+            max_size.min(64)
+        };
         Self {
-            queue: PacketHashQueue::new(max_size, allocation),
-            set: PacketHashSet::new(max_size, allocation),
+            queue: PacketHashQueue::new(initial, allocation),
+            set: PacketHashSet::new(initial),
+            max_size,
         }
     }
 
     /// Check if a hash is currently retained.
     pub fn is_duplicate(&self, hash: &[u8; 32]) -> bool {
-        self.set.contains(hash)
+        self.set.contains(hash, &self.queue)
     }
 
     /// Retain a hash. If the dedup table is full, evict the oldest unique hash.
     pub fn add(&mut self, hash: [u8; 32]) {
-        if self.queue.capacity() == 0 || self.set.contains(&hash) {
+        if self.max_size == 0 || self.set.contains(&hash, &self.queue) {
             return;
         }
-
-        if self.queue.len() == self.queue.capacity() {
-            let Some(evicted) = self.queue.pop_front() else {
-                return;
-            };
-            let removed = self.set.remove(&evicted);
-            debug_assert!(removed, "evicted hash must exist in dedup set");
+        if self.queue.len() == self.max_size {
+            let oldest = *self.queue.entries.get(self.queue.head);
+            let removed = self.set.remove(&oldest, &self.queue);
+            debug_assert!(removed, "oldest hash must exist in index");
+            self.queue.pop_front();
         }
-
-        let inserted = self.set.insert(hash);
-        debug_assert!(inserted, "new hash must insert into dedup set");
+        if self.queue.len() == self.queue.capacity() {
+            let capacity = self
+                .queue
+                .capacity()
+                .saturating_mul(2)
+                .max(1)
+                .min(self.max_size);
+            self.queue.grow(capacity);
+            self.set = PacketHashSet::new(capacity);
+            self.set.rebuild(&self.queue);
+        }
+        let slot = (self.queue.head + self.queue.len) % self.queue.capacity();
         self.queue.push_back(hash);
+        self.set.insert(slot, &self.queue);
     }
 
     /// Stop retaining a hash, preserving the FIFO order of all other entries.
     pub fn remove(&mut self, hash: &[u8; 32]) -> bool {
-        if !self.set.remove(hash) {
+        if !self.set.contains(hash, &self.queue) {
             return false;
         }
-
         let removed = self.queue.remove(hash);
-        debug_assert!(removed, "dedup set entry must exist in FIFO queue");
+        debug_assert!(removed, "indexed hash must exist in FIFO queue");
+        // Queue compaction moves slots. Rebuild their index without allocation.
+        self.set.rebuild(&self.queue);
         true
     }
 
@@ -82,11 +98,8 @@ impl PacketHashlist {
     }
 }
 
-/// Fixed-capacity hash payload slots whose initialization is tracked by their owner.
-///
-/// Queue owners may read only slots in their logical FIFO range. Set owners may
-/// read only slots whose corresponding control byte is occupied. Keeping reads
-/// here confines the unsafe code required for lazy payload initialization.
+/// Hash payload slots initialized only within the queue's logical FIFO range.
+/// The index stores queue offsets, never a second copy of a full hash.
 struct RawHashSlots {
     slots: Box<[MaybeUninit<[u8; 32]>]>,
 }
@@ -114,13 +127,13 @@ impl RawHashSlots {
 
     fn read(&self, index: usize) -> [u8; 32] {
         // SAFETY: callers establish initialization through the queue's logical
-        // range or the set's occupied control byte before calling this method.
+        // range before calling this method.
         unsafe { self.slots[index].assume_init_read() }
     }
 
     fn get(&self, index: usize) -> &[u8; 32] {
         // SAFETY: callers establish initialization through the queue's logical
-        // range or the set's occupied control byte before calling this method.
+        // range before calling this method.
         unsafe { self.slots[index].assume_init_ref() }
     }
 }
@@ -214,6 +227,17 @@ impl PacketHashQueue {
         }
     }
 
+    fn grow(&mut self, capacity: usize) {
+        debug_assert!(capacity > self.capacity());
+        let mut entries = RawHashSlots::new(capacity, PacketHashlistAllocation::Lazy);
+        for offset in 0..self.len {
+            let old = (self.head + offset) % self.capacity();
+            entries.write(offset, self.entries.read(old));
+        }
+        self.entries = entries;
+        self.head = 0;
+    }
+
     fn capacity(&self) -> usize {
         self.entries.len()
     }
@@ -267,18 +291,17 @@ impl PacketHashQueue {
     }
 }
 
+/// Open-addressed lookup of queue slots. Zero is empty; other values are
+/// physical queue slot + 1. At most half the buckets are occupied.
 struct PacketHashSet {
-    entries: RawHashSlots,
-    controls: Box<[u8]>,
+    buckets: Box<[usize]>,
     len: usize,
 }
 
 impl PacketHashSet {
-    fn new(max_entries: usize, allocation: PacketHashlistAllocation) -> Self {
-        let capacity = bucket_capacity(max_entries);
+    fn new(max_entries: usize) -> Self {
         Self {
-            entries: RawHashSlots::new(capacity, allocation),
-            controls: vec![0; capacity].into_boxed_slice(),
+            buckets: vec![0; bucket_capacity(max_entries)].into_boxed_slice(),
             len: 0,
         }
     }
@@ -287,79 +310,66 @@ impl PacketHashSet {
         self.len
     }
 
-    fn contains(&self, hash: &[u8; 32]) -> bool {
-        if self.controls.is_empty() {
-            return false;
+    fn position(&self, hash: &[u8; 32], queue: &PacketHashQueue) -> Option<usize> {
+        if self.buckets.is_empty() {
+            return None;
         }
-
         let mut idx = self.bucket_index(hash);
         loop {
-            if self.controls[idx] == 0 {
-                return false;
+            let entry = self.buckets[idx];
+            if entry == 0 {
+                return None;
             }
-            if self.entries.get(idx) == hash {
-                return true;
+            if queue.entries.get(entry - 1) == hash {
+                return Some(idx);
             }
-            idx = (idx + 1) & (self.controls.len() - 1);
+            idx = (idx + 1) & (self.buckets.len() - 1);
         }
     }
 
-    fn insert(&mut self, hash: [u8; 32]) -> bool {
-        if self.controls.is_empty() {
-            return false;
-        }
-
-        let mut idx = self.bucket_index(&hash);
-        loop {
-            if self.controls[idx] == 0 {
-                // Publish occupancy only after the payload is initialized.
-                self.entries.write(idx, hash);
-                self.controls[idx] = 1;
-                self.len += 1;
-                return true;
-            }
-            if self.entries.get(idx) == &hash {
-                return false;
-            }
-            idx = (idx + 1) & (self.controls.len() - 1);
-        }
+    fn contains(&self, hash: &[u8; 32], queue: &PacketHashQueue) -> bool {
+        self.position(hash, queue).is_some()
     }
 
-    fn remove(&mut self, hash: &[u8; 32]) -> bool {
-        if self.controls.is_empty() {
-            return false;
-        }
-
+    fn insert(&mut self, slot: usize, queue: &PacketHashQueue) {
+        let hash = queue.entries.get(slot);
         let mut idx = self.bucket_index(hash);
-        loop {
-            if self.controls[idx] == 0 {
-                return false;
-            }
-            if self.entries.get(idx) == hash {
-                break;
-            }
-            idx = (idx + 1) & (self.controls.len() - 1);
+        while self.buckets[idx] != 0 {
+            idx = (idx + 1) & (self.buckets.len() - 1);
         }
+        self.buckets[idx] = slot + 1;
+        self.len += 1;
+    }
 
-        self.controls[idx] = 0;
+    fn remove(&mut self, hash: &[u8; 32], queue: &PacketHashQueue) -> bool {
+        let Some(idx) = self.position(hash, queue) else {
+            return false;
+        };
+        self.buckets[idx] = 0;
         self.len -= 1;
-
-        let mut next = (idx + 1) & (self.controls.len() - 1);
-        while self.controls[next] != 0 {
-            let entry = self.entries.read(next);
-            self.controls[next] = 0;
+        // Repair the probe cluster before the evicted queue slot is reused.
+        let mut next = (idx + 1) & (self.buckets.len() - 1);
+        while self.buckets[next] != 0 {
+            let slot = self.buckets[next] - 1;
+            self.buckets[next] = 0;
             self.len -= 1;
-            let inserted = self.insert(entry);
-            debug_assert!(inserted, "cluster reinsert after removal must succeed");
-            next = (next + 1) & (self.controls.len() - 1);
+            self.insert(slot, queue);
+            next = (next + 1) & (self.buckets.len() - 1);
         }
-
         true
     }
 
+    fn rebuild(&mut self, queue: &PacketHashQueue) {
+        self.buckets.fill(0);
+        self.len = 0;
+        for offset in 0..queue.len {
+            self.insert((queue.head + offset) % queue.capacity(), queue);
+        }
+    }
+
     fn bucket_index(&self, hash: &[u8; 32]) -> usize {
-        debug_assert!(!self.controls.is_empty());
-        (hash_bytes(hash) as usize) & (self.controls.len() - 1)
+        debug_assert!(!self.buckets.is_empty());
+        (hash_bytes(hash) as usize) & (self.buckets.len() - 1)
     }
 }
 
@@ -511,7 +521,8 @@ mod tests {
     #[test]
     fn collision_cluster_removal_preserves_remaining_entries() {
         for policy in policies() {
-            let mut set = PacketHashSet::new(3, policy);
+            let mut set = PacketHashSet::new(3);
+            let mut queue = PacketHashQueue::new(3, policy);
             let mut colliding = Vec::new();
             for seed in 0..=u8::MAX {
                 let hash = make_hash(seed);
@@ -524,11 +535,12 @@ mod tests {
             }
             assert_eq!(colliding.len(), 3);
             for hash in &colliding {
-                assert!(set.insert(*hash));
+                queue.push_back(*hash);
+                set.insert(queue.len - 1, &queue);
             }
-            assert!(set.remove(&colliding[0]));
-            assert!(set.contains(&colliding[1]));
-            assert!(set.contains(&colliding[2]));
+            assert!(set.remove(&colliding[0], &queue));
+            assert!(set.contains(&colliding[1], &queue));
+            assert!(set.contains(&colliding[2], &queue));
         }
     }
 
@@ -542,6 +554,67 @@ mod tests {
     }
 
     // --- AnnounceSignatureCache tests ---
+
+    #[test]
+    fn lazy_storage_grows_with_occupancy_not_retention_limit() {
+        let mut table = PacketHashlist::with_allocation(250_000, PacketHashlistAllocation::Lazy);
+        assert_eq!(table.queue.capacity(), 64);
+        assert_eq!(table.set.buckets.len(), 128);
+        for n in 0u64..1000 {
+            let mut hash = [0; 32];
+            hash[..8].copy_from_slice(&n.to_le_bytes());
+            table.add(hash);
+        }
+        assert_eq!(table.len(), 1000);
+        assert_eq!(table.queue.capacity(), 1024);
+        assert_eq!(table.set.buckets.len(), 2048);
+        assert_eq!(table.max_size, 250_000);
+    }
+
+    #[test]
+    fn mixed_operations_match_fifo_model_through_growth_and_wraparound() {
+        use alloc::collections::VecDeque;
+        for policy in policies() {
+            for limit in [0, 1, 3, 63, 64, 65, 127, 129, 257] {
+                let mut table = PacketHashlist::with_allocation(limit, policy);
+                let mut model = VecDeque::new();
+                let mut random = 0x123456789abcdefu64;
+                for step in 0..10_000 {
+                    random ^= random << 13;
+                    random ^= random >> 7;
+                    random ^= random << 17;
+                    let id = random % 400;
+                    let mut hash = [0; 32];
+                    hash[..8].copy_from_slice(&id.to_le_bytes());
+                    if step % 5 == 0 {
+                        let position = model.iter().position(|h| h == &hash);
+                        assert_eq!(table.remove(&hash), position.is_some());
+                        if let Some(position) = position {
+                            model.remove(position);
+                        }
+                    } else {
+                        table.add(hash);
+                        if limit > 0 && !model.contains(&hash) {
+                            if model.len() == limit {
+                                model.pop_front();
+                            }
+                            model.push_back(hash);
+                        }
+                    }
+                    assert_eq!(table.len(), model.len());
+                    assert_eq!(table.is_duplicate(&hash), model.contains(&hash));
+                    assert!(table.iter().eq(model.iter()));
+                    if step % 100 == 0 {
+                        for id in 0u64..400 {
+                            let mut hash = [0; 32];
+                            hash[..8].copy_from_slice(&id.to_le_bytes());
+                            assert_eq!(table.is_duplicate(&hash), model.contains(&hash));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_sig_cache_insert_and_contains() {
