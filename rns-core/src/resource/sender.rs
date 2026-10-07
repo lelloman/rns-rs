@@ -1,11 +1,12 @@
 use alloc::borrow::Cow;
+use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use rns_crypto::Rng;
 
 use super::advertisement::ResourceAdvertisement;
-use super::parts::{build_hashmap, has_collision, prepend_metadata, split_into_parts};
+use super::parts::{build_hashmap, has_collision, map_hash, prepend_metadata};
 use super::proof::{compute_expected_proof, compute_resource_hash, validate_proof};
 use super::types::*;
 use crate::buffer::types::Compressor;
@@ -31,8 +32,10 @@ pub struct ResourceSender {
     pub random_hash: Vec<u8>,
     /// SDU size
     pub sdu: usize,
-    /// Encrypted parts data
-    parts: Vec<Vec<u8>>,
+    /// Encrypted bytes retained once; parts are slices of this buffer.
+    parts: Box<[u8]>,
+    /// Original partition size, independent of the public SDU field.
+    part_sdu: usize,
     /// Part map hashes (4 bytes each)
     pub part_hashes: Vec<[u8; RESOURCE_MAPHASH_LEN]>,
     /// Concatenated hashmap bytes
@@ -158,7 +161,6 @@ impl ResourceSender {
         let mut truncated_resource_hash;
         let mut expected_proof;
         let mut final_random_hash;
-        let mut parts_data;
         let mut part_hashes;
         let mut collision_retries = 0;
         const MAX_COLLISION_RETRIES: usize = 100;
@@ -177,9 +179,14 @@ impl ResourceSender {
             };
             expected_proof = compute_expected_proof(&uncompressed_data, &resource_hash);
 
-            let (p, h) = split_into_parts(&encrypted_data, sdu, &final_random_hash);
-            parts_data = p;
-            part_hashes = h;
+            part_hashes = if sdu == 0 {
+                Vec::new()
+            } else {
+                encrypted_data
+                    .chunks(sdu)
+                    .map(|part| map_hash(part, &final_random_hash))
+                    .collect()
+            };
 
             if !has_collision(&part_hashes) {
                 break;
@@ -192,7 +199,7 @@ impl ResourceSender {
         }
 
         let hashmap = build_hashmap(&part_hashes);
-        let total_parts = parts_data.len();
+        let total_parts = part_hashes.len();
 
         let orig_hash = original_hash.unwrap_or(resource_hash);
 
@@ -213,7 +220,13 @@ impl ResourceSender {
             original_hash: orig_hash,
             random_hash: final_random_hash,
             sdu,
-            parts: parts_data,
+            // Discard spare encryption capacity rather than retaining it per transfer.
+            parts: if sdu == 0 {
+                Box::default()
+            } else {
+                encrypted_data.into_boxed_slice()
+            },
+            part_sdu: sdu.max(1),
             part_hashes,
             hashmap,
             total_parts,
@@ -324,7 +337,7 @@ impl ResourceSender {
 
         for part_idx in search_start..search_end {
             if map_hashes_requested.contains(&self.part_hashes[part_idx]) {
-                actions.push(ResourceAction::SendPart(self.parts[part_idx].clone()));
+                actions.push(ResourceAction::SendPart(self.part(part_idx).to_vec()));
                 if !self.sent_indices[part_idx] {
                     self.sent_indices[part_idx] = true;
                     self.sent_parts += 1;
@@ -518,6 +531,11 @@ impl ResourceSender {
         vec![]
     }
 
+    fn part(&self, index: usize) -> &[u8] {
+        let start = index * self.part_sdu;
+        &self.parts[start..start + self.part_sdu.min(self.parts.len() - start)]
+    }
+
     /// Get the total number of parts.
     pub fn total_parts(&self) -> usize {
         self.total_parts
@@ -624,7 +642,7 @@ mod tests {
                                 panic!("expected advertisement");
                             }
                         }
-                        for part in &sender.parts {
+                        for part in sender.parts.chunks(sender.part_sdu) {
                             transcript.extend_from_slice(&(part.len() as u64).to_be_bytes());
                             transcript.extend_from_slice(part);
                         }
@@ -689,6 +707,48 @@ mod tests {
             .iter()
             .any(|a| matches!(a, ResourceAction::SendPart(_)));
         assert!(has_part);
+    }
+
+    #[test]
+    fn requested_parts_and_retries_preserve_original_partition() {
+        for len in [
+            0,
+            1,
+            RESOURCE_SDU - 4,
+            RESOURCE_SDU - 3,
+            RESOURCE_SDU * 3 + 17,
+        ] {
+            let data = varying_data(len);
+            let mut sender = make_sender(&data);
+            // FixedRng and identity encryption leave the original bytes visible.
+            let mut encrypted = vec![0; RESOURCE_RANDOM_HASH_SIZE];
+            // The random prefix is a hash of RNG output, not raw RNG bytes.
+            encrypted[..RESOURCE_RANDOM_HASH_SIZE]
+                .copy_from_slice(&crate::hash::full_hash(&[0x42; 16])[..RESOURCE_RANDOM_HASH_SIZE]);
+            encrypted.extend_from_slice(&data);
+            let expected: Vec<Vec<u8>> =
+                encrypted.chunks(RESOURCE_SDU).map(<[u8]>::to_vec).collect();
+            sender.advertise(1000.0);
+            let mut request = vec![RESOURCE_HASHMAP_IS_NOT_EXHAUSTED];
+            request.extend_from_slice(&sender.resource_hash);
+            for hash in &sender.part_hashes {
+                request.extend_from_slice(hash);
+            }
+            // Public SDU changes must not repartition a transfer already prepared.
+            sender.sdu = 1;
+            for now in [1001.0, 1002.0] {
+                let parts: Vec<Vec<u8>> = sender
+                    .handle_request(&request, now)
+                    .into_iter()
+                    .filter_map(|action| match action {
+                        ResourceAction::SendPart(part) => Some(part),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(parts, expected);
+                assert_eq!(sender.sent_parts, expected.len());
+            }
+        }
     }
 
     #[test]
@@ -905,7 +965,7 @@ mod tests {
         );
         assert_ne!(
             sender.resource_hash,
-            compute_resource_hash(&sender.parts[0], &sender.random_hash)
+            compute_resource_hash(sender.part(0), &sender.random_hash)
         );
     }
 
