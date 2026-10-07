@@ -286,7 +286,7 @@ pub enum PacketHashlistAllocation {
     /// Touch every payload slot during construction.
     #[default]
     Eager,
-    /// Reserve fixed-capacity payload storage without touching its pages.
+    /// Grow payload storage and its index with occupancy, up to the retention limit.
     Lazy,
 }
 
