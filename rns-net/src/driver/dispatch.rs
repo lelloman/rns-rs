@@ -1405,10 +1405,11 @@ impl Driver {
                     dest_type,
                     mut attached_interface,
                 } => {
+                    let mut decoded = RawPacket::unpack(&raw);
                     if dest_type == rns_core::constants::DESTINATION_LINK
                         && attached_interface.is_none()
                     {
-                        if let Ok(packet) = RawPacket::unpack(&raw) {
+                        if let Ok(packet) = &decoded {
                             let link_id = packet.destination_hash;
                             if let Some(route_hint) =
                                 self.link_manager.get_link_route_hint(&link_id)
@@ -1417,6 +1418,10 @@ impl Driver {
                                 if packet.flags.header_type == rns_core::constants::HEADER_1 {
                                     if let Some(next_hop) = route_hint.transport_id {
                                         raw = inject_transport_header(&packet.raw, &next_hop);
+                                        // Reparse only when routing changed the wire header,
+                                        // releasing the old payload copies first.
+                                        drop(decoded);
+                                        decoded = RawPacket::unpack(&raw);
                                         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                             "Link SendPacket rewrite: link={:02x?} iface={} header=1->2 tid={:02x?}",
                                             &link_id[..4],
@@ -1441,7 +1446,7 @@ impl Driver {
                     }
 
                     // Route through the transport engine's outbound path
-                    match RawPacket::unpack(&raw) {
+                    match decoded {
                         Ok(packet) => {
                             self.link_manager.record_outbound_packet(&packet);
                             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {

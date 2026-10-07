@@ -59,3 +59,53 @@ and all-target Clippy for core/networking pass.
 Reproduce live runs with each frozen revision's `rns-bench run --suite
 resource-mixed --profile mixed-smoke --output <fresh-directory>`. Ignored local
 artifacts contain manifests, allocation diagnostic, pair runner and comparisons.
+
+## Reuse the outbound link decode (2026-10-07)
+
+Follow-up against `8940df5`: the driver previously decoded unattached link
+packets for their route hint, discarded that object, then decoded them again
+for outbound accounting and transport. It now retains the first decode. If a
+route adds a transport header, it drops the old decoded buffers and reparses the
+rewritten bytes, preserving existing flag normalization and error handling.
+Already-attached and non-link packets continue to decode once. No packet hash
+consumer, route lookup, traffic accounting or proof tracking is skipped.
+
+A focused allocation diagnostic compares two calls to `RawPacket::unpack` with
+one call on identical HEADER_1 packets. Three observations per size verify raw
+bytes, payload and packet hash equality. This isolates the avoided decode, not
+full driver allocation totals. Rust/System allocation plus reallocation counts:
+
+| Payload | Calls before / after | Requested bytes before / after |
+| --- | ---: | ---: |
+| 1 B | 8 / 4 | 96 / 48 |
+| 64 B | 8 / 4 | 474 / 237 |
+| 464 B | 8 / 4 | 2,874 / 1,437 |
+| 16,348 B | 8 / 4 | 98,178 / 49,089 |
+
+All observations match. Eligible packets avoid raw/payload copies, one hash
+computation and its temporary input buffer. Rewritten packets still decode twice;
+already-attached packets still decode once. These are cumulative requested bytes,
+not live heap, peak memory or RSS. Frozen binaries, the focused diagnostic and
+live reports are retained in `.local/link-decode-reuse/`.
+
+The new driver test verifies exact transmitted bytes and original proof hashes
+for direct routing, transport-header insertion, an attached-interface bypass and
+an already-present transport header. It exercises the context flag during header
+rewriting and confirms malformed packets are neither emitted nor tracked.
+
+All 1,024 networking unit tests passed; the focused routing test was rerun after
+ensuring the old decode is dropped before reparsing. All-target Clippy and
+formatting pass. The no-default-features build passes with 30 unused/dead-code
+warnings in feature-disabled code.
+
+Three alternating before/after pairs of the existing mixed-smoke suite passed
+all 72 cases: 108 Resources and 27,648 echoes including warmups. The median of
+per-case combined endpoint CPU changes for bulk-active cases was -9.98%, -4.70%
+and -0.31%; individual changes ranged from -30.61% to +25.66%. Echo p99 improved
+in 4/6 bulk-active cases in each pair. Echo-only CPU medians were +1.95%, -1.03%
+and -0.94%, with p99 improving in only 2/6, 1/6 and 2/6 cases. These short,
+contended-host measurements suggest potential bulk benefit but do not establish
+a general CPU or latency improvement. Allocation reduction is the confirmed
+result. Host, lockfile, toolchain and portable release settings match the prior
+slice; no agent builds/tests ran concurrently with timing. No new benchmark
+infrastructure or tuning setting was added.
