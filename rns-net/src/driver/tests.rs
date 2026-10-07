@@ -9213,6 +9213,75 @@ fn inbound_implicit_proof_matches_truncated_destination() {
 }
 
 #[test]
+fn link_dispatch_preserves_route_headers_and_proof_tracking() {
+    for (header, routed, attached) in [
+        (constants::HEADER_1, false, false),
+        (constants::HEADER_1, true, false),
+        (constants::HEADER_1, true, true),
+        (constants::HEADER_2, true, false),
+    ] {
+        let mut driver = new_test_driver();
+        let (manager, link_id) = active_link_manager_with_route(InterfaceId(1));
+        driver.link_manager = manager;
+        if routed {
+            driver
+                .link_manager
+                .set_link_route_hint(&link_id, InterfaceId(1), Some([0x88; 16]));
+        }
+        let (writer, sent) = MockWriter::new();
+        let entry = make_entry(1, Box::new(writer), true);
+        driver.engine.register_interface(entry.info.clone());
+        driver.interfaces.insert(InterfaceId(1), entry);
+        let flags = PacketFlags {
+            header_type: header,
+            context_flag: constants::FLAG_SET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &link_id,
+            if header == constants::HEADER_2 {
+                Some(&[0x99; 16])
+            } else {
+                None
+            },
+            constants::CONTEXT_RESOURCE,
+            b"preserve part bytes",
+        )
+        .unwrap();
+        let mut expected = packet.raw.clone();
+        if header == constants::HEADER_1 && routed && !attached {
+            expected = vec![
+                (constants::HEADER_2 << 6)
+                    | (constants::TRANSPORT_TRANSPORT << 4)
+                    | (packet.raw[0] & 0x0F),
+                0,
+            ];
+            expected.extend_from_slice(&[0x88; 16]);
+            expected.extend_from_slice(&packet.raw[2..]);
+        }
+        driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
+            raw: packet.raw,
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: attached.then_some(InterfaceId(1)),
+        }]);
+        assert_eq!(sent.lock().unwrap().as_slice(), &[expected]);
+        assert_eq!(driver.sent_packets.len(), 1);
+        assert_eq!(driver.sent_packets[&packet.packet_hash].0, link_id);
+        driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
+            raw: vec![0],
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: None,
+        }]);
+        assert_eq!(sent.lock().unwrap().len(), 1);
+        assert_eq!(driver.sent_packets.len(), 1);
+    }
+}
+
+#[test]
 fn link_manager_data_send_is_tracked_for_proofs() {
     let mut driver = new_test_driver();
     let (writer, _sent) = MockWriter::new();
