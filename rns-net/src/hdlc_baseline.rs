@@ -11,55 +11,75 @@ const ESC_MASK: u8 = 0x20;
 /// Exact on-wire length after HDLC escaping and delimiter insertion.
 pub(crate) fn framed_len(data: &[u8]) -> usize {
     data.len()
-        .saturating_add(memchr::memchr2_iter(FLAG, ESC, data).count())
+        .saturating_add(
+            data.iter()
+                .filter(|&&byte| byte == FLAG || byte == ESC)
+                .count(),
+        )
         .saturating_add(2)
 }
 
 /// Escape special bytes in data (FLAG and ESC).
 pub fn escape(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(framed_len(data).saturating_sub(2));
-    append_escaped(data, &mut out);
+    let mut out = Vec::with_capacity(data.len());
+    for &b in data {
+        match b {
+            ESC => {
+                out.push(ESC);
+                out.push(ESC ^ ESC_MASK);
+            }
+            FLAG => {
+                out.push(ESC);
+                out.push(FLAG ^ ESC_MASK);
+            }
+            _ => out.push(b),
+        }
+    }
     out
 }
 
-fn append_escaped(data: &[u8], out: &mut Vec<u8>) {
-    let mut offset = 0;
-    for index in memchr::memchr2_iter(FLAG, ESC, data) {
-        out.extend_from_slice(&data[offset..index]);
-        out.extend_from_slice(&[ESC, data[index] ^ ESC_MASK]);
-        offset = index + 1;
-    }
-    out.extend_from_slice(&data[offset..]);
-}
-
-/// Wrap data in the same HDLC delimiters and escaping as the scalar encoder.
+/// Wrap data in HDLC frame: [FLAG] + escape(data) + [FLAG].
 pub fn frame(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(framed_len(data));
     out.push(FLAG);
-    append_escaped(data, &mut out);
+    for &byte in data {
+        match byte {
+            ESC | FLAG => {
+                out.push(ESC);
+                out.push(byte ^ ESC_MASK);
+            }
+            _ => out.push(byte),
+        }
+    }
     out.push(FLAG);
     out
 }
 
+/// Unescape HDLC-escaped data.
 fn unescape(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
-    let mut offset = 0;
-    while let Some(relative) = memchr::memchr(ESC, &data[offset..]) {
-        let index = offset + relative;
-        out.extend_from_slice(&data[offset..index]);
-        match data.get(index + 1).copied() {
-            Some(byte) if byte == FLAG ^ ESC_MASK || byte == ESC ^ ESC_MASK => {
-                out.push(byte ^ ESC_MASK);
-                offset = index + 2;
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == ESC && i + 1 < data.len() {
+            match data[i + 1] {
+                byte if byte == FLAG ^ ESC_MASK => {
+                    out.push(FLAG);
+                    i += 2;
+                }
+                byte if byte == ESC ^ ESC_MASK => {
+                    out.push(ESC);
+                    i += 2;
+                }
+                _ => {
+                    out.push(ESC);
+                    i += 1;
+                }
             }
-            _ => {
-                // Unknown escapes and a trailing ESC remain literal.
-                out.push(ESC);
-                offset = index + 1;
-            }
+        } else {
+            out.push(data[i]);
+            i += 1;
         }
     }
-    out.extend_from_slice(&data[offset..]);
     out
 }
 
@@ -130,7 +150,7 @@ impl Decoder {
 
         loop {
             // Find first FLAG in the unconsumed tail.
-            let start = match memchr::memchr(FLAG, &self.buffer[self.offset..]) {
+            let start = match self.buffer[self.offset..].iter().position(|&b| b == FLAG) {
                 Some(pos) => self.offset + pos,
                 None => {
                     // No FLAG found, discard buffer.
@@ -141,7 +161,7 @@ impl Decoder {
             };
 
             // Find second FLAG after the opening marker.
-            let end = match memchr::memchr(FLAG, &self.buffer[start + 1..]) {
+            let end = match self.buffer[start + 1..].iter().position(|&b| b == FLAG) {
                 Some(pos) => start + 1 + pos,
                 None => {
                     if self.buffer.len() - self.offset > self.max_buffer_size {
@@ -465,73 +485,5 @@ mod tests {
 
         assert_eq!(decoded.frames, vec![payload]);
         assert!(decoded.invalid_frame_lengths.is_empty());
-    }
-}
-
-#[cfg(test)]
-#[path = "hdlc_baseline.rs"]
-mod scalar_baseline;
-#[cfg(test)]
-mod bulk_regression {
-    use super::*;
-    fn compare(wire: &[u8], chunk: usize, mtu: usize) {
-        let mut scalar = scalar_baseline::Decoder::reticulum(mtu, 0);
-        let mut bulk = Decoder::reticulum(mtu, 0);
-        for part in wire.chunks(chunk) {
-            let a = scalar.feed_with_diagnostics(part);
-            let b = bulk.feed_with_diagnostics(part);
-            assert_eq!(a.frames, b.frames);
-            assert_eq!(a.invalid_frame_lengths, b.invalid_frame_lengths);
-        }
-        let recovery = frame(&vec![0x11; mtu.clamp(20, 64)]);
-        let a = scalar.feed_with_diagnostics(&recovery);
-        let b = bulk.feed_with_diagnostics(&recovery);
-        assert_eq!(a.frames, b.frames);
-        assert_eq!(a.invalid_frame_lengths, b.invalid_frame_lengths);
-    }
-    #[test]
-    fn every_two_byte_escape_and_unknown_sequence_matches_scalar() {
-        for first in 0..=255u8 {
-            for second in 0..=255u8 {
-                let data = [first, second];
-                assert_eq!(escape(&data), scalar_baseline::escape(&data));
-                assert_eq!(frame(&data), scalar_baseline::frame(&data));
-                let mut wire = vec![FLAG];
-                wire.extend_from_slice(&[0x11; 20]);
-                wire.extend_from_slice(&[first, second, FLAG]);
-                for chunk in [1, 2, 23, 64] {
-                    compare(&wire, chunk, 64);
-                }
-            }
-        }
-    }
-    #[test]
-    fn arbitrary_wire_fragmentation_limits_and_recovery_match_scalar() {
-        let mut state = 0x723b19u64;
-        for len in [
-            0, 1, 18, 19, 20, 63, 64, 65, 499, 500, 501, 8191, 8192, 8193, 16385,
-        ] {
-            let data: Vec<u8> = (0..len)
-                .map(|_| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    state as u8
-                })
-                .collect();
-            assert_eq!(escape(&data), scalar_baseline::escape(&data));
-            assert_eq!(frame(&data), scalar_baseline::frame(&data));
-            for chunk in [1, 2, 7, 128, 2048, 65536] {
-                for mtu in [64, 500, 8192] {
-                    compare(&data, chunk, mtu);
-                    compare(&frame(&data), chunk, mtu);
-                }
-            }
-        }
-        for byte in [FLAG, ESC, 0x11] {
-            for chunk in [1, 7, 2048] {
-                compare(&vec![byte; 16385], chunk, 8192);
-            }
-        }
     }
 }
