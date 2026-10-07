@@ -74,3 +74,52 @@ cargo build --release --offline --locked -p rns-bench --features allocation-prof
 
 Ignored raw artifacts, manifests, reports and frozen binaries are retained in
 `.local/resource-borrow/`; the durable result is recorded here.
+
+## Contiguous sender part storage (2026-10-07)
+
+A second isolated change, measured against `9e758f4`, retains the encrypted
+buffer instead of allocating and copying each part during preparation. Map
+hashes are computed directly over its chunks; requested parts still get owned
+action buffers, preserving retransmissions and asynchronous consumers. Collision
+retries recompute hashes without copying parts. A boxed slice releases spare
+capacity supplied by the encryption callback. A private partition size preserves
+part boundaries even if a caller subsequently changes the public SDU field.
+The public `split_into_parts` helper and action API are unchanged.
+
+The same 108-case allocation matrix passed on each build. Representative 2 MiB
+results below are exact in all three repetitions; savings are before minus after.
+
+| Input / compression / SDU | Fewer allocation calls | Fewer requested bytes over cycle | Less retained sender storage |
+| --- | ---: | ---: | ---: |
+| Any / off / 464 | 4,521 | 2,205,696 B | 108,480 B |
+| Any / off / 16348 | 130 | 2,100,312 B | 3,096 B |
+| Seeded / on / 464 | 4,028 | 1,964,776 B | 96,648 B |
+| Seeded / on / 16348 | 116 | 1,870,888 B | 2,760 B |
+| Repeated / on / either | 2 | 136 B | 24 B |
+
+Rejected SHA-256-counter compression has the same savings as compression off.
+Overall logical peak live bytes are unchanged in the uncompressed and seeded
+examples: another phase sets the peak. The repeated compressed example reduces
+that peak by 24 B. Every cycle returns to its starting live-byte count after
+teardown. These remain Rust/System counters, not native heap or daemon RSS.
+Callbacks returning excess capacity can require a shrink reallocation when the
+buffer becomes a boxed slice; its cost depends on the allocator and callback.
+
+Three alternating timing pairs (before/after, after/before, before/after) yielded
+360 verified core cycles. Per-configuration preparation median changes range
+from -8.64% to +6.08%; total-cycle changes range from -6.99% to +4.81%.
+Directions change across pairs, including unchanged codec work. No general
+speedup is established; the accepted benefit is fewer allocations/copies and
+less retained sender metadata. No agent builds or benchmarks ran concurrently
+with these timing runs, but host load was uncontrolled. Toolchain, platform,
+lockfile and portable settings match the first experiment above. Baseline
+binaries were reused from that experiment's accepted version.
+
+Validation: 669 core unit tests and 56 integration tests pass, including the
+original 90-case wire transcript. A new request/retry test verifies exact bytes
+at empty, exact-boundary and multipart sizes and checks partition stability
+when the public SDU changes. no-default-features, Clippy and formatting pass.
+The uninstrumented candidate passes all 36 live quick-transfer cases (288
+measured transfers plus 72 warmups) and 12 mixed-smoke cases. Live runs check
+correctness, not a before/after latency claim. No benchmark infrastructure was
+added. Raw evidence and frozen binaries: `.local/resource-parts/`.
