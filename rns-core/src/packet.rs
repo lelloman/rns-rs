@@ -175,6 +175,30 @@ impl RawPacket {
         data: &[u8],
         max_mtu: usize,
     ) -> Result<(Vec<u8>, [u8; 32]), PacketError> {
+        let raw = Self::pack_raw_with_max_mtu(
+            flags,
+            hops,
+            destination_hash,
+            transport_id,
+            context,
+            data,
+            max_mtu,
+        )?;
+        let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, &raw));
+        Ok((raw, packet_hash))
+    }
+
+    /// Pack only wire bytes when the caller does not need a packet hash.
+    /// Validation and encoding match the hash-producing packing methods.
+    pub fn pack_raw_with_max_mtu(
+        flags: PacketFlags,
+        hops: u8,
+        destination_hash: &[u8; 16],
+        transport_id: Option<&[u8; 16]>,
+        context: u8,
+        data: &[u8],
+        max_mtu: usize,
+    ) -> Result<Vec<u8>, PacketError> {
         if flags.header_type == constants::HEADER_2 && transport_id.is_none() {
             return Err(PacketError::MissingTransportId);
         }
@@ -197,8 +221,7 @@ impl RawPacket {
             return Err(PacketError::ExceedsMtu);
         }
 
-        let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, &raw));
-        Ok((raw, packet_hash))
+        Ok(raw)
     }
 
     /// Unpack raw bytes into fields.
@@ -324,6 +347,68 @@ impl RawPacket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_only_packing_preserves_wire_layout_and_limits() {
+        for header in [constants::HEADER_1, constants::HEADER_2] {
+            for transport in [None, Some([0xBB; 16])] {
+                for len in [0, 1, 464, 16348] {
+                    let flags = PacketFlags {
+                        header_type: header,
+                        context_flag: constants::FLAG_UNSET,
+                        transport_type: constants::TRANSPORT_BROADCAST,
+                        destination_type: constants::DESTINATION_LINK,
+                        packet_type: constants::PACKET_TYPE_DATA,
+                    };
+                    let data = vec![0xCC; len];
+                    let mut expected = vec![flags.pack(), 7];
+                    if header == constants::HEADER_2 {
+                        expected.extend_from_slice(&[0xBB; 16]);
+                    }
+                    expected.extend_from_slice(&[0xAA; 16]);
+                    expected.push(constants::CONTEXT_RESOURCE);
+                    expected.extend_from_slice(&data);
+                    for limit in [0, expected.len() - 1, expected.len(), expected.len() + 1] {
+                        let result = RawPacket::pack_raw_with_max_mtu(
+                            flags,
+                            7,
+                            &[0xAA; 16],
+                            transport.as_ref(),
+                            constants::CONTEXT_RESOURCE,
+                            &data,
+                            limit,
+                        );
+                        if header == constants::HEADER_2 && transport.is_none() {
+                            assert!(matches!(result, Err(PacketError::MissingTransportId)));
+                        } else if limit < expected.len() {
+                            assert!(matches!(result, Err(PacketError::ExceedsMtu)));
+                        } else {
+                            assert_eq!(result.unwrap(), expected);
+                            let (raw, hash) = RawPacket::pack_raw_with_hash_with_max_mtu(
+                                flags,
+                                7,
+                                &[0xAA; 16],
+                                transport.as_ref(),
+                                constants::CONTEXT_RESOURCE,
+                                &data,
+                                limit,
+                            )
+                            .unwrap();
+                            assert_eq!(raw, expected);
+                            if len == 0 {
+                                assert!(matches!(
+                                    RawPacket::unpack(&raw),
+                                    Err(PacketError::ZeroLengthData)
+                                ));
+                            } else {
+                                assert_eq!(RawPacket::unpack(&raw).unwrap().packet_hash, hash);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_flags_pack_header1_data_single_broadcast() {

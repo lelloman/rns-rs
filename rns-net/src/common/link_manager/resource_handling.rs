@@ -1502,9 +1502,9 @@ impl LinkManager {
             .get(link_id)
             .map(|l| l.engine.mtu() as usize)
             .unwrap_or(constants::MTU);
-        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
-            flags, 0, link_id, None, context, data, max_mtu,
-        ) {
+        if let Ok(raw) =
+            RawPacket::pack_raw_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
+        {
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
