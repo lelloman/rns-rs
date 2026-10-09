@@ -340,19 +340,16 @@ fn reader_loop(
                         frame_len,
                     );
                 }
-                for frame in decoded.frames {
-                    if tx
-                        .send(Event::Frame {
-                            interface_id: id,
-                            data: frame,
-                            rssi: None,
-                            snr: None,
-                        })
-                        .is_err()
-                    {
-                        // Driver shut down
-                        return;
-                    }
+                // One queue lock for every frame decoded from this read.
+                let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
+                    interface_id: id,
+                    data: frame,
+                    rssi: None,
+                    snr: None,
+                });
+                if tx.send_batch(frames).is_err() {
+                    // Driver shut down
+                    return;
                 }
             }
             // Retry without dropping the connection or a partially decoded frame.

@@ -319,9 +319,35 @@ impl EventSender {
         block_control: bool,
         drop_full_inbound: bool,
     ) -> Result<(), std::sync::mpsc::TrySendError<Event>> {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let (state, result) = self.enqueue_locked(state, event, block_control, drop_full_inbound);
+        let wake = state.waiters > 0;
+        drop(state);
+        if wake {
+            self.shared.changed.notify_one();
+        }
+        result
+    }
+
+    /// Enqueue one event while holding the state lock. Waits for space (when
+    /// permitted) release and reacquire the lock; before waiting, any thread
+    /// already waiting is woken so events pushed earlier in a batch are seen.
+    #[allow(clippy::result_large_err)]
+    fn enqueue_locked<'a>(
+        &'a self,
+        mut state: std::sync::MutexGuard<'a, QueueState>,
+        event: Event,
+        block_control: bool,
+        drop_full_inbound: bool,
+    ) -> (
+        std::sync::MutexGuard<'a, QueueState>,
+        Result<(), std::sync::mpsc::TrySendError<Event>>,
+    ) {
         if !state.receiver_alive {
-            return Err(std::sync::mpsc::TrySendError::Disconnected(event));
+            return (
+                state,
+                Err(std::sync::mpsc::TrySendError::Disconnected(event)),
+            );
         }
         let class = self.classify(&event, &state);
         if let Some(class) = class {
@@ -334,38 +360,46 @@ impl EventSender {
             // protective drop-on-full policy.
             if block_control && class == QueueClass::Data {
                 while state.inbound[index].len() >= self.shared.inbound_capacities[index] {
+                    if state.waiters > 0 {
+                        self.shared.changed.notify_all();
+                    }
                     state = self.shared.wait_changed(state);
                     if !state.receiver_alive {
-                        return Err(std::sync::mpsc::TrySendError::Disconnected(event));
+                        return (
+                            state,
+                            Err(std::sync::mpsc::TrySendError::Disconnected(event)),
+                        );
                     }
                 }
             }
             if state.inbound[index].len() >= self.shared.inbound_capacities[index] {
                 state.inbound_dropped[index] = state.inbound_dropped[index].saturating_add(1);
-                return if drop_full_inbound {
+                let result = if drop_full_inbound {
                     Ok(())
                 } else {
                     Err(std::sync::mpsc::TrySendError::Full(event))
                 };
+                return (state, result);
             }
             let sequence = state.next_sequence;
             state.next_sequence = state.next_sequence.wrapping_add(1);
             state.inbound[index].push_back(QueuedEvent { sequence, event });
-            let wake = state.waiters > 0;
-            drop(state);
-            if wake {
-                self.shared.changed.notify_one();
-            }
-            return Ok(());
+            return (state, Ok(()));
         }
 
         while state.control.len() >= self.shared.control_capacity {
             if !block_control {
-                return Err(std::sync::mpsc::TrySendError::Full(event));
+                return (state, Err(std::sync::mpsc::TrySendError::Full(event)));
+            }
+            if state.waiters > 0 {
+                self.shared.changed.notify_all();
             }
             state = self.shared.wait_changed(state);
             if !state.receiver_alive {
-                return Err(std::sync::mpsc::TrySendError::Disconnected(event));
+                return (
+                    state,
+                    Err(std::sync::mpsc::TrySendError::Disconnected(event)),
+                );
             }
         }
         let sequence = state.next_sequence;
@@ -374,12 +408,38 @@ impl EventSender {
             completion.admit();
         }
         state.control.push_back(QueuedEvent { sequence, event });
+        (state, Ok(()))
+    }
+
+    /// Send several events in order under one lock acquisition, with the
+    /// same per-event semantics as [`EventSender::send`]. Interface readers
+    /// use this for all frames decoded from one socket read. Stops at the
+    /// first event that cannot be delivered because the receiver is gone.
+    #[allow(clippy::result_large_err)]
+    pub fn send_batch(
+        &self,
+        events: impl IntoIterator<Item = Event>,
+    ) -> Result<(), std::sync::mpsc::SendError<Event>> {
+        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut result = Ok(());
+        for event in events {
+            let (next, sent) = self.enqueue_locked(state, event, true, true);
+            state = next;
+            if let Err(
+                std::sync::mpsc::TrySendError::Full(event)
+                | std::sync::mpsc::TrySendError::Disconnected(event),
+            ) = sent
+            {
+                result = Err(std::sync::mpsc::SendError(event));
+                break;
+            }
+        }
         let wake = state.waiters > 0;
         drop(state);
         if wake {
             self.shared.changed.notify_one();
         }
-        Ok(())
+        result
     }
 
     #[allow(clippy::result_large_err)]
@@ -985,6 +1045,29 @@ mod tests {
         assert_eq!(frame_interface(rx.recv().unwrap()), 1);
         reader.join().unwrap().unwrap();
         assert_eq!(frame_interface(rx.recv().unwrap()), 2);
+        assert_eq!(tx.inbound_queue_snapshot().dropped, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn batch_larger_than_the_queue_wakes_a_waiting_receiver_and_keeps_order() {
+        let (tx, rx) = channel_with_capacity(2);
+        // The receiver is already waiting on an empty queue when the batch
+        // starts; the batch must wake it before blocking on a full queue.
+        let receiver = std::thread::spawn(move || {
+            (0..6)
+                .map(|_| frame_interface(rx.recv().unwrap()))
+                .collect::<Vec<_>>()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tx.send_batch((1..=6).map(|id| {
+            frame(
+                id,
+                [0xD0 + id as u8; 16],
+                rns_core::constants::PACKET_TYPE_DATA,
+            )
+        }))
+        .unwrap();
+        assert_eq!(receiver.join().unwrap(), vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(tx.inbound_queue_snapshot().dropped, [0, 0, 0, 0]);
     }
 

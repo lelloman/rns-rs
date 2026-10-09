@@ -354,20 +354,17 @@ fn client_reader_loop(
                         id.0,
                     );
                 }
-                for frame in decoded.frames {
-                    if tx
-                        .send(Event::Frame {
-                            interface_id: id,
-                            data: frame,
-                            rssi: None,
-                            snr: None,
-                        })
-                        .is_err()
-                    {
-                        // Driver shut down
-                        active_connections.fetch_sub(1, Ordering::Relaxed);
-                        return;
-                    }
+                // One queue lock for every frame decoded from this read.
+                let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
+                    interface_id: id,
+                    data: frame,
+                    rssi: None,
+                    snr: None,
+                });
+                if tx.send_batch(frames).is_err() {
+                    // Driver shut down
+                    active_connections.fetch_sub(1, Ordering::Relaxed);
+                    return;
                 }
             }
             Err(e)
