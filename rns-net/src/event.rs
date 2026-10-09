@@ -92,6 +92,11 @@ struct QueueState {
     announce_bursts: HashMap<InterfaceId, f64>,
     path_request_bursts: HashMap<InterfaceId, f64>,
     dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
+    /// Threads currently blocked on `QueueShared::changed`. Producers and the
+    /// receiver only notify when someone waits: a thread can start waiting
+    /// only after taking the state lock, so it observes every change made
+    /// before the notification check and no wakeup is lost.
+    waiters: usize,
 }
 
 pub(crate) struct ReceivedEvent {
@@ -110,6 +115,7 @@ impl QueueState {
             announce_bursts: HashMap::new(),
             path_request_bursts: HashMap::new(),
             dynamic_interface_parents: HashMap::new(),
+            waiters: 0,
         }
     }
 
@@ -140,6 +146,10 @@ struct QueueShared {
     local_ratchets: crate::local_ratchet::Registry,
     link_sends: Arc<crate::link_send::SendPool>,
     async_waiters: Mutex<Vec<std::sync::Weak<crate::link_send::Waiter>>>,
+    /// Length of `async_waiters` as of its last update, read without the lock
+    /// on every receive. Registration stores it before the sender's queue
+    /// attempt, which is ordered by the state lock relative to the receive.
+    async_waiter_count: AtomicUsize,
     state: Mutex<QueueState>,
     changed: Condvar,
     sender_count: AtomicUsize,
@@ -149,7 +159,21 @@ struct QueueShared {
 }
 
 impl QueueShared {
+    /// Wait on `changed`, keeping the waiter count used to skip notifications.
+    fn wait_changed<'a>(
+        &self,
+        mut state: std::sync::MutexGuard<'a, QueueState>,
+    ) -> std::sync::MutexGuard<'a, QueueState> {
+        state.waiters += 1;
+        let mut state = self.changed.wait(state).unwrap_or_else(|p| p.into_inner());
+        state.waiters -= 1;
+        state
+    }
+
     fn wake_async_senders(&self) {
+        if self.async_waiter_count.load(Ordering::SeqCst) == 0 {
+            return;
+        }
         let waiters: Vec<_> = self
             .async_waiters
             .lock()
@@ -237,6 +261,9 @@ impl EventSender {
             let mut waiters = self.shared.async_waiters.lock().unwrap();
             waiters.retain(|w| w.strong_count() > 0);
             waiters.push(Arc::downgrade(&waiter));
+            self.shared
+                .async_waiter_count
+                .store(waiters.len(), Ordering::SeqCst);
         }
         let mut pending = Some(event);
         futures::future::poll_fn(|cx| {
@@ -307,11 +334,7 @@ impl EventSender {
             // protective drop-on-full policy.
             if block_control && class == QueueClass::Data {
                 while state.inbound[index].len() >= self.shared.inbound_capacities[index] {
-                    state = self
-                        .shared
-                        .changed
-                        .wait(state)
-                        .unwrap_or_else(|p| p.into_inner());
+                    state = self.shared.wait_changed(state);
                     if !state.receiver_alive {
                         return Err(std::sync::mpsc::TrySendError::Disconnected(event));
                     }
@@ -328,8 +351,11 @@ impl EventSender {
             let sequence = state.next_sequence;
             state.next_sequence = state.next_sequence.wrapping_add(1);
             state.inbound[index].push_back(QueuedEvent { sequence, event });
+            let wake = state.waiters > 0;
             drop(state);
-            self.shared.changed.notify_one();
+            if wake {
+                self.shared.changed.notify_one();
+            }
             return Ok(());
         }
 
@@ -337,11 +363,7 @@ impl EventSender {
             if !block_control {
                 return Err(std::sync::mpsc::TrySendError::Full(event));
             }
-            state = self
-                .shared
-                .changed
-                .wait(state)
-                .unwrap_or_else(|p| p.into_inner());
+            state = self.shared.wait_changed(state);
             if !state.receiver_alive {
                 return Err(std::sync::mpsc::TrySendError::Disconnected(event));
             }
@@ -352,8 +374,11 @@ impl EventSender {
             completion.admit();
         }
         state.control.push_back(QueuedEvent { sequence, event });
+        let wake = state.waiters > 0;
         drop(state);
-        self.shared.changed.notify_one();
+        if wake {
+            self.shared.changed.notify_one();
+        }
         Ok(())
     }
 
@@ -481,7 +506,7 @@ impl Drop for EventReceiver {
 impl EventReceiver {
     fn pop_locked(&self, state: &mut QueueState) -> Option<ReceivedEvent> {
         let event = state.pop_next();
-        if event.is_some() {
+        if event.is_some() && state.waiters > 0 {
             self.shared.changed.notify_all();
         }
         event
@@ -502,11 +527,7 @@ impl EventReceiver {
             if self.shared.sender_count.load(Ordering::Acquire) == 0 {
                 return Err(std::sync::mpsc::RecvError);
             }
-            state = self
-                .shared
-                .changed
-                .wait(state)
-                .unwrap_or_else(|p| p.into_inner());
+            state = self.shared.wait_changed(state);
         }
     }
 
@@ -542,11 +563,13 @@ impl EventReceiver {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
             };
-            let (next_state, result) = self
+            state.waiters += 1;
+            let (mut next_state, result) = self
                 .shared
                 .changed
                 .wait_timeout(state, remaining)
                 .unwrap_or_else(|p| p.into_inner());
+            next_state.waiters -= 1;
             state = next_state;
             if result.timed_out() && !state.has_events() {
                 return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
@@ -578,6 +601,7 @@ pub(crate) fn channel_with_queue_capacities(
         local_ratchets: Default::default(),
         link_sends: crate::link_send::SendPool::new(control_capacity),
         async_waiters: Mutex::new(Vec::new()),
+        async_waiter_count: AtomicUsize::new(0),
         state: Mutex::new(QueueState::new()),
         changed: Condvar::new(),
         sender_count: AtomicUsize::new(1),
