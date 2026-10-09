@@ -76,11 +76,17 @@ impl Default for TcpServerConfig {
 /// Writer that sends HDLC-framed data over a TCP stream.
 struct TcpServerWriter {
     stream: TcpStream,
+    /// Reused encoding buffer for coalesced writes.
+    scratch: Vec<u8>,
 }
 
 impl Writer for TcpServerWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.stream.write_all(&hdlc::frame(data))
+    }
+
+    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+        hdlc::write_frames(&mut self.stream, frames, &mut self.scratch)
     }
 }
 
@@ -244,6 +250,7 @@ fn listener_loop(context: ListenerLoopContext) {
 
         let writer: Box<dyn Writer> = Box::new(TcpServerWriter {
             stream: writer_stream,
+            scratch: Vec::new(),
         });
 
         let info = InterfaceInfo {
@@ -323,7 +330,7 @@ fn client_reader_loop(
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
     let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-    let mut buf = [0u8; 4096];
+    let mut buf = vec![0u8; 64 * 1024];
 
     loop {
         if control.should_stop() {
