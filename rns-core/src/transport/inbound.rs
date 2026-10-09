@@ -67,6 +67,47 @@ pub fn forward_transport_packet(
     }
 }
 
+/// Clamp the link MTU signalled by a forwarded LINKREQUEST to the smaller of
+/// the receiving and next-hop interface MTUs.
+///
+/// Transport.py (forwarding a LINKREQUEST): when the request carries MTU
+/// signalling and either hop's hardware MTU is smaller than the signalled
+/// path MTU, the signalled MTU is lowered so both endpoints negotiate a frame
+/// size every hop can carry. A next-hop interface without a usable MTU strips
+/// the signalling, disabling the upgrade. The three mode bits are preserved.
+/// Link IDs exclude the signalling bytes, so rewriting them does not change
+/// the link table key.
+pub fn clamp_forwarded_link_request_mtu(
+    new_raw: &mut Vec<u8>,
+    signalled: bool,
+    receiving_mtu: Option<u32>,
+    next_hop_mtu: Option<u32>,
+) {
+    if !signalled || new_raw.len() < constants::LINK_MTU_SIZE {
+        return;
+    }
+    let start = new_raw.len() - constants::LINK_MTU_SIZE;
+    let Some(next_hop_mtu) = next_hop_mtu.filter(|mtu| *mtu > 0) else {
+        new_raw.truncate(start);
+        return;
+    };
+    let value = ((new_raw[start] as u32) << 16)
+        | ((new_raw[start + 1] as u32) << 8)
+        | (new_raw[start + 2] as u32);
+    let path_mtu = value & constants::LINK_MTU_BYTEMASK;
+    let mut limit = next_hop_mtu;
+    if let Some(receiving_mtu) = receiving_mtu.filter(|mtu| *mtu > 0) {
+        limit = limit.min(receiving_mtu);
+    }
+    if limit < path_mtu {
+        let clamped =
+            (value & !constants::LINK_MTU_BYTEMASK) | (limit & constants::LINK_MTU_BYTEMASK);
+        new_raw[start] = (clamped >> 16) as u8;
+        new_raw[start + 1] = (clamped >> 8) as u8;
+        new_raw[start + 2] = clamped as u8;
+    }
+}
+
 /// Create a link table entry for a forwarded LINKREQUEST.
 pub fn create_link_entry(
     packet: &RawPacket,
@@ -562,5 +603,53 @@ mod tests {
         let result =
             route_via_link_table(&packet, &link, InterfaceId(1), LocalHopRewrite::default());
         assert!(result.is_none());
+    }
+}
+
+#[cfg(test)]
+mod link_request_mtu_tests {
+    use super::clamp_forwarded_link_request_mtu;
+    use crate::link::handshake::build_signalling_bytes;
+    use crate::link::types::LinkMode;
+
+    fn request(mtu: u32, mode: LinkMode) -> Vec<u8> {
+        let mut raw = vec![0xAA; 19 + 64];
+        raw.extend_from_slice(&build_signalling_bytes(mtu, mode));
+        raw
+    }
+
+    #[test]
+    fn clamps_to_smaller_next_hop_and_preserves_mode() {
+        let mut raw = request(524_288, LinkMode::Aes256Cbc);
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(262_144), Some(16_384));
+        assert_eq!(raw, request(16_384, LinkMode::Aes256Cbc));
+    }
+
+    #[test]
+    fn clamps_to_smaller_receiving_interface() {
+        let mut raw = request(524_288, LinkMode::Aes128Cbc);
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(8_192), Some(65_535));
+        assert_eq!(raw, request(8_192, LinkMode::Aes128Cbc));
+    }
+
+    #[test]
+    fn leaves_fitting_signalling_untouched() {
+        let mut raw = request(16_384, LinkMode::Aes256Cbc);
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(65_535), Some(65_535));
+        assert_eq!(raw, request(16_384, LinkMode::Aes256Cbc));
+    }
+
+    #[test]
+    fn strips_signalling_without_next_hop_mtu() {
+        let mut raw = request(16_384, LinkMode::Aes256Cbc);
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(65_535), Some(0));
+        assert_eq!(raw.len(), 19 + 64);
+    }
+
+    #[test]
+    fn ignores_requests_without_signalling() {
+        let mut raw = vec![0xAA; 19 + 64];
+        clamp_forwarded_link_request_mtu(&mut raw, false, Some(500), Some(500));
+        assert_eq!(raw, vec![0xAA; 19 + 64]);
     }
 }

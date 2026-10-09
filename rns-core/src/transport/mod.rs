@@ -33,8 +33,8 @@ use self::announce_queue::AnnounceQueues;
 use self::announce_verify_queue::{AnnounceVerifyKey, AnnounceVerifyQueue, PendingAnnounce};
 use self::dedup::{AnnounceSignatureCache, PacketHashlist};
 use self::inbound::{
-    create_link_entry, create_reverse_entry, forward_transport_packet, route_proof_via_reverse,
-    route_via_link_table, LocalHopRewrite,
+    clamp_forwarded_link_request_mtu, create_link_entry, create_reverse_entry,
+    forward_transport_packet, route_proof_via_reverse, route_via_link_table, LocalHopRewrite,
 };
 use self::ingress_control::IngressControl;
 use self::outbound::{route_outbound_with_options, should_transmit_announce, OutboundRouteOptions};
