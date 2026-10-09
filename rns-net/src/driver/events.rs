@@ -279,8 +279,7 @@ impl Driver {
         }
 
         self.dispatch_all_with_ingress_class(actions, ingress_limited);
-        self.event_tx.set_ingress_bursts(
-            interface_id,
+        let bursts = (
             self.engine
                 .burst_active(&interface_id)
                 .then(|| self.engine.burst_activated(&interface_id)),
@@ -288,6 +287,13 @@ impl Driver {
                 .pr_burst_active(&interface_id)
                 .then(|| self.engine.pr_burst_activated(&interface_id)),
         );
+        // Publishing takes the shared event-queue lock that every interface
+        // reader also needs, so only publish when the burst state changed.
+        if self.published_ingress_bursts.get(&interface_id) != Some(&bursts) {
+            self.event_tx
+                .set_ingress_bursts(interface_id, bursts.0, bursts.1);
+            self.published_ingress_bursts.insert(interface_id, bursts);
+        }
     }
 
     pub(crate) fn handle_announce_verified_event(

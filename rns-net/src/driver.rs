@@ -665,6 +665,8 @@ pub struct Driver {
     pub(crate) interface_management: Option<crate::node::InterfaceManagementConfig>,
     pub(crate) managed_interfaces: HashMap<String, ManagedInterface>,
     pub(crate) retired_interface_parents: HashSet<InterfaceId>,
+    /// Ingress burst state last published to the event queue, per interface.
+    pub(crate) published_ingress_bursts: crate::interface::InterfaceMap<(Option<f64>, Option<f64>)>,
     pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
     /// Destination hash for rnstransport.tunnel.synthesize (PLAIN).
     pub(crate) tunnel_synth_dest: [u8; 16],
@@ -903,6 +905,7 @@ impl Driver {
             interface_management: None,
             managed_interfaces: HashMap::new(),
             retired_interface_parents: HashSet::new(),
+            published_ingress_bursts: Default::default(),
             announce_cache: None,
             tunnel_synth_dest,
             transport_identity: None,
