@@ -347,7 +347,7 @@ impl TransportEngine {
         }
         let instance_local_link = self.interface_is_local_client(link_entry.next_hop_interface)
             && self.interface_is_local_client(link_entry.received_interface);
-        let Some((outbound_iface, new_raw)) = route_via_link_table(
+        let Some((outbound_iface, new_raw)) = super::inbound::route_via_link_table_shared(
             &ctx.packet,
             &link_entry,
             ctx.iface,
@@ -365,7 +365,7 @@ impl TransportEngine {
         self.packet_hashlist.add(ctx.packet.packet_hash);
         actions.push(TransportAction::SendOnInterface {
             interface: outbound_iface,
-            raw: new_raw.into(),
+            raw: new_raw,
         });
 
         if let Some(entry) = self.link_table.get_mut(&ctx.packet.destination_hash) {
