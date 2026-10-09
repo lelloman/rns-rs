@@ -665,6 +665,8 @@ pub struct Driver {
     pub(crate) interface_management: Option<crate::node::InterfaceManagementConfig>,
     pub(crate) managed_interfaces: HashMap<String, ManagedInterface>,
     pub(crate) retired_interface_parents: HashSet<InterfaceId>,
+    /// Writers that may hold frames queued without a wakeup.
+    pub(crate) writers_to_wake: Vec<InterfaceId>,
     /// Ingress burst state last published to the event queue, per interface.
     pub(crate) published_ingress_bursts: crate::interface::InterfaceMap<(Option<f64>, Option<f64>)>,
     pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
@@ -906,6 +908,7 @@ impl Driver {
             managed_interfaces: HashMap::new(),
             retired_interface_parents: HashSet::new(),
             published_ingress_bursts: Default::default(),
+            writers_to_wake: Vec::new(),
             announce_cache: None,
             tunnel_synth_dest,
             transport_identity: None,

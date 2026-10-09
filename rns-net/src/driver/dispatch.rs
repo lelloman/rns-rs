@@ -350,6 +350,15 @@ impl Driver {
         }
     }
 
+    /// Wake writers left asleep by deferred forwarding sends.
+    pub(crate) fn wake_writers(&mut self) {
+        for id in std::mem::take(&mut self.writers_to_wake) {
+            if let Some(entry) = self.interfaces.get_mut(&id) {
+                entry.writer.wake();
+            }
+        }
+    }
+
     pub(crate) fn interface_send_deferred(entry: &InterfaceEntry, now: Instant) -> bool {
         // Async writers bound their own waiting and stop waiting on a stalled
         // peer, refusing only frames that do not fit. Skipping sends to them
@@ -558,11 +567,16 @@ impl Driver {
                 entry.stats.outgoing_path_request_samples(),
             );
         }
+        // Forwarded frames postpone the writer wakeup; the driver wakes each
+        // touched writer once before it next waits for events.
         let send_result = if entry.ifac.is_some() {
-            entry.writer.send_frame(&data)
+            entry.writer.send_frame_deferred(&data)
         } else {
-            entry.writer.send_frame(&raw)
+            entry.writer.send_frame_deferred(&raw)
         };
+        if self.writers_to_wake.last() != Some(&interface) {
+            self.writers_to_wake.push(interface);
+        }
         let sent_ok = send_result.is_ok();
         Self::record_send_result(entry, &send_result, "send", interface);
         if sent_ok && is_announce {

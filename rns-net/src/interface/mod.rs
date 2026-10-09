@@ -260,6 +260,16 @@ pub trait Writer: Send {
         ))
     }
 
+    /// Like [`Writer::send_frame`], but a writer with its own worker may
+    /// postpone waking it until [`Writer::wake`]. The driver uses this for
+    /// forwarded frames and wakes each touched writer once per event batch.
+    fn send_frame_deferred(&mut self, data: &[u8]) -> io::Result<()> {
+        self.send_frame(data)
+    }
+
+    /// Wake a worker postponed by [`Writer::send_frame_deferred`].
+    fn wake(&mut self) {}
+
     fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
         for frame in frames {
             self.send_frame(frame)?;
@@ -308,6 +318,10 @@ pub type InterfaceMap<V> =
     HashMap<InterfaceId, V, std::hash::BuildHasherDefault<InterfaceIdHasher>>;
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
+
+/// Longest a sleeping writer worker goes without rechecking its queue, a
+/// backstop for wakeups postponed by `send_frame_deferred`.
+const WRITER_RECHECK: Duration = Duration::from_millis(5);
 
 /// Longest time a producer waits for a busy async writer to free queue space
 /// or byte budget before treating the frame as undeliverable.
@@ -598,14 +612,26 @@ impl WriterQueue {
                 return false;
             }
             state.receiver_waiting = true;
-            state = match self.ready.wait(state) {
-                Ok(state) => state,
-                Err(poisoned) => poisoned.into_inner(),
+            // Producers may postpone the wakeup (see send_frame_deferred);
+            // the periodic recheck bounds any delay if one is never sent.
+            state = match self.ready.wait_timeout(state, WRITER_RECHECK) {
+                Ok((state, _)) => state,
+                Err(poisoned) => poisoned.into_inner().0,
             };
             state.receiver_waiting = false;
         }
         out.extend(state.frames.drain(..));
         true
+    }
+
+    /// Wake the worker if it sleeps while frames are queued.
+    fn kick(&self) {
+        let state = lock_or_recover(&self.state, "async writer queue");
+        let wake = state.receiver_waiting && !state.frames.is_empty();
+        drop(state);
+        if wake {
+            self.ready.notify_one();
+        }
     }
 
     fn close_receiver(&self) {
@@ -617,7 +643,13 @@ impl WriterQueue {
 struct WriterTx(Arc<WriterQueue>);
 
 impl WriterTx {
-    fn try_send(&self, frame: QueuedFrame) -> Result<(), TrySendError<QueuedFrame>> {
+    /// Queue a frame. Returns whether the worker still needs waking: false
+    /// when it was woken here (`notify`) or was not waiting.
+    fn try_send(
+        &self,
+        frame: QueuedFrame,
+        notify: bool,
+    ) -> Result<bool, TrySendError<QueuedFrame>> {
         let mut state = lock_or_recover(&self.0.state, "async writer queue");
         if state.receiver_closed {
             return Err(TrySendError::Disconnected(frame));
@@ -626,12 +658,12 @@ impl WriterTx {
             return Err(TrySendError::Full(frame));
         }
         state.frames.push_back(frame);
-        let wake = state.receiver_waiting;
+        let waiting = state.receiver_waiting;
         drop(state);
-        if wake {
+        if waiting && notify {
             self.0.ready.notify_one();
         }
-        Ok(())
+        Ok(waiting && !notify)
     }
 }
 
@@ -649,6 +681,10 @@ struct AsyncWriter {
     /// again, unconfirmed sends make a single attempt instead of waiting,
     /// so a stalled peer costs the producer at most one wait.
     skip_wait: bool,
+    /// Set while a deferred send is in progress.
+    defer_wake: bool,
+    /// A deferred send left the worker asleep with frames queued.
+    wake_pending: bool,
 }
 
 enum Admission {
@@ -665,6 +701,19 @@ struct QueuedFrame {
 impl Writer for AsyncWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.enqueue(data, &mut None)
+    }
+
+    fn send_frame_deferred(&mut self, data: &[u8]) -> io::Result<()> {
+        self.defer_wake = true;
+        let result = self.enqueue(data, &mut None);
+        self.defer_wake = false;
+        result
+    }
+
+    fn wake(&mut self) {
+        if std::mem::take(&mut self.wake_pending) {
+            self.tx.0.kick();
+        }
     }
 
     fn enqueue_confirmed(
@@ -697,6 +746,9 @@ impl AsyncWriter {
         if self.skip_wait {
             return self.refuse(frame);
         }
+        // The worker must run to free space; wake it if a deferred send left
+        // it asleep.
+        self.wake();
         let space = Arc::clone(&self.metrics.space);
         let (lock, condvar) = &*space;
         let mut guard = lock_or_recover(lock, "async writer space");
@@ -747,9 +799,10 @@ impl AsyncWriter {
             frame.reserved_bytes = bytes;
         }
         self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
-        match self.tx.try_send(frame) {
-            Ok(()) => {
+        match self.tx.try_send(frame, !self.defer_wake) {
+            Ok(needs_wake) => {
                 self.skip_wait = false;
+                self.wake_pending |= needs_wake;
                 Ok(Admission::Done)
             }
             Err(TrySendError::Full(mut returned)) => {
@@ -836,12 +889,15 @@ impl AsyncWriter {
 
         // Publish accounting before the frame becomes visible to the worker.
         self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
-        match self.tx.try_send(QueuedFrame {
-            data: data.to_vec(),
-            reserved_bytes,
-            completion: completion.take(),
-        }) {
-            Ok(()) => Ok(()),
+        match self.tx.try_send(
+            QueuedFrame {
+                data: data.to_vec(),
+                reserved_bytes,
+                completion: completion.take(),
+            },
+            true,
+        ) {
+            Ok(_) => Ok(()),
             Err(TrySendError::Full(frame)) => {
                 *completion = frame.completion;
                 self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
@@ -909,6 +965,8 @@ pub fn wrap_async_writer(
             tx,
             metrics: metrics.clone(),
             skip_wait: false,
+            defer_wake: false,
+            wake_pending: false,
         }),
         metrics,
     )
@@ -1571,6 +1629,47 @@ mod tests {
             .expect("the queued frame must wake the writer without another send trigger");
         assert_eq!(metrics.queued_frames(), 0);
         release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn deferred_sends_are_delivered_on_wake_or_by_the_recheck_backstop() {
+        struct Recorder(mpsc::Sender<Vec<u8>>);
+        impl Writer for Recorder {
+            fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+                self.0.send(data.to_vec()).unwrap();
+                Ok(())
+            }
+        }
+        let (event_tx, _event_rx) = crate::event::channel();
+        let (sent_tx, sent_rx) = mpsc::channel();
+        let (mut writer, _metrics) = wrap_async_writer(
+            Box::new(Recorder(sent_tx)),
+            InterfaceId(9),
+            "test",
+            event_tx,
+            8,
+        );
+        // Let the worker go to sleep on the empty queue.
+        std::thread::sleep(Duration::from_millis(20));
+        writer.send_frame_deferred(&[1]).unwrap();
+        writer.send_frame_deferred(&[2]).unwrap();
+        writer.wake();
+        assert_eq!(
+            sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            vec![1]
+        );
+        assert_eq!(
+            sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            vec![2]
+        );
+
+        std::thread::sleep(Duration::from_millis(20));
+        writer.send_frame_deferred(&[3]).unwrap();
+        // No wake: the periodic recheck still delivers the frame.
+        assert_eq!(
+            sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            vec![3]
+        );
     }
 
     #[test]
