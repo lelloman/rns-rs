@@ -527,6 +527,10 @@ impl AsyncWriterMetrics {
 struct AsyncWriter {
     tx: SyncSender<QueuedFrame>,
     metrics: AsyncWriterMetrics,
+    /// Set after a backpressure wait times out. Until a frame is admitted
+    /// again, unconfirmed sends make a single attempt instead of waiting,
+    /// so a stalled peer costs the producer at most one wait.
+    skip_wait: bool,
 }
 
 struct QueuedFrame {
@@ -562,7 +566,11 @@ impl AsyncWriter {
             .egress_control
             .as_ref()
             .map(|_| crate::hdlc::framed_len(data));
-        let deadline = Instant::now() + ASYNC_WRITER_BACKPRESSURE_WAIT;
+        let deadline = if self.skip_wait {
+            Instant::now()
+        } else {
+            Instant::now() + ASYNC_WRITER_BACKPRESSURE_WAIT
+        };
         let mut frame = Some(QueuedFrame {
             data: data.to_vec(),
             reserved_bytes: 0,
@@ -596,7 +604,10 @@ impl AsyncWriter {
                     .tx
                     .try_send(frame.take().expect("frame retained until admitted"))
                 {
-                    Ok(()) => return Ok(()),
+                    Ok(()) => {
+                        self.skip_wait = false;
+                        return Ok(());
+                    }
                     Err(TrySendError::Full(returned)) => {
                         self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
                         if let Some(control) = &self.metrics.egress_control {
@@ -622,6 +633,7 @@ impl AsyncWriter {
             }
             let now = Instant::now();
             if now >= deadline {
+                self.skip_wait = true;
                 if let (Some(control), Some(bytes)) = (&self.metrics.egress_control, framed_bytes) {
                     if !admitted_budget {
                         control.record_drop(bytes);
@@ -755,6 +767,7 @@ pub fn wrap_async_writer(
         Box::new(AsyncWriter {
             tx,
             metrics: metrics.clone(),
+            skip_wait: false,
         }),
         metrics,
     )
