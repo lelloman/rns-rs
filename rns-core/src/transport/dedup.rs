@@ -23,6 +23,8 @@ impl PacketHashlist {
     }
 
     pub fn with_allocation(max_size: usize, allocation: PacketHashlistAllocation) -> Self {
+        // Index buckets store a 32-bit slot number.
+        let max_size = max_size.min(MAX_ENTRIES);
         let initial = if allocation == PacketHashlistAllocation::Eager {
             max_size
         } else {
@@ -294,7 +296,7 @@ impl PacketHashQueue {
 /// Open-addressed lookup of queue slots. Zero is empty; other values are
 /// physical queue slot + 1. At most half the buckets are occupied.
 struct PacketHashSet {
-    buckets: Box<[usize]>,
+    buckets: Box<[u32]>,
     len: usize,
 }
 
@@ -320,7 +322,7 @@ impl PacketHashSet {
             if entry == 0 {
                 return None;
             }
-            if queue.entries.get(entry - 1) == hash {
+            if queue.entries.get(entry as usize - 1) == hash {
                 return Some(idx);
             }
             idx = (idx + 1) & (self.buckets.len() - 1);
@@ -337,7 +339,7 @@ impl PacketHashSet {
         while self.buckets[idx] != 0 {
             idx = (idx + 1) & (self.buckets.len() - 1);
         }
-        self.buckets[idx] = slot + 1;
+        self.buckets[idx] = (slot + 1) as u32;
         self.len += 1;
     }
 
@@ -356,7 +358,7 @@ impl PacketHashSet {
         let mut hole = idx;
         let mut next = (idx + 1) & mask;
         while self.buckets[next] != 0 {
-            let home = self.bucket_index(queue.entries.get(self.buckets[next] - 1));
+            let home = self.bucket_index(queue.entries.get(self.buckets[next] as usize - 1));
             let reachable_without_hole = if hole <= next {
                 hole < home && home <= next
             } else {
@@ -385,6 +387,9 @@ impl PacketHashSet {
         (hash_bytes(hash) as usize) & (self.buckets.len() - 1)
     }
 }
+
+/// Largest retention the 32-bit index buckets can address.
+const MAX_ENTRIES: usize = u32::MAX as usize - 1;
 
 fn bucket_capacity(max_entries: usize) -> usize {
     if max_entries == 0 {
