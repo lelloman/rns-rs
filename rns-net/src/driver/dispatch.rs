@@ -347,6 +347,13 @@ impl Driver {
     }
 
     pub(crate) fn interface_send_deferred(entry: &InterfaceEntry, now: Instant) -> bool {
+        // Async writers bound their own waiting and stop waiting on a stalled
+        // peer, refusing only frames that do not fit. Skipping sends to them
+        // for the whole retry window would discard traffic that the drained
+        // queue could have accepted.
+        if entry.async_writer_metrics.is_some() {
+            return false;
+        }
         matches!(entry.send_retry_at, Some(retry_at) if now < retry_at)
     }
 
