@@ -32,6 +32,46 @@ fn append_escaped(data: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(&data[offset..]);
 }
 
+/// Append one HDLC frame (delimiters plus escaped payload) to `out`.
+///
+/// Produces exactly the bytes of [`frame`], without a per-frame allocation,
+/// so writers can coalesce several queued frames into one socket write.
+pub(crate) fn append_frame(data: &[u8], out: &mut Vec<u8>) {
+    out.push(FLAG);
+    append_escaped(data, out);
+    out.push(FLAG);
+}
+
+/// Bytes a writer coalesces before issuing one socket write.
+pub(crate) const WRITE_BATCH_BYTES: usize = 256 * 1024;
+
+/// Encode `frames` in order and write them with as few `write_all` calls as
+/// possible, flushing whenever the pending batch reaches
+/// [`WRITE_BATCH_BYTES`]. The wire bytes are identical to writing each
+/// frame separately; only the number of system calls changes.
+pub(crate) fn write_frames<W: std::io::Write>(
+    writer: &mut W,
+    frames: &[Vec<u8>],
+    scratch: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    scratch.clear();
+    for frame in frames {
+        append_frame(frame, scratch);
+        if scratch.len() >= WRITE_BATCH_BYTES {
+            writer.write_all(scratch)?;
+            scratch.clear();
+        }
+    }
+    if !scratch.is_empty() {
+        writer.write_all(scratch)?;
+        scratch.clear();
+    }
+    if scratch.capacity() > WRITE_BATCH_BYTES * 2 {
+        scratch.shrink_to(WRITE_BATCH_BYTES);
+    }
+    Ok(())
+}
+
 /// Wrap data in the same HDLC delimiters and escaping as the scalar encoder.
 pub fn frame(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(framed_len(data));

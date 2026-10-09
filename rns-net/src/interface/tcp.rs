@@ -91,11 +91,17 @@ impl Default for TcpClientConfig {
 /// Writer that sends HDLC-framed data over a TCP stream.
 struct TcpWriter {
     stream: TcpStream,
+    /// Reused encoding buffer for coalesced writes.
+    scratch: Vec<u8>,
 }
 
 impl Writer for TcpWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.stream.write_all(&hdlc::frame(data))
+    }
+
+    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+        hdlc::write_frames(&mut self.stream, frames, &mut self.scratch)
     }
 }
 
@@ -262,6 +268,7 @@ fn start_with_ifac_control(
     Ok((
         Box::new(TcpWriter {
             stream: writer_stream,
+            scratch: Vec::new(),
         }),
         control,
     ))
@@ -279,7 +286,7 @@ fn reader_loop(
 ) {
     let id = config.interface_id;
     let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-    let mut buf = [0u8; 4096];
+    let mut buf = vec![0u8; 64 * 1024];
 
     loop {
         if control.should_stop() {
@@ -414,6 +421,7 @@ fn reconnect(
                 // Send new writer to the driver so it can replace the stale one
                 let new_writer: Box<dyn Writer> = Box::new(TcpWriter {
                     stream: writer_stream,
+                    scratch: Vec::new(),
                 });
                 let _ = tx.send(Event::InterfaceUp(
                     config.interface_id,
