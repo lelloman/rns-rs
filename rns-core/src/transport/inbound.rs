@@ -1,7 +1,8 @@
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use super::tables::{LinkEntry, ReverseEntry};
-use super::types::{InterfaceId, TransportAction};
+use super::types::{InterfaceId, PacketBytes, TransportAction};
 use crate::constants;
 use crate::link::handshake::compute_link_id;
 use crate::packet::RawPacket;
@@ -147,12 +148,11 @@ pub fn route_proof_via_reverse(
 /// Route link traffic bidirectionally through the link table.
 ///
 /// Transport.py:1514-1549.
-pub fn route_via_link_table(
+fn link_table_outbound_interface(
     packet: &RawPacket,
     link_entry: &LinkEntry,
     receiving_interface: InterfaceId,
-    hop_rewrite: LocalHopRewrite,
-) -> Option<(InterfaceId, Vec<u8>)> {
+) -> Option<InterfaceId> {
     let outbound_interface;
 
     if link_entry.next_hop_interface == link_entry.received_interface {
@@ -181,6 +181,17 @@ pub fn route_via_link_table(
         }
     }
 
+    Some(outbound_interface)
+}
+
+pub fn route_via_link_table(
+    packet: &RawPacket,
+    link_entry: &LinkEntry,
+    receiving_interface: InterfaceId,
+    hop_rewrite: LocalHopRewrite,
+) -> Option<(InterfaceId, Vec<u8>)> {
+    let outbound_interface =
+        link_table_outbound_interface(packet, link_entry, receiving_interface)?;
     let mut new_raw = Vec::new();
     new_raw.push(packet.raw[0]);
     new_raw.push(hop_rewrite.hop_byte(packet));
@@ -189,9 +200,98 @@ pub fn route_via_link_table(
     Some((outbound_interface, new_raw))
 }
 
+/// Build the final shared forwarding buffer directly, avoiding a temporary Vec
+/// and its subsequent conversion copy. The source packet remains unchanged.
+pub(super) fn route_via_link_table_shared(
+    packet: &RawPacket,
+    link_entry: &LinkEntry,
+    receiving_interface: InterfaceId,
+    hop_rewrite: LocalHopRewrite,
+) -> Option<(InterfaceId, PacketBytes)> {
+    let outbound_interface =
+        link_table_outbound_interface(packet, link_entry, receiving_interface)?;
+    let mut raw: PacketBytes = packet.raw.as_slice().into();
+    Arc::get_mut(&mut raw).expect("fresh forwarding buffer is uniquely owned")[1] =
+        hop_rewrite.hop_byte(packet);
+    Some((outbound_interface, raw))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_link_forwarding_matches_vec_bytes_and_keeps_packet_immutable() {
+        for header_type in [constants::HEADER_1, constants::HEADER_2] {
+            for payload_len in [0, 1, 128, 480, 8157] {
+                let flags = PacketFlags {
+                    header_type,
+                    context_flag: constants::FLAG_UNSET,
+                    transport_type: constants::TRANSPORT_BROADCAST,
+                    destination_type: constants::DESTINATION_LINK,
+                    packet_type: constants::PACKET_TYPE_DATA,
+                };
+                let link = LinkEntry {
+                    timestamp: 100.0,
+                    next_hop_transport_id: [0; 16],
+                    next_hop_interface: InterfaceId(1),
+                    remaining_hops: 3,
+                    received_interface: InterfaceId(2),
+                    taken_hops: 5,
+                    destination_hash: [0xAA; 16],
+                    validated: true,
+                    proof_timeout: 200.0,
+                };
+                let payload = alloc::vec![0x7e; payload_len];
+                for hops in [0, 3, 5, 255] {
+                    let packet = RawPacket::pack_with_max_mtu(
+                        flags,
+                        hops,
+                        &[0xAA; 16],
+                        Some(&[0xBB; 16]),
+                        constants::CONTEXT_RESOURCE,
+                        &payload,
+                        8192,
+                    )
+                    .unwrap();
+                    let original = packet.raw.clone();
+                    for same_interface in [false, true] {
+                        let mut link = link.clone();
+                        if same_interface {
+                            link.received_interface = link.next_hop_interface;
+                        }
+                        for receiving in [InterfaceId(1), InterfaceId(2), InterfaceId(3)] {
+                            for from_local_client in [false, true] {
+                                for skip_local_hops_delta in [false, true] {
+                                    let rewrite = LocalHopRewrite {
+                                        local_hops_delta: 7,
+                                        from_local_client,
+                                        skip_local_hops_delta,
+                                    };
+                                    let old =
+                                        route_via_link_table(&packet, &link, receiving, rewrite);
+                                    let shared = route_via_link_table_shared(
+                                        &packet, &link, receiving, rewrite,
+                                    );
+                                    assert_eq!(
+                                        old.as_ref().map(|(i, b)| (*i, b.as_slice())),
+                                        shared.as_ref().map(|(i, b)| (*i, b.as_ref()))
+                                    );
+                                    if let Some((_, bytes)) = shared {
+                                        let clone = bytes.clone();
+                                        assert!(Arc::ptr_eq(&bytes, &clone));
+                                        drop(bytes);
+                                        assert_eq!(clone.as_ref(), old.unwrap().1.as_slice());
+                                    }
+                                    assert_eq!(packet.raw, original);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     use crate::packet::PacketFlags;
 
     fn make_h2_packet(dest: &[u8; 16], transport_id: &[u8; 16], hops: u8) -> RawPacket {
