@@ -651,6 +651,11 @@ struct AsyncWriter {
     skip_wait: bool,
 }
 
+enum Admission {
+    Done,
+    Refused(QueuedFrame),
+}
+
 struct QueuedFrame {
     data: Vec<u8>,
     reserved_bytes: usize,
@@ -679,109 +684,111 @@ impl AsyncWriter {
     /// immediately so that one dead connection cannot repeatedly pause the
     /// driver. Over-budget frames that can never fit are dropped as before.
     fn enqueue_unconfirmed(&mut self, data: &[u8]) -> io::Result<()> {
-        let space = Arc::clone(&self.metrics.space);
-        let (lock, _) = &*space;
-        let guard = lock_or_recover(lock, "async writer space");
-        self.metrics.space_waiters.fetch_add(1, Ordering::SeqCst);
-        let result = self.enqueue_unconfirmed_locked(data, guard);
-        self.metrics.space_waiters.fetch_sub(1, Ordering::SeqCst);
-        result
-    }
-
-    fn enqueue_unconfirmed_locked(
-        &mut self,
-        data: &[u8],
-        mut guard: MutexGuard<'_, ()>,
-    ) -> io::Result<()> {
-        let framed_bytes = self
-            .metrics
-            .egress_control
-            .as_ref()
-            .map(|_| crate::hdlc::framed_len(data));
-        let deadline = if self.skip_wait {
-            Instant::now()
-        } else {
-            Instant::now() + ASYNC_WRITER_BACKPRESSURE_WAIT
-        };
-        let mut frame = Some(QueuedFrame {
+        let mut frame = QueuedFrame {
             data: data.to_vec(),
             reserved_bytes: 0,
             completion: None,
-        });
+        };
+        // Fast path without the space lock: almost every frame fits.
+        match self.try_admit(frame)? {
+            Admission::Done => return Ok(()),
+            Admission::Refused(returned) => frame = returned,
+        }
+        if self.skip_wait {
+            return self.refuse(frame);
+        }
         let space = Arc::clone(&self.metrics.space);
-        let (_, condvar) = &*space;
-        loop {
-            if !self.metrics.worker_alive() {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "interface writer worker is offline",
-                ));
-            }
-            let mut admitted_budget = true;
-            if let (Some(control), Some(bytes)) = (&self.metrics.egress_control, framed_bytes) {
-                if bytes > control.byte_limit || control.stalled() {
-                    control.record_drop(bytes);
-                    return Ok(());
-                }
-                admitted_budget = control.try_reserve(bytes);
-                if admitted_budget {
-                    if let Some(frame) = frame.as_mut() {
-                        frame.reserved_bytes = bytes;
-                    }
-                }
-            }
-            if admitted_budget {
-                self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
-                match self
-                    .tx
-                    .try_send(frame.take().expect("frame retained until admitted"))
-                {
-                    Ok(()) => {
-                        self.skip_wait = false;
-                        return Ok(());
-                    }
-                    Err(TrySendError::Full(returned)) => {
-                        self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
-                        if let Some(control) = &self.metrics.egress_control {
-                            control.release(returned.reserved_bytes);
-                        }
-                        frame = Some(QueuedFrame {
-                            reserved_bytes: 0,
-                            ..returned
-                        });
-                    }
-                    Err(TrySendError::Disconnected(returned)) => {
-                        self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
-                        if let Some(control) = &self.metrics.egress_control {
-                            control.release(returned.reserved_bytes);
-                        }
-                        self.metrics.worker_alive.store(false, Ordering::Relaxed);
-                        return Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "interface writer worker disconnected",
-                        ));
-                    }
-                }
+        let (lock, condvar) = &*space;
+        let mut guard = lock_or_recover(lock, "async writer space");
+        // Register before retrying: a worker that frees space after this
+        // retry fails observes the waiter and must take the lock to notify,
+        // which it can only do once this thread is waiting.
+        self.metrics.space_waiters.fetch_add(1, Ordering::SeqCst);
+        let deadline = Instant::now() + ASYNC_WRITER_BACKPRESSURE_WAIT;
+        let result = loop {
+            match self.try_admit(frame) {
+                Err(error) => break Err(error),
+                Ok(Admission::Done) => break Ok(()),
+                Ok(Admission::Refused(returned)) => frame = returned,
             }
             let now = Instant::now();
             if now >= deadline {
                 self.skip_wait = true;
-                if let (Some(control), Some(bytes)) = (&self.metrics.egress_control, framed_bytes) {
-                    if !admitted_budget {
-                        control.record_drop(bytes);
-                        return Ok(());
-                    }
-                }
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "interface writer queue is full",
-                ));
+                break self.refuse(frame);
             }
             guard = match condvar.wait_timeout(guard, deadline - now) {
                 Ok((guard, _)) => guard,
                 Err(poisoned) => poisoned.into_inner().0,
             };
+        };
+        self.metrics.space_waiters.fetch_sub(1, Ordering::SeqCst);
+        drop(guard);
+        result
+    }
+
+    /// One admission attempt. Frames that can never be admitted (over the
+    /// byte limit, or a stalled peer) are dropped and counted, as before.
+    fn try_admit(&mut self, mut frame: QueuedFrame) -> io::Result<Admission> {
+        if !self.metrics.worker_alive() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "interface writer worker is offline",
+            ));
         }
+        if let Some(control) = &self.metrics.egress_control {
+            let bytes = crate::hdlc::framed_len(&frame.data);
+            if bytes > control.byte_limit || control.stalled() {
+                control.record_drop(bytes);
+                return Ok(Admission::Done);
+            }
+            if !control.try_reserve(bytes) {
+                return Ok(Admission::Refused(frame));
+            }
+            frame.reserved_bytes = bytes;
+        }
+        self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
+        match self.tx.try_send(frame) {
+            Ok(()) => {
+                self.skip_wait = false;
+                Ok(Admission::Done)
+            }
+            Err(TrySendError::Full(mut returned)) => {
+                self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
+                if let Some(control) = &self.metrics.egress_control {
+                    control.release(returned.reserved_bytes);
+                }
+                returned.reserved_bytes = 0;
+                Ok(Admission::Refused(returned))
+            }
+            Err(TrySendError::Disconnected(returned)) => {
+                self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
+                if let Some(control) = &self.metrics.egress_control {
+                    control.release(returned.reserved_bytes);
+                }
+                self.metrics.worker_alive.store(false, Ordering::Relaxed);
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "interface writer worker disconnected",
+                ))
+            }
+        }
+    }
+
+    /// Give up on a frame that did not fit. A frame refused for byte budget
+    /// is dropped and counted (the pre-existing egress-control policy); a
+    /// frame refused for queue slots is reported as would-block.
+    fn refuse(&self, frame: QueuedFrame) -> io::Result<()> {
+        if let Some(control) = &self.metrics.egress_control {
+            let bytes = crate::hdlc::framed_len(&frame.data);
+            if self.metrics.queued_frames() < self.tx.0.capacity {
+                control.record_drop(bytes);
+                return Ok(());
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "interface writer queue is full",
+        ))
     }
 
     fn enqueue(
@@ -1564,6 +1571,53 @@ mod tests {
             .expect("the queued frame must wake the writer without another send trigger");
         assert_eq!(metrics.queued_frames(), 0);
         release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn async_writer_waits_briefly_for_space_then_fails_fast_while_stalled() {
+        let (event_tx, _event_rx) = crate::event::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (mut writer, metrics) = wrap_async_writer(
+            Box::new(BlockingWriter {
+                entered_tx,
+                release_rx,
+            }),
+            InterfaceId(8),
+            "test",
+            event_tx,
+            1,
+        );
+        writer.send_frame(&[1]).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        writer.send_frame(&[2]).unwrap();
+
+        // The worker frees the slot while the producer is waiting: the frame
+        // is admitted instead of being refused.
+        let release = release_tx.clone();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            release.send(()).unwrap();
+        });
+        writer.send_frame(&[3]).unwrap();
+        releaser.join().unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(metrics.queued_frames(), 1);
+
+        // A writer that stays full costs one bounded wait; later sends do not
+        // wait again until a frame is admitted.
+        let started = Instant::now();
+        let err = writer.send_frame(&[4]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        assert!(started.elapsed() >= ASYNC_WRITER_BACKPRESSURE_WAIT);
+        let started = Instant::now();
+        let err = writer.send_frame(&[5]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        assert!(started.elapsed() < ASYNC_WRITER_BACKPRESSURE_WAIT);
+
+        for _ in 0..3 {
+            let _ = release_tx.send(());
+        }
     }
 
     #[test]
