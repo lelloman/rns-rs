@@ -278,6 +278,14 @@ impl TransportEngine {
         }
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
+            clamp_forwarded_link_request_mtu(
+                &mut new_raw,
+                ctx.packet.data.len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE,
+                self.interfaces.get(&ctx.iface).map(|info| info.mtu),
+                self.interfaces
+                    .get(&outbound_interface)
+                    .map(|info| info.mtu),
+            );
             let extra_proof_timeout =
                 extra_link_proof_timeout(self.interfaces.get(&outbound_interface));
             let proof_timeout = ctx.now
