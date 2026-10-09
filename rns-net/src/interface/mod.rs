@@ -33,7 +33,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::mpsc::TrySendError;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -531,8 +531,93 @@ impl AsyncWriterMetrics {
     }
 }
 
+/// Bounded frame queue between the driver and one interface writer thread.
+///
+/// The worker drains every queued frame in one lock acquisition. This
+/// replaces a std sync channel whose receiver spins while it observes a send
+/// in progress, which on a single CPU burned the rest of the time slice.
+struct WriterQueue {
+    state: Mutex<WriterQueueState>,
+    ready: Condvar,
+    capacity: usize,
+}
+
+struct WriterQueueState {
+    frames: std::collections::VecDeque<QueuedFrame>,
+    sender_closed: bool,
+    receiver_closed: bool,
+    receiver_waiting: bool,
+}
+
+impl WriterQueue {
+    fn new(capacity: usize) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(WriterQueueState {
+                frames: std::collections::VecDeque::new(),
+                sender_closed: false,
+                receiver_closed: false,
+                receiver_waiting: false,
+            }),
+            ready: Condvar::new(),
+            capacity: capacity.max(1),
+        })
+    }
+
+    /// Wait until frames are queued, then move all of them into `out`.
+    /// Returns false once the sender is gone and nothing remains.
+    fn recv_all(&self, out: &mut Vec<QueuedFrame>) -> bool {
+        let mut state = lock_or_recover(&self.state, "async writer queue");
+        while state.frames.is_empty() {
+            if state.sender_closed {
+                return false;
+            }
+            state.receiver_waiting = true;
+            state = match self.ready.wait(state) {
+                Ok(state) => state,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            state.receiver_waiting = false;
+        }
+        out.extend(state.frames.drain(..));
+        true
+    }
+
+    fn close_receiver(&self) {
+        lock_or_recover(&self.state, "async writer queue").receiver_closed = true;
+    }
+}
+
+/// Producer handle; dropping it lets the worker exit after draining.
+struct WriterTx(Arc<WriterQueue>);
+
+impl WriterTx {
+    fn try_send(&self, frame: QueuedFrame) -> Result<(), TrySendError<QueuedFrame>> {
+        let mut state = lock_or_recover(&self.0.state, "async writer queue");
+        if state.receiver_closed {
+            return Err(TrySendError::Disconnected(frame));
+        }
+        if state.frames.len() >= self.0.capacity {
+            return Err(TrySendError::Full(frame));
+        }
+        state.frames.push_back(frame);
+        let wake = state.receiver_waiting;
+        drop(state);
+        if wake {
+            self.0.ready.notify_one();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for WriterTx {
+    fn drop(&mut self) {
+        lock_or_recover(&self.0.state, "async writer queue").sender_closed = true;
+        self.0.ready.notify_one();
+    }
+}
+
 struct AsyncWriter {
-    tx: SyncSender<QueuedFrame>,
+    tx: WriterTx,
     metrics: AsyncWriterMetrics,
     /// Set after a backpressure wait times out. Until a frame is admitted
     /// again, unconfirmed sends make a single attempt instead of waiting,
@@ -759,7 +844,8 @@ pub fn wrap_async_writer(
     queue_capacity: usize,
 ) -> (Box<dyn Writer>, AsyncWriterMetrics) {
     let egress_control = writer.egress_control();
-    let (tx, rx) = sync_channel::<QueuedFrame>(queue_capacity.max(1));
+    let queue = WriterQueue::new(queue_capacity);
+    let (tx, rx) = (WriterTx(Arc::clone(&queue)), queue);
     let metrics = AsyncWriterMetrics {
         queued_frames: Arc::new(AtomicUsize::new(0)),
         worker_alive: Arc::new(AtomicBool::new(true)),
@@ -805,15 +891,15 @@ impl Writer for DirectWriterFallback {
 
 fn async_writer_loop(
     mut writer: Box<dyn Writer>,
-    rx: std::sync::mpsc::Receiver<QueuedFrame>,
+    rx: Arc<WriterQueue>,
     interface_id: InterfaceId,
     interface_name: String,
     event_tx: EventSender,
     metrics: AsyncWriterMetrics,
 ) {
-    while let Ok(first) = rx.recv() {
-        let mut queued = vec![first];
-        queued.extend(rx.try_iter());
+    let mut batch = Vec::new();
+    while rx.recv_all(&mut batch) {
+        let queued = std::mem::take(&mut batch);
         let reserved_bytes = queued.iter().map(|frame| frame.reserved_bytes).sum();
         metrics
             .queued_frames
@@ -905,12 +991,14 @@ fn async_writer_loop(
                 err
             );
             writer.shutdown();
+            rx.close_receiver();
             metrics.notify_space();
             let _ = event_tx.send(crate::event::Event::InterfaceDown(interface_id));
             return;
         }
     }
 
+    rx.close_receiver();
     metrics.worker_alive.store(false, Ordering::Relaxed);
     metrics.notify_space();
 }
