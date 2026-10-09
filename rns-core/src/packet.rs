@@ -2,7 +2,6 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::constants;
-use crate::hash;
 
 #[derive(Debug)]
 pub enum PacketError {
@@ -184,7 +183,7 @@ impl RawPacket {
             data,
             max_mtu,
         )?;
-        let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, &raw));
+        let packet_hash = Self::compute_packet_hash(flags.header_type, &raw);
         Ok((raw, packet_hash))
     }
 
@@ -257,7 +256,7 @@ impl RawPacket {
                 return Err(PacketError::ZeroLengthData);
             }
 
-            let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, raw));
+            let packet_hash = Self::compute_packet_hash(flags.header_type, raw);
 
             Ok(RawPacket {
                 flags,
@@ -287,7 +286,7 @@ impl RawPacket {
                 return Err(PacketError::ZeroLengthData);
             }
 
-            let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, raw));
+            let packet_hash = Self::compute_packet_hash(flags.header_type, raw);
 
             Ok(RawPacket {
                 flags,
@@ -316,16 +315,30 @@ impl RawPacket {
         Self::compute_hashable_part(self.flags.header_type, &self.raw)
     }
 
-    fn compute_hashable_part(header_type: u8, raw: &[u8]) -> Vec<u8> {
-        let mut hashable = Vec::new();
-        hashable.push(raw[0] & 0b00001111);
+    fn hashable_tail(header_type: u8, raw: &[u8]) -> &[u8] {
         if header_type == constants::HEADER_2 {
             // Skip transport_id: raw[2..18] is transport_id (16 bytes)
-            hashable.extend_from_slice(&raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
+            &raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]
         } else {
-            hashable.extend_from_slice(&raw[2..]);
+            &raw[2..]
         }
+    }
+
+    fn compute_hashable_part(header_type: u8, raw: &[u8]) -> Vec<u8> {
+        let tail = Self::hashable_tail(header_type, raw);
+        let mut hashable = Vec::with_capacity(1 + tail.len());
+        hashable.push(raw[0] & 0b00001111);
+        hashable.extend_from_slice(tail);
         hashable
+    }
+
+    /// SHA-256 of the hashable part, fed from the wire bytes without building
+    /// the concatenated buffer that [`RawPacket::get_hashable_part`] returns.
+    fn compute_packet_hash(header_type: u8, raw: &[u8]) -> [u8; 32] {
+        let mut hasher = rns_crypto::sha256::Sha256::new();
+        hasher.update(&[raw[0] & 0b00001111]);
+        hasher.update(Self::hashable_tail(header_type, raw));
+        hasher.digest()
     }
 
     /// Full SHA-256 hash of the hashable part.
