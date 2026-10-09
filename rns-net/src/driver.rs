@@ -649,7 +649,7 @@ pub struct Driver {
     pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,
     pub(crate) pending_link_frames: std::collections::VecDeque<PendingLinkFrame>,
     pub(crate) engine: TransportEngine,
-    pub(crate) interfaces: HashMap<InterfaceId, InterfaceEntry>,
+    pub(crate) interfaces: crate::interface::InterfaceMap<InterfaceEntry>,
     /// Parent listener for dynamically spawned interfaces.
     pub(crate) dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
     /// Previous cumulative counters used to calculate current one-second rates.
@@ -889,7 +889,7 @@ impl Driver {
             tracked_link_send: None,
             pending_link_frames: std::collections::VecDeque::new(),
             engine,
-            interfaces: HashMap::new(),
+            interfaces: Default::default(),
             dynamic_interface_parents: HashMap::new(),
             traffic_samples: HashMap::new(),
             rng: OsRng,
