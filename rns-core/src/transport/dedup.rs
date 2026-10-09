@@ -347,14 +347,27 @@ impl PacketHashSet {
         };
         self.buckets[idx] = 0;
         self.len -= 1;
-        // Repair the probe cluster before the evicted queue slot is reused.
-        let mut next = (idx + 1) & (self.buckets.len() - 1);
+        // Repair the probe cluster before the evicted queue slot is reused,
+        // by backward-shift deletion: walk the cluster after the hole and move
+        // each entry whose home bucket does not lie cyclically in
+        // (hole, current] back into the hole. Every remaining entry stays
+        // reachable from its home bucket, and each moves at most once.
+        let mask = self.buckets.len() - 1;
+        let mut hole = idx;
+        let mut next = (idx + 1) & mask;
         while self.buckets[next] != 0 {
-            let slot = self.buckets[next] - 1;
-            self.buckets[next] = 0;
-            self.len -= 1;
-            self.insert(slot, queue);
-            next = (next + 1) & (self.buckets.len() - 1);
+            let home = self.bucket_index(queue.entries.get(self.buckets[next] - 1));
+            let reachable_without_hole = if hole <= next {
+                hole < home && home <= next
+            } else {
+                hole < home || home <= next
+            };
+            if !reachable_without_hole {
+                self.buckets[hole] = self.buckets[next];
+                self.buckets[next] = 0;
+                hole = next;
+            }
+            next = (next + 1) & mask;
         }
         true
     }
@@ -382,13 +395,14 @@ fn bucket_capacity(max_entries: usize) -> usize {
     min_capacity.next_power_of_two()
 }
 
+/// Bucket key for a packet hash. Packet hashes are SHA-256 digests, already
+/// uniformly distributed, so their leading 64 bits index the table directly;
+/// a byte-wise mixing function added a dependent multiply per byte on every
+/// lookup, insertion and eviction without improving the distribution.
 fn hash_bytes(hash: &[u8; 32]) -> u64 {
-    let mut state = 0xcbf29ce484222325u64;
-    for byte in hash {
-        state ^= u64::from(*byte);
-        state = state.wrapping_mul(0x100000001b3);
-    }
-    state
+    let mut leading = [0u8; 8];
+    leading.copy_from_slice(&hash[..8]);
+    u64::from_le_bytes(leading)
 }
 
 #[cfg(test)]
@@ -515,6 +529,58 @@ mod tests {
             assert_eq!(hl.len(), 0);
             assert!(!hl.is_duplicate(&h));
             assert_eq!(hl.iter().count(), 0);
+        }
+    }
+
+    /// Random adds, duplicates and removals against a FIFO-plus-set model,
+    /// with keys confined to a few buckets so probe clusters, wraparound and
+    /// backward-shift deletion are exercised heavily.
+    #[test]
+    fn hashlist_matches_fifo_model_under_collisions() {
+        use alloc::collections::VecDeque;
+        for policy in policies() {
+            for capacity in [1usize, 2, 3, 7, 16, 33] {
+                let mut list = PacketHashlist::with_allocation(capacity, policy);
+                let mut model: VecDeque<[u8; 32]> = VecDeque::new();
+                let mut rng = 0x2545_f491_4f6c_dd1du64 ^ capacity as u64;
+                for _ in 0..20_000 {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 7;
+                    rng ^= rng << 17;
+                    let mut key = [0u8; 32];
+                    // Few distinct leading bytes: many keys share a home bucket.
+                    key[0] = (rng % 5) as u8;
+                    key[8] = (rng >> 8) as u8 % (capacity as u8 * 3 + 1);
+                    match (rng >> 20) % 4 {
+                        0 | 1 => {
+                            list.add(key);
+                            if !model.contains(&key) {
+                                if model.len() == capacity {
+                                    model.pop_front();
+                                }
+                                model.push_back(key);
+                            }
+                        }
+                        2 => {
+                            let removed = list.remove(&key);
+                            let position = model.iter().position(|k| *k == key);
+                            assert_eq!(removed, position.is_some());
+                            if let Some(position) = position {
+                                model.remove(position);
+                            }
+                        }
+                        _ => {}
+                    }
+                    assert_eq!(list.len(), model.len());
+                    assert_eq!(list.is_duplicate(&key), model.contains(&key));
+                    if rng % 97 == 0 {
+                        for retained in &model {
+                            assert!(list.is_duplicate(retained));
+                        }
+                        assert!(list.iter().eq(model.iter()));
+                    }
+                }
+            }
         }
     }
 
