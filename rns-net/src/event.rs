@@ -299,6 +299,24 @@ impl EventSender {
         let class = self.classify(&event, &state);
         if let Some(class) = class {
             let index = class as usize;
+            // Interface readers deliver ordinary data with backpressure: when
+            // the driver is behind, the reader thread pauses here, its socket
+            // stops being read, and the transport (e.g. TCP flow control)
+            // slows the sender instead of the relay silently losing frames.
+            // Announce, path-request and ingress-limited classes keep their
+            // protective drop-on-full policy.
+            if block_control && class == QueueClass::Data {
+                while state.inbound[index].len() >= self.shared.inbound_capacities[index] {
+                    state = self
+                        .shared
+                        .changed
+                        .wait(state)
+                        .unwrap_or_else(|p| p.into_inner());
+                    if !state.receiver_alive {
+                        return Err(std::sync::mpsc::TrySendError::Disconnected(event));
+                    }
+                }
+            }
             if state.inbound[index].len() >= self.shared.inbound_capacities[index] {
                 state.inbound_dropped[index] = state.inbound_dropped[index].saturating_add(1);
                 return if drop_full_inbound {
@@ -920,23 +938,57 @@ mod tests {
     }
 
     #[test]
-    fn blocking_send_drops_only_the_full_inbound_class() {
+    fn blocking_send_waits_for_space_in_the_data_class() {
         let (tx, rx) = channel_with_capacity(1);
         tx.send(frame(1, [0xD1; 16], rns_core::constants::PACKET_TYPE_DATA))
             .unwrap();
-        tx.send(frame(2, [0xD2; 16], rns_core::constants::PACKET_TYPE_DATA))
-            .expect("a full inbound class must drop instead of blocking its reader");
-        assert_eq!(tx.inbound_queue_snapshot().dropped, [1, 0, 0, 0]);
+
+        // A reader delivering data into a full queue pauses (applying
+        // backpressure to its own transport) instead of dropping the frame.
+        let reader = {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                tx.send(frame(2, [0xD2; 16], rns_core::constants::PACKET_TYPE_DATA))
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !reader.is_finished(),
+            "a full data queue must pause its reader"
+        );
+        assert_eq!(tx.inbound_queue_snapshot().dropped, [0, 0, 0, 0]);
+
         assert_eq!(frame_interface(rx.recv().unwrap()), 1);
+        reader.join().unwrap().unwrap();
+        assert_eq!(frame_interface(rx.recv().unwrap()), 2);
+        assert_eq!(tx.inbound_queue_snapshot().dropped, [0, 0, 0, 0]);
+    }
 
-        tx.send(frame(3, [0xD3; 16], rns_core::constants::PACKET_TYPE_DATA))
+    #[test]
+    fn blocked_data_sender_is_released_when_the_receiver_closes() {
+        let (tx, rx) = channel_with_capacity(1);
+        tx.send(frame(1, [0xD1; 16], rns_core::constants::PACKET_TYPE_DATA))
             .unwrap();
-        tx.send(frame(4, [0xD4; 16], rns_core::constants::PACKET_TYPE_DATA))
-            .unwrap();
-        assert_eq!(tx.inbound_queue_snapshot().dropped, [2, 0, 0, 0]);
+        let reader = {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                tx.send(frame(2, [0xD2; 16], rns_core::constants::PACKET_TYPE_DATA))
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(rx);
+        assert!(reader.join().unwrap().is_err());
+    }
 
-        tx.send(Event::Shutdown).unwrap();
-        assert_eq!(frame_interface(rx.recv().unwrap()), 3);
-        assert!(matches!(rx.recv().unwrap(), Event::Shutdown));
+    #[test]
+    fn try_send_still_refuses_a_full_data_class() {
+        let (tx, _rx) = channel_with_capacity(1);
+        tx.try_send(frame(1, [0xD1; 16], rns_core::constants::PACKET_TYPE_DATA))
+            .unwrap();
+        assert!(matches!(
+            tx.try_send(frame(2, [0xD2; 16], rns_core::constants::PACKET_TYPE_DATA)),
+            Err(std::sync::mpsc::TrySendError::Full(_))
+        ));
+        assert_eq!(tx.inbound_queue_snapshot().dropped, [1, 0, 0, 0]);
     }
 }

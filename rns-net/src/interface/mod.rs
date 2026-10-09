@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -283,6 +283,16 @@ pub trait Writer: Send {
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
 
+/// Longest time a producer waits for a busy async writer to free queue space
+/// or byte budget before treating the frame as undeliverable.
+///
+/// A healthy writer drains its queue in well under a millisecond, so this
+/// bound converts momentary bursts into backpressure (the producer pauses and
+/// the inbound queue fills) instead of silent loss. A writer that stays full
+/// for the whole bound is treated as stalled: the frame is refused and the
+/// driver's per-interface send deferral protects other interfaces.
+pub const ASYNC_WRITER_BACKPRESSURE_WAIT: Duration = Duration::from_millis(20);
+
 #[derive(Clone)]
 #[doc(hidden)]
 pub struct EgressControl {
@@ -466,9 +476,17 @@ pub struct AsyncWriterMetrics {
     queued_frames: Arc<AtomicUsize>,
     worker_alive: Arc<AtomicBool>,
     egress_control: Option<EgressControl>,
+    /// Signalled by the worker whenever it frees queue slots or byte budget.
+    space: Arc<(Mutex<()>, Condvar)>,
 }
 
 impl AsyncWriterMetrics {
+    fn notify_space(&self) {
+        let (lock, condvar) = &*self.space;
+        let _guard = lock_or_recover(lock, "async writer space");
+        condvar.notify_all();
+    }
+
     pub fn queued_frames(&self) -> usize {
         self.queued_frames.load(Ordering::Relaxed)
     }
@@ -532,6 +550,96 @@ impl Writer for AsyncWriter {
 }
 
 impl AsyncWriter {
+    /// Admit an unconfirmed frame, waiting up to
+    /// [`ASYNC_WRITER_BACKPRESSURE_WAIT`] while the worker is busy.
+    ///
+    /// A stalled peer (as reported by the byte-budget controller) is refused
+    /// immediately so that one dead connection cannot repeatedly pause the
+    /// driver. Over-budget frames that can never fit are dropped as before.
+    fn enqueue_unconfirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        let framed_bytes = self
+            .metrics
+            .egress_control
+            .as_ref()
+            .map(|_| crate::hdlc::framed_len(data));
+        let deadline = Instant::now() + ASYNC_WRITER_BACKPRESSURE_WAIT;
+        let mut frame = Some(QueuedFrame {
+            data: data.to_vec(),
+            reserved_bytes: 0,
+            completion: None,
+        });
+        let (lock, condvar) = &*self.metrics.space;
+        let mut guard = lock_or_recover(lock, "async writer space");
+        loop {
+            if !self.metrics.worker_alive() {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "interface writer worker is offline",
+                ));
+            }
+            let mut admitted_budget = true;
+            if let (Some(control), Some(bytes)) = (&self.metrics.egress_control, framed_bytes) {
+                if bytes > control.byte_limit || control.stalled() {
+                    control.record_drop(bytes);
+                    return Ok(());
+                }
+                admitted_budget = control.try_reserve(bytes);
+                if admitted_budget {
+                    if let Some(frame) = frame.as_mut() {
+                        frame.reserved_bytes = bytes;
+                    }
+                }
+            }
+            if admitted_budget {
+                self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
+                match self
+                    .tx
+                    .try_send(frame.take().expect("frame retained until admitted"))
+                {
+                    Ok(()) => return Ok(()),
+                    Err(TrySendError::Full(returned)) => {
+                        self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
+                        if let Some(control) = &self.metrics.egress_control {
+                            control.release(returned.reserved_bytes);
+                        }
+                        frame = Some(QueuedFrame {
+                            reserved_bytes: 0,
+                            ..returned
+                        });
+                    }
+                    Err(TrySendError::Disconnected(returned)) => {
+                        self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
+                        if let Some(control) = &self.metrics.egress_control {
+                            control.release(returned.reserved_bytes);
+                        }
+                        self.metrics.worker_alive.store(false, Ordering::Relaxed);
+                        return Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "interface writer worker disconnected",
+                        ));
+                    }
+                }
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                if let (Some(control), Some(bytes)) = (&self.metrics.egress_control, framed_bytes) {
+                    if !admitted_budget {
+                        control.record_drop(bytes);
+                        return Ok(());
+                    }
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "interface writer queue is full",
+                ));
+            }
+            guard = match condvar.wait_timeout(guard, deadline - now) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+    }
+
     fn enqueue(
         &mut self,
         data: &[u8],
@@ -542,6 +650,14 @@ impl AsyncWriter {
                 io::ErrorKind::BrokenPipe,
                 "interface writer worker is offline",
             ));
+        }
+
+        // Unconfirmed frames (transit forwarding, announces) wait briefly for a
+        // busy worker instead of being refused at the first full queue.
+        // Confirmed sends keep their immediate WouldBlock contract: their
+        // callers already retry through the completion machinery.
+        if completion.is_none() {
+            return self.enqueue_unconfirmed(data);
         }
 
         let reserved_bytes = if let Some(control) = &self.metrics.egress_control {
@@ -615,6 +731,7 @@ pub fn wrap_async_writer(
         queued_frames: Arc::new(AtomicUsize::new(0)),
         worker_alive: Arc::new(AtomicBool::new(true)),
         egress_control,
+        space: Arc::default(),
     };
     let metrics_thread = metrics.clone();
     let name = interface_name.to_string();
@@ -666,6 +783,7 @@ fn async_writer_loop(
         metrics
             .queued_frames
             .fetch_sub(queued.len(), Ordering::Relaxed);
+        metrics.notify_space();
         if event_tx.link_send_pool().in_flight() > 0 {
             let _ = event_tx.try_send(crate::event::Event::LinkWriterReady);
         }
@@ -738,6 +856,7 @@ fn async_writer_loop(
         if let Some(control) = &metrics.egress_control {
             control.release(reserved_bytes);
         }
+        metrics.notify_space();
         if event_tx.link_send_pool().in_flight() > 0 {
             let _ = event_tx.try_send(crate::event::Event::LinkWriterReady);
         }
@@ -751,12 +870,14 @@ fn async_writer_loop(
                 err
             );
             writer.shutdown();
+            metrics.notify_space();
             let _ = event_tx.send(crate::event::Event::InterfaceDown(interface_id));
             return;
         }
     }
 
     metrics.worker_alive.store(false, Ordering::Relaxed);
+    metrics.notify_space();
 }
 
 pub use crate::common::interface_stats::{InterfaceStats, TrafficRates, ANNOUNCE_SAMPLE_MAX};
