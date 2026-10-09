@@ -963,6 +963,9 @@ impl Driver {
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
             self.dispatch_link_actions(actions);
             self.flush_pending_link_frames();
+            if !self.rx.has_prefetched() {
+                self.wake_writers();
+            }
             let received = match self.rx.recv_classified() {
                 Ok(e) => e,
                 Err(_) => break, // all senders dropped

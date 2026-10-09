@@ -580,6 +580,12 @@ impl EventReceiver {
         event
     }
 
+    /// Whether events already taken from the queue are waiting locally, so
+    /// the next receive cannot block.
+    pub(crate) fn has_prefetched(&self) -> bool {
+        !self.prefetched.borrow().is_empty()
+    }
+
     pub fn recv(&self) -> Result<Event, std::sync::mpsc::RecvError> {
         self.recv_classified().map(|received| received.event)
     }
