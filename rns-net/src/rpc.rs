@@ -3933,14 +3933,16 @@ mod tests {
                 snr: None,
             })
             .is_err());
-        event_tx
-            .send(Event::Frame {
+        // Reader `send` now waits for space in the data class instead of
+        // dropping, so a second refused `try_send` provides the second drop.
+        assert!(event_tx
+            .try_send(Event::Frame {
                 interface_id: InterfaceId(2),
                 data: vec![0],
                 rssi: None,
                 snr: None,
             })
-            .unwrap();
+            .is_err());
         let mut runtime_pickle = interface_stats_to_pickle(&stats);
         add_inbound_runtime_stats(&mut runtime_pickle, &stats, &event_tx);
         let runtime_ifaces = runtime_pickle.get("interfaces").unwrap().as_list().unwrap();
