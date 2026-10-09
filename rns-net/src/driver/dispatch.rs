@@ -77,6 +77,10 @@ impl Driver {
     /// bounding this queue together with driver events and in-flight writes.
     pub(crate) fn flush_pending_link_frames(&mut self) {
         use crate::link_send::LinkSendError;
+        // Called on every driver iteration; avoid seeding a hasher when idle.
+        if self.pending_link_frames.is_empty() {
+            return;
+        }
         let mut blocked = std::collections::HashSet::new();
         for _ in 0..self.pending_link_frames.len() {
             let mut frame = self.pending_link_frames.pop_front().unwrap();
