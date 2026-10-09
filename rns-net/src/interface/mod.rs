@@ -478,10 +478,17 @@ pub struct AsyncWriterMetrics {
     egress_control: Option<EgressControl>,
     /// Signalled by the worker whenever it frees queue slots or byte budget.
     space: Arc<(Mutex<()>, Condvar)>,
+    /// Producers inside a backpressure wait. Incremented under the `space`
+    /// lock before the producer's queue attempt, so a worker that frees space
+    /// after a failed attempt always observes it and notifies.
+    space_waiters: Arc<AtomicUsize>,
 }
 
 impl AsyncWriterMetrics {
     fn notify_space(&self) {
+        if self.space_waiters.load(Ordering::SeqCst) == 0 {
+            return;
+        }
         let (lock, condvar) = &*self.space;
         let _guard = lock_or_recover(lock, "async writer space");
         condvar.notify_all();
@@ -561,6 +568,20 @@ impl AsyncWriter {
     /// immediately so that one dead connection cannot repeatedly pause the
     /// driver. Over-budget frames that can never fit are dropped as before.
     fn enqueue_unconfirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        let space = Arc::clone(&self.metrics.space);
+        let (lock, _) = &*space;
+        let guard = lock_or_recover(lock, "async writer space");
+        self.metrics.space_waiters.fetch_add(1, Ordering::SeqCst);
+        let result = self.enqueue_unconfirmed_locked(data, guard);
+        self.metrics.space_waiters.fetch_sub(1, Ordering::SeqCst);
+        result
+    }
+
+    fn enqueue_unconfirmed_locked(
+        &mut self,
+        data: &[u8],
+        mut guard: MutexGuard<'_, ()>,
+    ) -> io::Result<()> {
         let framed_bytes = self
             .metrics
             .egress_control
@@ -576,8 +597,8 @@ impl AsyncWriter {
             reserved_bytes: 0,
             completion: None,
         });
-        let (lock, condvar) = &*self.metrics.space;
-        let mut guard = lock_or_recover(lock, "async writer space");
+        let space = Arc::clone(&self.metrics.space);
+        let (_, condvar) = &*space;
         loop {
             if !self.metrics.worker_alive() {
                 return Err(io::Error::new(
@@ -744,6 +765,7 @@ pub fn wrap_async_writer(
         worker_alive: Arc::new(AtomicBool::new(true)),
         egress_control,
         space: Arc::default(),
+        space_waiters: Arc::default(),
     };
     let metrics_thread = metrics.clone();
     let name = interface_name.to_string();
