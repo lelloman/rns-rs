@@ -550,7 +550,15 @@ impl EventSender {
 /// Receiver for the prioritized driver event queue.
 pub struct EventReceiver {
     shared: Arc<QueueShared>,
+    /// Events already taken from the shared queue, in delivery order. The
+    /// driver drains up to [`RECEIVE_BATCH`] events per lock acquisition so
+    /// interface readers contend for the queue lock less often.
+    prefetched: std::cell::RefCell<VecDeque<ReceivedEvent>>,
 }
+
+/// Events moved from the shared queue per lock acquisition. Bounds how long
+/// a higher-priority event arriving meanwhile waits behind earlier events.
+const RECEIVE_BATCH: usize = 16;
 
 impl Drop for EventReceiver {
     fn drop(&mut self) {
@@ -577,9 +585,20 @@ impl EventReceiver {
     }
 
     pub(crate) fn recv_classified(&self) -> Result<ReceivedEvent, std::sync::mpsc::RecvError> {
+        if let Some(event) = self.prefetched.borrow_mut().pop_front() {
+            return Ok(event);
+        }
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         loop {
             if let Some(event) = self.pop_locked(&mut state) {
+                let mut prefetched = self.prefetched.borrow_mut();
+                while prefetched.len() + 1 < RECEIVE_BATCH {
+                    match self.pop_locked(&mut state) {
+                        Some(next) => prefetched.push_back(next),
+                        None => break,
+                    }
+                }
+                drop(prefetched);
                 drop(state);
                 self.shared.wake_async_senders();
                 return Ok(event);
@@ -592,6 +611,9 @@ impl EventReceiver {
     }
 
     pub fn try_recv(&self) -> Result<Event, std::sync::mpsc::TryRecvError> {
+        if let Some(event) = self.prefetched.borrow_mut().pop_front() {
+            return Ok(event.event);
+        }
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(event) = self.pop_locked(&mut state) {
             drop(state);
@@ -609,6 +631,9 @@ impl EventReceiver {
         &self,
         timeout: Duration,
     ) -> Result<Event, std::sync::mpsc::RecvTimeoutError> {
+        if let Some(event) = self.prefetched.borrow_mut().pop_front() {
+            return Ok(event.event);
+        }
         let deadline = Instant::now() + timeout;
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         loop {
@@ -679,7 +704,10 @@ pub(crate) fn channel_with_queue_capacities(
         EventSender {
             shared: Arc::clone(&shared),
         },
-        EventReceiver { shared },
+        EventReceiver {
+            shared,
+            prefetched: Default::default(),
+        },
     )
 }
 
