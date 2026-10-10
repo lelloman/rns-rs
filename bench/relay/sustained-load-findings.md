@@ -65,3 +65,21 @@ every commit; new tests cover batch enqueue ordering and wakeup, blocking
 reader delivery, writer backpressure and stall fail-fast, the MTU clamp, and a
 randomized dedup FIFO model with colliding keys. The nine-case Python 1.5.7
 smoke and the restart scenario pass.
+
+## Follow-up — 2026-10-10
+
+With kernel-capable perf, the saturated relay spent 51% of CPU in the kernel:
+TCP send and receive, plus about 18% in scheduling and futex work as each
+frame passed reader, driver and writer threads. Changes since, measured in
+alternating one-CPU trials:
+
+| Change | Small-frame CPU/frame | Throughput |
+| --- | --- | --- |
+| Wake writers once per driver batch | 6.31 to 4.44 µs (every pair) | +41% |
+| Queue forwarded frames without copying | unchanged | +2.5% link parts |
+| Box oversized event payloads (Event 1,000 to 240 bytes) | 4.08 to 4.01 µs (within noise) | — |
+
+The relay now forwards about 250,000 small frames/s on one CPU at about
+4.0 µs/frame. The remaining gap is mostly structural: three threads and
+kernel wakeups per forwarded frame. A single-threaded nonblocking event loop
+for TCP interfaces would remove it but is a larger redesign.
