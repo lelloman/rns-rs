@@ -267,10 +267,19 @@ pub trait Writer: Send {
         self.send_frame(data)
     }
 
+    /// Deferred send of shared frame bytes; writers with a worker queue may
+    /// retain the shared buffer instead of copying it.
+    fn send_shared_deferred(
+        &mut self,
+        data: &rns_core::transport::types::PacketBytes,
+    ) -> io::Result<()> {
+        self.send_frame_deferred(data)
+    }
+
     /// Wake a worker postponed by [`Writer::send_frame_deferred`].
     fn wake(&mut self) {}
 
-    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+    fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         for frame in frames {
             self.send_frame(frame)?;
         }
@@ -692,8 +701,26 @@ enum Admission {
     Refused(QueuedFrame),
 }
 
+/// Frame bytes queued for a writer: owned, or shared with the driver's
+/// forwarding buffer so queueing a forwarded frame does not copy it.
+pub enum FrameBytes {
+    Owned(Vec<u8>),
+    Shared(rns_core::transport::types::PacketBytes),
+}
+
+impl std::ops::Deref for FrameBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            FrameBytes::Owned(bytes) => bytes,
+            FrameBytes::Shared(bytes) => bytes,
+        }
+    }
+}
+
 struct QueuedFrame {
-    data: Vec<u8>,
+    data: FrameBytes,
     reserved_bytes: usize,
     completion: Option<crate::link_send::Completion>,
 }
@@ -706,6 +733,16 @@ impl Writer for AsyncWriter {
     fn send_frame_deferred(&mut self, data: &[u8]) -> io::Result<()> {
         self.defer_wake = true;
         let result = self.enqueue(data, &mut None);
+        self.defer_wake = false;
+        result
+    }
+
+    fn send_shared_deferred(
+        &mut self,
+        data: &rns_core::transport::types::PacketBytes,
+    ) -> io::Result<()> {
+        self.defer_wake = true;
+        let result = self.enqueue_unconfirmed(FrameBytes::Shared(data.clone()));
         self.defer_wake = false;
         result
     }
@@ -732,9 +769,9 @@ impl AsyncWriter {
     /// A stalled peer (as reported by the byte-budget controller) is refused
     /// immediately so that one dead connection cannot repeatedly pause the
     /// driver. Over-budget frames that can never fit are dropped as before.
-    fn enqueue_unconfirmed(&mut self, data: &[u8]) -> io::Result<()> {
+    fn enqueue_unconfirmed(&mut self, data: FrameBytes) -> io::Result<()> {
         let mut frame = QueuedFrame {
-            data: data.to_vec(),
+            data,
             reserved_bytes: 0,
             completion: None,
         };
@@ -861,7 +898,7 @@ impl AsyncWriter {
         // Confirmed sends keep their immediate WouldBlock contract: their
         // callers already retry through the completion machinery.
         if completion.is_none() {
-            return self.enqueue_unconfirmed(data);
+            return self.enqueue_unconfirmed(FrameBytes::Owned(data.to_vec()));
         }
 
         let reserved_bytes = if let Some(control) = &self.metrics.egress_control {
@@ -891,7 +928,7 @@ impl AsyncWriter {
         self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
         match self.tx.try_send(
             QueuedFrame {
-                data: data.to_vec(),
+                data: FrameBytes::Owned(data.to_vec()),
                 reserved_bytes,
                 completion: completion.take(),
             },
@@ -1581,7 +1618,7 @@ mod tests {
             unreachable!("the async worker must use batch delivery")
         }
 
-        fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+        fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
             self.batch_tx.send(frames.len()).unwrap();
             if let Some(release) = self.first_release.take() {
                 release.recv().unwrap();

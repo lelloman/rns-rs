@@ -572,7 +572,7 @@ impl Driver {
         let send_result = if entry.ifac.is_some() {
             entry.writer.send_frame_deferred(&data)
         } else {
-            entry.writer.send_frame_deferred(&raw)
+            entry.writer.send_shared_deferred(&raw)
         };
         if self.writers_to_wake.last() != Some(&interface) {
             self.writers_to_wake.push(interface);

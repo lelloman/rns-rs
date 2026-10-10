@@ -100,7 +100,7 @@ impl Writer for TcpWriter {
         self.stream.write_all(&hdlc::frame(data))
     }
 
-    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+    fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         hdlc::write_frames(&mut self.stream, frames, &mut self.scratch)
     }
 }

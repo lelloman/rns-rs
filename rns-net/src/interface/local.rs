@@ -94,14 +94,14 @@ impl Writer for LocalWriter {
         append_and_drain(
             &mut self.transmit_buffer,
             &mut self.stream,
-            &[data.to_vec()],
+            &[crate::interface::FrameBytes::Owned(data.to_vec())],
         )
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send_frames(&[data.to_vec()])
+        self.send_frames(&[crate::interface::FrameBytes::Owned(data.to_vec())])
     }
 
-    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+    fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         if self
             .sleep_hold
             .as_ref()
@@ -117,7 +117,7 @@ impl Writer for LocalWriter {
 fn append_and_drain(
     buffer: &mut TransmitBuffer,
     writer: &mut impl Write,
-    frames: &[Vec<u8>],
+    frames: &[crate::interface::FrameBytes],
 ) -> io::Result<()> {
     for frame in frames {
         let _ = buffer.append(hdlc::frame(frame));
@@ -449,14 +449,14 @@ impl Writer for UnixLocalWriter {
         append_and_drain(
             &mut self.transmit_buffer,
             &mut self.stream,
-            &[data.to_vec()],
+            &[crate::interface::FrameBytes::Owned(data.to_vec())],
         )
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send_frames(&[data.to_vec()])
+        self.send_frames(&[crate::interface::FrameBytes::Owned(data.to_vec())])
     }
 
-    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+    fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         if self
             .sleep_hold
             .as_ref()

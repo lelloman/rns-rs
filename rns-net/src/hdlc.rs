@@ -51,7 +51,7 @@ pub(crate) const WRITE_BATCH_BYTES: usize = 256 * 1024;
 /// frame separately; only the number of system calls changes.
 pub(crate) fn write_frames<W: std::io::Write>(
     writer: &mut W,
-    frames: &[Vec<u8>],
+    frames: &[crate::interface::FrameBytes],
     scratch: &mut Vec<u8>,
 ) -> std::io::Result<()> {
     scratch.clear();
