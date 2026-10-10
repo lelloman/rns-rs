@@ -407,10 +407,10 @@ fn unix_server_loop(
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
-                registration: template.registration(info),
+                registration: Box::new(template.registration(info)),
             }
         } else {
-            Event::InterfaceUp(client_id, Some(writer), Some(info))
+            Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
         };
         if tx.send(event).is_err() {
             return;
@@ -539,10 +539,10 @@ fn spawn_local_client_handler(
         Event::DynamicInterfaceUp {
             id: client_id,
             writer,
-            registration: template.registration(info),
+            registration: Box::new(template.registration(info)),
         }
     } else {
-        Event::InterfaceUp(client_id, Some(writer), Some(info))
+        Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
     };
     if tx.send(event).is_err() {
         return;

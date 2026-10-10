@@ -569,7 +569,7 @@ impl WeaveSession {
                 session: Arc::clone(self),
                 endpoint,
             }),
-            registration: DynamicInterfaceRegistration {
+            registration: Box::new(DynamicInterfaceRegistration {
                 info,
                 interface_type: "WeaveInterfacePeer".into(),
                 parent_id: self.config.interface_id,
@@ -578,7 +578,7 @@ impl WeaveSession {
                     ..Default::default()
                 },
                 ifac: self.ifac.clone(),
-            },
+            }),
         });
         self.publish_parent_telemetry();
         id

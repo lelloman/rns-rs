@@ -204,12 +204,12 @@ pub enum Event<W: Send> {
     /// An interface came online after (re)connecting.
     /// Carries a new writer if the connection was re-established.
     /// Carries InterfaceInfo if this is a new dynamic interface (e.g. TCP server client).
-    InterfaceUp(InterfaceId, Option<W>, Option<InterfaceInfo>),
+    InterfaceUp(InterfaceId, Option<W>, Option<Box<InterfaceInfo>>),
     /// Register a dynamic interface with an exact type and parent identity.
     DynamicInterfaceUp {
         id: InterfaceId,
         writer: W,
-        registration: DynamicInterfaceRegistration,
+        registration: Box<DynamicInterfaceRegistration>,
     },
     /// Update optional device/interface telemetry without replacing counters.
     InterfaceTelemetry {

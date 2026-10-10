@@ -1069,10 +1069,10 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 Event::DynamicInterfaceUp {
                                     id: client_id,
                                     writer,
-                                    registration: template.registration(info),
+                                    registration: Box::new(template.registration(info)),
                                 }
                             } else {
-                                Event::InterfaceUp(client_id, Some(writer), Some(info))
+                                Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
                             };
                             if tx.send(event).is_err() {
                                 // Driver shut down

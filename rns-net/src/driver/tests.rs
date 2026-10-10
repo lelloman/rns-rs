@@ -2134,7 +2134,7 @@ fn queued_startup_events_register_dynamic_interface_before_frame() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Frame {
@@ -3259,7 +3259,7 @@ fn dynamic_interface_register() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -3411,7 +3411,7 @@ fn dynamic_interface_applies_transport_announce_rate_defaults() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -3442,7 +3442,7 @@ fn dynamic_interface_keeps_explicit_announce_rate_values() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -3470,7 +3470,7 @@ fn dynamic_interface_skips_announce_rate_defaults_without_transport() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -3506,7 +3506,7 @@ fn dynamic_interface_applies_transport_ingress_control_defaults() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -3544,7 +3544,7 @@ fn dynamic_interface_keeps_explicit_ingress_control_values() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -3571,7 +3571,7 @@ fn dynamic_interface_skips_ingress_control_defaults_without_transport() {
     tx.send(Event::InterfaceUp(
         InterfaceId(100),
         Some(Box::new(writer)),
-        Some(info),
+        Some(Box::new(info)),
     ))
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
