@@ -286,10 +286,14 @@ fn listener_loop(context: ListenerLoopContext) {
             tx.send(Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
-                registration: template.registration(info),
+                registration: Box::new(template.registration(info)),
             })
         } else {
-            tx.send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
+            tx.send(Event::InterfaceUp(
+                client_id,
+                Some(writer),
+                Some(Box::new(info)),
+            ))
         };
         if registration_result.is_err() {
             // Driver shut down

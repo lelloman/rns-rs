@@ -1015,13 +1015,13 @@ impl Driver {
                     self.begin_drain(timeout);
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
-                    self.handle_interface_up_event(id, new_writer, info);
+                    self.handle_interface_up_event(id, new_writer, info.map(|info| *info));
                 }
                 Event::DynamicInterfaceUp {
                     id,
                     writer,
                     registration,
-                } => self.handle_dynamic_interface_up_event(id, writer, registration),
+                } => self.handle_dynamic_interface_up_event(id, writer, *registration),
                 Event::InterfaceTelemetry {
                     interface_id,
                     telemetry,

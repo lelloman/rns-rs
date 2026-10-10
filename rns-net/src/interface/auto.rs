@@ -1298,10 +1298,10 @@ fn add_peer(context: AddPeerContext<'_>) {
         Event::DynamicInterfaceUp {
             id: peer_id,
             writer: driver_writer,
-            registration: template.registration(peer_info),
+            registration: Box::new(template.registration(peer_info)),
         }
     } else {
-        Event::InterfaceUp(peer_id, Some(driver_writer), Some(peer_info))
+        Event::InterfaceUp(peer_id, Some(driver_writer), Some(Box::new(peer_info)))
     };
     let _ = tx.send(event);
 }

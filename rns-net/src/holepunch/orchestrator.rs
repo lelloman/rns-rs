@@ -401,7 +401,7 @@ impl HolePunchManager {
                                 let _ = tx.send(Event::InterfaceUp(
                                     interface_id,
                                     Some(writer),
-                                    Some(info),
+                                    Some(Box::new(info)),
                                 ));
                                 iface_ok = true;
                             }

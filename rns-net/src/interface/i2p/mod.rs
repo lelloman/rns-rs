@@ -418,10 +418,10 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                     Event::DynamicInterfaceUp {
                         id: client_id,
                         writer,
-                        registration: template.registration(info),
+                        registration: Box::new(template.registration(info)),
                     }
                 } else {
-                    Event::InterfaceUp(client_id, Some(writer), Some(info))
+                    Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
                 };
                 if tx.send(event).is_err() {
                     return; // Driver shut down
@@ -538,10 +538,10 @@ fn acceptor_loop(context: AcceptorContext) {
                     Event::DynamicInterfaceUp {
                         id: client_id,
                         writer,
-                        registration: template.registration(info),
+                        registration: Box::new(template.registration(info)),
                     }
                 } else {
-                    Event::InterfaceUp(client_id, Some(writer), Some(info))
+                    Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
                 };
                 if tx.send(event).is_err() {
                     return; // Driver shut down
