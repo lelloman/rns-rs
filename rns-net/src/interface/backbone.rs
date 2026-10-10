@@ -398,10 +398,10 @@ impl Writer for BackboneWriter {
         self.drain_transmit(timeout)
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send_frames(&[data.to_vec()])
+        self.send_frames(&[crate::interface::FrameBytes::Owned(data.to_vec())])
     }
 
-    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+    fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         let write_stall_timeout =
             lock_or_recover(&self.runtime, "backbone runtime").write_stall_timeout;
         if self.transmit_buffer.buffered_bytes() > 0 {
@@ -1499,10 +1499,10 @@ impl Writer for BackboneClientWriter {
         Ok(())
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send_frames(&[data.to_vec()])
+        self.send_frames(&[crate::interface::FrameBytes::Owned(data.to_vec())])
     }
 
-    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+    fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         for frame in frames {
             let encoded = hdlc::frame(frame);
             let encoded_len = encoded.len();
