@@ -347,7 +347,7 @@ struct BackbonePeerPoolCandidate {
 #[cfg(feature = "hooks")]
 struct EngineRef<'a> {
     engine: &'a TransportEngine,
-    interfaces: &'a HashMap<InterfaceId, InterfaceEntry>,
+    interfaces: &'a crate::interface::InterfaceMap<InterfaceEntry>,
     link_manager: &'a LinkManager,
     now: f64,
 }
