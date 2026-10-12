@@ -18,7 +18,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rns_core::transport::types::InterfaceId;
 
@@ -85,6 +85,21 @@ pub const REVERSE_PEERING_MULTIPLIER: f64 = 3.25;
 /// How often AutoInterface rescans local link-local interfaces.
 pub const AUTO_RESCAN_INTERVAL: f64 = 1.25;
 
+/// Default cap on active peers per discovery worker (one adopted network
+/// interface). Discovery tokens from further sources are ignored until an
+/// existing peer times out. Configurable with `max_peers`.
+pub const DEFAULT_MAX_PEERS: usize = 128;
+
+/// New peers each discovery worker admits within one
+/// [`PEER_ADMISSION_WINDOW`].
+pub const MAX_NEW_PEERS_PER_WINDOW: usize = 32;
+
+/// Length of the window over which [`MAX_NEW_PEERS_PER_WINDOW`] applies.
+pub const PEER_ADMISSION_WINDOW: Duration = Duration::from_secs(10);
+
+/// Minimum spacing between warnings about ignored discovery sources, per worker.
+const PEER_REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
 /// Interfaces always ignored.
 pub const ALL_IGNORE_IFS: &[&str] = &["lo0"];
 
@@ -108,6 +123,10 @@ pub struct AutoConfig {
     pub allowed_interfaces: Vec<String>,
     pub ignored_interfaces: Vec<String>,
     pub configured_bitrate: u64,
+    /// Maximum number of active peers per adopted network interface
+    /// (`max_peers`, default [`DEFAULT_MAX_PEERS`]). Discovery tokens from
+    /// further sources are ignored until an existing peer times out.
+    pub max_peers: usize,
     /// Base interface ID. Per-peer IDs will be assigned dynamically.
     pub interface_id: InterfaceId,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
@@ -150,6 +169,7 @@ impl Default for AutoConfig {
             allowed_interfaces: Vec::new(),
             ignored_interfaces: Vec::new(),
             configured_bitrate: BITRATE_GUESS,
+            max_peers: DEFAULT_MAX_PEERS,
             interface_id: InterfaceId(0),
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(AutoRuntime {
@@ -457,6 +477,66 @@ struct AutoPeer {
     last_heard: f64,
 }
 
+/// Outcome of asking a discovery worker to admit a new peer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeerAdmissionDecision {
+    Admit,
+    /// The worker already has `max_peers` active peers.
+    AtCapacity,
+    /// The worker admitted [`MAX_NEW_PEERS_PER_WINDOW`] peers in the current window.
+    RateLimited,
+}
+
+/// Per-worker bookkeeping for admitting new peers.
+#[derive(Debug, Default)]
+struct PeerAdmission {
+    window_start: Option<Instant>,
+    admitted_in_window: usize,
+    last_refusal_log: Option<Instant>,
+    refusals_since_log: usize,
+}
+
+impl PeerAdmission {
+    /// Decide whether a new peer may be created, given the worker's current
+    /// number of active peers. An admitted peer counts against the window.
+    fn decide(
+        &mut self,
+        active_peers: usize,
+        max_peers: usize,
+        now: Instant,
+    ) -> PeerAdmissionDecision {
+        if active_peers >= max_peers {
+            return PeerAdmissionDecision::AtCapacity;
+        }
+        let window_elapsed = self
+            .window_start
+            .is_none_or(|start| now.saturating_duration_since(start) >= PEER_ADMISSION_WINDOW);
+        if window_elapsed {
+            self.window_start = Some(now);
+            self.admitted_in_window = 0;
+        }
+        if self.admitted_in_window >= MAX_NEW_PEERS_PER_WINDOW {
+            return PeerAdmissionDecision::RateLimited;
+        }
+        self.admitted_in_window += 1;
+        PeerAdmissionDecision::Admit
+    }
+
+    /// Record a refusal. Returns the number of refusals to report when a
+    /// warning is due, or `None` while warnings are being spaced out.
+    fn note_refusal(&mut self, now: Instant) -> Option<usize> {
+        self.refusals_since_log = self.refusals_since_log.saturating_add(1);
+        let due = self
+            .last_refusal_log
+            .is_none_or(|last| now.saturating_duration_since(last) >= PEER_REFUSAL_LOG_INTERVAL);
+        if !due {
+            return None;
+        }
+        self.last_refusal_log = Some(now);
+        Some(std::mem::take(&mut self.refusals_since_log))
+    }
+}
+
 /// Writer that sends UDP unicast data to a peer.
 struct UdpWriter {
     socket: UdpSocket,
@@ -482,6 +562,10 @@ struct SharedState {
     online: bool,
     /// Next dynamic interface ID
     next_id: Arc<AtomicU64>,
+    /// Maximum active peers per adopted network interface.
+    max_peers: usize,
+    /// New-peer admission state, keyed by adopted network interface name.
+    peer_admission: HashMap<String, PeerAdmission>,
 }
 
 impl SharedState {
@@ -492,7 +576,53 @@ impl SharedState {
             dedup_deque: VecDeque::new(),
             online: false,
             next_id,
+            max_peers: DEFAULT_MAX_PEERS,
+            peer_admission: HashMap::new(),
         }
+    }
+
+    /// Number of active peers discovered on the adopted interface `ifname`.
+    fn active_peers_on(&self, ifname: &str) -> usize {
+        self.peers
+            .values()
+            .filter(|peer| peer.ifname == ifname)
+            .count()
+    }
+
+    /// Decide whether the worker on `ifname` may create one more peer.
+    fn admit_new_peer(&mut self, ifname: &str, now: Instant) -> PeerAdmissionDecision {
+        let active_peers = self.active_peers_on(ifname);
+        let max_peers = self.max_peers;
+        self.peer_admission
+            .entry(ifname.to_string())
+            .or_default()
+            .decide(active_peers, max_peers, now)
+    }
+
+    /// Record an ignored discovery source for `ifname`; see [`PeerAdmission::note_refusal`].
+    fn note_peer_refusal(&mut self, ifname: &str, now: Instant) -> Option<usize> {
+        self.peer_admission
+            .entry(ifname.to_string())
+            .or_default()
+            .note_refusal(now)
+    }
+
+    /// Remove peers not heard from within `peer_timeout_secs`, returning them.
+    fn remove_timed_out_peers(
+        &mut self,
+        now: f64,
+        peer_timeout_secs: f64,
+    ) -> Vec<(PeerKey, InterfaceId)> {
+        let timed_out = self
+            .peers
+            .iter()
+            .filter(|(_, peer)| now > peer.last_heard + peer_timeout_secs)
+            .map(|(peer_key, peer)| (peer_key.clone(), peer.interface_id))
+            .collect::<Vec<_>>();
+        for (peer_key, _) in &timed_out {
+            self.peers.remove(peer_key);
+        }
+        timed_out
     }
 
     /// Check dedup deque for a data hash.
@@ -563,6 +693,7 @@ fn remove_peers_for_worker(
         for (peer_key, _) in &removed {
             state.peers.remove(peer_key);
         }
+        state.peer_admission.remove(&key.ifname);
 
         removed
     };
@@ -633,7 +764,9 @@ fn start_with_template(
         *lock_or_recover(&config.runtime, "auto runtime") = startup;
     }
     let runtime = Arc::clone(&config.runtime);
-    let shared = Arc::new(Mutex::new(SharedState::new(next_dynamic_id)));
+    let mut shared_state = SharedState::new(next_dynamic_id);
+    shared_state.max_peers = config.max_peers;
+    let shared = Arc::new(Mutex::new(shared_state));
     let running = Arc::new(AtomicBool::new(true));
 
     let worker_context = AutoWorkerContext {
@@ -1195,6 +1328,24 @@ fn add_peer(context: AddPeerContext<'_>) {
         dynamic_template,
         underlay_mark,
     } = context;
+
+    {
+        let mut state = lock_or_recover(shared, "auto shared state");
+        if state.peers.contains_key(peer_key) {
+            state.refresh_peer(peer_key, crate::time::now());
+            return;
+        }
+        let now = Instant::now();
+        let decision = state.admit_new_peer(ifname, now);
+        if decision != PeerAdmissionDecision::Admit {
+            let report = state.note_peer_refusal(ifname, now);
+            let max_peers = state.max_peers;
+            drop(state);
+            log_peer_refusal(name, ifname, peer_key, decision, max_peers, report);
+            return;
+        }
+    }
+
     // Create UDP writer to send data to this peer
     let send_socket = match UdpSocket::bind("[::]:0") {
         Ok(s) => s,
@@ -1232,6 +1383,21 @@ fn add_peer(context: AddPeerContext<'_>) {
     // Double-check not already added (race)
     if state.peers.contains_key(peer_key) {
         state.refresh_peer(peer_key, crate::time::now());
+        return;
+    }
+    // Both discovery receivers of a worker may admit concurrently; recheck the cap.
+    if state.active_peers_on(ifname) >= state.max_peers {
+        let report = state.note_peer_refusal(ifname, Instant::now());
+        let max_peers = state.max_peers;
+        drop(state);
+        log_peer_refusal(
+            name,
+            ifname,
+            peer_key,
+            PeerAdmissionDecision::AtCapacity,
+            max_peers,
+            report,
+        );
         return;
     }
 
@@ -1306,6 +1472,38 @@ fn add_peer(context: AddPeerContext<'_>) {
     let _ = tx.send(event);
 }
 
+/// Warn about an ignored discovery source when `report` says a warning is due.
+fn log_peer_refusal(
+    name: &str,
+    ifname: &str,
+    peer_key: &PeerKey,
+    decision: PeerAdmissionDecision,
+    max_peers: usize,
+    report: Option<usize>,
+) {
+    let Some(ignored) = report else {
+        return;
+    };
+    let reason = match decision {
+        PeerAdmissionDecision::AtCapacity => format!("{} active peers is the limit", max_peers),
+        PeerAdmissionDecision::RateLimited => format!(
+            "at most {} new peers per {}s",
+            MAX_NEW_PEERS_PER_WINDOW,
+            PEER_ADMISSION_WINDOW.as_secs()
+        ),
+        PeerAdmissionDecision::Admit => return,
+    };
+    log::warn!(
+        "[{}] ignoring new peer {}%{} on {} ({}); {} new peer(s) ignored since the last warning",
+        name,
+        peer_key.link_local_addr,
+        peer_key.if_index,
+        ifname,
+        reason,
+        ignored
+    );
+}
+
 /// Data receiver: receives unicast UDP data from peers and dispatches as frames.
 fn data_receiver_loop(
     socket: UdpSocket,
@@ -1331,14 +1529,20 @@ fn data_receiver_loop(
                 let peer_key = peer_key_from_src(&src_addr, if_index);
                 let data = &buf[..n];
 
+                // Only data from known peers is considered (as in Python,
+                // which looks up the spawned peer before deduplicating).
+                let known = {
+                    let state = lock_or_recover(&shared, "auto shared state");
+                    state.online && state.peers.contains_key(&peer_key)
+                };
+                if !known {
+                    continue;
+                }
+
                 let now = crate::time::now();
                 let data_hash = rns_crypto::sha256::sha256(data);
 
                 let mut state = lock_or_recover(&shared, "auto shared state");
-
-                if !state.online {
-                    continue;
-                }
 
                 // Deduplication
                 if state.is_duplicate(&data_hash, now) {
@@ -1349,13 +1553,10 @@ fn data_receiver_loop(
                 // Refresh peer
                 state.refresh_peer(&peer_key, now);
 
-                // Find the interface ID for this peer
+                // Find the interface ID for this peer (it may have timed out meanwhile)
                 let iface_id = match state.peers.get(&peer_key) {
                     Some(peer) => peer.interface_id,
-                    None => {
-                        // Unknown peer, skip
-                        continue;
-                    }
+                    None => continue,
                 };
 
                 drop(state);
@@ -1405,17 +1606,10 @@ fn peer_jobs_loop(
         thread::sleep(interval);
 
         let now = crate::time::now();
-        let mut timed_out = Vec::new();
         let peer_timeout_secs = lock_or_recover(&runtime, "auto runtime").peer_timeout_secs;
 
-        {
-            let state = lock_or_recover(&shared, "auto shared state");
-            for (peer_key, peer) in &state.peers {
-                if now > peer.last_heard + peer_timeout_secs {
-                    timed_out.push((peer_key.clone(), peer.interface_id));
-                }
-            }
-        }
+        let timed_out = lock_or_recover(&shared, "auto shared state")
+            .remove_timed_out_peers(now, peer_timeout_secs);
 
         for (peer_key, iface_id) in &timed_out {
             log::info!(
@@ -1424,8 +1618,6 @@ fn peer_jobs_loop(
                 peer_key.link_local_addr,
                 peer_key.if_index
             );
-            let mut state = lock_or_recover(&shared, "auto shared state");
-            state.peers.remove(peer_key);
             let _ = tx.send(Event::InterfaceDown(*iface_id));
         }
     }
@@ -1527,6 +1719,12 @@ impl InterfaceFactory for AutoFactory {
             })
             .unwrap_or_default();
 
+        let max_peers = params
+            .get("max_peers")
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|max_peers| *max_peers > 0)
+            .unwrap_or(DEFAULT_MAX_PEERS);
+
         Ok(Box::new(AutoConfig {
             name: name.to_string(),
             group_id,
@@ -1537,6 +1735,7 @@ impl InterfaceFactory for AutoFactory {
             allowed_interfaces,
             ignored_interfaces,
             configured_bitrate,
+            max_peers,
             interface_id: id,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(AutoRuntime {
@@ -2160,6 +2359,166 @@ mod tests {
         assert_eq!(config.configured_bitrate, BITRATE_GUESS);
         assert!(config.allowed_interfaces.is_empty());
         assert!(config.ignored_interfaces.is_empty());
+        assert_eq!(config.max_peers, DEFAULT_MAX_PEERS);
+    }
+
+    fn parse_auto_config(params: &[(&str, &str)]) -> AutoConfig {
+        let params = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<HashMap<_, _>>();
+        let config = AutoFactory
+            .parse_config("auto", InterfaceId(1), &params)
+            .unwrap();
+        *config.into_any().downcast::<AutoConfig>().unwrap()
+    }
+
+    #[test]
+    fn parse_config_reads_max_peers() {
+        assert_eq!(parse_auto_config(&[]).max_peers, DEFAULT_MAX_PEERS);
+        assert_eq!(parse_auto_config(&[("max_peers", "16")]).max_peers, 16);
+        assert_eq!(
+            parse_auto_config(&[("max_peers", "0")]).max_peers,
+            DEFAULT_MAX_PEERS
+        );
+        assert_eq!(
+            parse_auto_config(&[("max_peers", "many")]).max_peers,
+            DEFAULT_MAX_PEERS
+        );
+    }
+
+    // ── Peer admission ───────────────────────────────────────────────
+
+    fn insert_peer(state: &mut SharedState, addr: &str, ifname: &str, last_heard: f64) {
+        let key = peer_key(addr, 2);
+        let id = InterfaceId(state.next_id.fetch_add(1, Ordering::Relaxed));
+        state.peers.insert(
+            key.clone(),
+            AutoPeer {
+                interface_id: id,
+                link_local_addr: key.link_local_addr.clone(),
+                ifname: ifname.to_string(),
+                if_index: key.if_index,
+                last_heard,
+            },
+        );
+    }
+
+    #[test]
+    fn peer_cap_refuses_peer_beyond_limit_and_admits_after_timeout() {
+        let mut state = SharedState::new(Arc::new(AtomicU64::new(100)));
+        state.max_peers = 3;
+        let now = Instant::now();
+
+        for (i, addr) in ["fe80::1", "fe80::2", "fe80::3"].iter().enumerate() {
+            assert_eq!(
+                state.admit_new_peer("eth0", now),
+                PeerAdmissionDecision::Admit
+            );
+            insert_peer(&mut state, addr, "eth0", 1000.0 + i as f64);
+        }
+        assert_eq!(
+            state.admit_new_peer("eth0", now),
+            PeerAdmissionDecision::AtCapacity
+        );
+        // Another adopted interface has its own cap.
+        assert_eq!(
+            state.admit_new_peer("wlan0", now),
+            PeerAdmissionDecision::Admit
+        );
+
+        // fe80::1 was last heard at 1000.0 and times out first.
+        let removed = state.remove_timed_out_peers(1000.0 + PEERING_TIMEOUT + 0.5, PEERING_TIMEOUT);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].0, peer_key("fe80::1", 2));
+        assert_eq!(state.active_peers_on("eth0"), 2);
+
+        assert_eq!(
+            state.admit_new_peer("eth0", now),
+            PeerAdmissionDecision::Admit
+        );
+    }
+
+    #[test]
+    fn peer_admission_rate_limit_refuses_within_window_and_admits_after() {
+        let mut admission = PeerAdmission::default();
+        let start = Instant::now();
+
+        for _ in 0..MAX_NEW_PEERS_PER_WINDOW {
+            assert_eq!(
+                admission.decide(0, usize::MAX, start),
+                PeerAdmissionDecision::Admit
+            );
+        }
+        assert_eq!(
+            admission.decide(0, usize::MAX, start),
+            PeerAdmissionDecision::RateLimited
+        );
+        let almost = start + PEER_ADMISSION_WINDOW - Duration::from_millis(1);
+        assert_eq!(
+            admission.decide(0, usize::MAX, almost),
+            PeerAdmissionDecision::RateLimited
+        );
+
+        let next_window = start + PEER_ADMISSION_WINDOW;
+        assert_eq!(
+            admission.decide(0, usize::MAX, next_window),
+            PeerAdmissionDecision::Admit
+        );
+    }
+
+    #[test]
+    fn peer_admission_cap_takes_precedence_and_does_not_use_window() {
+        let mut admission = PeerAdmission::default();
+        let now = Instant::now();
+        for _ in 0..MAX_NEW_PEERS_PER_WINDOW * 2 {
+            assert_eq!(
+                admission.decide(4, 4, now),
+                PeerAdmissionDecision::AtCapacity
+            );
+        }
+        assert_eq!(admission.decide(3, 4, now), PeerAdmissionDecision::Admit);
+    }
+
+    #[test]
+    fn peer_refusal_warnings_are_spaced_out() {
+        let mut admission = PeerAdmission::default();
+        let start = Instant::now();
+        assert_eq!(admission.note_refusal(start), Some(1));
+        assert_eq!(admission.note_refusal(start), None);
+        assert_eq!(admission.note_refusal(start + Duration::from_secs(1)), None);
+        assert_eq!(
+            admission.note_refusal(start + PEER_REFUSAL_LOG_INTERVAL),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn remove_peers_for_worker_resets_peer_admission() {
+        let next_id = Arc::new(AtomicU64::new(100));
+        let shared = Arc::new(Mutex::new(SharedState::new(next_id)));
+        let now = Instant::now();
+        {
+            let mut state = lock_or_recover(&shared, "auto shared state");
+            for _ in 0..MAX_NEW_PEERS_PER_WINDOW {
+                state.admit_new_peer("eth0", now);
+            }
+            assert_eq!(
+                state.admit_new_peer("eth0", now),
+                PeerAdmissionDecision::RateLimited
+            );
+        }
+        let (tx, _rx) = crate::event::channel();
+        let key = AutoWorkerKey {
+            ifname: "eth0".to_string(),
+            if_index: 2,
+            link_local_addr: "fe80::10".to_string(),
+        };
+        remove_peers_for_worker(&shared, &tx, &key);
+        assert_eq!(
+            lock_or_recover(&shared, "auto shared state").admit_new_peer("eth0", now),
+            PeerAdmissionDecision::Admit
+        );
     }
 
     // ── Constants ────────────────────────────────────────────────────
