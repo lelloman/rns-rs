@@ -69,6 +69,9 @@ pub(crate) struct LoopWriter {
     /// admission. Mirrors the async writer's stalled-peer behaviour.
     skip_wait: bool,
     failed: bool,
+    /// The interface-down report did not fit in the driver's control queue
+    /// and is retried on later flushes until it is accepted.
+    down_report_pending: bool,
     interface_id: InterfaceId,
     interface_name: String,
     event_tx: EventSender,
@@ -120,6 +123,7 @@ pub(crate) fn wrap(
         want_writable: false,
         skip_wait: false,
         failed: false,
+        down_report_pending: false,
         interface_id,
         interface_name: interface_name.to_string(),
         event_tx,
@@ -327,17 +331,41 @@ impl LoopWriter {
         self.sent = self.appended;
         self.set_writable_interest(false);
         self.inner.shutdown();
-        // The driver is the queue's consumer, so it must never block on it.
-        if let Err(error) = self
-            .event_tx
-            .try_send(crate::event::Event::InterfaceDown(self.interface_id))
-        {
-            log::warn!(
-                "[{}:{}] could not queue interface down: {:?}",
-                self.interface_name,
-                self.interface_id.0,
-                error.to_string()
-            );
+        self.report_down(true);
+    }
+
+    /// Queue the interface-down report. The driver is the queue's consumer,
+    /// so it must never block on it: a report that does not fit stays owed
+    /// and [`Writer::flush_pending`] retries it on later passes.
+    fn report_down(&mut self, first: bool) {
+        let event = crate::event::Event::InterfaceDown(self.interface_id);
+        match self.event_tx.try_send(event) {
+            Ok(()) => self.down_report_pending = false,
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                self.down_report_pending = true;
+                if first {
+                    log::warn!(
+                        "[{}:{}] could not queue interface down yet, the driver queue is full; \
+                         retrying on later passes",
+                        self.interface_name,
+                        self.interface_id.0
+                    );
+                } else {
+                    log::debug!(
+                        "[{}:{}] interface down still waiting for room in the driver queue",
+                        self.interface_name,
+                        self.interface_id.0
+                    );
+                }
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                self.down_report_pending = false;
+                log::warn!(
+                    "[{}:{}] could not queue interface down: the driver queue is gone",
+                    self.interface_name,
+                    self.interface_id.0
+                );
+            }
         }
     }
 }
@@ -362,6 +390,12 @@ impl Writer for LoopWriter {
     }
 
     fn flush_pending(&mut self) {
+        if self.failed {
+            if self.down_report_pending {
+                self.report_down(false);
+            }
+            return;
+        }
         self.drain();
     }
 
@@ -469,6 +503,13 @@ mod tests {
     }
 
     fn fixture(send_buffer: Option<usize>) -> Fixture {
+        fixture_on(send_buffer, crate::event::channel())
+    }
+
+    fn fixture_on(
+        send_buffer: Option<usize>,
+        (tx, rx): (crate::event::EventSender, crate::event::EventReceiver),
+    ) -> Fixture {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (peer, _) = listener.accept().unwrap();
@@ -483,7 +524,6 @@ mod tests {
                 .unwrap();
         }
         let fd = stream.as_raw_fd();
-        let (tx, rx) = crate::event::channel();
         let poller = Arc::clone(tx.poller());
         let (writer, metrics) = wrap(Box::new(Socket(stream)), fd, InterfaceId(7), "test", tx);
         Fixture {
@@ -683,5 +723,74 @@ mod tests {
             );
         }
         assert!(seen_down);
+    }
+
+    /// Drops the peer and flushes until the writer sees the send failure.
+    fn fail_writer(f: Fixture) -> (Box<dyn Writer>, crate::event::EventReceiver) {
+        let Fixture {
+            mut writer,
+            metrics,
+            peer,
+            rx,
+            ..
+        } = f;
+        let pool = SendPool::new(1);
+        let (completion, _receipt) = Completion::new(pool.try_acquire().unwrap());
+        writer
+            .enqueue_confirmed(&vec![0x22u8; 300_000], &mut Some(completion))
+            .unwrap();
+        drop(peer);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while metrics.worker_alive() {
+            assert!(Instant::now() < deadline, "send failure never observed");
+            writer.flush_pending();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        (writer, rx)
+    }
+
+    /// Takes every queued event and counts the interface-down reports.
+    fn take_down_reports(rx: &crate::event::EventReceiver) -> usize {
+        let mut downs = 0;
+        while let Ok(Some(event)) = rx.try_recv_classified() {
+            if matches!(
+                event.event,
+                crate::event::Event::InterfaceDown(InterfaceId(7))
+            ) {
+                downs += 1;
+            }
+        }
+        downs
+    }
+
+    #[test]
+    fn a_down_report_that_did_not_fit_is_retried_on_a_later_flush() {
+        let (tx, rx) = crate::event::channel_with_capacity(1);
+        let mut queued = 0;
+        while tx.try_send(crate::event::Event::Tick).is_ok() {
+            queued += 1;
+            assert!(queued < 1000, "control queue never filled");
+        }
+        let (mut writer, rx) = fail_writer(fixture_on(Some(4096), (tx, rx)));
+        // Still owed while the queue stays full; draining it finds only ticks.
+        writer.flush_pending();
+        assert_eq!(take_down_reports(&rx), 0);
+        // The queue has room now, so the next flush delivers the report.
+        writer.flush_pending();
+        assert_eq!(take_down_reports(&rx), 1);
+        // Once delivered it is not queued again.
+        writer.flush_pending();
+        assert_eq!(take_down_reports(&rx), 0);
+    }
+
+    #[test]
+    fn a_down_report_is_queued_once_when_it_fits() {
+        let (mut writer, rx) = fail_writer(fixture(Some(4096)));
+        for _ in 0..5 {
+            writer.flush_pending();
+        }
+        assert_eq!(take_down_reports(&rx), 1);
+        writer.flush_pending();
+        assert_eq!(take_down_reports(&rx), 0);
     }
 }
