@@ -1,6 +1,10 @@
 use super::*;
 use rns_core::transport::{DecodedInboundFrame, DecodedPacket, RxMetadata};
 
+/// Events the driver handles before flushing driver-run writers even though
+/// its queue has not emptied yet.
+const WRITER_FLUSH_EVENTS: usize = 1024;
+
 impl Driver {
     #[cfg(test)]
     pub(crate) fn handle_frame_event(
@@ -961,6 +965,8 @@ impl Driver {
         self.link_manager
             .set_receive_worker_wake(self.event_tx.clone());
         let mut ready = polling::Events::new();
+        // Events handled since driver-run writers were last flushed.
+        let mut unflushed = 0usize;
         loop {
             self.poll_resource_preparations();
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
@@ -972,6 +978,10 @@ impl Driver {
             let received = match self.rx.try_recv_classified() {
                 Ok(Some(e)) => e,
                 Ok(None) => {
+                    // Everything the last poll delivered has been handled:
+                    // send this pass's output before waiting for more.
+                    self.flush_writers();
+                    unflushed = 0;
                     ready.clear();
                     if let Err(error) = self.rx.wait(&mut ready, None) {
                         log::warn!("driver wait failed: {error}");
@@ -981,6 +991,12 @@ impl Driver {
                 }
                 Err(_) => break, // all senders dropped
             };
+            // Bound output latency while other threads keep the queue full.
+            unflushed += 1;
+            if unflushed >= WRITER_FLUSH_EVENTS {
+                self.flush_writers();
+                unflushed = 0;
+            }
 
             match received.event {
                 Event::Frame {

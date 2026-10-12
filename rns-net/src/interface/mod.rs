@@ -280,6 +280,11 @@ pub trait Writer: Send {
     /// Wake a worker postponed by [`Writer::send_frame_deferred`].
     fn wake(&mut self) {}
 
+    /// Write out what a driver-run writer has buffered (see `loop_writer`).
+    /// The driver calls this on every writer before it waits for more
+    /// input, so frames from one pass leave in as few writes as possible.
+    fn flush_pending(&mut self) {}
+
     fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         for frame in frames {
             self.send_frame(frame)?;

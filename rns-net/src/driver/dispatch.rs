@@ -363,9 +363,16 @@ impl Driver {
             let (interface, is_write) = crate::interface::loop_writer::key_target(event.key);
             if is_write && event.writable {
                 if let Some(entry) = self.interfaces.get_mut(&interface) {
-                    entry.writer.wake();
+                    entry.writer.flush_pending();
                 }
             }
+        }
+    }
+
+    /// Write out every driver-run writer's buffered frames.
+    pub(crate) fn flush_writers(&mut self) {
+        for entry in self.interfaces.values_mut() {
+            entry.writer.flush_pending();
         }
     }
 

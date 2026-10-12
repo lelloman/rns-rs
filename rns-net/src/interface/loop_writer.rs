@@ -2,9 +2,9 @@
 //!
 //! Replaces the async writer thread for stream sockets. Frames are encoded
 //! straight into one byte buffer; the driver writes it to the socket with
-//! nonblocking sends: immediately for ordinary sends, and once per event
-//! pass for deferred (forwarded) frames, so a burst leaves in few large
-//! writes. Bytes the socket cannot take yet stay buffered; the writer then
+//! nonblocking sends once per pass, before it waits for more input
+//! ([`Writer::flush_pending`]), or as soon as a batch's worth is buffered,
+//! so a burst leaves in few large writes. Bytes the socket cannot take yet stay buffered; the writer then
 //! registers writable interest on the driver's poller and finishes when the
 //! driver reports the socket writable.
 
@@ -20,6 +20,10 @@ use rns_core::transport::types::InterfaceId;
 use super::{AsyncWriterMetrics, Writer, ASYNC_WRITER_BACKPRESSURE_WAIT};
 use crate::event::EventSender;
 use crate::link_send::{Completion, LinkSendError};
+
+/// Buffered bytes at which a writer writes at once instead of waiting for
+/// the driver's end-of-pass flush.
+const EAGER_WRITE_BYTES: usize = crate::hdlc::WRITE_BATCH_BYTES;
 
 /// Bytes buffered per writer before new frames must wait for the socket.
 /// A frame is always admitted into an empty buffer, whatever its size.
@@ -338,18 +342,26 @@ impl LoopWriter {
     }
 }
 
+impl LoopWriter {
+    fn drain_if_batch_full(&mut self) {
+        if self.buffered() >= EAGER_WRITE_BYTES {
+            self.drain();
+        }
+    }
+}
+
 impl Writer for LoopWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.admit_unconfirmed(data)?;
-        self.drain();
+        self.drain_if_batch_full();
         Ok(())
     }
 
     fn send_frame_deferred(&mut self, data: &[u8]) -> io::Result<()> {
-        self.admit_unconfirmed(data)
+        self.send_frame(data)
     }
 
-    fn wake(&mut self) {
+    fn flush_pending(&mut self) {
         self.drain();
     }
 
@@ -357,7 +369,7 @@ impl Writer for LoopWriter {
         for frame in frames {
             self.admit_unconfirmed(frame)?;
         }
-        self.drain();
+        self.drain_if_batch_full();
         Ok(())
     }
 
@@ -387,7 +399,7 @@ impl Writer for LoopWriter {
         if let Some(completion) = completion.take() {
             self.completions.push_back((self.appended, completion));
         }
-        self.drain();
+        self.drain_if_batch_full();
         Ok(())
     }
 
@@ -506,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_sends_are_written_immediately_as_hdlc() {
+    fn sends_are_buffered_until_the_driver_flushes() {
         let mut f = fixture(None);
         f.writer.send_frame(&[1, 0x7E, 2]).unwrap();
         f.writer
@@ -515,6 +527,9 @@ mod tests {
                 crate::interface::FrameBytes::Owned(vec![0x7D]),
             ])
             .unwrap();
+        assert!(nothing_readable(&mut f.peer));
+        assert_eq!(f.metrics.queued_frames(), 3);
+        f.writer.flush_pending();
         let mut expected = crate::hdlc::frame(&[1, 0x7E, 2]);
         expected.extend(crate::hdlc::frame(&[3]));
         expected.extend(crate::hdlc::frame(&[0x7D]));
@@ -523,19 +538,35 @@ mod tests {
     }
 
     #[test]
-    fn deferred_sends_wait_for_wake_and_leave_together() {
+    fn a_pass_of_deferred_sends_leaves_together() {
         let mut f = fixture(None);
         for byte in 0..50u8 {
             f.writer.send_frame_deferred(&[byte; 40]).unwrap();
         }
+        // wake() only matters to worker threads; the loop writer waits for
+        // the driver's flush.
+        f.writer.wake();
         assert!(nothing_readable(&mut f.peer));
         assert_eq!(f.metrics.queued_frames(), 50);
-        f.writer.wake();
+        f.writer.flush_pending();
         let expected: Vec<u8> = (0..50u8)
             .flat_map(|b| crate::hdlc::frame(&[b; 40]))
             .collect();
         assert_eq!(read_exact(&mut f.peer, expected.len()), expected);
         assert_eq!(f.metrics.queued_frames(), 0);
+    }
+
+    #[test]
+    fn a_full_batch_is_written_without_waiting_for_the_flush() {
+        let mut f = fixture(None);
+        let frame = vec![0x33u8; 1000];
+        let per_frame = crate::hdlc::frame(&frame).len();
+        let frames = EAGER_WRITE_BYTES / per_frame + 1;
+        for _ in 0..frames {
+            f.writer.send_frame(&frame).unwrap();
+        }
+        let got = read_exact(&mut f.peer, frames * per_frame);
+        assert_eq!(got.len(), frames * per_frame);
     }
 
     #[test]
@@ -548,6 +579,7 @@ mod tests {
         f.writer
             .enqueue_confirmed(&payload, &mut completion)
             .unwrap();
+        f.writer.flush_pending();
         assert!(completion.is_none());
         assert_eq!(f.metrics.queued_frames(), 1);
         assert!(
@@ -561,7 +593,12 @@ mod tests {
         f.peer
             .set_read_timeout(Some(Duration::from_millis(20)))
             .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
         while received.len() < expected.len() {
+            assert!(
+                Instant::now() < deadline,
+                "leftover bytes were never written"
+            );
             let mut buf = [0u8; 65536];
             match f.peer.read(&mut buf) {
                 Ok(n) => received.extend_from_slice(&buf[..n]),
@@ -574,7 +611,7 @@ mod tests {
                 .unwrap();
             for event in events.iter() {
                 assert_eq!(key_target(event.key), (InterfaceId(7), true));
-                f.writer.wake();
+                f.writer.flush_pending();
             }
         }
         assert_eq!(received, expected);
@@ -612,7 +649,7 @@ mod tests {
             f.poller
                 .wait(&mut events, Some(Duration::from_millis(50)))
                 .unwrap();
-            f.writer.wake();
+            f.writer.flush_pending();
         }
         assert_eq!(reader.join().unwrap(), expected_len);
         f.writer.send_frame(&frame).unwrap();
@@ -630,7 +667,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         while f.metrics.worker_alive() {
             assert!(Instant::now() < deadline, "send failure never observed");
-            f.writer.wake();
+            f.writer.flush_pending();
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(matches!(receipt.wait(), Err(LinkSendError::WriteFailed(_))));
