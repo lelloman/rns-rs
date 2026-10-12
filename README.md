@@ -8,7 +8,7 @@
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
-This is a faithful port of the Python reference implementation, validated with Python-generated conformance vectors and live Python/Rust interoperability tests. `rns-crypto` and `rns-core` are `no_std`-compatible, making them suitable for embedded/microcontroller targets. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
+This port tracks the accepted Python Reticulum baseline documented in [UPSTREAM.md](UPSTREAM.md), with Python-generated conformance vectors and live Python/Rust interoperability tests covering the implemented protocol capabilities. `rns-crypto` and `rns-core` support `no_std` builds with default features disabled. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
 
 ## Performance
 
@@ -31,14 +31,21 @@ interoperability validation.
 | [`rns-core`](https://crates.io/crates/rns-core) | Yes | Wire protocol, destinations and packets, transport routing, links, channels, buffers, resources, and the hole-punch state machine |
 | [`rns-net`](https://crates.io/crates/rns-net) | No | Network node and driver with TCP, UDP, Local, Serial, KISS, AX.25, RNode, Pipe, Backbone, Auto, I2P, and Weave interfaces, configuration, discovery, and Direct Link support |
 | [`rns-server`](https://crates.io/crates/rns-server) | No | Batteries-included node supervisor with an embedded control plane and optional hook, sentinel, and statistics sidecars |
-| [`rns-cli`](https://crates.io/crates/rns-cli) | No | CLI programs: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, plus feature-gated `rns-sentineld` and `rns-statsd` sidecars |
+| [`rns-cli`](https://crates.io/crates/rns-cli) | No | CLI programs: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, `rncp`, `rnx`, plus feature-gated `rns-sentineld` and `rns-statsd` sidecars |
 | [`rns-git`](https://crates.io/crates/rns-git) | No | Git over Reticulum: the `rngit` repository server and management client, `git-remote-rns`, and the `rngcs` signing helper |
 | [`rns-ctl`](https://crates.io/crates/rns-ctl) | No | Unified daemon and control CLI with HTTP/WebSocket APIs, status, probe, path, identity, runtime configuration, backbone, and hook management |
 | [`rns-hooks`](https://crates.io/crates/rns-hooks) | No | Programmable transport-pipeline hook runtime with sandboxed WASM, trusted native dynamic-library, and built-in backends |
 | [`rns-hooks-abi`](https://crates.io/crates/rns-hooks-abi) | Yes | Shared ABI types and constants used by hook hosts, native hooks, and WASM guests |
 | [`rns-hooks-sdk`](https://crates.io/crates/rns-hooks-sdk) | Yes | Guest-side `no_std` SDK for writing `rns-hooks` WASM programs |
-| [`rns-stats-hook`](https://crates.io/crates/rns-stats-hook) | Yes | Statistics hook used by `rns-statsd`, available as a WASM guest or built-in hook |
-| [`rns-sentinel-hook`](https://crates.io/crates/rns-sentinel-hook) | Yes | Sentinel policy hook used by `rns-sentineld`, available as a WASM guest or built-in hook |
+| [`rns-stats-hook`](https://crates.io/crates/rns-stats-hook) | WASM builds | Statistics hook used by `rns-statsd`, available as a WASM guest or built-in hook |
+| [`rns-sentinel-hook`](https://crates.io/crates/rns-sentinel-hook) | WASM builds | Sentinel policy hook used by `rns-sentineld`, available as a WASM guest or built-in hook |
+| [`rns-tun`](rns-tun/README.md) | No | Authenticated IPv4 tunnelling over Reticulum, with the Linux `rntun` CLI and shared Android tunnel support |
+| [`rns-tun-android`](rns-tun-android/README.md) | No | Android JNI host boundary for `rns-tun`, used by the Android VPN client |
+| [`rns-bench`](tools/rns-bench/) | No | Native benchmark workloads and measurement tools |
+
+For `rns-crypto` and `rns-core`, disable default features to build without `std`.
+The separately built [ESP32 firmware](rns-esp32/README.md) is excluded from the
+root workspace.
 
 ## Building
 
@@ -207,7 +214,7 @@ Useful docs:
 ## Interface Ingress Control
 
 rns-rs accepts the Python-compatible ingress-control keys in any interface
-section:
+section. This example uses custom thresholds and timings:
 
 ```ini
 ingress_control = Yes
@@ -223,6 +230,12 @@ ic_new_time = 7200
 ic_burst_penalty = 300
 ic_held_release_interval = 30
 ```
+
+The default timings are `ic_burst_hold = 15`, `ic_burst_penalty = 15`, and
+`ic_held_release_interval = 5` seconds. Default announce frequency thresholds
+are `ic_burst_freq_new = 3` and `ic_burst_freq = 10`; default path-request
+thresholds are `ic_pr_burst_freq_new = 3` and `ic_pr_burst_freq = 8` per second.
+The other values in the example match their defaults.
 
 Ingress control defaults to enabled on Auto, Backbone, TCP client/server, UDP,
 and I2P interfaces. It defaults to disabled on local/serial/KISS/RNode/Pipe-style
@@ -283,7 +296,7 @@ Build and run the CLI binaries:
 
 ```bash
 # Run the daemon directly
-cargo run --bin rnsd -- /path/to/config
+cargo run --bin rnsd -- --config /path/to/config
 
 # Check network status
 cargo run --bin rnstatus
@@ -292,7 +305,7 @@ cargo run --bin rnstatus
 cargo run --bin rnpath
 
 # Probe connectivity
-cargo run --bin rnprobe
+cargo run --bin rnprobe -- <destination_hash>
 
 # Identity management
 cargo run --bin rnid
@@ -325,7 +338,9 @@ git remote add origin rns://<destination_hash>/<repository>
 
 ## rns-ctl
 
-`rns-ctl` is a unified CLI tool that combines daemon, control server, and all CLI utilities into a single binary:
+`rns-ctl` combines the daemon and HTTP/WebSocket control server with status,
+probe, path, identity, runtime configuration, backbone, and hook management in
+a single binary:
 
 ```bash
 # Start the HTTP/WebSocket control server
@@ -559,7 +574,13 @@ does. Enabling a local private owner alone does not configure remote-key storage
 
 ## Interoperability
 
-rns-rs is designed to be fully interoperable with the Python Reticulum implementation. A Rust node can join an existing Reticulum network alongside Python nodes, exchange announces, establish links, and transfer resources.
+rns-rs supports interoperability with Python Reticulum for exchanging announces,
+establishing links, and transferring resources. A Rust node can join a Reticulum
+network alongside Python nodes. The accepted upstream baseline, test coverage,
+and validation dates are recorded in [UPSTREAM.md](UPSTREAM.md) and the
+[upstream-parity records](docs/upstream-parity/). Those records distinguish tests
+rerun for each advancement from earlier validation; physical hardware validation
+remains unclaimed.
 
 The current wire-level protocol is described in [docs/protocol-spec.md](docs/protocol-spec.md).
 
