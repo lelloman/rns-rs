@@ -569,12 +569,12 @@ fn test_full_announce_pipeline_from_python() {
 
     for action in &actions {
         match action {
-            TransportAction::AnnounceReceived {
-                destination_hash: dh,
-                identity_hash: ih,
-                hops,
-                ..
-            } => {
+            TransportAction::AnnounceReceived(announce) => {
+                let (dh, ih, hops) = (
+                    &announce.destination_hash,
+                    &announce.identity_hash,
+                    &announce.hops,
+                );
                 assert_eq!(dh, &dest_hash, "AnnounceReceived dest_hash mismatch");
                 assert_eq!(
                     ih.as_slice(),
@@ -716,11 +716,8 @@ fn test_announce_action_includes_validated_ratchet() {
     assert!(actions.iter().any(|action| {
         matches!(
             action,
-            TransportAction::AnnounceReceived {
-                destination_hash,
-                ratchet: Some(action_ratchet),
-                ..
-            } if *destination_hash == dest_hash && *action_ratchet == ratchet
+            TransportAction::AnnounceReceived(announce)
+                if announce.destination_hash == dest_hash && announce.ratchet == Some(ratchet)
         )
     }));
 }
@@ -745,7 +742,7 @@ fn test_announce_retransmit_lifecycle() {
     assert!(
         actions
             .iter()
-            .any(|a| matches!(a, TransportAction::AnnounceReceived { .. })),
+            .any(|a| matches!(a, TransportAction::AnnounceReceived(_))),
         "Should receive announce"
     );
     assert!(harness.engine.has_path(&dest_hash));
@@ -1140,7 +1137,7 @@ fn test_duplicate_announce_allowed() {
     assert!(
         actions1
             .iter()
-            .any(|a| matches!(a, TransportAction::AnnounceReceived { .. })),
+            .any(|a| matches!(a, TransportAction::AnnounceReceived(_))),
         "First announce should be processed"
     );
 
@@ -1153,7 +1150,7 @@ fn test_duplicate_announce_allowed() {
     assert!(
         actions2
             .iter()
-            .any(|a| matches!(a, TransportAction::AnnounceReceived { .. })),
+            .any(|a| matches!(a, TransportAction::AnnounceReceived(_))),
         "Duplicate announce with newer timebase should still be processed"
     );
 }

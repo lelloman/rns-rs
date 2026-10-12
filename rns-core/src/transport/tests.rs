@@ -1338,7 +1338,7 @@ fn test_blackhole_blocks_announce() {
     // Should produce no AnnounceReceived or PathUpdated actions
     assert!(actions
         .iter()
-        .all(|a| !matches!(a, TransportAction::AnnounceReceived { .. })));
+        .all(|a| !matches!(a, TransportAction::AnnounceReceived(_))));
     assert!(actions
         .iter()
         .all(|a| !matches!(a, TransportAction::PathUpdated { .. })));
@@ -1481,7 +1481,7 @@ fn test_async_announce_completion_inserts_sig_cache_and_prevents_requeue() {
         engine.complete_verified_announce(pending, validated, sig_cache_key, 1000.0, &mut rng);
     assert!(actions
         .iter()
-        .any(|action| matches!(action, TransportAction::AnnounceReceived { .. })));
+        .any(|action| matches!(action, TransportAction::AnnounceReceived(_))));
     assert!(engine.announce_sig_cache_contains(&sig_cache_key));
 
     let actions = engine.handle_inbound_with_announce_queue(
@@ -1575,19 +1575,12 @@ type AnnounceReceivedFields = ([u8; 16], [u8; 64], [u8; 10], [u8; 10], Option<Ve
 
 fn announce_received(actions: &[TransportAction]) -> Option<AnnounceReceivedFields> {
     actions.iter().find_map(|action| match action {
-        TransportAction::AnnounceReceived {
-            identity_hash,
-            public_key,
-            name_hash,
-            random_hash,
-            app_data,
-            ..
-        } => Some((
-            *identity_hash,
-            *public_key,
-            *name_hash,
-            *random_hash,
-            app_data.clone(),
+        TransportAction::AnnounceReceived(announce) => Some((
+            announce.identity_hash,
+            announce.public_key,
+            announce.name_hash,
+            announce.random_hash,
+            announce.app_data.clone(),
         )),
         _ => None,
     })
@@ -3856,11 +3849,9 @@ fn test_pending_path_request_announce_bypasses_ingress_control() {
     assert!(actions.iter().any(|a| {
         matches!(
             a,
-            TransportAction::AnnounceReceived {
-                destination_hash,
-                receiving_interface: InterfaceId(1),
-                ..
-            } if *destination_hash == dest_hash
+            TransportAction::AnnounceReceived(announce)
+                if announce.destination_hash == dest_hash
+                    && announce.receiving_interface == InterfaceId(1)
         )
     }));
     assert!(actions.iter().any(|action| {
@@ -3953,11 +3944,9 @@ fn test_ingress_held_announce_preserves_rx_metadata_on_release() {
     let released_actions = engine.tick(10000.0 + constants::IC_BURST_PENALTY + 1.0, &mut rng);
 
     let released_rx = released_actions.iter().find_map(|action| match action {
-        TransportAction::AnnounceReceived {
-            destination_hash,
-            rx: action_rx,
-            ..
-        } if *destination_hash == dest_hash => Some(*action_rx),
+        TransportAction::AnnounceReceived(announce) if announce.destination_hash == dest_hash => {
+            Some(announce.rx)
+        }
         _ => None,
     });
 

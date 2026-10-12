@@ -276,10 +276,8 @@ impl Driver {
         if actions.iter().any(|action| {
             matches!(
                 action,
-                TransportAction::AnnounceReceived {
-                    receiving_interface,
-                    ..
-                } if *receiving_interface == interface_id
+                TransportAction::AnnounceReceived(announce)
+                    if announce.receiving_interface == interface_id
             )
         }) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
@@ -370,7 +368,7 @@ impl Driver {
             );
             if actions
                 .iter()
-                .any(|action| matches!(action, TransportAction::AnnounceReceived { .. }))
+                .any(|action| matches!(action, TransportAction::AnnounceReceived(_)))
             {
                 if let Some(entry) = self.interfaces.get_mut(&interface) {
                     entry.stats.arxc = entry.stats.arxc.saturating_add(1);

@@ -309,15 +309,11 @@ impl Driver {
                         hex(&packet_hash[..4])
                     );
                 }
-                TransportAction::AnnounceReceived {
-                    destination_hash,
-                    hops,
-                    ..
-                } => {
+                TransportAction::AnnounceReceived(announce) => {
                     log::info!(
                         "Announce received: dest={} hops={}",
-                        hex(&destination_hash[..4]),
-                        hops
+                        hex(&announce.destination_hash[..4]),
+                        announce.hops
                     );
                     if let Some(ref stats) = self.stats {
                         stats.lock().unwrap().announces += 1;

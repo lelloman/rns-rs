@@ -1063,21 +1063,23 @@ impl TransportEngine {
         }
 
         // Emit actions
-        actions.push(TransportAction::AnnounceReceived {
-            destination_hash: ctx.packet.destination_hash,
-            identity_hash: ctx.validated.identity_hash,
-            public_key: ctx.validated.public_key,
-            name_hash: ctx.validated.name_hash,
-            random_hash: ctx.validated.random_hash,
-            ratchet: ctx.validated.ratchet,
-            app_data: ctx.validated.app_data,
-            hops: ctx.packet.hops,
-            receiving_interface: ctx.iface,
-            rx: RxMetadata {
-                rssi: ctx.packet.rssi,
-                snr: ctx.packet.snr,
+        actions.push(TransportAction::AnnounceReceived(alloc::boxed::Box::new(
+            types::ReceivedAnnounce {
+                destination_hash: ctx.packet.destination_hash,
+                identity_hash: ctx.validated.identity_hash,
+                public_key: ctx.validated.public_key,
+                name_hash: ctx.validated.name_hash,
+                random_hash: ctx.validated.random_hash,
+                ratchet: ctx.validated.ratchet,
+                app_data: ctx.validated.app_data,
+                hops: ctx.packet.hops,
+                receiving_interface: ctx.iface,
+                rx: RxMetadata {
+                    rssi: ctx.packet.rssi,
+                    snr: ctx.packet.snr,
+                },
             },
-        });
+        )));
 
         actions.push(TransportAction::PathUpdated {
             destination_hash: ctx.packet.destination_hash,

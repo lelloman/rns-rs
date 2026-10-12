@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -179,6 +180,21 @@ pub struct InterfaceInfo {
     pub started: f64,
 }
 
+/// A received and validated announce, see [`TransportAction::AnnounceReceived`].
+#[derive(Debug, Clone)]
+pub struct ReceivedAnnounce {
+    pub destination_hash: [u8; 16],
+    pub identity_hash: [u8; 16],
+    pub public_key: [u8; 64],
+    pub name_hash: [u8; 10],
+    pub random_hash: [u8; 10],
+    pub ratchet: Option<[u8; 32]>,
+    pub app_data: Option<Vec<u8>>,
+    pub hops: u8,
+    pub receiving_interface: InterfaceId,
+    pub rx: RxMetadata,
+}
+
 /// Actions produced by TransportEngine for the caller to execute.
 #[derive(Debug, Clone)]
 pub enum TransportAction {
@@ -199,19 +215,9 @@ pub enum TransportAction {
         packet_hash: [u8; 32],
         receiving_interface: InterfaceId,
     },
-    /// An announce was received and validated.
-    AnnounceReceived {
-        destination_hash: [u8; 16],
-        identity_hash: [u8; 16],
-        public_key: [u8; 64],
-        name_hash: [u8; 10],
-        random_hash: [u8; 10],
-        ratchet: Option<[u8; 32]>,
-        app_data: Option<Vec<u8>>,
-        hops: u8,
-        receiving_interface: InterfaceId,
-        rx: RxMetadata,
-    },
+    /// An announce was received and validated. Boxed: it is by far the
+    /// largest action, and every action moves at its size.
+    AnnounceReceived(Box<ReceivedAnnounce>),
     /// A path was updated in the path table.
     PathUpdated {
         destination_hash: [u8; 16],

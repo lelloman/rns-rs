@@ -1084,18 +1084,19 @@ impl Driver {
                         run_packet_hooks,
                     );
                 }
-                TransportAction::AnnounceReceived {
-                    destination_hash,
-                    identity_hash,
-                    public_key,
-                    name_hash,
-                    ratchet,
-                    app_data,
-                    hops,
-                    receiving_interface,
-                    rx,
-                    ..
-                } => {
+                TransportAction::AnnounceReceived(announce) => {
+                    let ReceivedAnnounce {
+                        destination_hash,
+                        identity_hash,
+                        public_key,
+                        name_hash,
+                        ratchet,
+                        app_data,
+                        hops,
+                        receiving_interface,
+                        rx,
+                        ..
+                    } = *announce;
                     #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Announce {

@@ -257,18 +257,19 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
     app_data.extend_from_slice(&packed);
     app_data.extend_from_slice(&[0; crate::discovery::STAMP_SIZE]);
 
-    let announce = TransportAction::AnnounceReceived {
-        destination_hash: [0x31; 16],
-        identity_hash: [0x32; 16],
-        public_key: [0x33; 64],
-        name_hash: driver.discovery_name_hash,
-        random_hash: [0x34; 10],
-        ratchet: None,
-        app_data: Some(app_data.clone()),
-        hops: 1,
-        receiving_interface: InterfaceId(9),
-        rx: rns_core::transport::RxMetadata::default(),
-    };
+    let announce =
+        TransportAction::AnnounceReceived(Box::new(rns_core::transport::types::ReceivedAnnounce {
+            destination_hash: [0x31; 16],
+            identity_hash: [0x32; 16],
+            public_key: [0x33; 64],
+            name_hash: driver.discovery_name_hash,
+            random_hash: [0x34; 10],
+            ratchet: None,
+            app_data: Some(app_data.clone()),
+            hops: 1,
+            receiving_interface: InterfaceId(9),
+            rx: rns_core::transport::RxMetadata::default(),
+        }));
 
     driver.dispatch_all(vec![announce.clone()]);
     assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
@@ -345,18 +346,20 @@ fn dispatch_announce_received_persists_ratchet() {
     let ratchet = [0x55; 32];
 
     driver.dispatch_all(vec![
-        rns_core::transport::types::TransportAction::AnnounceReceived {
-            destination_hash: dest_hash,
-            identity_hash: [0x66; 16],
-            public_key: [0x77; 64],
-            name_hash: [0x88; 10],
-            random_hash: [0x99; 10],
-            ratchet: Some(ratchet),
-            app_data: None,
-            hops: 1,
-            receiving_interface: InterfaceId(1),
-            rx: rns_core::transport::RxMetadata::default(),
-        },
+        rns_core::transport::types::TransportAction::AnnounceReceived(Box::new(
+            rns_core::transport::types::ReceivedAnnounce {
+                destination_hash: dest_hash,
+                identity_hash: [0x66; 16],
+                public_key: [0x77; 64],
+                name_hash: [0x88; 10],
+                random_hash: [0x99; 10],
+                ratchet: Some(ratchet),
+                app_data: None,
+                hops: 1,
+                receiving_interface: InterfaceId(1),
+                rx: rns_core::transport::RxMetadata::default(),
+            },
+        )),
     ]);
 
     let remembered = store.remembered.lock().unwrap();

@@ -21,7 +21,7 @@ type BackboneCandidateOrder = (
 use rns_core::packet::RawPacket;
 use rns_core::transport::announce_verify_queue::{AnnounceVerifyQueue, OverflowPolicy};
 use rns_core::transport::tables::PathEntry;
-use rns_core::transport::types::{InterfaceId, TransportAction, TransportConfig};
+use rns_core::transport::types::{InterfaceId, ReceivedAnnounce, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
 
@@ -577,7 +577,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     app_data,
                     hops,
                     receiving_interface,
-                } => TransportAction::AnnounceReceived {
+                } => TransportAction::AnnounceReceived(Box::new(ReceivedAnnounce {
                     destination_hash,
                     identity_hash,
                     public_key,
@@ -588,7 +588,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     hops,
                     receiving_interface: InterfaceId(receiving_interface),
                     rx: rns_core::transport::RxMetadata::default(),
-                },
+                })),
             }
         })
         .collect()
