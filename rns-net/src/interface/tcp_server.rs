@@ -356,9 +356,20 @@ impl LoopSource for ClientSource {
         self.active_connections.fetch_sub(1, Ordering::Relaxed);
     }
 
+    fn on_abandoned(&mut self) {
+        // The driver was told about this client; it will never be read.
+        let _ = self.tx.push_from_loop([Event::InterfaceDown(self.id)]);
+        self.on_removed();
+    }
+
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
         if self.control.should_stop() {
             return SourceStatus::Remove;
+        }
+        // Read nothing while inbound data is full, so data queued past
+        // capacity is bounded by one read per client.
+        if !self.tx.inbound_data_has_room() {
+            return SourceStatus::Suspend;
         }
         let mut read = 0;
         while read < CLIENT_READ_BUDGET {
@@ -875,6 +886,21 @@ mod tests {
         }
         let _client = writer.join().unwrap();
         assert_eq!(snapshot_tx.inbound_queue_snapshot().dropped, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn dropping_the_receiver_closes_the_listener() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        start(
+            make_server_config(port, 6, None),
+            tx,
+            Arc::new(AtomicU64::new(6000)),
+        )
+        .unwrap();
+        drop(rx);
+        let refused = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::ConnectionRefused);
     }
 
     #[test]

@@ -95,6 +95,11 @@ pub(crate) trait LoopSource: Send {
     }
     /// Called once when the source is removed, before it is dropped.
     fn on_removed(&mut self) {}
+    /// Called instead of [`LoopSource::on_removed`] when a source handed to
+    /// [`LoopContext::add_source`] could not be registered at all.
+    fn on_abandoned(&mut self) {
+        self.on_removed();
+    }
 }
 
 /// What to do with a source after [`LoopSource::on_ready`].
@@ -245,11 +250,30 @@ impl QueueShared {
         key: usize,
         source: Box<dyn LoopSource>,
     ) -> std::io::Result<()> {
+        self.try_add_source(registry, key, source)
+            .map_err(|(error, _)| error)
+    }
+
+    /// Like `add_source`, handing the source back if it was not registered.
+    #[allow(clippy::type_complexity)]
+    fn try_add_source(
+        &self,
+        registry: &mut SourceRegistry,
+        key: usize,
+        source: Box<dyn LoopSource>,
+    ) -> Result<(), (std::io::Error, Box<dyn LoopSource>)> {
         // SAFETY: the source owns the descriptor and is deleted from the
         // poller before it is dropped (see `remove_source`).
-        unsafe { self.poller.add(source.fd(), polling::Event::readable(key)) }?;
+        if let Err(error) = unsafe { self.poller.add(source.fd(), polling::Event::readable(key)) } {
+            return Err((error, source));
+        }
         registry.sources.insert(key, source);
         Ok(())
+    }
+
+    fn data_has_room(&self, state: &QueueState) -> bool {
+        let data = QueueClass::Data as usize;
+        state.inbound[data].len() < self.inbound_capacities[data]
     }
 
     fn remove_source(&self, mut source: Box<dyn LoopSource>) {
@@ -420,10 +444,15 @@ impl EventSender {
             }
             state.next_sequence = state.next_sequence.wrapping_add(1);
         }
-        let data = QueueClass::Data as usize;
-        let room = state.inbound[data].len() < self.shared.inbound_capacities[data];
+        let room = self.shared.data_has_room(&state);
         self.shared.notify_change(&state, false);
         Ok(room)
+    }
+
+    /// Whether inbound data has room; loop sources check before reading.
+    pub(crate) fn inbound_data_has_room(&self) -> bool {
+        let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.shared.data_has_room(&state)
     }
 
     pub(crate) fn local_ratchets(&self) -> &crate::local_ratchet::Registry {
@@ -741,6 +770,21 @@ impl Drop for EventReceiver {
         self.shared.changed.notify_all();
         self.shared.link_sends.close();
         self.shared.wake_async_senders();
+        // Nothing serves the sources any more. Close their sockets, and drop
+        // the senders they hold, which would otherwise keep this queue (and
+        // them) alive forever through the registry.
+        let sources: Vec<_> = {
+            let mut registry = self
+                .shared
+                .sources
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            registry.suspended.clear();
+            registry.sources.drain().map(|(_, source)| source).collect()
+        };
+        for source in sources {
+            self.shared.remove_source(source);
+        }
     }
 }
 
@@ -818,6 +862,24 @@ impl EventReceiver {
         result
     }
 
+    /// Collect ready sources without blocking or parking, for a receiver
+    /// that still has queued events: sources must not starve while other
+    /// threads keep the queue busy. Suspended sources resume only once
+    /// inbound data has room again.
+    pub(crate) fn poll_ready(&self, ready: &mut polling::Events) -> std::io::Result<()> {
+        let room = {
+            let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+            self.shared.data_has_room(&state)
+        };
+        if room {
+            self.resume_suspended();
+        }
+        self.shared
+            .poller
+            .wait(ready, Some(Duration::ZERO))
+            .map(|_| ())
+    }
+
     /// Sources suspended because inbound data was full read again once the
     /// receiver is about to wait, i.e. has drained the queue.
     fn resume_suspended(&self) {
@@ -870,8 +932,9 @@ impl EventReceiver {
             }
         }
         for (key, source) in std::mem::take(&mut cx.added) {
-            if let Err(error) = self.shared.add_source(registry, key, source) {
+            if let Err((error, mut source)) = self.shared.try_add_source(registry, key, source) {
                 log::warn!("failed to register a loop source: {error}");
+                source.on_abandoned();
             }
         }
     }
@@ -1446,6 +1509,127 @@ mod tests {
             done.recv_timeout(Duration::from_millis(50)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         ));
+    }
+
+    /// A loop source over one end of a socket pair: every readable byte
+    /// becomes a Tick; `spawn` makes it add an unregistrable child.
+    struct PairSource {
+        stream: std::os::unix::net::UnixStream,
+        tx: EventSender,
+        spawn: bool,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct BadFdSource(Arc<Mutex<Vec<&'static str>>>);
+
+    impl LoopSource for BadFdSource {
+        fn fd(&self) -> std::os::fd::RawFd {
+            // Not an open descriptor: registration fails with EBADF.
+            999_999
+        }
+        fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
+            unreachable!("never registered")
+        }
+        fn on_abandoned(&mut self) {
+            self.0.lock().unwrap().push("abandoned");
+        }
+    }
+
+    impl LoopSource for PairSource {
+        fn fd(&self) -> std::os::fd::RawFd {
+            std::os::fd::AsRawFd::as_raw_fd(&self.stream)
+        }
+        fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+            use std::io::Read;
+            self.stream.set_nonblocking(true).unwrap();
+            match self.stream.read(cx.buf) {
+                Ok(0) => SourceStatus::Remove,
+                Ok(n) => {
+                    self.events.lock().unwrap().push("read");
+                    self.tx.push_from_loop((0..n).map(|_| Event::Tick)).unwrap();
+                    if std::mem::take(&mut self.spawn) {
+                        cx.add_source(99, Box::new(BadFdSource(Arc::clone(&self.events))));
+                    }
+                    SourceStatus::Rearm
+                }
+                Err(_) => SourceStatus::Rearm,
+            }
+        }
+        fn on_removed(&mut self) {
+            self.events.lock().unwrap().push("removed");
+        }
+    }
+
+    fn pair_source(
+        tx: &EventSender,
+        spawn: bool,
+    ) -> (
+        std::os::unix::net::UnixStream,
+        Arc<Mutex<Vec<&'static str>>>,
+    ) {
+        let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        tx.register_source(
+            2,
+            Box::new(PairSource {
+                stream: ours,
+                tx: tx.clone(),
+                spawn,
+                events: Arc::clone(&events),
+            }),
+        )
+        .unwrap();
+        (theirs, events)
+    }
+
+    #[test]
+    fn sources_are_polled_while_the_queue_is_still_busy() {
+        use std::io::Write;
+        let (tx, rx) = channel();
+        let (mut peer, events) = pair_source(&tx, false);
+        tx.send(Event::Tick).unwrap();
+        peer.write_all(&[1, 2, 3]).unwrap();
+        // The queue is not empty, so `wait` would return without polling.
+        let mut ready = polling::Events::new();
+        rx.poll_ready(&mut ready).unwrap();
+        rx.serve_sources(&ready);
+        assert_eq!(*events.lock().unwrap(), ["read"]);
+        let mut ticks = 0;
+        while rx.try_recv_classified().unwrap().is_some() {
+            ticks += 1;
+        }
+        assert_eq!(ticks, 1 + 3);
+    }
+
+    #[test]
+    fn a_source_that_cannot_be_registered_is_abandoned() {
+        use std::io::Write;
+        let (tx, rx) = channel();
+        let (mut peer, events) = pair_source(&tx, true);
+        peer.write_all(&[1]).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(Event::Tick)
+        ));
+        assert_eq!(*events.lock().unwrap(), ["read", "abandoned"]);
+    }
+
+    #[test]
+    fn dropping_the_receiver_closes_sources_and_releases_their_senders() {
+        let (tx, rx) = channel();
+        let (peer, events) = pair_source(&tx, false);
+        let shared = std::sync::Arc::downgrade(&tx.shared);
+        drop(tx);
+        drop(rx);
+        assert_eq!(*events.lock().unwrap(), ["removed"]);
+        // The source's end was closed.
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut byte = [0u8; 1];
+        assert_eq!(std::io::Read::read(&mut &peer, &mut byte).unwrap(), 0);
+        assert!(
+            shared.upgrade().is_none(),
+            "the queue leaked through its sources"
+        );
     }
 
     #[test]

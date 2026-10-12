@@ -1,8 +1,8 @@
 use super::*;
 use rns_core::transport::{DecodedInboundFrame, DecodedPacket, RxMetadata};
 
-/// Events the driver handles before flushing driver-run writers even though
-/// its queue has not emptied yet.
+/// Events the driver handles before flushing driver-run writers and polling
+/// its sockets even though its queue has not emptied yet.
 const WRITER_FLUSH_EVENTS: usize = 1024;
 
 impl Driver {
@@ -991,11 +991,17 @@ impl Driver {
                 }
                 Err(_) => break, // all senders dropped
             };
-            // Bound output latency while other threads keep the queue full.
+            // Bound output latency, and keep serving sockets, while other
+            // threads keep the queue from emptying.
             unflushed += 1;
             if unflushed >= WRITER_FLUSH_EVENTS {
                 self.flush_writers();
                 unflushed = 0;
+                ready.clear();
+                match self.rx.poll_ready(&mut ready) {
+                    Ok(()) => self.handle_ready_sources(&ready),
+                    Err(error) => log::warn!("driver poll failed: {error}"),
+                }
             }
 
             match received.event {
