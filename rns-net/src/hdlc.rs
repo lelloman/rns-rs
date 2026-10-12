@@ -81,35 +81,24 @@ pub fn frame(data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn unescape(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let mut offset = 0;
-    while let Some(relative) = memchr::memchr(ESC, &data[offset..]) {
-        let index = offset + relative;
-        out.extend_from_slice(&data[offset..index]);
-        match data.get(index + 1).copied() {
-            Some(byte) if byte == FLAG ^ ESC_MASK || byte == ESC ^ ESC_MASK => {
-                out.push(byte ^ ESC_MASK);
-                offset = index + 2;
-            }
-            _ => {
-                // Unknown escapes and a trailing ESC remain literal.
-                out.push(ESC);
-                offset = index + 1;
-            }
-        }
-    }
-    out.extend_from_slice(&data[offset..]);
-    out
-}
-
 /// Streaming HDLC frame decoder.
 ///
 /// Accumulates bytes via `feed()` and yields complete decoded frames.
 /// Matches the decode loop in `TCPInterface.py:381-394`.
+///
+/// Bytes are unescaped straight from each fed chunk into the frame being
+/// received, in one pass that stops at every FLAG or ESC, so a frame spread
+/// over many reads is never copied or scanned again.
 pub struct Decoder {
-    buffer: Vec<u8>,
-    offset: usize,
+    /// Unescaped bytes of the frame after the last opening FLAG.
+    frame: Vec<u8>,
+    /// An opening FLAG was seen and its frame has not ended.
+    in_frame: bool,
+    /// The last byte fed inside the frame was an ESC.
+    escape_pending: bool,
+    /// Wire bytes held since the last frame boundary: any bytes before the
+    /// first opening FLAG, that FLAG, and the encoded frame so far.
+    pending_wire_len: usize,
     min_frame_size: usize,
     max_frame_size: Option<usize>,
     max_buffer_size: usize,
@@ -134,8 +123,10 @@ impl Decoder {
 
     pub fn with_limits(min_frame_size: usize, max_buffer_size: usize) -> Self {
         Decoder {
-            buffer: Vec::new(),
-            offset: 0,
+            frame: Vec::new(),
+            in_frame: false,
+            escape_pending: false,
+            pending_wire_len: 0,
             min_frame_size,
             max_frame_size: None,
             max_buffer_size: max_buffer_size.max(2),
@@ -149,8 +140,10 @@ impl Decoder {
     /// unterminated encoded tail is retained up to twice the hardware MTU.
     pub fn reticulum(hardware_mtu: usize, ifac_size: usize) -> Self {
         Decoder {
-            buffer: Vec::new(),
-            offset: 0,
+            frame: Vec::new(),
+            in_frame: false,
+            escape_pending: false,
+            pending_wire_len: 0,
             min_frame_size: HEADER_MINSIZE.saturating_add(1),
             max_frame_size: Some(hardware_mtu.saturating_add(ifac_size)),
             max_buffer_size: hardware_mtu.saturating_mul(2).max(2),
@@ -165,57 +158,79 @@ impl Decoder {
     /// Feed raw bytes and retain the decoded lengths of non-empty frames that
     /// were rejected by the configured minimum or maximum.
     pub fn feed_with_diagnostics(&mut self, chunk: &[u8]) -> DecodeBatch {
-        self.buffer.extend_from_slice(chunk);
         let mut decoded = DecodeBatch::default();
-
+        let mut rest = chunk;
         loop {
-            // Find first FLAG in the unconsumed tail.
-            let start = match memchr::memchr(FLAG, &self.buffer[self.offset..]) {
-                Some(pos) => self.offset + pos,
-                None => {
-                    // No FLAG found, discard buffer.
-                    self.buffer.clear();
-                    self.offset = 0;
+            if !self.in_frame {
+                // Bytes before the first FLAG are held with the frame it
+                // opens; without a FLAG they are discarded.
+                let Some(start) = memchr::memchr(FLAG, rest) else {
+                    self.pending_wire_len = 0;
+                    return decoded;
+                };
+                self.pending_wire_len = start + 1;
+                self.in_frame = true;
+                rest = &rest[start + 1..];
+            }
+            if self.escape_pending {
+                let Some(&byte) = rest.first() else {
                     break;
+                };
+                self.escape_pending = false;
+                if byte == FLAG ^ ESC_MASK || byte == ESC ^ ESC_MASK {
+                    self.frame.push(byte ^ ESC_MASK);
+                    self.pending_wire_len += 1;
+                    rest = &rest[1..];
+                    continue;
                 }
+                // Unknown escapes and an ESC before the closing FLAG remain
+                // literal; the following byte is decoded on its own.
+                self.frame.push(ESC);
+            }
+            let Some(index) = memchr::memchr2(FLAG, ESC, rest) else {
+                self.frame.extend_from_slice(rest);
+                self.pending_wire_len += rest.len();
+                break;
             };
+            self.frame.extend_from_slice(&rest[..index]);
+            if rest[index] == ESC {
+                self.escape_pending = true;
+                self.pending_wire_len += index + 1;
+                rest = &rest[index + 1..];
+                continue;
+            }
+            // The closing FLAG also opens the next frame.
+            self.finish_frame(&mut decoded);
+            self.pending_wire_len = 1;
+            rest = &rest[index + 1..];
+        }
+        if self.pending_wire_len > self.max_buffer_size {
+            self.in_frame = false;
+            self.escape_pending = false;
+            self.pending_wire_len = 0;
+            self.frame.clear();
+        }
+        decoded
+    }
 
-            // Find second FLAG after the opening marker.
-            let end = match memchr::memchr(FLAG, &self.buffer[start + 1..]) {
-                Some(pos) => start + 1 + pos,
-                None => {
-                    if self.buffer.len() - self.offset > self.max_buffer_size {
-                        self.buffer.clear();
-                        self.offset = 0;
-                    }
-                    break;
-                }
-            };
-
-            // Extract bytes between the two FLAGs
-            let between = &self.buffer[start + 1..end];
-            let unescaped = unescape(between);
-
-            let frame_len = unescaped.len();
-            let within_maximum = self
-                .max_frame_size
-                .is_none_or(|max_frame_size| frame_len <= max_frame_size);
-            if frame_len >= self.min_frame_size && within_maximum {
-                decoded.frames.push(unescaped);
-            } else if frame_len != 0 {
+    fn finish_frame(&mut self, decoded: &mut DecodeBatch) {
+        let frame_len = self.frame.len();
+        let within_maximum = self
+            .max_frame_size
+            .is_none_or(|max_frame_size| frame_len <= max_frame_size);
+        if frame_len >= self.min_frame_size && within_maximum {
+            // Successive frames tend to be alike in size: start the next one
+            // with this one's capacity.
+            let next = Vec::with_capacity(frame_len);
+            decoded
+                .frames
+                .push(core::mem::replace(&mut self.frame, next));
+        } else {
+            if frame_len != 0 {
                 decoded.invalid_frame_lengths.push(frame_len);
             }
-
-            // Keep the closing FLAG as the next opening marker. Avoid a
-            // front-drain per frame; compact only after consuming half.
-            self.offset = end;
-            if self.offset > 0 && self.offset >= self.buffer.len() / 2 {
-                self.buffer.drain(..self.offset);
-                self.offset = 0;
-            }
+            self.frame.clear();
         }
-
-        decoded
     }
 }
 
@@ -379,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn decoder_defers_compaction_until_consumed_prefix_reaches_half() {
+    fn decoder_holds_only_the_frame_after_the_last_boundary() {
         let first = vec![0x31; 32];
         let second = vec![0x42; 200];
         let mut stream = frame(&first);
@@ -387,12 +402,24 @@ mod tests {
         let mut decoder = Decoder::with_limits(HEADER_MINSIZE, 1024);
 
         assert_eq!(decoder.feed(&stream), vec![first]);
-        assert!(decoder.offset > 0);
-        assert!(decoder.buffer.len() - decoder.offset > decoder.offset);
+        assert_eq!(decoder.pending_wire_len, 1 + second.len());
+        assert_eq!(decoder.frame, second);
 
         assert_eq!(decoder.feed(&[FLAG]), vec![second]);
-        assert_eq!(decoder.buffer, vec![FLAG]);
-        assert_eq!(decoder.offset, 0);
+        assert_eq!(decoder.pending_wire_len, 1);
+        assert!(decoder.frame.is_empty());
+    }
+
+    #[test]
+    fn escape_split_across_feeds_decodes_like_a_single_feed() {
+        let payload: Vec<u8> = (0..=255u8).cycle().take(600).collect();
+        let wire = frame(&payload);
+        for split in 1..wire.len() {
+            let mut decoder = Decoder::with_limits(HEADER_MINSIZE, 4096);
+            let mut frames = decoder.feed(&wire[..split]);
+            frames.extend(decoder.feed(&wire[split..]));
+            assert_eq!(frames, vec![payload.clone()], "split at {split}");
+        }
     }
 
     #[test]
@@ -469,7 +496,7 @@ mod tests {
         let first = decoder.feed_with_diagnostics(&encoded[..split]);
         assert!(first.frames.is_empty());
         assert!(first.invalid_frame_lengths.is_empty());
-        assert_eq!(decoder.buffer.len(), split);
+        assert_eq!(decoder.pending_wire_len, split);
 
         let second = decoder.feed_with_diagnostics(&encoded[split..]);
         assert_eq!(second.frames, vec![payload]);
@@ -484,10 +511,10 @@ mod tests {
         exact_limit.extend(vec![0x22; hardware_mtu * 2 - 1]);
 
         assert!(decoder.feed(&exact_limit).is_empty());
-        assert_eq!(decoder.buffer.len(), hardware_mtu * 2);
+        assert_eq!(decoder.pending_wire_len, hardware_mtu * 2);
 
         assert!(decoder.feed(&[0x22]).is_empty());
-        assert!(decoder.buffer.is_empty());
+        assert_eq!(decoder.pending_wire_len, 0);
 
         let payload = vec![0x44; HEADER_MINSIZE + 1];
         assert_eq!(decoder.feed(&frame(&payload)), vec![payload]);
