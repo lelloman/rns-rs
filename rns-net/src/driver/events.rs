@@ -974,6 +974,7 @@ impl Driver {
                     if let Err(error) = self.rx.wait(&mut ready, None) {
                         log::warn!("driver wait failed: {error}");
                     }
+                    self.handle_ready_sources(&ready);
                     continue;
                 }
                 Err(_) => break, // all senders dropped

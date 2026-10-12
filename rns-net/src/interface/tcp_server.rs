@@ -88,6 +88,10 @@ impl Writer for TcpServerWriter {
     fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         hdlc::write_frames(&mut self.stream, frames, &mut self.scratch)
     }
+
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
+        Some(self.stream.as_raw_fd())
+    }
 }
 
 /// Start a TCP server. Spawns a listener thread that accepts connections

@@ -103,6 +103,10 @@ impl Writer for TcpWriter {
     fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         hdlc::write_frames(&mut self.stream, frames, &mut self.scratch)
     }
+
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
+        Some(self.stream.as_raw_fd())
+    }
 }
 
 /// Set TCP keepalive and timeout socket options (Linux).

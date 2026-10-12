@@ -274,6 +274,12 @@ impl Drop for EventSender {
 }
 
 impl EventSender {
+    /// The poller the receiver waits in; sources registered on it wake the
+    /// receiver like a queued event does.
+    pub(crate) fn poller(&self) -> &Arc<polling::Poller> {
+        &self.shared.poller
+    }
+
     pub(crate) fn local_ratchets(&self) -> &crate::local_ratchet::Registry {
         &self.shared.local_ratchets
     }

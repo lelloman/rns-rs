@@ -354,6 +354,19 @@ impl Driver {
         }
     }
 
+    /// Serve sockets the driver poller reported ready: writers that had
+    /// bytes left over continue writing.
+    pub(crate) fn handle_ready_sources(&mut self, ready: &polling::Events) {
+        for event in ready.iter() {
+            let (interface, is_write) = crate::interface::loop_writer::key_target(event.key);
+            if is_write && event.writable {
+                if let Some(entry) = self.interfaces.get_mut(&interface) {
+                    entry.writer.wake();
+                }
+            }
+        }
+    }
+
     /// Wake writers left asleep by deferred forwarding sends.
     pub(crate) fn wake_writers(&mut self) {
         for id in std::mem::take(&mut self.writers_to_wake) {

@@ -12,6 +12,7 @@ pub mod i2p;
 pub mod kiss_iface;
 #[cfg(feature = "iface-local")]
 pub mod local;
+pub(crate) mod loop_writer;
 #[cfg(feature = "iface-pipe")]
 pub mod pipe;
 pub mod registry;
@@ -294,6 +295,13 @@ pub trait Writer: Send {
     /// Share an exact byte admission budget with the async producer when this
     /// writer uses dataplane egress control.
     fn egress_control(&self) -> Option<EgressControl> {
+        None
+    }
+
+    /// A stream socket the driver may write directly, without a worker
+    /// thread (see `loop_writer`). Writers returning one must only frame
+    /// with HDLC and write the result to this descriptor.
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
         None
     }
 
@@ -969,6 +977,9 @@ pub fn wrap_async_writer(
     event_tx: EventSender,
     queue_capacity: usize,
 ) -> (Box<dyn Writer>, AsyncWriterMetrics) {
+    if let Some(fd) = writer.loop_socket() {
+        return loop_writer::wrap(writer, fd, interface_id, interface_name, event_tx);
+    }
     let egress_control = writer.egress_control();
     let queue = WriterQueue::new(queue_capacity);
     let (tx, rx) = (WriterTx(Arc::clone(&queue)), queue);
