@@ -148,7 +148,7 @@ impl Driver {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
                 hops: if packet.len() > 1 { packet[1] } else { 0 },
-                destination_hash: extract_dest_hash(&packet),
+                destination_hash: extract_dest_hash(packet),
                 context: 0,
                 packet_hash: [0; 32],
                 interface_id: interface_id.0,
