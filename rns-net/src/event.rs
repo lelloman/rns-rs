@@ -1452,6 +1452,7 @@ mod tests {
             let tx = tx.clone();
             std::thread::spawn(move || {
                 tx.send(frame(2, [0xD2; 16], rns_core::constants::PACKET_TYPE_DATA))
+                    .map_err(|_| ())
             })
         };
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1499,6 +1500,7 @@ mod tests {
             let tx = tx.clone();
             std::thread::spawn(move || {
                 tx.send(frame(2, [0xD2; 16], rns_core::constants::PACKET_TYPE_DATA))
+                    .map_err(|_| ())
             })
         };
         std::thread::sleep(std::time::Duration::from_millis(20));

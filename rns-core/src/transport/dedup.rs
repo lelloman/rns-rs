@@ -578,7 +578,7 @@ mod tests {
                     }
                     assert_eq!(list.len(), model.len());
                     assert_eq!(list.is_duplicate(&key), model.contains(&key));
-                    if rng % 97 == 0 {
+                    if rng.is_multiple_of(97) {
                         for retained in &model {
                             assert!(list.is_duplicate(retained));
                         }
