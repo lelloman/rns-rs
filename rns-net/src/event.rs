@@ -110,6 +110,10 @@ pub(crate) enum SourceStatus {
     /// Stop reading until the receiver has drained the queue (inbound data
     /// is full); transport flow control then slows the sender.
     Suspend,
+    /// Stop reading until the next tick-time
+    /// [`EventReceiver::resume_paused_sources`], e.g. after an error that
+    /// readiness alone would report again at once.
+    Pause,
     /// Deregister and drop the source.
     Remove,
 }
@@ -134,6 +138,8 @@ const LOOP_READ_BUFFER: usize = 64 * 1024;
 struct SourceRegistry {
     sources: HashMap<usize, Box<dyn LoopSource>>,
     suspended: Vec<usize>,
+    /// Sources waiting for the next tick-time resume.
+    paused: Vec<usize>,
     buf: Vec<u8>,
 }
 
@@ -780,6 +786,7 @@ impl Drop for EventReceiver {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
             registry.suspended.clear();
+            registry.paused.clear();
             registry.sources.drain().map(|(_, source)| source).collect()
         };
         for source in sources {
@@ -928,6 +935,10 @@ impl EventReceiver {
                     registry.suspended.push(event.key);
                     registry.sources.insert(event.key, source);
                 }
+                SourceStatus::Pause => {
+                    registry.paused.push(event.key);
+                    registry.sources.insert(event.key, source);
+                }
                 SourceStatus::Remove => self.shared.remove_source(source),
             }
         }
@@ -954,8 +965,25 @@ impl EventReceiver {
             .collect();
         for key in stopped {
             registry.suspended.retain(|suspended| *suspended != key);
+            registry.paused.retain(|paused| *paused != key);
             if let Some(source) = registry.sources.remove(&key) {
                 self.shared.remove_source(source);
+            }
+        }
+    }
+
+    /// Watch sources paused by [`SourceStatus::Pause`] again. Called once
+    /// per tick, so a paused source stays idle for about a second.
+    pub(crate) fn resume_paused_sources(&self) {
+        let mut registry = self
+            .shared
+            .sources
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let registry = &mut *registry;
+        for key in registry.paused.drain(..) {
+            if let Some(source) = registry.sources.get(&key) {
+                self.shared.arm_source(key, source.as_ref());
             }
         }
     }
@@ -1599,6 +1627,107 @@ mod tests {
             ticks += 1;
         }
         assert_eq!(ticks, 1 + 3);
+    }
+
+    /// A loop source that never reads its socket and pauses on every pass,
+    /// so the socket stays readable; counts how often it is served.
+    struct PausingSource {
+        stream: std::os::unix::net::UnixStream,
+        served: Arc<Mutex<usize>>,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl LoopSource for PausingSource {
+        fn fd(&self) -> std::os::fd::RawFd {
+            std::os::fd::AsRawFd::as_raw_fd(&self.stream)
+        }
+        fn stopped(&self) -> bool {
+            self.stop.load(Ordering::Relaxed)
+        }
+        fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
+            *self.served.lock().unwrap() += 1;
+            SourceStatus::Pause
+        }
+        fn on_removed(&mut self) {
+            self.events.lock().unwrap().push("removed");
+        }
+    }
+
+    struct PausingPair {
+        peer: std::os::unix::net::UnixStream,
+        served: Arc<Mutex<usize>>,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    fn pausing_source(tx: &EventSender) -> PausingPair {
+        use std::io::Write;
+        let (ours, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let served = Arc::new(Mutex::new(0));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        tx.register_source(
+            7,
+            Box::new(PausingSource {
+                stream: ours,
+                served: Arc::clone(&served),
+                stop: Arc::clone(&stop),
+                events: Arc::clone(&events),
+            }),
+        )
+        .unwrap();
+        peer.write_all(&[1]).unwrap();
+        PausingPair {
+            peer,
+            served,
+            stop,
+            events,
+        }
+    }
+
+    fn serve_once(rx: &EventReceiver) {
+        let mut ready = polling::Events::new();
+        rx.wait(&mut ready, Some(Duration::from_millis(20)))
+            .unwrap();
+        rx.serve_sources(&ready);
+    }
+
+    #[test]
+    fn a_paused_source_is_served_again_only_after_the_tick_resume() {
+        let (tx, rx) = channel();
+        let pair = pausing_source(&tx);
+        serve_once(&rx);
+        assert_eq!(*pair.served.lock().unwrap(), 1);
+        // Still readable, but neither waiting (which resumes suspended
+        // sources) nor polling serves it while paused.
+        serve_once(&rx);
+        let mut ready = polling::Events::new();
+        rx.poll_ready(&mut ready).unwrap();
+        rx.serve_sources(&ready);
+        rx.sweep_stopped_sources();
+        serve_once(&rx);
+        assert_eq!(*pair.served.lock().unwrap(), 1);
+
+        rx.resume_paused_sources();
+        serve_once(&rx);
+        assert_eq!(*pair.served.lock().unwrap(), 2);
+        drop(pair.peer);
+    }
+
+    #[test]
+    fn a_paused_source_that_stops_is_closed_at_the_next_sweep() {
+        let (tx, rx) = channel();
+        let pair = pausing_source(&tx);
+        serve_once(&rx);
+        assert_eq!(*pair.served.lock().unwrap(), 1);
+        pair.stop.store(true, Ordering::Relaxed);
+        rx.sweep_stopped_sources();
+        assert_eq!(*pair.events.lock().unwrap(), ["removed"]);
+        // Resuming afterwards finds nothing to re-arm.
+        rx.resume_paused_sources();
+        serve_once(&rx);
+        assert_eq!(*pair.served.lock().unwrap(), 1);
     }
 
     #[test]

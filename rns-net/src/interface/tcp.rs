@@ -109,8 +109,10 @@ impl Writer for TcpWriter {
     }
 }
 
-/// Set TCP keepalive and timeout socket options (Linux).
-fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
+/// Set TCP_NODELAY, keepalive and (on Linux) keepalive tuning and user
+/// timeout options. Shared by outbound client sockets and sockets accepted
+/// by the TCP server.
+pub(crate) fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
     let fd = stream.as_raw_fd();
     unsafe {
         // TCP_NODELAY = 1

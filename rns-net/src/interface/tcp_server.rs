@@ -193,12 +193,23 @@ impl LoopSource for ListenerSource {
         for _ in 0..ACCEPT_BURST {
             let stream = match self.listener.accept() {
                 Ok((stream, _)) => stream,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    log::warn!("[{}] accept failed: {}", self.name, e);
-                    break;
-                }
+                Err(e) => match accept_error_step(&e) {
+                    AcceptStep::Drained => break,
+                    AcceptStep::Next => {
+                        log::debug!("[{}] accept failed: {}", self.name, e);
+                        continue;
+                    }
+                    AcceptStep::Pause => {
+                        // The pending connection stays queued, so the
+                        // listener would be ready again at once.
+                        log::warn!(
+                            "[{}] accept failed: {}; accepting resumes on the next tick",
+                            self.name,
+                            e
+                        );
+                        return SourceStatus::Pause;
+                    }
+                },
             };
             match self.admit(stream) {
                 Admitted::Client(id, source) => {
@@ -209,6 +220,34 @@ impl LoopSource for ListenerSource {
             }
         }
         SourceStatus::Rearm
+    }
+}
+
+/// What the accept loop does after `accept` returns an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcceptStep {
+    /// No connection is pending: wait for readiness.
+    Drained,
+    /// The error concerned one pending connection only: try the next one.
+    Next,
+    /// The error is likely to persist (e.g. out of descriptors or memory):
+    /// stop watching the listener until the next tick.
+    Pause,
+}
+
+fn accept_error_step(error: &io::Error) -> AcceptStep {
+    match error.kind() {
+        io::ErrorKind::WouldBlock => AcceptStep::Drained,
+        io::ErrorKind::Interrupted
+        | io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::NetworkDown
+        | io::ErrorKind::NetworkUnreachable
+        | io::ErrorKind::HostUnreachable => AcceptStep::Next,
+        // Linux reports some network errors of a pending connection
+        // through accept; they concern that connection only.
+        _ if error.raw_os_error() == Some(libc::EPROTO) => AcceptStep::Next,
+        _ => AcceptStep::Pause,
     }
 }
 
@@ -228,6 +267,17 @@ impl ListenerSource {
                 error
             );
             return Admitted::Rejected;
+        }
+
+        // Keepalive and user timeout notice a peer that went silent or
+        // stopped reading; both descriptors of the client share them.
+        if let Err(error) = super::tcp::set_socket_options(&stream) {
+            log::warn!(
+                "[{}] failed to set socket options for {:?}: {}",
+                name,
+                stream.peer_addr().ok(),
+                error
+            );
         }
 
         let max_connections = lock_or_recover(&self.runtime, "tcp server runtime").max_connections;
@@ -253,11 +303,6 @@ impl ListenerSource {
             peer_addr,
             client_id.0
         );
-
-        // Set TCP_NODELAY on the client socket
-        if let Err(e) = stream.set_nodelay(true) {
-            log::warn!("[{}] set_nodelay failed: {}", name, e);
-        }
 
         // Clone stream for writer
         let writer_stream = match stream.try_clone() {
@@ -917,6 +962,165 @@ mod tests {
         rx.sweep_stopped_sources();
         let refused = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::ConnectionRefused);
+    }
+
+    #[test]
+    fn accept_errors_map_to_drain_next_or_pause() {
+        use io::ErrorKind;
+        let step = |kind: ErrorKind| accept_error_step(&io::Error::from(kind));
+        assert_eq!(step(ErrorKind::WouldBlock), AcceptStep::Drained);
+        for kind in [
+            ErrorKind::Interrupted,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::NetworkDown,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::HostUnreachable,
+        ] {
+            assert_eq!(step(kind), AcceptStep::Next, "{kind:?}");
+        }
+        assert_eq!(
+            accept_error_step(&io::Error::from_raw_os_error(libc::ECONNABORTED)),
+            AcceptStep::Next
+        );
+        assert_eq!(
+            accept_error_step(&io::Error::from_raw_os_error(libc::EPROTO)),
+            AcceptStep::Next
+        );
+        for errno in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            assert_eq!(
+                accept_error_step(&io::Error::from_raw_os_error(errno)),
+                AcceptStep::Pause,
+                "errno {errno}"
+            );
+        }
+    }
+
+    /// Pauses on its first pass without accepting, as the listener does
+    /// after an accept error, then serves the real listener.
+    struct PauseOnce {
+        inner: ListenerSource,
+        paused: bool,
+    }
+
+    impl LoopSource for PauseOnce {
+        fn fd(&self) -> std::os::fd::RawFd {
+            self.inner.fd()
+        }
+        fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+            if !std::mem::replace(&mut self.paused, true) {
+                return SourceStatus::Pause;
+            }
+            self.inner.on_ready(cx)
+        }
+    }
+
+    fn serve_pass(rx: &crate::event::EventReceiver) {
+        let mut ready = polling::Events::new();
+        rx.wait(&mut ready, Some(Duration::from_millis(50)))
+            .unwrap();
+        rx.serve_sources(&ready);
+    }
+
+    #[test]
+    fn connections_made_while_the_listener_is_paused_are_accepted_after_the_resume() {
+        let (tx, rx) = crate::event::channel();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = make_server_config(addr.port(), 8, None);
+        let inner = ListenerSource {
+            listener,
+            name: config.name.clone(),
+            tx: tx.clone(),
+            next_id: Arc::new(AtomicU64::new(8000)),
+            runtime: Arc::clone(&config.runtime),
+            ingress_control: config.ingress_control,
+            active_connections: Arc::new(AtomicUsize::new(0)),
+            control: ListenerControl::new(),
+            dynamic_template: None,
+            ifac_size: 0,
+            underlay_mark: None,
+        };
+        tx.register_source(
+            crate::interface::loop_writer::read_key(config.interface_id),
+            Box::new(PauseOnce {
+                inner,
+                paused: false,
+            }),
+        )
+        .unwrap();
+
+        let _first = TcpStream::connect(addr).unwrap();
+        serve_pass(&rx);
+        let _second = TcpStream::connect(addr).unwrap();
+        for _ in 0..3 {
+            serve_pass(&rx);
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "a paused listener accepted a connection"
+        );
+
+        rx.resume_paused_sources();
+        let mut up = Vec::new();
+        for _ in 0..20 {
+            serve_pass(&rx);
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    Event::InterfaceUp(id, _, _) => up.push(id),
+                    other => panic!("expected InterfaceUp, got {:?}", other),
+                }
+            }
+            if up.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(up, [InterfaceId(8000), InterfaceId(8001)]);
+    }
+
+    fn sockopt_int(fd: std::os::fd::RawFd, level: libc::c_int, name: libc::c_int) -> libc::c_int {
+        let mut value: libc::c_int = 0;
+        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        // SAFETY: `value` and `len` are valid for the call and sized for an int.
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                level,
+                name,
+                &mut value as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt: {}", io::Error::last_os_error());
+        value
+    }
+
+    #[test]
+    fn accepted_sockets_get_keepalive_and_timeout_options() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        start(
+            make_server_config(port, 9, None),
+            tx,
+            Arc::new(AtomicU64::new(9000)),
+        )
+        .unwrap();
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let writer = match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::InterfaceUp(_, Some(writer), _) => writer,
+            other => panic!("expected InterfaceUp with writer, got {:?}", other),
+        };
+        let fd = writer
+            .loop_socket()
+            .expect("server writer exposes its socket");
+        assert_eq!(sockopt_int(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE), 1);
+        assert_eq!(sockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY), 1);
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            sockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT),
+            24_000
+        );
     }
 
     #[test]
