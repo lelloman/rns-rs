@@ -389,7 +389,9 @@ fn print_usage() {
     println!();
     println!("OPTIONS:");
     println!("    --url URL          HTTP server URL (default: http://127.0.0.1:8080)");
-    println!("    --token TOKEN, -t  Bearer auth token (printed by rns-ctl http on start)");
+    println!(
+        "    --token TOKEN, -t  Bearer auth token (generated tokens: <config dir>/http-token)"
+    );
     println!();
     println!(
         "    --type defaults to {}. Native hooks must be requested with",

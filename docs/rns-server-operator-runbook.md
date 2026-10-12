@@ -106,7 +106,9 @@ Useful flags:
 - `--http-port PORT`
   Embedded control-plane port.
 - `--http-token TOKEN`
-  Fixed bearer token for the control plane.
+  Fixed bearer token for the control plane. Without it (and without
+  `--disable-auth`), a token is generated at startup and written to
+  `<config dir>/http-token` with mode `0600`; it is not written to `logs/*.log`.
 - `--disable-auth`
   Disable control-plane auth.
 - `--no-http`

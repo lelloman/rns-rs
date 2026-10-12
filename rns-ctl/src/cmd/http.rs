@@ -1,7 +1,8 @@
 //! HTTP/WebSocket control server subcommand.
 
+use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -93,8 +94,7 @@ pub fn prepare_embedded_with_state(
         let mut token_bytes = [0u8; 24];
         rns_crypto::OsRng.fill_bytes(&mut token_bytes);
         let token = encode::to_hex(&token_bytes);
-        log::info!("Generated auth token: {}", token);
-        println!("Auth token: {}", token);
+        publish_generated_token(&token, cfg.config_path.as_deref().map(Path::new))?;
         cfg.auth_token = Some(token);
     }
 
@@ -203,6 +203,77 @@ pub fn prepare_embedded_with_state(
         .map_err(|_| "invalid bind address".to_string())?;
 
     Ok(PreparedHttpServer { addr, ctx })
+}
+
+/// Name of the file, inside the config directory, that receives a generated
+/// bearer token.
+pub const TOKEN_FILE_NAME: &str = "http-token";
+
+/// Path of the generated token file for a config directory.
+pub fn token_file_path(config_path: Option<&Path>) -> PathBuf {
+    rns_net::storage::resolve_config_dir(config_path).join(TOKEN_FILE_NAME)
+}
+
+/// Make a generated token available to the operator without passing it
+/// through the logger: it is written to an owner-only file, and printed
+/// once when stdout is a terminal.
+fn publish_generated_token(token: &str, config_path: Option<&Path>) -> Result<(), String> {
+    let path = token_file_path(config_path);
+    let interactive = std::io::stdout().is_terminal();
+    match write_token_file(&path, token) {
+        Ok(()) => log::info!("{}", token_file_log_message(&path)),
+        Err(err) => {
+            let msg = format!(
+                "failed to write auth token file {}: {}",
+                path.display(),
+                err
+            );
+            if !interactive {
+                return Err(msg);
+            }
+            log::warn!("{}", msg);
+        }
+    }
+    if interactive {
+        println!(
+            "Auth token (shown once; also stored in {}): {}",
+            path.display(),
+            token
+        );
+    }
+    Ok(())
+}
+
+/// Log line announcing where the generated token was stored.
+fn token_file_log_message(path: &Path) -> String {
+    format!("Generated auth token written to {}", path.display())
+}
+
+/// Write `token` to `path` with mode 0600, replacing any previous file.
+fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let file = options.open(path)?;
+        // `mode` only applies on creation; tighten a pre-existing file too.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        write_token(file, token)
+    }
+    #[cfg(not(unix))]
+    {
+        write_token(options.open(path)?, token)
+    }
+}
+
+fn write_token(mut file: std::fs::File, token: &str) -> std::io::Result<()> {
+    writeln!(file, "{}", token)?;
+    file.sync_all()
 }
 
 fn load_identity_into_state(config_path: Option<&Path>, shared_state: &state::SharedState) {
@@ -335,7 +406,8 @@ OPTIONS:
     -c, --config PATH       Path to RNS config directory
     -p, --port PORT         HTTP port (default: 8080, env: RNSCTL_HTTP_PORT)
     -H, --host HOST         Bind host (default: 127.0.0.1, env: RNSCTL_HOST)
-    -t, --token TOKEN       Auth bearer token (env: RNSCTL_AUTH_TOKEN)
+    -t, --token TOKEN       Auth bearer token (env: RNSCTL_AUTH_TOKEN). When unset, a
+                            token is generated and written to <config dir>/http-token
     -d, --daemon            Connect as client to running rnsd
         --disable-auth      Disable authentication
         --tls-cert PATH     TLS certificate file (env: RNSCTL_TLS_CERT, requires 'tls' feature)
@@ -354,6 +426,76 @@ mod tests {
 
     fn args(values: &[&str]) -> Args {
         Args::parse_from(values.iter().map(|value| value.to_string()).collect())
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rns-ctl-http-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn token_file_is_owner_only_and_holds_token() {
+        let dir = temp_dir("token-file");
+        let path = token_file_path(Some(&dir));
+        assert_eq!(path, dir.join(TOKEN_FILE_NAME));
+
+        write_token_file(&path, "0123abcd").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), "0123abcd");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn token_file_replaces_previous_token_and_mode() {
+        let dir = temp_dir("token-replace");
+        let path = dir.join(TOKEN_FILE_NAME);
+        std::fs::write(&path, "an-older-and-longer-token-value\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        write_token_file(&path, "fresh").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn publish_generated_token_logs_path_not_token() {
+        let dir = temp_dir("token-log");
+        let token = "5f3c9a7e21b84d06c1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6";
+        publish_generated_token(token, Some(&dir)).unwrap();
+
+        let path = dir.join(TOKEN_FILE_NAME);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), token);
+        let message = token_file_log_message(&path);
+        assert!(message.contains(&path.display().to_string()));
+        assert!(!message.contains(token));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

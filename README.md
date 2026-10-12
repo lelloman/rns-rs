@@ -347,7 +347,7 @@ cargo run --bin rns-ctl -- path -t
 cargo run --bin rns-ctl -- id -g /path/to/identity
 
 # Manage hooks through an authenticated control server
-cargo run --bin rns-ctl -- hook list --token "replace-with-token-printed-by-rns-ctl-http"
+cargo run --bin rns-ctl -- hook list --token "$(cat ~/.reticulum/http-token)"
 ```
 
 The `http` subcommand starts an HTTP/WebSocket control server:
@@ -362,6 +362,10 @@ cargo run --bin rns-ctl -- http --disable-auth
 # Run on a custom port
 cargo run --bin rns-ctl -- http --port 9090
 ```
+
+Without `--token` (or `RNSCTL_AUTH_TOKEN`), and unless auth is disabled, the server generates a bearer token at startup and writes it to `<config dir>/http-token` with mode `0600`, replacing any previous one. The token is printed once when stdout is a terminal; it is never written to the log, which records only the file path.
+
+Request bodies are limited to 4 MiB (`413` above that), the bearer token is checked before a body is read, and at most 64 connections are served at once (`503` beyond that).
 
 The server exposes:
 - HTTP API on `http://localhost:8080` (configurable via `--port` or `RNSCTL_HTTP_PORT`)
@@ -448,10 +452,10 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 
 **CLI management:**
 
-The hook CLI talks to the HTTP control server, which enables bearer authentication by default. Pass the token printed when `rns-ctl http` starts (or omit `--token` only when the server was explicitly started with `--disable-auth`):
+The hook CLI talks to the HTTP control server, which enables bearer authentication by default. Pass the token given with `rns-ctl http --token`, or the generated one stored in `<config dir>/http-token` (omit `--token` only when the server was explicitly started with `--disable-auth`):
 
 ```bash
-RNSCTL_TOKEN="replace-with-token-printed-by-rns-ctl-http"
+RNSCTL_TOKEN="$(cat ~/.reticulum/http-token)"
 rns-ctl hook list --token "$RNSCTL_TOKEN"                                                # list loaded hooks and their status
 rns-ctl hook load <path-or-builtin-id> --point <HookPoint> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin] [--priority N] [--name name]
 rns-ctl hook unload <name> --point <HookPoint> --token "$RNSCTL_TOKEN"                   # unload a running hook
