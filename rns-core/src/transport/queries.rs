@@ -280,8 +280,12 @@ impl TransportEngine {
 
     pub fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
         self.config.packet_hashlist_max_entries = max_entries;
+        let seed = self.packet_hashlist.hashing_seed();
         self.packet_hashlist =
             PacketHashlist::with_allocation(max_entries, self.config.packet_hashlist_allocation);
+        if let Some(seed) = seed {
+            self.packet_hashlist.seed_hashing(seed);
+        }
     }
 
     pub fn get_path_table(&self, max_hops: Option<u8>) -> Vec<PathTableRow> {
@@ -434,16 +438,19 @@ impl TransportEngine {
         self.announce_retained_bytes_total()
     }
 
-    /// Key the hashing of tables indexed by packet hashes with a seed drawn
-    /// from `rng`. Packet hashes are chosen by whoever crafts the packets,
+    /// Key the hashing of tables indexed by packet hashes, the reverse table
+    /// and the deduplication table, with seeds drawn from `rng`. Packet hashes are chosen by whoever crafts the packets,
     /// so without a secret seed a sender could grind packets into one probe
     /// sequence and make every lookup in that table linear. Call this once
     /// with a cryptographic RNG after creating the engine; until then the
     /// tables use a fixed public seed.
     pub fn seed_table_hashing(&mut self, rng: &mut dyn Rng) {
-        let mut seed = [0u8; 8];
-        rng.fill_bytes(&mut seed);
-        let hasher = foldhash::fast::FixedState::with_seed(u64::from_le_bytes(seed));
+        let mut seeds = [0u8; 16];
+        rng.fill_bytes(&mut seeds);
+        let (reverse_seed, dedup_seed) = seeds.split_at(8);
+        let seed = |bytes: &[u8]| u64::from_le_bytes(bytes.try_into().expect("8 bytes"));
+        self.packet_hashlist.seed_hashing(seed(dedup_seed));
+        let hasher = foldhash::fast::FixedState::with_seed(seed(reverse_seed));
         let mut table =
             tables::ReverseTable::with_capacity_and_hasher(self.reverse_table.len(), hasher);
         table.extend(self.reverse_table.drain());

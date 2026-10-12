@@ -4920,4 +4920,10 @@ fn seeding_table_hashing_keeps_reverse_entries() {
         engine.reverse_table.hasher().hash_one(probe),
         "the seed changes the hash function"
     );
+
+    // The deduplication table is keyed too, and keeps its key when resized.
+    let seed = engine.packet_hashlist.hashing_seed();
+    assert!(seed.is_some());
+    engine.set_packet_hashlist_max_entries(1000);
+    assert_eq!(engine.packet_hashlist.hashing_seed(), seed);
 }

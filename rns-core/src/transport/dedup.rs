@@ -32,9 +32,25 @@ impl PacketHashlist {
         };
         Self {
             queue: PacketHashQueue::new(initial, allocation),
-            set: PacketHashSet::new(initial),
+            set: PacketHashSet::new(initial, None),
             max_size,
         }
+    }
+
+    /// Key bucket placement with a secret `seed`, so that senders cannot
+    /// grind packets whose hashes share a probe sequence. Unseeded tables
+    /// index buckets by the hashes' leading bits.
+    pub fn seed_hashing(&mut self, seed: u64) {
+        self.set.key_seed = Some(seed);
+        // An empty table's buckets are already clear; rewriting them would
+        // fault in every page of a table allocated up front.
+        if self.set.len > 0 {
+            self.set.rebuild(&self.queue);
+        }
+    }
+
+    pub(crate) fn hashing_seed(&self) -> Option<u64> {
+        self.set.key_seed
     }
 
     /// Check if a hash is currently retained.
@@ -46,7 +62,7 @@ impl PacketHashlist {
     /// [`is_duplicate`](Self::is_duplicate) or [`add`](Self::add) for it can
     /// overlap that cache miss with other work.
     pub fn prefetch(&self, hash: &[u8; 32]) {
-        self.set.prefetch(hash_bytes(hash));
+        self.set.prefetch(self.set.key(hash));
     }
 
     /// Retain a hash. If the dedup table is full, evict the oldest unique hash.
@@ -68,7 +84,7 @@ impl PacketHashlist {
                 .max(1)
                 .min(self.max_size);
             self.queue.grow(capacity);
-            self.set = PacketHashSet::new(capacity);
+            self.set = PacketHashSet::new(capacity, self.set.key_seed);
             self.set.rebuild(&self.queue);
         }
         let slot = (self.queue.head + self.queue.len) % self.queue.capacity();
@@ -78,7 +94,7 @@ impl PacketHashlist {
             // The next new hash evicts the current oldest; start loading its
             // bucket now instead of stalling on it then.
             let oldest = self.queue.entries.get(self.queue.head);
-            self.set.prefetch(hash_bytes(oldest));
+            self.set.prefetch(self.set.key(oldest));
         }
     }
 
@@ -316,13 +332,28 @@ impl PacketHashQueue {
 struct PacketHashSet {
     buckets: Box<[u64]>,
     len: usize,
+    /// Seed of the keyed bucket hash; `None` uses the hashes' leading bits.
+    key_seed: Option<u64>,
 }
 
 impl PacketHashSet {
-    fn new(max_entries: usize) -> Self {
+    fn new(max_entries: usize, key_seed: Option<u64>) -> Self {
         Self {
             buckets: vec![0; bucket_capacity(max_entries)].into_boxed_slice(),
             len: 0,
+            key_seed,
+        }
+    }
+
+    /// Bucket key of a packet hash.
+    fn key(&self, hash: &[u8; 32]) -> u64 {
+        let leading = leading_bits(hash);
+        match self.key_seed {
+            None => leading,
+            Some(seed) => {
+                use core::hash::BuildHasher;
+                foldhash::fast::FixedState::with_seed(seed).hash_one(leading)
+            }
         }
     }
 
@@ -334,7 +365,7 @@ impl PacketHashSet {
         if self.buckets.is_empty() {
             return None;
         }
-        let key = hash_bytes(hash);
+        let key = self.key(hash);
         let tag = key as u32;
         let mut idx = self.bucket_index(key);
         loop {
@@ -354,7 +385,7 @@ impl PacketHashSet {
     }
 
     fn insert(&mut self, slot: usize, queue: &PacketHashQueue) {
-        let key = hash_bytes(queue.entries.get(slot));
+        let key = self.key(queue.entries.get(slot));
         let mut idx = self.bucket_index(key);
         while self.buckets[idx] != 0 {
             idx = (idx + 1) & (self.buckets.len() - 1);
@@ -419,7 +450,7 @@ impl PacketHashSet {
         if self.buckets.len() as u64 <= 1 << 32 {
             self.bucket_index(u64::from(bucket_tag(entry)))
         } else {
-            self.bucket_index(hash_bytes(queue.entries.get(bucket_slot(entry))))
+            self.bucket_index(self.key(queue.entries.get(bucket_slot(entry))))
         }
     }
 }
@@ -469,11 +500,10 @@ fn bucket_capacity(max_entries: usize) -> usize {
     min_capacity.next_power_of_two()
 }
 
-/// Bucket key for a packet hash. Packet hashes are SHA-256 digests, already
-/// uniformly distributed, so their leading 64 bits index the table directly;
-/// a byte-wise mixing function added a dependent multiply per byte on every
-/// lookup, insertion and eviction without improving the distribution.
-fn hash_bytes(hash: &[u8; 32]) -> u64 {
+/// Leading 64 bits of a packet hash. Packet hashes are SHA-256 digests,
+/// already uniformly distributed for packets nobody chose, so an unseeded
+/// table indexes buckets with these bits directly.
+fn leading_bits(hash: &[u8; 32]) -> u64 {
     let mut leading = [0u8; 8];
     leading.copy_from_slice(&hash[..8]);
     u64::from_le_bytes(leading)
@@ -487,6 +517,28 @@ mod tests {
         let mut h = [0u8; 32];
         h[0] = seed;
         h
+    }
+
+    /// Every allocation policy, unseeded and with a keyed bucket hash.
+    fn seeded_policies() -> impl Iterator<Item = (PacketHashlistAllocation, Option<u64>)> {
+        policies()
+            .into_iter()
+            .flat_map(|policy| [(policy, None), (policy, Some(0x9e37_79b9_7f4a_7c15))])
+    }
+
+    #[test]
+    fn seeding_keeps_retained_hashes_and_fifo_order() {
+        for policy in policies() {
+            let mut list = PacketHashlist::with_allocation(16, policy);
+            let hashes: Vec<[u8; 32]> = (0..12).map(make_hash).collect();
+            for hash in &hashes {
+                list.add(*hash);
+            }
+            list.seed_hashing(0x0123_4567_89ab_cdef);
+            assert!(hashes.iter().all(|hash| list.is_duplicate(hash)));
+            assert!(list.iter().eq(hashes.iter()));
+            assert!(!list.is_duplicate(&make_hash(200)));
+        }
     }
 
     fn policies() -> [PacketHashlistAllocation; 2] {
@@ -612,9 +664,12 @@ mod tests {
     #[test]
     fn hashlist_matches_fifo_model_under_collisions() {
         use alloc::collections::VecDeque;
-        for policy in policies() {
+        for (policy, seed) in seeded_policies() {
             for capacity in [1usize, 2, 3, 7, 16, 33] {
                 let mut list = PacketHashlist::with_allocation(capacity, policy);
+                if let Some(seed) = seed {
+                    list.seed_hashing(seed);
+                }
                 let mut model: VecDeque<[u8; 32]> = VecDeque::new();
                 let mut rng = 0x2545_f491_4f6c_dd1du64 ^ capacity as u64;
                 for _ in 0..20_000 {
@@ -661,12 +716,12 @@ mod tests {
     #[test]
     fn collision_cluster_removal_preserves_remaining_entries() {
         for policy in policies() {
-            let mut set = PacketHashSet::new(3);
+            let mut set = PacketHashSet::new(3, None);
             let mut queue = PacketHashQueue::new(3, policy);
             let mut colliding = Vec::new();
             for seed in 0..=u8::MAX {
                 let hash = make_hash(seed);
-                if hash_bytes(&hash) & 7 == 0 {
+                if leading_bits(&hash) & 7 == 0 {
                     colliding.push(hash);
                     if colliding.len() == 3 {
                         break;
@@ -714,9 +769,12 @@ mod tests {
     #[test]
     fn mixed_operations_match_fifo_model_through_growth_and_wraparound() {
         use alloc::collections::VecDeque;
-        for policy in policies() {
+        for (policy, seed) in seeded_policies() {
             for limit in [0, 1, 3, 63, 64, 65, 127, 129, 257] {
                 let mut table = PacketHashlist::with_allocation(limit, policy);
+                if let Some(seed) = seed {
+                    table.seed_hashing(seed);
+                }
                 let mut model = VecDeque::new();
                 let mut random = 0x123456789abcdefu64;
                 for step in 0..10_000 {
