@@ -1,3 +1,10 @@
+//! Mirror every packet the hook sees to interface `MIRROR_INTERFACE` by
+//! injecting a `SendOnInterface` action.
+//!
+//! Intended attach point: `PreIngress` (mirror received packets). It can also
+//! be attached at `SendOnInterface` to mirror outbound packets: actions that a
+//! hook injects are dispatched without running the per-packet hooks again, so
+//! the mirrored copy is sent once and does not re-trigger this hook.
 #![no_std]
 
 use rns_hooks_sdk::action;

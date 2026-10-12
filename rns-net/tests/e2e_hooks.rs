@@ -1293,6 +1293,60 @@ fn test_packet_mirror_does_not_block() {
 }
 
 #[test]
+fn test_packet_mirror_on_send_on_interface_does_not_retrigger_itself() {
+    // packet_mirror injects a SendOnInterface action. Attached at
+    // SendOnInterface, the injected send must not run the hook again, so the
+    // sender keeps working and traffic is still delivered.
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
+
+    let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+
+    alice_node
+        .load_hook(
+            "packet_mirror".into(),
+            wasm_bytes("packet_mirror"),
+            "SendOnInterface".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    for message in [b"mirror send 1".as_slice(), b"mirror send 2".as_slice()] {
+        alice_node
+            .send_packet_queued(&dest_to_bob, message)
+            .unwrap();
+        let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
+            .expect("Bob did not receive message with packet_mirror on SendOnInterface");
+        let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
+        assert_eq!(decrypted, message);
+    }
+
+    // The sender's driver is still responsive.
+    assert_eq!(
+        alice_node
+            .list_hooks()
+            .expect("list_hooks send failed")
+            .len(),
+        1
+    );
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
 fn test_link_guard_loads_and_continues() {
     // Verify link_guard loads successfully on LinkRequestReceived and doesn't
     // interfere with normal operation (no link requests in this test, just

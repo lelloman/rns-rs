@@ -1,5 +1,9 @@
 use super::*;
 
+/// Maximum nesting depth for re-dispatching actions injected by hooks.
+#[cfg(feature = "hooks")]
+const MAX_HOOK_INJECTION_DEPTH: usize = 4;
+
 impl Driver {
     pub(crate) fn handle_confirmed_outbound(
         &mut self,
@@ -404,12 +408,28 @@ impl Driver {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn dispatch_send_on_interface_action(
         &mut self,
         interface: InterfaceId,
         raw: rns_core::transport::types::PacketBytes,
-        _hook_injected: &mut Vec<TransportAction>,
+        hook_injected: &mut Vec<TransportAction>,
     ) {
+        self.dispatch_send_on_interface_action_with_hooks(interface, raw, hook_injected, true);
+    }
+
+    /// Send `raw` on `interface`. When `run_hooks` is false the
+    /// `SendOnInterface` hook point is skipped; this is used for actions that
+    /// hooks injected themselves, so a hook cannot re-trigger itself.
+    fn dispatch_send_on_interface_action_with_hooks(
+        &mut self,
+        interface: InterfaceId,
+        raw: rns_core::transport::types::PacketBytes,
+        _hook_injected: &mut Vec<TransportAction>,
+        run_hooks: bool,
+    ) {
+        #[cfg(not(feature = "hooks"))]
+        let _ = run_hooks;
         let ratchet_lease = match crate::local_ratchet::AnnouncementLease::acquire(
             self.event_tx.local_ratchets(),
             &raw,
@@ -422,7 +442,7 @@ impl Driver {
         };
 
         #[cfg(feature = "hooks")]
-        {
+        if run_hooks {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
                 hops: if raw.len() > 1 { raw[1] } else { 0 },
@@ -603,7 +623,10 @@ impl Driver {
         raw: rns_core::transport::types::PacketBytes,
         exclude: Option<InterfaceId>,
         _hook_injected: &mut Vec<TransportAction>,
+        run_hooks: bool,
     ) {
+        #[cfg(not(feature = "hooks"))]
+        let _ = run_hooks;
         let ratchet_lease = match crate::local_ratchet::AnnouncementLease::acquire(
             self.event_tx.local_ratchets(),
             &raw,
@@ -616,7 +639,7 @@ impl Driver {
         };
 
         #[cfg(feature = "hooks")]
-        {
+        if run_hooks {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
                 hops: if raw.len() > 1 { raw[1] } else { 0 },
@@ -745,9 +768,12 @@ impl Driver {
         receiving_interface: InterfaceId,
         ingress_limited: bool,
         _hook_injected: &mut Vec<TransportAction>,
+        run_hooks: bool,
     ) {
+        #[cfg(not(feature = "hooks"))]
+        let _ = run_hooks;
         #[cfg(feature = "hooks")]
-        {
+        if run_hooks {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: 0,
                 hops: 0,
@@ -879,6 +905,40 @@ impl Driver {
         actions: Vec<TransportAction>,
         ingress_limited: bool,
     ) {
+        self.dispatch_actions_at_depth(actions, ingress_limited, 0);
+    }
+
+    /// Re-dispatch actions injected by hooks one nesting level below
+    /// `depth`. Injected actions skip the per-action packet hooks
+    /// (`SendOnInterface`, `BroadcastOnAllInterfaces`, `DeliverLocal`), and
+    /// nesting through other hook points is capped at
+    /// `MAX_HOOK_INJECTION_DEPTH`; anything beyond that is logged and dropped.
+    #[cfg(feature = "hooks")]
+    fn dispatch_hook_injected(&mut self, injected: Vec<TransportAction>, depth: usize) {
+        if injected.is_empty() {
+            return;
+        }
+        if depth >= MAX_HOOK_INJECTION_DEPTH {
+            log::warn!(
+                "dropping {} hook-injected action(s): nesting depth limit {} reached",
+                injected.len(),
+                MAX_HOOK_INJECTION_DEPTH
+            );
+            return;
+        }
+        self.dispatch_actions_at_depth(injected, false, depth + 1);
+    }
+
+    /// Dispatch `actions`. `depth` is 0 for top-level actions and counts how
+    /// many hook-injection levels deep the batch is otherwise; per-action
+    /// packet hooks run only at depth 0.
+    fn dispatch_actions_at_depth(
+        &mut self,
+        actions: Vec<TransportAction>,
+        ingress_limited: bool,
+        depth: usize,
+    ) {
+        let run_packet_hooks = depth == 0;
         #[cfg(feature = "hooks")]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
         #[cfg(not(feature = "hooks"))]
@@ -887,10 +947,20 @@ impl Driver {
         for action in actions {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
-                    self.dispatch_send_on_interface_action(interface, raw, &mut hook_injected);
+                    self.dispatch_send_on_interface_action_with_hooks(
+                        interface,
+                        raw,
+                        &mut hook_injected,
+                        run_packet_hooks,
+                    );
                 }
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
-                    self.dispatch_broadcast_action(raw, exclude, &mut hook_injected);
+                    self.dispatch_broadcast_action(
+                        raw,
+                        exclude,
+                        &mut hook_injected,
+                        run_packet_hooks,
+                    );
                 }
                 TransportAction::DeliverLocal {
                     destination_hash,
@@ -905,6 +975,7 @@ impl Driver {
                         receiving_interface,
                         ingress_limited,
                         &mut hook_injected,
+                        run_packet_hooks,
                     );
                 }
                 TransportAction::AnnounceReceived {
@@ -1413,9 +1484,9 @@ impl Driver {
 
         // Dispatch any actions injected by hooks during action processing
         #[cfg(feature = "hooks")]
-        if !hook_injected.is_empty() {
-            self.dispatch_all(hook_injected);
-        }
+        self.dispatch_hook_injected(hook_injected, depth);
+        #[cfg(not(feature = "hooks"))]
+        let _ = depth;
     }
 
     /// Dispatch link manager actions.
@@ -1843,9 +1914,7 @@ impl Driver {
 
         // Dispatch any actions injected by hooks during action processing
         #[cfg(feature = "hooks")]
-        if !hook_injected.is_empty() {
-            self.dispatch_all(hook_injected);
-        }
+        self.dispatch_hook_injected(hook_injected, 0);
     }
 
     /// Dispatch hole-punch manager actions.
@@ -1961,5 +2030,181 @@ mod classification_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "rns-hooks-builtin"))]
+mod hook_injection_tests {
+    use super::*;
+    use crate::interface::Writer;
+    use rns_core::transport::types::InterfaceInfo;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    struct NoopCallbacks;
+
+    impl Callbacks for NoopCallbacks {
+        fn on_announce(&mut self, _: crate::common::destination::AnnouncedIdentity) {}
+        fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
+        fn on_local_delivery(
+            &mut self,
+            _: rns_core::types::DestHash,
+            _: Vec<u8>,
+            _: rns_core::types::PacketHash,
+        ) {
+        }
+    }
+
+    struct RecordingWriter(Arc<Mutex<Vec<Vec<u8>>>>);
+
+    impl Writer for RecordingWriter {
+        fn send_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
+            self.0.lock().unwrap().push(data.to_vec());
+            Ok(())
+        }
+    }
+
+    fn interface_info(id: u64) -> InterfaceInfo {
+        InterfaceInfo {
+            id: InterfaceId(id),
+            name: format!("test-{}", id),
+            mode: rns_core::constants::MODE_FULL,
+            gravity: 0,
+            recursive_prs: false,
+            announces_from_internal: true,
+            announces_to_internal: None,
+            out_capable: true,
+            in_capable: true,
+            bitrate: None,
+            airtime_profile: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
+            ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
+            started: 0.0,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+        }
+    }
+
+    fn driver_with_interface(id: u64) -> (Driver, Arc<Mutex<Vec<Vec<u8>>>>) {
+        let (tx, rx) = crate::event::channel();
+        let mut driver = Driver::new(
+            super::super::tests::make_transport_config(false),
+            rx,
+            tx,
+            Box::new(NoopCallbacks),
+        );
+        driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        driver.interfaces.insert(
+            InterfaceId(id),
+            InterfaceEntry {
+                id: InterfaceId(id),
+                info: interface_info(id),
+                writer: Box::new(RecordingWriter(sent.clone())),
+                async_writer_metrics: None,
+                enabled: true,
+                online: true,
+                dynamic: false,
+                ifac: None,
+                stats: InterfaceStats::default(),
+                interface_type: String::new(),
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
+            },
+        );
+        (driver, sent)
+    }
+
+    static HOOK_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn attach_builtin(
+        driver: &mut Driver,
+        point: HookPoint,
+        hook: impl rns_hooks::BuiltinHook,
+    ) -> String {
+        let id = format!(
+            "test.dispatch.hook_injection.{}.{}",
+            std::process::id(),
+            HOOK_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        rns_hooks::register_builtin_hook(id.clone(), hook).unwrap();
+        let program = driver
+            .hook_manager
+            .as_ref()
+            .expect("hook manager")
+            .load_builtin(id.clone(), id.as_str(), 0)
+            .unwrap();
+        driver.hook_slots[point as usize].attach(program);
+        id
+    }
+
+    #[test]
+    fn send_hook_injecting_a_send_runs_once_and_sends_the_injected_frame() {
+        let (mut driver, sent) = driver_with_interface(1);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls = calls.clone();
+        attach_builtin(
+            &mut driver,
+            HookPoint::SendOnInterface,
+            move |_call: rns_hooks::BuiltinHookCall<'_>, host: &mut rns_hooks::BuiltinHookHost| {
+                hook_calls.fetch_add(1, Ordering::SeqCst);
+                host.inject_action(rns_hooks::ActionWire::SendOnInterface {
+                    interface: 1,
+                    raw: vec![0x00, 0x00, 0x42],
+                });
+                Ok(rns_hooks::HookResult::continue_result())
+            },
+        );
+
+        driver.dispatch_all(vec![TransportAction::SendOnInterface {
+            interface: InterfaceId(1),
+            raw: vec![0x00, 0x00, 0x01].into(),
+        }]);
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let sent = sent.lock().unwrap();
+        assert_eq!(
+            sent.as_slice(),
+            &[vec![0x00, 0x00, 0x01], vec![0x00, 0x00, 0x42]]
+        );
+    }
+
+    #[test]
+    fn self_injecting_path_updated_hook_stops_at_nesting_limit() {
+        let (mut driver, _sent) = driver_with_interface(1);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls = calls.clone();
+        attach_builtin(
+            &mut driver,
+            HookPoint::PathUpdated,
+            move |_call: rns_hooks::BuiltinHookCall<'_>, host: &mut rns_hooks::BuiltinHookHost| {
+                hook_calls.fetch_add(1, Ordering::SeqCst);
+                host.inject_action(rns_hooks::ActionWire::PathUpdated {
+                    destination_hash: [0x11; 16],
+                    hops: 1,
+                    next_hop: [0x22; 16],
+                    interface: 1,
+                });
+                Ok(rns_hooks::HookResult::continue_result())
+            },
+        );
+
+        driver.dispatch_all(vec![TransportAction::PathUpdated {
+            destination_hash: [0x11; 16],
+            hops: 1,
+            next_hop: [0x22; 16],
+            interface: InterfaceId(1),
+        }]);
+
+        assert_eq!(calls.load(Ordering::SeqCst), MAX_HOOK_INJECTION_DEPTH + 1);
     }
 }

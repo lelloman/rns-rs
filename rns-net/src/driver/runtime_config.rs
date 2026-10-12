@@ -1478,17 +1478,36 @@ impl Driver {
         key: &str,
     ) -> Result<f64, RuntimeConfigError> {
         match value {
-            RuntimeConfigValue::Float(v) if v >= 0.0 => Ok(v),
+            RuntimeConfigValue::Float(v) if v.is_finite() && v >= 0.0 => Ok(v),
             RuntimeConfigValue::Int(v) if v >= 0 => Ok(v as f64),
             RuntimeConfigValue::Float(_) | RuntimeConfigValue::Int(_) => Err(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::InvalidValue,
-                message: format!("{} must be >= 0", key),
+                message: format!("{} must be a finite number >= 0", key),
             }),
             _ => Err(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::InvalidType,
                 message: format!("{} expects a numeric value", key),
             }),
         }
+    }
+
+    /// Convert a number of seconds into a `Duration`, rejecting values that
+    /// cannot be represented or that would overflow when added to `Instant::now()`.
+    pub(crate) fn duration_from_secs(secs: f64, key: &str) -> Result<Duration, RuntimeConfigError> {
+        Duration::try_from_secs_f64(secs)
+            .ok()
+            .filter(|duration| std::time::Instant::now().checked_add(*duration).is_some())
+            .ok_or_else(|| RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidValue,
+                message: format!("{} is out of range for a duration", key),
+            })
+    }
+
+    pub(crate) fn expect_duration_secs(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<Duration, RuntimeConfigError> {
+        Self::duration_from_secs(Self::expect_f64(value, key)?, key)
     }
 
     pub(crate) fn expect_i64(
@@ -1583,7 +1602,7 @@ impl Driver {
         if secs == 0.0 {
             Ok(None)
         } else {
-            Ok(Some(Duration::from_secs_f64(secs)))
+            Ok(Some(Self::duration_from_secs(secs, key)?))
         }
     }
 
@@ -1912,11 +1931,11 @@ impl Driver {
         let mut runtime = recover_mutex_guard(&handle.runtime, "backbone client runtime");
         match setting {
             "connect_timeout_secs" => {
-                runtime.connect_timeout = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                runtime.connect_timeout = Self::expect_duration_secs(value, key)?;
                 Ok(())
             }
             "reconnect_wait_secs" => {
-                runtime.reconnect_wait = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                runtime.reconnect_wait = Self::expect_duration_secs(value, key)?;
                 Ok(())
             }
             "max_reconnect_tries" => {
@@ -2085,11 +2104,11 @@ impl Driver {
         let mut runtime = recover_mutex_guard(&handle.runtime, "tcp client runtime");
         match setting {
             "connect_timeout_secs" => {
-                runtime.connect_timeout = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                runtime.connect_timeout = Self::expect_duration_secs(value, key)?;
                 Ok(())
             }
             "reconnect_wait_secs" => {
-                runtime.reconnect_wait = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                runtime.reconnect_wait = Self::expect_duration_secs(value, key)?;
                 Ok(())
             }
             "max_reconnect_tries" => {
@@ -2365,13 +2384,21 @@ impl Driver {
         let mut runtime = recover_mutex_guard(&handle.runtime, "auto runtime");
         match setting {
             "announce_interval_secs" => {
-                runtime.announce_interval_secs = Self::expect_f64(value, key)?.max(0.1)
+                let secs = Self::expect_f64(value, key)?.max(0.1);
+                // The auto interface sleeps for 1.2x the announce interval
+                // before peering, so that value must be a valid duration too.
+                Self::duration_from_secs(secs * 1.2, key)?;
+                runtime.announce_interval_secs = secs
             }
             "peer_timeout_secs" => {
-                runtime.peer_timeout_secs = Self::expect_f64(value, key)?.max(0.1)
+                let secs = Self::expect_f64(value, key)?.max(0.1);
+                Self::duration_from_secs(secs, key)?;
+                runtime.peer_timeout_secs = secs
             }
             "peer_job_interval_secs" => {
-                runtime.peer_job_interval_secs = Self::expect_f64(value, key)?.max(0.1)
+                let secs = Self::expect_f64(value, key)?.max(0.1);
+                Self::duration_from_secs(secs, key)?;
+                runtime.peer_job_interval_secs = secs
             }
             _ => {
                 return Err(RuntimeConfigError {
@@ -2483,7 +2510,7 @@ impl Driver {
         match setting {
             "reconnect_wait_secs" => {
                 runtime.reconnect_wait =
-                    Duration::from_secs_f64(Self::expect_f64(value, key)?.max(0.1));
+                    Self::duration_from_secs(Self::expect_f64(value, key)?.max(0.1), key)?;
                 Ok(())
             }
             _ => Err(RuntimeConfigError {
@@ -2584,7 +2611,7 @@ impl Driver {
         match setting {
             "respawn_delay_secs" => {
                 runtime.respawn_delay =
-                    Duration::from_secs_f64(Self::expect_f64(value, key)?.max(0.1));
+                    Self::duration_from_secs(Self::expect_f64(value, key)?.max(0.1), key)?;
                 Ok(())
             }
             _ => Err(RuntimeConfigError {
@@ -3920,5 +3947,112 @@ pub(crate) fn parse_version_tuple(version: &str) -> Option<Vec<u32>> {
         None
     } else {
         Some(components)
+    }
+}
+
+#[cfg(all(test, feature = "iface-backbone"))]
+mod duration_value_tests {
+    use super::*;
+    use crate::interface::backbone::BackboneClientRuntime;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+
+    struct NoopCallbacks;
+
+    impl Callbacks for NoopCallbacks {
+        fn on_announce(&mut self, _: crate::common::destination::AnnouncedIdentity) {}
+        fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
+        fn on_local_delivery(
+            &mut self,
+            _: rns_core::types::DestHash,
+            _: Vec<u8>,
+            _: rns_core::types::PacketHash,
+        ) {
+        }
+    }
+
+    fn driver_with_backbone_client(
+        name: &str,
+    ) -> (Driver, Arc<std::sync::Mutex<BackboneClientRuntime>>) {
+        let (tx, rx) = crate::event::channel();
+        let mut driver = Driver::new(
+            super::super::tests::make_transport_config(false),
+            rx,
+            tx,
+            Box::new(NoopCallbacks),
+        );
+        driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+        let startup = BackboneClientRuntime {
+            reconnect_wait: Duration::from_secs(5),
+            max_reconnect_tries: Some(3),
+            connect_timeout: Duration::from_secs(5),
+        };
+        let runtime = Arc::new(std::sync::Mutex::new(startup.clone()));
+        driver.register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: runtime.clone(),
+            startup,
+        });
+        (driver, runtime)
+    }
+
+    #[test]
+    fn expect_f64_rejects_non_finite_values() {
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, -1.0] {
+            let err = Driver::expect_f64(RuntimeConfigValue::Float(value), "k").unwrap_err();
+            assert_eq!(err.code, RuntimeConfigErrorCode::InvalidValue, "{value}");
+        }
+        assert_eq!(
+            Driver::expect_f64(RuntimeConfigValue::Float(1.5), "k").unwrap(),
+            1.5
+        );
+    }
+
+    #[test]
+    fn out_of_range_duration_values_return_errors_and_keep_runtime_usable() {
+        let (mut driver, runtime) = driver_with_backbone_client("uplink");
+        for key in [
+            "backbone_client.uplink.connect_timeout_secs",
+            "backbone_client.uplink.reconnect_wait_secs",
+        ] {
+            for value in [
+                RuntimeConfigValue::Float(f64::INFINITY),
+                RuntimeConfigValue::Float(f64::NAN),
+                RuntimeConfigValue::Float(-1.0),
+                RuntimeConfigValue::Int(-1),
+                RuntimeConfigValue::Float(1e300),
+            ] {
+                let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+                    key: key.into(),
+                    value: value.clone(),
+                });
+                let QueryResponse::RuntimeConfigSet(Err(err)) = response else {
+                    panic!("expected {key} = {value:?} to be rejected");
+                };
+                assert_eq!(err.code, RuntimeConfigErrorCode::InvalidValue);
+            }
+        }
+        assert!(!runtime.is_poisoned());
+        assert_eq!(
+            runtime.lock().unwrap().connect_timeout,
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            runtime.lock().unwrap().reconnect_wait,
+            Duration::from_secs(5)
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone_client.uplink.connect_timeout_secs".into(),
+            value: RuntimeConfigValue::Float(2.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(2.5));
+        assert_eq!(
+            runtime.lock().unwrap().connect_timeout,
+            Duration::from_millis(2500)
+        );
     }
 }

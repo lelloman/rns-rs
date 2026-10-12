@@ -878,11 +878,11 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
     let mut ingress_snapshot_at = Instant::now();
 
     loop {
-        let runtime_snapshot = runtime.lock().unwrap().clone();
+        let runtime_snapshot = lock_or_recover(&runtime, "backbone runtime").clone();
         let max_connections = runtime_snapshot.max_connections;
         let idle_timeout = runtime_snapshot.idle_timeout;
         {
-            let mut monitor = peer_state.lock().unwrap();
+            let mut monitor = lock_or_recover(&peer_state, "backbone peer state");
             monitor.sync_into(&mut peers);
             cleanup_peer_state(&mut peers);
             monitor.upsert_snapshot(&peers);
@@ -926,7 +926,8 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 if let Some(state) = peers.get_mut(&peer_ip) {
                                     state.reject_count = state.reject_count.saturating_add(1);
                                 }
-                                peer_state.lock().unwrap().upsert_snapshot(&peers);
+                                lock_or_recover(&peer_state, "backbone peer state")
+                                    .upsert_snapshot(&peers);
                                 log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                     "[{}] rejecting blocked peer {}",
                                     name,
@@ -1029,7 +1030,8 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 .entry(peer_ip)
                                 .or_insert_with(PeerBehaviorState::new)
                                 .connected_count += 1;
-                            peer_state.lock().unwrap().upsert_snapshot(&peers);
+                            lock_or_recover(&peer_state, "backbone peer state")
+                                .upsert_snapshot(&peers);
                             let _ = tx.send(Event::BackbonePeerConnected {
                                 server_interface_id,
                                 peer_interface_id: client_id,
@@ -1378,7 +1380,7 @@ fn disconnect_client(context: DisconnectContext<'_>) {
     if let Some(state) = peers.get_mut(&client.peer_ip) {
         state.connected_count = state.connected_count.saturating_sub(1);
     }
-    peer_state.lock().unwrap().upsert_snapshot(peers);
+    lock_or_recover(peer_state, "backbone peer state").upsert_snapshot(peers);
     // Writer already sent InterfaceDown for write stalls; avoid duplicate.
     if !matches!(reason, DisconnectReason::WriteStall) {
         let _ = tx.send(Event::InterfaceDown(client_id));
@@ -1535,7 +1537,7 @@ fn try_connect_client(
     config: &BackboneClientConfig,
     underlay_mark: Option<u32>,
 ) -> io::Result<TcpStream> {
-    let runtime = config.runtime.lock().unwrap().clone();
+    let runtime = lock_or_recover(&config.runtime, "backbone runtime").clone();
     let addr_str = format!("{}:{}", config.target_host, config.target_port);
     let addr = addr_str
         .to_socket_addrs()?
@@ -1721,7 +1723,7 @@ fn client_reconnect(
 ) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
-        let runtime = config.runtime.lock().unwrap().clone();
+        let runtime = lock_or_recover(&config.runtime, "backbone runtime").clone();
 
         let shift = attempts.min(MAX_BACKOFF_SHIFT);
         let backoff = runtime.reconnect_wait * 2u32.pow(shift);
@@ -1851,7 +1853,8 @@ fn parse_positive_duration_secs(params: &HashMap<String, String>, key: &str) -> 
         .get(key)
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|v| *v > 0.0)
-        .map(Duration::from_secs_f64)
+        .and_then(|v| Duration::try_from_secs_f64(v).ok())
+        .filter(|duration| Instant::now().checked_add(*duration).is_some())
 }
 
 fn parse_nonnegative_duration(
@@ -3630,5 +3633,22 @@ mod tests {
                 "unexpected error for {value}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn positive_duration_param_rejects_values_that_are_not_durations() {
+        for raw in ["inf", "-inf", "NaN", "1e300", "-1", "0"] {
+            let params = HashMap::from([("idle_timeout".to_string(), raw.to_string())]);
+            assert_eq!(
+                parse_positive_duration_secs(&params, "idle_timeout"),
+                None,
+                "value {raw} should be ignored"
+            );
+        }
+        let params = HashMap::from([("idle_timeout".to_string(), "2.5".to_string())]);
+        assert_eq!(
+            parse_positive_duration_secs(&params, "idle_timeout"),
+            Some(Duration::from_millis(2500))
+        );
     }
 }
