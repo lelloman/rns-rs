@@ -127,14 +127,82 @@ fn reload_embedded_http_auth_if_needed(
             poisoned.into_inner()
         }
     };
-    config.auth_token = next.http.auth_token.clone();
-    config.disable_auth = next.http.disable_auth;
+    apply_auth_reload(
+        &mut config,
+        next.http.auth_token.as_deref(),
+        next.http.disable_auth,
+    );
     log::info!("reloaded embedded control-plane auth settings in place");
+}
+
+/// Apply reloaded auth settings to the live control-plane config.
+///
+/// A reload that enables auth but names no token keeps the token already in
+/// use, so the control plane stays reachable with the known token instead of
+/// ending up with auth enabled and nothing that can match.
+fn apply_auth_reload(
+    config: &mut rns_ctl::config::CtlConfig,
+    next_token: Option<&str>,
+    next_disable_auth: bool,
+) {
+    match next_token {
+        Some(token) => config.auth_token = Some(token.to_string()),
+        None if next_disable_auth => config.auth_token = None,
+        None => {
+            if config.auth_token.is_some() {
+                log::warn!(
+                    "http.auth_token was removed from the configuration while auth stays enabled; \
+                     keeping the previous token until a new one is configured"
+                );
+            }
+        }
+    }
+    config.disable_auth = next_disable_auth;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn live_config(token: Option<&str>, disable_auth: bool) -> rns_ctl::config::CtlConfig {
+        rns_ctl::config::CtlConfig {
+            auth_token: token.map(String::from),
+            disable_auth,
+            ..rns_ctl::config::CtlConfig::default()
+        }
+    }
+
+    #[test]
+    fn auth_reload_replaces_the_token_when_one_is_given() {
+        let mut config = live_config(Some("old"), false);
+        apply_auth_reload(&mut config, Some("new"), false);
+        assert_eq!(config.auth_token.as_deref(), Some("new"));
+        assert!(!config.disable_auth);
+    }
+
+    #[test]
+    fn auth_reload_without_a_token_keeps_the_previous_one_while_auth_is_enabled() {
+        let mut config = live_config(Some("old"), false);
+        apply_auth_reload(&mut config, None, false);
+        assert_eq!(config.auth_token.as_deref(), Some("old"));
+        assert!(!config.disable_auth);
+    }
+
+    #[test]
+    fn auth_reload_that_disables_auth_clears_the_token() {
+        let mut config = live_config(Some("old"), false);
+        apply_auth_reload(&mut config, None, true);
+        assert_eq!(config.auth_token, None);
+        assert!(config.disable_auth);
+    }
+
+    #[test]
+    fn auth_reload_that_re_enables_auth_with_a_token_sets_both() {
+        let mut config = live_config(None, true);
+        apply_auth_reload(&mut config, Some("new"), false);
+        assert_eq!(config.auth_token.as_deref(), Some("new"));
+        assert!(!config.disable_auth);
+    }
 
     #[test]
     fn new_supervised_state_registers_managed_processes() {

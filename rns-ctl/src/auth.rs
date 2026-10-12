@@ -12,9 +12,10 @@ pub fn check_auth(
         return Ok(());
     }
 
-    let expected = match &config.auth_token {
-        Some(t) => t.as_str(),
-        None => return Ok(()), // No token configured and auth not disabled = open (shouldn't happen)
+    // Auth is enabled, so a request is accepted only when it carries the
+    // configured token. Without a configured token nothing can match.
+    let Some(expected) = config.auth_token.as_deref() else {
+        return Err(HttpResponse::unauthorized("No auth token configured"));
     };
 
     let auth_header = req.headers.get("authorization");
@@ -41,9 +42,8 @@ pub fn check_ws_auth(query: &str, config: &ControlPlaneConfigHandle) -> Result<(
         return Ok(());
     }
 
-    let expected = match &config.auth_token {
-        Some(t) => t.as_str(),
-        None => return Ok(()),
+    let Some(expected) = config.auth_token.as_deref() else {
+        return Err(HttpResponse::unauthorized("No auth token configured"));
     };
 
     let params = crate::http::parse_query(query);
@@ -87,9 +87,12 @@ mod tests {
     }
 
     #[test]
-    fn auth_no_token_configured() {
+    fn auth_enabled_without_a_token_denies_every_request() {
         let config = make_config(None, false);
-        assert!(check_auth(&make_req(None), &config).is_ok());
+        assert!(check_auth(&make_req(None), &config).is_err());
+        assert!(check_auth(&make_req(Some("Bearer anything")), &config).is_err());
+        assert!(check_ws_auth("token=anything", &config).is_err());
+        assert!(check_ws_auth("", &config).is_err());
     }
 
     #[test]
