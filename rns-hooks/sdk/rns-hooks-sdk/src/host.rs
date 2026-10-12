@@ -107,13 +107,15 @@ pub fn get_link_state(link_hash: &[u8; 16]) -> Option<u8> {
 }
 
 /// Inject a raw action. `buf` must contain a binary-encoded action.
-/// Returns `true` on success.
+/// Returns `true` on success; `false` if the action is invalid or the
+/// per-call action limit has been reached.
 pub fn inject_action_raw(buf: &[u8]) -> bool {
     unsafe { host_inject_action(buf.as_ptr() as i32, buf.len() as i32) == 0 }
 }
 
 /// Emit a provider event for host-side forwarding.
-/// Returns 0 on success, -1 on invalid arguments, -2 if disabled by the host.
+/// Returns 0 on success, -1 on invalid arguments, -2 if disabled by the host,
+/// -3 if the per-call event limit has been reached.
 pub fn emit_event(payload_type: &str, payload: &[u8]) -> i32 {
     unsafe {
         host_emit_event(

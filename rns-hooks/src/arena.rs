@@ -251,7 +251,7 @@ pub fn read_result(
 ) -> Result<HookResult, HookError> {
     let size = std::mem::size_of::<HookResult>();
     let mem_size = memory.data_size(&store);
-    if offset + size > mem_size {
+    if offset.checked_add(size).is_none_or(|end| end > mem_size) {
         return Err(HookError::InvalidResult(format!(
             "result offset {} + size {} exceeds memory size {}",
             offset, size, mem_size

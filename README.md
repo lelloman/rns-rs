@@ -406,7 +406,8 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 
 - **Crash-safe WASM hooks** — WASM traps, invalid results, and fuel exhaustion are isolated by the runtime and fail open, so processing continues as if the hook returned `Continue`
 - **Trusted native hooks** — native hooks run in-process and are not crash-safe; they can block, corrupt, or terminate the node and must only load trusted code
-- **Fuel-limited WASM** — WASM invocations run with a bounded fuel budget to prevent runaway execution
+- **Fuel-limited WASM** — WASM invocations run with a bounded fuel budget to prevent runaway execution; bytes copied by host functions are charged against the same budget
+- **Bounded WASM resources** — each WASM hook instance is limited to 16 MiB of linear memory (a failed `memory.grow` traps), 64-bit memories are rejected at load time, and each invocation may inject at most 64 actions (256 KiB) and emit at most 256 provider events (256 KiB); further calls return `-3`
 - **Instance persistence** — WASM linear memory survives across calls, so hooks can maintain counters, caches, or bloom filters
 - **Native backend** — native hooks are loaded with `dlopen`/`LoadLibrary` and run in-process for targets where Wasmtime is unavailable, such as ARMv7
 - **Hot-reload** — hooks can be reloaded at runtime without restarting the node (`rns-ctl hook reload`)

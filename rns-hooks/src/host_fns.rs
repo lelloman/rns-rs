@@ -1,4 +1,9 @@
-use crate::runtime::StoreData;
+use crate::runtime::{
+    StoreData, MAX_INJECTED_ACTIONS_PER_CALL, MAX_INJECTED_ACTION_BYTES_PER_CALL,
+    MAX_LOG_MESSAGES_PER_CALL, MAX_LOG_MESSAGE_BYTES, MAX_PROVIDER_EVENTS_PER_CALL,
+    MAX_PROVIDER_EVENT_BYTES_PER_CALL,
+};
+use crate::wire::ActionWire;
 use wasmtime::{Caller, Linker};
 
 /// Register all host functions into the linker under the "env" module.
@@ -22,37 +27,85 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), was
     Ok(())
 }
 
+/// Return code for a call refused because a per-call limit was reached.
+pub const LIMIT_REACHED: i32 = -3;
+
 fn get_memory(caller: &mut Caller<'_, StoreData>) -> Option<wasmtime::Memory> {
     caller.get_export("memory").and_then(|e| e.into_memory())
 }
 
-fn read_bytes(data: &[u8], ptr: usize, len: usize) -> Option<&[u8]> {
-    let end = ptr.checked_add(len)?;
-    data.get(ptr..end)
+/// Convert a guest pointer and length into a host range. Guest pointers are
+/// unsigned 32-bit offsets into linear memory.
+fn guest_range(ptr: i32, len: usize) -> Option<std::ops::Range<usize>> {
+    let start = ptr as u32 as usize;
+    let end = start.checked_add(len)?;
+    Some(start..end)
 }
 
-fn read_16(data: &[u8], ptr: usize) -> Option<[u8; 16]> {
-    read_bytes(data, ptr, 16).map(|s| {
-        let mut arr = [0u8; 16];
-        arr.copy_from_slice(s);
-        arr
-    })
+fn read_bytes(data: &[u8], ptr: i32, len: i32) -> Option<&[u8]> {
+    data.get(guest_range(ptr, len as u32 as usize)?)
+}
+
+fn read_16(data: &[u8], ptr: i32) -> Option<[u8; 16]> {
+    data.get(guest_range(ptr, 16)?)?.try_into().ok()
+}
+
+fn write_bytes(data: &mut [u8], ptr: i32, bytes: &[u8]) -> bool {
+    match guest_range(ptr, bytes.len()).and_then(|range| data.get_mut(range)) {
+        Some(out) => {
+            out.copy_from_slice(bytes);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Charge one unit of fuel per byte copied between guest memory and the host.
+/// Returns false, leaving no fuel, if the remaining budget does not cover it.
+fn charge_fuel(caller: &mut Caller<'_, StoreData>, bytes: usize) -> bool {
+    let Ok(fuel) = caller.get_fuel() else {
+        // Fuel metering is not enabled for this store.
+        return true;
+    };
+    let cost = u64::try_from(bytes).unwrap_or(u64::MAX);
+    let enough = fuel >= cost;
+    let _ = caller.set_fuel(fuel.saturating_sub(cost));
+    enough
 }
 
 /// Log a message from guest memory.
+///
+/// Messages are forwarded to the host logger and not retained. At most
+/// `MAX_LOG_MESSAGES_PER_CALL` messages are forwarded per invocation, each
+/// truncated to `MAX_LOG_MESSAGE_BYTES`.
 fn host_log(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) {
-    if ptr < 0 || len < 0 {
+    if caller.data().log_messages_forwarded >= MAX_LOG_MESSAGES_PER_CALL {
+        let data = caller.data_mut();
+        data.log_messages_dropped += 1;
+        if data.log_messages_dropped == 1 {
+            log::debug!(
+                "[wasm-hook {}] log limit of {} messages per call reached, dropping the rest",
+                data.program_name,
+                MAX_LOG_MESSAGES_PER_CALL
+            );
+        }
         return;
     }
     let Some(memory) = get_memory(&mut caller) else {
         return;
     };
     let data = memory.data(&caller);
-    if let Some(bytes) = read_bytes(data, ptr as usize, len as usize) {
-        let msg = String::from_utf8_lossy(bytes).to_string();
-        log::debug!("[wasm-hook] {}", msg);
-        caller.data_mut().log_messages.push(msg);
+    let Some(bytes) = read_bytes(data, ptr, len) else {
+        return;
+    };
+    let bytes = &bytes[..bytes.len().min(MAX_LOG_MESSAGE_BYTES)];
+    let msg = String::from_utf8_lossy(bytes).into_owned();
+    if !charge_fuel(&mut caller, msg.len()) {
+        return;
     }
+    let data = caller.data_mut();
+    data.log_messages_forwarded += 1;
+    log::debug!("[wasm-hook {}] {}", data.program_name, msg);
 }
 
 /// Check if a path exists to the given destination.
@@ -61,7 +114,7 @@ fn host_has_path(mut caller: Caller<'_, StoreData>, dest_ptr: i32) -> i32 {
         return 0;
     };
     let data = memory.data(&caller);
-    let Some(dest) = read_16(data, dest_ptr as usize) else {
+    let Some(dest) = read_16(data, dest_ptr) else {
         return 0;
     };
     let result = unsafe { caller.data().engine().has_path(&dest) };
@@ -74,7 +127,7 @@ fn host_get_hops(mut caller: Caller<'_, StoreData>, dest_ptr: i32) -> i32 {
         return -1;
     };
     let data = memory.data(&caller);
-    let Some(dest) = read_16(data, dest_ptr as usize) else {
+    let Some(dest) = read_16(data, dest_ptr) else {
         return -1;
     };
     match unsafe { caller.data().engine().hops_to(&dest) } {
@@ -89,19 +142,11 @@ fn host_get_next_hop(mut caller: Caller<'_, StoreData>, dest_ptr: i32, out_ptr: 
         return 0;
     };
     let data = memory.data(&caller);
-    let Some(dest) = read_16(data, dest_ptr as usize) else {
+    let Some(dest) = read_16(data, dest_ptr) else {
         return 0;
     };
     match unsafe { caller.data().engine().next_hop(&dest) } {
-        Some(hop) => {
-            let data = memory.data_mut(&mut caller);
-            let out = out_ptr as usize;
-            if out + 16 > data.len() {
-                return 0;
-            }
-            data[out..out + 16].copy_from_slice(&hop);
-            1
-        }
+        Some(hop) => write_bytes(memory.data_mut(&mut caller), out_ptr, &hop) as i32,
         None => 0,
     }
 }
@@ -112,7 +157,7 @@ fn host_is_blackholed(mut caller: Caller<'_, StoreData>, identity_ptr: i32) -> i
         return 0;
     };
     let data = memory.data(&caller);
-    let Some(identity) = read_16(data, identity_ptr as usize) else {
+    let Some(identity) = read_16(data, identity_ptr) else {
         return 0;
     };
     let result = unsafe { caller.data().engine().is_blackholed(&identity) };
@@ -126,7 +171,7 @@ fn host_get_interface_name(
     out_ptr: i32,
     out_len: i32,
 ) -> i32 {
-    if out_ptr < 0 || out_len < 0 {
+    if out_len < 0 {
         return -1;
     }
     let name = unsafe { caller.data().engine().interface_name(id as u64) };
@@ -136,15 +181,11 @@ fn host_get_interface_name(
     };
     let bytes = name.as_bytes();
     let write_len = bytes.len().min(out_len as usize);
-    let data = memory.data_mut(&mut caller);
-    let out = out_ptr as usize;
-    if out + write_len > data.len() {
+    if !write_bytes(memory.data_mut(&mut caller), out_ptr, &bytes[..write_len]) {
         return -1;
     }
-    data[out..out + write_len].copy_from_slice(&bytes[..write_len]);
     write_len as i32
 }
-
 /// Get interface mode. Returns mode byte, or -1 if not found.
 fn host_get_interface_mode(caller: Caller<'_, StoreData>, id: i64) -> i32 {
     match unsafe { caller.data().engine().interface_mode(id as u64) } {
@@ -160,13 +201,7 @@ fn host_get_transport_identity(mut caller: Caller<'_, StoreData>, out_ptr: i32) 
     let Some(memory) = get_memory(&mut caller) else {
         return 0;
     };
-    let data = memory.data_mut(&mut caller);
-    let out = out_ptr as usize;
-    if out + 16 > data.len() {
-        return 0;
-    }
-    data[out..out + 16].copy_from_slice(&hash);
-    1
+    write_bytes(memory.data_mut(&mut caller), out_ptr, &hash) as i32
 }
 
 /// Get the outgoing announce rate for an interface in millihertz.
@@ -182,7 +217,7 @@ fn host_get_link_state(mut caller: Caller<'_, StoreData>, link_hash_ptr: i32) ->
         return -1;
     };
     let data = memory.data(&caller);
-    let Some(hash) = read_16(data, link_hash_ptr as usize) else {
+    let Some(hash) = read_16(data, link_hash_ptr) else {
         return -1;
     };
     match unsafe { caller.data().engine().link_state(&hash) } {
@@ -192,30 +227,66 @@ fn host_get_link_state(mut caller: Caller<'_, StoreData>, link_hash_ptr: i32) ->
 }
 
 /// Inject an action from guest memory (action_ptr, action_len).
-/// Returns 0 on success, -1 on error.
+/// Returns 0 on success, -1 on error, -3 if the per-call action limit is reached.
 ///
 /// The guest writes a binary-encoded action into linear memory, then calls
 /// this function. The host parses it into an `ActionWire` and queues it in
 /// `StoreData.injected_actions` for dispatch after the hook chain completes.
+/// At most `MAX_INJECTED_ACTIONS_PER_CALL` actions carrying at most
+/// `MAX_INJECTED_ACTION_BYTES_PER_CALL` bytes are accepted per invocation.
 fn host_inject_action(mut caller: Caller<'_, StoreData>, action_ptr: i32, action_len: i32) -> i32 {
-    if action_ptr < 0 || action_len <= 0 {
+    if action_len <= 0 {
         return -1;
+    }
+    if caller.data().injected_actions.len() >= MAX_INJECTED_ACTIONS_PER_CALL {
+        return LIMIT_REACHED;
     }
     let Some(memory) = get_memory(&mut caller) else {
         return -1;
     };
     let data = memory.data(&caller);
-    match crate::arena::read_action_wire(data, action_ptr as usize, action_len as usize) {
-        Some(action) => {
-            caller.data_mut().injected_actions.push(action);
-            0
-        }
-        None => -1,
+    let Some(range) = guest_range(action_ptr, action_len as usize) else {
+        return -1;
+    };
+    let Some(action) = crate::arena::read_action_wire(data, range.start, range.len()) else {
+        return -1;
+    };
+    let size = range.len().saturating_add(action_payload_len(&action));
+    if !charge_fuel(&mut caller, size) {
+        return -1;
+    }
+    let store_data = caller.data_mut();
+    let total = store_data.injected_action_bytes.saturating_add(size);
+    if total > MAX_INJECTED_ACTION_BYTES_PER_CALL {
+        return LIMIT_REACHED;
+    }
+    store_data.injected_action_bytes = total;
+    store_data.injected_actions.push(action);
+    0
+}
+
+/// Bytes copied out of guest memory for the variable-length fields of an action.
+fn action_payload_len(action: &ActionWire) -> usize {
+    match action {
+        ActionWire::SendOnInterface { raw, .. }
+        | ActionWire::BroadcastOnAllInterfaces { raw, .. }
+        | ActionWire::DeliverLocal { raw, .. }
+        | ActionWire::ForwardToLocalClients { raw, .. }
+        | ActionWire::ForwardPlainBroadcast { raw, .. }
+        | ActionWire::CacheAnnounce { raw, .. } => raw.len(),
+        ActionWire::TunnelSynthesize { data, .. } => data.len(),
+        ActionWire::AnnounceReceived { app_data, .. } => app_data.as_ref().map_or(0, Vec::len),
+        ActionWire::PathUpdated { .. } | ActionWire::TunnelEstablished { .. } => 0,
     }
 }
 
 /// Queue a provider event for host-side forwarding.
-/// Returns 0 on success, -1 on invalid memory, -2 if provider events are disabled.
+/// Returns 0 on success, -1 on invalid memory, -2 if provider events are disabled,
+/// -3 if the per-call event limit is reached.
+///
+/// At most `MAX_PROVIDER_EVENTS_PER_CALL` events carrying at most
+/// `MAX_PROVIDER_EVENT_BYTES_PER_CALL` bytes (type plus payload) are accepted
+/// per invocation.
 fn host_emit_event(
     mut caller: Caller<'_, StoreData>,
     type_ptr: i32,
@@ -223,26 +294,37 @@ fn host_emit_event(
     payload_ptr: i32,
     payload_len: i32,
 ) -> i32 {
-    if type_ptr < 0 || type_len < 0 || payload_ptr < 0 || payload_len < 0 {
+    if type_len < 0 || payload_len < 0 {
         return -1;
     }
     if !caller.data().provider_events_enabled {
         return -2;
     }
+    let size = type_len as usize + payload_len as usize;
+    let store_data = caller.data();
+    if store_data.provider_events.len() >= MAX_PROVIDER_EVENTS_PER_CALL
+        || store_data.provider_event_bytes.saturating_add(size) > MAX_PROVIDER_EVENT_BYTES_PER_CALL
+    {
+        return LIMIT_REACHED;
+    }
     let Some(memory) = get_memory(&mut caller) else {
         return -1;
     };
     let data = memory.data(&caller);
-    let Some(payload_type_bytes) = read_bytes(data, type_ptr as usize, type_len as usize) else {
+    let Some(payload_type_bytes) = read_bytes(data, type_ptr, type_len) else {
         return -1;
     };
-    let Some(payload) = read_bytes(data, payload_ptr as usize, payload_len as usize) else {
+    let Some(payload) = read_bytes(data, payload_ptr, payload_len) else {
         return -1;
     };
-    let payload_type = String::from_utf8_lossy(payload_type_bytes).to_string();
+    let payload_type = String::from_utf8_lossy(payload_type_bytes).into_owned();
     let payload = payload.to_vec();
-    caller
-        .data_mut()
+    if !charge_fuel(&mut caller, size) {
+        return -1;
+    }
+    let store_data = caller.data_mut();
+    store_data.provider_event_bytes += size;
+    store_data
         .provider_events
         .push(crate::runtime::RawProviderEvent {
             payload_type,

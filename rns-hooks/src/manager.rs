@@ -97,7 +97,7 @@ impl HookManager {
             let module = self
                 .runtime
                 .compile(bytes)
-                .map_err(|e| HookError::CompileError(e.to_string()))?;
+                .map_err(|e| HookError::CompileError(format!("{:#}", e)))?;
             self.validate_abi_version(&name, &module)?;
             Ok(LoadedProgram::new(name, module, priority))
         }
@@ -119,24 +119,18 @@ impl HookManager {
 
         // Instantiate the module to call the function and read the version.
         static NULL_ENGINE: NullEngine = NullEngine;
-        let mut store = Store::new(
-            self.runtime.engine(),
-            StoreData {
-                engine_access: &NULL_ENGINE as *const dyn EngineAccess,
-                now: 0.0,
-                injected_actions: Vec::new(),
-                log_messages: Vec::new(),
-                provider_events: Vec::new(),
-                provider_events_enabled: false,
-            },
-        );
-        store
-            .set_fuel(self.runtime.fuel())
+        let mut store = self
+            .runtime
+            .new_store(StoreData::new(
+                name.to_string(),
+                &NULL_ENGINE as *const dyn EngineAccess,
+                0.0,
+                false,
+                self.runtime.max_memory(),
+            ))
             .map_err(|e| HookError::CompileError(e.to_string()))?;
 
-        let instance = self
-            .linker
-            .instantiate(&mut store, module)
+        let instance = guard_guest_call(|| self.linker.instantiate(&mut store, module))
             .map_err(|e| HookError::InstantiationError(e.to_string()))?;
 
         let func = instance
@@ -145,8 +139,7 @@ impl HookManager {
                 HookError::CompileError(format!("__rns_abi_version has wrong signature: {}", e))
             })?;
 
-        let version = func
-            .call(&mut store, ())
+        let version = guard_guest_call(|| func.call(&mut store, ()))
             .map_err(|e| HookError::Trap(format!("__rns_abi_version trapped: {}", e)))?;
 
         if version != HOST_ABI_VERSION {
@@ -397,20 +390,21 @@ impl HookManager {
             }
             (s, i)
         } else {
-            let store_data = StoreData {
-                engine_access: engine_access_ptr,
+            let store_data = StoreData::new(
+                program.name.clone(),
+                engine_access_ptr,
                 now,
-                injected_actions: Vec::new(),
-                log_messages: Vec::new(),
-                provider_events: Vec::new(),
                 provider_events_enabled,
-            };
+                self.runtime.max_memory(),
+            );
 
-            let mut store = Store::new(self.runtime.engine(), store_data);
-            if let Err(e) = store.set_fuel(self.runtime.fuel()) {
-                log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
-                return None;
-            }
+            let mut store = match self.runtime.new_store(store_data) {
+                Ok(store) => store,
+                Err(e) => {
+                    log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
+                    return None;
+                }
+            };
 
             let module = match &program.backend {
                 ProgramBackend::Builtin(_) => unreachable!(),
@@ -418,7 +412,7 @@ impl HookManager {
                 #[cfg(feature = "native")]
                 ProgramBackend::Native(_) => unreachable!(),
             };
-            let instance = match self.linker.instantiate(&mut store, &module) {
+            let instance = match guard_guest_call(|| self.linker.instantiate(&mut store, &module)) {
                 Ok(inst) => inst,
                 Err(e) => {
                     log::warn!("failed to instantiate hook '{}': {}", program.name, e);
@@ -482,9 +476,31 @@ impl HookManager {
             }
         };
 
-        let result_offset = match func.call(&mut store, arena::ARENA_BASE as i32) {
-            Ok(offset) => offset,
-            Err(e) => {
+        let call = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            func.call(&mut store, arena::ARENA_BASE as i32)
+        }));
+        let result_offset = match call {
+            Ok(Ok(offset)) => offset,
+            Err(panic) => {
+                // A host function panicked while serving this program. The
+                // store may hold partial state, so drop it instead of caching
+                // it; the next call instantiates a fresh one.
+                let auto_disabled = program.record_trap();
+                log::warn!(
+                    "hook '{}' aborted: host panic: {}",
+                    program.name,
+                    panic_message(&*panic)
+                );
+                if auto_disabled {
+                    log::error!(
+                        "hook '{}' auto-disabled after {} consecutive traps",
+                        program.name,
+                        program.consecutive_traps
+                    );
+                }
+                return None;
+            }
+            Ok(Err(e)) => {
                 // Fail-open: trap or fuel exhaustion → continue
                 let auto_disabled = program.record_trap();
                 if auto_disabled {
@@ -502,7 +518,8 @@ impl HookManager {
         };
 
         // Read result from guest memory
-        let ret = match arena::read_result(&memory, &store, result_offset as usize) {
+        // Guest pointers are unsigned 32-bit offsets.
+        let ret = match arena::read_result(&memory, &store, result_offset as u32 as usize) {
             Ok(result) => {
                 program.record_success();
 
@@ -646,6 +663,32 @@ impl HookManager {
         } else {
             None
         }
+    }
+}
+
+/// Run a call into guest code, converting a panic raised by a host function
+/// into an error so a single program cannot unwind through the driver thread.
+#[cfg(feature = "wasm")]
+fn guard_guest_call<T>(
+    call: impl FnOnce() -> Result<T, wasmtime::Error>,
+) -> Result<T, wasmtime::Error> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+        Ok(result) => result,
+        Err(panic) => Err(wasmtime::format_err!(
+            "host panic: {}",
+            panic_message(&*panic)
+        )),
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(msg) = panic.downcast_ref::<&str>() {
+        msg
+    } else if let Some(msg) = panic.downcast_ref::<String>() {
+        msg
+    } else {
+        "unknown panic"
     }
 }
 
@@ -1608,5 +1651,454 @@ mod tests {
         assert_eq!(exec.provider_events.len(), 1);
         assert_eq!(exec.provider_events[0].payload_type, "packet");
         assert_eq!(exec.provider_events[0].payload, vec![1, 2, 3]);
+    }
+
+    /// Build a hook module whose `on_hook` runs `body` and then returns a
+    /// Modify verdict exposing `out_len` bytes at 0x3000 (or Continue when
+    /// `out_len` is 0).
+    fn hook_module(imports: &str, pages: u32, body: &str, out_len: u32) -> String {
+        let verdict = if out_len == 0 { 0 } else { 2 };
+        format!(
+            r#"(module
+                {imports}
+                (memory (export "memory") {pages})
+                (global $calls (mut i32) (i32.const 0))
+                (func (export "__rns_abi_version") (result i32) (i32.const 1))
+                (func (export "on_hook") (param i32) (result i32)
+                    (local $i i32)
+                    (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
+                    {body}
+                    (i32.store (i32.const 0x2000) (i32.const {verdict}))
+                    (i32.store (i32.const 0x2004) (i32.const 0x3000))
+                    (i32.store (i32.const 0x2008) (i32.const {out_len}))
+                    (i32.store (i32.const 0x200c) (i32.const 0))
+                    (i32.store (i32.const 0x2010) (i32.const 0))
+                    (i32.store (i32.const 0x2014) (i32.const 0))
+                    (i32.store (i32.const 0x2018) (i32.const 0))
+                    (i32.const 0x2000)))"#
+        )
+    }
+
+    fn read_i32s(data: &[u8]) -> Vec<i32> {
+        data.chunks_exact(4)
+            .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    fn cached_store(prog: &LoadedProgram) -> &Store<StoreData> {
+        match &prog.backend {
+            ProgramBackend::Wasm(wasm) => &wasm.cached.as_ref().expect("cached store").0,
+            _ => panic!("expected a wasm program"),
+        }
+    }
+
+    struct AnsweringEngine;
+    impl EngineAccess for AnsweringEngine {
+        fn has_path(&self, _: &[u8; 16]) -> bool {
+            true
+        }
+        fn hops_to(&self, _: &[u8; 16]) -> Option<u8> {
+            Some(2)
+        }
+        fn next_hop(&self, _: &[u8; 16]) -> Option<[u8; 16]> {
+            Some([7; 16])
+        }
+        fn is_blackholed(&self, _: &[u8; 16]) -> bool {
+            true
+        }
+        fn interface_name(&self, _: u64) -> Option<String> {
+            Some("eth0".into())
+        }
+        fn interface_mode(&self, _: u64) -> Option<u8> {
+            Some(1)
+        }
+        fn identity_hash(&self) -> Option<[u8; 16]> {
+            Some([9; 16])
+        }
+        fn announce_rate(&self, _: u64) -> Option<i32> {
+            Some(1)
+        }
+        fn link_state(&self, _: &[u8; 16]) -> Option<u8> {
+            Some(2)
+        }
+    }
+
+    const ALL_MEMORY_HOST_FNS: &str = r#"
+        (import "env" "host_log" (func $log (param i32 i32)))
+        (import "env" "host_has_path" (func $has_path (param i32) (result i32)))
+        (import "env" "host_get_hops" (func $hops (param i32) (result i32)))
+        (import "env" "host_get_next_hop" (func $next_hop (param i32 i32) (result i32)))
+        (import "env" "host_is_blackholed" (func $blackholed (param i32) (result i32)))
+        (import "env" "host_get_interface_name" (func $ifname (param i64 i32 i32) (result i32)))
+        (import "env" "host_get_transport_identity" (func $identity (param i32) (result i32)))
+        (import "env" "host_get_link_state" (func $link (param i32) (result i32)))
+        (import "env" "host_inject_action" (func $inject (param i32 i32) (result i32)))
+        (import "env" "host_emit_event" (func $emit (param i32 i32 i32 i32) (result i32)))
+    "#;
+
+    #[test]
+    fn host_fns_reject_out_of_range_guest_pointers() {
+        let mgr = make_manager();
+        let body = r#"
+            (call $log (i32.const -16) (i32.const 0x7fffffff))
+            (call $log (i32.const 0x100) (i32.const -1))
+            (i32.store (i32.const 0x3000) (call $has_path (i32.const -16)))
+            (i32.store (i32.const 0x3004) (call $hops (i32.const -16)))
+            (i32.store (i32.const 0x3008) (call $next_hop (i32.const 0x100) (i32.const -16)))
+            (i32.store (i32.const 0x300c) (call $next_hop (i32.const -16) (i32.const 0x100)))
+            (i32.store (i32.const 0x3010) (call $blackholed (i32.const -16)))
+            (i32.store (i32.const 0x3014)
+                (call $ifname (i64.const 1) (i32.const -16) (i32.const 0x7fffffff)))
+            (i32.store (i32.const 0x3018) (call $identity (i32.const -16)))
+            (i32.store (i32.const 0x301c) (call $link (i32.const -16)))
+            (i32.store (i32.const 0x3020) (call $inject (i32.const -16) (i32.const 0x7fffffff)))
+            (i32.store (i32.const 0x3024)
+                (call $emit (i32.const -16) (i32.const 16) (i32.const 0) (i32.const 0)))
+            (i32.store (i32.const 0x3028)
+                (call $emit (i32.const 0) (i32.const 0) (i32.const -16) (i32.const 16)))
+            (i32.store (i32.const 0x302c) (call $next_hop (i32.const 0x100) (i32.const 0x200)))
+        "#;
+        let wat = hook_module(ALL_MEMORY_HOST_FNS, 1, body, 48);
+        let mut prog = mgr.compile("bounds".into(), wat.as_bytes(), 0).unwrap();
+        let expected = vec![0, -1, 0, 0, 0, -1, 0, -1, -1, -1, -1, 1];
+
+        for _ in 0..2 {
+            let exec = mgr
+                .execute_program_with_provider_events(
+                    &mut prog,
+                    &HookContext::Tick,
+                    &AnsweringEngine,
+                    0.0,
+                    true,
+                    None,
+                )
+                .expect("hook keeps running after out-of-range pointers");
+            assert_eq!(read_i32s(&exec.modified_data.unwrap()), expected);
+            assert!(exec.injected_actions.is_empty());
+            assert!(exec.provider_events.is_empty());
+        }
+        assert_eq!(prog.consecutive_traps, 0);
+    }
+
+    #[test]
+    fn result_offset_near_end_of_address_space_is_rejected() {
+        let mgr = make_manager();
+        let wat = r#"(module
+            (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "on_hook") (param i32) (result i32) (i32.const -4)))"#;
+        let mut prog = mgr.compile("offset".into(), wat.as_bytes(), 0).unwrap();
+        assert!(mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .is_none());
+        assert_eq!(prog.consecutive_traps, 1);
+
+        let mut valid = mgr
+            .compile("valid".into(), WAT_CONTINUE.as_bytes(), 0)
+            .unwrap();
+        assert!(mgr
+            .execute_program(&mut valid, &HookContext::Tick, &NullEngine, 0.0, None)
+            .is_some());
+    }
+
+    #[test]
+    fn host_panic_is_contained_and_program_recovers() {
+        struct PanickingEngine;
+        impl EngineAccess for PanickingEngine {
+            fn has_path(&self, _: &[u8; 16]) -> bool {
+                panic!("engine lookup failed")
+            }
+            fn hops_to(&self, _: &[u8; 16]) -> Option<u8> {
+                None
+            }
+            fn next_hop(&self, _: &[u8; 16]) -> Option<[u8; 16]> {
+                None
+            }
+            fn is_blackholed(&self, _: &[u8; 16]) -> bool {
+                false
+            }
+            fn interface_name(&self, _: u64) -> Option<String> {
+                None
+            }
+            fn interface_mode(&self, _: u64) -> Option<u8> {
+                None
+            }
+            fn identity_hash(&self) -> Option<[u8; 16]> {
+                None
+            }
+            fn announce_rate(&self, _: u64) -> Option<i32> {
+                None
+            }
+            fn link_state(&self, _: &[u8; 16]) -> Option<u8> {
+                None
+            }
+        }
+
+        let mgr = make_manager();
+        let mut prog = mgr
+            .compile("pathcheck".into(), WAT_HOST_HAS_PATH.as_bytes(), 0)
+            .unwrap();
+        assert!(mgr
+            .execute_program(&mut prog, &HookContext::Tick, &PanickingEngine, 0.0, None)
+            .is_none());
+        assert_eq!(prog.consecutive_traps, 1);
+
+        let exec = mgr
+            .execute_program(&mut prog, &HookContext::Tick, &AnsweringEngine, 0.0, None)
+            .expect("program runs again after a contained host panic");
+        assert!(exec.hook_result.unwrap().is_drop());
+        assert_eq!(prog.consecutive_traps, 0);
+    }
+
+    #[test]
+    fn memory_grow_past_limit_traps_and_host_continues() {
+        let mgr = make_manager();
+        let body = r#"
+            (if (i32.eq (global.get $calls) (i32.const 1))
+                (then (drop (memory.grow (i32.const 8192)))))
+            (i32.store (i32.const 0x3000) (memory.size))
+        "#;
+        let wat = hook_module("", 1, body, 4);
+        let mut prog = mgr.compile("grow".into(), wat.as_bytes(), 0).unwrap();
+        assert!(mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .is_none());
+        assert_eq!(prog.consecutive_traps, 1);
+
+        let exec = mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .expect("program runs after a refused grow");
+        assert_eq!(read_i32s(&exec.modified_data.unwrap()), vec![1]);
+    }
+
+    #[test]
+    fn memory_grow_within_limit_succeeds() {
+        let mgr = make_manager();
+        let body = r#"
+            (i32.store (i32.const 0x3000) (memory.grow (i32.const 100)))
+            (i32.store (i32.const 0x3004) (memory.size))
+        "#;
+        let wat = hook_module("", 1, body, 8);
+        let mut prog = mgr.compile("grow".into(), wat.as_bytes(), 0).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .unwrap();
+        assert_eq!(read_i32s(&exec.modified_data.unwrap()), vec![1, 101]);
+    }
+
+    #[test]
+    fn rejects_memory64_modules() {
+        let mgr = make_manager();
+        let wat = r#"(module
+            (memory (export "memory") i64 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1)))"#;
+        let err = mgr
+            .compile("m64".into(), wat.as_bytes(), 0)
+            .err()
+            .expect("memory64 module is rejected");
+        assert!(err.to_string().contains("memory64"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_declared_minimum_memory_above_limit() {
+        let mgr = make_manager();
+        let exported = r#"(module
+            (memory (export "memory") 1024)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1)))"#;
+        let err = mgr
+            .compile("big".into(), exported.as_bytes(), 0)
+            .err()
+            .expect("module above the memory limit is rejected");
+        assert!(err.to_string().contains("minimum memory"), "{}", err);
+
+        let internal = r#"(module
+            (memory 1024)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1)))"#;
+        assert!(mgr.compile("big".into(), internal.as_bytes(), 0).is_err());
+    }
+
+    #[test]
+    fn module_at_memory_limit_runs() {
+        let mgr = make_manager();
+        let pages = (crate::runtime::DEFAULT_MAX_MEMORY / 65536) as u32;
+        let body = r#"(i32.store (i32.const 0x3000) (memory.size))"#;
+        let wat = hook_module("", pages, body, 4);
+        let mut prog = mgr.compile("full".into(), wat.as_bytes(), 0).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .unwrap();
+        assert_eq!(read_i32s(&exec.modified_data.unwrap()), vec![pages as i32]);
+    }
+
+    #[test]
+    fn host_log_forwards_at_most_the_per_call_cap() {
+        let mgr = make_manager();
+        let imports = r#"(import "env" "host_log" (func $log (param i32 i32)))"#;
+        let body = r#"
+            (local.set $i (i32.const 0))
+            (block $done (loop $next
+                (br_if $done (i32.ge_u (local.get $i) (i32.const 100)))
+                (call $log (i32.const 0x4000) (i32.const 4096))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $next)))
+        "#;
+        let wat = hook_module(imports, 1, body, 0);
+        let mut prog = mgr.compile("log".into(), wat.as_bytes(), 0).unwrap();
+        for _ in 0..2 {
+            mgr.execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+                .unwrap();
+            let data = cached_store(&prog).data();
+            assert_eq!(
+                data.log_messages_forwarded,
+                crate::runtime::MAX_LOG_MESSAGES_PER_CALL
+            );
+            assert_eq!(
+                data.log_messages_dropped,
+                100 - crate::runtime::MAX_LOG_MESSAGES_PER_CALL
+            );
+        }
+    }
+
+    /// Write a SendOnInterface action at 0x3100 whose payload is
+    /// `payload_len` bytes at 0x10000, then inject it `count` times. Stores
+    /// the number of accepted calls at 0x3000 and the last return code at 0x3004.
+    fn inject_repeatedly(count: u32, payload_len: u32) -> String {
+        let imports =
+            r#"(import "env" "host_inject_action" (func $inject (param i32 i32) (result i32)))"#;
+        let body = format!(
+            r#"
+            (i32.store8 (i32.const 0x3100) (i32.const 0))
+            (i64.store (i32.const 0x3101) (i64.const 1))
+            (i32.store (i32.const 0x3109) (i32.const 0x10000))
+            (i32.store (i32.const 0x310d) (i32.const {payload_len}))
+            (i32.store (i32.const 0x3000) (i32.const 0))
+            (local.set $i (i32.const 0))
+            (block $done (loop $next
+                (br_if $done (i32.ge_u (local.get $i) (i32.const {count})))
+                (i32.store (i32.const 0x3004) (call $inject (i32.const 0x3100) (i32.const 17)))
+                (if (i32.eqz (i32.load (i32.const 0x3004)))
+                    (then (i32.store (i32.const 0x3000)
+                        (i32.add (i32.load (i32.const 0x3000)) (i32.const 1)))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $next)))
+            "#
+        );
+        hook_module(imports, 3, &body, 8)
+    }
+
+    #[test]
+    fn host_inject_action_refuses_actions_beyond_count_cap() {
+        let mgr = make_manager();
+        let cap = crate::runtime::MAX_INJECTED_ACTIONS_PER_CALL;
+        let wat = inject_repeatedly(cap as u32 + 6, 4);
+        let mut prog = mgr.compile("inject".into(), wat.as_bytes(), 0).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .unwrap();
+        assert_eq!(
+            read_i32s(&exec.modified_data.unwrap()),
+            vec![cap as i32, host_fns::LIMIT_REACHED]
+        );
+        assert_eq!(exec.injected_actions.len(), cap);
+    }
+
+    #[test]
+    fn host_inject_action_refuses_actions_beyond_byte_cap() {
+        let mgr = make_manager();
+        let wat = inject_repeatedly(5, 65536);
+        let mut prog = mgr.compile("inject".into(), wat.as_bytes(), 0).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .unwrap();
+        // Each action carries 17 + 65536 bytes; three fit in 256 KiB.
+        assert_eq!(
+            read_i32s(&exec.modified_data.unwrap()),
+            vec![3, host_fns::LIMIT_REACHED]
+        );
+        assert_eq!(exec.injected_actions.len(), 3);
+        for action in &exec.injected_actions {
+            match action {
+                crate::wire::ActionWire::SendOnInterface { raw, .. } => {
+                    assert_eq!(raw.len(), 65536)
+                }
+                other => panic!("expected SendOnInterface, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn host_emit_event_refuses_events_beyond_count_cap() {
+        let mgr = make_manager();
+        let cap = crate::runtime::MAX_PROVIDER_EVENTS_PER_CALL;
+        let imports =
+            r#"(import "env" "host_emit_event" (func $emit (param i32 i32 i32 i32) (result i32)))"#;
+        let body = format!(
+            r#"
+            (i32.store (i32.const 0x3000) (i32.const 0))
+            (local.set $i (i32.const 0))
+            (block $done (loop $next
+                (br_if $done (i32.ge_u (local.get $i) (i32.const {count})))
+                (i32.store (i32.const 0x3004)
+                    (call $emit (i32.const 0x3100) (i32.const 4) (i32.const 0x3200) (i32.const 8)))
+                (if (i32.eqz (i32.load (i32.const 0x3004)))
+                    (then (i32.store (i32.const 0x3000)
+                        (i32.add (i32.load (i32.const 0x3000)) (i32.const 1)))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $next)))
+            "#,
+            count = cap + 10
+        );
+        let wat = hook_module(imports, 1, &body, 8);
+        let mut prog = mgr.compile("emit".into(), wat.as_bytes(), 0).unwrap();
+        let exec = mgr
+            .execute_program_with_provider_events(
+                &mut prog,
+                &HookContext::Tick,
+                &NullEngine,
+                0.0,
+                true,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            read_i32s(&exec.modified_data.unwrap()),
+            vec![cap as i32, host_fns::LIMIT_REACHED]
+        );
+        assert_eq!(exec.provider_events.len(), cap);
+    }
+
+    #[test]
+    fn host_copies_consume_fuel_per_byte() {
+        let mgr = make_manager();
+        let imports =
+            r#"(import "env" "host_emit_event" (func $emit (param i32 i32 i32 i32) (result i32)))"#;
+        let fuel_used = |payload_len: u32| {
+            let body = format!(
+                r#"(drop (call $emit (i32.const 0x100) (i32.const 4)
+                    (i32.const 0x4000) (i32.const {payload_len})))"#
+            );
+            let wat = hook_module(imports, 2, &body, 0);
+            let mut prog = mgr.compile("fuel".into(), wat.as_bytes(), 0).unwrap();
+            let exec = mgr
+                .execute_program_with_provider_events(
+                    &mut prog,
+                    &HookContext::Tick,
+                    &NullEngine,
+                    0.0,
+                    true,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(exec.provider_events[0].payload.len(), payload_len as usize);
+            mgr.runtime.fuel() - cached_store(&prog).get_fuel().unwrap()
+        };
+        let small = fuel_used(0);
+        let large = fuel_used(100_000);
+        assert!(
+            large - small >= 100_000,
+            "fuel used: {} without payload, {} with 100000 bytes",
+            small,
+            large
+        );
     }
 }
