@@ -84,9 +84,9 @@ pub enum HolePunchPolicy {
     /// Reject all proposals.
     Reject,
     /// Accept all proposals automatically.
-    #[default]
     AcceptAll,
     /// Accept proposals only after the Reticulum link peer has identified itself.
+    #[default]
     IdentifiedOnly,
     /// Ask the application callback.
     AskApp,

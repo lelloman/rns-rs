@@ -382,10 +382,14 @@ The protocol uses a STUN-like probe to discover public endpoints, negotiates the
 **Configuration:**
 - Facilitator (transport node): `probe_port = 4343` in `[reticulum]`
 - Client (behind NAT): `probe_addr = <facilitator_ip>:4343` in `[reticulum]`
-- Incoming policy: `direct_connect_policy = accept_all` (default), `reject`,
-  `identified_only`, or `ask_app`. `identified_only` avoids revealing the
+- Incoming policy: `direct_connect_policy = identified_only` (default),
+  `accept_all`, `reject`, or `ask_app`. `identified_only` avoids revealing the
   responder's public endpoint until the peer has completed Reticulum
   `LINKIDENTIFY`; `ask_app` fails closed unless the application callback accepts.
+- Endpoint ranges: by default the facilitator and peer endpoints named in an
+  upgrade request must be globally routable unicast addresses. LAN-only
+  deployments can set `direct_connect_allow_private_endpoints = yes` to also
+  accept private, shared (100.64/10), link-local and IPv6 unique-local addresses.
 
 The public policy variant and `NodeConfig::direct_connect_policy` field are
 available in `rns-net` 0.7.1 and later.

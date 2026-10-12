@@ -16,6 +16,26 @@ const ACK_MAGIC: &[u8; 4] = b"RNSA";
 const PUNCH_PACKET_LEN: usize = 56; // 4 + 16 + 32 + 4
 const PUNCH_INTERVAL: Duration = Duration::from_millis(100);
 const PUNCH_DURATION: Duration = Duration::from_secs(10);
+/// Upper bound on punch packets sent per session (over all endpoints).
+pub const MAX_PUNCH_PACKETS: u32 = 128;
+/// Upper bound on ACK packets sent per session.
+pub const MAX_ACK_PACKETS: u32 = 128;
+
+/// Timing and packet budget for one punch session.
+#[derive(Debug, Clone, Copy)]
+struct PunchLimits {
+    duration: Duration,
+    interval: Duration,
+    max_punch_packets: u32,
+    max_ack_packets: u32,
+}
+
+const DEFAULT_LIMITS: PunchLimits = PunchLimits {
+    duration: PUNCH_DURATION,
+    interval: PUNCH_INTERVAL,
+    max_punch_packets: MAX_PUNCH_PACKETS,
+    max_ack_packets: MAX_ACK_PACKETS,
+};
 
 /// Result of a completed hole punch.
 pub struct PunchResult {
@@ -68,12 +88,34 @@ impl PunchHandle {
 /// `peer_endpoints` are the peer's public endpoints discovered via probe.
 /// `local_endpoints` are the peer's LAN endpoints for direct-network fallback.
 /// `session_id` and `punch_token` are used for packet authentication.
+///
+/// Punch and ACK packets are only exchanged with sources whose IP matches one
+/// of the given endpoints (the port may differ), and the number of packets
+/// sent per session is capped by [`MAX_PUNCH_PACKETS`] and [`MAX_ACK_PACKETS`].
 pub fn start_udp_punch(
     socket: UdpSocket,
     peer_endpoints: Vec<SocketAddr>,
     local_endpoints: Vec<SocketAddr>,
     session_id: [u8; 16],
     punch_token: [u8; 32],
+) -> io::Result<PunchHandle> {
+    start_udp_punch_with_limits(
+        socket,
+        peer_endpoints,
+        local_endpoints,
+        session_id,
+        punch_token,
+        DEFAULT_LIMITS,
+    )
+}
+
+fn start_udp_punch_with_limits(
+    socket: UdpSocket,
+    peer_endpoints: Vec<SocketAddr>,
+    local_endpoints: Vec<SocketAddr>,
+    session_id: [u8; 16],
+    punch_token: [u8; 32],
+    limits: PunchLimits,
 ) -> io::Result<PunchHandle> {
     socket.set_read_timeout(Some(Duration::from_millis(100)))?;
     socket.set_nonblocking(false)?;
@@ -82,18 +124,20 @@ pub fn start_udp_punch(
     let cancel = Arc::new(AtomicBool::new(false));
     let status_clone = status.clone();
     let cancel_clone = cancel.clone();
+    let all_endpoints: Vec<SocketAddr> =
+        peer_endpoints.into_iter().chain(local_endpoints).collect();
 
     let handle = thread::Builder::new()
         .name("udp-punch".into())
         .spawn(move || {
             run_udp_punch(
                 socket,
-                peer_endpoints,
-                local_endpoints,
+                all_endpoints,
                 session_id,
                 punch_token,
                 status_clone,
                 cancel_clone,
+                limits,
             )
         })?;
 
@@ -106,28 +150,25 @@ pub fn start_udp_punch(
 
 fn run_udp_punch(
     socket: UdpSocket,
-    peer_endpoints: Vec<SocketAddr>,
-    local_endpoints: Vec<SocketAddr>,
+    all_endpoints: Vec<SocketAddr>,
     session_id: [u8; 16],
     punch_token: [u8; 32],
     status: Arc<AtomicU8>,
     cancel: Arc<AtomicBool>,
+    limits: PunchLimits,
 ) -> Option<PunchResult> {
     let start = Instant::now();
     let mut seq: u32 = 0;
+    let mut punch_packets_sent: u32 = 0;
+    let mut ack_packets_sent: u32 = 0;
     let mut we_got_ack = false;
     let mut they_got_ack = false;
     let mut verified_peer: Option<SocketAddr> = None;
     let mut first_ack_time: Option<Instant> = None;
 
-    // Combine all endpoints to try
-    let all_endpoints: Vec<SocketAddr> = peer_endpoints
-        .iter()
-        .chain(local_endpoints.iter())
-        .cloned()
-        .collect();
+    let source_allowed = |src: &SocketAddr| all_endpoints.iter().any(|ep| ep.ip() == src.ip());
 
-    while start.elapsed() < PUNCH_DURATION {
+    while start.elapsed() < limits.duration {
         if cancel.load(Ordering::Relaxed) {
             status.store(STATUS_CANCELLED, Ordering::Relaxed);
             return None;
@@ -136,12 +177,16 @@ fn run_udp_punch(
         // Send punch packets to all peer endpoints
         let punch_pkt = build_punch_packet(&session_id, &punch_token, seq);
         for ep in &all_endpoints {
+            if punch_packets_sent >= limits.max_punch_packets {
+                break;
+            }
             let _ = socket.send_to(&punch_pkt, ep);
+            punch_packets_sent += 1;
         }
-        seq += 1;
+        seq = seq.wrapping_add(1);
 
         // Listen for replies
-        let recv_deadline = Instant::now() + PUNCH_INTERVAL;
+        let recv_deadline = Instant::now() + limits.interval;
         let mut buf = [0u8; 128];
         while Instant::now() < recv_deadline {
             let remaining = recv_deadline.duration_since(Instant::now());
@@ -149,10 +194,20 @@ fn run_udp_punch(
 
             let (len, src) = match socket.recv_from(&mut buf) {
                 Ok(r) => r,
+                // An ICMP error from an earlier send surfaces here; keep
+                // listening until the interval ends instead of sending again.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
+                    ) =>
+                {
+                    continue
+                }
                 Err(_) => break,
             };
 
-            if len != PUNCH_PACKET_LEN {
+            if len != PUNCH_PACKET_LEN || !source_allowed(&src) {
                 continue;
             }
 
@@ -161,8 +216,11 @@ fn run_udp_punch(
                 if verify_punch_packet(&buf[..len], &session_id, &punch_token) {
                     // Send ACK back
                     let peer_seq = u32::from_be_bytes([buf[52], buf[53], buf[54], buf[55]]);
-                    let ack = build_ack_packet(&session_id, &punch_token, peer_seq);
-                    let _ = socket.send_to(&ack, src);
+                    if ack_packets_sent < limits.max_ack_packets {
+                        let ack = build_ack_packet(&session_id, &punch_token, peer_seq);
+                        let _ = socket.send_to(&ack, src);
+                        ack_packets_sent += 1;
+                    }
                     they_got_ack = true;
                     verified_peer = Some(src);
                 }
@@ -298,5 +356,81 @@ mod tests {
         let result_b = result_b.unwrap();
         assert_eq!(result_a.peer_addr, addr_b);
         assert_eq!(result_b.peer_addr, addr_a);
+    }
+
+    fn short_limits(max_punch_packets: u32) -> PunchLimits {
+        PunchLimits {
+            duration: Duration::from_millis(600),
+            interval: Duration::from_millis(5),
+            max_punch_packets,
+            max_ack_packets: MAX_ACK_PACKETS,
+        }
+    }
+
+    #[test]
+    fn punch_packet_count_is_capped_per_session() {
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let target = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let target_addr = target.local_addr().unwrap();
+
+        let handle = start_udp_punch_with_limits(
+            sender,
+            vec![target_addr],
+            vec![],
+            [0x11; 16],
+            [0x22; 32],
+            short_limits(5),
+        )
+        .unwrap();
+        assert!(handle.join().is_none());
+
+        target
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut buf = [0u8; 128];
+        let mut received = 0;
+        while target.recv_from(&mut buf).is_ok() {
+            received += 1;
+        }
+        assert_eq!(received, 5);
+    }
+
+    #[test]
+    fn punch_from_other_source_ip_is_ignored() {
+        // The puncher targets 127.0.0.1; a valid punch from 127.0.0.2 must
+        // not be acknowledged or accepted as the peer.
+        let sock_a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr_a = sock_a.local_addr().unwrap();
+        let target = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let target_addr = target.local_addr().unwrap();
+        let other = match UdpSocket::bind("127.0.0.2:0") {
+            Ok(s) => s,
+            Err(_) => return, // loopback alias not available on this host
+        };
+        other
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+
+        let session_id = [0x33; 16];
+        let token = [0x44; 32];
+        let handle = start_udp_punch_with_limits(
+            sock_a,
+            vec![target_addr],
+            vec![],
+            session_id,
+            token,
+            short_limits(MAX_PUNCH_PACKETS),
+        )
+        .unwrap();
+
+        other
+            .send_to(&build_punch_packet(&session_id, &token, 0), addr_a)
+            .unwrap();
+        other
+            .send_to(&build_ack_packet(&session_id, &token, 0), addr_a)
+            .unwrap();
+        let mut buf = [0u8; 128];
+        assert!(other.recv_from(&mut buf).is_err(), "no ACK expected");
+        assert!(handle.join().is_none());
     }
 }

@@ -575,6 +575,9 @@ pub struct NodeConfig {
     pub probe_protocol: rns_core::holepunch::ProbeProtocol,
     /// Policy for incoming direct-connect proposals.
     pub direct_connect_policy: crate::event::HolePunchPolicy,
+    /// Accept direct-connect endpoints in private, shared, link-local,
+    /// and unique-local ranges (LAN-only deployments).
+    pub direct_connect_allow_private_endpoints: bool,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
@@ -692,7 +695,8 @@ impl Default for NodeConfig {
             probe_port: None,
             probe_addrs: vec![],
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
-            direct_connect_policy: crate::event::HolePunchPolicy::AcceptAll,
+            direct_connect_policy: crate::event::HolePunchPolicy::IdentifiedOnly,
+            direct_connect_allow_private_endpoints: false,
             device: None,
             underlay_mark: None,
             hooks: Vec::new(),
@@ -1272,6 +1276,9 @@ impl RnsNode {
             probe_addrs,
             probe_protocol,
             direct_connect_policy: rns_config.reticulum.direct_connect_policy,
+            direct_connect_allow_private_endpoints: rns_config
+                .reticulum
+                .direct_connect_allow_private_endpoints,
             device: rns_config.reticulum.device.clone(),
             underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
             hooks: if private {
@@ -1543,6 +1550,9 @@ impl RnsNode {
         driver
             .holepunch_manager
             .set_policy(config.direct_connect_policy);
+        driver
+            .holepunch_manager
+            .set_allow_private_endpoints(config.direct_connect_allow_private_endpoints);
         driver.runtime_config_defaults.direct_connect_policy = config.direct_connect_policy;
         #[cfg(feature = "hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
@@ -4554,6 +4564,7 @@ mod tests {
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -4877,6 +4888,7 @@ share_instance = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -4948,6 +4960,7 @@ share_instance = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -5769,6 +5782,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -5849,6 +5863,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -5925,6 +5940,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -5998,6 +6014,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -6111,6 +6128,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -6192,6 +6210,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -6271,6 +6290,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -6363,6 +6383,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -6445,6 +6466,7 @@ enable_transport = False
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
+                direct_connect_allow_private_endpoints: false,
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),

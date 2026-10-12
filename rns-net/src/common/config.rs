@@ -55,6 +55,9 @@ pub struct ReticulumSection {
     pub probe_protocol: Option<String>,
     /// Policy for incoming direct-connect proposals.
     pub direct_connect_policy: crate::event::HolePunchPolicy,
+    /// Accept direct-connect endpoints in private, shared, link-local,
+    /// and unique-local ranges (LAN-only deployments).
+    pub direct_connect_allow_private_endpoints: bool,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
@@ -191,7 +194,8 @@ impl Default for ReticulumSection {
             probe_port: None,
             probe_addr: None,
             probe_protocol: None,
-            direct_connect_policy: crate::event::HolePunchPolicy::AcceptAll,
+            direct_connect_policy: crate::event::HolePunchPolicy::IdentifiedOnly,
+            direct_connect_allow_private_endpoints: false,
             device: None,
             underlay_mark: None,
             discover_interfaces: false,
@@ -808,6 +812,13 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 })
             }
         };
+    }
+    if let Some(v) = kvs.get("direct_connect_allow_private_endpoints") {
+        section.direct_connect_allow_private_endpoints =
+            parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: "direct_connect_allow_private_endpoints".into(),
+                value: v.clone(),
+            })?;
     }
     if let Some(v) = kvs.get("device") {
         section.device = Some(v.clone());
@@ -2422,13 +2433,30 @@ direct_connect_policy = identified_only
     }
 
     #[test]
-    fn direct_connect_policy_defaults_to_accept_all_and_rejects_invalid() {
+    fn direct_connect_policy_defaults_to_identified_only_and_rejects_invalid() {
         let config = parse("[reticulum]\n").unwrap();
+        assert_eq!(
+            config.reticulum.direct_connect_policy,
+            crate::event::HolePunchPolicy::IdentifiedOnly
+        );
+        let config = parse("[reticulum]\ndirect_connect_policy = accept_all\n").unwrap();
         assert_eq!(
             config.reticulum.direct_connect_policy,
             crate::event::HolePunchPolicy::AcceptAll
         );
         assert!(parse("[reticulum]\ndirect_connect_policy = sometimes\n").is_err());
+    }
+
+    #[test]
+    fn direct_connect_allow_private_endpoints_parses_and_defaults_false() {
+        let config = parse("[reticulum]\n").unwrap();
+        assert!(!config.reticulum.direct_connect_allow_private_endpoints);
+        let config = parse("[reticulum]\ndirect_connect_allow_private_endpoints = yes\n").unwrap();
+        assert!(config.reticulum.direct_connect_allow_private_endpoints);
+        let config =
+            parse("[reticulum]\ndirect_connect_allow_private_endpoints = False\n").unwrap();
+        assert!(!config.reticulum.direct_connect_allow_private_endpoints);
+        assert!(parse("[reticulum]\ndirect_connect_allow_private_endpoints = maybe\n").is_err());
     }
 
     #[test]

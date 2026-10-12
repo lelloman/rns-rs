@@ -124,12 +124,30 @@ Reasons B might reject:
 - Policy or configuration.
 
 The responder applies `direct_connect_policy` only after fully decoding the
-request. `accept_all` preserves the compatibility default, `reject` declines
-all requests, and `identified_only` accepts only when the existing link has
-completed `LINKIDENTIFY`. `ask_app` invokes the application callback once with
+request. `identified_only` (the default) accepts only when the existing link has
+completed `LINKIDENTIFY`, `accept_all` accepts every well-formed request, and
+`reject` declines all requests. `ask_app` invokes the application callback once with
 the peer identity when known (or no identity otherwise) and honors its boolean
 decision; the default callback rejects. These controls are responder-side only
 and do not change initiation behavior.
+
+After the policy accepts a request, the responder also checks it before sending
+anything:
+
+- **Endpoint ranges.** `facilitator` and `initiator_public` must be globally
+  routable unicast addresses with a non-zero port. Unspecified, loopback,
+  multicast, broadcast, reserved, documentation and benchmarking addresses are
+  always declined. Private (10/8, 172.16/12, 192.168/16), shared (100.64/10),
+  link-local (169.254/16, fe80::/10) and IPv6 unique-local (fc00::/7) addresses
+  are declined unless `direct_connect_allow_private_endpoints = yes` is set in
+  `[reticulum]`. IPv4-mapped IPv6 addresses are checked as their IPv4 form.
+  The initiator applies the same check to `responder_public` in
+  `UPGRADE_READY` before punching. Out-of-range requests receive
+  `UPGRADE_REJECT` with reason `0x01`.
+- **Pacing.** At most one upgrade request per link is taken up per 60 seconds,
+  at most 4 responder sessions run node-wide at once, and only one session at a
+  time punches toward a given address. Requests over these limits receive
+  `UPGRADE_REJECT` with reason `0x02` (busy).
 
 ### Phase 3: STUN Discovery + Address Exchange (B ↔ T, B → A)
 
@@ -154,8 +172,11 @@ same remote address, the NAT allows it through (the "pinhole").
 The hole punch procedure:
 1. Both sides begin sending UDP packets immediately after Phase 3 completes.
 2. Packets are sent at a regular interval (e.g. every 100ms) for a bounded
-   duration (e.g. 10 seconds).
+   duration (e.g. 10 seconds). rns-rs also caps a session at 128 punch packets
+   and 128 acknowledgements.
 3. The first received packet from the peer confirms the hole punch succeeded.
+   rns-rs only accepts punch and acknowledgement packets whose source IP
+   matches the peer endpoint being punched (the port may differ).
 4. If no packet is received within the timeout, the hole punch has failed.
 
 On failure, the protocol ends gracefully. The existing Reticulum link continues

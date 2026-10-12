@@ -11,16 +11,20 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::thread;
+use std::time::Instant;
 
 use rns_core::holepunch::types::is_holepunch_msgtype;
 use rns_core::holepunch::{
-    Endpoint, HolePunchAction, HolePunchEngine, HolePunchState, ProbeProtocol, REJECT_POLICY,
-    UPGRADE_REQUEST,
+    Endpoint, HolePunchAction, HolePunchEngine, HolePunchState, ProbeProtocol, REJECT_BUSY,
+    REJECT_POLICY, UPGRADE_REQUEST,
 };
 
 use crate::event::{Event, EventSender};
 use crate::time;
 
+use super::admission::{
+    endpoint_is_acceptable, InboundRequestLimiter, INBOUND_REQUEST_WINDOW, MAX_CONCURRENT_SESSIONS,
+};
 use super::probe;
 use super::puncher::{self, PunchHandle};
 use super::udp_direct;
@@ -36,6 +40,42 @@ struct HolePunchSession {
     punch_handle: Option<PunchHandle>,
     /// Last proposal time for rate limiting.
     last_proposal: f64,
+    /// Address the punch thread sends to, once punching has started.
+    punch_target: Option<SocketAddr>,
+}
+
+impl HolePunchSession {
+    fn new(engine: HolePunchEngine, now: f64) -> Self {
+        HolePunchSession {
+            engine,
+            socket: None,
+            punch_handle: None,
+            last_proposal: now,
+            punch_target: None,
+        }
+    }
+
+    /// Whether this session is a responder session still probing or punching.
+    fn is_active_inbound(&self) -> bool {
+        !self.engine.is_initiator()
+            && matches!(
+                self.engine.state(),
+                HolePunchState::Discovering | HolePunchState::Punching
+            )
+    }
+
+    fn is_punching(&self) -> bool {
+        self.punch_handle
+            .as_ref()
+            .map(|h| h.is_running())
+            .unwrap_or(false)
+    }
+
+    fn cancel_punch(&mut self) {
+        if let Some(handle) = self.punch_handle.take() {
+            handle.cancel();
+        }
+    }
 }
 
 /// Manages all hole-punch sessions.
@@ -53,6 +93,12 @@ pub struct HolePunchManager {
     underlay_mark: Option<u32>,
     /// Next available interface ID counter for direct interfaces.
     next_interface_id: u64,
+    /// Accept private, shared, link-local and unique-local endpoints from peers.
+    allow_private_endpoints: bool,
+    /// Paces inbound upgrade requests per link.
+    inbound_limiter: InboundRequestLimiter,
+    /// Spawn probe and punch threads (disabled by unit tests).
+    spawn_workers: bool,
 }
 
 /// Actions produced by HolePunchManager for the driver to dispatch.
@@ -96,6 +142,9 @@ impl HolePunchManager {
             device,
             underlay_mark: None,
             next_interface_id: 50000, // start high to avoid collision with regular interfaces
+            allow_private_endpoints: false,
+            inbound_limiter: InboundRequestLimiter::new(INBOUND_REQUEST_WINDOW),
+            spawn_workers: true,
         }
     }
 
@@ -109,6 +158,22 @@ impl HolePunchManager {
 
     pub fn set_underlay_mark(&mut self, underlay_mark: Option<u32>) {
         self.underlay_mark = underlay_mark;
+    }
+
+    /// Accept peer-supplied endpoints in private, shared, link-local,
+    /// and unique-local ranges (for LAN-only deployments).
+    pub fn set_allow_private_endpoints(&mut self, allow: bool) {
+        self.allow_private_endpoints = allow;
+    }
+
+    pub fn allow_private_endpoints(&self) -> bool {
+        self.allow_private_endpoints
+    }
+
+    /// Whether a peer-supplied endpoint may be probed or punched.
+    fn endpoint_allowed(&self, ep: &Endpoint) -> Option<SocketAddr> {
+        endpoint_to_socket_addr(ep)
+            .filter(|addr| endpoint_is_acceptable(addr, self.allow_private_endpoints))
     }
 
     /// Propose a direct connection on a link.
@@ -141,9 +206,7 @@ impl HolePunchManager {
         }
 
         // Clean up any existing session for this link
-        if let Some(old_session_id) = self.link_to_session.remove(&link_id) {
-            self.sessions.remove(&old_session_id);
-        }
+        self.remove_link_session(&link_id);
 
         let probe_endpoint = self.probe_addrs.first().map(|addr| Endpoint {
             addr: match addr {
@@ -164,15 +227,8 @@ impl HolePunchManager {
 
         let session_id = *engine.session_id();
         self.link_to_session.insert(link_id, session_id);
-        self.sessions.insert(
-            session_id,
-            HolePunchSession {
-                engine,
-                socket: None,
-                punch_handle: None,
-                last_proposal: now,
-            },
-        );
+        self.sessions
+            .insert(session_id, HolePunchSession::new(engine, now));
 
         let mgr_actions = convert_engine_actions(link_id, &actions);
 
@@ -192,6 +248,18 @@ impl HolePunchManager {
         payload: Vec<u8>,
         derived_key: Option<&[u8]>,
         tx: &EventSender,
+    ) -> (bool, Vec<HolePunchManagerAction>) {
+        self.handle_signal_at(link_id, msgtype, payload, derived_key, tx, Instant::now())
+    }
+
+    fn handle_signal_at(
+        &mut self,
+        link_id: [u8; 16],
+        msgtype: u16,
+        payload: Vec<u8>,
+        derived_key: Option<&[u8]>,
+        tx: &EventSender,
+        now_instant: Instant,
     ) -> (bool, Vec<HolePunchManagerAction>) {
         if !is_holepunch_msgtype(msgtype) {
             return (false, Vec::new());
@@ -233,6 +301,31 @@ impl HolePunchManager {
                 }
             }
 
+            if !self.inbound_limiter.check_and_record(link_id, now_instant) {
+                log::debug!(
+                    "Refusing hole punch proposal on link {:02x?}: request window",
+                    &link_id[..4]
+                );
+                return (true, refuse_request(link_id, &payload, REJECT_BUSY));
+            }
+
+            // A new request replaces any earlier session on this link.
+            self.remove_link_session(&link_id);
+
+            let active_inbound = self
+                .sessions
+                .values()
+                .filter(|s| s.is_active_inbound())
+                .count();
+            if active_inbound >= MAX_CONCURRENT_SESSIONS {
+                log::debug!(
+                    "Refusing hole punch proposal on link {:02x?}: {} sessions active",
+                    &link_id[..4],
+                    active_inbound
+                );
+                return (true, refuse_request(link_id, &payload, REJECT_BUSY));
+            }
+
             // Create engine for responder (no probe_addr needed — facilitator comes from request)
             // Protocol will be set from the decoded UPGRADE_REQUEST payload.
             let mut engine = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
@@ -245,17 +338,38 @@ impl HolePunchManager {
                 }
             };
 
+            // Both endpoints in the request are chosen by the peer: check them
+            // before anything is sent to either.
+            let initiator_addr = engine
+                .peer_public_endpoint()
+                .and_then(|ep| self.endpoint_allowed(ep));
+            let facilitator_ok = actions.iter().all(|a| match a {
+                HolePunchAction::DiscoverEndpoints { probe_addr, .. } => {
+                    self.endpoint_allowed(probe_addr).is_some()
+                }
+                _ => true,
+            });
+            let Some(initiator_addr) = initiator_addr.filter(|_| facilitator_ok) else {
+                log::debug!(
+                    "Refusing hole punch proposal on link {:02x?}: endpoint outside the accepted ranges",
+                    &link_id[..4]
+                );
+                return (true, refuse_request(link_id, &payload, REJECT_POLICY));
+            };
+            if self.target_in_use(initiator_addr, None) {
+                log::debug!(
+                    "Refusing hole punch proposal on link {:02x?}: {} already has a session",
+                    &link_id[..4],
+                    initiator_addr
+                );
+                return (true, refuse_request(link_id, &payload, REJECT_BUSY));
+            }
+
             let session_id = *engine.session_id();
             self.link_to_session.insert(link_id, session_id);
-            self.sessions.insert(
-                session_id,
-                HolePunchSession {
-                    engine,
-                    socket: None,
-                    punch_handle: None,
-                    last_proposal: now,
-                },
-            );
+            let mut session = HolePunchSession::new(engine, now);
+            session.punch_target = Some(initiator_addr);
+            self.sessions.insert(session_id, session);
 
             let mgr_actions = convert_engine_actions(link_id, &actions);
 
@@ -291,10 +405,10 @@ impl HolePunchManager {
             }
         };
 
-        let mgr_actions = convert_engine_actions(link_id, &actions);
+        let mut mgr_actions = convert_engine_actions(link_id, &actions);
 
         // Check if engine now wants to start punching
-        self.start_punch_from_actions(&session_id, &actions);
+        mgr_actions.extend(self.start_punch_from_actions(link_id, &session_id, &actions));
 
         (true, mgr_actions)
     }
@@ -475,7 +589,9 @@ impl HolePunchManager {
             .collect();
 
         for session_id in failed_sessions {
-            self.sessions.remove(&session_id);
+            if let Some(mut session) = self.sessions.remove(&session_id) {
+                session.cancel_punch();
+            }
             self.link_to_session.retain(|_, v| *v != session_id);
         }
 
@@ -484,13 +600,26 @@ impl HolePunchManager {
 
     /// Called when a link is closed — clean up any associated session.
     pub fn link_closed(&mut self, link_id: &[u8; 16]) {
+        self.remove_link_session(link_id);
+    }
+
+    /// Remove the session bound to `link_id`, stopping its punch thread.
+    fn remove_link_session(&mut self, link_id: &[u8; 16]) {
         if let Some(session_id) = self.link_to_session.remove(link_id) {
             if let Some(mut session) = self.sessions.remove(&session_id) {
-                if let Some(handle) = session.punch_handle.take() {
-                    handle.cancel();
-                }
+                session.cancel_punch();
             }
         }
+    }
+
+    /// Whether another session (other than `except`) is probing or punching
+    /// toward `target`.
+    fn target_in_use(&self, target: SocketAddr, except: Option<&[u8; 16]>) -> bool {
+        self.sessions.iter().any(|(id, s)| {
+            Some(id) != except
+                && s.punch_target == Some(target)
+                && (s.is_punching() || s.is_active_inbound())
+        })
     }
 
     /// Abort and remove all active hole-punch sessions.
@@ -538,7 +667,7 @@ impl HolePunchManager {
                 let servers: Vec<SocketAddr> = if session.engine.is_initiator() {
                     self.probe_addrs.clone()
                 } else {
-                    match endpoint_to_socket_addr(probe_addr) {
+                    match self.endpoint_allowed(probe_addr) {
                         Some(a) => vec![a],
                         None => {
                             log::warn!("Invalid probe endpoint: {:?}", probe_addr);
@@ -552,6 +681,10 @@ impl HolePunchManager {
                         "No probe servers available for session {:02x?}",
                         &session_id[..4]
                     );
+                    continue;
+                }
+
+                if !self.spawn_workers {
                     continue;
                 }
 
@@ -583,49 +716,85 @@ impl HolePunchManager {
     }
 
     /// Start punch if the engine actions contain a StartUdpPunch.
-    fn start_punch_from_actions(&mut self, session_id: &[u8; 16], actions: &[HolePunchAction]) {
+    fn start_punch_from_actions(
+        &mut self,
+        link_id: [u8; 16],
+        session_id: &[u8; 16],
+        actions: &[HolePunchAction],
+    ) -> Vec<HolePunchManagerAction> {
+        let mut mgr_actions = Vec::new();
         for action in actions {
             if let HolePunchAction::StartUdpPunch {
                 peer_public,
                 punch_token,
-                session_id: sid,
+                ..
             } = action
             {
-                self.start_punch_for_session(session_id, peer_public, punch_token, sid);
+                mgr_actions.extend(self.start_punch_for_session(
+                    link_id,
+                    session_id,
+                    peer_public,
+                    punch_token,
+                ));
             }
         }
+        mgr_actions
     }
 
     fn start_punch_for_session(
         &mut self,
+        link_id: [u8; 16],
         session_id: &[u8; 16],
         peer_public: &Endpoint,
         punch_token: &[u8; 32],
-        _engine_session_id: &[u8; 16],
-    ) {
+    ) -> Vec<HolePunchManagerAction> {
+        let peer_addr = self.endpoint_allowed(peer_public);
+        let running = self.sessions.values().filter(|s| s.is_punching()).count();
+        let target_busy = peer_addr
+            .map(|addr| self.target_in_use(addr, Some(session_id)))
+            .unwrap_or(false);
+
         let session = match self.sessions.get_mut(session_id) {
             Some(s) => s,
-            None => return,
+            None => return Vec::new(),
         };
 
         if session.punch_handle.is_some() {
-            return; // Already punching
+            return Vec::new(); // Already punching
+        }
+
+        let peer_addr = match peer_addr {
+            Some(a) if !target_busy && running < MAX_CONCURRENT_SESSIONS => a,
+            other => {
+                match other {
+                    None => log::warn!(
+                        "Not punching session {:02x?}: peer endpoint {:?} outside the accepted ranges",
+                        &session_id[..4],
+                        peer_public
+                    ),
+                    Some(a) => log::debug!(
+                        "Not punching session {:02x?} to {}: target busy or {} punches running",
+                        &session_id[..4],
+                        a,
+                        running
+                    ),
+                }
+                session.socket = None;
+                let actions = session.engine.punch_failed(time::now()).unwrap_or_default();
+                return convert_engine_actions(link_id, &actions);
+            }
+        };
+        session.punch_target = Some(peer_addr);
+
+        if !self.spawn_workers {
+            return Vec::new();
         }
 
         let socket = match session.socket.take() {
             Some(s) => s,
             None => {
                 log::warn!("No socket available for punching");
-                return;
-            }
-        };
-
-        let peer_addr = match endpoint_to_socket_addr(peer_public) {
-            Some(a) => a,
-            None => {
-                log::warn!("Invalid peer endpoint for punch: {:?}", peer_public);
-                session.socket = Some(socket);
-                return;
+                return Vec::new();
             }
         };
 
@@ -652,6 +821,7 @@ impl HolePunchManager {
                 log::warn!("Failed to start UDP punch: {}", e);
             }
         }
+        Vec::new()
     }
 
     /// Called when a probe result arrives from the worker thread.
@@ -711,25 +881,10 @@ impl HolePunchManager {
             }
         };
 
-        let mgr_actions = convert_engine_actions(link_id, &actions);
+        let mut mgr_actions = convert_engine_actions(link_id, &actions);
 
         // Check if engine now wants to start punching (responder after discovery)
-        let should_punch = actions
-            .iter()
-            .any(|a| matches!(a, HolePunchAction::StartUdpPunch { .. }));
-        if should_punch {
-            // Need to extract punch params and start
-            for action in &actions {
-                if let HolePunchAction::StartUdpPunch {
-                    peer_public,
-                    punch_token,
-                    session_id: sid,
-                } = action
-                {
-                    self.start_punch_for_session(&session_id, peer_public, punch_token, sid);
-                }
-            }
-        }
+        mgr_actions.extend(self.start_punch_from_actions(link_id, &session_id, &actions));
 
         mgr_actions
     }
@@ -795,6 +950,17 @@ fn run_probe_worker(
                 link_id,
                 session_id,
             });
+        }
+    }
+}
+
+/// Build an `UPGRADE_REJECT` reply for a request that is not taken up.
+fn refuse_request(link_id: [u8; 16], payload: &[u8], reason: u8) -> Vec<HolePunchManagerAction> {
+    match HolePunchEngine::build_reject(link_id, payload, reason) {
+        Ok(action) => convert_engine_actions(link_id, &[action]),
+        Err(e) => {
+            log::warn!("Failed to build reject for proposal: {}", e);
+            Vec::new()
         }
     }
 }
@@ -868,6 +1034,10 @@ impl HolePunchManager {
     fn has_session_for_link(&self, link_id: &[u8; 16]) -> bool {
         self.link_to_session.contains_key(link_id)
     }
+
+    fn set_spawn_workers(&mut self, spawn: bool) {
+        self.spawn_workers = spawn;
+    }
 }
 
 #[cfg(test)]
@@ -890,6 +1060,286 @@ mod tests {
 
     fn make_tx() -> (EventSender, crate::event::EventReceiver) {
         crate::event::channel()
+    }
+
+    fn ep(s: &str) -> Endpoint {
+        let addr: SocketAddr = s.parse().unwrap();
+        Endpoint {
+            addr: match addr {
+                SocketAddr::V4(v4) => v4.ip().octets().to_vec(),
+                SocketAddr::V6(v6) => v6.ip().octets().to_vec(),
+            },
+            port: addr.port(),
+        }
+    }
+
+    /// Build an UPGRADE_REQUEST payload naming `facilitator` and `initiator`.
+    fn make_request(link_id: [u8; 16], facilitator: &str, initiator: &str, seed: u8) -> Vec<u8> {
+        let mut rng = make_rng(seed);
+        let mut proposer =
+            HolePunchEngine::new(link_id, Some(ep(facilitator)), ProbeProtocol::Rnsp);
+        proposer
+            .propose(&test_derived_key(), 100.0, &mut rng)
+            .unwrap();
+        let discover_actions = proposer.endpoints_discovered(ep(initiator), 101.0).unwrap();
+        match &discover_actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => panic!("Expected SendSignal"),
+        }
+    }
+
+    /// Manager accepting all proposals, with probe and punch threads disabled.
+    fn accepting_manager() -> HolePunchManager {
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
+        mgr.set_policy(HolePunchPolicy::AcceptAll);
+        mgr.set_spawn_workers(false);
+        mgr
+    }
+
+    fn is_msg(action: &HolePunchManagerAction, expected: u16) -> bool {
+        matches!(action, HolePunchManagerAction::SendChannelMessage { msgtype, .. } if *msgtype == expected)
+    }
+
+    fn reject_reason(actions: &[HolePunchManagerAction]) -> Option<u8> {
+        actions.iter().find_map(|a| match a {
+            HolePunchManagerAction::SendChannelMessage {
+                msgtype, payload, ..
+            } if *msgtype == UPGRADE_REJECT => {
+                let (val, _) = rns_core::msgpack::unpack(payload).ok()?;
+                val.map_get("r").and_then(|v| v.as_uint()).map(|r| r as u8)
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn request_with_private_initiator_endpoint_is_refused() {
+        for initiator in [
+            "192.168.1.10:41000",
+            "127.0.0.1:41000",
+            "[::ffff:10.0.0.1]:41000",
+        ] {
+            let mut mgr = accepting_manager();
+            let (tx, _rx) = make_tx();
+            let link_id = [0x51; 16];
+            let payload = make_request(link_id, "1.2.3.4:4343", initiator, 0x42);
+            let (handled, actions) = mgr.handle_signal(
+                link_id,
+                UPGRADE_REQUEST,
+                payload,
+                Some(&test_derived_key()),
+                &tx,
+            );
+            assert!(handled);
+            assert_eq!(actions.len(), 1, "{initiator}");
+            assert_eq!(reject_reason(&actions), Some(REJECT_POLICY), "{initiator}");
+            assert_eq!(mgr.session_count(), 0, "{initiator}");
+        }
+    }
+
+    #[test]
+    fn request_with_private_facilitator_is_refused() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x52; 16];
+        let payload = make_request(link_id, "10.0.0.1:4343", "1.2.3.4:41000", 0x42);
+        let (_, actions) = mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            payload,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert_eq!(reject_reason(&actions), Some(REJECT_POLICY));
+        assert_eq!(mgr.session_count(), 0);
+    }
+
+    #[test]
+    fn private_endpoints_accepted_when_allowed() {
+        let mut mgr = accepting_manager();
+        mgr.set_allow_private_endpoints(true);
+        let (tx, _rx) = make_tx();
+        let link_id = [0x53; 16];
+        let payload = make_request(link_id, "192.168.1.1:4343", "192.168.1.10:41000", 0x42);
+        let (_, actions) = mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            payload,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert!(actions.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+        assert_eq!(mgr.session_count(), 1);
+    }
+
+    #[test]
+    fn ready_with_private_responder_endpoint_does_not_punch() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x54; 16];
+        let mut rng = make_rng(0x42);
+        mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        let session_id = *mgr.link_to_session.get(&link_id).unwrap();
+        let probe_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let request = mgr.handle_probe_result(
+            link_id,
+            session_id,
+            "1.2.3.4:41000".parse().unwrap(),
+            probe_socket,
+            make_probe_addr(),
+        );
+        assert!(request.iter().any(|a| is_msg(a, UPGRADE_REQUEST)));
+
+        // Responder side builds ACCEPT and READY naming a private endpoint.
+        let request_payload = match &request[0] {
+            HolePunchManagerAction::SendChannelMessage { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
+        let r_actions = responder
+            .handle_signal(
+                UPGRADE_REQUEST,
+                &request_payload,
+                Some(&test_derived_key()),
+                1.0,
+            )
+            .unwrap();
+        let accept = match &r_actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        let ready_actions = responder
+            .endpoints_discovered(ep("10.1.2.3:52000"), 2.0)
+            .unwrap();
+        let ready = match &ready_actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+
+        mgr.handle_signal(link_id, UPGRADE_ACCEPT, accept, None, &tx);
+        let (_, actions) = mgr.handle_signal(link_id, UPGRADE_READY, ready, None, &tx);
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, HolePunchManagerAction::DirectConnectFailed { .. })));
+        let session = mgr.sessions.get(&session_id).unwrap();
+        assert!(session.punch_target.is_none());
+        assert!(session.punch_handle.is_none());
+        assert_eq!(session.engine.state(), HolePunchState::Failed);
+    }
+
+    #[test]
+    fn second_request_on_link_inside_window_is_refused() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x55; 16];
+        let t0 = Instant::now();
+
+        let first = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x01);
+        let (_, actions) = mgr.handle_signal_at(
+            link_id,
+            UPGRADE_REQUEST,
+            first,
+            Some(&test_derived_key()),
+            &tx,
+            t0,
+        );
+        assert!(actions.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+
+        let second = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x02);
+        let (_, actions) = mgr.handle_signal_at(
+            link_id,
+            UPGRADE_REQUEST,
+            second,
+            Some(&test_derived_key()),
+            &tx,
+            t0 + std::time::Duration::from_secs(30),
+        );
+        assert_eq!(reject_reason(&actions), Some(REJECT_BUSY));
+        assert_eq!(mgr.session_count(), 1);
+
+        let third = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x03);
+        let (_, actions) = mgr.handle_signal_at(
+            link_id,
+            UPGRADE_REQUEST,
+            third,
+            Some(&test_derived_key()),
+            &tx,
+            t0 + INBOUND_REQUEST_WINDOW,
+        );
+        assert!(actions.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+        // The new session replaced the earlier one on this link.
+        assert_eq!(mgr.session_count(), 1);
+    }
+
+    #[test]
+    fn concurrent_inbound_sessions_are_capped() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        for i in 0..MAX_CONCURRENT_SESSIONS as u8 {
+            let link_id = [0x60 + i; 16];
+            let initiator = format!("5.6.7.{}:41000", 10 + i);
+            let payload = make_request(link_id, "1.2.3.4:4343", &initiator, i);
+            let (_, actions) = mgr.handle_signal(
+                link_id,
+                UPGRADE_REQUEST,
+                payload,
+                Some(&test_derived_key()),
+                &tx,
+            );
+            assert!(actions.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+        }
+        assert_eq!(mgr.session_count(), MAX_CONCURRENT_SESSIONS);
+
+        let link_id = [0x70; 16];
+        let payload = make_request(link_id, "1.2.3.4:4343", "5.6.7.99:41000", 0x70);
+        let (_, actions) = mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            payload,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert_eq!(reject_reason(&actions), Some(REJECT_BUSY));
+        assert_eq!(mgr.session_count(), MAX_CONCURRENT_SESSIONS);
+
+        // Closing a link frees a slot.
+        mgr.link_closed(&[0x60; 16]);
+        let link_id = [0x71; 16];
+        let payload = make_request(link_id, "1.2.3.4:4343", "5.6.7.99:41000", 0x71);
+        let (_, actions) = mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            payload,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert!(actions.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+    }
+
+    #[test]
+    fn second_session_toward_same_target_is_refused() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let a = make_request([0x81; 16], "1.2.3.4:4343", "5.6.7.8:41000", 0x01);
+        let (_, actions) = mgr.handle_signal(
+            [0x81; 16],
+            UPGRADE_REQUEST,
+            a,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert!(actions.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+
+        let b = make_request([0x82; 16], "1.2.3.4:4343", "5.6.7.8:41000", 0x02);
+        let (_, actions) = mgr.handle_signal(
+            [0x82; 16],
+            UPGRADE_REQUEST,
+            b,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert_eq!(reject_reason(&actions), Some(REJECT_BUSY));
+        assert_eq!(mgr.session_count(), 1);
     }
 
     #[test]
@@ -974,38 +1424,13 @@ mod tests {
 
     #[test]
     fn test_accept_policy_creates_session() {
-        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
-        mgr.set_policy(HolePunchPolicy::AcceptAll);
+        // Acceptable (public) endpoints still proceed under AcceptAll.
+        let mut mgr = accepting_manager();
 
         let link_id = [0x44; 16];
-        let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
-        // Build UPGRADE_REQUEST
-        let mut proposer = HolePunchEngine::new(
-            link_id,
-            Some(Endpoint {
-                addr: vec![127, 0, 0, 1],
-                port: 4343,
-            }),
-            ProbeProtocol::Rnsp,
-        );
-        proposer
-            .propose(&test_derived_key(), 100.0, &mut rng)
-            .unwrap();
-        let discover_actions = proposer
-            .endpoints_discovered(
-                Endpoint {
-                    addr: vec![1, 2, 3, 4],
-                    port: 41000,
-                },
-                101.0,
-            )
-            .unwrap();
-        let request_payload = match &discover_actions[0] {
-            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
-            _ => panic!("Expected SendSignal"),
-        };
+        let request_payload = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x42);
 
         let (handled, actions) = mgr.handle_signal(
             link_id,
@@ -1124,36 +1549,12 @@ mod tests {
 
     #[test]
     fn test_handle_probe_result_responder_sends_ready() {
-        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
+        let mut mgr = accepting_manager();
         let link_id = [0xBB; 16];
-        let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
         // Build UPGRADE_REQUEST from an initiator
-        let mut proposer = HolePunchEngine::new(
-            link_id,
-            Some(Endpoint {
-                addr: vec![127, 0, 0, 1],
-                port: 4343,
-            }),
-            ProbeProtocol::Rnsp,
-        );
-        proposer
-            .propose(&test_derived_key(), 100.0, &mut rng)
-            .unwrap();
-        let discover_actions = proposer
-            .endpoints_discovered(
-                Endpoint {
-                    addr: vec![1, 2, 3, 4],
-                    port: 41000,
-                },
-                101.0,
-            )
-            .unwrap();
-        let request_payload = match &discover_actions[0] {
-            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
-            _ => panic!("Expected SendSignal"),
-        };
+        let request_payload = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x42);
 
         // Responder receives UPGRADE_REQUEST (session enters Discovering)
         mgr.handle_signal(
@@ -1180,6 +1581,9 @@ mod tests {
             HolePunchManagerAction::SendChannelMessage { msgtype, .. }
             if *msgtype == UPGRADE_READY
         )));
+        // The responder punches toward the initiator endpoint from the request.
+        let session = mgr.sessions.get(&session_id).unwrap();
+        assert_eq!(session.punch_target, Some("5.6.7.8:41000".parse().unwrap()));
     }
 
     #[test]
@@ -1212,9 +1616,11 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_default_is_accept_all() {
+    fn test_policy_default_is_identified_only() {
         let mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
-        assert_eq!(mgr.policy(), HolePunchPolicy::AcceptAll);
+        assert_eq!(mgr.policy(), HolePunchPolicy::IdentifiedOnly);
+        assert_eq!(HolePunchPolicy::default(), HolePunchPolicy::IdentifiedOnly);
+        assert!(!mgr.allow_private_endpoints());
     }
 
     #[test]
