@@ -276,9 +276,9 @@ fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef
             .as_slice()
             .try_into()
             .map_err(|_| "Invalid public identity length".to_string())?;
-        return Ok(Some(IdentityRef::Identity(Box::new(
-            Identity::from_public_key(&key),
-        ))));
+        let identity = Identity::from_public_key(&key)
+            .map_err(|_| "Invalid public identity key".to_string())?;
+        return Ok(Some(IdentityRef::Identity(Box::new(identity))));
     }
 
     if let Some(spec) = args.get("M").or_else(|| args.get("import-prv")) {
@@ -408,7 +408,9 @@ fn request_identity(args: &Args, requested_hash: [u8; 16]) -> Result<Option<Iden
             if retained {
                 println!("Retained Identity {}", prettyhexrep(&entry.identity_hash));
             }
-            return Ok(Some(Identity::from_public_key(&entry.public_key)));
+            return Identity::from_public_key(&entry.public_key)
+                .map(Some)
+                .map_err(|_| "Recalled identity has an invalid public key".to_string());
         }
         if Instant::now() >= deadline {
             return Ok(None);
@@ -1408,7 +1410,9 @@ fn validate_rsg(
     let Ok(public_key) = <[u8; 64]>::try_from(pubkey_bytes) else {
         return Ok(RsgValidation::Invalid);
     };
-    let identity = Identity::from_public_key(&public_key);
+    let Ok(identity) = Identity::from_public_key(&public_key) else {
+        return Ok(RsgValidation::Invalid);
+    };
     let signer_hash = *identity.hash();
 
     let Some(meta_signer) = meta.map_get("signer").and_then(Value::as_bin) else {

@@ -19,6 +19,7 @@ pub enum CryptoError {
     TokenError(TokenError),
     HkdfError(hkdf::HkdfError),
     InvalidCiphertext,
+    InvalidPublicKey,
 }
 
 impl fmt::Display for CryptoError {
@@ -29,6 +30,7 @@ impl fmt::Display for CryptoError {
             CryptoError::TokenError(e) => write!(f, "Token error: {}", e),
             CryptoError::HkdfError(e) => write!(f, "HKDF error: {}", e),
             CryptoError::InvalidCiphertext => write!(f, "Invalid ciphertext"),
+            CryptoError::InvalidPublicKey => write!(f, "Invalid public key"),
         }
     }
 }
@@ -98,24 +100,26 @@ impl Identity {
 
     /// Load a public-only identity from fixed-width public key material.
     ///
-    /// Valid input is represented by the 64-byte type itself, so successful
-    /// construction returns `Self` directly instead of a fall-through status.
-    pub fn from_public_key(pub_bytes: &[u8; 64]) -> Self {
+    /// Any 32 bytes form a valid X25519 public key, but the Ed25519 half must
+    /// decode to a valid curve point; otherwise this returns
+    /// `CryptoError::InvalidPublicKey`.
+    pub fn from_public_key(pub_bytes: &[u8; 64]) -> Result<Self, CryptoError> {
         let x_pub_bytes: [u8; 32] = pub_bytes[..32].try_into().unwrap();
         let ed_pub_bytes: [u8; 32] = pub_bytes[32..].try_into().unwrap();
 
         let pub_key = X25519PublicKey::from_bytes(&x_pub_bytes);
-        let sig_pub = Ed25519PublicKey::from_bytes(&ed_pub_bytes);
+        let sig_pub = Ed25519PublicKey::from_bytes(&ed_pub_bytes)
+            .map_err(|_| CryptoError::InvalidPublicKey)?;
 
         let hash = truncated_hash(pub_bytes);
 
-        Identity {
+        Ok(Identity {
             prv: None,
             sig_prv: None,
             pub_key: Some(pub_key),
             sig_pub: Some(sig_pub),
             hash,
-        }
+        })
     }
 
     pub fn get_private_key(&self) -> Option<[u8; 64]> {
@@ -301,10 +305,32 @@ mod tests {
     use crate::FixedRng;
 
     #[test]
+    fn from_public_key_with_invalid_signing_key_returns_error() {
+        let identity = Identity::from_private_key(&[0x37; 64]);
+        let mut public_key = identity.get_public_key().unwrap();
+        // y = 2 is not a valid compressed Ed25519 point encoding.
+        public_key[32..].copy_from_slice(&[0; 32]);
+        public_key[32] = 2;
+        assert!(matches!(
+            Identity::from_public_key(&public_key),
+            Err(CryptoError::InvalidPublicKey)
+        ));
+    }
+
+    #[test]
+    fn from_public_key_accepts_valid_public_key() {
+        let identity = Identity::from_private_key(&[0x37; 64]);
+        let public_key = identity.get_public_key().unwrap();
+        let public = Identity::from_public_key(&public_key).unwrap();
+        assert_eq!(public.get_public_key(), Some(public_key));
+        assert_eq!(public.hash(), identity.hash());
+    }
+
+    #[test]
     fn short_ratchet_ciphertexts_preserve_error_and_fallback_policy() {
         use crate::ratchet::RatchetRing;
         let identity = Identity::from_private_key(&[0x37; 64]);
-        let public = Identity::from_public_key(&identity.get_public_key().unwrap());
+        let public = Identity::from_public_key(&identity.get_public_key().unwrap()).unwrap();
         for retained in [0, 1, 32] {
             let ring = RatchetRing::from_keys(vec![[0x42; 32]; retained]).unwrap();
             for length in [0, 1, 31, 32, 33, 48, 79, 80] {
@@ -344,7 +370,8 @@ mod tests {
     fn minimum_valid_ratchet_ciphertext_still_authenticates() {
         use crate::ratchet::{ratchet_id, RatchetRing};
         let identity = Identity::from_private_key(&[0x37; 64]);
-        let public_identity = Identity::from_public_key(&identity.get_public_key().unwrap());
+        let public_identity =
+            Identity::from_public_key(&identity.get_public_key().unwrap()).unwrap();
         let ring = RatchetRing::from_keys(vec![[0x42; 32]]).unwrap();
         let key = ring.current_public().unwrap();
         let mut ciphertext = identity

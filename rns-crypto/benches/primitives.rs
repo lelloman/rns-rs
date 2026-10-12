@@ -9,7 +9,7 @@ use std::hint::black_box;
 
 fn signatures(c: &mut Criterion) {
     let private = Identity::from_private_key(&[0x37; 64]);
-    let public = Identity::from_public_key(&private.get_public_key().unwrap());
+    let public = Identity::from_public_key(&private.get_public_key().unwrap()).unwrap();
     let mut group = c.benchmark_group("crypto-v1/ed25519");
     for bytes in [32, 1024, 65536] {
         let message: Vec<u8> = (0..bytes).map(|n| (n % 251) as u8).collect();

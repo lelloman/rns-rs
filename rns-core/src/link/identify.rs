@@ -49,16 +49,19 @@ pub fn validate_identify_data(
     signed_data.extend_from_slice(link_id);
     signed_data.extend_from_slice(&public_key);
 
-    // Verify using Ed25519 signing key (second half of public key)
+    // Verify using Ed25519 signing key (second half of public key).
+    // Key bytes that are not a valid point fail like a bad signature.
     let sig_pub = Ed25519PublicKey::from_bytes(&{
         let mut b = [0u8; 32];
         b.copy_from_slice(&public_key[32..64]);
         b
-    });
+    })
+    .map_err(|_| LinkError::InvalidSignature)?;
 
     if sig_pub.verify(&signature, &signed_data) {
         // Compute identity hash
-        let identity = Identity::from_public_key(&public_key);
+        let identity =
+            Identity::from_public_key(&public_key).map_err(|_| LinkError::InvalidSignature)?;
         let identity_hash = *identity.hash();
         Ok((identity_hash, public_key))
     } else {
@@ -114,6 +117,22 @@ mod tests {
     }
 
     #[test]
+    fn test_identify_invalid_signing_key_is_rejected() {
+        let mut rng = FixedRng::new(&[0x42; 128]);
+        let identity = Identity::new(&mut rng);
+        let link_id: LinkId = [0xAA; 16];
+
+        let mut data = build_identify_data(&identity, &link_id).unwrap();
+        // y = 2 is not a valid compressed Ed25519 point encoding.
+        data[32..64].copy_from_slice(&[0; 32]);
+        data[32] = 2;
+        assert_eq!(
+            validate_identify_data(&data, &link_id),
+            Err(LinkError::InvalidSignature)
+        );
+    }
+
+    #[test]
     fn test_identify_invalid_length() {
         let link_id: LinkId = [0xAA; 16];
         assert_eq!(
@@ -127,7 +146,7 @@ mod tests {
         let mut rng = FixedRng::new(&[0x42; 128]);
         let identity = Identity::new(&mut rng);
         let pubkey = identity.get_public_key().unwrap();
-        let public_only = Identity::from_public_key(&pubkey);
+        let public_only = Identity::from_public_key(&pubkey).unwrap();
         let link_id: LinkId = [0xAA; 16];
 
         // Should fail because public-only identity can't sign

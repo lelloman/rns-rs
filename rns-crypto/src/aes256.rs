@@ -1,8 +1,29 @@
 use alloc::vec::Vec;
+use core::fmt;
 
 use aes::cipher::{block_padding::NoPadding, BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 
 const BLOCK_SIZE: usize = 16;
+
+/// Error returned by the raw (unpadded) AES-CBC helpers.
+#[derive(Debug, PartialEq)]
+pub enum CbcError {
+    /// The input length is not a multiple of the 16-byte block size.
+    UnalignedLength,
+}
+
+impl fmt::Display for CbcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CbcError::UnalignedLength => {
+                write!(f, "CBC input length is not a multiple of the block size")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for CbcError {}
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
@@ -20,23 +41,35 @@ impl Aes256 {
         Aes256 { key: *key }
     }
 
-    pub fn encrypt_cbc(&self, plaintext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
-        assert_eq!(plaintext.len() % BLOCK_SIZE, 0);
+    /// Encrypt block-aligned plaintext in CBC mode without padding.
+    ///
+    /// Returns `CbcError::UnalignedLength` if `plaintext.len()` is not a
+    /// multiple of 16.
+    pub fn encrypt_cbc(&self, plaintext: &[u8], iv: &[u8; 16]) -> Result<Vec<u8>, CbcError> {
+        if plaintext.len() % BLOCK_SIZE != 0 {
+            return Err(CbcError::UnalignedLength);
+        }
         let mut buf = plaintext.to_vec();
         let message_len = buf.len();
         Aes256CbcEnc::new(&self.key.into(), iv.into())
             .encrypt_padded::<NoPadding>(&mut buf, message_len)
-            .expect("aligned CBC plaintext has sufficient capacity");
-        buf
+            .map_err(|_| CbcError::UnalignedLength)?;
+        Ok(buf)
     }
 
-    pub fn decrypt_cbc(&self, ciphertext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
-        assert_eq!(ciphertext.len() % BLOCK_SIZE, 0);
+    /// Decrypt block-aligned ciphertext in CBC mode without removing padding.
+    ///
+    /// Returns `CbcError::UnalignedLength` if `ciphertext.len()` is not a
+    /// multiple of 16.
+    pub fn decrypt_cbc(&self, ciphertext: &[u8], iv: &[u8; 16]) -> Result<Vec<u8>, CbcError> {
+        if ciphertext.len() % BLOCK_SIZE != 0 {
+            return Err(CbcError::UnalignedLength);
+        }
         let mut buf = ciphertext.to_vec();
         Aes256CbcDec::new(&self.key.into(), iv.into())
             .decrypt_padded::<NoPadding>(&mut buf)
-            .expect("aligned CBC ciphertext has no padding to validate");
-        buf
+            .map_err(|_| CbcError::UnalignedLength)?;
+        Ok(buf)
     }
 }
 
@@ -50,8 +83,8 @@ mod tests {
         let iv = [0u8; 16];
         let cipher = Aes256::new(&key);
         let plaintext = [0u8; 16];
-        let encrypted = cipher.encrypt_cbc(&plaintext, &iv);
-        let decrypted = cipher.decrypt_cbc(&encrypted, &iv);
+        let encrypted = cipher.encrypt_cbc(&plaintext, &iv).unwrap();
+        let decrypted = cipher.decrypt_cbc(&encrypted, &iv).unwrap();
         assert_eq!(decrypted, plaintext.to_vec());
     }
 
@@ -61,8 +94,8 @@ mod tests {
         let iv = [0x02u8; 16];
         let cipher = Aes256::new(&key);
         let plaintext = [0x03u8; 32];
-        let encrypted = cipher.encrypt_cbc(&plaintext, &iv);
-        let decrypted = cipher.decrypt_cbc(&encrypted, &iv);
+        let encrypted = cipher.encrypt_cbc(&plaintext, &iv).unwrap();
+        let decrypted = cipher.decrypt_cbc(&encrypted, &iv).unwrap();
         assert_eq!(decrypted, plaintext.to_vec());
     }
 
@@ -84,7 +117,7 @@ mod tests {
         ];
         let cipher = Aes256::new(&key);
         let iv = [0u8; 16];
-        let result = cipher.encrypt_cbc(&plaintext, &iv);
+        let result = cipher.encrypt_cbc(&plaintext, &iv).unwrap();
         assert_eq!(&result[..16], &expected);
     }
 
@@ -113,21 +146,31 @@ mod tests {
         ));
         let cipher = Aes256::new(&key);
 
-        assert_eq!(cipher.encrypt_cbc(&plaintext, &iv), expected);
-        assert_eq!(cipher.decrypt_cbc(&expected, &iv), plaintext);
+        assert_eq!(cipher.encrypt_cbc(&plaintext, &iv).unwrap(), expected);
+        assert_eq!(cipher.decrypt_cbc(&expected, &iv).unwrap(), plaintext);
     }
 
     #[test]
     fn test_aes256_empty_cbc_payload_is_stable() {
         let cipher = Aes256::new(&[0x11; 32]);
-        assert!(cipher.encrypt_cbc(&[], &[0x22; 16]).is_empty());
-        assert!(cipher.decrypt_cbc(&[], &[0x22; 16]).is_empty());
+        assert!(cipher.encrypt_cbc(&[], &[0x22; 16]).unwrap().is_empty());
+        assert!(cipher.decrypt_cbc(&[], &[0x22; 16]).unwrap().is_empty());
     }
 
     #[test]
-    #[should_panic(expected = "assertion `left == right` failed")]
     fn test_aes256_rejects_unaligned_ciphertext() {
-        Aes256::new(&[0; 32]).decrypt_cbc(&[0; 17], &[0; 16]);
+        assert_eq!(
+            Aes256::new(&[0; 32]).decrypt_cbc(&[0; 17], &[0; 16]),
+            Err(CbcError::UnalignedLength)
+        );
+    }
+
+    #[test]
+    fn test_aes256_rejects_unaligned_plaintext() {
+        assert_eq!(
+            Aes256::new(&[0; 32]).encrypt_cbc(&[0; 15], &[0; 16]),
+            Err(CbcError::UnalignedLength)
+        );
     }
 
     fn decode_hex(hex: &str) -> Vec<u8> {

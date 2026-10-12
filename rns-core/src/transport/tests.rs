@@ -2554,7 +2554,8 @@ fn test_synthesize_tunnel_public_only_identity_is_dropped() {
 
     let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
     let public_key = identity.get_public_key().unwrap();
-    let public_only_identity = rns_crypto::identity::Identity::from_public_key(&public_key);
+    let public_only_identity =
+        rns_crypto::identity::Identity::from_public_key(&public_key).unwrap();
     let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
 
     let actions = engine.synthesize_tunnel(&public_only_identity, InterfaceId(1), &mut rng);

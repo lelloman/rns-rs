@@ -196,7 +196,7 @@ fn bench_aes128_cbc() {
     let n = 10_000;
 
     let cipher = aes128::Aes128::new(&key);
-    let ciphertext = cipher.encrypt_cbc(&padded, &iv);
+    let ciphertext = cipher.encrypt_cbc(&padded, &iv).unwrap();
 
     let start = now();
     for _ in 0..n {
@@ -227,7 +227,7 @@ fn bench_aes256_cbc() {
     let n = 10_000;
 
     let cipher = aes256::Aes256::new(&key);
-    let ciphertext = cipher.encrypt_cbc(&padded, &iv);
+    let ciphertext = cipher.encrypt_cbc(&padded, &iv).unwrap();
 
     let start = now();
     for _ in 0..n {

@@ -1557,7 +1557,9 @@ fn work_signature_status(document: &crate::work::WorkDocument) -> &'static str {
     let Ok(public_key) = <[u8; 64]>::try_from(identity_bytes) else {
         return "Not valid";
     };
-    let identity = Identity::from_public_key(&public_key);
+    let Ok(identity) = Identity::from_public_key(&public_key) else {
+        return "Not valid";
+    };
     if identity.verify(signature, document.content.as_bytes()) {
         "Valid"
     } else {

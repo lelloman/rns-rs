@@ -181,8 +181,11 @@ impl AnnounceData {
         &self,
         destination_hash: &[u8; 16],
     ) -> Result<ValidatedAnnounce, AnnounceError> {
-        // Create identity from public key
-        let announced_identity = Identity::from_public_key(&self.public_key);
+        // Create identity from public key. Key bytes that do not decode to a
+        // valid Ed25519 point cannot carry a valid signature, so the announce
+        // is rejected the same way (Python returns False from validate_announce).
+        let announced_identity = Identity::from_public_key(&self.public_key)
+            .map_err(|_| AnnounceError::InvalidSignature)?;
 
         // Build signed data
         let mut signed_data = Vec::new();
@@ -342,6 +345,29 @@ mod tests {
 
         let parsed = AnnounceData::unpack(&data, false).unwrap();
         assert!(parsed.validate(&dh).is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_announce_with_invalid_signing_key() {
+        let identity = Identity::from_private_key(&[0x42; 64]);
+        let id_hash = *identity.hash();
+
+        let nh = destination::name_hash("testapp", &["aspect"]);
+        let dh = destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
+        let random = [0x22; 10];
+
+        let (mut data, _) = AnnounceData::pack(&identity, &dh, &nh, &random, None, None).unwrap();
+
+        // Replace the Ed25519 half of the public key (bytes 32..64) with
+        // y = 2, which is not a valid compressed point encoding.
+        data[32..64].copy_from_slice(&[0; 32]);
+        data[32] = 2;
+
+        let parsed = AnnounceData::unpack(&data, false).unwrap();
+        assert!(matches!(
+            parsed.validate(&dh),
+            Err(AnnounceError::InvalidSignature)
+        ));
     }
 
     #[test]

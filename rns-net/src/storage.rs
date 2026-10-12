@@ -454,13 +454,9 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
                     hash.copy_from_slice(bytes);
                     hash
                 });
-            hash_bytes.unwrap_or_else(|| {
-                let identity = Identity::from_public_key(&public_key);
-                *identity.hash()
-            })
+            hash_bytes.unwrap_or_else(|| rns_core::hash::truncated_hash(&public_key))
         } else {
-            let identity = Identity::from_public_key(&public_key);
-            *identity.hash()
+            rns_core::hash::truncated_hash(&public_key)
         };
         let hops = arr.get(4).and_then(|value| value.as_uint()).unwrap_or(0) as u8;
         let receiving_interface = arr.get(5).and_then(|value| value.as_uint()).unwrap_or(0);

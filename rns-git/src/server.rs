@@ -1292,7 +1292,8 @@ fn validate_work_signature(
         return Err(Error::msg("invalid signature"));
     }
     let signature: &[u8; 64] = signature.try_into().unwrap();
-    let identity = Identity::from_public_key(remote_pubkey);
+    let identity =
+        Identity::from_public_key(remote_pubkey).map_err(|_| Error::msg("invalid signature"))?;
     if !identity.verify(signature, content.trim().as_bytes()) {
         return Err(Error::msg("invalid signature"));
     }

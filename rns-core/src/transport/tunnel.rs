@@ -146,7 +146,8 @@ pub fn validate_tunnel_synthesize_data(data: &[u8]) -> Result<ValidatedTunnel, T
 
     // Verify signature over (public_key || interface_hash || random_hash)
     let signed_data = &data[0..112];
-    let remote_identity = Identity::from_public_key(&public_key);
+    let remote_identity =
+        Identity::from_public_key(&public_key).map_err(|_| TunnelError::InvalidSignature)?;
     if !remote_identity.verify(&signature, signed_data) {
         return Err(TunnelError::InvalidSignature);
     }

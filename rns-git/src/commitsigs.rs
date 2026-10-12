@@ -376,7 +376,8 @@ fn validate_rsg(rsg: &[u8], message: &[u8]) -> Result<[u8; 16]> {
     let public_key: [u8; 64] = public_key
         .try_into()
         .map_err(|_| Error::msg("invalid public key length"))?;
-    let identity = Identity::from_public_key(&public_key);
+    let identity =
+        Identity::from_public_key(&public_key).map_err(|_| Error::msg("invalid public key"))?;
     let signer_hash = *identity.hash();
     let meta_signer = meta
         .map_get("signer")

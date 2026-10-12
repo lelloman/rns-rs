@@ -243,8 +243,11 @@ impl TransportEngine {
             return false;
         }
 
-        let destination_sig_pub =
-            rns_crypto::ed25519::Ed25519PublicKey::from_bytes(destination_sig_pub_bytes);
+        let Ok(destination_sig_pub) =
+            rns_crypto::ed25519::Ed25519PublicKey::from_bytes(destination_sig_pub_bytes)
+        else {
+            return false;
+        };
         if crate::link::handshake::validate_lrproof(
             proof_data,
             link_id,

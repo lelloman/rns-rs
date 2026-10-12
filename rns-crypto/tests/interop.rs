@@ -140,14 +140,14 @@ fn test_aes128_interop() {
         let iv: [u8; 16] = iv_bytes.try_into().unwrap();
 
         let cipher = aes128::Aes128::new(&key);
-        let ciphertext = cipher.encrypt_cbc(&plaintext, &iv);
+        let ciphertext = cipher.encrypt_cbc(&plaintext, &iv).unwrap();
         assert_eq!(
             ciphertext, expected_ct,
             "AES128 encrypt mismatch: {}",
             v["description"]
         );
 
-        let decrypted = cipher.decrypt_cbc(&ciphertext, &iv);
+        let decrypted = cipher.decrypt_cbc(&ciphertext, &iv).unwrap();
         assert_eq!(
             decrypted, plaintext,
             "AES128 decrypt mismatch: {}",
@@ -169,14 +169,14 @@ fn test_aes256_interop() {
         let iv: [u8; 16] = iv_bytes.try_into().unwrap();
 
         let cipher = aes256::Aes256::new(&key);
-        let ciphertext = cipher.encrypt_cbc(&plaintext, &iv);
+        let ciphertext = cipher.encrypt_cbc(&plaintext, &iv).unwrap();
         assert_eq!(
             ciphertext, expected_ct,
             "AES256 encrypt mismatch: {}",
             v["description"]
         );
 
-        let decrypted = cipher.decrypt_cbc(&ciphertext, &iv);
+        let decrypted = cipher.decrypt_cbc(&ciphertext, &iv).unwrap();
         assert_eq!(
             decrypted, plaintext,
             "AES256 decrypt mismatch: {}",

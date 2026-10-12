@@ -1,6 +1,25 @@
+use core::fmt;
+
 use crate::Rng;
 use ed25519_dalek::Signer;
 use ed25519_dalek::Verifier;
+
+#[derive(Debug, PartialEq)]
+pub enum Ed25519Error {
+    /// The 32 bytes do not decode to a valid compressed Edwards point.
+    InvalidPublicKey,
+}
+
+impl fmt::Display for Ed25519Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Ed25519Error::InvalidPublicKey => write!(f, "Invalid Ed25519 public key bytes"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Ed25519Error {}
 
 pub struct Ed25519PrivateKey {
     inner: ed25519_dalek::SigningKey,
@@ -39,11 +58,14 @@ impl Ed25519PrivateKey {
 }
 
 impl Ed25519PublicKey {
-    pub fn from_bytes(data: &[u8; 32]) -> Self {
-        Ed25519PublicKey {
-            inner: ed25519_dalek::VerifyingKey::from_bytes(data)
-                .expect("invalid Ed25519 public key bytes"),
-        }
+    /// Decode a compressed Ed25519 public key.
+    ///
+    /// Not every 32-byte string is a valid point encoding; such input
+    /// returns `Ed25519Error::InvalidPublicKey`.
+    pub fn from_bytes(data: &[u8; 32]) -> Result<Self, Ed25519Error> {
+        ed25519_dalek::VerifyingKey::from_bytes(data)
+            .map(|inner| Ed25519PublicKey { inner })
+            .map_err(|_| Ed25519Error::InvalidPublicKey)
     }
 
     pub fn public_bytes(&self) -> [u8; 32] {
@@ -148,6 +170,7 @@ mod tests {
             assert_eq!(key.sign(&message), expected_signature);
             assert!(key.public_key().verify(&expected_signature, &message));
             assert!(Ed25519PublicKey::from_bytes(&expected_public)
+                .unwrap()
                 .verify(&expected_signature, &message));
         }
     }
@@ -184,6 +207,26 @@ mod tests {
         ]);
 
         assert!(!public.verify(&signature, message));
+    }
+
+    #[test]
+    fn test_ed25519_invalid_public_key_bytes_return_error() {
+        // y = 2 has no corresponding x on the curve, so this is not a valid
+        // compressed point encoding.
+        let mut invalid = [0u8; 32];
+        invalid[0] = 2;
+        assert!(matches!(
+            Ed25519PublicKey::from_bytes(&invalid),
+            Err(Ed25519Error::InvalidPublicKey)
+        ));
+    }
+
+    #[test]
+    fn test_ed25519_valid_public_key_bytes_roundtrip() {
+        let public = Ed25519PrivateKey::from_bytes(&[7; 32]).public_key();
+        let bytes = public.public_bytes();
+        let decoded = Ed25519PublicKey::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.public_bytes(), bytes);
     }
 
     fn decode_hex(hex: &str) -> alloc::vec::Vec<u8> {

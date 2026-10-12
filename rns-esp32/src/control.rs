@@ -218,7 +218,8 @@ pub fn authorize_request(
         .position(|key| key == &request.controller_pubkey)
         .ok_or(ControlAuthError::UnauthorizedController)?;
 
-    let controller_identity = Identity::from_public_key(&request.controller_pubkey);
+    let controller_identity = Identity::from_public_key(&request.controller_pubkey)
+        .map_err(|_| ControlAuthError::InvalidSignature)?;
     let transcript = request_signature_transcript(
         node_control_destination,
         request.command,

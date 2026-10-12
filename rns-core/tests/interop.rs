@@ -412,7 +412,7 @@ fn test_proof_interop() {
         let pub_key_bytes = hex_to_bytes(v["public_key"].as_str().unwrap());
         let mut pub_key = [0u8; 64];
         pub_key.copy_from_slice(&pub_key_bytes);
-        let identity = Identity::from_public_key(&pub_key);
+        let identity = Identity::from_public_key(&pub_key).unwrap();
 
         let packet_hash_bytes = hex_to_bytes(v["packet_hash"].as_str().unwrap());
         let mut packet_hash = [0u8; 32];

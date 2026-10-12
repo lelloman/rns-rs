@@ -608,7 +608,9 @@ fn work_document_signature_status(value: &Value) -> &'static str {
     let Ok(public_key) = <[u8; 64]>::try_from(identity_bytes) else {
         return "Not valid";
     };
-    let identity = Identity::from_public_key(&public_key);
+    let Ok(identity) = Identity::from_public_key(&public_key) else {
+        return "Not valid";
+    };
     if identity.verify(signature, content.as_bytes()) {
         "Valid"
     } else {

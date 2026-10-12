@@ -260,7 +260,8 @@ impl LinkEngine {
             return Err(LinkError::InvalidState);
         }
 
-        let peer_sig_pub = Ed25519PublicKey::from_bytes(peer_sig_pub_bytes);
+        let peer_sig_pub = Ed25519PublicKey::from_bytes(peer_sig_pub_bytes)
+            .map_err(|_| LinkError::InvalidSignature)?;
 
         let (peer_pub, confirmed_mtu, confirmed_mode) =
             validate_lrproof(proof_data, &self.link_id, &peer_sig_pub, peer_sig_pub_bytes)?;
@@ -399,7 +400,8 @@ impl LinkEngine {
     /// Validate a delivery proof using the remote endpoint's Link signing key.
     pub fn validate_packet_proof(&self, packet_hash: &[u8; 32], signature: &[u8; 64]) -> bool {
         self.peer_sig_pub_bytes
-            .map(|bytes| Ed25519PublicKey::from_bytes(&bytes).verify(signature, packet_hash))
+            .and_then(|bytes| Ed25519PublicKey::from_bytes(&bytes).ok())
+            .map(|key| key.verify(signature, packet_hash))
             .unwrap_or(false)
     }
 

@@ -127,7 +127,10 @@ pub fn parse_device_frame(data: &[u8], host_switch_id: [u8; 4]) -> Option<WeaveI
         WDCL_T_DISCOVER if frame.payload.len() == 96 => {
             let key: [u8; 32] = frame.payload[..32].try_into().ok()?;
             let signature: [u8; 64] = frame.payload[32..].try_into().ok()?;
-            if !Ed25519PublicKey::from_bytes(&key).verify(&signature, &frame.destination) {
+            if !Ed25519PublicKey::from_bytes(&key)
+                .ok()?
+                .verify(&signature, &frame.destination)
+            {
                 return None;
             }
             Some(WeaveInput::Discovery {

@@ -72,7 +72,8 @@ impl Token {
         let ciphertext = match &self.mode {
             AesMode::Aes128(aes) => aes.encrypt_cbc(&padded, iv),
             AesMode::Aes256(aes) => aes.encrypt_cbc(&padded, iv),
-        };
+        }
+        .expect("PKCS7 padding always produces block-aligned plaintext");
 
         let mut signed_parts = Vec::with_capacity(16 + ciphertext.len());
         signed_parts.extend_from_slice(iv);
@@ -113,10 +114,16 @@ impl Token {
         let iv: [u8; 16] = token[..16].try_into().unwrap();
         let ciphertext = &token[16..token.len() - 32];
 
+        // CBC ciphertext must be a non-empty whole number of 16-byte blocks.
+        if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+            return Err(TokenError::DecryptionFailed);
+        }
+
         let mut decrypted = match &self.mode {
             AesMode::Aes128(aes) => aes.decrypt_cbc(ciphertext, &iv),
             AesMode::Aes256(aes) => aes.decrypt_cbc(ciphertext, &iv),
-        };
+        }
+        .map_err(|_| TokenError::DecryptionFailed)?;
 
         let unpadded_len = pkcs7::unpad(&decrypted, 16)
             .map_err(|_| TokenError::DecryptionFailed)?
@@ -213,6 +220,44 @@ mod tests {
             token.decrypt(&[0u8; 10]),
             Err(TokenError::InvalidToken)
         ));
+    }
+
+    fn sign_token_parts(key: &[u8], iv_and_ciphertext: &[u8]) -> Vec<u8> {
+        let signing_key = &key[..key.len() / 2];
+        let mut token = iv_and_ciphertext.to_vec();
+        token.extend_from_slice(&hmac_sha256(signing_key, iv_and_ciphertext));
+        token
+    }
+
+    #[test]
+    fn test_token_decrypt_rejects_misaligned_ciphertext_with_valid_hmac() {
+        for key in [&[0x42u8; 32][..], &[0x42u8; 64][..]] {
+            let token = Token::new(key).unwrap();
+            for ciphertext_len in [1usize, 15, 17, 31, 33] {
+                let mut parts = alloc::vec![0xAAu8; 16];
+                parts.extend(core::iter::repeat_n(0x55u8, ciphertext_len));
+                let signed = sign_token_parts(key, &parts);
+                assert_eq!(token.verify_hmac(&signed), Ok(true));
+                assert_eq!(
+                    token.decrypt(&signed),
+                    Err(TokenError::DecryptionFailed),
+                    "ciphertext length {ciphertext_len} must be rejected"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_token_well_formed_roundtrip_after_alignment_check() {
+        for key in [&[0x24u8; 32][..], &[0x24u8; 64][..]] {
+            let token = Token::new(key).unwrap();
+            for plaintext_len in [0usize, 1, 15, 16, 17, 32, 100] {
+                let plaintext = alloc::vec![0x5Au8; plaintext_len];
+                let encrypted = token.encrypt_with_iv(&plaintext, &[0x11; 16]);
+                assert_eq!((encrypted.len() - TOKEN_OVERHEAD) % 16, 0);
+                assert_eq!(token.decrypt(&encrypted).unwrap(), plaintext);
+            }
+        }
     }
 
     #[test]

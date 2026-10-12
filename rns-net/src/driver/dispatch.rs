@@ -317,10 +317,10 @@ impl Driver {
             // (matches Python's PacketReceipt.validate_proof behavior)
             if let Some(announced) = self.known_destination_announced(&tracked_dest) {
                 let identity =
-                    rns_crypto::identity::Identity::from_public_key(&announced.public_key);
+                    rns_crypto::identity::Identity::from_public_key(&announced.public_key).ok();
                 let mut sig = [0u8; 64];
                 sig.copy_from_slice(signature);
-                if !identity.verify(&sig, &tracked_hash) {
+                if !identity.is_some_and(|identity| identity.verify(&sig, &tracked_hash)) {
                     log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4],);
                     return;
                 }

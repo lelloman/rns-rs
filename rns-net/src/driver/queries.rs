@@ -779,7 +779,7 @@ impl Driver {
                             rns_crypto::identity::Identity::from_public_key(&recalled.public_key);
                         let mut payload = vec![0u8; payload_size];
                         self.rng.fill_bytes(&mut payload);
-                        match remote_id.encrypt(&payload, &mut self.rng) {
+                        match remote_id.and_then(|id| id.encrypt(&payload, &mut self.rng)) {
                             Ok(ciphertext) => {
                                 // Build DATA SINGLE BROADCAST packet to dest_hash
                                 let flags = rns_core::packet::PacketFlags {
