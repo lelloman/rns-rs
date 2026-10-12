@@ -569,7 +569,7 @@ impl AnnouncementLease {
             return Ok(None);
         };
         let announce = rns_core::announce::AnnounceData::unpack(
-            &packet.data,
+            packet.data(),
             packet.flags.context_flag == FLAG_SET,
         )
         .map_err(|_| invalid("invalid local announce"))?;

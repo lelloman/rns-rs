@@ -8137,10 +8137,10 @@ fn recursive_path_request_does_not_reach_offline_interface_writer() {
     assert_eq!(*interface, InterfaceId(2));
     let packet = RawPacket::unpack(raw).expect("valid recursive path request");
     assert_eq!(packet.destination_hash, driver.path_request_dest);
-    assert_eq!(packet.data.len(), 48);
-    assert_eq!(&packet.data[..16], &destination_hash);
-    assert_eq!(&packet.data[16..32], &[0x42; 16]);
-    assert_eq!(&packet.data[32..], &request_tag);
+    assert_eq!(packet.data().len(), 48);
+    assert_eq!(&packet.data()[..16], &destination_hash);
+    assert_eq!(&packet.data()[16..32], &[0x42; 16]);
+    assert_eq!(&packet.data()[32..], &request_tag);
 
     driver.dispatch_all(actions);
 
@@ -8359,17 +8359,17 @@ fn request_path_includes_transport_id() {
     if let Ok(packet) = RawPacket::unpack(raw) {
         // Data: dest_hash(16) + transport_id(16) + random_tag(16) = 48 bytes
         assert_eq!(
-            packet.data.len(),
+            packet.data().len(),
             48,
             "Path request data should be 48 bytes with transport_id"
         );
         assert_eq!(
-            &packet.data[..16],
+            &packet.data()[..16],
             &[0xAA; 16],
             "First 16 bytes should be dest_hash"
         );
         assert_eq!(
-            &packet.data[16..32],
+            &packet.data()[16..32],
             &[0xBB; 16],
             "Next 16 bytes should be transport_id"
         );
@@ -9645,14 +9645,14 @@ fn proof_data_is_valid_explicit_proof() {
     let proof_packet = RawPacket::unpack(proof_raw.unwrap()).unwrap();
     // Proof data should be 96 bytes: packet_hash(32) + signature(64)
     assert_eq!(
-        proof_packet.data.len(),
+        proof_packet.data().len(),
         96,
         "Explicit proof should be 96 bytes"
     );
 
     // Validate using rns-core's receipt module
     let result = rns_core::receipt::validate_proof(
-        &proof_packet.data,
+        proof_packet.data(),
         &data_packet_hash,
         &Identity::from_private_key(&prv_key), // same identity
     );
@@ -10998,7 +10998,7 @@ fn local_ratchets_reconnect_replay_and_writer_queue_retention() {
     let packet = RawPacket::unpack(&raw).unwrap();
     assert_eq!(packet.flags.context_flag, constants::FLAG_SET);
     assert_eq!(packet.context, constants::CONTEXT_PATH_RESPONSE);
-    let announce = AnnounceData::unpack(&packet.data, true).unwrap();
+    let announce = AnnounceData::unpack(packet.data(), true).unwrap();
     announce.validate(&dest.hash.0).unwrap();
     assert_eq!(announce.ratchet, owner.current_public());
     struct RatchetWriter {

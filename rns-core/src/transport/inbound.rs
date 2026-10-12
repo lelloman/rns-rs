@@ -125,8 +125,8 @@ pub fn create_link_entry(
     // compute_link_id(hashable_part, extra) where extra = data_len - ECPUBSIZE
     // This ensures the transport's link table key matches the link_id in LRPROOF packets.
     let hashable = packet.get_hashable_part();
-    let extra = if packet.data.len() > constants::LINK_ECPUBSIZE {
-        packet.data.len() - constants::LINK_ECPUBSIZE
+    let extra = if packet.data().len() > constants::LINK_ECPUBSIZE {
+        packet.data().len() - constants::LINK_ECPUBSIZE
     } else {
         0
     };

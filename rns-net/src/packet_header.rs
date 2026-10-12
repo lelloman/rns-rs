@@ -66,7 +66,7 @@ mod tests {
                     if let (Some(header), Ok(full)) = (header, full) {
                         assert_eq!(header.flags, full.flags);
                         assert_eq!(header.destination_hash, full.destination_hash);
-                        assert_eq!(header.data, full.data.as_slice());
+                        assert_eq!(header.data, full.data());
                     }
                 }
             }

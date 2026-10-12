@@ -168,7 +168,7 @@ impl AnnounceVerifyQueue {
 
     pub fn pending_identity_hash(&self, key: &AnnounceVerifyKey) -> Option<[u8; 16]> {
         let packet = &pending_of(self.pending.get(key)?).packet;
-        Some(crate::hash::truncated_hash(packet.data.get(..64)?))
+        Some(crate::hash::truncated_hash(packet.data().get(..64)?))
     }
 
     pub fn len(&self) -> usize {
@@ -247,7 +247,7 @@ fn queued_at_of(entry: &QueueEntry) -> f64 {
 
 fn pending_bytes(entry: &PendingAnnounce) -> usize {
     entry.original_raw.len()
-        + entry.packet.data.len()
+        + entry.packet.data().len()
         + entry.packet.transport_id.as_ref().map_or(0, |id| id.len())
 }
 

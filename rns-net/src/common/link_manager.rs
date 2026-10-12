@@ -579,7 +579,7 @@ impl LinkManager {
         engine.set_link_id_from_hashable(&packet.get_hashable_part(), request_data.len());
         let link_id = *engine.link_id();
 
-        engine.record_outbound_traffic(packet.data.len());
+        engine.record_outbound_traffic(packet.data().len());
         let managed = ManagedLink {
             resource_generation: std::sync::Arc::new(()),
             engine,
@@ -646,7 +646,7 @@ impl LinkManager {
         // attached interface, before dispatch/decryption of its context.
         if packet.flags.packet_type != constants::PACKET_TYPE_LINKREQUEST {
             if let Some(link) = self.links.get_mut(&dest_hash) {
-                link.engine.record_inbound_traffic(packet.data.len());
+                link.engine.record_inbound_traffic(packet.data().len());
             }
         }
 
@@ -661,7 +661,7 @@ impl LinkManager {
             constants::PACKET_TYPE_PROOF if packet.context == constants::CONTEXT_RESOURCE_PRF => {
                 // Resource proofs are PROOF packets with raw proof data, not
                 // encrypted DATA packets.
-                self.handle_resource_prf(&dest_hash, &packet.data, rng)
+                self.handle_resource_prf(&dest_hash, packet.data(), rng)
             }
             constants::PACKET_TYPE_PROOF => self.handle_link_proof(&dest_hash, &packet, rng),
             constants::PACKET_TYPE_DATA => {
@@ -692,7 +692,7 @@ impl LinkManager {
         let (engine, lrproof_data) = match LinkEngine::new_responder(
             &ld.sig_prv,
             &ld.sig_pub_bytes,
-            &packet.data,
+            packet.data(),
             &hashable,
             dest_hash,
             packet.hops,
@@ -802,15 +802,15 @@ impl LinkManager {
         packet: &RawPacket,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        if packet.data.len() != 96 {
+        if packet.data().len() != 96 {
             return Vec::new();
         }
 
         let mut tracked_hash = [0u8; 32];
-        tracked_hash.copy_from_slice(&packet.data[..32]);
+        tracked_hash.copy_from_slice(&packet.data()[..32]);
 
         let mut signature = [0u8; 64];
-        signature.copy_from_slice(&packet.data[32..]);
+        signature.copy_from_slice(&packet.data()[32..]);
 
         let Some(link) = self.links.get_mut(link_id) else {
             return Vec::new();
@@ -915,7 +915,7 @@ impl LinkManager {
 
         let now = time::now();
         let (lrrtt_encrypted, link_actions) = match link.engine.handle_lrproof_with_hops(
-            &packet.data,
+            packet.data(),
             &dest_sig_pub_bytes,
             Some(packet.hops),
             now,
@@ -1087,15 +1087,15 @@ impl LinkManager {
                     constants::CONTEXT_LINKIDENTIFY | constants::CONTEXT_REQUEST
                 )
             {
-                let packet_bytes = packet.raw.len() + packet.data.len();
+                let packet_bytes = packet.raw.len() + packet.data().len();
                 let queued_bytes: usize = link
                     .pre_rtt_packets
                     .iter()
-                    .map(|pending| pending.packet.raw.len() + pending.packet.data.len())
+                    .map(|pending| pending.packet.raw.len() + pending.packet.data().len())
                     .sum();
                 if link.pre_rtt_packets.len() < MAX_PRE_RTT_PACKETS
                     && packet_bytes <= MAX_PRE_RTT_BYTES.saturating_sub(queued_bytes)
-                    && link.engine.decrypt(&packet.data).is_ok()
+                    && link.engine.decrypt(packet.data()).is_ok()
                 {
                     link.pre_rtt_packets.push(PreRttPacket {
                         packet: packet.clone(),
@@ -1118,7 +1118,7 @@ impl LinkManager {
             match packet.context {
                 constants::CONTEXT_LRRTT => {
                     match link.engine.handle_lrrtt_with_hops(
-                        &packet.data,
+                        packet.data(),
                         Some(packet.hops),
                         time::now(),
                     ) {
@@ -1136,7 +1136,7 @@ impl LinkManager {
                     }
                 }
                 constants::CONTEXT_LINKIDENTIFY => {
-                    match link.engine.handle_identify(&packet.data) {
+                    match link.engine.handle_identify(packet.data()) {
                         Ok(link_actions) => {
                             let link_id = *link.engine.link_id();
                             link.remote_identity = link.engine.remote_identity().cloned();
@@ -1155,7 +1155,7 @@ impl LinkManager {
                     let received_at = time::now();
                     let reply = link
                         .engine
-                        .should_reply_keepalive(&packet.data, received_at);
+                        .should_reply_keepalive(packet.data(), received_at);
                     let inbound_actions = link.engine.record_inbound(received_at);
                     let link_id = *link.engine.link_id();
                     LinkDataResult::Keepalive {
@@ -1165,7 +1165,7 @@ impl LinkManager {
                         received_at,
                     }
                 }
-                constants::CONTEXT_LINKCLOSE => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_LINKCLOSE => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) if plaintext.as_slice() == link_id_bytes => {
                         let teardown_actions = link.engine.handle_teardown();
                         let link_id = *link.engine.link_id();
@@ -1176,7 +1176,7 @@ impl LinkManager {
                     }
                     _ => LinkDataResult::Error,
                 },
-                constants::CONTEXT_CHANNEL => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_CHANNEL => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1189,7 +1189,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_REQUEST => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_REQUEST => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1203,7 +1203,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESPONSE => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_RESPONSE => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1216,7 +1216,7 @@ impl LinkManager {
                     Err(_) => LinkDataResult::Error,
                 },
                 // --- Resource contexts ---
-                constants::CONTEXT_RESOURCE_ADV => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_RESOURCE_ADV => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1228,7 +1228,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_REQ => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_RESOURCE_REQ => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1240,7 +1240,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_HMU => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_RESOURCE_HMU => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1259,10 +1259,10 @@ impl LinkManager {
                     LinkDataResult::ResourcePart {
                         link_id,
                         inbound_actions,
-                        raw_data: &packet.data,
+                        raw_data: packet.data(),
                     }
                 }
-                constants::CONTEXT_RESOURCE_PRF => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_RESOURCE_PRF => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1274,7 +1274,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_ICL => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_RESOURCE_ICL => match link.engine.decrypt(packet.data()) {
                     Ok(resource_hash) if resource_hash.len() == 32 => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1286,7 +1286,7 @@ impl LinkManager {
                     }
                     _ => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_RCL => match link.engine.decrypt(&packet.data) {
+                constants::CONTEXT_RESOURCE_RCL => match link.engine.decrypt(packet.data()) {
                     Ok(resource_hash) if resource_hash.len() == 32 => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1298,7 +1298,7 @@ impl LinkManager {
                     }
                     _ => LinkDataResult::Error,
                 },
-                _ => match link.engine.decrypt(&packet.data) {
+                _ => match link.engine.decrypt(packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -2002,7 +2002,7 @@ impl LinkManager {
     pub fn record_outbound_packet(&mut self, packet: &RawPacket) {
         if packet.flags.destination_type == constants::DESTINATION_LINK {
             if let Some(link) = self.links.get_mut(&packet.destination_hash) {
-                link.engine.record_outbound_traffic(packet.data.len());
+                link.engine.record_outbound_traffic(packet.data().len());
             }
         }
     }

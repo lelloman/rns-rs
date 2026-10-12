@@ -308,7 +308,7 @@ fn find_free_port() -> u16 {
 
 fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Option<Vec<u8>> {
     let packet = rns_core::packet::RawPacket::unpack(raw).ok()?;
-    identity.decrypt(&packet.data).ok()
+    identity.decrypt(packet.data()).ok()
 }
 
 /// Extract Ed25519 signing keys from an identity for link registration.
@@ -1966,7 +1966,7 @@ fn test_plain_message_delivery() {
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive plain message");
     let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
-    assert_eq!(packet.data, b"plain text");
+    assert_eq!(packet.data(), b"plain text");
 
     alice_node.shutdown();
     bob_node.shutdown();
@@ -2231,7 +2231,7 @@ fn test_group_message_delivery() {
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive group message");
     let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
     let decrypted = group_dest_receiver
-        .decrypt(&packet.data)
+        .decrypt(packet.data())
         .expect("GROUP decrypt failed");
     assert_eq!(decrypted, b"group message");
 
@@ -2361,7 +2361,7 @@ fn test_group_wrong_key_fails() {
     let (_, raw, _) =
         wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive group message");
     let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
-    let result = group_dest_receiver.decrypt(&packet.data);
+    let result = group_dest_receiver.decrypt(packet.data());
     assert!(result.is_err(), "Decryption with wrong key should fail");
 
     alice_node.shutdown();
@@ -5766,9 +5766,9 @@ fn local_ratchets_survive_shared_daemon_restart() {
         futures::executor::block_on(bob.send_packet(&out, payload.as_bytes())).unwrap();
         let (_, raw, _) = wait_for_delivery(&alice_rx, TIMEOUT).unwrap();
         let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
-        assert!(identity.decrypt(&packet.data).is_err());
+        assert!(identity.decrypt(packet.data()).is_err());
         assert_eq!(
-            owner.decrypt(&packet.data).unwrap().plaintext,
+            owner.decrypt(packet.data()).unwrap().plaintext,
             payload.as_bytes()
         );
         if phase == 0 {

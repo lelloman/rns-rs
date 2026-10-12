@@ -151,7 +151,7 @@ fn decode_hex(s: &str) -> Vec<u8> {
 fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Vec<u8> {
     let packet = RawPacket::unpack(raw).expect("Rust delivery should be a valid packet");
     identity
-        .decrypt(&packet.data)
+        .decrypt(packet.data())
         .expect("Rust should decrypt Python packet")
 }
 
@@ -799,11 +799,11 @@ fn python_rns_local_ratchets_bidirectional_and_restart() {
     let (raw, _) = wait_for_rust_delivery(&rx, dest.hash, TIMEOUT);
     let packet = RawPacket::unpack(&raw).unwrap();
     assert!(
-        identity.decrypt(&packet.data).is_err(),
+        identity.decrypt(packet.data()).is_err(),
         "Python must select announced ratchet"
     );
     assert_eq!(
-        owner.decrypt(&packet.data).unwrap().plaintext,
+        owner.decrypt(packet.data()).unwrap().plaintext,
         PYTHON_TO_RUST_PAYLOAD
     );
     let first = owner.current_public().unwrap();

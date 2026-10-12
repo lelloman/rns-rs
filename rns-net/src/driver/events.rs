@@ -36,14 +36,14 @@ impl Driver {
             return false;
         }
         let is_path_request = parsed_packet.destination_hash == self.path_request_dest;
-        let tagless_path_request = is_path_request && parsed_packet.data.len() <= 16;
+        let tagless_path_request = is_path_request && parsed_packet.data().len() <= 16;
         if tagless_path_request || self.engine.is_unvalidated_link_packet(parsed_packet) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
             }
             return false;
         }
-        if is_path_request && parsed_packet.data.len() > 48 {
+        if is_path_request && parsed_packet.data().len() > 48 {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
             }
@@ -2196,7 +2196,7 @@ impl Driver {
             Err(_) => return,
         };
 
-        match rns_core::transport::tunnel::validate_tunnel_synthesize_data(&packet.data) {
+        match rns_core::transport::tunnel::validate_tunnel_synthesize_data(packet.data()) {
             Ok(validated) => {
                 // Find the interface this tunnel belongs to by computing the expected
                 // tunnel_id for each interface with wants_tunnel

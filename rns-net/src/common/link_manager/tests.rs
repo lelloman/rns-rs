@@ -109,7 +109,7 @@ fn link_mtu_discovery_can_be_disabled_without_changing_public_create_api() {
     let raw = extract_any_send_packet(&actions);
     let packet = RawPacket::unpack(&raw).unwrap();
     let (_, _, signalled_mtu, _) =
-        rns_core::link::handshake::parse_linkrequest_data(&packet.data).unwrap();
+        rns_core::link::handshake::parse_linkrequest_data(packet.data()).unwrap();
 
     assert_eq!(signalled_mtu, None);
     assert_eq!(
@@ -381,7 +381,7 @@ fn packet_request_at_exact_size_limit_is_dispatched() {
     let packet = RawPacket::unpack(&raw).unwrap();
     let packed_size = resp_mgr.links[&link_id]
         .engine
-        .decrypt(&packet.data)
+        .decrypt(packet.data())
         .unwrap()
         .len();
     resp_mgr.links.get_mut(&link_id).unwrap().max_request_size = Some(packed_size);
@@ -417,7 +417,7 @@ fn packet_request_one_byte_over_size_limit_is_ignored_before_dispatch() {
     let packet = RawPacket::unpack(&raw).unwrap();
     let packed_size = resp_mgr.links[&link_id]
         .engine
-        .decrypt(&packet.data)
+        .decrypt(packet.data())
         .unwrap()
         .len();
     resp_mgr.links.get_mut(&link_id).unwrap().max_request_size = Some(packed_size - 1);
@@ -791,7 +791,7 @@ fn active_teardown_sends_linkclose_and_remote_closed_teardown_is_noop() {
         .get(&link_id)
         .unwrap()
         .engine
-        .decrypt(&close_packet.data)
+        .decrypt(close_packet.data())
         .expect("LINKCLOSE payload must authenticate");
     assert_eq!(plaintext, link_id);
     assert!(initiator.teardown_link(&link_id).is_empty());
@@ -1106,7 +1106,7 @@ fn initiator_tick_emits_ff_keepalive_probe_when_outbound_is_quiet() {
 
     let packets = keepalive_packets(&initiator.tick(&mut OsRng));
     assert_eq!(packets.len(), 1);
-    assert_eq!(packets[0].data, [0xff]);
+    assert_eq!(packets[0].data(), [0xff]);
 }
 
 #[test]
@@ -1143,7 +1143,7 @@ fn responder_acknowledges_ff_probe_after_outbound_silence() {
     );
     let packets = keepalive_packets(&actions);
     assert_eq!(packets.len(), 1);
-    assert_eq!(packets[0].data, [0xfe]);
+    assert_eq!(packets[0].data(), [0xfe]);
 }
 
 #[test]
@@ -1613,7 +1613,7 @@ fn first_resource_advertisement(
         .get(link_id)
         .unwrap()
         .engine
-        .decrypt(&adv_pkt.data)
+        .decrypt(adv_pkt.data())
         .unwrap();
     rns_core::resource::ResourceAdvertisement::unpack(&plaintext).unwrap()
 }
@@ -2815,7 +2815,7 @@ fn resource_cancellation_on_storage_failure_names_the_failed_resource() {
     assert_eq!(
         sender.links[&link]
             .engine
-            .decrypt(&cancellation.1.data)
+            .decrypt(cancellation.1.data())
             .unwrap(),
         hash
     );
@@ -3181,13 +3181,13 @@ fn link_traffic_accounting_uses_ciphertext_data_once() {
         })
         .unwrap();
     let packet = RawPacket::unpack(&raw).unwrap();
-    assert!(packet.data.len() > b"short plaintext".len());
+    assert!(packet.data().len() > b"short plaintext".len());
 
     initiator.record_outbound_packet(&packet);
     assert_eq!(initiator.links[&link_id].engine.tx_packets(), before_tx + 1);
     assert_eq!(
         initiator.links[&link_id].engine.tx_bytes(),
-        before_tx_bytes + packet.data.len() as u64
+        before_tx_bytes + packet.data().len() as u64
     );
 
     responder.handle_local_delivery(
@@ -3200,7 +3200,7 @@ fn link_traffic_accounting_uses_ciphertext_data_once() {
     assert_eq!(responder.links[&link_id].engine.rx_packets(), before_rx + 1);
     assert_eq!(
         responder.links[&link_id].engine.rx_bytes(),
-        before_rx_bytes + packet.data.len() as u64
+        before_rx_bytes + packet.data().len() as u64
     );
 }
 
@@ -3257,7 +3257,7 @@ fn test_resource_proof_is_raw_proof_packet() {
 
     assert_eq!(pkt.flags.packet_type, constants::PACKET_TYPE_PROOF);
     assert_eq!(pkt.context, constants::CONTEXT_RESOURCE_PRF);
-    assert_eq!(pkt.data, proof);
+    assert_eq!(pkt.data(), proof);
 }
 
 // ====================================================================
@@ -3894,7 +3894,7 @@ fn test_resource_receiver_stores_original_advertisement_plaintext() {
         .get(&link_id)
         .unwrap()
         .engine
-        .decrypt(&adv_pkt.data)
+        .decrypt(adv_pkt.data())
         .unwrap();
 
     let _resp_actions = resp_mgr.handle_local_delivery(
@@ -4196,7 +4196,7 @@ fn test_resource_hmu_timeout_extension_in_link_manager_flow() {
         .get(&link_id)
         .unwrap()
         .engine
-        .decrypt(&retry_pkt.data)
+        .decrypt(retry_pkt.data())
         .expect("retry request should decrypt");
     assert_eq!(retry_plaintext[0], constants::RESOURCE_HASHMAP_IS_EXHAUSTED);
 

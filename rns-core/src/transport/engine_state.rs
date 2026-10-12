@@ -218,7 +218,7 @@ impl TransportEngine {
         let link_id = packet.destination_hash;
         let destination_hash =
             self.link_rebalance_destination(&link_id, hops, receiving_interface)?;
-        Some((link_id, destination_hash, hops, packet.data.clone()))
+        Some((link_id, destination_hash, hops, packet.data().to_vec()))
     }
 
     /// Validate a mismatched-hop LRPROOF and update the relay link route and

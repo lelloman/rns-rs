@@ -265,7 +265,7 @@ impl TransportEngine {
             received_from: path.next_hop,
             hops: path.hops,
             packet_raw: raw.clone(),
-            packet_data: parsed.data,
+            packet_data: parsed.data().to_vec(),
             destination_hash: ctx.destination_hash,
             context_flag: parsed.flags.context_flag,
             local_rebroadcasts: 0,

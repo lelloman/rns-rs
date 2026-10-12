@@ -1385,7 +1385,7 @@ fn test_async_announce_retransmit_cleanup_happens_before_queueing() {
             received_from: [0xBB; 16],
             hops: 2,
             packet_raw: packet.raw.clone(),
-            packet_data: packet.data.clone(),
+            packet_data: packet.data().to_vec(),
             destination_hash: dest_hash,
             context_flag: constants::FLAG_UNSET,
             local_rebroadcasts: 0,
@@ -1472,7 +1472,7 @@ fn test_async_announce_completion_inserts_sig_cache_and_prevents_requeue() {
     assert_eq!(batch.len(), 1);
     let (key, pending) = batch.pop().unwrap();
 
-    let announce = AnnounceData::unpack(&pending.packet.data, false).unwrap();
+    let announce = AnnounceData::unpack(pending.packet.data(), false).unwrap();
     let validated = announce.validate(&pending.packet.destination_hash).unwrap();
     let sig_cache_key = announce.signature_cache_key(&pending.packet.destination_hash);
 
@@ -2824,7 +2824,7 @@ fn assert_recursive_path_request_packet(raw: &[u8], dest: &[u8; 16], tag: &[u8])
     expected_data.extend_from_slice(dest);
     expected_data.extend_from_slice(&[0x42; 16]);
     expected_data.extend_from_slice(tag);
-    assert_eq!(packet.data, expected_data);
+    assert_eq!(packet.data(), expected_data);
 }
 
 #[test]
@@ -4667,7 +4667,7 @@ fn refreshed_announce_does_not_postpone_pending_send() {
         assert!(
             actions.iter().any(|a| matches!(a,
                 TransportAction::SendOnInterface { raw, .. }
-                if RawPacket::unpack(raw).unwrap().data == vec![0xCD; 32]
+                if RawPacket::unpack(raw).unwrap().data() == vec![0xCD; 32]
             )),
             "replacement must send fresh data without postponing pending work"
         );

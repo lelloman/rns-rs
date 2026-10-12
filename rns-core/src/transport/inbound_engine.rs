@@ -350,7 +350,7 @@ impl TransportEngine {
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
             clamp_forwarded_link_request_mtu(
                 &mut new_raw,
-                ctx.packet.data.len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE,
+                ctx.packet.data().len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE,
                 self.interfaces.get(&ctx.iface).map(|info| info.mtu),
                 self.interfaces
                     .get(&outbound_interface)
@@ -534,7 +534,7 @@ impl TransportEngine {
         let has_ratchet = packet.flags.context_flag == constants::FLAG_SET;
 
         // Unpack and validate announce
-        let announce = match AnnounceData::unpack(&packet.data, has_ratchet) {
+        let announce = match AnnounceData::unpack(packet.data(), has_ratchet) {
             Ok(a) => a,
             Err(_) => {
                 actions.push(TransportAction::ProtocolViolation { interface: iface });
@@ -564,7 +564,7 @@ impl TransportEngine {
         };
 
         let received_from = self.announce_received_from(packet, now);
-        let random_blob = match extract_random_blob(&packet.data) {
+        let random_blob = match extract_random_blob(packet.data()) {
             Some(b) => b,
             None => {
                 actions.push(TransportAction::ProtocolViolation { interface: iface });
@@ -718,7 +718,7 @@ impl TransportEngine {
         }
 
         let has_ratchet = ctx.packet.flags.context_flag == constants::FLAG_SET;
-        let announce = match AnnounceData::unpack(&ctx.packet.data, has_ratchet) {
+        let announce = match AnnounceData::unpack(ctx.packet.data(), has_ratchet) {
             Ok(a) => a,
             Err(_) => {
                 actions.push(TransportAction::ProtocolViolation {
@@ -762,7 +762,7 @@ impl TransportEngine {
                 self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
                 return;
             };
-            let random_blob = match extract_random_blob(&ctx.packet.data) {
+            let random_blob = match extract_random_blob(ctx.packet.data()) {
                 Some(b) => b,
                 None => return,
             };
@@ -790,7 +790,7 @@ impl TransportEngine {
                 return;
             };
             self.announce_sig_cache.insert(sig_cache_key, ctx.now);
-            let random_blob = match extract_random_blob(&ctx.packet.data) {
+            let random_blob = match extract_random_blob(ctx.packet.data()) {
                 Some(b) => b,
                 None => return,
             };
@@ -812,7 +812,7 @@ impl TransportEngine {
             return;
         }
 
-        let random_blob = match extract_random_blob(&ctx.packet.data) {
+        let random_blob = match extract_random_blob(ctx.packet.data()) {
             Some(b) => b,
             None => {
                 actions.push(TransportAction::ProtocolViolation {
@@ -992,7 +992,7 @@ impl TransportEngine {
         let (path_entry, announce_entry) = announce_proc::process_validated_announce(
             ctx.packet.destination_hash,
             ctx.packet.hops,
-            &ctx.packet.data,
+            ctx.packet.data(),
             &ctx.packet.raw,
             ctx.packet.packet_hash,
             ctx.packet.flags.context_flag,
@@ -1108,7 +1108,7 @@ impl TransportEngine {
                 received_from: ctx.received_from,
                 hops: ctx.packet.hops,
                 packet_raw: ctx.packet.raw.clone(),
-                packet_data: ctx.packet.data.clone(),
+                packet_data: ctx.packet.data().to_vec(),
                 destination_hash: ctx.packet.destination_hash,
                 context_flag: ctx.packet.flags.context_flag,
                 local_rebroadcasts: 0,

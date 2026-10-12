@@ -383,7 +383,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let raw = build_management_announce(&identity, &mut OsRng).unwrap();
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
-        let validated = rns_core::announce::AnnounceData::unpack(&pkt.data, false);
+        let validated = rns_core::announce::AnnounceData::unpack(pkt.data(), false);
         assert!(validated.is_ok(), "Announce data should unpack");
         let ann = validated.unwrap();
         let result = ann.validate(&pkt.destination_hash);
@@ -402,7 +402,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let raw = build_blackhole_announce(&identity, &mut OsRng).unwrap();
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
-        let ann = rns_core::announce::AnnounceData::unpack(&pkt.data, false).unwrap();
+        let ann = rns_core::announce::AnnounceData::unpack(pkt.data(), false).unwrap();
         let result = ann.validate(&pkt.destination_hash);
         assert!(
             result.is_ok(),
@@ -445,7 +445,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let raw = build_probe_announce(&identity, &mut OsRng).unwrap();
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
-        let ann = rns_core::announce::AnnounceData::unpack(&pkt.data, false).unwrap();
+        let ann = rns_core::announce::AnnounceData::unpack(pkt.data(), false).unwrap();
         let result = ann.validate(&pkt.destination_hash);
         assert!(
             result.is_ok(),

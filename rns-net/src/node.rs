@@ -2311,7 +2311,7 @@ impl RnsNode {
                         let has_ratchet =
                             pending.packet.flags.context_flag == rns_core::constants::FLAG_SET;
                         let announce = match rns_core::announce::AnnounceData::unpack(
-                            &pending.packet.data,
+                            pending.packet.data(),
                             has_ratchet,
                         ) {
                             Ok(announce) => announce,
@@ -3934,7 +3934,7 @@ mod tests {
         assert!(node.attach_local_ratchets(conflicting).is_err());
         let (packet, _) = node.build_announce(&dest, &identity, Some(b"app")).unwrap();
         assert_eq!(packet.flags.context_flag, rns_core::constants::FLAG_SET);
-        let announce = rns_core::announce::AnnounceData::unpack(&packet.data, true).unwrap();
+        let announce = rns_core::announce::AnnounceData::unpack(packet.data(), true).unwrap();
         announce.validate(&dest.hash.0).unwrap();
         assert_eq!(announce.ratchet, owner.current_public());
         assert!(node

@@ -361,7 +361,7 @@ impl Driver {
             return true;
         }
 
-        match authorize_request(&packet.data, &destination_hash, &mut self.replay_window) {
+        match authorize_request(packet.data(), &destination_hash, &mut self.replay_window) {
             Ok(request) => self.execute_control_request(request),
             Err(ControlAuthError::Parse(err)) => {
                 log::warn!("Malformed control request: {:?}", err);

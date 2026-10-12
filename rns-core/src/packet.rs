@@ -82,7 +82,6 @@ pub struct RawPacket {
     pub transport_id: Option<[u8; 16]>,
     pub destination_hash: [u8; 16],
     pub context: u8,
-    pub data: Vec<u8>,
     pub raw: Vec<u8>,
     pub packet_hash: [u8; 32],
     pub rssi: Option<i16>,
@@ -90,6 +89,22 @@ pub struct RawPacket {
 }
 
 impl RawPacket {
+    /// Offset of the payload in the wire bytes of a packet with this header type.
+    #[inline]
+    pub const fn data_offset(header_type: u8) -> usize {
+        if header_type == constants::HEADER_2 {
+            2 + 2 * (constants::TRUNCATED_HASHLENGTH / 8) + 1
+        } else {
+            2 + constants::TRUNCATED_HASHLENGTH / 8 + 1
+        }
+    }
+
+    /// The payload: the wire bytes after the header.
+    #[inline]
+    pub fn data(&self) -> &[u8] {
+        &self.raw[Self::data_offset(self.flags.header_type)..]
+    }
+
     /// Pack fields into raw bytes.
     pub fn pack(
         flags: PacketFlags,
@@ -156,7 +171,6 @@ impl RawPacket {
             transport_id: transport_id.copied(),
             destination_hash: *destination_hash,
             context,
-            data: data.to_vec(),
             raw,
             packet_hash,
             rssi: None,
@@ -272,8 +286,7 @@ impl RawPacket {
             destination_hash.copy_from_slice(&raw[2 + dst_len..2 + 2 * dst_len]);
 
             let context = raw[2 + 2 * dst_len];
-            let data = raw[2 + 2 * dst_len + 1..].to_vec();
-            if data.is_empty() {
+            if raw.len() == 2 + 2 * dst_len + 1 {
                 return Err(PacketError::ZeroLengthData);
             }
 
@@ -289,7 +302,6 @@ impl RawPacket {
                 transport_id: Some(transport_id),
                 destination_hash,
                 context,
-                data,
                 raw: input.into(),
                 packet_hash,
                 rssi: None,
@@ -306,8 +318,7 @@ impl RawPacket {
             destination_hash.copy_from_slice(&raw[2..2 + dst_len]);
 
             let context = raw[2 + dst_len];
-            let data = raw[2 + dst_len + 1..].to_vec();
-            if data.is_empty() {
+            if raw.len() == 2 + dst_len + 1 {
                 return Err(PacketError::ZeroLengthData);
             }
 
@@ -323,7 +334,6 @@ impl RawPacket {
                 transport_id: None,
                 destination_hash,
                 context,
-                data,
                 raw: input.into(),
                 packet_hash,
                 rssi: None,
@@ -575,7 +585,7 @@ mod tests {
         assert!(unpacked.transport_id.is_none());
         assert_eq!(unpacked.destination_hash, dest_hash);
         assert_eq!(unpacked.context, constants::CONTEXT_RESOURCE);
-        assert_eq!(unpacked.data, data);
+        assert_eq!(unpacked.data(), data);
         assert_eq!(unpacked.packet_hash, pkt.packet_hash);
     }
 
@@ -608,7 +618,7 @@ mod tests {
         assert_eq!(unpacked.transport_id.unwrap(), transport_id);
         assert_eq!(unpacked.destination_hash, dest_hash);
         assert_eq!(unpacked.context, constants::CONTEXT_NONE);
-        assert_eq!(unpacked.data, data);
+        assert_eq!(unpacked.data(), data);
         assert_eq!(unpacked.packet_hash, pkt.packet_hash);
     }
 

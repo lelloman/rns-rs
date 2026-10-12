@@ -115,7 +115,7 @@ fn find_free_port() -> u16 {
 fn decrypt_delivery(raw: &[u8], ratchets: &rns_net::LocalRatchets) -> Option<Vec<u8>> {
     let packet = rns_core::packet::RawPacket::unpack(raw).ok()?;
     ratchets
-        .decrypt(&packet.data)
+        .decrypt(packet.data())
         .ok()
         .map(|result| result.plaintext)
 }

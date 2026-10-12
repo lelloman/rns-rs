@@ -922,7 +922,7 @@ impl Driver {
                 let now = time::now();
                 let Some(request) =
                     self.engine
-                        .accept_path_request(&packet.data, receiving_interface, now)
+                        .accept_path_request(packet.data(), receiving_interface, now)
                 else {
                     return;
                 };

@@ -215,7 +215,7 @@ fn test_packet_interop() {
             "unpack context mismatch for {}",
             desc
         );
-        assert_eq!(unpacked.data, data, "unpack data mismatch for {}", desc);
+        assert_eq!(unpacked.data(), data, "unpack data mismatch for {}", desc);
 
         if let Some(ref tid) = transport_id {
             assert_eq!(
@@ -496,10 +496,10 @@ fn test_milestone_announce_pipeline() {
 
     let unpacked = RawPacket::unpack(&pkt.raw).unwrap();
     assert_eq!(unpacked.destination_hash, dest_hash);
-    assert_eq!(unpacked.data, announce_bytes);
+    assert_eq!(unpacked.data(), announce_bytes);
 
     // Re-validate from unpacked packet data
-    let reparsed = AnnounceData::unpack(&unpacked.data, has_ratchet).unwrap();
+    let reparsed = AnnounceData::unpack(unpacked.data(), has_ratchet).unwrap();
     let revalidated = reparsed.validate(&dest_hash).unwrap();
     assert_eq!(revalidated.identity_hash, validated.identity_hash);
 }
