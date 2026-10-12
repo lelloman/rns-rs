@@ -17,6 +17,14 @@ use crate::interface::{
 };
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
+/// Upstream `SerialInterface.HW_MTU`.
+const HW_MTU: usize = 564;
+
+/// HDLC decoder bounded by the serial hardware MTU plus on-wire IFAC bytes.
+fn frame_decoder(ifac_size: usize) -> hdlc::Decoder {
+    hdlc::Decoder::reticulum(HW_MTU, ifac_size)
+}
+
 /// Configuration for a Serial interface.
 #[derive(Debug, Clone)]
 pub struct SerialIfaceConfig {
@@ -57,12 +65,13 @@ impl Writer for SerialWriter {
 /// Start the serial interface. Opens the port, spawns reader thread.
 /// Returns the writer for the driver.
 pub fn start(config: SerialIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    start_with_control(config, tx).map(|(writer, _)| writer)
+    start_with_control(config, tx, 0).map(|(writer, _)| writer)
 }
 
 fn start_with_control(
     config: SerialIfaceConfig,
     tx: EventSender,
+    ifac_size: usize,
 ) -> io::Result<(Box<dyn Writer>, ListenerControl)> {
     let serial_config = SerialConfig {
         path: config.port.clone(),
@@ -88,7 +97,7 @@ fn start_with_control(
                 .spawn(move || {
                     if let Some(reader) = reconnect(&config, &tx, &retry_control) {
                         let id = config.interface_id;
-                        reader_loop(reader, id, config, tx, retry_control);
+                        reader_loop(reader, id, config, tx, retry_control, ifac_size);
                     }
                 })?;
             return Ok((Box::new(UnavailableWriter), control));
@@ -110,7 +119,7 @@ fn start_with_control(
     thread::Builder::new()
         .name(format!("serial-reader-{}", id.0))
         .spawn(move || {
-            reader_loop(reader_file, id, config, tx, reader_control);
+            reader_loop(reader_file, id, config, tx, reader_control, ifac_size);
         })?;
 
     Ok((Box::new(SerialWriter { file: writer_file }), control))
@@ -123,8 +132,9 @@ fn reader_loop(
     config: SerialIfaceConfig,
     tx: EventSender,
     control: ListenerControl,
+    ifac_size: usize,
 ) {
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = frame_decoder(ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -143,7 +153,7 @@ fn reader_loop(
                 match reconnect(&config, &tx, &control) {
                     Some(new_reader) => {
                         reader = new_reader;
-                        decoder = hdlc::Decoder::new();
+                        decoder = frame_decoder(ifac_size);
                         continue;
                     }
                     None => return,
@@ -161,7 +171,7 @@ fn reader_loop(
                 match reconnect(&config, &tx, &control) {
                     Some(new_reader) => {
                         reader = new_reader;
-                        decoder = hdlc::Decoder::new();
+                        decoder = frame_decoder(ifac_size);
                         continue;
                     }
                     None => return,
@@ -191,7 +201,7 @@ fn reader_loop(
                 match reconnect(&config, &tx, &control) {
                     Some(new_reader) => {
                         reader = new_reader;
-                        decoder = hdlc::Decoder::new();
+                        decoder = frame_decoder(ifac_size);
                         continue;
                     }
                     None => return,
@@ -365,7 +375,8 @@ impl InterfaceFactory for SerialFactory {
             started: crate::time::now(),
         };
 
-        let (writer, control) = start_with_control(serial_config, ctx.tx)?;
+        let ifac_size = ctx.ifac.as_ref().map_or(0, |ifac| ifac.size);
+        let (writer, control) = start_with_control(serial_config, ctx.tx, ifac_size)?;
 
         Ok(StartResult::Simple {
             control: Some(control),
@@ -557,8 +568,9 @@ mod tests {
             ..Default::default()
         };
 
-        let reader =
-            thread::spawn(move || reader_loop(slave, InterfaceId(71), config, tx, reader_control));
+        let reader = thread::spawn(move || {
+            reader_loop(slave, InterfaceId(71), config, tx, reader_control, 0)
+        });
         thread::sleep(Duration::from_millis(50));
         control.request_stop();
         reader.join().unwrap();
@@ -578,7 +590,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (_writer, control) = start_with_control(config, tx).unwrap();
+        let (_writer, control) = start_with_control(config, tx, 0).unwrap();
         assert!(rx.try_recv().is_err());
 
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
@@ -595,5 +607,23 @@ mod tests {
         control.request_stop();
         drop(slave);
         drop(master);
+    }
+
+    #[test]
+    fn frame_decoder_accepts_frames_up_to_hw_mtu_plus_ifac() {
+        let ifac_size = 8;
+        let mut decoder = frame_decoder(ifac_size);
+        let payload = vec![0x3c; HW_MTU + ifac_size];
+        let decoded = decoder.feed_with_diagnostics(&hdlc::frame(&payload));
+        assert_eq!(decoded.frames, vec![payload]);
+        assert!(decoded.invalid_frame_lengths.is_empty());
+    }
+
+    #[test]
+    fn frame_decoder_drops_frame_above_hw_mtu_as_invalid() {
+        let mut decoder = frame_decoder(0);
+        let decoded = decoder.feed_with_diagnostics(&hdlc::frame(&vec![0x3c; HW_MTU + 1]));
+        assert!(decoded.frames.is_empty());
+        assert_eq!(decoded.invalid_frame_lengths, vec![HW_MTU + 1]);
     }
 }

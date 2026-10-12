@@ -26,7 +26,6 @@ use rns_crypto::identity::Identity;
 use crate::driver::{Callbacks, Driver};
 use crate::event;
 use crate::event::Event;
-use crate::hdlc;
 use crate::interface::local::LocalClientConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::node::RnsNode;
@@ -286,7 +285,7 @@ pub fn bench_shared_client_replay_once(
         expected: usize,
         expected_context: u8,
     ) -> io::Result<Vec<Vec<u8>>> {
-        let mut decoder = hdlc::Decoder::new();
+        let mut decoder = crate::interface::local::frame_decoder(0);
         let mut buf = [0u8; 4096];
         let mut frames = Vec::new();
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -528,7 +527,6 @@ pub fn bench_shared_client_replay_once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hdlc;
     use rns_core::packet::RawPacket;
     use rns_core::types::IdentityHash;
     use rns_crypto::identity::Identity;
@@ -707,7 +705,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
 
-        let mut decoder = hdlc::Decoder::new();
+        let mut decoder = crate::interface::local::frame_decoder(0);
         let mut buf = [0u8; 4096];
         let n = stream1.read(&mut buf).unwrap();
         let frames = decoder.feed(&buf[..n]);
@@ -730,7 +728,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
 
-        let mut decoder = hdlc::Decoder::new();
+        let mut decoder = crate::interface::local::frame_decoder(0);
         let n = stream2.read(&mut buf).unwrap();
         let frames = decoder.feed(&buf[..n]);
         assert!(!frames.is_empty(), "expected replayed announce frame");

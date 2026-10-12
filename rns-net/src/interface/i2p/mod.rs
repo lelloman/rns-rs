@@ -27,7 +27,6 @@ use crate::interface::{lock_or_recover, Writer};
 use self::sam::{Destination, SamError};
 
 /// Hardware MTU for I2P streams (matches Python I2PInterface).
-#[allow(dead_code)]
 const HW_MTU: usize = 1064;
 
 /// Estimated bitrate for I2P tunnels (256 kbps, matches Python).
@@ -428,7 +427,13 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                 }
 
                 // Run HDLC reader loop (blocks until disconnect)
-                peer_reader_loop(stream, client_id, &iface_name, &tx);
+                peer_reader_loop(
+                    stream,
+                    client_id,
+                    &iface_name,
+                    &tx,
+                    template_ifac_size(dynamic_template.as_ref()),
+                );
 
                 // Disconnected
                 let _ = tx.send(Event::InterfaceDown(client_id));
@@ -550,10 +555,11 @@ fn acceptor_loop(context: AcceptorContext) {
                 // Spawn per-client reader thread (accepted peers don't reconnect)
                 let client_tx = tx.clone();
                 let client_name = iface_name.to_string();
+                let ifac_size = template_ifac_size(dynamic_template.as_ref());
                 thread::Builder::new()
                     .name(format!("i2p-client-{}", client_id.0))
                     .spawn(move || {
-                        peer_reader_loop(stream, client_id, &client_name, &client_tx);
+                        peer_reader_loop(stream, client_id, &client_name, &client_tx, ifac_size);
                         let _ = client_tx.send(Event::InterfaceDown(client_id));
                     })
                     .ok();
@@ -566,6 +572,18 @@ fn acceptor_loop(context: AcceptorContext) {
     }
 }
 
+/// IFAC bytes a spawned peer connection may carry on the wire.
+fn template_ifac_size(template: Option<&super::DynamicInterfaceTemplate>) -> usize {
+    template
+        .and_then(|template| template.ifac.as_ref())
+        .map_or(0, |ifac| ifac.size)
+}
+
+/// HDLC decoder bounded by the I2P hardware MTU plus on-wire IFAC bytes.
+fn frame_decoder(ifac_size: usize) -> hdlc::Decoder {
+    hdlc::Decoder::reticulum(HW_MTU, ifac_size)
+}
+
 /// Per-peer HDLC reader loop. Reads from the SAM data stream, decodes HDLC
 /// frames, and sends them to the driver. Returns when the stream is closed.
 fn peer_reader_loop(
@@ -573,8 +591,9 @@ fn peer_reader_loop(
     id: InterfaceId,
     name: &str,
     tx: &EventSender,
+    ifac_size: usize,
 ) {
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = frame_decoder(ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -707,5 +726,28 @@ pub(crate) fn i2p_runtime_handle_from_config(config: &I2pConfig) -> I2pRuntimeCo
         interface_name: config.name.clone(),
         runtime: Arc::clone(&config.runtime),
         startup: I2pRuntime::from_config(config),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_decoder_accepts_frames_up_to_hw_mtu_plus_ifac() {
+        let ifac_size = 16;
+        let mut decoder = frame_decoder(ifac_size);
+        let payload = vec![0x5a; HW_MTU + ifac_size];
+        let decoded = decoder.feed_with_diagnostics(&hdlc::frame(&payload));
+        assert_eq!(decoded.frames, vec![payload]);
+        assert!(decoded.invalid_frame_lengths.is_empty());
+    }
+
+    #[test]
+    fn frame_decoder_drops_frame_above_hw_mtu_as_invalid() {
+        let mut decoder = frame_decoder(0);
+        let decoded = decoder.feed_with_diagnostics(&hdlc::frame(&vec![0x5a; HW_MTU + 1]));
+        assert!(decoded.frames.is_empty());
+        assert_eq!(decoded.invalid_frame_lengths, vec![HW_MTU + 1]);
     }
 }

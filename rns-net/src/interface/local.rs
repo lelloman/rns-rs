@@ -27,6 +27,22 @@ use crate::interface::{ListenerControl, Writer};
 pub(crate) const HW_MTU: u32 = 262_144;
 pub(crate) const BITRATE: u64 = 1_000_000_000;
 
+/// HDLC decoder for frames received on a local shared-instance connection.
+///
+/// Accepts frames up to [`HW_MTU`] plus `ifac_size` bytes, matching Python
+/// `LocalInterface`'s `ReceiveBuffer(mtu=HW_MTU)`. Local connections normally
+/// carry no IFAC, so callers pass 0 unless a template configures one.
+pub(crate) fn frame_decoder(ifac_size: usize) -> hdlc::Decoder {
+    hdlc::Decoder::reticulum(HW_MTU as usize, ifac_size)
+}
+
+/// IFAC bytes a spawned local client connection may carry on the wire.
+fn template_ifac_size(template: Option<&super::DynamicInterfaceTemplate>) -> usize {
+    template
+        .and_then(|template| template.ifac.as_ref())
+        .map_or(0, |ifac| ifac.size)
+}
+
 #[cfg(target_os = "android")]
 const CLIENT_SLEEP_PAUSE_TIMEOUT: Duration = Duration::from_secs(12);
 #[cfg(target_os = "android")]
@@ -417,10 +433,11 @@ fn unix_server_loop(
         }
 
         let client_tx = tx.clone();
+        let ifac_size = template_ifac_size(dynamic_template.as_ref());
         thread::Builder::new()
             .name(format!("local-unix-reader-{}", client_id.0))
             .spawn(move || {
-                unix_reader_loop(stream, client_id, client_tx, sleep_hold);
+                unix_reader_loop(stream, client_id, client_tx, sleep_hold, ifac_size);
             })
             .ok();
     }
@@ -475,9 +492,10 @@ fn unix_reader_loop(
     id: InterfaceId,
     tx: EventSender,
     sleep_hold: Option<ClientSleepHold>,
+    ifac_size: usize,
 ) {
     use std::io::Read;
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = frame_decoder(ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -548,10 +566,11 @@ fn spawn_local_client_handler(
         return;
     }
 
+    let ifac_size = template_ifac_size(dynamic_template);
     thread::Builder::new()
         .name(format!("local-reader-{}", client_id.0))
         .spawn(move || {
-            tcp_reader_loop(stream, client_id, tx, sleep_hold);
+            tcp_reader_loop(stream, client_id, tx, sleep_hold, ifac_size);
         })
         .ok();
 }
@@ -561,8 +580,9 @@ fn tcp_reader_loop(
     id: InterfaceId,
     tx: EventSender,
     sleep_hold: Option<ClientSleepHold>,
+    ifac_size: usize,
 ) {
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = frame_decoder(ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -749,7 +769,7 @@ fn local_client_reader_loop(
     tx: EventSender,
 ) {
     let id = config.interface_id;
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = frame_decoder(0);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -758,7 +778,7 @@ fn local_client_reader_loop(
                 log::warn!("[{}] shared connection closed", config.name);
                 let _ = tx.send(Event::InterfaceDown(id));
                 stream = reconnect_local_client(&config, &tx);
-                decoder = hdlc::Decoder::new();
+                decoder = frame_decoder(0);
             }
             Ok(n) => {
                 for frame in decoder.feed(&buf[..n]) {
@@ -779,7 +799,7 @@ fn local_client_reader_loop(
                 log::warn!("[{}] shared read error: {}", config.name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
                 stream = reconnect_local_client(&config, &tx);
-                decoder = hdlc::Decoder::new();
+                decoder = frame_decoder(0);
             }
         }
     }
@@ -1222,7 +1242,13 @@ mod tests {
         let reader_sleep_hold = sleep_hold.clone();
         let (tx, rx) = crate::event::channel();
         thread::spawn(move || {
-            tcp_reader_loop(server_stream, InterfaceId(98), tx, Some(reader_sleep_hold));
+            tcp_reader_loop(
+                server_stream,
+                InterfaceId(98),
+                tx,
+                Some(reader_sleep_hold),
+                0,
+            );
         });
 
         let mut writer = LocalWriter {
@@ -1243,7 +1269,7 @@ mod tests {
             "paused writer should not emit bytes, got {err:?}"
         );
 
-        let inbound = vec![0x42; constants::HEADER_MINSIZE];
+        let inbound = vec![0x42; constants::HEADER_MINSIZE + 1];
         client.write_all(&hdlc::frame(&inbound)).unwrap();
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
@@ -1445,5 +1471,79 @@ mod tests {
         let mut buf = [0u8; 4];
         server.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"ping");
+    }
+
+    #[test]
+    fn tcp_reader_delivers_frame_above_64k_sent_in_small_chunks() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+
+        let (tx, rx) = crate::event::channel();
+        thread::spawn(move || {
+            tcp_reader_loop(server_stream, InterfaceId(97), tx, None, 0);
+        });
+
+        let payload: Vec<u8> = (0..100 * 1024).map(|i| (i % 251) as u8).collect();
+        let framed = hdlc::frame(&payload);
+        for chunk in framed.chunks(4096) {
+            client.write_all(chunk).unwrap();
+        }
+        client.flush().unwrap();
+
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame {
+                interface_id, data, ..
+            } => {
+                assert_eq!(interface_id, InterfaceId(97));
+                assert_eq!(data, payload);
+            }
+            other => panic!("expected Frame, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn frame_decoder_accepts_hw_mtu_frame_in_chunks() {
+        let mut decoder = frame_decoder(0);
+        let payload: Vec<u8> = (0..HW_MTU as usize).map(|i| (i % 253) as u8).collect();
+        let framed = hdlc::frame(&payload);
+        let mut frames = Vec::new();
+        let mut invalid = Vec::new();
+        for chunk in framed.chunks(4096) {
+            let decoded = decoder.feed_with_diagnostics(chunk);
+            frames.extend(decoded.frames);
+            invalid.extend(decoded.invalid_frame_lengths);
+        }
+        assert_eq!(frames, vec![payload]);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn frame_decoder_drops_frame_above_hw_mtu_as_invalid() {
+        let mut decoder = frame_decoder(0);
+        let oversized = vec![0x42; HW_MTU as usize + 1];
+        let valid = vec![0x24; constants::HEADER_MINSIZE + 1];
+        let mut stream = hdlc::frame(&oversized);
+        stream.extend_from_slice(&hdlc::frame(&valid));
+        let mut frames = Vec::new();
+        let mut invalid = Vec::new();
+        for chunk in stream.chunks(4096) {
+            let decoded = decoder.feed_with_diagnostics(chunk);
+            frames.extend(decoded.frames);
+            invalid.extend(decoded.invalid_frame_lengths);
+        }
+        assert_eq!(frames, vec![valid]);
+        assert_eq!(invalid, vec![HW_MTU as usize + 1]);
+    }
+
+    #[test]
+    fn frame_decoder_allows_template_ifac_bytes() {
+        let ifac_size = 16;
+        let mut decoder = frame_decoder(ifac_size);
+        let payload = vec![0x11; HW_MTU as usize + ifac_size];
+        let decoded = decoder.feed_with_diagnostics(&hdlc::frame(&payload));
+        assert_eq!(decoded.frames, vec![payload]);
+        assert!(decoded.invalid_frame_lengths.is_empty());
     }
 }
