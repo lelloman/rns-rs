@@ -1,5 +1,6 @@
 use rns_core::msgpack::{self, Value};
 
+use crate::util::validate_upstream_source;
 use crate::{Error, Result};
 
 pub const APP_NAME: &str = "git";
@@ -103,6 +104,7 @@ pub fn parse_remote_clone_request(data: &[u8]) -> Result<(String, String)> {
         .filter(|source| !source.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| Error::msg("request missing source"))?;
+    validate_upstream_source(&source)?;
     Ok((repo, source))
 }
 
@@ -372,6 +374,22 @@ mod tests {
                 "https://example.invalid/repo.git".into()
             )
         );
+    }
+
+    #[test]
+    fn remote_clone_request_rejects_unsupported_sources() {
+        for source in [
+            "--option=value",
+            "/srv/git/repo.git",
+            "file:///srv/git/repo.git",
+            "https://example.invalid/repo\n.git",
+        ] {
+            let req = remote_clone_request("group/repo", source);
+            assert!(
+                parse_remote_clone_request(&req).is_err(),
+                "{source:?} should be rejected"
+            );
+        }
     }
 
     #[test]

@@ -659,6 +659,9 @@ fn sign_release_artifacts_in_repo(
 }
 
 fn resolve_tag_commit_hash(repo_path: &Path, tag: &str) -> Result<Option<String>> {
+    if tag.is_empty() || tag.starts_with('-') {
+        return Ok(None);
+    }
     let output = Command::new("git")
         .arg("rev-list")
         .arg("-n")
@@ -909,7 +912,8 @@ fn validate_rsg_parts(
     let public_key: [u8; 64] = pubkey
         .try_into()
         .map_err(|_| Error::msg("RSG public key has invalid length"))?;
-    let identity = Identity::from_public_key(&public_key);
+    let identity = Identity::from_public_key(&public_key)
+        .map_err(|_| Error::msg("RSG public key is invalid"))?;
     let signer_hash = *identity.hash();
     let meta_signer = meta
         .map_get("signer")

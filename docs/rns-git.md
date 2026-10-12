@@ -160,6 +160,9 @@ rngit perms rns://<destination_hash>/<group>/<repo>
 rngit perms rns://<destination_hash>/<group>/<repo> --content ./repo.allowed
 ```
 
+Upstream sources for `fork` and `mirror` must be `https://`, `http://`, `git://`,
+`ssh://` or `rns://` URLs. Local paths and `file://` URLs are not accepted.
+
 `create`, `fork`, and `mirror` require create access in the target group. The
 server initializes a bare repository and writes a sidecar `<repo>.allowed` file
 granting the requester admin access. Forks and mirrors store

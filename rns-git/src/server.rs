@@ -1877,14 +1877,15 @@ mod tests {
     #[test]
     fn fork_handler_fetches_source_repo_and_records_metadata() {
         let tmp = tempfile::tempdir().unwrap();
-        let source = create_source_repo(tmp.path());
+        create_source_repo(tmp.path());
         let mut config = cfg(tmp.path());
         config.allow_create = vec!["all".into()];
         std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
         let access = make_access(&config);
         let remote = ([0x22; 16], [0u8; 64]);
-        let req =
-            protocol::remote_clone_request("group/forked", source.to_str().expect("utf-8 path"));
+        let daemon = git::test_support::GitDaemon::serve(tmp.path());
+        let source_url = daemon.url("source-master");
+        let req = protocol::remote_clone_request("group/forked", &source_url);
 
         let resp = handle_fork(&config, &access, &req, Some(&remote)).unwrap();
 
@@ -1895,7 +1896,7 @@ mod tests {
         assert_eq!(git_config(&target, "repository.rngit.type"), "fork");
         assert_eq!(
             git_config(&target, "repository.rngit.upstream.source"),
-            source.to_string_lossy()
+            source_url
         );
         assert!(git_config(&target, "repository.rngit.upstream.sync")
             .parse::<u64>()
@@ -1909,14 +1910,14 @@ mod tests {
     #[test]
     fn mirror_handler_records_mirror_type() {
         let tmp = tempfile::tempdir().unwrap();
-        let source = create_source_repo_on_branch(tmp.path(), "main");
+        create_source_repo_on_branch(tmp.path(), "main");
         let mut config = cfg(tmp.path());
         config.allow_create = vec!["all".into()];
         std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
         let access = make_access(&config);
         let remote = ([0x22; 16], [0u8; 64]);
-        let req =
-            protocol::remote_clone_request("group/mirrored", source.to_str().expect("utf-8 path"));
+        let daemon = git::test_support::GitDaemon::serve(tmp.path());
+        let req = protocol::remote_clone_request("group/mirrored", &daemon.url("source-main"));
 
         let resp = handle_mirror(&config, &access, &req, Some(&remote)).unwrap();
 
@@ -1948,10 +1949,27 @@ mod tests {
         .unwrap();
         assert_eq!(missing_source[0], protocol::RES_INVALID_REQ);
 
+        let local_source = create_source_repo(tmp.path());
+        for source in [
+            local_source.to_str().expect("utf-8 path").to_string(),
+            format!("file://{}", local_source.display()),
+            "--option=value".to_string(),
+        ] {
+            let rejected = handle_fork(
+                &config,
+                &access,
+                &protocol::remote_clone_request("group/new", &source),
+                Some(&remote),
+            )
+            .unwrap();
+            assert_eq!(rejected[0], protocol::RES_INVALID_REQ, "{source:?}");
+            assert!(!config.repositories_dir.join("group/new").exists());
+        }
+
         let existing = handle_fork(
             &config,
             &access,
-            &protocol::remote_clone_request("group/existing", "unused"),
+            &protocol::remote_clone_request("group/existing", "https://example.invalid/unused.git"),
             Some(&remote),
         )
         .unwrap();
@@ -1968,8 +1986,8 @@ mod tests {
         std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
         let access = make_access(&config);
         let remote = ([0x22; 16], [0u8; 64]);
-        let fork_req =
-            protocol::remote_clone_request("group/forked", source.to_str().expect("utf-8 path"));
+        let daemon = git::test_support::GitDaemon::serve(tmp.path());
+        let fork_req = protocol::remote_clone_request("group/forked", &daemon.url("source-master"));
         assert_eq!(
             handle_fork(&config, &access, &fork_req, Some(&remote)).unwrap()[0],
             protocol::RES_OK

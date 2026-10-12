@@ -123,6 +123,42 @@ pub fn validate_repo_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Longest upstream source URL accepted for forks and mirrors.
+pub const MAX_UPSTREAM_SOURCE_LEN: usize = 2048;
+
+/// URL schemes accepted as fork and mirror upstream sources.
+pub const UPSTREAM_SOURCE_SCHEMES: &[&str] = &["https://", "http://", "git://", "ssh://", "rns://"];
+
+/// Validate a fork or mirror upstream source before passing it to git.
+///
+/// Accepts only URLs with a scheme from [`UPSTREAM_SOURCE_SCHEMES`] and a
+/// non-empty host, without whitespace or control characters, and at most
+/// [`MAX_UPSTREAM_SOURCE_LEN`] bytes long. `rns://` sources must be canonical
+/// `rns://<destination_hash>/<repository>` URLs.
+pub fn validate_upstream_source(source: &str) -> Result<()> {
+    let invalid = || Error::msg("invalid upstream source");
+    if source.is_empty()
+        || source.len() > MAX_UPSTREAM_SOURCE_LEN
+        || source.starts_with('-')
+        || source.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(invalid());
+    }
+    let rest = UPSTREAM_SOURCE_SCHEMES
+        .iter()
+        .find_map(|scheme| source.strip_prefix(scheme))
+        .ok_or_else(|| Error::msg("unsupported upstream source scheme"))?;
+    if source.starts_with("rns://") {
+        return parse_rns_url(source).map(|_| ()).map_err(|_| invalid());
+    }
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    if authority.starts_with('-') || host.is_empty() || host.starts_with('-') {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +288,57 @@ mod tests {
         match value {
             Some(value) => std::env::set_var(key, value),
             None => std::env::remove_var(key),
+        }
+    }
+
+    #[test]
+    fn upstream_source_accepts_supported_schemes() {
+        for source in [
+            "https://example.invalid/project.git",
+            "http://example.invalid:8080/project.git",
+            "git://127.0.0.1:9418/project",
+            "ssh://git@example.invalid/project.git",
+            "rns://00112233445566778899aabbccddeeff/group/repo",
+        ] {
+            assert!(
+                validate_upstream_source(source).is_ok(),
+                "{source:?} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_source_rejects_unsupported_or_malformed_values() {
+        let too_long = format!(
+            "https://example.invalid/{}",
+            "a".repeat(MAX_UPSTREAM_SOURCE_LEN)
+        );
+        for source in [
+            "",
+            "--option=value",
+            "-oflag=value",
+            "/srv/git/project.git",
+            "../project.git",
+            "file:///srv/git/project.git",
+            "ext::example",
+            "git@example.invalid:project.git",
+            "HTTPS://example.invalid/project.git",
+            "https://",
+            "https:///project.git",
+            "ssh://-flag=value/project",
+            "ssh://user@-host/project",
+            "https://example.invalid/pro ject.git",
+            "https://example.invalid/project.git\n",
+            "https://example.invalid/\tproject.git",
+            "https://example.invalid/project\u{7f}.git",
+            "rns://not-a-hash/group/repo",
+            "rns://00112233445566778899aabbccddeeff/../repo",
+            too_long.as_str(),
+        ] {
+            assert!(
+                validate_upstream_source(source).is_err(),
+                "{source:?} should be rejected"
+            );
         }
     }
 }

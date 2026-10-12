@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::protocol::RefUpdate;
-use crate::util::validate_repo_name;
+use crate::util::{validate_repo_name, validate_upstream_source};
 use crate::{Error, Result};
 
 pub fn check_git_available() -> Result<()> {
@@ -72,9 +72,8 @@ pub fn ensure_bare_repository(path: &Path) -> Result<()> {
 }
 
 pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Result<()> {
-    if source.trim().is_empty() {
-        return Err(Error::msg("missing source"));
-    }
+    // Validate the remote before passing it to git.
+    validate_upstream_source(source)?;
     if path.exists() {
         return Err(Error::msg("repository already exists"));
     }
@@ -100,6 +99,7 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
             .arg("--git-dir")
             .arg(&temp)
             .arg("fetch")
+            .arg("--")
             .arg(source)
             .arg("+refs/*:refs/*"))?;
         update_head_to_source_default(&temp, source)?;
@@ -113,6 +113,7 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
             .arg("--git-dir")
             .arg(&temp)
             .arg("config")
+            .arg("--")
             .arg("repository.rngit.upstream.source")
             .arg(source))?;
         if matches!(repository_type, "fork" | "mirror") {
@@ -143,6 +144,7 @@ pub fn update_head_to_source_default(repo_path: &Path, source: &str) -> Result<(
             .arg("show-ref")
             .arg("--verify")
             .arg("--quiet")
+            .arg("--")
             .arg(branch)
             .status()?;
         if !check.success() {
@@ -158,15 +160,19 @@ pub fn update_head_to_source_default(repo_path: &Path, source: &str) -> Result<(
         .arg("--git-dir")
         .arg(repo_path)
         .arg("symbolic-ref")
+        .arg("--")
         .arg("HEAD")
         .arg(target_branch))?;
     Ok(())
 }
 
 fn source_default_head(source: &str) -> Result<Option<String>> {
+    // Validate the remote before passing it to git.
+    validate_upstream_source(source)?;
     let output = Command::new("git")
         .arg("ls-remote")
         .arg("--symref")
+        .arg("--")
         .arg(source)
         .arg("HEAD")
         .output()?;
@@ -229,10 +235,13 @@ pub fn sync_upstream(path: &Path) -> Result<String> {
     let source = repository_config(path, "repository.rngit.upstream.source")?
         .filter(|source| !source.is_empty())
         .ok_or_else(|| Error::msg("missing upstream source"))?;
+    // Validate the remote before passing it to git.
+    validate_upstream_source(&source)?;
     run(Command::new("git")
         .arg("--git-dir")
         .arg(path)
         .arg("fetch")
+        .arg("--")
         .arg(&source)
         .arg("+refs/*:refs/*"))?;
     if repository_type == "mirror" {
@@ -330,6 +339,7 @@ pub fn apply_push(path: &Path, bundle: &[u8], updates: &[RefUpdate]) -> Result<(
             .arg("--git-dir")
             .arg(path)
             .arg("fetch")
+            .arg("--")
             .arg(&bundle_path)
             .arg("+refs/heads/*:refs/heads/*")
             .arg("+refs/tags/*:refs/tags/*"));
@@ -354,6 +364,10 @@ pub fn apply_push(path: &Path, bundle: &[u8], updates: &[RefUpdate]) -> Result<(
 }
 
 pub fn local_ref_sha(refname: &str) -> Result<Option<String>> {
+    // Remote-advertised ref names reach this call; a leading `-` is never a ref.
+    if refname.is_empty() || refname.starts_with('-') {
+        return Ok(None);
+    }
     let output = Command::new("git")
         .arg("rev-parse")
         .arg("--verify")
@@ -407,6 +421,9 @@ pub fn object_exists_local(sha: &str) -> bool {
 }
 
 fn object_exists_local_in(repo: &Path, sha: &str) -> bool {
+    if !is_valid_sha(sha) {
+        return false;
+    }
     Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -428,7 +445,7 @@ pub fn fetch_bundle_into_local(bundle: &[u8], wanted: &[String]) -> Result<()> {
     let bundle_path = temp_path("rngit-local-fetch", "bundle");
     fs::write(&bundle_path, bundle)?;
     let mut cmd = Command::new("git");
-    cmd.arg("fetch").arg(&bundle_path);
+    cmd.arg("fetch").arg("--").arg(&bundle_path);
     if wanted.is_empty() {
         cmd.arg("refs/*:refs/*");
     } else {
@@ -444,6 +461,7 @@ fn update_ref(path: &Path, refname: &str, new: &str, old: Option<&str>, force: b
     cmd.arg("--git-dir")
         .arg(path)
         .arg("update-ref")
+        .arg("--")
         .arg(refname)
         .arg(new);
     if !force {
@@ -460,6 +478,7 @@ fn delete_ref(path: &Path, refname: &str, old: Option<&str>, force: bool) -> Res
         .arg(path)
         .arg("update-ref")
         .arg("-d")
+        .arg("--")
         .arg(refname);
     if !force {
         if let Some(old) = old {
@@ -492,6 +511,9 @@ fn valid_local_objects_in(repo: &Path, shas: &[String]) -> Vec<String> {
 }
 
 fn object_exists_in_repo(path: &Path, sha: &str) -> bool {
+    if !is_valid_sha(sha) {
+        return false;
+    }
     Command::new("git")
         .arg("--git-dir")
         .arg(path)
@@ -580,6 +602,72 @@ fn run(cmd: &mut Command) -> Result<String> {
     } else {
         stderr
     }))
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+    use std::path::Path;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// A `git daemon` serving every repository under a directory over
+    /// `git://127.0.0.1:<port>/`, stopped when dropped.
+    pub(crate) struct GitDaemon {
+        child: Child,
+        port: u16,
+    }
+
+    impl GitDaemon {
+        pub(crate) fn serve(base: &Path) -> Self {
+            let mut last_error = String::new();
+            for _ in 0..5 {
+                let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                    .and_then(|listener| listener.local_addr())
+                    .map(|addr| addr.port())
+                    .expect("reserve local port");
+                let mut child = Command::new("git")
+                    .arg("daemon")
+                    .arg("--reuseaddr")
+                    .arg("--export-all")
+                    .arg("--listen=127.0.0.1")
+                    .arg(format!("--port={port}"))
+                    .arg(format!("--base-path={}", base.display()))
+                    .arg(base)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("start git daemon");
+                let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while Instant::now() < deadline {
+                    if let Ok(Some(status)) = child.try_wait() {
+                        last_error = format!("git daemon exited with {status}");
+                        break;
+                    }
+                    if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
+                        return Self { child, port };
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            panic!("git daemon did not start: {last_error}");
+        }
+
+        pub(crate) fn url(&self, name: &str) -> String {
+            format!("git://127.0.0.1:{}/{name}", self.port)
+        }
+    }
+
+    impl Drop for GitDaemon {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -864,6 +952,130 @@ mod tests {
         let excluded = create_local_bundle_in(&work, &["refs/heads/main".into()], &[sha]).unwrap();
         assert!(!full.is_empty());
         assert!(excluded.is_empty());
+    }
+
+    fn commit_in_new_work_tree(work: &Path, branch: &str) -> String {
+        fs::create_dir_all(work).unwrap();
+        test_git(
+            Command::new("git")
+                .arg("init")
+                .arg("-b")
+                .arg(branch)
+                .arg(work),
+        );
+        fs::write(work.join("README.md"), "hello\n").unwrap();
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(work)
+                .args(["add", "README.md"]),
+        );
+        test_git(Command::new("git").arg("-C").arg(work).args([
+            "-c",
+            "user.name=RNS Test",
+            "-c",
+            "user.email=rns@example.invalid",
+            "commit",
+            "-m",
+            "init",
+        ]));
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(work)
+                .args(["rev-parse", "HEAD"]),
+        )
+        .trim()
+        .to_string()
+    }
+
+    #[test]
+    fn clone_remote_bare_fetches_from_git_url_and_follows_source_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let served = tmp.path().join("served");
+        let sha = commit_in_new_work_tree(&served.join("project"), "trunk");
+        let daemon = test_support::GitDaemon::serve(&served);
+        let source = daemon.url("project");
+        let target = tmp.path().join("repos/group/mirror");
+
+        clone_remote_bare(&source, &target, "mirror").unwrap();
+
+        assert!(is_bare_repository(&target));
+        assert_eq!(
+            list_refs(&target).unwrap(),
+            vec![(sha, "refs/heads/trunk".to_string())]
+        );
+        assert_eq!(
+            test_git(
+                Command::new("git")
+                    .arg("--git-dir")
+                    .arg(&target)
+                    .args(["symbolic-ref", "HEAD"])
+            )
+            .trim(),
+            "refs/heads/trunk"
+        );
+        assert_eq!(
+            repository_config(&target, "repository.rngit.upstream.source")
+                .unwrap()
+                .as_deref(),
+            Some(source.as_str())
+        );
+        assert_eq!(sync_upstream(&target).unwrap(), "mirror");
+    }
+
+    #[test]
+    fn clone_remote_bare_rejects_sources_outside_the_allow_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_dir = tmp.path().join("source");
+        commit_in_new_work_tree(&source_dir, "main");
+        let local_path = source_dir.to_string_lossy().into_owned();
+        let file_url = format!("file://{local_path}");
+        for source in [
+            local_path.as_str(),
+            file_url.as_str(),
+            "--option=value",
+            "-c",
+            "",
+        ] {
+            let target = tmp.path().join("repos/group/rejected");
+            assert!(
+                clone_remote_bare(source, &target, "fork").is_err(),
+                "{source:?} should be rejected"
+            );
+            assert!(!target.exists());
+        }
+    }
+
+    #[test]
+    fn sync_upstream_rejects_stored_source_outside_the_allow_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo.git");
+        ensure_bare_repository(&repo).unwrap();
+        for (key, value) in [
+            ("repository.rngit.type", "fork"),
+            (
+                "repository.rngit.upstream.source",
+                "--option=value",
+            ),
+        ] {
+            test_git(
+                Command::new("git")
+                    .arg("--git-dir")
+                    .arg(&repo)
+                    .args(["config", "--", key, value]),
+            );
+        }
+
+        assert!(sync_upstream(&repo).is_err());
+    }
+
+    #[test]
+    fn local_ref_lookup_ignores_option_like_names() {
+        assert_eq!(local_ref_sha("--all").unwrap(), None);
+        assert_eq!(local_ref_sha("").unwrap(), None);
+        assert!(!object_exists_local("--all"));
+        assert!(!object_exists_in_repo(Path::new("."), "--all"));
     }
 
     fn test_git(cmd: &mut Command) -> String {
