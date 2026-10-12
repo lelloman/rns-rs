@@ -37,32 +37,35 @@ pub fn forward_transport_packet(
     if remaining_hops > 1 || (remaining_hops == 1 && next_hop != packet.destination_hash) {
         // Replace transport_id with next_hop, update hops. A one-hop path can
         // still point at a final transport node for destinations behind it.
-        let mut new_raw = Vec::new();
+        let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+        let mut new_raw = Vec::with_capacity(2 + next_hop.len() + tail.len());
         new_raw.push(packet.raw[0]); // flags unchanged
         new_raw.push(packet.hops); // updated hop count
         new_raw.extend_from_slice(&next_hop); // transport_id = next hop
                                               // Skip old transport_id (bytes 2..18), keep dest_hash + context + data
-        new_raw.extend_from_slice(&packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
+        new_raw.extend_from_slice(tail);
         new_raw
     } else if remaining_hops == 1 {
         // Direct final hop: strip transport headers and deliver as H1.
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
             | (packet.raw[0] & 0x0F);
-        let mut new_raw = Vec::new();
+        let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+        let mut new_raw = Vec::with_capacity(2 + tail.len());
         new_raw.push(new_flags);
         new_raw.push(packet.hops);
-        new_raw.extend_from_slice(&packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
+        new_raw.extend_from_slice(tail);
         new_raw
     } else {
         // remaining_hops == 0: final local delivery, strip transport header.
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
             | (packet.raw[0] & 0x0F);
-        let mut new_raw = Vec::new();
+        let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+        let mut new_raw = Vec::with_capacity(2 + tail.len());
         new_raw.push(new_flags);
         new_raw.push(packet.hops);
-        new_raw.extend_from_slice(&packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
+        new_raw.extend_from_slice(tail);
         new_raw
     }
 }
@@ -172,7 +175,7 @@ pub fn route_proof_via_reverse(
     hop_rewrite: LocalHopRewrite,
 ) -> Option<TransportAction> {
     if receiving_interface == reverse_entry.outbound_interface {
-        let mut new_raw = Vec::new();
+        let mut new_raw = Vec::with_capacity(packet.raw.len());
         new_raw.push(packet.raw[0]);
         new_raw.push(hop_rewrite.hop_byte(packet));
         new_raw.extend_from_slice(&packet.raw[2..]);
@@ -233,7 +236,7 @@ pub fn route_via_link_table(
 ) -> Option<(InterfaceId, Vec<u8>)> {
     let outbound_interface =
         link_table_outbound_interface(packet, link_entry, receiving_interface)?;
-    let mut new_raw = Vec::new();
+    let mut new_raw = Vec::with_capacity(packet.raw.len());
     new_raw.push(packet.raw[0]);
     new_raw.push(hop_rewrite.hop_byte(packet));
     new_raw.extend_from_slice(&packet.raw[2..]);
