@@ -293,10 +293,15 @@ impl PacketHashQueue {
     }
 }
 
-/// Open-addressed lookup of queue slots. Zero is empty; other values are
-/// physical queue slot + 1. At most half the buckets are occupied.
+/// Open-addressed lookup of queue slots. Zero is empty. Otherwise the low 32
+/// bits are the physical queue slot + 1 and the high 32 bits are the low 32
+/// bits of the hash's bucket key. At most half the buckets are occupied.
+///
+/// The key bits let lookups skip the queue entry of every bucket whose key
+/// differs, so a miss usually touches only buckets, and let deletion find an
+/// entry's home bucket without reading its hash.
 struct PacketHashSet {
-    buckets: Box<[u32]>,
+    buckets: Box<[u64]>,
     len: usize,
 }
 
@@ -316,13 +321,15 @@ impl PacketHashSet {
         if self.buckets.is_empty() {
             return None;
         }
-        let mut idx = self.bucket_index(hash);
+        let key = hash_bytes(hash);
+        let tag = key as u32;
+        let mut idx = self.bucket_index(key);
         loop {
             let entry = self.buckets[idx];
             if entry == 0 {
                 return None;
             }
-            if queue.entries.get(entry as usize - 1) == hash {
+            if bucket_tag(entry) == tag && queue.entries.get(bucket_slot(entry)) == hash {
                 return Some(idx);
             }
             idx = (idx + 1) & (self.buckets.len() - 1);
@@ -334,12 +341,12 @@ impl PacketHashSet {
     }
 
     fn insert(&mut self, slot: usize, queue: &PacketHashQueue) {
-        let hash = queue.entries.get(slot);
-        let mut idx = self.bucket_index(hash);
+        let key = hash_bytes(queue.entries.get(slot));
+        let mut idx = self.bucket_index(key);
         while self.buckets[idx] != 0 {
             idx = (idx + 1) & (self.buckets.len() - 1);
         }
-        self.buckets[idx] = (slot + 1) as u32;
+        self.buckets[idx] = (u64::from(key as u32) << 32) | (slot as u64 + 1);
         self.len += 1;
     }
 
@@ -358,7 +365,7 @@ impl PacketHashSet {
         let mut hole = idx;
         let mut next = (idx + 1) & mask;
         while self.buckets[next] != 0 {
-            let home = self.bucket_index(queue.entries.get(self.buckets[next] as usize - 1));
+            let home = self.home(self.buckets[next], queue);
             let reachable_without_hole = if hole <= next {
                 hole < home && home <= next
             } else {
@@ -382,10 +389,28 @@ impl PacketHashSet {
         }
     }
 
-    fn bucket_index(&self, hash: &[u8; 32]) -> usize {
+    fn bucket_index(&self, key: u64) -> usize {
         debug_assert!(!self.buckets.is_empty());
-        (hash_bytes(hash) as usize) & (self.buckets.len() - 1)
+        (key as usize) & (self.buckets.len() - 1)
     }
+
+    /// Home bucket of an occupied entry. The stored key bits cover every
+    /// table of up to 2^32 buckets; larger tables read the queued hash.
+    fn home(&self, entry: u64, queue: &PacketHashQueue) -> usize {
+        if self.buckets.len() as u64 <= 1 << 32 {
+            self.bucket_index(u64::from(bucket_tag(entry)))
+        } else {
+            self.bucket_index(hash_bytes(queue.entries.get(bucket_slot(entry))))
+        }
+    }
+}
+
+fn bucket_slot(entry: u64) -> usize {
+    (entry as u32) as usize - 1
+}
+
+fn bucket_tag(entry: u64) -> u32 {
+    (entry >> 32) as u32
 }
 
 /// Largest retention the 32-bit index buckets can address.
