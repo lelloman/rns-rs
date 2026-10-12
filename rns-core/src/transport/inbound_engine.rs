@@ -472,21 +472,20 @@ impl TransportEngine {
             return;
         }
 
-        let sig_cache_key =
-            Self::announce_sig_cache_key(packet.destination_hash, &announce.signature);
+        let sig_cache_key = Self::announce_sig_cache_key(&packet.destination_hash, &announce);
 
         let validated = if self.announce_sig_cache.contains(&sig_cache_key) {
-            announce.to_validated_unchecked()
+            announce.to_validated_with_cached_signature(&packet.destination_hash)
         } else {
-            match announce.validate(&packet.destination_hash) {
-                Ok(v) => {
-                    self.announce_sig_cache.insert(sig_cache_key, now);
-                    v
-                }
-                Err(_) => {
-                    self.record_invalid_announce(&announce, iface, now, actions);
-                    return;
-                }
+            announce.validate(&packet.destination_hash).inspect(|_| {
+                self.announce_sig_cache.insert(sig_cache_key, now);
+            })
+        };
+        let validated = match validated {
+            Ok(v) => v,
+            Err(_) => {
+                self.record_invalid_announce(&announce, iface, now, actions);
+                return;
             }
         };
 
@@ -545,14 +544,13 @@ impl TransportEngine {
         PacketBytes::from(raw)
     }
 
+    /// Signature cache key for an announce: covers the full signed data
+    /// (see [`AnnounceData::signature_cache_key`]) plus the signature.
     pub(super) fn announce_sig_cache_key(
-        destination_hash: [u8; 16],
-        signature: &[u8; 64],
+        destination_hash: &[u8; 16],
+        announce: &AnnounceData,
     ) -> [u8; 32] {
-        let mut material = [0u8; 80];
-        material[..16].copy_from_slice(&destination_hash);
-        material[16..].copy_from_slice(signature);
-        hash::full_hash(&material)
+        announce.signature_cache_key(destination_hash)
     }
 
     fn announce_received_from(&mut self, packet: &RawPacket, now: f64) -> [u8; 16] {
@@ -682,10 +680,14 @@ impl TransportEngine {
             return;
         }
 
-        let sig_cache_key =
-            Self::announce_sig_cache_key(ctx.packet.destination_hash, &announce.signature);
+        let sig_cache_key = Self::announce_sig_cache_key(&ctx.packet.destination_hash, &announce);
         if self.announce_sig_cache.contains(&sig_cache_key) {
-            let validated = announce.to_validated_unchecked();
+            let Ok(validated) =
+                announce.to_validated_with_cached_signature(&ctx.packet.destination_hash)
+            else {
+                self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
+                return;
+            };
             let random_blob = match extract_random_blob(&ctx.packet.data) {
                 Some(b) => b,
                 None => return,

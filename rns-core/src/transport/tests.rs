@@ -1474,10 +1474,7 @@ fn test_async_announce_completion_inserts_sig_cache_and_prevents_requeue() {
 
     let announce = AnnounceData::unpack(&pending.packet.data, false).unwrap();
     let validated = announce.validate(&pending.packet.destination_hash).unwrap();
-    let mut material = [0u8; 80];
-    material[..16].copy_from_slice(&pending.packet.destination_hash);
-    material[16..].copy_from_slice(&announce.signature);
-    let sig_cache_key = hash::full_hash(&material);
+    let sig_cache_key = announce.signature_cache_key(&pending.packet.destination_hash);
 
     let pending = queue.complete_success(&key).unwrap();
     let actions =
@@ -1504,15 +1501,244 @@ fn test_async_announce_completion_inserts_sig_cache_and_prevents_requeue() {
     assert_eq!(queue.len(), 0);
 }
 
+fn signed_announce_packet(
+    identity_seed: u8,
+    app_data: Option<&[u8]>,
+) -> (RawPacket, crate::announce::AnnounceData) {
+    use crate::announce::AnnounceData;
+    use crate::destination::{destination_hash, name_hash};
+
+    let identity = rns_crypto::identity::Identity::from_private_key(&[identity_seed; 64]);
+    let dest_hash = destination_hash("sigcache", &["test"], Some(identity.hash()));
+    let name_h = name_hash("sigcache", &["test"]);
+    let (announce_data, _) =
+        AnnounceData::pack(&identity, &dest_hash, &name_h, &[0x5c; 10], None, app_data).unwrap();
+    let packet = announce_packet_from_data(&dest_hash, &announce_data);
+    let announce = AnnounceData::unpack(&announce_data, false).unwrap();
+    (packet, announce)
+}
+
+fn announce_packet_from_data(dest_hash: &[u8; 16], announce_data: &[u8]) -> RawPacket {
+    RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        },
+        0,
+        dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        announce_data,
+    )
+    .unwrap()
+}
+
+/// Re-serialise announce fields without signing (no ratchet).
+fn raw_announce_data(announce: &crate::announce::AnnounceData) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&announce.public_key);
+    data.extend_from_slice(&announce.name_hash);
+    data.extend_from_slice(&announce.random_hash);
+    data.extend_from_slice(&announce.signature);
+    if let Some(ref ad) = announce.app_data {
+        data.extend_from_slice(ad);
+    }
+    data
+}
+
+fn feed_announce(
+    engine: &mut TransportEngine,
+    packet: &RawPacket,
+    now: f64,
+) -> Vec<TransportAction> {
+    let mut rng = rns_crypto::FixedRng::new(&[0x77; 32]);
+    engine.handle_inbound(
+        InboundFrame {
+            raw: &packet.raw,
+            iface: InterfaceId(1),
+            now,
+            rx: RxMetadata {
+                rssi: None,
+                snr: None,
+            },
+        },
+        &mut rng,
+    )
+}
+
+fn announce_received(
+    actions: &[TransportAction],
+) -> Option<([u8; 16], [u8; 64], [u8; 10], [u8; 10], Option<Vec<u8>>)> {
+    actions.iter().find_map(|action| match action {
+        TransportAction::AnnounceReceived {
+            identity_hash,
+            public_key,
+            name_hash,
+            random_hash,
+            app_data,
+            ..
+        } => Some((
+            *identity_hash,
+            *public_key,
+            *name_hash,
+            *random_hash,
+            app_data.clone(),
+        )),
+        _ => None,
+    })
+}
+
 #[test]
-fn announce_signature_cache_key_binds_destination_and_signature() {
-    let signature = [0x5a; 64];
-    let first = TransportEngine::announce_sig_cache_key([0x11; 16], &signature);
-    let other_destination = TransportEngine::announce_sig_cache_key([0x12; 16], &signature);
-    let other_signature = TransportEngine::announce_sig_cache_key([0x11; 16], &[0x5b; 64]);
+fn announce_signature_cache_key_covers_signed_fields() {
+    let (_, announce) = signed_announce_packet(0x61, Some(b"app"));
+    let dest = [0x11; 16];
+    let first = TransportEngine::announce_sig_cache_key(&dest, &announce);
+    let other_destination = TransportEngine::announce_sig_cache_key(&[0x12; 16], &announce);
+
+    let mut other_signature = announce.clone();
+    other_signature.signature[0] ^= 0x01;
+    let mut other_key = announce.clone();
+    other_key.public_key[0] ^= 0x01;
+    let mut other_app_data = announce.clone();
+    other_app_data.app_data = Some(b"apq".to_vec());
 
     assert_ne!(first, other_destination);
-    assert_ne!(first, other_signature);
+    assert_ne!(
+        first,
+        TransportEngine::announce_sig_cache_key(&dest, &other_signature)
+    );
+    assert_ne!(
+        first,
+        TransportEngine::announce_sig_cache_key(&dest, &other_key)
+    );
+    assert_ne!(
+        first,
+        TransportEngine::announce_sig_cache_key(&dest, &other_app_data)
+    );
+}
+
+#[test]
+fn announce_signature_cache_hit_yields_same_validated_announce() {
+    let (packet, announce) = signed_announce_packet(0x62, Some(b"payload"));
+    let dest = packet.destination_hash;
+
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let actions = feed_announce(&mut engine, &packet, 1000.0);
+    let verified = announce_received(&actions).expect("valid announce is accepted");
+    let key = TransportEngine::announce_sig_cache_key(&dest, &announce);
+    assert!(engine.announce_sig_cache_contains(&key));
+    assert_eq!(engine.announce_sig_cache_len(), 1);
+
+    // A second engine whose cache already holds the key for this exact
+    // announce takes the cache path. Flip a signature byte and seed the cache
+    // with that announce's key: it is accepted only because the cache path
+    // skips signature verification, which shows the path was taken.
+    let mut cached = announce.clone();
+    cached.signature[0] ^= 0x01;
+    assert!(cached.validate(&dest).is_err());
+    let cached_packet = announce_packet_from_data(&dest, &raw_announce_data(&cached));
+
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.announce_sig_cache.insert(
+        TransportEngine::announce_sig_cache_key(&dest, &cached),
+        1000.0,
+    );
+    let actions = feed_announce(&mut engine, &cached_packet, 1000.0);
+    let from_cache = announce_received(&actions).expect("cache hit is accepted");
+    assert_eq!(from_cache, verified);
+    assert_eq!(engine.announce_sig_cache_len(), 1);
+}
+
+#[test]
+fn announce_signature_cache_hit_still_checks_destination_binding() {
+    let (packet, announce) = signed_announce_packet(0x63, None);
+    let dest = packet.destination_hash;
+
+    // Same signed fields under a different destination hash: seed the cache
+    // with the key for that combination so the cache path is taken.
+    let mut other_dest = dest;
+    other_dest[0] ^= 0x01;
+    let other_packet = announce_packet_from_data(&other_dest, &raw_announce_data(&announce));
+
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.announce_sig_cache.insert(
+        TransportEngine::announce_sig_cache_key(&other_dest, &announce),
+        1000.0,
+    );
+    let actions = feed_announce(&mut engine, &other_packet, 1000.0);
+    assert!(announce_received(&actions).is_none());
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, TransportAction::ProtocolViolation { .. })));
+}
+
+#[test]
+fn announce_with_cached_signature_but_different_fields_is_verified_again() {
+    let (packet, announce) = signed_announce_packet(0x64, Some(b"original"));
+    let dest = packet.destination_hash;
+
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let actions = feed_announce(&mut engine, &packet, 1000.0);
+    assert!(announce_received(&actions).is_some());
+    assert_eq!(engine.announce_sig_cache_len(), 1);
+
+    // Same destination hash and signature, different public key.
+    let other_identity = rns_crypto::identity::Identity::from_private_key(&[0x65; 64]);
+    let mut other_key = announce.clone();
+    other_key.public_key = other_identity.get_public_key().unwrap();
+
+    // Same destination hash and signature, different app data.
+    let mut other_app_data = announce.clone();
+    other_app_data.app_data = Some(b"changed".to_vec());
+
+    for (i, variant) in [other_key, other_app_data].iter().enumerate() {
+        let key = TransportEngine::announce_sig_cache_key(&dest, variant);
+        assert!(!engine.announce_sig_cache_contains(&key));
+        assert!(matches!(
+            variant.validate(&dest),
+            Err(crate::announce::AnnounceError::InvalidSignature)
+        ));
+
+        let variant_packet = announce_packet_from_data(&dest, &raw_announce_data(variant));
+        let actions = feed_announce(&mut engine, &variant_packet, 1001.0 + i as f64);
+        assert!(announce_received(&actions).is_none());
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, TransportAction::ProtocolViolation { .. })));
+        assert!(!engine.announce_sig_cache_contains(&key));
+        assert_eq!(engine.announce_sig_cache_len(), 1);
+    }
+}
+
+#[test]
+fn announce_signature_cache_stays_bounded() {
+    let mut config = make_config(false);
+    config.announce_sig_cache_max_entries = 2;
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+    let mut keys = Vec::new();
+    for (i, seed) in [0x71u8, 0x72, 0x73].iter().enumerate() {
+        let (packet, announce) = signed_announce_packet(*seed, None);
+        let actions = feed_announce(&mut engine, &packet, 1000.0 + i as f64);
+        assert!(announce_received(&actions).is_some());
+        keys.push(TransportEngine::announce_sig_cache_key(
+            &packet.destination_hash,
+            &announce,
+        ));
+        assert!(engine.announce_sig_cache_len() <= 2);
+    }
+    assert_eq!(engine.announce_sig_cache_len(), 2);
+    assert!(!engine.announce_sig_cache_contains(&keys[0]));
+    assert!(engine.announce_sig_cache_contains(&keys[1]));
+    assert!(engine.announce_sig_cache_contains(&keys[2]));
 }
 
 #[test]

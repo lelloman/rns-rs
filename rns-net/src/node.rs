@@ -2323,10 +2323,8 @@ impl RnsNode {
                                 continue;
                             }
                         };
-                        let mut material = [0u8; 80];
-                        material[..16].copy_from_slice(&pending.packet.destination_hash);
-                        material[16..].copy_from_slice(&announce.signature);
-                        let sig_cache_key = rns_core::hash::full_hash(&material);
+                        let sig_cache_key =
+                            announce.signature_cache_key(&pending.packet.destination_hash);
                         match announce.validate(&pending.packet.destination_hash) {
                             Ok(validated) => {
                                 if verify_tx

@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use rns_crypto::identity::Identity;
+use rns_crypto::sha256::Sha256;
 
 use crate::constants;
 use crate::hash;
@@ -168,6 +169,73 @@ impl AnnounceData {
         })
     }
 
+    /// Feed each part of the signed data, in order, to `f`:
+    /// destination_hash + public_key + name_hash + random_hash + ratchet + app_data.
+    ///
+    /// Python builds signed_data with `app_data = b""` when there is no app data,
+    /// so absent optional fields contribute nothing.
+    fn for_each_signed_part(&self, destination_hash: &[u8; 16], mut f: impl FnMut(&[u8])) {
+        f(destination_hash);
+        f(&self.public_key);
+        f(&self.name_hash);
+        f(&self.random_hash);
+        if let Some(ref ratchet) = self.ratchet {
+            f(ratchet);
+        }
+        if let Some(ref ad) = self.app_data {
+            f(ad);
+        }
+    }
+
+    /// The bytes covered by the announce signature.
+    fn signed_data(&self, destination_hash: &[u8; 16]) -> Vec<u8> {
+        let mut signed_data = Vec::new();
+        self.for_each_signed_part(destination_hash, |part| signed_data.extend_from_slice(part));
+        signed_data
+    }
+
+    /// Key for the announce signature cache: SHA-256 over the signed data
+    /// followed by the signature.
+    ///
+    /// Two announces share a key only when every signed field and the
+    /// signature are identical, so a cached verification result applies to
+    /// exactly the announce it was computed for.
+    pub fn signature_cache_key(&self, destination_hash: &[u8; 16]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        self.for_each_signed_part(destination_hash, |part| hasher.update(part));
+        hasher.update(&self.signature);
+        hasher.digest()
+    }
+
+    /// Check that `destination_hash == truncated_hash(name_hash || identity_hash)`.
+    fn check_destination_binding(
+        &self,
+        destination_hash: &[u8; 16],
+        identity_hash: &[u8; 16],
+    ) -> Result<(), AnnounceError> {
+        let mut hash_material = [0u8; 26];
+        hash_material[..10].copy_from_slice(&self.name_hash);
+        hash_material[10..].copy_from_slice(identity_hash);
+
+        let expected_hash = hash::truncated_hash(&hash_material);
+
+        if &expected_hash != destination_hash {
+            return Err(AnnounceError::DestinationMismatch);
+        }
+        Ok(())
+    }
+
+    fn to_validated(&self, identity_hash: [u8; 16]) -> ValidatedAnnounce {
+        ValidatedAnnounce {
+            identity_hash,
+            public_key: self.public_key,
+            name_hash: self.name_hash,
+            random_hash: self.random_hash,
+            ratchet: self.ratchet,
+            app_data: self.app_data.clone(),
+        }
+    }
+
     /// Validate an announce: verify signature and check destination hash.
     ///
     /// Follows Python Identity.validate_announce():
@@ -187,65 +255,34 @@ impl AnnounceData {
         let announced_identity = Identity::from_public_key(&self.public_key)
             .map_err(|_| AnnounceError::InvalidSignature)?;
 
-        // Build signed data
-        let mut signed_data = Vec::new();
-        signed_data.extend_from_slice(destination_hash);
-        signed_data.extend_from_slice(&self.public_key);
-        signed_data.extend_from_slice(&self.name_hash);
-        signed_data.extend_from_slice(&self.random_hash);
-
-        if let Some(ref ratchet) = self.ratchet {
-            signed_data.extend_from_slice(ratchet);
-        }
-
-        // When building signed_data, use app_data bytes (or empty if None)
-        // Python uses app_data = b"" for building signed_data when no app_data
-        if let Some(ref ad) = self.app_data {
-            signed_data.extend_from_slice(ad);
-        }
-
         // Verify signature
+        let signed_data = self.signed_data(destination_hash);
         if !announced_identity.verify(&self.signature, &signed_data) {
             return Err(AnnounceError::InvalidSignature);
         }
 
         // Verify destination hash
         let identity_hash = *announced_identity.hash();
+        self.check_destination_binding(destination_hash, &identity_hash)?;
 
-        let mut hash_material = Vec::new();
-        hash_material.extend_from_slice(&self.name_hash);
-        hash_material.extend_from_slice(&identity_hash);
-
-        let expected_hash = hash::truncated_hash(&hash_material);
-
-        if &expected_hash != destination_hash {
-            return Err(AnnounceError::DestinationMismatch);
-        }
-
-        Ok(ValidatedAnnounce {
-            identity_hash,
-            public_key: self.public_key,
-            name_hash: self.name_hash,
-            random_hash: self.random_hash,
-            ratchet: self.ratchet,
-            app_data: self.app_data.clone(),
-        })
+        Ok(self.to_validated(identity_hash))
     }
 
-    /// Reconstruct a `ValidatedAnnounce` without signature verification.
+    /// Build a `ValidatedAnnounce` for an announce whose signature cache key
+    /// (see [`Self::signature_cache_key`]) is already in the signature cache.
     ///
-    /// Only call this when the signature has already been verified (e.g., via
-    /// the announce signature cache). No cryptographic checks are performed.
-    pub fn to_validated_unchecked(&self) -> ValidatedAnnounce {
+    /// The signature was verified for an identical announce earlier; the
+    /// structural checks are repeated here: the identity hash is recomputed
+    /// from `public_key` and the destination hash binding is checked. The
+    /// public key decoded successfully when that earlier announce was
+    /// verified, since the cache key covers the key bytes.
+    pub fn to_validated_with_cached_signature(
+        &self,
+        destination_hash: &[u8; 16],
+    ) -> Result<ValidatedAnnounce, AnnounceError> {
         let identity_hash = hash::truncated_hash(&self.public_key);
-        ValidatedAnnounce {
-            identity_hash,
-            public_key: self.public_key,
-            name_hash: self.name_hash,
-            random_hash: self.random_hash,
-            ratchet: self.ratchet,
-            app_data: self.app_data.clone(),
-        }
+        self.check_destination_binding(destination_hash, &identity_hash)?;
+        Ok(self.to_validated(identity_hash))
     }
 }
 
@@ -387,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_validated_unchecked_matches_validate() {
+    fn test_to_validated_with_cached_signature_matches_validate() {
         let identity = Identity::from_private_key(&[0x42; 64]);
         let id_hash = *identity.hash();
 
@@ -400,7 +437,7 @@ mod tests {
 
         let parsed = AnnounceData::unpack(&data, false).unwrap();
         let validated = parsed.validate(&dh).unwrap();
-        let unchecked = parsed.to_validated_unchecked();
+        let unchecked = parsed.to_validated_with_cached_signature(&dh).unwrap();
 
         assert_eq!(validated.identity_hash, unchecked.identity_hash);
         assert_eq!(validated.public_key, unchecked.public_key);
@@ -408,5 +445,86 @@ mod tests {
         assert_eq!(validated.random_hash, unchecked.random_hash);
         assert_eq!(validated.ratchet, unchecked.ratchet);
         assert_eq!(validated.app_data, unchecked.app_data);
+    }
+    fn signed_announce(
+        app_data: Option<&[u8]>,
+        ratchet: Option<&[u8; 32]>,
+    ) -> (AnnounceData, [u8; 16]) {
+        let identity = Identity::from_private_key(&[0x42; 64]);
+        let id_hash = *identity.hash();
+        let nh = destination::name_hash("testapp", &["aspect"]);
+        let dh = destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
+        let (data, has_ratchet) =
+            AnnounceData::pack(&identity, &dh, &nh, &[0x31; 10], ratchet, app_data).unwrap();
+        (AnnounceData::unpack(&data, has_ratchet).unwrap(), dh)
+    }
+
+    #[test]
+    fn test_cached_signature_path_checks_destination_binding() {
+        let (parsed, dh) = signed_announce(None, None);
+        let mut other_dh = dh;
+        other_dh[0] ^= 0x01;
+        assert!(matches!(
+            parsed.to_validated_with_cached_signature(&other_dh),
+            Err(AnnounceError::DestinationMismatch)
+        ));
+
+        let other = Identity::from_private_key(&[0x43; 64]);
+        let mut swapped = parsed.clone();
+        swapped.public_key = other.get_public_key().unwrap();
+        assert!(matches!(
+            swapped.to_validated_with_cached_signature(&dh),
+            Err(AnnounceError::DestinationMismatch)
+        ));
+    }
+
+    #[test]
+    fn test_signature_cache_key_covers_every_signed_field() {
+        let ratchet = [0x44; 32];
+        let (base, dh) = signed_announce(Some(b"app"), Some(&ratchet));
+        let key = base.signature_cache_key(&dh);
+        assert_eq!(key, base.clone().signature_cache_key(&dh));
+
+        let mut other_dh = dh;
+        other_dh[15] ^= 0x01;
+        assert_ne!(key, base.signature_cache_key(&other_dh));
+
+        let mut variants = Vec::new();
+        let mut v = base.clone();
+        v.public_key[0] ^= 0x01;
+        variants.push(v);
+        let mut v = base.clone();
+        v.name_hash[0] ^= 0x01;
+        variants.push(v);
+        let mut v = base.clone();
+        v.random_hash[0] ^= 0x01;
+        variants.push(v);
+        let mut v = base.clone();
+        v.ratchet = None;
+        variants.push(v);
+        let mut v = base.clone();
+        v.ratchet.as_mut().unwrap()[0] ^= 0x01;
+        variants.push(v);
+        let mut v = base.clone();
+        v.app_data = None;
+        variants.push(v);
+        let mut v = base.clone();
+        v.app_data = Some(b"apq".to_vec());
+        variants.push(v);
+        let mut v = base.clone();
+        v.signature[0] ^= 0x01;
+        variants.push(v);
+
+        for variant in &variants {
+            assert_ne!(key, variant.signature_cache_key(&dh));
+        }
+    }
+
+    #[test]
+    fn test_signature_cache_key_is_hash_of_signed_data_and_signature() {
+        let (parsed, dh) = signed_announce(Some(b"payload"), None);
+        let mut material = parsed.signed_data(&dh);
+        material.extend_from_slice(&parsed.signature);
+        assert_eq!(parsed.signature_cache_key(&dh), hash::full_hash(&material));
     }
 }
