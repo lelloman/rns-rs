@@ -208,7 +208,7 @@ impl TransportEngine {
         decoded: &DecodedPacket,
         receiving_interface: InterfaceId,
     ) -> Option<super::LrproofRebalanceCandidate> {
-        let packet = &decoded.0;
+        let packet = &decoded.packet;
         let (hops, _) = self.filtered_inbound_hops(packet, receiving_interface)?;
         if packet.flags.packet_type != constants::PACKET_TYPE_PROOF
             || packet.context != constants::CONTEXT_LRPROOF

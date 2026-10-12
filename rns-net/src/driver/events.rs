@@ -122,7 +122,7 @@ impl Driver {
             data
         };
 
-        let decoded_packet = match DecodedPacket::unpack(&packet) {
+        let decoded_packet = match self.engine.decode_inbound(&packet) {
             Ok(packet) => packet,
             Err(_) => {
                 if let Some(entry) = self.interfaces.get_mut(&interface_id) {
@@ -131,8 +131,9 @@ impl Driver {
                 return;
             }
         };
-        self.engine
-            .prefetch_packet_hash(&decoded_packet.packet().packet_hash);
+        if let Some(packet_hash) = decoded_packet.packet_hash() {
+            self.engine.prefetch_packet_hash(packet_hash);
+        }
         if !self.admit_decoded_inbound(interface_id, packet.len(), &decoded_packet) {
             return;
         }

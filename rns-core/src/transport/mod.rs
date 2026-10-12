@@ -112,15 +112,30 @@ impl<'a> InboundFrame<'a> {
 
 /// A syntactically decoded packet. Routing/admission is rechecked on every use.
 /// Fields are read-only so cached hashes cannot diverge from the parsed bytes.
-pub struct DecodedPacket(RawPacket);
+pub struct DecodedPacket {
+    packet: RawPacket,
+    /// Set by [`TransportEngine::decode_inbound`] for link traffic it only
+    /// forwards; `packet.packet_hash` is then zeroed until the engine needs it.
+    hash_deferred: bool,
+}
 
 impl DecodedPacket {
     pub fn unpack(raw: &[u8]) -> Result<Self, crate::packet::PacketError> {
-        RawPacket::unpack(raw).map(Self)
+        RawPacket::unpack(raw).map(|packet| Self {
+            packet,
+            hash_deferred: false,
+        })
     }
 
+    /// The decoded fields. Its `packet_hash` is zeroed when hashing was
+    /// deferred; read the hash through [`DecodedPacket::packet_hash`].
     pub fn packet(&self) -> &RawPacket {
-        &self.0
+        &self.packet
+    }
+
+    /// The packet hash, unless [`TransportEngine::decode_inbound`] deferred it.
+    pub fn packet_hash(&self) -> Option<&[u8; 32]> {
+        (!self.hash_deferred).then_some(&self.packet.packet_hash)
     }
 }
 
@@ -134,6 +149,9 @@ pub struct DecodedInboundFrame {
 
 struct InboundPacketCtx {
     packet: RawPacket,
+    /// `packet.packet_hash` is zeroed: the packet is link traffic that is
+    /// only forwarded, which never reads it.
+    hash_deferred: bool,
     original_raw: Option<Vec<u8>>,
     iface: InterfaceId,
     now: f64,

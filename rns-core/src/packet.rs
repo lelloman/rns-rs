@@ -225,6 +225,17 @@ impl RawPacket {
 
     /// Unpack raw bytes into fields.
     pub fn unpack(raw: &[u8]) -> Result<Self, PacketError> {
+        Self::unpack_with::<true>(raw)
+    }
+
+    /// Unpack raw bytes into fields, leaving `packet_hash` zeroed. Callers
+    /// must hash the packet with [`RawPacket::hash_in_place`] before anything
+    /// reads `packet_hash`.
+    pub(crate) fn unpack_unhashed(raw: &[u8]) -> Result<Self, PacketError> {
+        Self::unpack_with::<false>(raw)
+    }
+
+    fn unpack_with<const HASH: bool>(raw: &[u8]) -> Result<Self, PacketError> {
         if raw.len() < constants::HEADER_MINSIZE {
             return Err(PacketError::TooShort);
         }
@@ -256,7 +267,11 @@ impl RawPacket {
                 return Err(PacketError::ZeroLengthData);
             }
 
-            let packet_hash = Self::compute_packet_hash(flags.header_type, raw);
+            let packet_hash = if HASH {
+                Self::compute_packet_hash(flags.header_type, raw)
+            } else {
+                [0; 32]
+            };
 
             Ok(RawPacket {
                 flags,
@@ -286,7 +301,11 @@ impl RawPacket {
                 return Err(PacketError::ZeroLengthData);
             }
 
-            let packet_hash = Self::compute_packet_hash(flags.header_type, raw);
+            let packet_hash = if HASH {
+                Self::compute_packet_hash(flags.header_type, raw)
+            } else {
+                [0; 32]
+            };
 
             Ok(RawPacket {
                 flags,
@@ -339,6 +358,11 @@ impl RawPacket {
         hasher.update(&[raw[0] & 0b00001111]);
         hasher.update(Self::hashable_tail(header_type, raw));
         hasher.digest()
+    }
+
+    /// Compute `packet_hash` from the packet's wire bytes.
+    pub(crate) fn hash_in_place(&mut self) {
+        self.packet_hash = Self::compute_packet_hash(self.flags.header_type, &self.raw);
     }
 
     /// Full SHA-256 hash of the hashable part.

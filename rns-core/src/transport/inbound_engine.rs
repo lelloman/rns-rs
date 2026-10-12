@@ -46,7 +46,7 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
     ) -> Vec<TransportAction> {
-        let Ok(decoded) = DecodedPacket::unpack(frame.raw) else {
+        let Ok(decoded) = self.decode_inbound(frame.raw) else {
             return Vec::new();
         };
         self.handle_decoded_inbound_with_announce_queue(
@@ -61,6 +61,64 @@ impl TransportEngine {
         )
     }
 
+    /// Decode an inbound frame for [`handle_decoded_inbound_with_announce_queue`].
+    ///
+    /// Link traffic that this node only forwards, in a context the packet
+    /// filter admits without consulting deduplication, is not hashed: no
+    /// step that handles it reads the hash. Its hash cannot reject any later
+    /// packet either, since a packet with the same hash has the same context.
+    /// [`DecodedPacket::packet_hash`] reports whether hashing was deferred.
+    ///
+    /// [`handle_decoded_inbound_with_announce_queue`]: Self::handle_decoded_inbound_with_announce_queue
+    pub fn decode_inbound(&self, raw: &[u8]) -> Result<DecodedPacket, crate::packet::PacketError> {
+        // Only link data qualifies; decode everything else directly.
+        let flags = raw
+            .first()
+            .map(|flags| crate::packet::PacketFlags::unpack(*flags));
+        if !flags.is_some_and(|flags| {
+            flags.packet_type == constants::PACKET_TYPE_DATA
+                && flags.destination_type == constants::DESTINATION_LINK
+        }) {
+            return DecodedPacket::unpack(raw);
+        }
+        let mut packet = RawPacket::unpack_unhashed(raw)?;
+        let hash_deferred = self.forwards_link_packet_unhashed(&packet);
+        if !hash_deferred {
+            packet.hash_in_place();
+        }
+        Ok(DecodedPacket {
+            packet,
+            hash_deferred,
+        })
+    }
+
+    /// Whether every inbound step that handles `packet` leaves its hash unread:
+    /// it is link data for a validated link this node relays, in a context
+    /// that [`packet_filter_at_hops`](Self::packet_filter_at_hops) admits
+    /// before deduplication, and it is neither delivered locally nor routed
+    /// through the path table.
+    fn forwards_link_packet_unhashed(&self, packet: &RawPacket) -> bool {
+        packet.flags.packet_type == constants::PACKET_TYPE_DATA
+            && packet.flags.destination_type == constants::DESTINATION_LINK
+            && matches!(
+                packet.context,
+                constants::CONTEXT_KEEPALIVE
+                    | constants::CONTEXT_RESOURCE_REQ
+                    | constants::CONTEXT_RESOURCE
+                    | constants::CONTEXT_CACHE_REQUEST
+                    | constants::CONTEXT_CHANNEL
+            )
+            && (self.config.transport_enabled || self.config.identity_hash.is_some())
+            && self
+                .link_table
+                .get(&packet.destination_hash)
+                .is_some_and(|entry| entry.validated)
+            && !self
+                .local_destinations
+                .contains_key(&packet.destination_hash)
+            && !self.path_table.contains_key(&packet.destination_hash)
+    }
+
     /// Recheck current routing/filter state and consume a previously decoded frame.
     pub fn handle_decoded_inbound_with_announce_queue(
         &mut self,
@@ -68,9 +126,15 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
     ) -> Vec<TransportAction> {
-        let Some(ctx) = self.prepare_decoded_packet(frame) else {
+        let Some(mut ctx) = self.prepare_decoded_packet(frame) else {
             return Vec::new();
         };
+        // Routing state may have changed since decoding. Any packet that is
+        // no longer only relayed is hashed before a step can read the hash.
+        if ctx.hash_deferred && !self.forwards_link_packet_unhashed(&ctx.packet) {
+            ctx.packet.hash_in_place();
+            ctx.hash_deferred = false;
+        }
         let mut actions = Vec::new();
 
         self.remember_inbound_packet_hash(&ctx.packet);
@@ -118,14 +182,15 @@ impl TransportEngine {
     }
 
     pub fn accepts_decoded_packet(&self, decoded: &DecodedPacket, iface: InterfaceId) -> bool {
-        self.filtered_inbound_hops(&decoded.0, iface).is_some()
+        self.filtered_inbound_hops(&decoded.packet, iface).is_some()
     }
 
     pub(super) fn prepare_decoded_packet(
         &self,
         frame: DecodedInboundFrame,
     ) -> Option<InboundPacketCtx> {
-        let mut packet = frame.decoded.0;
+        let hash_deferred = frame.decoded.hash_deferred;
+        let mut packet = frame.decoded.packet;
         let (hops, from_local_client) = self.filtered_inbound_hops(&packet, frame.iface)?;
         packet.hops = hops;
         packet.rssi = frame.rx.rssi;
@@ -134,6 +199,7 @@ impl TransportEngine {
         let original_raw = retain_original_raw.then(|| packet.raw.clone());
         Some(InboundPacketCtx {
             packet,
+            hash_deferred,
             original_raw,
             iface: frame.iface,
             now: frame.now,
@@ -370,7 +436,11 @@ impl TransportEngine {
             return;
         };
 
-        self.packet_hashlist.add(ctx.packet.packet_hash);
+        // A deferred packet's context bypasses deduplication, so its hash
+        // could never mark a later packet as a duplicate.
+        if !ctx.hash_deferred {
+            self.packet_hashlist.add(ctx.packet.packet_hash);
+        }
         actions.push(TransportAction::SendOnInterface {
             interface: outbound_iface,
             raw: new_raw,

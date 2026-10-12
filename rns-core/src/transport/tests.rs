@@ -4705,3 +4705,185 @@ fn announce_replacement_does_not_revive_expired_or_completed_deadlines() {
         assert_eq!(engine.announce_table[&dest].retransmit_timeout, now + 0.4);
     }
 }
+
+fn relay_with_validated_link(link_id: [u8; 16]) -> TransportEngine {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    engine.register_link(
+        link_id,
+        LinkEntry {
+            timestamp: 1000.0,
+            next_hop_transport_id: [0xAA; 16],
+            next_hop_interface: InterfaceId(2),
+            remaining_hops: 1,
+            received_interface: InterfaceId(1),
+            taken_hops: 1,
+            destination_hash: [0xBB; 16],
+            validated: true,
+            proof_timeout: 1100.0,
+        },
+    );
+    engine
+}
+
+fn link_data_packet(link_id: &[u8; 16], context: u8, payload: &[u8]) -> RawPacket {
+    RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        // One hop after ingress, matching the link's taken hops.
+        0,
+        link_id,
+        None,
+        context,
+        payload,
+    )
+    .unwrap()
+}
+
+fn handle_decoded_at(
+    engine: &mut TransportEngine,
+    decoded: DecodedPacket,
+    now: f64,
+) -> Vec<TransportAction> {
+    let mut rng = rns_crypto::FixedRng::new(&[0x47; 32]);
+    engine.handle_decoded_inbound_with_announce_queue(
+        DecodedInboundFrame {
+            decoded,
+            iface: InterfaceId(1),
+            now,
+            rx: RxMetadata::default(),
+        },
+        &mut rng,
+        None,
+    )
+}
+
+#[test]
+fn relayed_link_traffic_forwards_identically_without_its_hash() {
+    let link_id = [0x4E; 16];
+    let deferred_contexts = [
+        constants::CONTEXT_RESOURCE,
+        constants::CONTEXT_RESOURCE_REQ,
+        constants::CONTEXT_CHANNEL,
+        constants::CONTEXT_KEEPALIVE,
+        constants::CONTEXT_CACHE_REQUEST,
+    ];
+    for context in deferred_contexts
+        .into_iter()
+        .chain([constants::CONTEXT_NONE, constants::CONTEXT_REQUEST])
+    {
+        let packet = link_data_packet(&link_id, context, b"relayed link payload");
+        let mut deferring = relay_with_validated_link(link_id);
+        let mut hashing = relay_with_validated_link(link_id);
+
+        let decoded = deferring.decode_inbound(&packet.raw).unwrap();
+        let deferred = deferred_contexts.contains(&context);
+        assert_eq!(
+            decoded.packet_hash().is_none(),
+            deferred,
+            "context {context}"
+        );
+        if !deferred {
+            assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
+        }
+
+        // Twice: a repeat must be treated the same way by both engines.
+        for now in [1001.0, 1002.0] {
+            let decoded = deferring.decode_inbound(&packet.raw).unwrap();
+            let unhashed = handle_decoded_at(&mut deferring, decoded, now);
+            let decoded = DecodedPacket::unpack(&packet.raw).unwrap();
+            let hashed = handle_decoded_at(&mut hashing, decoded, now);
+            assert_eq!(
+                format!("{unhashed:?}"),
+                format!("{hashed:?}"),
+                "context {context}"
+            );
+        }
+        // Contexts that bypass deduplication forward the repeat as well;
+        // the others drop it as a duplicate.
+        let forwarded = hashing
+            .link_table
+            .get(&link_id)
+            .map(|entry| entry.timestamp);
+        let last_forward = if deferred { 1002.0 } else { 1001.0 };
+        assert_eq!(forwarded, Some(last_forward), "context {context}");
+        assert_eq!(
+            deferring
+                .link_table
+                .get(&link_id)
+                .map(|entry| entry.timestamp),
+            forwarded
+        );
+        // Only hashed packets are recorded for deduplication.
+        let expected = if deferred { 0 } else { 1 };
+        assert_eq!(
+            deferring.packet_hashlist_len(),
+            expected,
+            "context {context}"
+        );
+        assert_eq!(hashing.packet_hashlist_len(), 1, "context {context}");
+    }
+}
+
+#[test]
+fn deferred_hash_is_computed_when_routing_changes_before_handling() {
+    let link_id = [0x4F; 16];
+    let packet = link_data_packet(&link_id, constants::CONTEXT_CHANNEL, b"channel payload");
+
+    // The link becomes this node's own: the packet must be delivered with
+    // its real hash.
+    let mut engine = relay_with_validated_link(link_id);
+    let decoded = engine.decode_inbound(&packet.raw).unwrap();
+    assert!(decoded.packet_hash().is_none());
+    engine.register_destination(link_id, constants::DESTINATION_LINK);
+    let actions = handle_decoded_at(&mut engine, decoded, 1001.0);
+    let delivered = actions.iter().find_map(|action| match action {
+        TransportAction::DeliverLocal { packet_hash, .. } => Some(*packet_hash),
+        _ => None,
+    });
+    assert_eq!(delivered, Some(packet.packet_hash));
+
+    // The relayed link goes away: nothing is forwarded, and the packet is
+    // handled exactly as a hashed one.
+    let mut deferring = relay_with_validated_link(link_id);
+    let mut hashing = relay_with_validated_link(link_id);
+    let decoded = deferring.decode_inbound(&packet.raw).unwrap();
+    assert!(decoded.packet_hash().is_none());
+    deferring.link_table.remove(&link_id);
+    hashing.link_table.remove(&link_id);
+    let unhashed = handle_decoded_at(&mut deferring, decoded, 1001.0);
+    let hashed = handle_decoded_at(
+        &mut hashing,
+        DecodedPacket::unpack(&packet.raw).unwrap(),
+        1001.0,
+    );
+    assert_eq!(format!("{unhashed:?}"), format!("{hashed:?}"));
+    assert!(!unhashed
+        .iter()
+        .any(|action| matches!(action, TransportAction::SendOnInterface { .. })));
+    assert_eq!(
+        deferring.packet_hashlist_len(),
+        hashing.packet_hashlist_len()
+    );
+}
+
+#[test]
+fn own_link_traffic_is_always_hashed() {
+    let link_id = [0x50; 16];
+    let packet = link_data_packet(&link_id, constants::CONTEXT_RESOURCE, b"resource part");
+    let mut engine = relay_with_validated_link(link_id);
+    engine.register_destination(link_id, constants::DESTINATION_LINK);
+    let decoded = engine.decode_inbound(&packet.raw).unwrap();
+    assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
+
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let decoded = engine.decode_inbound(&packet.raw).unwrap();
+    assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
+}
