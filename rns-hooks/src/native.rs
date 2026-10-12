@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use libloading::Library;
 use rns_hooks_abi::native::{
@@ -18,8 +18,27 @@ pub struct NativeProgram {
     on_call: NativeHookOnCallFn,
 }
 
+/// Path handed to the dynamic loader for a native hook file.
+///
+/// A bare file name (no directory component) is anchored to the current
+/// directory, so it is always treated as a file path and the dynamic loader's
+/// library search path is never used.
+fn loader_path(path: &Path) -> PathBuf {
+    let has_dir = path.is_absolute()
+        || path
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty());
+    if has_dir {
+        path.to_path_buf()
+    } else {
+        Path::new(".").join(path)
+    }
+}
+
 impl NativeProgram {
     pub fn load(path: &Path) -> Result<Self, HookError> {
+        let path = loader_path(path);
+        let path = path.as_path();
         let library = unsafe { Library::new(path) }
             .map_err(|e| HookError::CompileError(format!("failed to load native hook: {}", e)))?;
 
@@ -341,4 +360,33 @@ unsafe extern "C" fn native_set_modified_data(
     };
     state.modified_data = Some(bytes.to_vec());
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_name_is_anchored_to_current_dir() {
+        assert_eq!(
+            loader_path(Path::new("libhook.so")),
+            PathBuf::from("./libhook.so")
+        );
+    }
+
+    #[test]
+    fn paths_with_directories_are_unchanged() {
+        assert_eq!(
+            loader_path(Path::new("/opt/rns/hooks/libhook.so")),
+            PathBuf::from("/opt/rns/hooks/libhook.so")
+        );
+        assert_eq!(
+            loader_path(Path::new("hooks/libhook.so")),
+            PathBuf::from("hooks/libhook.so")
+        );
+        assert_eq!(
+            loader_path(Path::new("./libhook.so")),
+            PathBuf::from("./libhook.so")
+        );
+    }
 }

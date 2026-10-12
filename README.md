@@ -458,6 +458,8 @@ rns-ctl hook unload <name> --point <HookPoint> --token "$RNSCTL_TOKEN"          
 rns-ctl hook reload <name> --point <HookPoint> --path <hook_file_or_builtin_id> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin]
 ```
 
+`--type` defaults to `wasm` (or `builtin` on builds without the WASM backend); native hooks must be requested with `--type native`. Native hooks are loaded only from the configured hooks directory when requested through the CLI or HTTP API: the path must be absolute and resolve to a file inside `<config dir>/hooks` (override with `rns-ctl http --hooks-dir PATH`, `RNSCTL_HOOKS_DIR`, or `hooks_dir` in `rns-server.json`). Hooks listed in the `[hooks]` section of the config file are loaded at startup from the path given there. See [docs/native-hooks.md](docs/native-hooks.md#accepted-paths).
+
 **Writing hooks:**
 
 Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook_abi_version` plus `rns_hook_on_call`; see `rns-hooks/examples/native_noop` and [docs/native-hooks.md](docs/native-hooks.md). Use the `rns-hooks-sdk` crate to write WASM hooks in `no_std` Rust. Each WASM hook exports an `on_hook` function that receives a context and returns a verdict. Built-in hooks are linked Rust functions registered by ID; see [docs/builtin-hooks.md](docs/builtin-hooks.md).

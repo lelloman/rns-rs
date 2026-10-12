@@ -17,6 +17,11 @@ use crate::supervisor::{
 use rns_net::RpcAddr;
 
 const DEFAULT_STATS_MAX_AGE_DAYS: u64 = 30;
+
+/// Keys whose values name executables, libraries, or library locations. They
+/// are set in the configuration file only; the HTTP config API refuses to
+/// change them.
+pub const API_READ_ONLY_KEYS: [&str; 4] = ["rnsd_bin", "sentineld_bin", "statsd_bin", "hooks_dir"];
 const DEFAULT_STATS_MAX_SIZE_MB: u64 = 4096;
 
 #[derive(Debug, Clone)]
@@ -63,6 +68,11 @@ pub struct ServerConfigFile {
     pub sentineld_bin: Option<String>,
     #[serde(default)]
     pub statsd_bin: Option<String>,
+    /// Directory the control plane may load native hooks from through the API.
+    /// Relative paths are resolved against the config directory. Unset uses
+    /// `<config dir>/hooks`.
+    #[serde(default)]
+    pub hooks_dir: Option<String>,
     #[serde(default)]
     pub logs: ServerLogConfigFile,
     #[serde(default)]
@@ -150,7 +160,8 @@ impl ServerConfig {
         &self,
         body: &[u8],
     ) -> Result<ServerConfigValidationSnapshot, String> {
-        let candidate = Self::parse_config_json(body)?;
+        let mut candidate = Self::parse_config_json(body)?;
+        self.keep_api_read_only_keys(&mut candidate)?;
         let mut warnings = Self::validate_file_config(&candidate)?;
         let validated = self.with_file_config(&candidate, self.server_config_file_present);
         warnings.push(format!(
@@ -165,13 +176,45 @@ impl ServerConfig {
         })
     }
 
+    /// Enforce [`API_READ_ONLY_KEYS`] on a config submitted through the API.
+    ///
+    /// A key omitted from the submission keeps its current file value; a key
+    /// that is present must equal the current file value.
+    fn keep_api_read_only_keys(&self, candidate: &mut ServerConfigFile) -> Result<(), String> {
+        let current = &self.file_config;
+        let pairs: [(&str, &mut Option<String>, &Option<String>); 4] = [
+            ("rnsd_bin", &mut candidate.rnsd_bin, &current.rnsd_bin),
+            (
+                "sentineld_bin",
+                &mut candidate.sentineld_bin,
+                &current.sentineld_bin,
+            ),
+            ("statsd_bin", &mut candidate.statsd_bin, &current.statsd_bin),
+            ("hooks_dir", &mut candidate.hooks_dir, &current.hooks_dir),
+        ];
+        for (key, next, current) in pairs {
+            match next {
+                None => *next = current.clone(),
+                Some(value) if Some(&*value) == current.as_ref() => {}
+                Some(_) => {
+                    return Err(format!(
+                        "read-only key: {key} can only be changed by editing {} and restarting rns-server",
+                        self.server_config_file_path.display()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn mutate_json_with_current_context(
         &self,
         mode: ServerConfigMutationMode,
         body: &[u8],
         control_tx: Option<mpsc::Sender<ProcessControlCommand>>,
     ) -> Result<ServerConfigMutationResult, String> {
-        let candidate = Self::parse_config_json(body)?;
+        let mut candidate = Self::parse_config_json(body)?;
+        self.keep_api_read_only_keys(&mut candidate)?;
         let warnings = Self::validate_file_config(&candidate)?;
         let next = self.with_file_config(&candidate, true);
         let apply_plan = self.apply_plan(&next);
@@ -329,6 +372,7 @@ impl ServerConfig {
                 ),
                 "Only fields present in rns-server.json are persisted; CLI flags still override them at startup.".into(),
                 "By default, child roles self-spawn from the running rns-server binary via /proc/self/exe with current_exe() fallback. Hook-enabled builds manage rnsd, rns-sentineld, and rns-statsd. Explicit child binary paths remain available as advanced overrides.".into(),
+                "Role binary paths (rnsd_bin, sentineld_bin, statsd_bin) and hooks_dir are set in rns-server.json and are not changeable through the API; a submitted config that omits them keeps the current values.".into(),
                 "Changing process launch settings restarts only the affected child processes. Embedded HTTP auth settings reload in place; bind host, port, and enablement changes still require restarting rns-server.".into(),
             ],
             fields: vec![
@@ -346,7 +390,7 @@ impl ServerConfig {
                     required: false,
                     default_value: "(self-spawn via /proc/self/exe)".into(),
                     description: "Advanced override for the Reticulum daemon executable; unset uses self-spawn from rns-server.".into(),
-                    effect: "Restarts rnsd when changed.".into(),
+                    effect: "Read-only through the API; set it in rns-server.json and restart rns-server.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "sentineld_bin".into(),
@@ -354,7 +398,7 @@ impl ServerConfig {
                     required: false,
                     default_value: "(self-spawn via /proc/self/exe)".into(),
                     description: "Advanced override for the sentinel sidecar executable; unset uses self-spawn from rns-server.".into(),
-                    effect: "Restarts rns-sentineld when changed.".into(),
+                    effect: "Read-only through the API; set it in rns-server.json and restart rns-server.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "statsd_bin".into(),
@@ -362,7 +406,15 @@ impl ServerConfig {
                     required: false,
                     default_value: "(self-spawn via /proc/self/exe)".into(),
                     description: "Advanced override for the stats sidecar executable; unset uses self-spawn from rns-server.".into(),
-                    effect: "Restarts rns-statsd when changed.".into(),
+                    effect: "Read-only through the API; set it in rns-server.json and restart rns-server.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "hooks_dir".into(),
+                    field_type: "string".into(),
+                    required: false,
+                    default_value: self.resolved_config_dir.join("hooks").display().to_string(),
+                    description: "Directory native hooks are loaded from through the HTTP API; relative paths resolve against the config directory.".into(),
+                    effect: "Read-only through the API; set it in rns-server.json and restart rns-server.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "logs.max_file_size_mb".into(),
@@ -440,6 +492,15 @@ impl ServerConfig {
         }
     }
 
+    /// Hooks directory set in the config file, resolved against the config dir.
+    pub fn configured_hooks_dir(&self) -> Option<PathBuf> {
+        self.file_config
+            .hooks_dir
+            .as_deref()
+            .filter(|dir| !dir.trim().is_empty())
+            .map(|dir| self.resolved_config_dir.join(dir))
+    }
+
     pub fn http_enabled(&self) -> bool {
         self.http.enabled
     }
@@ -460,6 +521,10 @@ impl ServerConfig {
         }
         if self.http.disable_auth {
             argv.push("--disable-auth".into());
+        }
+        if let Some(hooks_dir) = self.configured_hooks_dir() {
+            argv.push("--hooks-dir".into());
+            argv.push(hooks_dir.display().to_string());
         }
         if verbosity > 0 {
             argv.push(format!("-{}", "v".repeat(verbosity as usize)));
@@ -784,6 +849,7 @@ impl ServerConfig {
         validate_optional_nonempty("rnsd_bin", file_cfg.rnsd_bin.as_deref())?;
         validate_optional_nonempty("sentineld_bin", file_cfg.sentineld_bin.as_deref())?;
         validate_optional_nonempty("statsd_bin", file_cfg.statsd_bin.as_deref())?;
+        validate_optional_nonempty("hooks_dir", file_cfg.hooks_dir.as_deref())?;
         validate_optional_nonempty("http.host", file_cfg.http.host.as_deref())?;
         validate_optional_nonempty("http.auth_token", file_cfg.http.auth_token.as_deref())?;
 
@@ -1020,6 +1086,7 @@ impl ServerConfig {
             rnsd_bin: None,
             sentineld_bin: None,
             statsd_bin: None,
+            hooks_dir: None,
             logs: ServerLogConfigFile {
                 max_file_size_mb: Some(DEFAULT_MAX_FILE_BYTES / (1024 * 1024)),
                 max_archives: Some(DEFAULT_MAX_ARCHIVES),
@@ -1252,6 +1319,96 @@ mod tests {
         assert!(plan.processes_to_restart.is_empty());
         assert!(!plan.control_plane_reload_required);
         assert!(!plan.control_plane_restart_required);
+    }
+
+    #[test]
+    fn api_config_change_to_role_binary_key_is_rejected() {
+        let current = test_config();
+        for key in super::API_READ_ONLY_KEYS {
+            let body = format!(r#"{{"{key}": "/usr/bin/other"}}"#);
+            let err = current
+                .validate_json_with_current_context(body.as_bytes())
+                .unwrap_err();
+            assert!(err.starts_with(&format!("read-only key: {key}")), "{err}");
+            for mode in [
+                rns_ctl::state::ServerConfigMutationMode::Save,
+                rns_ctl::state::ServerConfigMutationMode::Apply,
+            ] {
+                let err = current
+                    .mutate_json_with_current_context(mode, body.as_bytes(), None)
+                    .unwrap_err();
+                assert!(err.starts_with(&format!("read-only key: {key}")), "{err}");
+            }
+        }
+    }
+
+    #[test]
+    fn api_config_keeps_role_binary_keys_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut current = test_config();
+        current.resolved_config_dir = dir.path().to_path_buf();
+        current.server_config_file_path = dir.path().join("rns-server.json");
+        current.file_config = ServerConfigFile {
+            rnsd_bin: Some("/opt/custom-rnsd".into()),
+            hooks_dir: Some("/opt/rns-hooks".into()),
+            ..ServerConfigFile::default()
+        };
+
+        // Omitted keys keep their file values; unchanged values are accepted.
+        let mut omitted = ServerConfigFile::default();
+        current.keep_api_read_only_keys(&mut omitted).unwrap();
+        assert_eq!(omitted.rnsd_bin.as_deref(), Some("/opt/custom-rnsd"));
+        assert_eq!(omitted.hooks_dir.as_deref(), Some("/opt/rns-hooks"));
+
+        let body = br#"{"rnsd_bin": "/opt/custom-rnsd", "stats": {"max_age_days": 7}}"#;
+        current.validate_json_with_current_context(body).unwrap();
+
+        let result = current
+            .mutate_json_with_current_context(
+                rns_ctl::state::ServerConfigMutationMode::Save,
+                br#"{"stats": {"max_age_days": 7}}"#,
+                None,
+            )
+            .unwrap();
+        assert_eq!(result.action, "save");
+        let written: ServerConfigFile =
+            serde_json::from_slice(&std::fs::read(&current.server_config_file_path).unwrap())
+                .unwrap();
+        assert_eq!(written.rnsd_bin.as_deref(), Some("/opt/custom-rnsd"));
+        assert_eq!(written.hooks_dir.as_deref(), Some("/opt/rns-hooks"));
+        assert_eq!(written.stats.max_age_days, Some(7));
+
+        // Changing a file-set key through the API is refused.
+        let err = current
+            .validate_json_with_current_context(br#"{"rnsd_bin": "/opt/other"}"#)
+            .unwrap_err();
+        assert!(err.starts_with("read-only key: rnsd_bin"), "{err}");
+    }
+
+    #[test]
+    fn file_config_still_accepts_role_binary_paths() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                rnsd_bin: Some("/opt/custom-rnsd".into()),
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+        assert_eq!(next.rnsd_bin, PathBuf::from("/opt/custom-rnsd"));
+    }
+
+    #[test]
+    fn ctl_args_pass_configured_hooks_dir() {
+        let mut config = test_config();
+        assert!(config.ctl_args(0).get("hooks-dir").is_none());
+        config.file_config.hooks_dir = Some("native-hooks".into());
+        assert_eq!(
+            config.ctl_args(0).get("hooks-dir"),
+            Some("/tmp/rns/native-hooks")
+        );
+        config.file_config.hooks_dir = Some("/opt/rns-hooks".into());
+        assert_eq!(config.ctl_args(0).get("hooks-dir"), Some("/opt/rns-hooks"));
     }
 
     #[test]

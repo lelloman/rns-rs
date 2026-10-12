@@ -6,6 +6,7 @@ pub mod cmd;
 pub mod config;
 pub mod encode;
 pub mod format;
+pub mod hook_path;
 pub mod http;
 pub mod remote;
 pub mod server;

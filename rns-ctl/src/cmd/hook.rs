@@ -4,18 +4,16 @@
 
 use crate::args::Args;
 
+/// Hook type used when the caller omits `type`. Native hooks must be
+/// requested explicitly.
 const DEFAULT_HOOK_TYPE: &str = {
-    #[cfg(feature = "rns-hooks-native")]
-    {
-        "native"
-    }
-    #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
+    #[cfg(feature = "rns-hooks-wasm")]
     {
         "wasm"
     }
-    #[cfg(all(not(feature = "rns-hooks-native"), not(feature = "rns-hooks-wasm")))]
+    #[cfg(not(feature = "rns-hooks-wasm"))]
     {
-        "wasm"
+        "builtin"
     }
 };
 
@@ -392,6 +390,13 @@ fn print_usage() {
     println!("OPTIONS:");
     println!("    --url URL          HTTP server URL (default: http://127.0.0.1:8080)");
     println!("    --token TOKEN, -t  Bearer auth token (printed by rns-ctl http on start)");
+    println!();
+    println!(
+        "    --type defaults to {}. Native hooks must be requested with",
+        DEFAULT_HOOK_TYPE
+    );
+    println!("    --type native and an absolute path inside the server's configured");
+    println!("    hooks directory (default: <config dir>/hooks).");
     println!();
     println!("HOOK POINTS:");
     println!("    PreIngress, PreDispatch, AnnounceReceived, PathUpdated,");

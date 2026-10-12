@@ -340,6 +340,8 @@ OPTIONS:
         --disable-auth      Disable authentication
         --tls-cert PATH     TLS certificate file (env: RNSCTL_TLS_CERT, requires 'tls' feature)
         --tls-key PATH      TLS private key file (env: RNSCTL_TLS_KEY, requires 'tls' feature)
+        --hooks-dir PATH    Directory native hooks may be loaded from through the API
+                            (default: <config dir>/hooks, env: RNSCTL_HOOKS_DIR)
     -v                      Increase verbosity (repeat for more)
     -h, --help              Show this help
         --version           Show version"

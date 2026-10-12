@@ -30,6 +30,30 @@ rns-ctl hook load /opt/rns/hooks/libnative_noop.so --type native --point Tick
 rns-ctl hook reload native_noop --type native --point Tick --path /opt/rns/hooks/libnative_noop.so
 ```
 
+## Accepted Paths
+
+Native hooks are loaded only from the configured hooks directory when they are
+requested at runtime through the HTTP API or `rns-ctl hook load|reload`.
+
+| Where the hook is requested | Accepted paths |
+|-----------------------------|----------------|
+| Node `config` file, `[hooks]` section (startup) | Any path the operator writes. Absolute paths are recommended; a bare file name is resolved against the working directory, never the dynamic loader's library search path. |
+| HTTP API / `rns-ctl hook load` / `rns-ctl hook reload` | An absolute path to a regular file whose resolved location (after following symlinks) is inside the hooks directory. Relative paths, bare names, directories, and paths outside the directory are refused with `native hook path must be inside the configured hooks directory`. |
+
+The hooks directory defaults to `<config dir>/hooks`. Set it with:
+
+- `rns-ctl http --hooks-dir PATH` or the `RNSCTL_HOOKS_DIR` environment variable;
+- `hooks_dir` in `rns-server.json` for `rns-server` (relative values resolve
+  against the config directory). This key is set in the configuration file only
+  and is not changeable through the config API.
+
+The examples above therefore require `--hooks-dir /opt/rns/hooks` (or
+`hooks_dir = "/opt/rns/hooks"`) when loading at runtime.
+
+When the `type` field is omitted, the API and CLI default to `wasm` (or
+`builtin` on builds without the WASM backend). Native hooks must be requested
+with `--type native` / `"type": "native"`.
+
 ## ABI
 
 Native libraries must export two C ABI symbols:

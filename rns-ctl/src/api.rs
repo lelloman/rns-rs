@@ -1,17 +1,15 @@
 use serde_json::{json, Value};
 
+/// Hook type used when the caller omits `type`. Native hooks must be
+/// requested explicitly.
 const DEFAULT_HOOK_TYPE: &str = {
-    #[cfg(feature = "rns-hooks-native")]
-    {
-        "native"
-    }
-    #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
+    #[cfg(feature = "rns-hooks-wasm")]
     {
         "wasm"
     }
-    #[cfg(all(not(feature = "rns-hooks-native"), not(feature = "rns-hooks-wasm")))]
+    #[cfg(not(feature = "rns-hooks-wasm"))]
     {
-        "wasm"
+        "builtin"
     }
 };
 
@@ -25,7 +23,8 @@ use crate::auth::check_auth;
 use crate::encode::{from_base64, hex_to_array, to_base64, to_hex};
 use crate::http::{parse_query, HttpRequest, HttpResponse};
 use crate::state::{
-    lock_node_handle, read_state, ControlPlaneConfigHandle, DestinationEntry, SharedState,
+    lock_node_handle, read_control_plane_config, read_state, ControlPlaneConfigHandle,
+    DestinationEntry, SharedState,
 };
 use crate::stats_api;
 
@@ -172,9 +171,9 @@ pub fn handle_request(
 
         // Hook management
         ("GET", "/api/hooks") => handle_list_hooks(node),
-        ("POST", "/api/hook/load") => handle_load_hook(req, node),
+        ("POST", "/api/hook/load") => handle_load_hook(req, node, config),
         ("POST", "/api/hook/unload") => handle_unload_hook(req, node),
-        ("POST", "/api/hook/reload") => handle_reload_hook(req, node),
+        ("POST", "/api/hook/reload") => handle_reload_hook(req, node, config),
         ("POST", "/api/hook/enable") => handle_set_hook_enabled(req, node, true),
         ("POST", "/api/hook/disable") => handle_set_hook_enabled(req, node, false),
         ("POST", "/api/hook/priority") => handle_set_hook_priority(req, node),
@@ -1239,12 +1238,31 @@ fn handle_list_hooks(node: &NodeHandle) -> HttpResponse {
     })
 }
 
+/// Resolve the path of a file-backed (native) hook requested through the API.
+///
+/// The path must be absolute and resolve to a regular file inside the
+/// configured hooks directory.
+fn resolve_api_hook_file(
+    config: &ControlPlaneConfigHandle,
+    path: &str,
+) -> Result<String, HttpResponse> {
+    let hooks_dir = read_control_plane_config(config).resolved_hooks_dir();
+    crate::hook_path::resolve_native_hook_path(&hooks_dir, path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| HttpResponse::bad_request(&e))
+}
+
 /// Load a hook from a filesystem path.
 ///
 /// The `path` field in the JSON body refers to a file on the **server's** local
 /// filesystem. This means the CLI and the HTTP server must have access to the
-/// same filesystem for the path to resolve correctly.
-fn handle_load_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+/// same filesystem for the path to resolve correctly. Native hooks are loaded
+/// only from the configured hooks directory.
+fn handle_load_hook(
+    req: &HttpRequest,
+    node: &NodeHandle,
+    config: &ControlPlaneConfigHandle,
+) -> HttpResponse {
     let body = match parse_json_body(req) {
         Ok(v) => v,
         Err(r) => return r,
@@ -1297,8 +1315,12 @@ fn handle_load_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
             }
         })
     } else {
+        let path = match resolve_api_hook_file(config, path) {
+            Ok(p) => p,
+            Err(r) => return r,
+        };
         with_node(node, |n| {
-            match n.load_hook_file(name, path.to_string(), hook_type, attach_point, priority) {
+            match n.load_hook_file(name, path, hook_type, attach_point, priority) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
                 Ok(Err(e)) => HttpResponse::bad_request(&e),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
@@ -1329,7 +1351,11 @@ fn handle_unload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     })
 }
 
-fn handle_reload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+fn handle_reload_hook(
+    req: &HttpRequest,
+    node: &NodeHandle,
+    config: &ControlPlaneConfigHandle,
+) -> HttpResponse {
     let body = match parse_json_body(req) {
         Ok(v) => v,
         Err(r) => return r,
@@ -1381,8 +1407,12 @@ fn handle_reload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
             }
         })
     } else {
+        let path = match resolve_api_hook_file(config, path) {
+            Ok(p) => p,
+            Err(r) => return r,
+        };
         with_node(node, |n| {
-            match n.reload_hook_file(name, attach_point, path.to_string(), hook_type) {
+            match n.reload_hook_file(name, attach_point, path, hook_type) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
                 Ok(Err(e)) => HttpResponse::bad_request(&e),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),

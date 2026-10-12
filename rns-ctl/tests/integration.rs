@@ -104,6 +104,7 @@ fn start_test_server() -> TestServer {
             daemon_mode: false,
             tls_cert: None,
             tls_key: None,
+            hooks_dir: None,
         },
         vec![],
     )
@@ -121,6 +122,7 @@ fn start_test_server_with_auth(token: &str) -> TestServer {
             daemon_mode: false,
             tls_cert: None,
             tls_key: None,
+            hooks_dir: None,
         },
         vec![],
     )
@@ -746,6 +748,62 @@ fn test_hook_api_loads_reloads_lists_and_unloads_builtin_hook() {
     assert!(res.json()["hooks"].as_array().unwrap().is_empty());
 
     server.shutdown();
+}
+
+#[test]
+fn test_hook_api_native_path_must_be_inside_hooks_dir() {
+    let root = std::env::temp_dir().join(format!(
+        "rns-ctl-hooks-dir-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let hooks_dir = root.join("hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    let outside = root.join("liboutside.so");
+    std::fs::write(&outside, b"not a library").unwrap();
+    let inside = hooks_dir.join("libinside.so");
+    std::fs::write(&inside, b"not a library").unwrap();
+
+    let server = start_test_server_with_config(
+        CtlConfig {
+            disable_auth: true,
+            hooks_dir: Some(hooks_dir.to_str().unwrap().into()),
+            ..CtlConfig::default()
+        },
+        vec![],
+    );
+    let expected = "native hook path must be inside the configured hooks directory";
+
+    for requested in [
+        outside.to_str().unwrap(),
+        "liboutside.so",
+        "hooks/libinside.so",
+    ] {
+        let body =
+            format!(r#"{{"name":"n","path":"{requested}","type":"native","attach_point":"Tick"}}"#);
+        let res = http_post(server.port, "/api/hook/load", &body);
+        assert_eq!(res.status, 400);
+        assert_eq!(res.json()["error"], expected);
+
+        let res = http_post(server.port, "/api/hook/reload", &body);
+        assert_eq!(res.status, 400);
+        assert_eq!(res.json()["error"], expected);
+    }
+
+    // A file inside the hooks directory passes the path check and reaches the loader.
+    let body = format!(
+        r#"{{"name":"n","path":"{}","type":"native","attach_point":"Tick"}}"#,
+        inside.to_str().unwrap()
+    );
+    let res = http_post(server.port, "/api/hook/load", &body);
+    assert_eq!(res.status, 400);
+    assert_ne!(res.json()["error"], expected);
+
+    server.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -1646,6 +1704,7 @@ fn start_test_pair() -> TestPair {
         daemon_mode: false,
         tls_cert: None,
         tls_key: None,
+        hooks_dir: None,
     };
 
     let ifaces_a = vec![InterfaceConfig {
@@ -1681,6 +1740,7 @@ fn start_test_pair() -> TestPair {
         daemon_mode: false,
         tls_cert: None,
         tls_key: None,
+        hooks_dir: None,
     };
 
     let ifaces_b = vec![InterfaceConfig {
@@ -1908,6 +1968,7 @@ mod tls_tests {
             daemon_mode: false,
             tls_cert: Some(cert_path.to_str().unwrap().into()),
             tls_key: Some(key_path.to_str().unwrap().into()),
+            hooks_dir: None,
         }));
 
         let shared_state: SharedState = Arc::new(RwLock::new(CtlState::new()));

@@ -19,6 +19,9 @@ pub struct CtlConfig {
     pub tls_cert: Option<String>,
     /// TLS private key path.
     pub tls_key: Option<String>,
+    /// Directory native hooks may be loaded from through the API.
+    /// When unset, `<config dir>/hooks` is used.
+    pub hooks_dir: Option<String>,
 }
 
 impl Default for CtlConfig {
@@ -32,7 +35,15 @@ impl Default for CtlConfig {
             daemon_mode: false,
             tls_cert: None,
             tls_key: None,
+            hooks_dir: None,
         }
+    }
+}
+
+impl CtlConfig {
+    /// Directory native hooks may be loaded from through the API.
+    pub fn resolved_hooks_dir(&self) -> std::path::PathBuf {
+        crate::hook_path::resolve_hooks_dir(self.hooks_dir.as_deref(), self.config_path.as_deref())
     }
 }
 
@@ -87,6 +98,11 @@ pub fn from_args_and_env(args: &Args) -> CtlConfig {
         .get("tls-key")
         .map(String::from)
         .or_else(|| std::env::var("RNSCTL_TLS_KEY").ok());
+
+    cfg.hooks_dir = args
+        .get("hooks-dir")
+        .map(String::from)
+        .or_else(|| std::env::var("RNSCTL_HOOKS_DIR").ok());
 
     cfg
 }
@@ -153,5 +169,21 @@ mod tests {
         assert_eq!(cfg.host, "0.0.0.0");
         assert_eq!(cfg.auth_token.as_deref(), Some("secret"));
         assert!(cfg.daemon_mode);
+    }
+
+    #[test]
+    fn hooks_dir_from_args_and_default() {
+        let cfg = from_args_and_env(&args(&["--config", "/srv/rns", "--hooks-dir", "/opt/h"]));
+        assert_eq!(cfg.hooks_dir.as_deref(), Some("/opt/h"));
+        assert_eq!(cfg.resolved_hooks_dir(), std::path::PathBuf::from("/opt/h"));
+
+        let cfg = CtlConfig {
+            config_path: Some("/srv/rns".into()),
+            ..CtlConfig::default()
+        };
+        assert_eq!(
+            cfg.resolved_hooks_dir(),
+            std::path::PathBuf::from("/srv/rns/hooks")
+        );
     }
 }

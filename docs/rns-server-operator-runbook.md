@@ -607,7 +607,17 @@ By default, child processes are started by re-executing the running `rns-server`
 - `rns-sentineld`
 - `rns-statsd`
 
-Advanced override fields in `rns-server.json` can still point a role at an external binary, but that is not the default operating mode.
+Advanced override fields in `rns-server.json` (`rnsd_bin`, `sentineld_bin`, `statsd_bin`) can still point a role at an external binary, but that is not the default operating mode.
+
+Role binary paths are set in the configuration file and are not changeable through the API. To change one, edit `rns-server.json` and restart `rns-server`. The same applies to `hooks_dir` (see below).
+
+## Native Hooks Directory
+
+Native hooks are loaded only from the configured hooks directory when they are requested through the HTTP API (`POST /api/hook/load`, `POST /api/hook/reload`, `rns-ctl hook load|reload --type native`). The directory is `<config dir>/hooks` unless `hooks_dir` is set in `rns-server.json` (relative values resolve against the config directory). A runtime request must name an absolute path to a regular file that, after resolving symlinks, lies inside that directory; other paths are refused with `native hook path must be inside the configured hooks directory`.
+
+Hooks listed in the node's `config` file under `[hooks]` are loaded at startup from the path given there and are not subject to the hooks directory.
+
+When the API caller omits the hook `type`, it defaults to `wasm` (or `builtin` on builds without the WASM backend). Native hooks must be requested with `type: "native"`.
 
 ## Config Apply Semantics
 
@@ -627,6 +637,8 @@ Advanced override fields in `rns-server.json` can still point a role at an exter
   Child restart plus full `rns-server` restart requirement.
 
 Use `POST /api/config/validate` before save/apply to inspect the exact plan.
+
+The keys `rnsd_bin`, `sentineld_bin`, `statsd_bin`, and `hooks_dir` are read-only through the config API. A submitted config that omits them keeps the current file values; a submitted config that sets a different value is rejected with `read-only key: <key> ...`.
 
 ## Observability
 
