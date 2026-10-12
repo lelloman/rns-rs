@@ -2853,7 +2853,7 @@ fn begin_drain_event_is_processed_by_run_loop() {
     .unwrap();
     let (resp_tx, resp_rx) = std::sync::mpsc::channel();
     tx_query
-        .send(Event::Query(QueryRequest::DrainStatus, resp_tx))
+        .send(Event::query(QueryRequest::DrainStatus, resp_tx))
         .unwrap();
     let status = match resp_rx.recv().unwrap() {
         QueryResponse::DrainStatus(status) => status,
@@ -4215,7 +4215,7 @@ fn query_interface_stats() {
     driver.interfaces.insert(InterfaceId(2), local);
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
+    tx.send(Event::query(QueryRequest::InterfaceStats, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -4338,7 +4338,7 @@ fn query_path_table() {
     .unwrap();
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::PathTable { max_hops: None },
         resp_tx,
     ))
@@ -4407,7 +4407,7 @@ fn query_drop_path() {
     .unwrap();
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::DropPath { dest_hash }, resp_tx))
+    tx.send(Event::query(QueryRequest::DropPath { dest_hash }, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -4579,7 +4579,7 @@ fn query_transport_identity() {
     );
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::TransportIdentity, resp_tx))
+    tx.send(Event::query(QueryRequest::TransportIdentity, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -4623,10 +4623,10 @@ fn query_link_count() {
     );
 
     let (count_tx, count_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::LinkCount, count_tx))
+    tx.send(Event::query(QueryRequest::LinkCount, count_tx))
         .unwrap();
     let (active_tx, active_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::ActiveLinkCount, active_tx))
+    tx.send(Event::query(QueryRequest::ActiveLinkCount, active_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -4672,7 +4672,7 @@ fn query_rate_table() {
     );
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::RateTable, resp_tx))
+    tx.send(Event::query(QueryRequest::RateTable, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -4715,7 +4715,7 @@ fn query_next_hop() {
 
     let dest = [0xBB; 16];
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::NextHop { dest_hash: dest },
         resp_tx,
     ))
@@ -4761,7 +4761,7 @@ fn query_next_hop_if_name() {
 
     let dest = [0xCC; 16];
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::NextHopIfName { dest_hash: dest },
         resp_tx,
     ))
@@ -4807,7 +4807,7 @@ fn query_drop_all_via() {
 
     let transport = [0xDD; 16];
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::DropAllVia {
             transport_hash: transport,
         },
@@ -4854,7 +4854,7 @@ fn query_drop_announce_queues() {
     );
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::DropAnnounceQueues, resp_tx))
+    tx.send(Event::query(QueryRequest::DropAnnounceQueues, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -5396,7 +5396,7 @@ fn link_count_includes_link_manager() {
 
     // Query link count — should include link_manager links
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::LinkCount, resp_tx))
+    tx.send(Event::query(QueryRequest::LinkCount, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -7847,7 +7847,7 @@ fn query_has_path() {
 
     // No path yet
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::HasPath {
             dest_hash: [0xAA; 16],
         },
@@ -7869,7 +7869,7 @@ fn query_has_path() {
     .unwrap();
 
     let (resp_tx2, resp_rx2) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::HasPath { dest_hash }, resp_tx2))
+    tx.send(Event::query(QueryRequest::HasPath { dest_hash }, resp_tx2))
         .unwrap();
 
     tx.send(Event::Shutdown).unwrap();
@@ -7939,7 +7939,7 @@ fn query_hops_to() {
     .unwrap();
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::HopsTo { dest_hash }, resp_tx))
+    tx.send(Event::query(QueryRequest::HopsTo { dest_hash }, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -8001,7 +8001,7 @@ fn query_recall_identity() {
 
     // Recall identity
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::RecallIdentity { dest_hash },
         resp_tx,
     ))
@@ -8009,7 +8009,7 @@ fn query_recall_identity() {
 
     // Also recall unknown destination
     let (resp_tx2, resp_rx2) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::RecallIdentity {
             dest_hash: [0xFF; 16],
         },
@@ -9683,7 +9683,7 @@ fn query_local_destinations_empty() {
     let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx))
+    tx.send(Event::query(QueryRequest::LocalDestinations, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -9734,7 +9734,7 @@ fn query_local_destinations_with_registered() {
     .unwrap();
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx))
+    tx.send(Event::query(QueryRequest::LocalDestinations, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -9789,7 +9789,7 @@ fn query_local_destinations_tracks_link_dest() {
     .unwrap();
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx))
+    tx.send(Event::query(QueryRequest::LocalDestinations, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -9834,7 +9834,7 @@ fn query_links_empty() {
     let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::Links, resp_tx)).unwrap();
+    tx.send(Event::query(QueryRequest::Links, resp_tx)).unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
@@ -9873,7 +9873,7 @@ fn query_resources_empty() {
     let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::Resources, resp_tx))
+    tx.send(Event::query(QueryRequest::Resources, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -9955,7 +9955,7 @@ fn send_probe_unknown_dest_returns_none() {
 
     // SendProbe for a dest_hash with no known identity should return None
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::SendProbe {
             dest_hash: [0xAA; 16],
             payload_size: 16,
@@ -10089,7 +10089,7 @@ fn check_proof_not_found_returns_none() {
     );
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::CheckProof {
             packet_hash: [0xBB; 32],
         },
@@ -10142,7 +10142,7 @@ fn check_proof_found_returns_rtt() {
         .insert(packet_hash, (0.123, time::now()));
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::CheckProof { packet_hash },
         resp_tx,
     ))
@@ -10464,7 +10464,7 @@ fn interface_stats_includes_probe_responder() {
     driver.probe_responder_hash = Some([0xEE; 16]);
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
+    tx.send(Event::query(QueryRequest::InterfaceStats, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -10512,7 +10512,7 @@ fn interface_stats_probe_responder_none_when_disabled() {
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
+    tx.send(Event::query(QueryRequest::InterfaceStats, resp_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
@@ -10734,7 +10734,7 @@ fn inject_identity_stores_sentinel_interface() {
         rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
 
     let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::InjectIdentity {
             dest_hash,
             identity_hash: *identity.hash(),
@@ -10811,7 +10811,7 @@ fn inject_identity_overwrites_previous_entry() {
 
     // First injection
     let (resp_tx1, resp_rx1) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::InjectIdentity {
             dest_hash,
             identity_hash: *identity.hash(),
@@ -10826,7 +10826,7 @@ fn inject_identity_overwrites_previous_entry() {
 
     // Second injection with different app_data
     let (resp_tx2, resp_rx2) = mpsc::channel();
-    tx.send(Event::Query(
+    tx.send(Event::query(
         QueryRequest::InjectIdentity {
             dest_hash,
             identity_hash: *identity.hash(),

@@ -193,7 +193,7 @@ pub enum Event<W: Send> {
     /// (Internal) An announce was verified off-thread and is ready for driver-side processing.
     AnnounceVerified {
         key: AnnounceVerifyKey,
-        validated: ValidatedAnnounce,
+        validated: Box<ValidatedAnnounce>,
         sig_cache_key: [u8; 32],
     },
     /// (Internal) An announce failed off-thread verification.
@@ -251,7 +251,7 @@ pub enum Event<W: Send> {
     /// Deregister a link destination (stop accepting incoming links).
     DeregisterLinkDestination { dest_hash: [u8; 16] },
     /// Query driver state. Response is sent via the provided channel.
-    Query(QueryRequest, mpsc::Sender<QueryResponse>),
+    Query(Box<QueryRequest>, mpsc::Sender<QueryResponse>),
     /// Register a link destination (accepts incoming LINKREQUEST).
     RegisterLinkDestination {
         dest_hash: [u8; 16],
@@ -1015,6 +1015,21 @@ pub struct NextHopResponse {
     pub next_hop: [u8; 16],
     pub hops: u8,
     pub interface: InterfaceId,
+}
+
+impl<W: Send> Event<W> {
+    /// A query for the driver, answered on `response`.
+    pub fn query(request: QueryRequest, response: mpsc::Sender<QueryResponse>) -> Self {
+        Event::Query(Box::new(request), response)
+    }
+
+    /// The request and response channel of a query, or the event itself.
+    pub fn into_query(self) -> Result<(QueryRequest, mpsc::Sender<QueryResponse>), Self> {
+        match self {
+            Event::Query(request, response) => Ok((*request, response)),
+            other => Err(other),
+        }
+    }
 }
 
 impl<W: Send> fmt::Debug for Event<W> {

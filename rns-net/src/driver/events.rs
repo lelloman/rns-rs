@@ -1073,7 +1073,7 @@ impl Driver {
                     validated,
                     sig_cache_key,
                 } => {
-                    self.handle_announce_verified_event(key, validated, sig_cache_key);
+                    self.handle_announce_verified_event(key, *validated, sig_cache_key);
                 }
                 Event::AnnounceVerifyFailed { key, .. } => {
                     let mut announce_queue = self
@@ -1150,7 +1150,7 @@ impl Driver {
                     self.shared_announces.remove(&dest_hash);
                 }
                 Event::Query(request, response_tx) => {
-                    let response = self.handle_query_mut(request);
+                    let response = self.handle_query_mut(*request);
                     let _ = response_tx.send(response);
                 }
                 Event::DeregisterLinkDestination { dest_hash } => {

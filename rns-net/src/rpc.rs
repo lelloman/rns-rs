@@ -1136,7 +1136,7 @@ fn handle_hook_rpc_request(
 /// Send a query to the driver and wait for the response.
 fn send_query(event_tx: &EventSender, request: QueryRequest) -> io::Result<QueryResponse> {
     let (resp_tx, resp_rx) = mpsc::channel();
-    try_send_event(event_tx, Event::Query(request, resp_tx))?;
+    try_send_event(event_tx, Event::query(request, resp_tx))?;
     resp_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "query timed out"))
@@ -3307,23 +3307,38 @@ mod tests {
         // Driver thread that handles queries
         let driver_thread = thread::spawn(move || loop {
             match event_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                Ok(Event::Query(QueryRequest::LinkCount, resp_tx)) => {
+                Ok(Event::Query(request, resp_tx))
+                    if matches!(*request, QueryRequest::LinkCount) =>
+                {
                     let _ = resp_tx.send(QueryResponse::LinkCount(42));
                 }
-                Ok(Event::Query(QueryRequest::ActiveLinkCount, resp_tx)) => {
+                Ok(Event::Query(request, resp_tx))
+                    if matches!(*request, QueryRequest::ActiveLinkCount) =>
+                {
                     let _ = resp_tx.send(QueryResponse::ActiveLinkCount(7));
                 }
-                Ok(Event::Query(QueryRequest::LowestInterfaceBitrate, resp_tx)) => {
+                Ok(Event::Query(request, resp_tx))
+                    if matches!(*request, QueryRequest::LowestInterfaceBitrate) =>
+                {
                     let _ = resp_tx.send(QueryResponse::LowestInterfaceBitrate(Some(400)));
                 }
-                Ok(Event::Query(QueryRequest::MediumPathTimeout, resp_tx)) => {
+                Ok(Event::Query(request, resp_tx))
+                    if matches!(*request, QueryRequest::MediumPathTimeout) =>
+                {
                     let _ = resp_tx.send(QueryResponse::MediumPathTimeout(26.0));
                 }
-                Ok(Event::Query(QueryRequest::FirstHopTimeout { dest_hash }, resp_tx)) => {
+                Ok(Event::Query(request, resp_tx))
+                    if matches!(*request, QueryRequest::FirstHopTimeout { .. }) =>
+                {
+                    let QueryRequest::FirstHopTimeout { dest_hash } = *request else {
+                        unreachable!()
+                    };
                     assert_eq!(dest_hash, [0x77; 16]);
                     let _ = resp_tx.send(QueryResponse::FirstHopTimeout(6.4));
                 }
-                Ok(Event::Query(QueryRequest::InterfaceStats, resp_tx)) => {
+                Ok(Event::Query(request, resp_tx))
+                    if matches!(*request, QueryRequest::InterfaceStats) =>
+                {
                     let _ = resp_tx.send(QueryResponse::InterfaceStats(InterfaceStatsResponse {
                         interfaces: vec![SingleInterfaceStat {
                             id: 7,
@@ -3503,7 +3518,9 @@ mod tests {
         assert!(matches!(event_rx.recv().unwrap(), Event::Tick));
         if !completed_promptly {
             match event_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
-                Event::Query(QueryRequest::LinkCount, response_tx) => {
+                Event::Query(request, response_tx)
+                    if matches!(*request, QueryRequest::LinkCount) =>
+                {
                     response_tx.send(QueryResponse::LinkCount(1)).unwrap();
                 }
                 other => panic!("unexpected event after releasing queue: {other:?}"),
@@ -3537,14 +3554,20 @@ mod tests {
         let (concurrent_tx, concurrent_rx) = mpsc::channel();
         let driver_thread = thread::spawn(move || {
             let first_response = match event_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
-                Event::Query(QueryRequest::LinkCount, response_tx) => response_tx,
+                Event::Query(request, response_tx)
+                    if matches!(*request, QueryRequest::LinkCount) =>
+                {
+                    response_tx
+                }
                 other => panic!("unexpected first RPC event: {other:?}"),
             };
             first_seen_tx.send(()).unwrap();
 
             let second = event_rx.recv_timeout(Duration::from_millis(500));
             let handled_concurrently = match second {
-                Ok(Event::Query(QueryRequest::TransportIdentity, response_tx)) => {
+                Ok(Event::Query(request, response_tx))
+                    if matches!(*request, QueryRequest::TransportIdentity) =>
+                {
                     response_tx
                         .send(QueryResponse::TransportIdentity(Some([7; 16])))
                         .unwrap();
@@ -3561,7 +3584,9 @@ mod tests {
 
             if !handled_concurrently {
                 match event_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
-                    Event::Query(QueryRequest::TransportIdentity, response_tx) => {
+                    Event::Query(request, response_tx)
+                        if matches!(*request, QueryRequest::TransportIdentity) =>
+                    {
                         response_tx
                             .send(QueryResponse::TransportIdentity(Some([7; 16])))
                             .unwrap();
@@ -3629,7 +3654,10 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::DropPath { dest_hash }, resp_tx)) = event_rx.recv()
+            if let Some((QueryRequest::DropPath { dest_hash }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(dest_hash, [1u8; 16]);
                 let _ = resp_tx.send(QueryResponse::DropPath(true));
@@ -4083,13 +4111,16 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(
+            if let Some((
                 QueryRequest::SendProbe {
                     dest_hash,
                     payload_size,
                 },
                 resp_tx,
-            )) = event_rx.recv()
+            )) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(dest_hash, [0xAA; 16]);
                 assert_eq!(payload_size, 16); // default
@@ -4113,13 +4144,16 @@ mod tests {
 
         let packet_hash = [0xBB; 32];
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(
+            if let Some((
                 QueryRequest::SendProbe {
                     dest_hash,
                     payload_size,
                 },
                 resp_tx,
-            )) = event_rx.recv()
+            )) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(dest_hash, [0xCC; 16]);
                 assert_eq!(payload_size, 32);
@@ -4148,12 +4182,15 @@ mod tests {
         let identity_hash = [0x44; 16];
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(
+            if let Some((
                 QueryRequest::RetainIdentity {
                     identity_hash: hash,
                 },
                 resp_tx,
-            )) = event_rx.recv()
+            )) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(hash, identity_hash);
                 let _ = resp_tx.send(QueryResponse::RetainIdentity(true));
@@ -4182,8 +4219,10 @@ mod tests {
 
         // Negative size should be clamped to default (16)
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::SendProbe { payload_size, .. }, resp_tx)) =
-                event_rx.recv()
+            if let Some((QueryRequest::SendProbe { payload_size, .. }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(payload_size, 16); // default, not negative
                 let _ = resp_tx.send(QueryResponse::SendProbe(None));
@@ -4209,8 +4248,10 @@ mod tests {
 
         // Size > 400 should be clamped to default (16)
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::SendProbe { payload_size, .. }, resp_tx)) =
-                event_rx.recv()
+            if let Some((QueryRequest::SendProbe { payload_size, .. }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(payload_size, 16); // default, not 999
                 let _ = resp_tx.send(QueryResponse::SendProbe(None));
@@ -4235,8 +4276,10 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::CheckProof { packet_hash }, resp_tx)) =
-                event_rx.recv()
+            if let Some((QueryRequest::CheckProof { packet_hash }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(packet_hash, [0xEE; 32]);
                 let _ = resp_tx.send(QueryResponse::CheckProof(None));
@@ -4258,8 +4301,10 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::CheckProof { packet_hash }, resp_tx)) =
-                event_rx.recv()
+            if let Some((QueryRequest::CheckProof { packet_hash }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(packet_hash, [0xFF; 32]);
                 let _ = resp_tx.send(QueryResponse::CheckProof(Some(0.352)));
@@ -4332,7 +4377,11 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::DrainStatus, resp_tx)) = event_rx.recv() {
+            if let Some((QueryRequest::DrainStatus, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
+            {
                 let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
                     state: LifecycleState::Draining,
                     drain_age_seconds: Some(0.75),
@@ -4419,8 +4468,10 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::GetRuntimeConfig { key }, resp_tx)) =
-                event_rx.recv()
+            if let Some((QueryRequest::GetRuntimeConfig { key }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(key, "global.tick_interval_ms");
                 let _ = resp_tx.send(QueryResponse::RuntimeConfigEntry(Some(
@@ -4437,8 +4488,10 @@ mod tests {
                 panic!("expected GetRuntimeConfig query");
             }
 
-            if let Ok(Event::Query(QueryRequest::SetRuntimeConfig { key, value }, resp_tx)) =
-                event_rx.recv()
+            if let Some((QueryRequest::SetRuntimeConfig { key, value }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(key, "global.tick_interval_ms");
                 assert_eq!(value, RuntimeConfigValue::Int(250));

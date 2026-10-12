@@ -816,7 +816,7 @@ mod tests {
         let driver = std::thread::spawn(move || {
             let mut polls = 0usize;
             while let Ok(event) = event_rx.recv_timeout(Duration::from_secs(1)) {
-                if let Event::Query(QueryRequest::DrainStatus, resp_tx) = event {
+                if let Ok((QueryRequest::DrainStatus, resp_tx)) = event.into_query() {
                     polls += 1;
                     let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
                         state: if polls == 1 {
@@ -877,7 +877,9 @@ mod tests {
 
         let driver = std::thread::spawn(move || loop {
             match event_rx.recv_timeout(Duration::from_millis(250)) {
-                Ok(Event::Query(QueryRequest::DrainStatus, resp_tx)) => {
+                Ok(Event::Query(request, resp_tx))
+                    if matches!(*request, QueryRequest::DrainStatus) =>
+                {
                     let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
                         state: LifecycleState::Draining,
                         drain_age_seconds: Some(0.05),
@@ -945,7 +947,9 @@ mod tests {
             while let Ok(event) = event_rx.recv_timeout(Duration::from_secs(1)) {
                 match event {
                     Event::BeginDrain { .. } => saw_begin_drain = true,
-                    Event::Query(QueryRequest::DrainStatus, resp_tx) => {
+                    Event::Query(request, resp_tx)
+                        if matches!(*request, QueryRequest::DrainStatus) =>
+                    {
                         let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
                             state: LifecycleState::Stopping,
                             drain_age_seconds: Some(0.05),
@@ -1008,7 +1012,9 @@ mod tests {
             while let Ok(event) = event_rx.recv_timeout(Duration::from_secs(1)) {
                 match event {
                     Event::BeginDrain { .. } => saw_begin_drain = true,
-                    Event::Query(QueryRequest::DrainStatus, resp_tx) => {
+                    Event::Query(request, resp_tx)
+                        if matches!(*request, QueryRequest::DrainStatus) =>
+                    {
                         let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
                             state: LifecycleState::Stopping,
                             drain_age_seconds: Some(0.05),

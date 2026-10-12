@@ -2340,7 +2340,7 @@ impl RnsNode {
                                 if verify_tx
                                     .send(Event::AnnounceVerified {
                                         key,
-                                        validated,
+                                        validated: Box::new(validated),
                                         sig_cache_key,
                                     })
                                     .is_err()
@@ -2392,7 +2392,7 @@ impl RnsNode {
                         }
                         let (response_tx, response_rx) = std::sync::mpsc::channel();
                         if persist_tx
-                            .send(Event::Query(
+                            .send(Event::query(
                                 QueryRequest::TransportStateSnapshot,
                                 response_tx,
                             ))
@@ -2440,7 +2440,7 @@ impl RnsNode {
     pub fn query(&self, request: QueryRequest) -> Result<QueryResponse, SendError> {
         let (resp_tx, resp_rx) = std::sync::mpsc::channel();
         self.tx
-            .send(Event::Query(request, resp_tx))
+            .send(Event::query(request, resp_tx))
             .map_err(|_| SendError)?;
         resp_rx.recv().map_err(|_| SendError)
     }
@@ -4623,7 +4623,7 @@ mod tests {
         let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         node.event_sender()
-            .send(crate::event::Event::Query(
+            .send(crate::event::Event::query(
                 QueryRequest::RestoreKnownDestination(crate::event::KnownDestinationEntry {
                     dest_hash,
                     identity_hash: *identity.hash(),
