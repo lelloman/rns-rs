@@ -2,7 +2,7 @@
 //!
 //! Matches Python `TCPClientInterface` from `TCPInterface.py`.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
@@ -11,11 +11,9 @@ use std::time::Duration;
 
 use rns_core::transport::types::InterfaceId;
 
-use crate::event::{Event, EventSender};
+use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
-use crate::interface::{
-    lock_or_recover, poll_readable, wait_while_active, ListenerControl, Writer,
-};
+use crate::interface::{lock_or_recover, wait_while_active, ListenerControl, Writer};
 
 /// Upstream `TCPInterface.HW_MTU`.
 const HW_MTU: usize = 262_144;
@@ -246,30 +244,24 @@ fn start_with_ifac_control(
     underlay_mark: Option<u32>,
 ) -> io::Result<(Box<dyn Writer>, ListenerControl)> {
     let stream = try_connect(&config, underlay_mark)?;
-    let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
 
     let id = config.interface_id;
     // Initial connect: writer is None because it's returned directly to the caller
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
-    // Spawn reader thread
-    let reader_config = config;
-    let reader_tx = tx;
     let control = ListenerControl::new();
-    let reader_control = control.clone();
-    thread::Builder::new()
-        .name(format!("tcp-reader-{}", id.0))
-        .spawn(move || {
-            reader_loop(
-                reader_stream,
-                reader_config,
-                reader_tx,
-                ifac_size,
-                underlay_mark,
-                reader_control,
-            );
-        })?;
+    let link = Arc::new(ClientLink {
+        config,
+        tx,
+        ifac_size,
+        underlay_mark,
+        control: control.clone(),
+    });
+    if let Err(error) = link.serve(stream) {
+        let _ = link.tx.send(Event::InterfaceDown(id));
+        return Err(error);
+    }
 
     Ok((
         Box::new(TcpWriter {
@@ -280,104 +272,197 @@ fn start_with_ifac_control(
     ))
 }
 
-/// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
-/// On disconnect, attempts reconnection.
-fn reader_loop(
-    mut stream: TcpStream,
+/// Bytes read from one stream socket per readiness before other sources
+/// get a turn; the socket is re-armed and served again on the next pass.
+pub(crate) const STREAM_READ_BUDGET: usize = 256 * 1024;
+
+/// How a read pass over a stream socket ended.
+pub(crate) enum StreamRead {
+    /// The socket is drained or the read budget is spent: watch it again.
+    Rearm,
+    /// Inbound data is full: read again once the driver has drained it, so
+    /// TCP flow control slows the sender meanwhile.
+    Suspend,
+    /// The peer closed the connection.
+    Closed,
+    Failed(io::Error),
+    /// The driver is gone.
+    DriverGone,
+}
+
+/// Read a readable stream socket on the driver thread until it is empty or
+/// [`STREAM_READ_BUDGET`] is spent, and queue the frames decoded from it.
+/// Reads nothing while inbound data is full, so data queued past capacity
+/// is bounded by one read per socket.
+pub(crate) fn read_stream_frames(
+    fd: std::os::fd::RawFd,
+    decoder: &mut hdlc::Decoder,
+    cx: &mut LoopContext<'_>,
+    tx: &EventSender,
+    id: InterfaceId,
+    name: &str,
+) -> StreamRead {
+    if !tx.inbound_data_has_room() {
+        return StreamRead::Suspend;
+    }
+    let mut read = 0;
+    while read < STREAM_READ_BUDGET {
+        // SAFETY: `cx.buf` is a valid writable buffer for the call.
+        // MSG_DONTWAIT keeps the socket's own mode untouched.
+        let n = unsafe {
+            libc::recv(
+                fd,
+                cx.buf.as_mut_ptr().cast(),
+                cx.buf.len(),
+                libc::MSG_DONTWAIT,
+            )
+        };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            match e.kind() {
+                io::ErrorKind::WouldBlock => return StreamRead::Rearm,
+                io::ErrorKind::Interrupted => continue,
+                _ => return StreamRead::Failed(e),
+            }
+        }
+        if n == 0 {
+            return StreamRead::Closed;
+        }
+        let n = n as usize;
+        read += n;
+        let decoded = decoder.feed_with_diagnostics(&cx.buf[..n]);
+        for frame_len in decoded.invalid_frame_lengths {
+            log::debug!(
+                "[{}] invalid HDLC frame of {} bytes received on interface {}, dropping frame",
+                name,
+                frame_len,
+                id.0,
+            );
+        }
+        let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
+            interface_id: id,
+            data: frame,
+            rssi: None,
+            snr: None,
+        });
+        match tx.push_from_loop(frames) {
+            Ok(true) => {}
+            Ok(false) => return StreamRead::Suspend,
+            Err(_) => return StreamRead::DriverGone,
+        }
+    }
+    StreamRead::Rearm
+}
+
+/// What a client connection needs across reconnects.
+struct ClientLink {
     config: TcpClientConfig,
     tx: EventSender,
     ifac_size: usize,
     underlay_mark: Option<u32>,
     control: ListenerControl,
-) {
-    let id = config.interface_id;
-    let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-    let mut buf = vec![0u8; 64 * 1024];
+}
 
-    loop {
-        if control.should_stop() {
-            return;
+impl ClientLink {
+    /// Read `stream` on the driver thread from now on.
+    fn serve(self: &Arc<Self>, stream: TcpStream) -> io::Result<()> {
+        let source = ReaderSource {
+            stream,
+            decoder: hdlc::Decoder::reticulum(HW_MTU, self.ifac_size),
+            link: Arc::clone(self),
+        };
+        self.tx.register_source(
+            crate::interface::loop_writer::read_key(self.config.interface_id),
+            Box::new(source),
+        )
+    }
+
+    /// Report the connection down and reconnect on a thread of its own,
+    /// which exits once the new connection is served on the driver (or
+    /// reconnecting gives up or is stopped).
+    fn connection_lost(self: &Arc<Self>) {
+        let id = self.config.interface_id;
+        let _ = self.tx.push_from_loop([Event::InterfaceDown(id)]);
+        let link = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name(format!("tcp-reconn-{}", id.0))
+            .spawn(move || link.reconnect_loop());
+        if let Err(error) = spawned {
+            log::error!(
+                "[{}] cannot start reconnecting, giving up: {}",
+                self.config.name,
+                error
+            );
         }
-        match poll_readable(stream.as_raw_fd(), Duration::from_millis(200)) {
-            Ok(false) => continue,
-            Ok(true) => {}
-            Err(error) => {
-                if control.should_stop() {
-                    return;
+    }
+
+    fn reconnect_loop(self: Arc<Self>) {
+        loop {
+            let Some(stream) = reconnect(&self.config, &self.tx, self.underlay_mark, &self.control)
+            else {
+                if !self.control.should_stop() {
+                    log::error!("[{}] reconnection failed, giving up", self.config.name);
                 }
-                log::warn!("[{}] TCP poll error: {}", config.name, error);
-                let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx, underlay_mark, &control) {
-                    Some(new_stream) => {
-                        stream = new_stream;
-                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-                        continue;
-                    }
-                    None => return,
-                }
-            }
-        }
-        match stream.read(&mut buf) {
-            Ok(0) => {
-                if control.should_stop() {
-                    return;
-                }
-                // Connection closed by peer
-                log::warn!("[{}] connection closed", config.name);
-                let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx, underlay_mark, &control) {
-                    Some(new_stream) => {
-                        stream = new_stream;
-                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-                        continue;
-                    }
-                    None => {
-                        log::error!("[{}] reconnection failed, giving up", config.name);
-                        return;
-                    }
-                }
-            }
-            Ok(n) => {
-                let decoded = decoder.feed_with_diagnostics(&buf[..n]);
-                for frame_len in decoded.invalid_frame_lengths {
-                    log::debug!(
-                        "[{}] invalid HDLC frame of {} bytes received, dropping frame",
-                        config.name,
-                        frame_len,
+                return;
+            };
+            match self.serve(stream) {
+                Ok(()) => return,
+                Err(error) => {
+                    log::warn!(
+                        "[{}] cannot read the new connection: {}",
+                        self.config.name,
+                        error
                     );
-                }
-                // One queue lock for every frame decoded from this read.
-                let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
-                    interface_id: id,
-                    data: frame,
-                    rssi: None,
-                    snr: None,
-                });
-                if tx.send_batch(frames).is_err() {
-                    // Driver shut down
-                    return;
+                    let _ = self.tx.send(Event::InterfaceDown(self.config.interface_id));
                 }
             }
-            // Retry without dropping the connection or a partially decoded frame.
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => {
-                if control.should_stop() {
-                    return;
-                }
-                log::warn!("[{}] read error: {}", config.name, e);
-                let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx, underlay_mark, &control) {
-                    Some(new_stream) => {
-                        stream = new_stream;
-                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-                        continue;
-                    }
-                    None => {
-                        log::error!("[{}] reconnection failed, giving up", config.name);
-                        return;
-                    }
-                }
+        }
+    }
+}
+
+/// The connected socket, read on the driver thread.
+struct ReaderSource {
+    stream: TcpStream,
+    decoder: hdlc::Decoder,
+    link: Arc<ClientLink>,
+}
+
+impl LoopSource for ReaderSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    fn stopped(&self) -> bool {
+        self.link.control.should_stop()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        let link = &self.link;
+        if link.control.should_stop() {
+            return SourceStatus::Remove;
+        }
+        let name = &link.config.name;
+        match read_stream_frames(
+            self.stream.as_raw_fd(),
+            &mut self.decoder,
+            cx,
+            &link.tx,
+            link.config.interface_id,
+            name,
+        ) {
+            StreamRead::Rearm => SourceStatus::Rearm,
+            StreamRead::Suspend => SourceStatus::Suspend,
+            StreamRead::Closed => {
+                log::warn!("[{}] connection closed", name);
+                link.connection_lost();
+                SourceStatus::Remove
             }
+            StreamRead::Failed(error) => {
+                log::warn!("[{}] read error: {}", name, error);
+                link.connection_lost();
+                SourceStatus::Remove
+            }
+            StreamRead::DriverGone => SourceStatus::Remove,
         }
     }
 }
@@ -546,29 +631,85 @@ pub(crate) fn tcp_client_runtime_handle_from_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn detach_stops_idle_tcp_reader_without_reconnect() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let (tx, rx) = crate::event::channel();
         let control = ListenerControl::new();
-        let reader_control = control.clone();
-        let config = TcpClientConfig {
-            name: "detach-test".into(),
-            interface_id: InterfaceId(75),
-            ..Default::default()
-        };
-
-        let reader =
-            thread::spawn(move || reader_loop(server, config, tx, 0, None, reader_control));
-        thread::sleep(Duration::from_millis(50));
+        let link = Arc::new(ClientLink {
+            config: TcpClientConfig {
+                name: "detach-test".into(),
+                interface_id: InterfaceId(75),
+                ..Default::default()
+            },
+            tx,
+            ifac_size: 0,
+            underlay_mark: None,
+            control: control.clone(),
+        });
+        link.serve(server).unwrap();
         control.request_stop();
-        reader.join().unwrap();
-        drop(client);
+        rx.sweep_stopped_sources();
+
+        // The reader closed its socket and did not report or reconnect.
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = [0u8; 1];
+        assert_eq!(std::io::Read::read(&mut client, &mut buf).unwrap(), 0);
         assert!(rx.try_recv().is_err());
+        drop(link);
     }
+
+    #[test]
+    fn a_reconnected_client_is_read_on_the_receiving_thread() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, rx) = crate::event::channel();
+        let config = TcpClientConfig {
+            interface_id: InterfaceId(76),
+            ..make_config(port)
+        };
+        let _writer = start(config, tx).unwrap();
+        let (first, _) = listener.accept().unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Event::InterfaceUp(InterfaceId(76), None, _)
+        ));
+        drop(first);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceDown(InterfaceId(76))
+        ));
+        let (mut second, _) = listener.accept().unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(76), Some(_), _)
+        ));
+        let payload: Vec<u8> = (0..32).collect();
+        second.write_all(&hdlc::frame(&payload)).unwrap();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame { data, .. } => assert_eq!(data, payload),
+            other => panic!("expected Frame, got {:?}", other),
+        }
+        // The reconnect thread exits once the new socket is served here.
+        let reconnecting = || {
+            std::fs::read_dir("/proc/self/task")
+                .unwrap()
+                .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("comm")).ok())
+                .any(|name| name.trim_end() == "tcp-reconn-76")
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while reconnecting() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!reconnecting());
+    }
+
     use std::net::TcpListener;
     use std::time::Duration;
 

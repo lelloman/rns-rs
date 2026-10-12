@@ -15,6 +15,7 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
+use crate::interface::tcp::{read_stream_frames, StreamRead};
 use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
 /// Upstream `TCPInterface.HW_MTU` inherited by spawned server clients.
@@ -152,10 +153,6 @@ fn start_with_template(
 
 /// Connections accepted per readiness before other sources get a turn.
 const ACCEPT_BURST: usize = 64;
-
-/// Bytes read from one client per readiness before other sources get a
-/// turn; the client is re-armed and served again on the next pass.
-const CLIENT_READ_BUDGET: usize = 256 * 1024;
 
 /// The listening socket, served on the driver thread: accepts clients,
 /// registers them with the driver and adds a source per client.
@@ -411,67 +408,28 @@ impl LoopSource for ClientSource {
         if self.control.should_stop() {
             return SourceStatus::Remove;
         }
-        // Read nothing while inbound data is full, so data queued past
-        // capacity is bounded by one read per client.
-        if !self.tx.inbound_data_has_room() {
-            return SourceStatus::Suspend;
-        }
-        let mut read = 0;
-        while read < CLIENT_READ_BUDGET {
-            // SAFETY: `cx.buf` is a valid writable buffer for the call.
-            // MSG_DONTWAIT keeps the socket's own mode untouched.
-            let n = unsafe {
-                libc::recv(
-                    self.stream.as_raw_fd(),
-                    cx.buf.as_mut_ptr().cast(),
-                    cx.buf.len(),
-                    libc::MSG_DONTWAIT,
-                )
-            };
-            if n < 0 {
-                let e = io::Error::last_os_error();
-                match e.kind() {
-                    io::ErrorKind::WouldBlock => return SourceStatus::Rearm,
-                    io::ErrorKind::Interrupted => continue,
-                    _ => {
-                        log::warn!("[{}] client {} read error: {}", self.name, self.id.0, e);
-                        let _ = self.tx.push_from_loop([Event::InterfaceDown(self.id)]);
-                        return SourceStatus::Remove;
-                    }
-                }
-            }
-            if n == 0 {
+        match read_stream_frames(
+            self.stream.as_raw_fd(),
+            &mut self.decoder,
+            cx,
+            &self.tx,
+            self.id,
+            &self.name,
+        ) {
+            StreamRead::Rearm => SourceStatus::Rearm,
+            StreamRead::Suspend => SourceStatus::Suspend,
+            StreamRead::Closed => {
                 log::info!("[{}] client {} disconnected", self.name, self.id.0);
                 let _ = self.tx.push_from_loop([Event::InterfaceDown(self.id)]);
-                return SourceStatus::Remove;
+                SourceStatus::Remove
             }
-            let n = n as usize;
-            read += n;
-            let decoded = self.decoder.feed_with_diagnostics(&cx.buf[..n]);
-            for frame_len in decoded.invalid_frame_lengths {
-                log::debug!(
-                    "[{}] invalid HDLC frame of {} bytes received from client {}, dropping frame",
-                    self.name,
-                    frame_len,
-                    self.id.0,
-                );
+            StreamRead::Failed(e) => {
+                log::warn!("[{}] client {} read error: {}", self.name, self.id.0, e);
+                let _ = self.tx.push_from_loop([Event::InterfaceDown(self.id)]);
+                SourceStatus::Remove
             }
-            let id = self.id;
-            let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
-                interface_id: id,
-                data: frame,
-                rssi: None,
-                snr: None,
-            });
-            match self.tx.push_from_loop(frames) {
-                Ok(true) => {}
-                // Inbound data is full: stop reading until the driver has
-                // caught up, so TCP flow control slows the sender.
-                Ok(false) => return SourceStatus::Suspend,
-                Err(_) => return SourceStatus::Remove,
-            }
+            StreamRead::DriverGone => SourceStatus::Remove,
         }
-        SourceStatus::Rearm
     }
 }
 
