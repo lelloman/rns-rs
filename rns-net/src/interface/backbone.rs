@@ -28,13 +28,15 @@ use rns_core::constants;
 use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
+use crate::event::{LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
 use crate::interface::loop_writer::LoopEgress;
+use crate::interface::tcp::{read_stream_frames, StreamRead};
 use crate::interface::transmit_buffer::{
     EgressController, TransmitBuffer, EGRESS_DEAD_TIME, EGRESS_HIGH_WATERMARK,
 };
 use crate::interface::{
-    lock_or_recover, poll_readable, wait_while_active, DynamicInterfaceTemplate, EgressControl,
+    lock_or_recover, wait_while_active, DynamicInterfaceTemplate, EgressControl,
     InterfaceConfigData, InterfaceFactory, ListenerControl, StartContext, StartResult, Writer,
 };
 use crate::BackbonePeerStateEntry;
@@ -1601,7 +1603,6 @@ pub(crate) fn start_client_with_ifac(
     control: ListenerControl,
 ) -> io::Result<Box<dyn Writer>> {
     let stream = try_connect_client(&config, underlay_mark)?;
-    let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
 
     let id = config.interface_id;
@@ -1615,11 +1616,17 @@ pub(crate) fn start_client_with_ifac(
     // Initial connect: writer is None because it's returned directly to the caller
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
-    thread::Builder::new()
-        .name(format!("backbone-client-{}", id.0))
-        .spawn(move || {
-            client_reader_loop(reader_stream, config, tx, ifac_size, underlay_mark, control);
-        })?;
+    let link = Arc::new(ClientLink {
+        config,
+        tx,
+        ifac_size,
+        underlay_mark,
+        control,
+    });
+    if let Err(error) = link.serve(stream) {
+        let _ = link.tx.send(Event::InterfaceDown(id));
+        return Err(error);
+    }
 
     Ok(Box::new(BackboneClientWriter {
         stream: writer_stream,
@@ -1628,105 +1635,116 @@ pub(crate) fn start_client_with_ifac(
     }))
 }
 
-/// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
-/// On disconnect, attempts reconnection. The socket intentionally remains in
-/// blocking mode: this dedicated thread owns reads, while a cloned stream and
-/// the interface writer path own writes.
-fn client_reader_loop(
-    mut stream: TcpStream,
+/// What a client connection needs across reconnects.
+struct ClientLink {
     config: BackboneClientConfig,
     tx: EventSender,
     ifac_size: usize,
     underlay_mark: Option<u32>,
     control: ListenerControl,
-) {
-    let id = config.interface_id;
-    let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-    let mut buf = [0u8; 4096];
+}
 
-    loop {
-        if control.should_stop() {
-            return;
+impl ClientLink {
+    /// Read `stream` on the driver thread from now on.
+    fn serve(self: &Arc<Self>, stream: TcpStream) -> io::Result<()> {
+        let source = ClientSource {
+            stream,
+            decoder: hdlc::Decoder::reticulum(HW_MTU, self.ifac_size),
+            link: Arc::clone(self),
+        };
+        self.tx.register_source(
+            crate::interface::loop_writer::read_key(self.config.interface_id),
+            Box::new(source),
+        )
+    }
+
+    /// Report the connection down and reconnect on a thread of its own,
+    /// which exits once the new connection is served on the driver (or
+    /// reconnecting gives up or is stopped).
+    fn connection_lost(self: &Arc<Self>) {
+        let id = self.config.interface_id;
+        let _ = self.tx.push_from_loop([Event::InterfaceDown(id)]);
+        let link = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name(format!("bb-reconn-{}", id.0))
+            .spawn(move || link.reconnect_loop());
+        if let Err(error) = spawned {
+            log::error!(
+                "[{}] cannot start reconnecting, giving up: {}",
+                self.config.name,
+                error
+            );
         }
-        match poll_readable(stream.as_raw_fd(), Duration::from_millis(200)) {
-            Ok(false) => continue,
-            Ok(true) => {}
-            Err(error) => {
-                if control.should_stop() {
-                    return;
+    }
+
+    fn reconnect_loop(self: Arc<Self>) {
+        loop {
+            let Some(stream) =
+                client_reconnect(&self.config, &self.tx, self.underlay_mark, &self.control)
+            else {
+                if !self.control.should_stop() {
+                    log::error!("[{}] reconnection failed, giving up", self.config.name);
                 }
-                log::warn!("[{}] backbone poll error: {}", config.name, error);
-                let _ = tx.send(Event::InterfaceDown(id));
-                match client_reconnect(&config, &tx, underlay_mark, &control) {
-                    Some(new_stream) => {
-                        stream = new_stream;
-                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-                        continue;
-                    }
-                    None => return,
-                }
-            }
-        }
-        match stream.read(&mut buf) {
-            Ok(0) => {
-                if control.should_stop() {
-                    return;
-                }
-                log::warn!("[{}] connection closed", config.name);
-                let _ = tx.send(Event::InterfaceDown(id));
-                match client_reconnect(&config, &tx, underlay_mark, &control) {
-                    Some(new_stream) => {
-                        stream = new_stream;
-                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-                        continue;
-                    }
-                    None => {
-                        log::error!("[{}] reconnection failed, giving up", config.name);
-                        return;
-                    }
-                }
-            }
-            Ok(n) => {
-                let decoded = decoder.feed_with_diagnostics(&buf[..n]);
-                for frame_len in decoded.invalid_frame_lengths {
-                    log::debug!(
-                        "[{}] invalid HDLC frame of {} bytes received, dropping frame",
-                        config.name,
-                        frame_len,
+                return;
+            };
+            match self.serve(stream) {
+                Ok(()) => return,
+                Err(error) => {
+                    log::warn!(
+                        "[{}] cannot read the new connection: {}",
+                        self.config.name,
+                        error
                     );
-                }
-                for frame in decoded.frames {
-                    if tx
-                        .send(Event::Frame {
-                            interface_id: id,
-                            data: frame,
-                            rssi: None,
-                            snr: None,
-                        })
-                        .is_err()
-                    {
-                        return;
-                    }
+                    let _ = self.tx.send(Event::InterfaceDown(self.config.interface_id));
                 }
             }
-            Err(e) => {
-                if control.should_stop() {
-                    return;
-                }
-                log::warn!("[{}] read error: {}", config.name, e);
-                let _ = tx.send(Event::InterfaceDown(id));
-                match client_reconnect(&config, &tx, underlay_mark, &control) {
-                    Some(new_stream) => {
-                        stream = new_stream;
-                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-                        continue;
-                    }
-                    None => {
-                        log::error!("[{}] reconnection failed, giving up", config.name);
-                        return;
-                    }
-                }
+        }
+    }
+}
+
+/// The connected client socket, read on the driver thread.
+struct ClientSource {
+    stream: TcpStream,
+    decoder: hdlc::Decoder,
+    link: Arc<ClientLink>,
+}
+
+impl LoopSource for ClientSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    fn stopped(&self) -> bool {
+        self.link.control.should_stop()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        let link = &self.link;
+        if link.control.should_stop() {
+            return SourceStatus::Remove;
+        }
+        let name = &link.config.name;
+        match read_stream_frames(
+            self.stream.as_raw_fd(),
+            &mut self.decoder,
+            cx,
+            &link.tx,
+            link.config.interface_id,
+            name,
+        ) {
+            StreamRead::Rearm => SourceStatus::Rearm,
+            StreamRead::Suspend => SourceStatus::Suspend,
+            StreamRead::Closed => {
+                log::warn!("[{}] connection closed", name);
+                link.connection_lost();
+                SourceStatus::Remove
             }
+            StreamRead::Failed(error) => {
+                log::warn!("[{}] read error: {}", name, error);
+                link.connection_lost();
+                SourceStatus::Remove
+            }
+            StreamRead::DriverGone => SourceStatus::Remove,
         }
     }
 }
@@ -3090,6 +3108,47 @@ mod tests {
         // Should get InterfaceUp again
         let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceUp(InterfaceId(9300), _, _)));
+    }
+
+    #[test]
+    fn a_reconnected_backbone_client_is_read_on_the_receiving_thread() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, rx) = crate::event::channel();
+        let _writer = start_client(make_client_config(port, 9310), tx).unwrap();
+        let (first, _) = listener.accept().unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Event::InterfaceUp(InterfaceId(9310), None, _)
+        ));
+        drop(first);
+        assert!(matches!(
+            recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap(),
+            Event::InterfaceDown(InterfaceId(9310))
+        ));
+        let (mut second, _) = listener.accept().unwrap();
+        assert!(matches!(
+            recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(9310), Some(_), _)
+        ));
+        let payload: Vec<u8> = (0..32).collect();
+        second.write_all(&hdlc::frame(&payload)).unwrap();
+        match recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap() {
+            Event::Frame { data, .. } => assert_eq!(data, payload),
+            other => panic!("expected Frame, got {:?}", other),
+        }
+        // The reconnect thread exits once the new socket is served here.
+        let reconnecting = || {
+            std::fs::read_dir("/proc/self/task")
+                .unwrap()
+                .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("comm")).ok())
+                .any(|name| name.trim_end() == "bb-reconn-9310")
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while reconnecting() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!reconnecting());
     }
 
     #[test]
