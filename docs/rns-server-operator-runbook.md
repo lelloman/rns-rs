@@ -400,6 +400,8 @@ scripts/manual-backbone-smoke.sh --daily
 
 scripts/check_upstream_drift.py
 
+# write data/daily-report-YYYY-MM-DD.md from the template below
+
 scp data/vps_daily_reports.db root@vps-eu:/var/lib/rns-node/vps_daily_reports.db
 ```
 
@@ -461,6 +463,87 @@ The report database stores the stable host key in the `host` column, so use the
 aliases above instead of raw IP addresses. This daily report database is
 separate from each node's live `/var/lib/rns-node/stats.db`, which is read by
 the report script but is not copied between hosts.
+
+#### Daily Report Output Template
+
+Write the reviewed result to `data/daily-report-YYYY-MM-DD.md` using the
+structure below. Replace every `<...>` placeholder and keep one value column per
+host. Keep the `Upstream parity` block whenever commits are visible or a refresh
+failed; when upstream is current, say so and omit the block. The report must be
+able to stand alone: a reader should not need the shell session to understand
+what was checked or what it means.
+
+````markdown
+# Daily VPS report — <YYYY-MM-DD>
+
+Completed according to `docs/rns-server-operator-runbook.md`. Fresh EU snapshot:
+<HH:MM:SS> UTC; fresh US snapshot: <HH:MM:SS> UTC. Both nodes were healthy with
+all three supervised children ready and all discovered public interfaces up
+(<EU up>/<EU total> and <US up>/<US total>). Each host has a single same-day
+snapshot with no duplicate rows. <State plainly whether the run deployed,
+restarted, or reconfigured anything; if not, say so.>
+
+## Host snapshots
+
+| Metric | vps-eu | vps-us |
+| --- | ---: | ---: |
+| Public interfaces up | <up/total> | <up/total> |
+| Announcements recorded, rolling 24h | <n> | <n> |
+| Announcements recorded, last 1h | <n> | <n> |
+| Packet observations RX / TX, rolling 24h | <rx> / <tx> | <rx> / <tx> |
+| Observed traffic RX / TX, decimal GB | <rx> / <tx> | <rx> / <tx> |
+| Memory used / total, MB | <used> / <total> | <used> / <total> |
+| Memory available, MB | <n> | <n> |
+| Swap used, MB | <n> | <n> |
+| Load, 1 / 5 / 15 minutes | <l1> / <l5> / <l15> | <l1> / <l5> / <l15> |
+| Provider drops / disconnects, 24h | <n> / <n> | <n> / <n> |
+| Idle timeouts, 24h | <n> | <n> |
+| Maximum packet-freshness age, seconds | <n> | <n> |
+| Established port-4242 sessions | <n> | <n> |
+| Active blacklist entries | <active> (<total> total) | <active> (<total> total) |
+| Backbone / named peers up | <n> / <n> | <n> / <n> |
+| Service uptime | <...> | <...> |
+| Transport uptime | <...> | <...> |
+| Installed commit (server and ctl) | <short sha> | <short sha> |
+
+<Note that packet totals count observations across interfaces, whether all 16
+traffic queries succeeded or a `-1` sentinel was recorded, and the
+`integrity_check` and `vps_history_dashboard.py --check` results. Name each
+host's primary peer and whether it was up.>
+
+## Version drift
+
+<State each host's installed server and ctl versions, which of `origin/master`
+and `origin/dev` each matches, and the commit the local smoke binary was built
+from. Say explicitly whether any deployed binary was replaced.>
+
+## Live Backbone daily stress test
+
+<State PASS/FAIL and the impairment profile, then the four Resource sizes with
+timings, the Link stress result, and the forced reconnect result. Record the
+disposable node workdir and where the passing output was captured.>
+
+## Upstream parity
+
+```text
+Upstream parity: <current|drift|behind|incomplete>
+Accepted baseline: <40-character commit>
+GitHub tip: <40-character commit> (<state>; <fresh|cached>)
+rgit tip: <40-character commit> (<state>; <fresh|cached>)
+Commits ahead: <deduplicated count>
+Active audit: docs/upstream-parity/reticulum-next-audit.md
+```
+
+<State whether both refreshes succeeded, whether the commit inventory changed,
+and whether the active audit was extended or recreated. State mapping-commit and
+promotion status.>
+
+## Publication
+
+<State the pre-collection database contents, the review outcome, and that the
+database was uploaded to `vps-eu`. Give the matching local and remote SHA-256
+and the local working copy path.>
+````
 
 ### Historical VPS Dashboard
 
