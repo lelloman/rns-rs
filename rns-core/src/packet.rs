@@ -225,17 +225,27 @@ impl RawPacket {
 
     /// Unpack raw bytes into fields.
     pub fn unpack(raw: &[u8]) -> Result<Self, PacketError> {
-        Self::unpack_with::<true>(raw)
+        Self::unpack_with::<true, _>(raw)
     }
 
-    /// Unpack raw bytes into fields, leaving `packet_hash` zeroed. Callers
-    /// must hash the packet with [`RawPacket::hash_in_place`] before anything
-    /// reads `packet_hash`.
-    pub(crate) fn unpack_unhashed(raw: &[u8]) -> Result<Self, PacketError> {
-        Self::unpack_with::<false>(raw)
+    /// Unpack wire bytes the caller owns, keeping them as `raw` instead of
+    /// copying them.
+    pub fn unpack_owned(raw: Vec<u8>) -> Result<Self, PacketError> {
+        Self::unpack_with::<true, _>(raw)
     }
 
-    fn unpack_with<const HASH: bool>(raw: &[u8]) -> Result<Self, PacketError> {
+    /// Unpack owned wire bytes into fields, leaving `packet_hash` zeroed.
+    /// Callers must hash the packet with [`RawPacket::hash_in_place`] before
+    /// anything reads `packet_hash`.
+    pub(crate) fn unpack_unhashed(raw: Vec<u8>) -> Result<Self, PacketError> {
+        Self::unpack_with::<false, _>(raw)
+    }
+
+    fn unpack_with<const HASH: bool, B>(input: B) -> Result<Self, PacketError>
+    where
+        B: AsRef<[u8]> + Into<Vec<u8>>,
+    {
+        let raw = input.as_ref();
         if raw.len() < constants::HEADER_MINSIZE {
             return Err(PacketError::TooShort);
         }
@@ -280,7 +290,7 @@ impl RawPacket {
                 destination_hash,
                 context,
                 data,
-                raw: raw.to_vec(),
+                raw: input.into(),
                 packet_hash,
                 rssi: None,
                 snr: None,
@@ -314,7 +324,7 @@ impl RawPacket {
                 destination_hash,
                 context,
                 data,
-                raw: raw.to_vec(),
+                raw: input.into(),
                 packet_hash,
                 rssi: None,
                 snr: None,

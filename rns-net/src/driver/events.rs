@@ -122,7 +122,8 @@ impl Driver {
             data
         };
 
-        let decoded_packet = match self.engine.decode_inbound(&packet) {
+        // The decoded packet keeps the frame's bytes as its `raw`.
+        let decoded_packet = match self.engine.decode_inbound(packet) {
             Ok(packet) => packet,
             Err(_) => {
                 if let Some(entry) = self.interfaces.get_mut(&interface_id) {
@@ -134,14 +135,16 @@ impl Driver {
         if let Some(packet_hash) = decoded_packet.packet_hash() {
             self.engine.prefetch_packet_hash(packet_hash);
         }
-        if !self.admit_decoded_inbound(interface_id, packet.len(), &decoded_packet) {
+        let packet_len = decoded_packet.packet().raw.len();
+        if !self.admit_decoded_inbound(interface_id, packet_len, &decoded_packet) {
             return;
         }
 
         #[cfg(feature = "hooks")]
-        let (packet, decoded_packet) = if !self.hooks_attached(HookPoint::PreIngress) {
-            (packet, decoded_packet)
+        let decoded_packet = if !self.hooks_attached(HookPoint::PreIngress) {
+            decoded_packet
         } else {
+            let packet = &decoded_packet.packet().raw;
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
                 hops: if packet.len() > 1 { packet[1] } else { 0 },
@@ -154,7 +157,7 @@ impl Driver {
             };
             let ctx = HookContext::Packet {
                 ctx: &pkt_ctx,
-                raw: &packet,
+                raw: packet,
             };
             let now = time::now();
             let engine_ref = EngineRef {
@@ -178,22 +181,24 @@ impl Driver {
                 outcome = self.packet_hook_outcome(HookPoint::PreIngress, e, max_len);
             }
             match outcome {
-                PacketHookOutcome::Keep => (packet, decoded_packet),
+                PacketHookOutcome::Keep => decoded_packet,
                 PacketHookOutcome::Drop => return,
                 PacketHookOutcome::Replace(replacement) => {
                     // Decode the replacement afresh and hold it to the same
                     // admission checks as a received packet.
-                    let Ok(decoded) = DecodedPacket::unpack(&replacement.raw) else {
+                    let replacement_len = replacement.raw.len();
+                    let Ok(decoded) = DecodedPacket::unpack_owned(replacement.raw) else {
                         return;
                     };
-                    if !self.admit_decoded_inbound(interface_id, replacement.raw.len(), &decoded) {
+                    if !self.admit_decoded_inbound(interface_id, replacement_len, &decoded) {
                         return;
                     }
-                    (replacement.raw, decoded)
+                    decoded
                 }
             }
         };
 
+        let packet = &decoded_packet.packet().raw;
         if packet.len() > 2 && (packet[0] & 0x03) == 0x01 {
             let now = time::now();
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
@@ -239,6 +244,11 @@ impl Driver {
             }
         }
 
+        // The engine consumes the packet; the hooks after it need the bytes.
+        #[cfg(feature = "hooks")]
+        let dispatch_hook_packet = self
+            .hooks_attached(HookPoint::PreDispatch)
+            .then(|| decoded_packet.packet().raw.clone());
         let inbound_frame = DecodedInboundFrame {
             decoded: decoded_packet,
             iface: interface_id,
@@ -279,7 +289,7 @@ impl Driver {
         }
 
         #[cfg(feature = "hooks")]
-        if self.hooks_attached(HookPoint::PreDispatch) {
+        if let Some(packet) = dispatch_hook_packet {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
                 hops: if packet.len() > 1 { packet[1] } else { 0 },

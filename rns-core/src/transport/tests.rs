@@ -4782,7 +4782,7 @@ fn relayed_link_traffic_forwards_identically_without_its_hash() {
         let mut deferring = relay_with_validated_link(link_id);
         let mut hashing = relay_with_validated_link(link_id);
 
-        let decoded = deferring.decode_inbound(&packet.raw).unwrap();
+        let decoded = deferring.decode_inbound(packet.raw.clone()).unwrap();
         let deferred = deferred_contexts.contains(&context);
         assert_eq!(
             decoded.packet_hash().is_none(),
@@ -4795,7 +4795,7 @@ fn relayed_link_traffic_forwards_identically_without_its_hash() {
 
         // Twice: a repeat must be treated the same way by both engines.
         for now in [1001.0, 1002.0] {
-            let decoded = deferring.decode_inbound(&packet.raw).unwrap();
+            let decoded = deferring.decode_inbound(packet.raw.clone()).unwrap();
             let unhashed = handle_decoded_at(&mut deferring, decoded, now);
             let decoded = DecodedPacket::unpack(&packet.raw).unwrap();
             let hashed = handle_decoded_at(&mut hashing, decoded, now);
@@ -4839,7 +4839,7 @@ fn deferred_hash_is_computed_when_routing_changes_before_handling() {
     // The link becomes this node's own: the packet must be delivered with
     // its real hash.
     let mut engine = relay_with_validated_link(link_id);
-    let decoded = engine.decode_inbound(&packet.raw).unwrap();
+    let decoded = engine.decode_inbound(packet.raw.clone()).unwrap();
     assert!(decoded.packet_hash().is_none());
     engine.register_destination(link_id, constants::DESTINATION_LINK);
     let actions = handle_decoded_at(&mut engine, decoded, 1001.0);
@@ -4853,7 +4853,7 @@ fn deferred_hash_is_computed_when_routing_changes_before_handling() {
     // handled exactly as a hashed one.
     let mut deferring = relay_with_validated_link(link_id);
     let mut hashing = relay_with_validated_link(link_id);
-    let decoded = deferring.decode_inbound(&packet.raw).unwrap();
+    let decoded = deferring.decode_inbound(packet.raw.clone()).unwrap();
     assert!(decoded.packet_hash().is_none());
     deferring.link_table.remove(&link_id);
     hashing.link_table.remove(&link_id);
@@ -4879,11 +4879,11 @@ fn own_link_traffic_is_always_hashed() {
     let packet = link_data_packet(&link_id, constants::CONTEXT_RESOURCE, b"resource part");
     let mut engine = relay_with_validated_link(link_id);
     engine.register_destination(link_id, constants::DESTINATION_LINK);
-    let decoded = engine.decode_inbound(&packet.raw).unwrap();
+    let decoded = engine.decode_inbound(packet.raw.clone()).unwrap();
     assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
 
     let mut engine = TransportEngine::new(make_config(true));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
-    let decoded = engine.decode_inbound(&packet.raw).unwrap();
+    let decoded = engine.decode_inbound(packet.raw.clone()).unwrap();
     assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
 }

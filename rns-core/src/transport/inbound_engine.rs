@@ -46,7 +46,7 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
     ) -> Vec<TransportAction> {
-        let Ok(decoded) = self.decode_inbound(frame.raw) else {
+        let Ok(decoded) = self.decode_inbound(frame.raw.to_vec()) else {
             return Vec::new();
         };
         self.handle_decoded_inbound_with_announce_queue(
@@ -70,7 +70,11 @@ impl TransportEngine {
     /// [`DecodedPacket::packet_hash`] reports whether hashing was deferred.
     ///
     /// [`handle_decoded_inbound_with_announce_queue`]: Self::handle_decoded_inbound_with_announce_queue
-    pub fn decode_inbound(&self, raw: &[u8]) -> Result<DecodedPacket, crate::packet::PacketError> {
+    /// It takes ownership of the wire bytes, which the decoded packet keeps.
+    pub fn decode_inbound(
+        &self,
+        raw: Vec<u8>,
+    ) -> Result<DecodedPacket, crate::packet::PacketError> {
         // Only link data qualifies; decode everything else directly.
         let flags = raw
             .first()
@@ -79,7 +83,7 @@ impl TransportEngine {
             flags.packet_type == constants::PACKET_TYPE_DATA
                 && flags.destination_type == constants::DESTINATION_LINK
         }) {
-            return DecodedPacket::unpack(raw);
+            return DecodedPacket::unpack_owned(raw);
         }
         let mut packet = RawPacket::unpack_unhashed(raw)?;
         let hash_deferred = self.forwards_link_packet_unhashed(&packet);

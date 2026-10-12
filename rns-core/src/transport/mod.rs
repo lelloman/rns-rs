@@ -121,10 +121,19 @@ pub struct DecodedPacket {
 
 impl DecodedPacket {
     pub fn unpack(raw: &[u8]) -> Result<Self, crate::packet::PacketError> {
-        RawPacket::unpack(raw).map(|packet| Self {
+        RawPacket::unpack(raw).map(Self::hashed)
+    }
+
+    /// Decode wire bytes the caller owns without copying them.
+    pub fn unpack_owned(raw: Vec<u8>) -> Result<Self, crate::packet::PacketError> {
+        RawPacket::unpack_owned(raw).map(Self::hashed)
+    }
+
+    fn hashed(packet: RawPacket) -> Self {
+        Self {
             packet,
             hash_deferred: false,
-        })
+        }
     }
 
     /// The decoded fields. Its `packet_hash` is zeroed when hashing was
