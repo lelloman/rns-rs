@@ -959,9 +959,9 @@ impl Driver {
                 &mut self.rng,
             );
             if link_actions.is_empty() {
-                if let Ok(packet) = RawPacket::unpack(&raw) {
+                if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
                     if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                        self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                        self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
                         return;
                     }
                 }
@@ -975,9 +975,11 @@ impl Driver {
                 self.dispatch_link_actions(link_actions);
             }
         } else {
-            if let Ok(packet) = RawPacket::unpack(&raw) {
+            // Every transported proof is also offered to local receipts. The
+            // header carries all the check needs; the packet hash is known.
+            if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
                 if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                    self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                    self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
                     return;
                 }
             }

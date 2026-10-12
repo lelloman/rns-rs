@@ -5,6 +5,7 @@ use rns_core::{constants, packet::PacketFlags};
 pub(crate) struct PacketHeader<'a> {
     pub flags: PacketFlags,
     pub destination_hash: &'a [u8],
+    pub data: &'a [u8],
 }
 
 impl<'a> PacketHeader<'a> {
@@ -29,6 +30,7 @@ impl<'a> PacketHeader<'a> {
         Some(Self {
             flags,
             destination_hash: &raw[destination_start..destination_end],
+            data: &raw[destination_end + 1..],
         })
     }
 }
@@ -64,6 +66,7 @@ mod tests {
                     if let (Some(header), Ok(full)) = (header, full) {
                         assert_eq!(header.flags, full.flags);
                         assert_eq!(header.destination_hash, full.destination_hash);
+                        assert_eq!(header.data, full.data.as_slice());
                     }
                 }
             }
