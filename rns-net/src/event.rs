@@ -100,6 +100,17 @@ pub(crate) trait LoopSource: Send {
     fn on_abandoned(&mut self) {
         self.on_removed();
     }
+    /// When [`LoopSource::on_timer`] should next run, if ever. Read when the
+    /// source is registered and after each of its callbacks; the receiver
+    /// waits no longer than the earliest deadline.
+    fn deadline(&self) -> Option<Instant> {
+        None
+    }
+    /// Called once [`LoopSource::deadline`] has passed. Only
+    /// [`SourceStatus::Remove`] is acted on: read interest is left as it is.
+    fn on_timer(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
+        SourceStatus::Rearm
+    }
 }
 
 /// What to do with a source after [`LoopSource::on_ready`].
@@ -116,6 +127,9 @@ pub(crate) enum SourceStatus {
     Pause,
     /// Deregister and drop the source.
     Remove,
+    /// Keep the source but leave it unwatched: whoever made it hold (the
+    /// source's own logic, e.g. an ingress throttle) arms it again.
+    Hold,
 }
 
 pub(crate) struct LoopContext<'a> {
@@ -140,7 +154,28 @@ struct SourceRegistry {
     suspended: Vec<usize>,
     /// Sources waiting for the next tick-time resume.
     paused: Vec<usize>,
+    /// Timer deadlines of the sources that have one.
+    deadlines: HashMap<usize, Instant>,
     buf: Vec<u8>,
+}
+
+impl SourceRegistry {
+    fn next_deadline(&self) -> Option<Instant> {
+        self.deadlines.values().min().copied()
+    }
+
+    fn set_deadline(&mut self, key: usize, deadline: Option<Instant>) {
+        match deadline {
+            Some(deadline) => {
+                self.deadlines.insert(key, deadline);
+            }
+            // Few sources have timers: skip the lookup when none does.
+            None if !self.deadlines.is_empty() => {
+                self.deadlines.remove(&key);
+            }
+            None => {}
+        }
+    }
 }
 
 struct QueuedEvent {
@@ -273,6 +308,7 @@ impl QueueShared {
         if let Err(error) = unsafe { self.poller.add(source.fd(), polling::Event::readable(key)) } {
             return Err((error, source));
         }
+        registry.set_deadline(key, source.deadline());
         registry.sources.insert(key, source);
         Ok(())
     }
@@ -850,7 +886,14 @@ impl EventReceiver {
         if self.has_prefetched() {
             return Ok(());
         }
-        self.resume_suspended();
+        let next_timer = self.resume_suspended();
+        let timeout = match next_timer {
+            Some(deadline) => {
+                let until = deadline.saturating_duration_since(Instant::now());
+                Some(timeout.map_or(until, |timeout| timeout.min(until)))
+            }
+            None => timeout,
+        };
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.has_events() || self.shared.sender_count.load(Ordering::Acquire) == 0 {
             return Ok(());
@@ -888,8 +931,9 @@ impl EventReceiver {
     }
 
     /// Sources suspended because inbound data was full read again once the
-    /// receiver is about to wait, i.e. has drained the queue.
-    fn resume_suspended(&self) {
+    /// receiver is about to wait, i.e. has drained the queue. Returns the
+    /// earliest source timer deadline.
+    fn resume_suspended(&self) -> Option<Instant> {
         let mut registry = self
             .shared
             .sources
@@ -901,6 +945,7 @@ impl EventReceiver {
                 self.shared.arm_source(key, source.as_ref());
             }
         }
+        registry.next_deadline()
     }
 
     /// Serve the loop sources `ready` reports readable. Keys of other kinds
@@ -915,8 +960,9 @@ impl EventReceiver {
         if registry.buf.is_empty() {
             registry.buf = vec![0; LOOP_READ_BUFFER];
         }
+        let mut buf = std::mem::take(&mut registry.buf);
         let mut cx = LoopContext {
-            buf: &mut registry.buf,
+            buf: &mut buf,
             added: Vec::new(),
         };
         for event in ready.iter() {
@@ -926,27 +972,58 @@ impl EventReceiver {
             let Some(mut source) = registry.sources.remove(&event.key) else {
                 continue;
             };
-            match source.on_ready(&mut cx) {
-                SourceStatus::Rearm => {
-                    self.shared.arm_source(event.key, source.as_ref());
-                    registry.sources.insert(event.key, source);
-                }
-                SourceStatus::Suspend => {
-                    registry.suspended.push(event.key);
-                    registry.sources.insert(event.key, source);
-                }
-                SourceStatus::Pause => {
-                    registry.paused.push(event.key);
-                    registry.sources.insert(event.key, source);
-                }
-                SourceStatus::Remove => self.shared.remove_source(source),
+            let status = source.on_ready(&mut cx);
+            match status {
+                SourceStatus::Rearm => self.shared.arm_source(event.key, source.as_ref()),
+                SourceStatus::Suspend => registry.suspended.push(event.key),
+                SourceStatus::Pause => registry.paused.push(event.key),
+                SourceStatus::Hold | SourceStatus::Remove => {}
+            }
+            self.keep_or_remove(registry, event.key, source, status);
+        }
+        if !registry.deadlines.is_empty() {
+            let now = Instant::now();
+            let due: Vec<usize> = registry
+                .deadlines
+                .iter()
+                .filter(|(_, deadline)| **deadline <= now)
+                .map(|(key, _)| *key)
+                .collect();
+            for key in due {
+                let Some(mut source) = registry.sources.remove(&key) else {
+                    registry.deadlines.remove(&key);
+                    continue;
+                };
+                let status = source.on_timer(&mut cx);
+                self.keep_or_remove(registry, key, source, status);
             }
         }
-        for (key, source) in std::mem::take(&mut cx.added) {
+        let added = std::mem::take(&mut cx.added);
+        registry.buf = buf;
+        for (key, source) in added {
             if let Err((error, mut source)) = self.shared.try_add_source(registry, key, source) {
                 log::warn!("failed to register a loop source: {error}");
                 source.on_abandoned();
             }
+        }
+    }
+
+    /// Put a served source back, or deregister it if it asked to be removed.
+    fn keep_or_remove(
+        &self,
+        registry: &mut SourceRegistry,
+        key: usize,
+        source: Box<dyn LoopSource>,
+        status: SourceStatus,
+    ) {
+        if status == SourceStatus::Remove {
+            registry.set_deadline(key, None);
+            registry.suspended.retain(|suspended| *suspended != key);
+            registry.paused.retain(|paused| *paused != key);
+            self.shared.remove_source(source);
+        } else {
+            registry.set_deadline(key, source.deadline());
+            registry.sources.insert(key, source);
         }
     }
 
@@ -964,6 +1041,7 @@ impl EventReceiver {
             .map(|(key, _)| *key)
             .collect();
         for key in stopped {
+            registry.deadlines.remove(&key);
             registry.suspended.retain(|suspended| *suspended != key);
             registry.paused.retain(|paused| *paused != key);
             if let Some(source) = registry.sources.remove(&key) {
@@ -1629,6 +1707,78 @@ mod tests {
             ticks += 1;
         }
         assert_eq!(ticks, 1 + 3);
+    }
+
+    /// A source that fires a timer every `interval`, queueing a tick each
+    /// time, and holds itself unwatched after its first read.
+    struct TimerSource {
+        stream: std::os::unix::net::UnixStream,
+        tx: EventSender,
+        interval: Duration,
+        next: Instant,
+        fired: Arc<AtomicUsize>,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl LoopSource for TimerSource {
+        fn fd(&self) -> std::os::fd::RawFd {
+            std::os::fd::AsRawFd::as_raw_fd(&self.stream)
+        }
+        fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            SourceStatus::Hold
+        }
+        fn deadline(&self) -> Option<Instant> {
+            Some(self.next)
+        }
+        fn on_timer(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
+            self.next = Instant::now() + self.interval;
+            if self.fired.fetch_add(1, Ordering::SeqCst) + 1 == 3 {
+                return SourceStatus::Remove;
+            }
+            self.tx.push_from_loop([Event::Tick]).unwrap();
+            SourceStatus::Rearm
+        }
+    }
+
+    #[test]
+    fn source_timers_wake_the_receiver_and_held_sources_stay_unwatched() {
+        use std::io::Write;
+        let (tx, rx) = channel();
+        let (ours, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        tx.register_source(
+            4,
+            Box::new(TimerSource {
+                stream: ours,
+                tx: tx.clone(),
+                interval: Duration::from_millis(20),
+                next: Instant::now() + Duration::from_millis(20),
+                fired: Arc::clone(&fired),
+                reads: Arc::clone(&reads),
+            }),
+        )
+        .unwrap();
+        // Nothing else is queued or readable: only the timer can end these
+        // waits, well before the timeout.
+        let started = Instant::now();
+        for _ in 0..2 {
+            assert!(matches!(
+                rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Event::Tick
+            ));
+        }
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        // A held source is not read again while its socket stays readable.
+        peer.write_all(&[1]).unwrap();
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        // The third timer removed it.
+        assert_eq!(fired.load(Ordering::SeqCst), 3);
+        assert!(rx.recv_timeout(Duration::from_millis(60)).is_err());
+        assert_eq!(fired.load(Ordering::SeqCst), 3);
     }
 
     /// A loop source that never reads its socket and pauses on every pass,

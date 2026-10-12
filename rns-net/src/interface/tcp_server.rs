@@ -222,7 +222,7 @@ impl LoopSource for ListenerSource {
 
 /// What the accept loop does after `accept` returns an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AcceptStep {
+pub(crate) enum AcceptStep {
     /// No connection is pending: wait for readiness.
     Drained,
     /// The error concerned one pending connection only: try the next one.
@@ -232,7 +232,7 @@ enum AcceptStep {
     Pause,
 }
 
-fn accept_error_step(error: &io::Error) -> AcceptStep {
+pub(crate) fn accept_error_step(error: &io::Error) -> AcceptStep {
     match error.kind() {
         io::ErrorKind::WouldBlock => AcceptStep::Drained,
         io::ErrorKind::Interrupted
@@ -415,6 +415,7 @@ impl LoopSource for ClientSource {
             &self.tx,
             self.id,
             &self.name,
+            |_, _| {},
         ) {
             StreamRead::Rearm => SourceStatus::Rearm,
             StreamRead::Suspend => SourceStatus::Suspend,

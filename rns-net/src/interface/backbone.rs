@@ -11,9 +11,9 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
+use std::io;
 #[cfg(test)]
 use std::io::Write;
-use std::io::{self, Read};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use polling::{Event as PollEvent, Events, Poller};
+use polling::Event as PollEvent;
 use socket2::{SockRef, TcpKeepalive};
 
 use rns_core::constants;
@@ -533,7 +533,8 @@ impl BackboneWriter {
     }
 }
 
-/// Start a backbone interface. Binds TCP listener, spawns poll thread.
+/// Start a backbone interface. Binds the TCP listener, which is served
+/// with its peers on the receiving (driver) thread.
 pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
     start_with_template(config, tx, next_id, None, None)
 }
@@ -558,51 +559,82 @@ fn start_with_template(
             .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], config.listen_port)))
     );
 
-    let name = config.name.clone();
-    let server_interface_id = config.interface_id;
-    let runtime = Arc::clone(&config.runtime);
-    let peer_state = Arc::clone(&config.peer_state);
-    let fast_flap = config.fast_flap;
-    let fast_flap_state = Arc::clone(&config.fast_flap_state);
-    let ingress_control = config.ingress_control;
-    let accepted_peer_mode = config.mode;
-    let accepted_peer_gravity = config.gravity;
-    let accepted_peer_recursive_prs = config.recursive_prs;
-    let accepted_peer_announces_from_internal = config.announces_from_internal;
-    let accepted_peer_announces_to_internal = config.announces_to_internal;
     let ifac_size = dynamic_template
         .as_ref()
         .and_then(|template| template.ifac.as_ref())
         .map(|ifac| ifac.size)
         .unwrap_or(0);
-    thread::Builder::new()
-        .name(format!("backbone-poll-{}", config.interface_id.0))
-        .spawn(move || {
-            if let Err(e) = poll_loop(PollLoopContext {
-                listener,
-                name,
-                server_interface_id,
-                tx,
-                next_id,
-                runtime,
-                peer_state,
-                fast_flap,
-                fast_flap_state,
-                ingress_control,
-                accepted_peer_mode,
-                accepted_peer_gravity,
-                accepted_peer_recursive_prs,
-                accepted_peer_announces_from_internal,
-                accepted_peer_announces_to_internal,
-                dynamic_template,
-                ifac_size,
-                underlay_mark,
-            }) {
-                log::error!("backbone poll loop error: {}", e);
-            }
-        })?;
+    // Queue capacities are finalized before interfaces start. Derive the
+    // ingress controller's watermarks once, before any listener can read.
+    let ingress_thresholds = ingress_thresholds(tx.inbound_queue_snapshot().capacities[0]);
+    let server = Arc::new(Server {
+        name: config.name.clone(),
+        server_interface_id: config.interface_id,
+        tx: tx.clone(),
+        next_id,
+        runtime: Arc::clone(&config.runtime),
+        peer_state: Arc::clone(&config.peer_state),
+        fast_flap: config.fast_flap,
+        fast_flap_state: Arc::clone(&config.fast_flap_state),
+        ingress_control: config.ingress_control,
+        accepted_peer_mode: config.mode,
+        accepted_peer_gravity: config.gravity,
+        accepted_peer_recursive_prs: config.recursive_prs,
+        accepted_peer_announces_from_internal: config.announces_from_internal,
+        accepted_peer_announces_to_internal: config.announces_to_internal,
+        dynamic_template,
+        ifac_size,
+        underlay_mark,
+        ingress_thresholds,
+        state: Mutex::new(ServerState {
+            clients: HashMap::new(),
+            peers: HashMap::new(),
+            ingress_snapshot_at: Instant::now(),
+        }),
+    });
+    tx.register_source(
+        crate::interface::loop_writer::read_key(config.interface_id),
+        Box::new(ListenerSource {
+            listener,
+            server,
+            next_interval: Instant::now() + DP_IC_INTERVAL,
+        }),
+    )
+}
 
-    Ok(())
+/// Connections accepted per readiness before other sources get a turn.
+const ACCEPT_BURST: usize = 64;
+
+/// A listener's configuration and the state its peers share. The listener
+/// and all its peers are served on the same thread, so `state` is never
+/// contended.
+struct Server {
+    name: String,
+    server_interface_id: InterfaceId,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    runtime: Arc<Mutex<BackboneServerRuntime>>,
+    peer_state: Arc<Mutex<BackbonePeerMonitor>>,
+    fast_flap: BackboneFastFlapConfig,
+    fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
+    ingress_control: IngressControlConfig,
+    accepted_peer_mode: u8,
+    accepted_peer_gravity: i64,
+    accepted_peer_recursive_prs: bool,
+    accepted_peer_announces_from_internal: bool,
+    accepted_peer_announces_to_internal: Option<bool>,
+    dynamic_template: Option<DynamicInterfaceTemplate>,
+    ifac_size: usize,
+    underlay_mark: Option<u32>,
+    ingress_thresholds: IngressThresholds,
+    state: Mutex<ServerState>,
+}
+
+struct ServerState {
+    /// Connected peers by poller key.
+    clients: HashMap<usize, ClientState>,
+    peers: HashMap<IpAddr, PeerBehaviorState>,
+    ingress_snapshot_at: Instant,
 }
 
 /// Per-client tracking state.
@@ -610,16 +642,331 @@ struct ClientState {
     id: InterfaceId,
     peer_ip: IpAddr,
     peer_port: u16,
-    stream: TcpStream,
-    decoder: hdlc::Decoder,
+    /// The peer's socket, owned by its source, which removes this entry
+    /// before the socket is closed.
+    fd: std::os::fd::RawFd,
     connected_at: Instant,
     has_received_data: bool,
     write_stall_flag: Arc<AtomicBool>,
+    /// The idle timeout shut the socket down; the peer source reports it
+    /// once it reads the end of the stream.
+    idle_timed_out: bool,
     dp_ingress_bytes: u64,
     dp_ingress_packets: u64,
     dp_ingress_hold: Option<Instant>,
     dp_ingress_gated: bool,
     dp_ingress_throttle_count: u64,
+}
+
+impl Server {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ServerState> {
+        lock_or_recover(&self.state, "backbone server state")
+    }
+
+    /// Take blacklist changes made through management and expire what is
+    /// due, then publish the merged view.
+    fn sync_peer_state(&self, state: &mut ServerState) {
+        let mut monitor = lock_or_recover(&self.peer_state, "backbone peer state");
+        monitor.sync_into(&mut state.peers);
+        cleanup_peer_state(&mut state.peers);
+        monitor.upsert_snapshot(&state.peers);
+    }
+
+    /// Watch a peer for readability again, or stop watching it.
+    fn set_readable(&self, key: usize, fd: std::os::fd::RawFd, readable: bool) {
+        // SAFETY: `fd` belongs to a registered peer source (see `ClientState`).
+        let source = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+        let interest = if readable {
+            PollEvent::readable(key)
+        } else {
+            PollEvent::none(key)
+        };
+        if let Err(error) = self.tx.poller().modify(source, interest) {
+            log::warn!(
+                "[{}] cannot update peer read interest: {}",
+                self.name,
+                error
+            );
+        }
+    }
+
+    /// Stop reading the peer that produced the most packets this sample
+    /// for a hold proportional to the sample span. Returns its key.
+    fn throttle_busiest_ingress(&self, state: &mut ServerState) -> Option<usize> {
+        let key = busiest_ingress_key(
+            state
+                .clients
+                .iter()
+                .map(|(key, client)| (*key, client.dp_ingress_packets)),
+        )?;
+        let allocation_divisor = state.clients.len().max(DP_IC_IF_HEADROOM) as f64 * DP_IC_PENALTY;
+        let sample_span = state.ingress_snapshot_at.elapsed();
+        let client = state.clients.get_mut(&key)?;
+        if client.dp_ingress_gated {
+            return None;
+        }
+        let hold = Duration::from_secs_f64(
+            (sample_span.as_secs_f64().max(0.001) * allocation_divisor).max(0.001),
+        );
+        client.dp_ingress_gated = true;
+        client.dp_ingress_hold = Some(Instant::now() + hold);
+        client.dp_ingress_throttle_count = client.dp_ingress_throttle_count.saturating_add(1);
+        log::info!(
+            "ingress throttled on BackboneInterface/{} for {:.3}s",
+            client.id.0,
+            hold.as_secs_f64(),
+        );
+        Some(key)
+    }
+
+    /// Resume reading one gated peer whose hold has passed.
+    fn release_one_ingress(&self, state: &mut ServerState, now: Instant) {
+        let Some((key, client)) = state.clients.iter_mut().find(|(_, client)| {
+            client.dp_ingress_gated
+                && client
+                    .dp_ingress_hold
+                    .is_none_or(|hold_until| now >= hold_until)
+        }) else {
+            return;
+        };
+        client.dp_ingress_gated = false;
+        client.dp_ingress_hold = None;
+        log::info!(
+            "released ingress throttle on BackboneInterface/{}",
+            client.id.0
+        );
+        self.set_readable(*key, client.fd, true);
+    }
+
+    /// The listener's periodic work: ingress throttling and idle timeouts.
+    fn interval(&self) {
+        let mut state = self.lock();
+        let state = &mut *state;
+        self.sync_peer_state(state);
+        let now = Instant::now();
+        if now.duration_since(state.ingress_snapshot_at) >= DP_IC_INTERVAL {
+            let height = self.tx.inbound_queue_snapshot().heights[0];
+            if height > self.ingress_thresholds.mid {
+                if let Some(key) = self.throttle_busiest_ingress(state) {
+                    self.set_readable(key, state.clients[&key].fd, false);
+                }
+            } else if height < self.ingress_thresholds.low {
+                self.release_one_ingress(state, now);
+            }
+            for client in state.clients.values_mut() {
+                client.dp_ingress_bytes = 0;
+                client.dp_ingress_packets = 0;
+            }
+            state.ingress_snapshot_at = now;
+        }
+
+        let idle_timeout = lock_or_recover(&self.runtime, "backbone runtime").idle_timeout;
+        if let Some(timeout) = idle_timeout {
+            for (key, client) in state.clients.iter_mut() {
+                if client.has_received_data
+                    || client.idle_timed_out
+                    || now.duration_since(client.connected_at) < timeout
+                {
+                    continue;
+                }
+                // The peer source reports the disconnect when it reads the
+                // end of the stream, gated or not.
+                client.idle_timed_out = true;
+                // SAFETY: the descriptor is open (see `ClientState`).
+                unsafe { libc::shutdown(client.fd, libc::SHUT_RDWR) };
+                self.set_readable(*key, client.fd, true);
+            }
+        }
+    }
+
+    /// Accept one connection; returns `false` once the driver is gone.
+    fn admit(
+        self: &Arc<Self>,
+        state: &mut ServerState,
+        stream: TcpStream,
+        peer_addr: std::net::SocketAddr,
+        cx: &mut LoopContext<'_>,
+    ) -> bool {
+        let name = &self.name;
+        if let Err(error) = super::apply_underlay_mark(stream.as_raw_fd(), self.underlay_mark) {
+            log::error!(
+                "[{}] failed to mark accepted underlay socket: {}",
+                name,
+                error
+            );
+            return true;
+        }
+        let peer_ip = peer_addr.ip();
+        let peer_port = peer_addr.port();
+
+        let fast_flap_blocked_until = lock_or_recover(
+            &self.fast_flap_state,
+            "backbone fast-flap state",
+        )
+        .blocked_until(peer_ip, &self.fast_flap, Instant::now());
+        if is_ip_blacklisted(&mut state.peers, peer_ip) || fast_flap_blocked_until.is_some() {
+            let peer = state
+                .peers
+                .entry(peer_ip)
+                .or_insert_with(PeerBehaviorState::new);
+            if let Some(blocked_until) = fast_flap_blocked_until {
+                peer.blacklisted_until = Some(blocked_until);
+                peer.blacklist_reason = Some("fast flapping".into());
+            }
+            peer.reject_count = peer.reject_count.saturating_add(1);
+            lock_or_recover(&self.peer_state, "backbone peer state").upsert_snapshot(&state.peers);
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "[{}] rejecting blocked peer {}",
+                name,
+                peer_addr,
+            );
+            return true;
+        }
+
+        let max_connections = lock_or_recover(&self.runtime, "backbone runtime").max_connections;
+        if let Some(max) = max_connections {
+            if state.clients.len() >= max {
+                log::warn!(
+                    "[{}] max connections ({}) reached, rejecting {}",
+                    name,
+                    max,
+                    peer_addr
+                );
+                return true;
+            }
+        }
+
+        stream.set_nonblocking(true).ok();
+        stream.set_nodelay(true).ok();
+        set_tcp_keepalive(&stream).ok();
+        SockRef::from(&stream)
+            .set_recv_buffer_size(DP_IC_RCVBUF)
+            .ok();
+
+        // Prevent SIGPIPE on macOS when writing to broken pipes
+        #[cfg(target_os = "macos")]
+        {
+            let sock = SockRef::from(&stream);
+            sock.set_nosigpipe(true).ok();
+        }
+
+        // Create writer via try_clone (cross-platform dup)
+        let writer_stream = match stream.try_clone() {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[{}] failed to clone client stream: {}", name, e);
+                return true;
+            }
+        };
+        let client_id = InterfaceId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let key = crate::interface::loop_writer::read_key(client_id);
+
+        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+            "[{}] backbone client connected: {} → id {}",
+            name,
+            peer_addr,
+            client_id.0
+        );
+
+        let write_stall_flag = Arc::new(AtomicBool::new(false));
+        let writer: Box<dyn Writer> = Box::new(BackboneWriter {
+            stream: writer_stream,
+            runtime: Arc::clone(&self.runtime),
+            interface_name: name.clone(),
+            interface_id: client_id,
+            event_tx: self.tx.clone(),
+            transmit_buffer: TransmitBuffer::new(),
+            egress_controller: EgressController::default(),
+            egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
+            egress_started: Instant::now(),
+            stall_started: None,
+            disconnect_notified: false,
+            write_stall_flag: Arc::clone(&write_stall_flag),
+        });
+
+        state.clients.insert(
+            key,
+            ClientState {
+                id: client_id,
+                peer_ip,
+                peer_port,
+                fd: stream.as_raw_fd(),
+                connected_at: Instant::now(),
+                has_received_data: false,
+                write_stall_flag,
+                idle_timed_out: false,
+                dp_ingress_bytes: 0,
+                dp_ingress_packets: 0,
+                dp_ingress_hold: None,
+                dp_ingress_gated: false,
+                dp_ingress_throttle_count: 0,
+            },
+        );
+        state
+            .peers
+            .entry(peer_ip)
+            .or_insert_with(PeerBehaviorState::new)
+            .connected_count += 1;
+        lock_or_recover(&self.peer_state, "backbone peer state").upsert_snapshot(&state.peers);
+
+        let info = InterfaceInfo {
+            id: client_id,
+            name: format!("BackboneInterface/{}", client_id.0),
+            mode: self.accepted_peer_mode,
+            gravity: self.accepted_peer_gravity,
+            recursive_prs: self.accepted_peer_recursive_prs,
+            announces_from_internal: self.accepted_peer_announces_from_internal,
+            announces_to_internal: self.accepted_peer_announces_to_internal,
+            out_capable: true,
+            in_capable: true,
+            bitrate: Some(SERVER_BITRATE_GUESS),
+            airtime_profile: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: SERVER_PEER_MTU,
+            ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
+            started: 0.0,
+            ingress_control: self.ingress_control,
+        };
+        let up = if let Some(template) = &self.dynamic_template {
+            Event::DynamicInterfaceUp {
+                id: client_id,
+                writer,
+                registration: Box::new(template.registration(info)),
+            }
+        } else {
+            Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
+        };
+        let connected = Event::BackbonePeerConnected {
+            server_interface_id: self.server_interface_id,
+            peer_interface_id: client_id,
+            peer_ip,
+            peer_port,
+        };
+        if self.tx.push_from_loop([connected, up]).is_err() {
+            state.clients.remove(&key);
+            return false;
+        }
+        cx.add_source(
+            key,
+            Box::new(PeerSource {
+                stream,
+                decoder: hdlc::Decoder::reticulum(HW_MTU, self.ifac_size),
+                key,
+                id: client_id,
+                server: Arc::clone(self),
+            }),
+        );
+        true
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -647,70 +994,6 @@ fn busiest_ingress_key(producers: impl Iterator<Item = (usize, u64)>) -> Option<
         .filter(|(_, packets)| *packets > 0)
         .max_by_key(|(_, packets)| *packets)
         .map(|(key, _)| key)
-}
-
-fn throttle_busiest_ingress(
-    poller: &Poller,
-    clients: &mut HashMap<usize, ClientState>,
-    sample_span: Duration,
-) -> io::Result<Option<InterfaceId>> {
-    let Some(key) = busiest_ingress_key(
-        clients
-            .iter()
-            .map(|(key, client)| (*key, client.dp_ingress_packets)),
-    ) else {
-        return Ok(None);
-    };
-    if clients
-        .get(&key)
-        .is_some_and(|client| client.dp_ingress_gated)
-    {
-        return Ok(None);
-    }
-
-    let allocation_divisor = clients.len().max(DP_IC_IF_HEADROOM) as f64 * DP_IC_PENALTY;
-    let hold = Duration::from_secs_f64(
-        (sample_span.as_secs_f64().max(0.001) * allocation_divisor).max(0.001),
-    );
-    let client = clients.get_mut(&key).expect("selected client disappeared");
-    poller.modify(&client.stream, PollEvent::none(key))?;
-    client.dp_ingress_gated = true;
-    client.dp_ingress_hold = Some(Instant::now() + hold);
-    client.dp_ingress_throttle_count = client.dp_ingress_throttle_count.saturating_add(1);
-    log::info!(
-        "ingress throttled on BackboneInterface/{} for {:.3}s",
-        client.id.0,
-        hold.as_secs_f64(),
-    );
-    Ok(Some(client.id))
-}
-
-fn release_one_ingress(
-    poller: &Poller,
-    clients: &mut HashMap<usize, ClientState>,
-    now: Instant,
-) -> io::Result<Option<InterfaceId>> {
-    let Some(key) = clients
-        .iter()
-        .find(|(_, client)| {
-            client.dp_ingress_gated
-                && client
-                    .dp_ingress_hold
-                    .is_none_or(|hold_until| now >= hold_until)
-        })
-        .map(|(key, _)| *key)
-    else {
-        return Ok(None);
-    };
-    let client = clients.get_mut(&key).expect("selected client disappeared");
-    poller.modify(&client.stream, PollEvent::readable(key))?;
-    client.dp_ingress_gated = false;
-    client.dp_ingress_hold = None;
-    log::info!(
-        "released ingress throttle on BackboneInterface/{}",
-        client.id.0
-    );
-    Ok(Some(client.id))
 }
 
 #[derive(Debug, Clone)]
@@ -835,418 +1118,247 @@ enum DisconnectReason {
     WriteStall,
 }
 
-/// Main poll event loop.
-struct PollLoopContext {
+/// The listening socket, served on the driver thread: accepts peers and
+/// runs the server's periodic work from its timer.
+struct ListenerSource {
     listener: TcpListener,
-    name: String,
-    server_interface_id: InterfaceId,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
-    runtime: Arc<Mutex<BackboneServerRuntime>>,
-    peer_state: Arc<Mutex<BackbonePeerMonitor>>,
-    fast_flap: BackboneFastFlapConfig,
-    fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
-    ingress_control: IngressControlConfig,
-    accepted_peer_mode: u8,
-    accepted_peer_gravity: i64,
-    accepted_peer_recursive_prs: bool,
-    accepted_peer_announces_from_internal: bool,
-    accepted_peer_announces_to_internal: Option<bool>,
-    dynamic_template: Option<DynamicInterfaceTemplate>,
-    ifac_size: usize,
-    underlay_mark: Option<u32>,
+    server: Arc<Server>,
+    next_interval: Instant,
 }
 
-fn poll_loop(context: PollLoopContext) -> io::Result<()> {
-    let PollLoopContext {
-        listener,
-        name,
-        server_interface_id,
-        tx,
-        next_id,
-        runtime,
-        peer_state,
-        fast_flap,
-        fast_flap_state,
-        ingress_control,
-        accepted_peer_mode,
-        accepted_peer_gravity,
-        accepted_peer_recursive_prs,
-        accepted_peer_announces_from_internal,
-        accepted_peer_announces_to_internal,
-        dynamic_template,
-        ifac_size,
-        underlay_mark,
-    } = context;
-    // Queue capacities are finalized before interfaces start. Derive the
-    // ingress controller's watermarks once, before any listener can read.
-    let ingress_thresholds = ingress_thresholds(tx.inbound_queue_snapshot().capacities[0]);
-    let poller = Poller::new()?;
+impl LoopSource for ListenerSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.listener.as_raw_fd()
+    }
 
-    const LISTENER_KEY: usize = 0;
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        let server = &self.server;
+        let mut state = server.lock();
+        server.sync_peer_state(&mut state);
+        for _ in 0..ACCEPT_BURST {
+            match self.listener.accept() {
+                Ok((stream, peer_addr)) => {
+                    if !server.admit(&mut state, stream, peer_addr, cx) {
+                        return SourceStatus::Remove;
+                    }
+                }
+                Err(error) => match super::tcp_server::accept_error_step(&error) {
+                    super::tcp_server::AcceptStep::Drained => return SourceStatus::Rearm,
+                    super::tcp_server::AcceptStep::Next => {}
+                    super::tcp_server::AcceptStep::Pause => {
+                        log::warn!("[{}] accept error, pausing accepts: {}", server.name, error);
+                        return SourceStatus::Pause;
+                    }
+                },
+            }
+        }
+        SourceStatus::Rearm
+    }
 
-    // SAFETY: listener outlives its registration in the poller.
-    unsafe { poller.add(&listener, PollEvent::readable(LISTENER_KEY))? };
+    fn deadline(&self) -> Option<Instant> {
+        Some(self.next_interval)
+    }
 
-    let mut clients: HashMap<usize, ClientState> = HashMap::new();
-    let mut peers: HashMap<IpAddr, PeerBehaviorState> = HashMap::new();
-    let mut events = Events::new();
-    let mut next_key: usize = 1;
-    let mut ingress_snapshot_at = Instant::now();
+    fn on_timer(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
+        self.server.interval();
+        self.next_interval = Instant::now() + DP_IC_INTERVAL;
+        SourceStatus::Rearm
+    }
+}
 
-    loop {
-        let runtime_snapshot = lock_or_recover(&runtime, "backbone runtime").clone();
-        let max_connections = runtime_snapshot.max_connections;
-        let idle_timeout = runtime_snapshot.idle_timeout;
+/// One accepted peer, read on the driver thread.
+struct PeerSource {
+    stream: TcpStream,
+    decoder: hdlc::Decoder,
+    key: usize,
+    id: InterfaceId,
+    server: Arc<Server>,
+}
+
+impl LoopSource for PeerSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        let server = Arc::clone(&self.server);
+        if server
+            .lock()
+            .clients
+            .get(&self.key)
+            .is_some_and(|client| client.dp_ingress_gated)
         {
-            let mut monitor = lock_or_recover(&peer_state, "backbone peer state");
-            monitor.sync_into(&mut peers);
-            cleanup_peer_state(&mut peers);
-            monitor.upsert_snapshot(&peers);
+            // Throttled: the server re-arms it when the hold ends.
+            return SourceStatus::Hold;
         }
-
-        events.clear();
-        poller.wait(&mut events, Some(DP_IC_INTERVAL))?;
-
-        for ev in events.iter() {
-            if ev.key == LISTENER_KEY {
-                // Accept new connections
-                loop {
-                    match listener.accept() {
-                        Ok((stream, peer_addr)) => {
-                            if let Err(error) =
-                                super::apply_underlay_mark(stream.as_raw_fd(), underlay_mark)
-                            {
-                                log::error!(
-                                    "[{}] failed to mark accepted underlay socket: {}",
-                                    name,
-                                    error
-                                );
-                                drop(stream);
-                                continue;
-                            }
-                            let peer_ip = peer_addr.ip();
-                            let peer_port = peer_addr.port();
-
-                            let fast_flap_blocked_until =
-                                lock_or_recover(&fast_flap_state, "backbone fast-flap state")
-                                    .blocked_until(peer_ip, &fast_flap, Instant::now());
-                            if is_ip_blacklisted(&mut peers, peer_ip)
-                                || fast_flap_blocked_until.is_some()
-                            {
-                                let state =
-                                    peers.entry(peer_ip).or_insert_with(PeerBehaviorState::new);
-                                if let Some(blocked_until) = fast_flap_blocked_until {
-                                    state.blacklisted_until = Some(blocked_until);
-                                    state.blacklist_reason = Some("fast flapping".into());
-                                }
-                                if let Some(state) = peers.get_mut(&peer_ip) {
-                                    state.reject_count = state.reject_count.saturating_add(1);
-                                }
-                                lock_or_recover(&peer_state, "backbone peer state")
-                                    .upsert_snapshot(&peers);
-                                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-                                    "[{}] rejecting blocked peer {}",
-                                    name,
-                                    peer_addr,
-                                );
-                                drop(stream);
-                                continue;
-                            }
-
-                            if let Some(max) = max_connections {
-                                if clients.len() >= max {
-                                    log::warn!(
-                                        "[{}] max connections ({}) reached, rejecting {}",
-                                        name,
-                                        max,
-                                        peer_addr
-                                    );
-                                    drop(stream);
-                                    continue;
-                                }
-                            }
-
-                            stream.set_nonblocking(true).ok();
-                            stream.set_nodelay(true).ok();
-                            set_tcp_keepalive(&stream).ok();
-                            SockRef::from(&stream)
-                                .set_recv_buffer_size(DP_IC_RCVBUF)
-                                .ok();
-
-                            // Prevent SIGPIPE on macOS when writing to broken pipes
-                            #[cfg(target_os = "macos")]
-                            {
-                                let sock = SockRef::from(&stream);
-                                sock.set_nosigpipe(true).ok();
-                            }
-
-                            let key = next_key;
-                            next_key += 1;
-                            let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
-
-                            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-                                "[{}] backbone client connected: {} → id {}",
-                                name,
-                                peer_addr,
-                                client_id.0
-                            );
-
-                            // Register client with poller
-                            // SAFETY: stream is stored in ClientState and outlives registration.
-                            if let Err(e) = unsafe { poller.add(&stream, PollEvent::readable(key)) }
-                            {
-                                log::warn!("[{}] failed to add client to poller: {}", name, e);
-                                continue; // stream drops, closing socket
-                            }
-
-                            // Create writer via try_clone (cross-platform dup)
-                            let writer_stream = match stream.try_clone() {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    log::warn!("[{}] failed to clone client stream: {}", name, e);
-                                    let _ = poller.delete(&stream);
-                                    continue; // stream drops
-                                }
-                            };
-                            let write_stall_flag = Arc::new(AtomicBool::new(false));
-                            let writer: Box<dyn Writer> = Box::new(BackboneWriter {
-                                stream: writer_stream,
-                                runtime: Arc::clone(&runtime),
-                                interface_name: name.clone(),
-                                interface_id: client_id,
-                                event_tx: tx.clone(),
-                                transmit_buffer: TransmitBuffer::new(),
-                                egress_controller: EgressController::default(),
-                                egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
-                                egress_started: Instant::now(),
-                                stall_started: None,
-                                disconnect_notified: false,
-                                write_stall_flag: Arc::clone(&write_stall_flag),
-                            });
-
-                            clients.insert(
-                                key,
-                                ClientState {
-                                    id: client_id,
-                                    peer_ip,
-                                    peer_port,
-                                    stream,
-                                    decoder: hdlc::Decoder::reticulum(HW_MTU, ifac_size),
-                                    connected_at: Instant::now(),
-                                    has_received_data: false,
-                                    write_stall_flag,
-                                    dp_ingress_bytes: 0,
-                                    dp_ingress_packets: 0,
-                                    dp_ingress_hold: None,
-                                    dp_ingress_gated: false,
-                                    dp_ingress_throttle_count: 0,
-                                },
-                            );
-                            peers
-                                .entry(peer_ip)
-                                .or_insert_with(PeerBehaviorState::new)
-                                .connected_count += 1;
-                            lock_or_recover(&peer_state, "backbone peer state")
-                                .upsert_snapshot(&peers);
-                            let _ = tx.send(Event::BackbonePeerConnected {
-                                server_interface_id,
-                                peer_interface_id: client_id,
-                                peer_ip,
-                                peer_port,
-                            });
-
-                            let info = InterfaceInfo {
-                                id: client_id,
-                                name: format!("BackboneInterface/{}", client_id.0),
-                                mode: accepted_peer_mode,
-                                gravity: accepted_peer_gravity,
-                                recursive_prs: accepted_peer_recursive_prs,
-                                announces_from_internal: accepted_peer_announces_from_internal,
-                                announces_to_internal: accepted_peer_announces_to_internal,
-                                out_capable: true,
-                                in_capable: true,
-                                bitrate: Some(SERVER_BITRATE_GUESS),
-                                airtime_profile: None,
-                                announce_rate_target: None,
-                                announce_rate_grace: 0,
-                                announce_rate_penalty: 0.0,
-                                announce_cap: constants::ANNOUNCE_CAP,
-                                is_local_client: false,
-                                wants_tunnel: false,
-                                tunnel_id: None,
-                                mtu: SERVER_PEER_MTU,
-                                ia_freq: 0.0,
-                                ip_freq: 0.0,
-                                op_freq: 0.0,
-                                op_samples: 0,
-                                started: 0.0,
-                                ingress_control,
-                            };
-
-                            let event = if let Some(template) = &dynamic_template {
-                                Event::DynamicInterfaceUp {
-                                    id: client_id,
-                                    writer,
-                                    registration: Box::new(template.registration(info)),
-                                }
-                            } else {
-                                Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
-                            };
-                            if tx.send(event).is_err() {
-                                // Driver shut down
-                                cleanup(&poller, &clients, &listener);
-                                return Ok(());
-                            }
-                        }
-                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                        Err(e) => {
-                            log::warn!("[{}] accept error: {}", name, e);
-                            break;
-                        }
-                    }
-                }
-                // Re-arm listener (oneshot semantics)
-                poller.modify(&listener, PollEvent::readable(LISTENER_KEY))?;
-            } else if clients.contains_key(&ev.key) {
-                let key = ev.key;
-                let mut should_remove = false;
-                let mut client_id = InterfaceId(0);
-
-                let mut buf = [0u8; 4096];
-                let read_result = {
-                    let client = clients.get_mut(&key).unwrap();
-                    client.stream.read(&mut buf)
-                };
-
-                match read_result {
-                    Ok(0) | Err(_) => {
-                        if let Some(c) = clients.get(&key) {
-                            client_id = c.id;
-                        }
-                        should_remove = true;
-                    }
-                    Ok(n) => {
-                        let client = clients.get_mut(&key).unwrap();
-                        client_id = client.id;
-                        client.has_received_data = true;
-                        client.dp_ingress_bytes = client.dp_ingress_bytes.saturating_add(n as u64);
-                        let decoded = client.decoder.feed_with_diagnostics(&buf[..n]);
-                        client.dp_ingress_packets = client
-                            .dp_ingress_packets
-                            .saturating_add(decoded.frames.len() as u64);
-                        for frame_len in decoded.invalid_frame_lengths {
-                            log::debug!(
-                            "[{}] invalid HDLC frame of {} bytes received from client {}, dropping frame",
-                            name,
-                            frame_len,
-                            client_id.0,
-                        );
-                        }
-                        for frame in decoded.frames {
-                            if tx
-                                .send(Event::Frame {
-                                    interface_id: client_id,
-                                    data: frame,
-                                    rssi: None,
-                                    snr: None,
-                                })
-                                .is_err()
-                            {
-                                cleanup(&poller, &clients, &listener);
-                                return Ok(());
-                            }
-                        }
-                        let queue = tx.inbound_queue_snapshot();
-                        if queue.heights[0] >= ingress_thresholds.immediate {
-                            let _ = throttle_busiest_ingress(
-                                &poller,
-                                &mut clients,
-                                ingress_snapshot_at.elapsed(),
-                            )?;
-                        }
-                    }
-                }
-
-                if should_remove {
-                    let reason = if clients
-                        .get(&key)
-                        .is_some_and(|c| c.write_stall_flag.load(Ordering::Relaxed))
-                    {
+        let (mut bytes, mut frames) = (0u64, 0u64);
+        let read = read_stream_frames(
+            self.stream.as_raw_fd(),
+            &mut self.decoder,
+            cx,
+            &server.tx,
+            self.id,
+            &server.name,
+            |read_bytes, read_frames| {
+                bytes += read_bytes as u64;
+                frames += read_frames as u64;
+            },
+        );
+        let mut state = server.lock();
+        if bytes > 0 {
+            if let Some(client) = state.clients.get_mut(&self.key) {
+                client.has_received_data = true;
+                client.dp_ingress_bytes = client.dp_ingress_bytes.saturating_add(bytes);
+                client.dp_ingress_packets = client.dp_ingress_packets.saturating_add(frames);
+            }
+        }
+        let status = match read {
+            StreamRead::Rearm => SourceStatus::Rearm,
+            StreamRead::Suspend => SourceStatus::Suspend,
+            StreamRead::Closed | StreamRead::Failed(_) => {
+                let reason = match state.clients.get(&self.key) {
+                    Some(client) if client.idle_timed_out => DisconnectReason::IdleTimeout,
+                    Some(client) if client.write_stall_flag.load(Ordering::Relaxed) => {
                         DisconnectReason::WriteStall
-                    } else {
-                        DisconnectReason::RemoteClosed
-                    };
-                    disconnect_client(DisconnectContext {
-                        poller: &poller,
-                        clients: &mut clients,
-                        peers: &mut peers,
-                        name: &name,
-                        server_interface_id,
-                        tx: &tx,
-                        peer_state: &peer_state,
-                        fast_flap: &fast_flap,
-                        fast_flap_state: &fast_flap_state,
-                        key,
-                        client_id,
-                        reason,
-                    });
-                } else if let Some(client) = clients.get(&key) {
-                    // Re-arm client (oneshot semantics)
-                    if !client.dp_ingress_gated {
-                        poller.modify(&client.stream, PollEvent::readable(key))?;
                     }
+                    _ => DisconnectReason::RemoteClosed,
+                };
+                self.disconnect(&mut state, reason);
+                return SourceStatus::Remove;
+            }
+            StreamRead::DriverGone => return SourceStatus::Remove,
+        };
+        if bytes > 0
+            && server.tx.inbound_queue_snapshot().heights[0] >= server.ingress_thresholds.immediate
+        {
+            if let Some(key) = server.throttle_busiest_ingress(&mut state) {
+                if key == self.key {
+                    return SourceStatus::Hold;
+                }
+                server.set_readable(key, state.clients[&key].fd, false);
+            }
+        }
+        status
+    }
+
+    fn on_removed(&mut self) {
+        // Closed without a disconnect (the receiver went away): forget it so
+        // nothing touches the descriptor once it is closed.
+        self.server.lock().clients.remove(&self.key);
+    }
+
+    fn on_abandoned(&mut self) {
+        // The driver was told about this peer; it will never be read.
+        let server = Arc::clone(&self.server);
+        let mut state = server.lock();
+        self.disconnect(&mut state, DisconnectReason::RemoteClosed);
+    }
+}
+
+impl PeerSource {
+    fn disconnect(&self, state: &mut ServerState, reason: DisconnectReason) {
+        let server = &self.server;
+        let name = &server.name;
+        let Some(client) = state.clients.remove(&self.key) else {
+            return;
+        };
+        let client_id = client.id;
+
+        match reason {
+            DisconnectReason::RemoteClosed => {
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "[{}] backbone client {} disconnected",
+                    name,
+                    client_id.0,
+                );
+            }
+            DisconnectReason::IdleTimeout => {
+                log::info!(
+                    "[{}] backbone client {} disconnected due to idle timeout",
+                    name,
+                    client_id.0
+                );
+            }
+            DisconnectReason::WriteStall => {
+                // Already logged by the writer that detected the stall.
+            }
+        }
+
+        let connected_for = client.connected_at.elapsed();
+        if let Some(record) = lock_or_recover(&server.fast_flap_state, "backbone fast-flap state")
+            .record_disconnect(
+                client.peer_ip,
+                connected_for,
+                &server.fast_flap,
+                Instant::now(),
+            )
+        {
+            let frequency = if record.elapsed_since_first.is_zero() {
+                None
+            } else {
+                Some(record.flap_count as f64 / record.elapsed_since_first.as_secs_f64())
+            };
+            log::debug!(
+                "[{}] peer {} fast flapped after {:.3}s ({} flaps{})",
+                name,
+                client.peer_ip,
+                connected_for.as_secs_f64(),
+                record.flap_count,
+                frequency
+                    .map(|value| format!(", {:.3} Hz", value))
+                    .unwrap_or_default(),
+            );
+            if record.blocked {
+                let peer = state
+                    .peers
+                    .entry(client.peer_ip)
+                    .or_insert_with(PeerBehaviorState::new);
+                peer.blacklisted_until = record.blocked_until;
+                peer.blacklist_reason = Some("fast flapping".into());
+                if record.newly_blocked {
+                    log::warn!(
+                        "[{}] blocking further connections from {} due to fast flapping",
+                        name,
+                        client.peer_ip,
+                    );
                 }
             }
         }
-
-        if ingress_snapshot_at.elapsed() >= DP_IC_INTERVAL {
-            let now = Instant::now();
-            let queue = tx.inbound_queue_snapshot();
-            if queue.heights[0] > ingress_thresholds.mid {
-                let _ =
-                    throttle_busiest_ingress(&poller, &mut clients, ingress_snapshot_at.elapsed())?;
-            } else if queue.heights[0] < ingress_thresholds.low {
-                let _ = release_one_ingress(&poller, &mut clients, now)?;
-            }
-            for client in clients.values_mut() {
-                client.dp_ingress_bytes = 0;
-                client.dp_ingress_packets = 0;
-            }
-            ingress_snapshot_at = now;
+        let mut events = vec![Event::BackbonePeerDisconnected {
+            server_interface_id: server.server_interface_id,
+            peer_interface_id: client.id,
+            peer_ip: client.peer_ip,
+            peer_port: client.peer_port,
+            connected_for,
+            had_received_data: client.has_received_data,
+        }];
+        match reason {
+            DisconnectReason::IdleTimeout => events.push(Event::BackbonePeerIdleTimeout {
+                server_interface_id: server.server_interface_id,
+                peer_interface_id: client.id,
+                peer_ip: client.peer_ip,
+                peer_port: client.peer_port,
+                connected_for,
+            }),
+            DisconnectReason::WriteStall => events.push(Event::BackbonePeerWriteStall {
+                server_interface_id: server.server_interface_id,
+                peer_interface_id: client.id,
+                peer_ip: client.peer_ip,
+                peer_port: client.peer_port,
+                connected_for,
+            }),
+            DisconnectReason::RemoteClosed => {}
         }
 
-        if let Some(timeout) = idle_timeout {
-            let now = Instant::now();
-            let timed_out: Vec<(usize, InterfaceId)> = clients
-                .iter()
-                .filter_map(|(&key, client)| {
-                    if client.has_received_data || now.duration_since(client.connected_at) < timeout
-                    {
-                        None
-                    } else {
-                        Some((key, client.id))
-                    }
-                })
-                .collect();
-
-            for (key, client_id) in timed_out {
-                disconnect_client(DisconnectContext {
-                    poller: &poller,
-                    clients: &mut clients,
-                    peers: &mut peers,
-                    name: &name,
-                    server_interface_id,
-                    tx: &tx,
-                    peer_state: &peer_state,
-                    fast_flap: &fast_flap,
-                    fast_flap_state: &fast_flap_state,
-                    key,
-                    client_id,
-                    reason: DisconnectReason::IdleTimeout,
-                });
-            }
+        if let Some(peer) = state.peers.get_mut(&client.peer_ip) {
+            peer.connected_count = peer.connected_count.saturating_sub(1);
         }
+        lock_or_recover(&server.peer_state, "backbone peer state").upsert_snapshot(&state.peers);
+        // The writer already reported a write stall's interface down.
+        if !matches!(reason, DisconnectReason::WriteStall) {
+            events.push(Event::InterfaceDown(client_id));
+        }
+        let _ = server.tx.push_from_loop(events);
     }
 }
 
@@ -1274,136 +1386,6 @@ fn is_ip_blacklisted(peers: &mut HashMap<IpAddr, PeerBehaviorState>, peer_ip: Ip
     false
 }
 
-struct DisconnectContext<'a> {
-    poller: &'a Poller,
-    clients: &'a mut HashMap<usize, ClientState>,
-    peers: &'a mut HashMap<IpAddr, PeerBehaviorState>,
-    name: &'a str,
-    server_interface_id: InterfaceId,
-    tx: &'a EventSender,
-    peer_state: &'a Arc<Mutex<BackbonePeerMonitor>>,
-    fast_flap: &'a BackboneFastFlapConfig,
-    fast_flap_state: &'a Arc<Mutex<BackboneFastFlapMonitor>>,
-    key: usize,
-    client_id: InterfaceId,
-    reason: DisconnectReason,
-}
-
-fn disconnect_client(context: DisconnectContext<'_>) {
-    let DisconnectContext {
-        poller,
-        clients,
-        peers,
-        name,
-        server_interface_id,
-        tx,
-        peer_state,
-        fast_flap,
-        fast_flap_state,
-        key,
-        client_id,
-        reason,
-    } = context;
-    let Some(client) = clients.remove(&key) else {
-        return;
-    };
-
-    match reason {
-        DisconnectReason::RemoteClosed => {
-            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-                "[{}] backbone client {} disconnected",
-                name,
-                client_id.0,
-            );
-        }
-        DisconnectReason::IdleTimeout => {
-            log::info!(
-                "[{}] backbone client {} disconnected due to idle timeout",
-                name,
-                client_id.0
-            );
-        }
-        DisconnectReason::WriteStall => {
-            // Already logged by BackboneWriter::disconnect_for_write_stall
-        }
-    }
-
-    let _ = poller.delete(&client.stream);
-    // client.stream closes on drop
-    let connected_for = client.connected_at.elapsed();
-    if let Some(record) = lock_or_recover(fast_flap_state, "backbone fast-flap state")
-        .record_disconnect(client.peer_ip, connected_for, fast_flap, Instant::now())
-    {
-        let frequency = if record.elapsed_since_first.is_zero() {
-            None
-        } else {
-            Some(record.flap_count as f64 / record.elapsed_since_first.as_secs_f64())
-        };
-        log::debug!(
-            "[{}] peer {} fast flapped after {:.3}s ({} flaps{})",
-            name,
-            client.peer_ip,
-            connected_for.as_secs_f64(),
-            record.flap_count,
-            frequency
-                .map(|value| format!(", {:.3} Hz", value))
-                .unwrap_or_default(),
-        );
-        if record.blocked {
-            let state = peers
-                .entry(client.peer_ip)
-                .or_insert_with(PeerBehaviorState::new);
-            state.blacklisted_until = record.blocked_until;
-            state.blacklist_reason = Some("fast flapping".into());
-            if record.newly_blocked {
-                log::warn!(
-                    "[{}] blocking further connections from {} due to fast flapping",
-                    name,
-                    client.peer_ip,
-                );
-            }
-        }
-    }
-    let _ = tx.send(Event::BackbonePeerDisconnected {
-        server_interface_id,
-        peer_interface_id: client.id,
-        peer_ip: client.peer_ip,
-        peer_port: client.peer_port,
-        connected_for,
-        had_received_data: client.has_received_data,
-    });
-    match reason {
-        DisconnectReason::IdleTimeout => {
-            let _ = tx.send(Event::BackbonePeerIdleTimeout {
-                server_interface_id,
-                peer_interface_id: client.id,
-                peer_ip: client.peer_ip,
-                peer_port: client.peer_port,
-                connected_for,
-            });
-        }
-        DisconnectReason::WriteStall => {
-            let _ = tx.send(Event::BackbonePeerWriteStall {
-                server_interface_id,
-                peer_interface_id: client.id,
-                peer_ip: client.peer_ip,
-                peer_port: client.peer_port,
-                connected_for,
-            });
-        }
-        DisconnectReason::RemoteClosed => {}
-    }
-
-    if let Some(state) = peers.get_mut(&client.peer_ip) {
-        state.connected_count = state.connected_count.saturating_sub(1);
-    }
-    lock_or_recover(peer_state, "backbone peer state").upsert_snapshot(peers);
-    // Writer already sent InterfaceDown for write stalls; avoid duplicate.
-    if !matches!(reason, DisconnectReason::WriteStall) {
-        let _ = tx.send(Event::InterfaceDown(client_id));
-    }
-}
-
 fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
     let sock = SockRef::from(stream);
     let mut keepalive = TcpKeepalive::new()
@@ -1414,13 +1396,6 @@ fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
         keepalive = keepalive.with_retries(12);
     }
     sock.set_tcp_keepalive(&keepalive)
-}
-
-fn cleanup(poller: &Poller, clients: &HashMap<usize, ClientState>, listener: &TcpListener) {
-    for client in clients.values() {
-        let _ = poller.delete(&client.stream);
-    }
-    let _ = poller.delete(listener);
 }
 
 // ---------------------------------------------------------------------------
@@ -1731,6 +1706,7 @@ impl LoopSource for ClientSource {
             &link.tx,
             link.config.interface_id,
             name,
+            |_, _| {},
         ) {
             StreamRead::Rearm => SourceStatus::Rearm,
             StreamRead::Suspend => SourceStatus::Suspend,
@@ -2202,11 +2178,25 @@ pub(crate) fn client_priority_from_mode(mode: &BackboneMode) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::sync::mpsc;
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
         crate::test_support::port()
+    }
+
+    /// Serve the receiver's sockets and timers for `duration` without
+    /// taking any event, as a driver busy with other work would.
+    fn serve_for(rx: &crate::event::EventReceiver, duration: Duration) {
+        let deadline = Instant::now() + duration;
+        let mut ready = polling::Events::new();
+        while Instant::now() < deadline {
+            ready.clear();
+            rx.poll_ready(&mut ready).unwrap();
+            rx.serve_sources(&ready);
+            thread::sleep(Duration::from_millis(2));
+        }
     }
 
     fn test_fast_flap_config() -> BackboneFastFlapConfig {
@@ -2610,9 +2600,9 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while observer.inbound_queue_snapshot().heights[0] < 180 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
+            serve_for(&rx, Duration::from_millis(5));
         }
-        thread::sleep(Duration::from_millis(100));
+        serve_for(&rx, Duration::from_millis(100));
         let gated = observer.inbound_queue_snapshot();
         assert!(
             gated.heights[0] >= 180,
@@ -2621,7 +2611,7 @@ mod tests {
         assert_eq!(gated.dropped[0], 0);
 
         client.write_all(&hdlc::frame(&[1u8; 32])).unwrap();
-        thread::sleep(Duration::from_millis(300));
+        serve_for(&rx, Duration::from_millis(300));
         let after_marker = observer.inbound_queue_snapshot();
         assert_eq!(after_marker.heights[0], gated.heights[0]);
         assert_eq!(
@@ -3535,7 +3525,7 @@ mod tests {
         assert!(entry.blacklisted_remaining_secs.is_some());
 
         let _rejected = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-        thread::sleep(Duration::from_millis(200));
+        serve_for(&rx, Duration::from_millis(200));
         assert_eq!(
             next_id.load(Ordering::Relaxed),
             9906,

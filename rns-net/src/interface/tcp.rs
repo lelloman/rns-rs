@@ -291,7 +291,8 @@ pub(crate) enum StreamRead {
 }
 
 /// Read a readable stream socket on the driver thread until it is empty or
-/// [`STREAM_READ_BUDGET`] is spent, and queue the frames decoded from it.
+/// [`STREAM_READ_BUDGET`] is spent, and queue the frames decoded from it,
+/// reporting the bytes and frames of each read to `on_read`.
 /// Reads nothing while inbound data is full, so data queued past capacity
 /// is bounded by one read per socket.
 pub(crate) fn read_stream_frames(
@@ -301,6 +302,7 @@ pub(crate) fn read_stream_frames(
     tx: &EventSender,
     id: InterfaceId,
     name: &str,
+    mut on_read: impl FnMut(usize, usize),
 ) -> StreamRead {
     if !tx.inbound_data_has_room() {
         return StreamRead::Suspend;
@@ -339,6 +341,7 @@ pub(crate) fn read_stream_frames(
                 id.0,
             );
         }
+        on_read(n, decoded.frames.len());
         let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
             interface_id: id,
             data: frame,
@@ -449,6 +452,7 @@ impl LoopSource for ReaderSource {
             &link.tx,
             link.config.interface_id,
             name,
+            |_, _| {},
         ) {
             StreamRead::Rearm => SourceStatus::Rearm,
             StreamRead::Suspend => SourceStatus::Suspend,
