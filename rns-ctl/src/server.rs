@@ -1,16 +1,50 @@
 use std::collections::HashSet;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use crate::api::{handle_request, NodeHandle};
+use crate::api::{check_request_auth, handle_request, NodeHandle};
 use crate::auth::check_ws_auth;
-use crate::http::{parse_request, write_response};
+use crate::http::{
+    parse_request_head, read_body, request_body_length, write_response, HttpResponse,
+};
 use crate::state::{
     lock_ws_broadcast, ControlPlaneConfigHandle, SharedState, WsBroadcast, WsEvent,
 };
 use crate::ws;
+
+/// Maximum number of connections served at once, WebSocket sessions included.
+///
+/// Each connection runs on its own thread. The control plane serves a local
+/// UI, CLI and a handful of automation clients, so 64 leaves ample room while
+/// keeping the thread count bounded. Connections accepted beyond this get a
+/// `503` and are closed without spawning a thread.
+pub const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+
+/// Write timeout for the short `503` sent from the accept loop.
+const REFUSAL_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Holds one connection slot and releases it when dropped.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl ConnectionSlot {
+    fn acquire(active: &Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < limit).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| ConnectionSlot(active.clone()))
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 /// A connection stream that is either plain TCP or TLS-wrapped.
 pub(crate) enum ConnStream {
@@ -91,13 +125,25 @@ pub fn run_server_with_listener(
 
     log::info!("Listening on {}://{}", scheme, addr);
 
+    let active = Arc::new(AtomicUsize::new(0));
+
     for stream in listener.incoming() {
         match stream {
             Ok(tcp_stream) => {
+                let Some(slot) = ConnectionSlot::acquire(&active, MAX_CONCURRENT_CONNECTIONS)
+                else {
+                    log::debug!(
+                        "refusing connection: {} connections already active",
+                        MAX_CONCURRENT_CONNECTIONS
+                    );
+                    refuse_connection(tcp_stream, &ctx);
+                    continue;
+                };
                 let ctx = ctx.clone();
                 std::thread::Builder::new()
                     .name("rns-ctl-conn".into())
                     .spawn(move || {
+                        let _slot = slot;
                         let conn = match wrap_stream(tcp_stream, &ctx) {
                             Ok(c) => c,
                             Err(e) => {
@@ -118,6 +164,25 @@ pub fn run_server_with_listener(
     }
 
     Ok(())
+}
+
+/// Answer a connection over the cap with a short `503` and close it.
+/// TLS listeners close the connection without a response, since a plain-text
+/// reply is not readable by a TLS client.
+fn refuse_connection(mut tcp_stream: TcpStream, ctx: &ServerContext) {
+    #[cfg(feature = "tls")]
+    {
+        if ctx.tls_config.is_some() {
+            return;
+        }
+    }
+    let _ = ctx;
+    let _ = tcp_stream.set_write_timeout(Some(REFUSAL_WRITE_TIMEOUT));
+    let _ = write_response(
+        &mut tcp_stream,
+        &HttpResponse::service_unavailable("Too many connections"),
+    );
+    let _ = tcp_stream.shutdown(std::net::Shutdown::Both);
 }
 
 /// Wrap a TCP stream in TLS if configured, otherwise return plain.
@@ -141,14 +206,28 @@ fn handle_connection(mut stream: ConnStream, ctx: &ServerContext) -> io::Result<
     // Set a read timeout so we don't block forever on malformed requests
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
 
-    let req = parse_request(&mut stream)?;
+    // Parse the head first; the body is read only after the request is
+    // authenticated and its declared length is within bounds.
+    let mut reader = BufReader::new(&mut stream);
+    let mut req = parse_request_head(&mut reader)?;
 
     if ws::is_upgrade(&req) {
-        handle_ws_connection(stream, &req, ctx)
-    } else {
-        let response = handle_request(&req, &ctx.node, &ctx.state, &ctx.config);
-        write_response(&mut stream, &response)
+        drop(reader);
+        return handle_ws_connection(stream, &req, ctx);
     }
+
+    if let Err(response) = check_request_auth(&req, &ctx.config) {
+        return write_response(reader.get_mut(), &response);
+    }
+    let len = match request_body_length(&req) {
+        Ok(len) => len,
+        Err(response) => return write_response(reader.get_mut(), &response),
+    };
+    req.body = read_body(&mut reader, len)?;
+    drop(reader);
+
+    let response = handle_request(&req, &ctx.node, &ctx.state, &ctx.config);
+    write_response(&mut stream, &response)
 }
 
 fn handle_ws_connection(

@@ -62,6 +62,29 @@ where
     })
 }
 
+/// Whether a route needs the bearer token. Only the UI shell, its static
+/// assets and the health check are served without it.
+pub fn requires_auth(method: &str, path: &str) -> bool {
+    !(method == "GET"
+        && matches!(
+            path,
+            "/" | "/ui" | "/assets/app.css" | "/assets/app.js" | "/health"
+        ))
+}
+
+/// Authenticate a request from its head alone, so the server can answer
+/// `401` before reading any body bytes.
+pub fn check_request_auth(
+    req: &HttpRequest,
+    config: &ControlPlaneConfigHandle,
+) -> Result<(), HttpResponse> {
+    if requires_auth(&req.method, &req.path) {
+        check_auth(req, config)
+    } else {
+        Ok(())
+    }
+}
+
 /// Route dispatch: match method + path and call the appropriate handler.
 pub fn handle_request(
     req: &HttpRequest,

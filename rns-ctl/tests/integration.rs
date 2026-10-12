@@ -222,7 +222,6 @@ fn http_post(port: u16, path: &str, body: &str) -> HttpResult {
     http_request(port, "POST", path, Some(body), None)
 }
 
-#[allow(dead_code)]
 fn http_post_auth(port: u16, path: &str, body: &str, token: &str) -> HttpResult {
     http_request(port, "POST", path, Some(body), Some(token))
 }
@@ -1670,6 +1669,178 @@ fn test_missing_fields() {
     assert_eq!(res.status, 400);
     let json = res.json();
     assert!(json["error"].as_str().unwrap().contains("app_name"));
+    server.shutdown();
+}
+
+// ─── Step 3g: Request Body Bounds and Connection Cap ────────────────────────
+
+fn connect_raw(port: u16) -> TcpStream {
+    let stream = TcpStream::connect(("127.0.0.1", port)).expect("Failed to connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+}
+
+/// Read until the server closes the connection or the read times out.
+fn read_raw_response(stream: &mut TcpStream) -> HttpResult {
+    let mut response = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+    }
+    let response_str = String::from_utf8_lossy(&response);
+    let status = response_str
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = response_str
+        .find("\r\n\r\n")
+        .map(|pos| response_str[pos + 4..].to_string())
+        .unwrap_or_default();
+    HttpResult { status, body }
+}
+
+#[test]
+fn test_oversize_content_length_gets_413_before_body() {
+    let server = start_test_server();
+    let mut stream = connect_raw(server.port);
+    let head = format!(
+        "POST /api/destination HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+        rns_ctl::http::MAX_REQUEST_BODY_BYTES + 1
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    // No body bytes are sent; the response must still arrive.
+    let res = read_raw_response(&mut stream);
+    assert_eq!(res.status, 413);
+    assert!(res.json()["error"].as_str().is_some());
+    server.shutdown();
+}
+
+#[test]
+fn test_invalid_content_length_gets_400() {
+    let server = start_test_server();
+    let mut stream = connect_raw(server.port);
+    stream
+        .write_all(b"POST /api/destination HTTP/1.1\r\nContent-Length: twelve\r\n\r\n")
+        .unwrap();
+    assert_eq!(read_raw_response(&mut stream).status, 400);
+    server.shutdown();
+}
+
+#[test]
+fn test_wrong_token_gets_401_before_body() {
+    let server = start_test_server_with_auth("test-secret-token");
+    let mut stream = connect_raw(server.port);
+    let head = "POST /api/destination HTTP/1.1\r\nHost: localhost\r\n\
+                Authorization: Bearer wrong-token\r\nContent-Length: 1024\r\n\r\n";
+    stream.write_all(head.as_bytes()).unwrap();
+    let res = read_raw_response(&mut stream);
+    assert_eq!(res.status, 401);
+    assert_eq!(res.json()["error"], "Invalid token");
+    server.shutdown();
+}
+
+#[test]
+fn test_missing_token_with_oversize_body_gets_401() {
+    let server = start_test_server_with_auth("test-secret-token");
+    let mut stream = connect_raw(server.port);
+    let head = format!(
+        "POST /api/send HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+        rns_ctl::http::MAX_REQUEST_BODY_BYTES * 4
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    let res = read_raw_response(&mut stream);
+    assert_eq!(res.status, 401);
+    assert_eq!(res.json()["error"], "Missing Authorization header");
+    server.shutdown();
+}
+
+#[test]
+fn test_valid_token_with_body_is_served() {
+    let server = start_test_server_with_auth("test-secret-token");
+    let body = r#"{"type":"single","app_name":"test_app","aspects":["echo"]}"#;
+    let res = http_post_auth(server.port, "/api/destination", body, "test-secret-token");
+    assert_eq!(res.status, 201);
+    assert_eq!(res.json()["name"], "test_app.echo");
+    server.shutdown();
+}
+
+#[test]
+fn test_body_sent_in_several_writes_is_reassembled() {
+    let server = start_test_server();
+    let body = r#"{"type":"single","app_name":"split_app","aspects":["echo","parts"]}"#;
+    let mut stream = connect_raw(server.port);
+    let head = format!(
+        "POST /api/destination HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    for part in body.as_bytes().chunks(9) {
+        stream.write_all(part).unwrap();
+        stream.flush().unwrap();
+        thread::sleep(Duration::from_millis(20));
+    }
+    let res = read_raw_response(&mut stream);
+    assert_eq!(res.status, 201);
+    assert_eq!(res.json()["name"], "split_app.echo.parts");
+    server.shutdown();
+}
+
+#[test]
+fn test_ws_upgrade_with_wrong_token_gets_401_before_body() {
+    let server = start_test_server_with_auth("test-secret-token");
+    let mut stream = connect_raw(server.port);
+    let head = format!(
+        "GET /ws?token=wrong-token HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Content-Length: {}\r\n\r\n",
+        rns_ctl::http::MAX_REQUEST_BODY_BYTES * 4
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    let res = read_raw_response(&mut stream);
+    assert_eq!(res.status, 401);
+    server.shutdown();
+}
+
+#[test]
+fn test_connections_beyond_cap_get_503() {
+    let server = start_test_server();
+    let mut held: Vec<TcpStream> = (0..server::MAX_CONCURRENT_CONNECTIONS)
+        .map(|_| connect_raw(server.port))
+        .collect();
+
+    let mut extra = connect_raw(server.port);
+    let res = read_raw_response(&mut extra);
+    assert_eq!(res.status, 503);
+
+    // A held connection is still served.
+    let mut first = held.remove(0);
+    first
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    assert_eq!(read_raw_response(&mut first).status, 200);
+    drop(first);
+
+    // Once a slot is free again, new connections are served.
+    let mut served = false;
+    for _ in 0..50 {
+        let res = http_get(server.port, "/health");
+        if res.status == 200 {
+            served = true;
+            break;
+        }
+        assert_eq!(res.status, 503);
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(served, "a freed slot should be reused");
+    drop(held);
     server.shutdown();
 }
 
