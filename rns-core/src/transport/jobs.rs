@@ -94,7 +94,7 @@ pub fn process_pending_announces(
 
 /// Cull expired entries from the reverse table.
 pub fn cull_reverse_table(
-    reverse_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::ReverseEntry>,
+    reverse_table: &mut super::tables::ReverseTable,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     now: f64,
 ) -> usize {
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_cull_reverse_table_timeout() {
-        let mut table = BTreeMap::new();
+        let mut table = crate::transport::tables::ReverseTable::default();
         let mut interfaces = BTreeMap::new();
         interfaces.insert(InterfaceId(1), make_interface_info(1));
         interfaces.insert(InterfaceId(2), make_interface_info(2));
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_cull_reverse_table_missing_interface() {
-        let mut table = BTreeMap::new();
+        let mut table = crate::transport::tables::ReverseTable::default();
         let mut interfaces = BTreeMap::new();
         interfaces.insert(InterfaceId(1), make_interface_info(1));
         // Interface 2 is missing

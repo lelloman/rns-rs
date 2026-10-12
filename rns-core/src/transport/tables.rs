@@ -33,6 +33,14 @@ pub struct AnnounceEntry {
     pub attached_interface: Option<InterfaceId>,
 }
 
+/// Reverse-path entries keyed by truncated packet hash.
+///
+/// Senders can grind packets for chosen hashes, so the table's hasher must
+/// be keyed with a secret seed; see [`TransportEngine::seed_table_hashing`].
+///
+/// [`TransportEngine::seed_table_hashing`]: super::TransportEngine::seed_table_hashing
+pub type ReverseTable = hashbrown::HashMap<[u8; 16], ReverseEntry, foldhash::fast::FixedState>;
+
 /// Entry in the reverse table, keyed by truncated packet hash.
 #[derive(Debug, Clone)]
 pub struct ReverseEntry {

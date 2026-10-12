@@ -15,7 +15,7 @@ impl TransportEngine {
             config,
             path_table: BTreeMap::new(),
             announce_table: BTreeMap::new(),
-            reverse_table: BTreeMap::new(),
+            reverse_table: tables::ReverseTable::default(),
             link_table: BTreeMap::new(),
             held_announces: BTreeMap::new(),
             packet_hashlist: PacketHashlist::with_allocation(

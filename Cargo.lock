@@ -2478,6 +2478,8 @@ name = "rns-core"
 version = "0.3.0"
 dependencies = [
  "criterion",
+ "foldhash",
+ "hashbrown 0.17.1",
  "libm",
  "log",
  "rns-crypto",

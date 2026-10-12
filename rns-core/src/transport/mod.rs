@@ -206,7 +206,7 @@ pub struct TransportEngine {
     config: TransportConfig,
     path_table: BTreeMap<[u8; 16], PathSet>,
     announce_table: BTreeMap<[u8; 16], AnnounceEntry>,
-    reverse_table: BTreeMap<[u8; 16], tables::ReverseEntry>,
+    reverse_table: tables::ReverseTable,
     link_table: BTreeMap<[u8; 16], LinkEntry>,
     held_announces: BTreeMap<[u8; 16], AnnounceEntry>,
     packet_hashlist: PacketHashlist,

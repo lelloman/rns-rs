@@ -897,6 +897,7 @@ impl Driver {
             rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
         let discovery_name_hash = crate::discovery::discovery_name_hash();
         let mut engine = TransportEngine::new(config);
+        engine.seed_table_hashing(&mut OsRng);
         engine.register_destination(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         // Register path request destination so inbound path requests are delivered locally
         engine.register_destination(path_request_dest, rns_core::constants::DESTINATION_PLAIN);

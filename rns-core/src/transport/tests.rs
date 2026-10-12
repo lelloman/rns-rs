@@ -4887,3 +4887,37 @@ fn own_link_traffic_is_always_hashed() {
     let decoded = engine.decode_inbound(packet.raw.clone()).unwrap();
     assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
 }
+
+#[test]
+fn seeding_table_hashing_keeps_reverse_entries() {
+    let mut engine = TransportEngine::new(make_config(true));
+    for i in 0..100u8 {
+        engine.reverse_table.insert(
+            [i; 16],
+            tables::ReverseEntry {
+                receiving_interface: InterfaceId(1),
+                outbound_interface: InterfaceId(2),
+                timestamp: f64::from(i),
+            },
+        );
+    }
+    let before = engine.reverse_table.hasher().clone();
+    let mut rng = rns_crypto::FixedRng::new(&[0x5A; 8]);
+    engine.seed_table_hashing(&mut rng);
+
+    assert_eq!(engine.reverse_table_count(), 100);
+    for i in 0..100u8 {
+        let entry = engine
+            .reverse_table
+            .remove(&[i; 16])
+            .expect("entry survives reseeding");
+        assert_eq!(entry.timestamp, f64::from(i));
+    }
+    let probe = [0x42u8; 16];
+    use core::hash::BuildHasher;
+    assert_ne!(
+        before.hash_one(probe),
+        engine.reverse_table.hasher().hash_one(probe),
+        "the seed changes the hash function"
+    );
+}

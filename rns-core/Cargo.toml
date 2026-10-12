@@ -16,6 +16,8 @@ std = ["rns-crypto/std"]
 rns-crypto = { version = "0.2.0", path = "../rns-crypto", default-features = false }
 log = "0.4"
 libm = "0.2"
+hashbrown = { version = "0.17", default-features = false }
+foldhash = { version = "0.2", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
