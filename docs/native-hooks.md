@@ -98,6 +98,58 @@ The host API pointer exposes callbacks equivalent to the WASM host functions:
 The `version` field is currently `1`. Hooks should check it before relying on a
 callback. A callback pointer may be `NULL`.
 
+## Verdicts
+
+Every hook backend (WASM, native and built-in) returns one of four verdicts:
+
+- `Continue` — pass the packet or event through unchanged.
+- `Drop` — stop the packet or action at hook points that support it.
+- `Modify` — replace the packet bytes. WASM hooks point
+  `modified_data_offset`/`modified_data_len` at the replacement; native hooks
+  call `set_modified_data`; built-in hooks call
+  `BuiltinHookHost::set_modified_data`.
+- `Halt` — stop the hook chain; later hooks at the same attach point do not run
+  and the packet continues with its original bytes, even if an earlier hook in
+  the chain returned `Modify`.
+
+Within a chain, each hook after a `Modify` sees the replacement bytes. The
+chain's final verdict decides what the node does: the replacement is used only
+when the last verdict that stopped or modified the chain is `Modify`.
+
+### Where `Modify` applies
+
+`Modify` is applied only at hook points that hold the raw packet before acting
+on it. At every other hook point it behaves exactly like `Continue` and the
+replacement bytes are ignored.
+
+| Hook point | `Modify` |
+|------------|----------|
+| `PreIngress` | Applied. The replacement is decoded and must pass the same admission checks as a received packet before transport processing. |
+| `SendOnInterface` | Applied. The replacement is sent on the interface. |
+| `BroadcastOnAllInterfaces` | Applied. The replacement is sent on every selected interface. |
+| `DeliverLocal` | Applied. The replacement is delivered under its own destination hash and packet hash. |
+| `PreDispatch` | Treated as `Continue`: the packet has already been processed. |
+| `TunnelSynthesize` | Treated as `Continue`: the hook sees the synthesis payload, not a packet. |
+| `AnnounceReceived`, `PathUpdated`, `AnnounceRetransmit` | Treated as `Continue`: no packet bytes. |
+| `LinkRequestReceived`, `LinkEstablished`, `LinkClosed` | Treated as `Continue`: no packet bytes. |
+| `InterfaceUp`, `InterfaceDown`, `InterfaceConfigChanged` | Treated as `Continue`: no packet bytes. |
+| `BackbonePeer*` | Treated as `Continue`: no packet bytes. |
+| `Tick` | Treated as `Continue`: no packet bytes. |
+
+Where it applies, a replacement is validated before use. It must be
+non-empty, no longer than the MTU of the interface the packet is handled on
+(the smallest MTU among the selected interfaces for a broadcast, or the
+protocol MTU when no interface is known), and decode as a packet with the same
+decoder the node uses for received frames. A replacement that fails validation
+is treated as `Drop`, logged at debug level and counted per hook point. A `Modify` verdict without
+replacement bytes behaves as `Continue`. Packet hashes, destination hashes and
+other header fields are always taken from the replacement, never from the
+original packet.
+
+`rns-hooks/examples/path_modifier` shows a `Modify` hook: attached at
+`PreIngress`, it raises the hop count of every received announce by two so
+paths learned through that interface are less preferred.
+
 ## Safety Model
 
 Native hooks are not sandboxed. A native hook can crash the process, block the

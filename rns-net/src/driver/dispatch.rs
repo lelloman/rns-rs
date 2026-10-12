@@ -440,6 +440,41 @@ impl Driver {
         self.dispatch_send_on_interface_action_with_hooks(interface, raw, hook_injected, true);
     }
 
+    /// Apply an outbound packet hook outcome. Returns the bytes to send and the
+    /// ratchet lease that covers them, or `None` when the packet must not be
+    /// sent. A replacement takes its own ratchet lease and becomes the packet
+    /// a pending confirmed link send waits for.
+    #[cfg(feature = "hooks")]
+    fn apply_outbound_hook_outcome(
+        &mut self,
+        outcome: PacketHookOutcome,
+        raw: rns_core::transport::types::PacketBytes,
+        ratchet_lease: Option<crate::local_ratchet::AnnouncementLease>,
+    ) -> Option<(
+        rns_core::transport::types::PacketBytes,
+        Option<crate::local_ratchet::AnnouncementLease>,
+    )> {
+        match outcome {
+            PacketHookOutcome::Keep => Some((raw, ratchet_lease)),
+            PacketHookOutcome::Drop => None,
+            PacketHookOutcome::Replace(packet) => {
+                let lease = match crate::local_ratchet::AnnouncementLease::acquire(
+                    self.event_tx.local_ratchets(),
+                    &packet.raw,
+                ) {
+                    Ok(lease) => lease,
+                    Err(error) => {
+                        log::warn!("suppressing local announcement: {error}");
+                        return None;
+                    }
+                };
+                drop(ratchet_lease);
+                self.retarget_tracked_link_send(&raw, &packet);
+                Some((packet.raw.into(), lease))
+            }
+        }
+    }
+
     /// Send `raw` on `interface`. When `run_hooks` is false the
     /// `SendOnInterface` hook point is skipped; this is used for actions that
     /// hooks injected themselves, so a hook cannot re-trigger itself.
@@ -464,7 +499,7 @@ impl Driver {
         };
 
         #[cfg(feature = "hooks")]
-        if run_hooks {
+        let (raw, ratchet_lease) = if run_hooks {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
                 hops: if raw.len() > 1 { raw[1] } else { 0 },
@@ -487,6 +522,7 @@ impl Driver {
                 now,
             };
             let provider_events_enabled = self.provider_events_enabled();
+            let mut outcome = PacketHookOutcome::Keep;
             if let Some(ref e) = run_hook_inner(
                 &mut self.hook_slots[HookPoint::SendOnInterface as usize].programs,
                 &self.hook_manager,
@@ -496,11 +532,17 @@ impl Driver {
                 provider_events_enabled,
             ) {
                 self.collect_hook_side_effects("SendOnInterface", e, _hook_injected);
-                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
-                    return;
-                }
+                let max_len = self.hook_packet_limit(interface);
+                outcome = self.packet_hook_outcome(HookPoint::SendOnInterface, e, max_len);
             }
-        }
+            let Some(applied) = self.apply_outbound_hook_outcome(outcome, raw, ratchet_lease)
+            else {
+                return;
+            };
+            applied
+        } else {
+            (raw, ratchet_lease)
+        };
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
@@ -661,7 +703,7 @@ impl Driver {
         };
 
         #[cfg(feature = "hooks")]
-        if run_hooks {
+        let (raw, ratchet_lease) = if run_hooks {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
                 hops: if raw.len() > 1 { raw[1] } else { 0 },
@@ -684,6 +726,7 @@ impl Driver {
                 now,
             };
             let provider_events_enabled = self.provider_events_enabled();
+            let mut outcome = PacketHookOutcome::Keep;
             if let Some(ref e) = run_hook_inner(
                 &mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize].programs,
                 &self.hook_manager,
@@ -693,11 +736,25 @@ impl Driver {
                 provider_events_enabled,
             ) {
                 self.collect_hook_side_effects("BroadcastOnAllInterfaces", e, _hook_injected);
-                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
-                    return;
-                }
+                // The replacement goes out on every selected interface, so it
+                // must fit the smallest of them.
+                let max_len = self
+                    .interfaces
+                    .values()
+                    .filter(|entry| entry.online && entry.enabled && Some(entry.id) != exclude)
+                    .map(|entry| self.hook_packet_limit(entry.id))
+                    .min()
+                    .unwrap_or(rns_core::constants::MTU);
+                outcome = self.packet_hook_outcome(HookPoint::BroadcastOnAllInterfaces, e, max_len);
             }
-        }
+            let Some(applied) = self.apply_outbound_hook_outcome(outcome, raw, ratchet_lease)
+            else {
+                return;
+            };
+            applied
+        } else {
+            (raw, ratchet_lease)
+        };
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
@@ -795,8 +852,11 @@ impl Driver {
     ) {
         #[cfg(not(feature = "hooks"))]
         let _ = run_hooks;
+        // The engine recorded the received packet's hash; a stale-link arrival
+        // must forget that entry even if a hook replaced the bytes.
+        let hashlist_hash = packet_hash;
         #[cfg(feature = "hooks")]
-        if run_hooks {
+        let (destination_hash, raw, packet_hash) = if run_hooks {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: 0,
                 hops: 0,
@@ -819,6 +879,7 @@ impl Driver {
                 now,
             };
             let provider_events_enabled = self.provider_events_enabled();
+            let mut outcome = PacketHookOutcome::Keep;
             if let Some(ref e) = run_hook_inner(
                 &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
                 &self.hook_manager,
@@ -828,11 +889,22 @@ impl Driver {
                 provider_events_enabled,
             ) {
                 self.collect_hook_side_effects("DeliverLocal", e, _hook_injected);
-                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
-                    return;
-                }
+                let max_len = self.hook_packet_limit(receiving_interface);
+                outcome = self.packet_hook_outcome(HookPoint::DeliverLocal, e, max_len);
             }
-        }
+            match outcome {
+                PacketHookOutcome::Keep => (destination_hash, raw, packet_hash),
+                PacketHookOutcome::Drop => return,
+                // Deliver the replacement under its own destination and hash.
+                PacketHookOutcome::Replace(packet) => (
+                    packet.destination_hash,
+                    packet.raw.into(),
+                    packet.packet_hash,
+                ),
+            }
+        } else {
+            (destination_hash, raw, packet_hash)
+        };
 
         if destination_hash == self.tunnel_synth_dest {
             self.handle_tunnel_synth_delivery(&raw, receiving_interface);
@@ -875,7 +947,7 @@ impl Driver {
                     // The active link has failed over, but an in-flight packet
                     // arrived on its former interface. Do not let this arrival
                     // suppress the copy still travelling on the current route.
-                    self.engine.forget_packet_hash(&packet_hash);
+                    self.engine.forget_packet_hash(&hashlist_hash);
                     return;
                 }
             }
@@ -1285,6 +1357,8 @@ impl Driver {
                             now,
                         };
                         let provider_events_enabled = self.provider_events_enabled();
+                        // The hook sees the synthesis payload, not a packet, so
+                        // `Modify` acts as `Continue` and its bytes are ignored.
                         {
                             let exec = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs,

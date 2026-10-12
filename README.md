@@ -433,8 +433,10 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 
 - `Continue` — pass through normally
 - `Drop` — block the packet/action
-- `Modify` — replace with modified data
+- `Modify` — replace the packet bytes (applied at `PreIngress`, `SendOnInterface`, `BroadcastOnAllInterfaces` and `DeliverLocal`; the replacement must decode as a packet and fit the interface MTU, otherwise the packet is dropped; elsewhere `Modify` acts as `Continue`)
 - `Halt` — stop the hook chain (no further hooks at this attach point are executed)
+
+See [docs/native-hooks.md](docs/native-hooks.md#verdicts) for how each hook point handles the verdicts.
 
 **Configuration:**
 
@@ -483,7 +485,7 @@ Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook
 | `rate_limiter` | Rate-limit packets per interface |
 | `metrics` | Collect counters and statistics across hook invocations |
 | `packet_mirror` | Mirror packets to an additional destination |
-| `path_modifier` | Demonstrate the Modify verdict by prepending a marker byte to packet data |
+| `path_modifier` | Demonstrate the Modify verdict by raising the hop count of received announces at `PreIngress` |
 | `stats_scraper` | Emit packet and announce statistics for collection by the statistics sidecar |
 
 ## Local destination ratchets

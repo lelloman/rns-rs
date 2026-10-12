@@ -17,6 +17,53 @@ impl Driver {
         self.handle_classified_frame_event(interface_id, data, rssi, snr, false);
     }
 
+    /// Inbound admission checks that run on a decoded packet before the
+    /// `PreIngress` hook. They count protocol violations and packet filter hits
+    /// on the receiving interface and return whether the packet may proceed.
+    fn admit_decoded_inbound(
+        &mut self,
+        interface_id: InterfaceId,
+        packet_len: usize,
+        decoded: &DecodedPacket,
+    ) -> bool {
+        let parsed_packet = decoded.packet();
+        if parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
+            && packet_len > rns_core::constants::MTU
+        {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.protocol_violations += 1;
+            }
+            return false;
+        }
+        let is_path_request = parsed_packet.destination_hash == self.path_request_dest;
+        let tagless_path_request = is_path_request && parsed_packet.data.len() <= 16;
+        if tagless_path_request || self.engine.is_unvalidated_link_packet(parsed_packet) {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.protocol_violations += 1;
+            }
+            return false;
+        }
+        if is_path_request && parsed_packet.data.len() > 48 {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.protocol_violations += 1;
+            }
+        }
+        if !self.engine.accepts_decoded_packet(decoded, interface_id) {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                if self
+                    .engine
+                    .is_packet_filter_protocol_violation(parsed_packet, interface_id)
+                {
+                    entry.stats.protocol_violations += 1;
+                } else {
+                    entry.stats.packet_filter_hits += 1;
+                }
+            }
+            return false;
+        }
+        true
+    }
+
     fn handle_classified_frame_event(
         &mut self,
         interface_id: InterfaceId,
@@ -84,47 +131,12 @@ impl Driver {
                 return;
             }
         };
-        let parsed_packet = decoded_packet.packet();
-        if parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
-            && packet.len() > rns_core::constants::MTU
-        {
-            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                entry.stats.protocol_violations += 1;
-            }
-            return;
-        }
-        let is_path_request = parsed_packet.destination_hash == self.path_request_dest;
-        let tagless_path_request = is_path_request && parsed_packet.data.len() <= 16;
-        if tagless_path_request || self.engine.is_unvalidated_link_packet(parsed_packet) {
-            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                entry.stats.protocol_violations += 1;
-            }
-            return;
-        }
-        if is_path_request && parsed_packet.data.len() > 48 {
-            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                entry.stats.protocol_violations += 1;
-            }
-        }
-        if !self
-            .engine
-            .accepts_decoded_packet(&decoded_packet, interface_id)
-        {
-            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                if self
-                    .engine
-                    .is_packet_filter_protocol_violation(parsed_packet, interface_id)
-                {
-                    entry.stats.protocol_violations += 1;
-                } else {
-                    entry.stats.packet_filter_hits += 1;
-                }
-            }
+        if !self.admit_decoded_inbound(interface_id, packet.len(), &decoded_packet) {
             return;
         }
 
         #[cfg(feature = "hooks")]
-        {
+        let (packet, decoded_packet) = {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
                 hops: if packet.len() > 1 { packet[1] } else { 0 },
@@ -147,6 +159,7 @@ impl Driver {
                 now,
             };
             let provider_events_enabled = self.provider_events_enabled();
+            let mut outcome = PacketHookOutcome::Keep;
             if let Some(ref e) = run_hook_inner(
                 &mut self.hook_slots[HookPoint::PreIngress as usize].programs,
                 &self.hook_manager,
@@ -156,11 +169,25 @@ impl Driver {
                 provider_events_enabled,
             ) {
                 self.forward_hook_side_effects("PreIngress", e);
-                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
-                    return;
+                let max_len = self.hook_packet_limit(interface_id);
+                outcome = self.packet_hook_outcome(HookPoint::PreIngress, e, max_len);
+            }
+            match outcome {
+                PacketHookOutcome::Keep => (packet, decoded_packet),
+                PacketHookOutcome::Drop => return,
+                PacketHookOutcome::Replace(replacement) => {
+                    // Decode the replacement afresh and hold it to the same
+                    // admission checks as a received packet.
+                    let Ok(decoded) = DecodedPacket::unpack(&replacement.raw) else {
+                        return;
+                    };
+                    if !self.admit_decoded_inbound(interface_id, replacement.raw.len(), &decoded) {
+                        return;
+                    }
+                    (replacement.raw, decoded)
                 }
             }
-        }
+        };
 
         if packet.len() > 2 && (packet[0] & 0x03) == 0x01 {
             let now = time::now();
@@ -270,6 +297,9 @@ impl Driver {
                 now,
             };
             let provider_events_enabled = self.provider_events_enabled();
+            // The engine has already handled this packet, so neither `Drop`
+            // nor `Modify` can change it any more: both act as `Continue` here
+            // and the replacement bytes of a `Modify` verdict are ignored.
             if let Some(ref e) = run_hook_inner(
                 &mut self.hook_slots[HookPoint::PreDispatch as usize].programs,
                 &self.hook_manager,
@@ -353,6 +383,7 @@ impl Driver {
                 now,
             };
             let provider_events_enabled = self.provider_events_enabled();
+            // Tick carries no packet: `Modify` acts as `Continue`.
             if let Some(ref e) = run_hook_inner(
                 &mut self.hook_slots[HookPoint::Tick as usize].programs,
                 &self.hook_manager,

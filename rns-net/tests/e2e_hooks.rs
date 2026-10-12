@@ -1472,3 +1472,46 @@ fn test_metrics_does_not_interfere() {
     bob_node.shutdown();
     transport.shutdown();
 }
+
+#[test]
+fn test_path_modifier_raises_received_announce_hops() {
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
+
+    // Baseline: hops for an announce received without the hook.
+    let baseline = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+
+    alice_node
+        .load_hook(
+            "path_modifier".into(),
+            wasm_bytes("path_modifier"),
+            "PreIngress".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    // A second destination of Bob, announced once the hook is in place.
+    let bob_ih = IdentityHash(*bob_id.hash());
+    let second_dest = Destination::single_in(APP_NAME, &["msg", "second"], bob_ih);
+    bob_node
+        .register_destination_with_proof(&second_dest, Some(bob_id.get_private_key().unwrap()))
+        .unwrap();
+    let modified = announce_bob_to_alice(&bob_node, &second_dest, &bob_id, &alice_rx);
+
+    // path_modifier adds two hops to every announce received at PreIngress.
+    assert_eq!(modified.hops, baseline.hops + 2);
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}

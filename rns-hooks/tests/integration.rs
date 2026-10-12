@@ -144,35 +144,54 @@ fn packet_logger_continue_on_announce() {
 
 // --- path_modifier tests ---
 
-#[test]
-fn path_modifier_modify_on_packet() {
+fn run_path_modifier_on(raw: &[u8]) -> Option<rns_hooks::ExecuteResult> {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "path_modifier") else {
-        return;
-    };
-
+    let mut prog = load_example(&mgr, "path_modifier")?;
     let pkt = rns_hooks::PacketContext {
-        flags: 0,
-        hops: 1,
+        flags: raw[0],
+        hops: raw[1],
         destination_hash: [0x33; 16],
         context: 0,
         packet_hash: [0x44; 32],
         interface_id: 7,
         data_offset: 0,
-        data_len: 0,
+        data_len: raw.len() as u32,
     };
-    let ctx = HookContext::Packet {
-        ctx: &pkt,
-        raw: &[],
+    let ctx = HookContext::Packet { ctx: &pkt, raw };
+    mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+}
+
+fn packet_bytes(flags: u8, hops: u8) -> Vec<u8> {
+    let mut raw = vec![flags, hops];
+    raw.extend_from_slice(&[0x33; 16]);
+    raw.push(0);
+    raw.extend_from_slice(b"payload");
+    raw
+}
+
+#[test]
+fn path_modifier_raises_announce_hops() {
+    let raw = packet_bytes(0x01, 1);
+    let Some(exec) = run_path_modifier_on(&raw) else {
+        return;
     };
-    let exec = mgr
-        .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
-        .unwrap();
     let r = exec.hook_result.unwrap();
     assert_eq!(r.verdict, Verdict::Modify as u32);
-    // Modified data should start with the 0xFF marker byte
     let data = exec.modified_data.unwrap();
-    assert_eq!(data[0], 0xFF);
+    assert_eq!(data[1], 3);
+    assert_eq!(data[0], raw[0]);
+    assert_eq!(data[2..], raw[2..]);
+}
+
+#[test]
+fn path_modifier_continues_on_other_packets_and_at_the_hop_limit() {
+    for raw in [packet_bytes(0x00, 1), packet_bytes(0x01, 126)] {
+        let Some(exec) = run_path_modifier_on(&raw) else {
+            return;
+        };
+        let r = exec.hook_result.unwrap();
+        assert_eq!(r.verdict, Verdict::Continue as u32);
+    }
 }
 
 #[test]

@@ -430,6 +430,36 @@ fn run_hook_inner(
     mgr.run_chain_with_provider_events(programs, ctx, engine_access, now, provider_events_enabled)
 }
 
+/// What a packet hook point does after its hook chain ran.
+///
+/// Only hook points that hold the raw packet bytes before acting on them apply
+/// a `Modify` verdict (`PreIngress`, `SendOnInterface`,
+/// `BroadcastOnAllInterfaces`, `DeliverLocal`). Every other hook point treats
+/// `Modify` as `Continue` and ignores the replacement bytes.
+#[cfg(feature = "hooks")]
+pub(crate) enum PacketHookOutcome {
+    /// Carry on with the bytes the hook point already holds.
+    Keep,
+    /// Stop processing this packet.
+    Drop,
+    /// Carry on with the replacement bytes, decoded with the same decoder the
+    /// normal path uses. Hashes and header fields come from the replacement.
+    Replace(RawPacket),
+}
+
+/// Validate replacement bytes from a `Modify` verdict: they must be non-empty,
+/// fit within `max_len`, and decode as a packet.
+#[cfg(feature = "hooks")]
+fn validate_hook_replacement(data: &[u8], max_len: usize) -> Result<RawPacket, &'static str> {
+    if data.is_empty() {
+        return Err("replacement is empty");
+    }
+    if data.len() > max_len {
+        return Err("replacement exceeds the packet size limit");
+    }
+    RawPacket::unpack(data).map_err(|_| "replacement does not decode as a packet")
+}
+
 #[cfg(feature = "hooks")]
 fn backbone_peer_hook_context(event: &BackbonePeerHookEvent) -> HookContext<'_> {
     HookContext::BackbonePeer {
@@ -843,6 +873,10 @@ pub struct Driver {
     pub(crate) hook_manager: Option<HookManager>,
     #[cfg(feature = "hooks")]
     pub(crate) provider_bridge: Option<ProviderBridge>,
+    /// Per hook point count of `Modify` replacements that failed validation
+    /// and were therefore treated as `Drop`.
+    #[cfg(feature = "hooks")]
+    pub(crate) hook_rejected_modifications: [u64; HookPoint::COUNT],
 }
 
 impl Driver {
@@ -1015,6 +1049,8 @@ impl Driver {
             hook_manager: HookManager::new().ok(),
             #[cfg(feature = "hooks")]
             provider_bridge: None,
+            #[cfg(feature = "hooks")]
+            hook_rejected_modifications: [0; HookPoint::COUNT],
         }
     }
 
@@ -1289,6 +1325,65 @@ impl Driver {
     #[allow(dead_code)]
     pub(crate) fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
         self.engine.set_packet_hashlist_max_entries(max_entries);
+    }
+
+    /// Turn a packet hook chain result into the action the hook point takes.
+    ///
+    /// `Drop` stops the packet. `Modify` with replacement bytes is validated
+    /// against `max_len` and the packet decoder; a replacement that fails
+    /// validation is treated as `Drop` and counted in
+    /// `hook_rejected_modifications`. `Modify` without bytes, `Continue` and
+    /// `Halt` keep the current bytes.
+    #[cfg(feature = "hooks")]
+    pub(crate) fn packet_hook_outcome(
+        &mut self,
+        point: HookPoint,
+        exec: &rns_hooks::ExecuteResult,
+        max_len: usize,
+    ) -> PacketHookOutcome {
+        let Some(result) = exec.hook_result.as_ref() else {
+            return PacketHookOutcome::Keep;
+        };
+        if result.is_drop() {
+            return PacketHookOutcome::Drop;
+        }
+        if rns_hooks::Verdict::from_u32(result.verdict) != Some(rns_hooks::Verdict::Modify) {
+            return PacketHookOutcome::Keep;
+        }
+        let Some(data) = exec.modified_data.as_deref() else {
+            return PacketHookOutcome::Keep;
+        };
+        match validate_hook_replacement(data, max_len) {
+            Ok(packet) => PacketHookOutcome::Replace(packet),
+            Err(reason) => {
+                let rejected = &mut self.hook_rejected_modifications[point as usize];
+                *rejected = rejected.saturating_add(1);
+                log::debug!("{:?} hook: {}; dropping packet", point, reason);
+                PacketHookOutcome::Drop
+            }
+        }
+    }
+
+    /// Largest packet a hook may substitute for one handled on `interface`.
+    #[cfg(feature = "hooks")]
+    pub(crate) fn hook_packet_limit(&self, interface: InterfaceId) -> usize {
+        self.interfaces
+            .get(&interface)
+            .map(|entry| entry.info.mtu as usize)
+            .filter(|mtu| *mtu > 0)
+            .unwrap_or(rns_core::constants::MTU)
+    }
+
+    /// Point a pending confirmed link send at the replacement bytes a hook
+    /// produced for the packet it was tracking.
+    #[cfg(feature = "hooks")]
+    pub(crate) fn retarget_tracked_link_send(&mut self, original: &[u8], replacement: &RawPacket) {
+        let Some((hash, _)) = self.tracked_link_send.as_mut() else {
+            return;
+        };
+        if RawPacket::unpack(original).is_ok_and(|packet| packet.packet_hash == *hash) {
+            *hash = replacement.packet_hash;
+        }
     }
 
     #[cfg(feature = "hooks")]

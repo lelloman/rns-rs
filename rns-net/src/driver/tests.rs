@@ -11070,3 +11070,315 @@ fn local_ratchets_reconnect_replay_and_writer_queue_retention() {
     driver.flush_pending_link_frames();
     assert_eq!(held.lock().unwrap().len(), 1);
 }
+
+#[cfg(feature = "hooks")]
+mod hook_modify {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static HOOK_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn attach_hook(driver: &mut Driver, point: HookPoint, hook: impl rns_hooks::BuiltinHook) {
+        let id = format!(
+            "test.driver.hook_modify.{}.{}",
+            std::process::id(),
+            HOOK_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        rns_hooks::register_builtin_hook(id.clone(), hook).unwrap();
+        let program = driver
+            .hook_manager
+            .as_ref()
+            .expect("hook manager")
+            .load_builtin(id.clone(), id.as_str(), 0)
+            .unwrap();
+        driver.hook_slots[point as usize].attach(program);
+    }
+
+    /// A hook that answers every call with `Modify` and the given bytes.
+    fn attach_replacing_hook(driver: &mut Driver, point: HookPoint, replacement: Vec<u8>) {
+        attach_hook(
+            driver,
+            point,
+            move |_call: rns_hooks::BuiltinHookCall<'_>, host: &mut rns_hooks::BuiltinHookHost| {
+                host.set_modified_data(replacement.clone());
+                Ok(rns_hooks::HookResult::modify_result(0, 0))
+            },
+        );
+    }
+
+    /// A hook that records the packet hash it was handed and continues.
+    fn attach_hash_recorder(driver: &mut Driver, point: HookPoint) -> Arc<Mutex<Vec<[u8; 32]>>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        attach_hook(
+            driver,
+            point,
+            move |call: rns_hooks::BuiltinHookCall<'_>, _host: &mut rns_hooks::BuiltinHookHost| {
+                if let HookContext::Packet { ctx, .. } = call.ctx {
+                    recorded.lock().unwrap().push(ctx.packet_hash);
+                }
+                Ok(rns_hooks::HookResult::continue_result())
+            },
+        );
+        seen
+    }
+
+    fn data_packet(dest: [u8; 16], payload: &[u8]) -> RawPacket {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, payload).unwrap()
+    }
+
+    /// A well-formed header followed by enough payload to exceed the MTU.
+    fn oversize_packet_bytes(dest: [u8; 16]) -> Vec<u8> {
+        let mut raw = vec![0x00, 0x00];
+        raw.extend_from_slice(&dest);
+        raw.push(constants::CONTEXT_NONE);
+        raw.resize(constants::MTU + 1, 0x42);
+        assert!(RawPacket::unpack(&raw).is_ok());
+        raw
+    }
+
+    fn driver_with_sender() -> (Driver, Arc<Mutex<Vec<Vec<u8>>>>) {
+        let mut driver = new_test_driver();
+        driver.engine.register_interface(make_interface_info(1));
+        let (writer, sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        (driver, sent)
+    }
+
+    fn driver_with_local_destinations(dests: &[[u8; 16]]) -> (Driver, Arc<Mutex<Vec<DestHash>>>) {
+        let (callbacks, _, _, deliveries, _, _) = MockCallbacks::new();
+        let (tx, rx) = event::channel();
+        let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(callbacks));
+        driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+        driver.engine.register_interface(make_interface_info(1));
+        let (writer, _sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        for dest in dests {
+            driver
+                .engine
+                .register_destination(*dest, constants::DESTINATION_SINGLE);
+        }
+        (driver, deliveries)
+    }
+
+    fn rejected(driver: &Driver, point: HookPoint) -> u64 {
+        driver.hook_rejected_modifications[point as usize]
+    }
+
+    #[test]
+    fn send_hook_replacement_is_sent_instead_of_the_original() {
+        let (mut driver, sent) = driver_with_sender();
+        let original = data_packet([0x11; 16], b"first");
+        let replacement = data_packet([0x22; 16], b"second");
+        attach_replacing_hook(
+            &mut driver,
+            HookPoint::SendOnInterface,
+            replacement.raw.clone(),
+        );
+
+        driver.dispatch_send_on_interface_action(
+            InterfaceId(1),
+            original.raw.clone().into(),
+            &mut Vec::new(),
+        );
+
+        assert_eq!(sent.lock().unwrap().as_slice(), &[replacement.raw]);
+        assert_eq!(rejected(&driver, HookPoint::SendOnInterface), 0);
+    }
+
+    #[test]
+    fn broadcast_hook_replacement_is_sent_instead_of_the_original() {
+        let (mut driver, sent) = driver_with_sender();
+        let original = data_packet([0x11; 16], b"first");
+        let replacement = data_packet([0x22; 16], b"second");
+        attach_replacing_hook(
+            &mut driver,
+            HookPoint::BroadcastOnAllInterfaces,
+            replacement.raw.clone(),
+        );
+
+        driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
+            raw: original.raw.clone().into(),
+            exclude: None,
+        }]);
+
+        assert_eq!(sent.lock().unwrap().as_slice(), &[replacement.raw]);
+        assert_eq!(rejected(&driver, HookPoint::BroadcastOnAllInterfaces), 0);
+    }
+
+    #[test]
+    fn send_hook_replacement_that_fails_validation_is_dropped_and_counted() {
+        let cases: [(&str, Vec<u8>); 4] = [
+            ("empty", Vec::new()),
+            ("too short", vec![0x00, 0x00, 0x01]),
+            ("hop count out of range", {
+                let mut raw = data_packet([0x22; 16], b"second").raw;
+                raw[1] = constants::PATHFINDER_M;
+                raw
+            }),
+            ("over the interface MTU", oversize_packet_bytes([0x22; 16])),
+        ];
+        for (name, replacement) in cases {
+            let (mut driver, sent) = driver_with_sender();
+            attach_replacing_hook(&mut driver, HookPoint::SendOnInterface, replacement);
+
+            driver.dispatch_send_on_interface_action(
+                InterfaceId(1),
+                data_packet([0x11; 16], b"first").raw.into(),
+                &mut Vec::new(),
+            );
+
+            assert!(sent.lock().unwrap().is_empty(), "{name}: nothing is sent");
+            assert_eq!(
+                rejected(&driver, HookPoint::SendOnInterface),
+                1,
+                "{name}: the replacement is counted"
+            );
+        }
+    }
+
+    #[test]
+    fn modify_without_replacement_bytes_sends_the_original() {
+        let (mut driver, sent) = driver_with_sender();
+        attach_hook(
+            &mut driver,
+            HookPoint::SendOnInterface,
+            |_call: rns_hooks::BuiltinHookCall<'_>, _host: &mut rns_hooks::BuiltinHookHost| {
+                Ok(rns_hooks::HookResult::modify_result(0, 0))
+            },
+        );
+        let original = data_packet([0x11; 16], b"first");
+
+        driver.dispatch_send_on_interface_action(
+            InterfaceId(1),
+            original.raw.clone().into(),
+            &mut Vec::new(),
+        );
+
+        assert_eq!(sent.lock().unwrap().as_slice(), &[original.raw]);
+        assert_eq!(rejected(&driver, HookPoint::SendOnInterface), 0);
+    }
+
+    #[test]
+    fn pre_ingress_replacement_is_decoded_and_delivered_with_its_own_hash() {
+        let first = [0x31; 16];
+        let second = [0x32; 16];
+        let (mut driver, deliveries) = driver_with_local_destinations(&[first, second]);
+        let original = data_packet(first, b"first");
+        let replacement = data_packet(second, b"second");
+        attach_replacing_hook(&mut driver, HookPoint::PreIngress, replacement.raw.clone());
+        let delivered_hashes = attach_hash_recorder(&mut driver, HookPoint::DeliverLocal);
+
+        driver.handle_frame_event(InterfaceId(1), original.raw.clone(), None, None);
+
+        assert_eq!(deliveries.lock().unwrap().as_slice(), &[DestHash(second)]);
+        assert_eq!(
+            delivered_hashes.lock().unwrap().as_slice(),
+            &[replacement.packet_hash]
+        );
+        assert_eq!(rejected(&driver, HookPoint::PreIngress), 0);
+    }
+
+    #[test]
+    fn pre_ingress_replacement_that_fails_validation_is_dropped_and_counted() {
+        let first = [0x31; 16];
+        let (mut driver, deliveries) = driver_with_local_destinations(&[first]);
+        attach_replacing_hook(&mut driver, HookPoint::PreIngress, vec![0x00]);
+
+        driver.handle_frame_event(InterfaceId(1), data_packet(first, b"first").raw, None, None);
+
+        assert!(deliveries.lock().unwrap().is_empty());
+        assert_eq!(rejected(&driver, HookPoint::PreIngress), 1);
+    }
+
+    #[test]
+    fn pre_ingress_replacement_still_passes_admission_checks() {
+        let first = [0x31; 16];
+        let (mut driver, deliveries) = driver_with_local_destinations(&[first]);
+        // A path request without a tag is refused on receipt, so it is refused
+        // as a replacement too.
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let tagless = RawPacket::pack(
+            flags,
+            0,
+            &driver.path_request_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &[0x44; 16],
+        )
+        .unwrap();
+        attach_replacing_hook(&mut driver, HookPoint::PreIngress, tagless.raw);
+
+        driver.handle_frame_event(InterfaceId(1), data_packet(first, b"first").raw, None, None);
+
+        assert!(deliveries.lock().unwrap().is_empty());
+        assert_eq!(
+            driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+            1
+        );
+    }
+
+    #[test]
+    fn deliver_local_replacement_is_delivered_to_its_own_destination() {
+        let first = [0x31; 16];
+        let second = [0x32; 16];
+        let (mut driver, deliveries) = driver_with_local_destinations(&[first, second]);
+        let original = data_packet(first, b"first");
+        let replacement = data_packet(second, b"second");
+        attach_replacing_hook(
+            &mut driver,
+            HookPoint::DeliverLocal,
+            replacement.raw.clone(),
+        );
+
+        driver.handle_frame_event(InterfaceId(1), original.raw.clone(), None, None);
+
+        assert_eq!(deliveries.lock().unwrap().as_slice(), &[DestHash(second)]);
+        assert_eq!(rejected(&driver, HookPoint::DeliverLocal), 0);
+    }
+
+    #[test]
+    fn pre_dispatch_modify_acts_as_continue() {
+        let first = [0x31; 16];
+        let second = [0x32; 16];
+        let (mut driver, deliveries) = driver_with_local_destinations(&[first, second]);
+        attach_replacing_hook(
+            &mut driver,
+            HookPoint::PreDispatch,
+            data_packet(second, b"second").raw,
+        );
+
+        driver.handle_frame_event(InterfaceId(1), data_packet(first, b"first").raw, None, None);
+
+        assert_eq!(deliveries.lock().unwrap().as_slice(), &[DestHash(first)]);
+        assert_eq!(rejected(&driver, HookPoint::PreDispatch), 0);
+    }
+
+    #[test]
+    fn tick_modify_acts_as_continue() {
+        let (mut driver, sent) = driver_with_sender();
+        attach_replacing_hook(&mut driver, HookPoint::Tick, vec![0x00]);
+
+        driver.handle_tick_event();
+
+        assert!(sent.lock().unwrap().is_empty());
+        assert_eq!(rejected(&driver, HookPoint::Tick), 0);
+    }
+}
