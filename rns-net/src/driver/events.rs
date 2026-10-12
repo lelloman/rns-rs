@@ -958,6 +958,7 @@ impl Driver {
     pub fn run(&mut self) {
         self.link_manager
             .set_receive_worker_wake(self.event_tx.clone());
+        let mut ready = polling::Events::new();
         loop {
             self.poll_resource_preparations();
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
@@ -966,8 +967,15 @@ impl Driver {
             if !self.rx.has_prefetched() {
                 self.wake_writers();
             }
-            let received = match self.rx.recv_classified() {
-                Ok(e) => e,
+            let received = match self.rx.try_recv_classified() {
+                Ok(Some(e)) => e,
+                Ok(None) => {
+                    ready.clear();
+                    if let Err(error) = self.rx.wait(&mut ready, None) {
+                        log::warn!("driver wait failed: {error}");
+                    }
+                    continue;
+                }
                 Err(_) => break, // all senders dropped
             };
 

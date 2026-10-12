@@ -97,6 +97,9 @@ struct QueueState {
     /// only after taking the state lock, so it observes every change made
     /// before the notification check and no wakeup is lost.
     waiters: usize,
+    /// The receiver is blocked in `QueueShared::poller` rather than on
+    /// `changed`. Set and cleared under the state lock, like `waiters`.
+    receiver_parked: bool,
 }
 
 pub(crate) struct ReceivedEvent {
@@ -116,6 +119,7 @@ impl QueueState {
             path_request_bursts: HashMap::new(),
             dynamic_interface_parents: HashMap::new(),
             waiters: 0,
+            receiver_parked: false,
         }
     }
 
@@ -152,6 +156,9 @@ struct QueueShared {
     async_waiter_count: AtomicUsize,
     state: Mutex<QueueState>,
     changed: Condvar,
+    /// The receiver can wait here instead of on `changed`, together with any
+    /// sources registered on it. Producers wake it with `Poller::notify`.
+    poller: Arc<polling::Poller>,
     sender_count: AtomicUsize,
     control_capacity: usize,
     inbound_capacities: [usize; INBOUND_QUEUE_COUNT],
@@ -159,6 +166,27 @@ struct QueueShared {
 }
 
 impl QueueShared {
+    /// Wake whoever waits for this change: threads on `changed`, and the
+    /// receiver if it is parked in the poller.
+    fn notify_change(&self, state: &QueueState, all: bool) {
+        if state.waiters > 0 {
+            if all {
+                self.changed.notify_all();
+            } else {
+                self.changed.notify_one();
+            }
+        }
+        if state.receiver_parked {
+            self.wake_poller();
+        }
+    }
+
+    fn wake_poller(&self) {
+        if let Err(error) = self.poller.notify() {
+            log::warn!("failed to wake the driver poller: {error}");
+        }
+    }
+
     /// Wait on `changed`, keeping the waiter count used to skip notifications.
     fn wait_changed<'a>(
         &self,
@@ -238,6 +266,9 @@ impl Drop for EventSender {
     fn drop(&mut self) {
         if self.shared.sender_count.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.shared.changed.notify_all();
+            // The notification is retained until the next wait, so a
+            // receiver about to park still observes the disconnect.
+            self.shared.wake_poller();
         }
     }
 }
@@ -321,11 +352,8 @@ impl EventSender {
     ) -> Result<(), std::sync::mpsc::TrySendError<Event>> {
         let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         let (state, result) = self.enqueue_locked(state, event, block_control, drop_full_inbound);
-        let wake = state.waiters > 0;
+        self.shared.notify_change(&state, false);
         drop(state);
-        if wake {
-            self.shared.changed.notify_one();
-        }
         result
     }
 
@@ -360,9 +388,7 @@ impl EventSender {
             // protective drop-on-full policy.
             if block_control && class == QueueClass::Data {
                 while state.inbound[index].len() >= self.shared.inbound_capacities[index] {
-                    if state.waiters > 0 {
-                        self.shared.changed.notify_all();
-                    }
+                    self.shared.notify_change(&state, true);
                     state = self.shared.wait_changed(state);
                     if !state.receiver_alive {
                         return (
@@ -391,9 +417,7 @@ impl EventSender {
             if !block_control {
                 return (state, Err(std::sync::mpsc::TrySendError::Full(event)));
             }
-            if state.waiters > 0 {
-                self.shared.changed.notify_all();
-            }
+            self.shared.notify_change(&state, true);
             state = self.shared.wait_changed(state);
             if !state.receiver_alive {
                 return (
@@ -434,11 +458,8 @@ impl EventSender {
                 break;
             }
         }
-        let wake = state.waiters > 0;
+        self.shared.notify_change(&state, false);
         drop(state);
-        if wake {
-            self.shared.changed.notify_one();
-        }
         result
     }
 
@@ -586,6 +607,64 @@ impl EventReceiver {
         !self.prefetched.borrow().is_empty()
     }
 
+    /// Take the next event without blocking: `Ok(None)` when the queue is
+    /// empty, `Err` once it is empty and every sender is gone.
+    pub(crate) fn try_recv_classified(
+        &self,
+    ) -> Result<Option<ReceivedEvent>, std::sync::mpsc::RecvError> {
+        if let Some(event) = self.prefetched.borrow_mut().pop_front() {
+            return Ok(Some(event));
+        }
+        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(event) = self.pop_locked(&mut state) {
+            let mut prefetched = self.prefetched.borrow_mut();
+            while prefetched.len() + 1 < RECEIVE_BATCH {
+                match self.pop_locked(&mut state) {
+                    Some(next) => prefetched.push_back(next),
+                    None => break,
+                }
+            }
+            drop(prefetched);
+            drop(state);
+            self.shared.wake_async_senders();
+            return Ok(Some(event));
+        }
+        if self.shared.sender_count.load(Ordering::Acquire) == 0 {
+            return Err(std::sync::mpsc::RecvError);
+        }
+        Ok(None)
+    }
+
+    /// Block in the poller until an event is queued, every sender is gone, a
+    /// source registered on the poller is ready, or `timeout` elapses.
+    /// Ready sources are reported in `ready`; returns at once if events are
+    /// already waiting.
+    pub(crate) fn wait(
+        &self,
+        ready: &mut polling::Events,
+        timeout: Option<Duration>,
+    ) -> std::io::Result<()> {
+        if self.has_prefetched() {
+            return Ok(());
+        }
+        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.has_events() || self.shared.sender_count.load(Ordering::Acquire) == 0 {
+            return Ok(());
+        }
+        // Producers read this under the lock: one that enqueues after the
+        // check above sees the flag and notifies, and the poller keeps that
+        // notification until the wait below consumes it.
+        state.receiver_parked = true;
+        drop(state);
+        let result = self.shared.poller.wait(ready, timeout).map(|_| ());
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .receiver_parked = false;
+        result
+    }
+
     pub fn recv(&self) -> Result<Event, std::sync::mpsc::RecvError> {
         self.recv_classified().map(|received| received.event)
     }
@@ -695,6 +774,7 @@ pub(crate) fn channel_with_queue_capacities(
         async_waiter_count: AtomicUsize::new(0),
         state: Mutex::new(QueueState::new()),
         changed: Condvar::new(),
+        poller: Arc::new(polling::Poller::new().expect("create the driver event poller")),
         sender_count: AtomicUsize::new(1),
         control_capacity: control_capacity.max(1),
         inbound_capacities: inbound_capacities
@@ -1131,5 +1211,141 @@ mod tests {
             Err(std::sync::mpsc::TrySendError::Full(_))
         ));
         assert_eq!(tx.inbound_queue_snapshot().dropped, [1, 0, 0, 0]);
+    }
+
+    /// Run `wait` on another thread and report when it returns.
+    fn parked_wait(
+        rx: EventReceiver,
+        timeout: Option<Duration>,
+    ) -> std::sync::mpsc::Receiver<(EventReceiver, std::io::Result<()>)> {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut ready = polling::Events::new();
+            let result = rx.wait(&mut ready, timeout);
+            let _ = done_tx.send((rx, result));
+        });
+        done_rx
+    }
+
+    fn assert_parked(done: &std::sync::mpsc::Receiver<(EventReceiver, std::io::Result<()>)>) {
+        assert!(matches!(
+            done.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+    }
+
+    #[test]
+    fn wait_returns_at_once_when_events_are_queued() {
+        let (tx, rx) = channel();
+        tx.send(Event::Tick).unwrap();
+        let mut ready = polling::Events::new();
+        rx.wait(&mut ready, None).unwrap();
+        assert!(matches!(
+            rx.try_recv_classified().unwrap().map(|r| r.event),
+            Some(Event::Tick)
+        ));
+        assert!(rx.try_recv_classified().unwrap().is_none());
+    }
+
+    #[test]
+    fn parked_receiver_is_woken_by_send() {
+        let (tx, rx) = channel();
+        let done = parked_wait(rx, None);
+        assert_parked(&done);
+        tx.send(frame(1, [0xA1; 16], rns_core::constants::PACKET_TYPE_DATA))
+            .unwrap();
+        let (rx, result) = done.recv_timeout(Duration::from_secs(5)).unwrap();
+        result.unwrap();
+        assert_eq!(
+            frame_interface(rx.try_recv_classified().unwrap().unwrap().event),
+            1
+        );
+    }
+
+    #[test]
+    fn parked_receiver_is_woken_by_send_batch_and_try_send() {
+        let (tx, rx) = channel();
+        let done = parked_wait(rx, None);
+        assert_parked(&done);
+        tx.send_batch([
+            frame(1, [0xA1; 16], rns_core::constants::PACKET_TYPE_DATA),
+            frame(2, [0xA2; 16], rns_core::constants::PACKET_TYPE_DATA),
+        ])
+        .unwrap();
+        let (rx, result) = done.recv_timeout(Duration::from_secs(5)).unwrap();
+        result.unwrap();
+        while rx.try_recv_classified().unwrap().is_some() {}
+
+        let done = parked_wait(rx, None);
+        assert_parked(&done);
+        tx.try_send(Event::Tick).unwrap();
+        let (rx, result) = done.recv_timeout(Duration::from_secs(5)).unwrap();
+        result.unwrap();
+        assert!(matches!(
+            rx.try_recv_classified().unwrap().map(|r| r.event),
+            Some(Event::Tick)
+        ));
+    }
+
+    #[test]
+    fn parked_receiver_observes_the_last_sender_leaving() {
+        let (tx, rx) = channel();
+        let extra = tx.clone();
+        let done = parked_wait(rx, None);
+        assert_parked(&done);
+        drop(extra);
+        assert_parked(&done);
+        drop(tx);
+        let (rx, result) = done.recv_timeout(Duration::from_secs(5)).unwrap();
+        result.unwrap();
+        assert!(rx.try_recv_classified().is_err());
+        // Waiting again once disconnected returns immediately.
+        rx.wait(&mut polling::Events::new(), None).unwrap();
+    }
+
+    #[test]
+    fn wait_times_out_without_events() {
+        let (_tx, rx) = channel();
+        let started = std::time::Instant::now();
+        rx.wait(&mut polling::Events::new(), Some(Duration::from_millis(30)))
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(25));
+        assert!(rx.try_recv_classified().unwrap().is_none());
+    }
+
+    #[test]
+    fn many_producers_never_leave_a_parked_receiver_asleep() {
+        let (tx, rx) = channel();
+        let producers: Vec<_> = (0..4u64)
+            .map(|id| {
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..2_000 {
+                        tx.send(frame(id, [0xB0; 16], rns_core::constants::PACKET_TYPE_DATA))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        drop(tx);
+        let mut ready = polling::Events::new();
+        let mut received = 0;
+        loop {
+            match rx.try_recv_classified() {
+                Ok(Some(_)) => received += 1,
+                Ok(None) => {
+                    ready.clear();
+                    let started = std::time::Instant::now();
+                    rx.wait(&mut ready, Some(Duration::from_secs(5))).unwrap();
+                    // A lost wakeup would only end at the timeout.
+                    assert!(started.elapsed() < Duration::from_secs(4));
+                }
+                Err(_) => break,
+            }
+        }
+        for producer in producers {
+            producer.join().unwrap();
+        }
+        assert_eq!(received, 8_000);
     }
 }
