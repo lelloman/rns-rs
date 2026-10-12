@@ -42,6 +42,13 @@ impl PacketHashlist {
         self.set.contains(hash, &self.queue)
     }
 
+    /// Start loading the bucket a lookup of `hash` probes first, so a later
+    /// [`is_duplicate`](Self::is_duplicate) or [`add`](Self::add) for it can
+    /// overlap that cache miss with other work.
+    pub fn prefetch(&self, hash: &[u8; 32]) {
+        self.set.prefetch(hash_bytes(hash));
+    }
+
     /// Retain a hash. If the dedup table is full, evict the oldest unique hash.
     pub fn add(&mut self, hash: [u8; 32]) {
         if self.max_size == 0 || self.set.contains(&hash, &self.queue) {
@@ -67,6 +74,12 @@ impl PacketHashlist {
         let slot = (self.queue.head + self.queue.len) % self.queue.capacity();
         self.queue.push_back(hash);
         self.set.insert(slot, &self.queue);
+        if self.queue.len() == self.max_size {
+            // The next new hash evicts the current oldest; start loading its
+            // bucket now instead of stalling on it then.
+            let oldest = self.queue.entries.get(self.queue.head);
+            self.set.prefetch(hash_bytes(oldest));
+        }
     }
 
     /// Stop retaining a hash, preserving the FIFO order of all other entries.
@@ -389,6 +402,12 @@ impl PacketHashSet {
         }
     }
 
+    fn prefetch(&self, key: u64) {
+        if !self.buckets.is_empty() {
+            prefetch_read(&self.buckets[self.bucket_index(key)]);
+        }
+    }
+
     fn bucket_index(&self, key: u64) -> usize {
         debug_assert!(!self.buckets.is_empty());
         (key as usize) & (self.buckets.len() - 1)
@@ -403,6 +422,31 @@ impl PacketHashSet {
             self.bucket_index(hash_bytes(queue.entries.get(bucket_slot(entry))))
         }
     }
+}
+
+/// Hint the CPU to load the cache line holding `value`. It has no effect on
+/// program state, and is a no-op on architectures without a stable hint.
+#[inline(always)]
+fn prefetch_read(value: &u64) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: SSE is part of the x86_64 baseline, and a prefetch never faults
+    // or changes memory.
+    unsafe {
+        core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
+            (value as *const u64).cast(),
+        );
+    }
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: PRFM is a hint that never faults or changes memory or flags.
+    unsafe {
+        core::arch::asm!(
+            "prfm pldl1keep, [{0}]",
+            in(reg) value as *const u64,
+            options(nostack, readonly, preserves_flags)
+        );
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = value;
 }
 
 fn bucket_slot(entry: u64) -> usize {

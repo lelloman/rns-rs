@@ -131,6 +131,8 @@ impl Driver {
                 return;
             }
         };
+        self.engine
+            .prefetch_packet_hash(&decoded_packet.packet().packet_hash);
         if !self.admit_decoded_inbound(interface_id, packet.len(), &decoded_packet) {
             return;
         }

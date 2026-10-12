@@ -91,6 +91,13 @@ impl TransportEngine {
         self.packet_hashlist.len()
     }
 
+    /// Start loading the deduplication state for `packet_hash`, so the
+    /// inbound filter's lookup of a just-decoded packet overlaps that cache
+    /// miss with the driver's admission checks. It has no other effect.
+    pub fn prefetch_packet_hash(&self, packet_hash: &[u8; 32]) {
+        self.packet_hashlist.prefetch(packet_hash);
+    }
+
     /// Remove a packet hash from deduplication after an interface failover race.
     ///
     /// Network drivers should call this when an active-link packet arrives on
