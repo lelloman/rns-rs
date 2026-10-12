@@ -46,7 +46,7 @@ impl Aes256 {
     /// Returns `CbcError::UnalignedLength` if `plaintext.len()` is not a
     /// multiple of 16.
     pub fn encrypt_cbc(&self, plaintext: &[u8], iv: &[u8; 16]) -> Result<Vec<u8>, CbcError> {
-        if plaintext.len() % BLOCK_SIZE != 0 {
+        if !plaintext.len().is_multiple_of(BLOCK_SIZE) {
             return Err(CbcError::UnalignedLength);
         }
         let mut buf = plaintext.to_vec();
@@ -62,7 +62,7 @@ impl Aes256 {
     /// Returns `CbcError::UnalignedLength` if `ciphertext.len()` is not a
     /// multiple of 16.
     pub fn decrypt_cbc(&self, ciphertext: &[u8], iv: &[u8; 16]) -> Result<Vec<u8>, CbcError> {
-        if ciphertext.len() % BLOCK_SIZE != 0 {
+        if !ciphertext.len().is_multiple_of(BLOCK_SIZE) {
             return Err(CbcError::UnalignedLength);
         }
         let mut buf = ciphertext.to_vec();

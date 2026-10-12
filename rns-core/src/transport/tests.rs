@@ -1569,9 +1569,11 @@ fn feed_announce(
     )
 }
 
-fn announce_received(
-    actions: &[TransportAction],
-) -> Option<([u8; 16], [u8; 64], [u8; 10], [u8; 10], Option<Vec<u8>>)> {
+/// Identity hash, public key, name hash, random hash and app data of an
+/// `AnnounceReceived` action.
+type AnnounceReceivedFields = ([u8; 16], [u8; 64], [u8; 10], [u8; 10], Option<Vec<u8>>);
+
+fn announce_received(actions: &[TransportAction]) -> Option<AnnounceReceivedFields> {
     actions.iter().find_map(|action| match action {
         TransportAction::AnnounceReceived {
             identity_hash,

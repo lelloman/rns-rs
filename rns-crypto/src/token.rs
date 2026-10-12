@@ -115,7 +115,7 @@ impl Token {
         let ciphertext = &token[16..token.len() - 32];
 
         // CBC ciphertext must be a non-empty whole number of 16-byte blocks.
-        if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+        if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
             return Err(TokenError::DecryptionFailed);
         }
 

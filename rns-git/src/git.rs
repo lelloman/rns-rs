@@ -1054,10 +1054,7 @@ mod tests {
         ensure_bare_repository(&repo).unwrap();
         for (key, value) in [
             ("repository.rngit.type", "fork"),
-            (
-                "repository.rngit.upstream.source",
-                "--option=value",
-            ),
+            ("repository.rngit.upstream.source", "--option=value"),
         ] {
             test_git(
                 Command::new("git")

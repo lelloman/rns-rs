@@ -760,6 +760,7 @@ impl Driver {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn dispatch_deliver_local_action(
         &mut self,
         destination_hash: [u8; 16],
