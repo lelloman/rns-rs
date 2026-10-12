@@ -1175,6 +1175,13 @@ impl Driver {
         self.provider_bridge.is_some()
     }
 
+    /// Whether any program is attached at `point`. Per-packet hook points
+    /// check this before building a hook context, which reads the clock.
+    #[cfg(feature = "hooks")]
+    pub(crate) fn hooks_attached(&self, point: HookPoint) -> bool {
+        !self.hook_slots[point as usize].programs.is_empty()
+    }
+
     #[cfg(feature = "hooks")]
     fn run_backbone_peer_hook(
         &mut self,

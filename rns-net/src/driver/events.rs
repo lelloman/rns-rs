@@ -139,7 +139,9 @@ impl Driver {
         }
 
         #[cfg(feature = "hooks")]
-        let (packet, decoded_packet) = {
+        let (packet, decoded_packet) = if !self.hooks_attached(HookPoint::PreIngress) {
+            (packet, decoded_packet)
+        } else {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
                 hops: if packet.len() > 1 { packet[1] } else { 0 },
@@ -277,7 +279,7 @@ impl Driver {
         }
 
         #[cfg(feature = "hooks")]
-        {
+        if self.hooks_attached(HookPoint::PreDispatch) {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
                 hops: if packet.len() > 1 { packet[1] } else { 0 },

@@ -385,6 +385,12 @@ impl Driver {
         }
     }
 
+    /// [`Self::interface_send_deferred`] at the current time, reading the
+    /// clock only while a send retry is pending.
+    pub(crate) fn interface_send_deferred_now(entry: &InterfaceEntry) -> bool {
+        entry.send_retry_at.is_some() && Self::interface_send_deferred(entry, Instant::now())
+    }
+
     pub(crate) fn interface_send_deferred(entry: &InterfaceEntry, now: Instant) -> bool {
         // Async writers bound their own waiting and stop waiting on a stalled
         // peer, refusing only frames that do not fit. Skipping sends to them
@@ -499,7 +505,7 @@ impl Driver {
         };
 
         #[cfg(feature = "hooks")]
-        let (raw, ratchet_lease) = if run_hooks {
+        let (raw, ratchet_lease) = if run_hooks && self.hooks_attached(HookPoint::SendOnInterface) {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
                 hops: if raw.len() > 1 { raw[1] } else { 0 },
@@ -618,7 +624,7 @@ impl Driver {
             });
             return;
         }
-        if Self::interface_send_deferred(entry, Instant::now()) {
+        if Self::interface_send_deferred_now(entry) {
             return;
         }
         let data = if let Some(ref ifac_state) = entry.ifac {
@@ -703,7 +709,9 @@ impl Driver {
         };
 
         #[cfg(feature = "hooks")]
-        let (raw, ratchet_lease) = if run_hooks {
+        let (raw, ratchet_lease) = if run_hooks
+            && self.hooks_attached(HookPoint::BroadcastOnAllInterfaces)
+        {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
                 hops: if raw.len() > 1 { raw[1] } else { 0 },
@@ -796,7 +804,7 @@ impl Driver {
         }
         for entry in self.interfaces.values_mut() {
             if entry.online && entry.enabled && Some(entry.id) != exclude {
-                if Self::interface_send_deferred(entry, Instant::now()) {
+                if Self::interface_send_deferred_now(entry) {
                     continue;
                 }
                 let data = if let Some(ref ifac_state) = entry.ifac {
@@ -856,55 +864,56 @@ impl Driver {
         // must forget that entry even if a hook replaced the bytes.
         let hashlist_hash = packet_hash;
         #[cfg(feature = "hooks")]
-        let (destination_hash, raw, packet_hash) = if run_hooks {
-            let pkt_ctx = rns_hooks::PacketContext {
-                flags: 0,
-                hops: 0,
-                destination_hash,
-                context: 0,
-                packet_hash,
-                interface_id: receiving_interface.0,
-                data_offset: 0,
-                data_len: raw.len() as u32,
+        let (destination_hash, raw, packet_hash) =
+            if run_hooks && self.hooks_attached(HookPoint::DeliverLocal) {
+                let pkt_ctx = rns_hooks::PacketContext {
+                    flags: 0,
+                    hops: 0,
+                    destination_hash,
+                    context: 0,
+                    packet_hash,
+                    interface_id: receiving_interface.0,
+                    data_offset: 0,
+                    data_len: raw.len() as u32,
+                };
+                let ctx = HookContext::Packet {
+                    ctx: &pkt_ctx,
+                    raw: &raw,
+                };
+                let now = time::now();
+                let engine_ref = EngineRef {
+                    engine: &self.engine,
+                    interfaces: &self.interfaces,
+                    link_manager: &self.link_manager,
+                    now,
+                };
+                let provider_events_enabled = self.provider_events_enabled();
+                let mut outcome = PacketHookOutcome::Keep;
+                if let Some(ref e) = run_hook_inner(
+                    &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
+                    &self.hook_manager,
+                    &engine_ref,
+                    &ctx,
+                    now,
+                    provider_events_enabled,
+                ) {
+                    self.collect_hook_side_effects("DeliverLocal", e, _hook_injected);
+                    let max_len = self.hook_packet_limit(receiving_interface);
+                    outcome = self.packet_hook_outcome(HookPoint::DeliverLocal, e, max_len);
+                }
+                match outcome {
+                    PacketHookOutcome::Keep => (destination_hash, raw, packet_hash),
+                    PacketHookOutcome::Drop => return,
+                    // Deliver the replacement under its own destination and hash.
+                    PacketHookOutcome::Replace(packet) => (
+                        packet.destination_hash,
+                        packet.raw.into(),
+                        packet.packet_hash,
+                    ),
+                }
+            } else {
+                (destination_hash, raw, packet_hash)
             };
-            let ctx = HookContext::Packet {
-                ctx: &pkt_ctx,
-                raw: &raw,
-            };
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
-            let mut outcome = PacketHookOutcome::Keep;
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
-                &self.hook_manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.collect_hook_side_effects("DeliverLocal", e, _hook_injected);
-                let max_len = self.hook_packet_limit(receiving_interface);
-                outcome = self.packet_hook_outcome(HookPoint::DeliverLocal, e, max_len);
-            }
-            match outcome {
-                PacketHookOutcome::Keep => (destination_hash, raw, packet_hash),
-                PacketHookOutcome::Drop => return,
-                // Deliver the replacement under its own destination and hash.
-                PacketHookOutcome::Replace(packet) => (
-                    packet.destination_hash,
-                    packet.raw.into(),
-                    packet.packet_hash,
-                ),
-            }
-        } else {
-            (destination_hash, raw, packet_hash)
-        };
 
         if destination_hash == self.tunnel_synth_dest {
             self.handle_tunnel_synth_delivery(&raw, receiving_interface);
@@ -1272,7 +1281,7 @@ impl Driver {
                             && entry.info.is_local_client
                             && Some(entry.id) != exclude
                         {
-                            if Self::interface_send_deferred(entry, Instant::now()) {
+                            if Self::interface_send_deferred_now(entry) {
                                 continue;
                             }
                             let data = if let Some(ref ifac_state) = entry.ifac {
@@ -1303,7 +1312,7 @@ impl Driver {
                             && entry.info.is_local_client == to_local
                             && Some(entry.id) != exclude
                         {
-                            if Self::interface_send_deferred(entry, Instant::now()) {
+                            if Self::interface_send_deferred_now(entry) {
                                 continue;
                             }
                             let data = if let Some(ref ifac_state) = entry.ifac {
