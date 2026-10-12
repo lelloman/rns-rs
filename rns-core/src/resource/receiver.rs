@@ -121,32 +121,42 @@ impl ResourceReceiver {
             return Err(ResourceError::TooLarge);
         }
 
+        // Python derives the part count of the transfer it receives from the
+        // advertised (encrypted, compressed) transfer size of this segment:
+        // ceil(t / sdu). Senders compute `n` the same way over the same SDU,
+        // so a matching advertisement carries exactly that count. No tolerance
+        // applies: Python's receiver ignores `n` and expects exactly this many
+        // parts, so a transfer advertising any other count cannot complete.
         let total_parts = usize::try_from(adv.num_parts).map_err(|_| ResourceError::TooLarge)?;
         if total_parts == 0 {
             return Err(ResourceError::InvalidAdvertisement);
         }
-        let max_parts = RESOURCE_AUTO_COMPRESS_MAX_SIZE
-            .div_ceil(sdu.max(1))
-            .saturating_add(RESOURCE_COLLISION_GUARD_SIZE);
-        if total_parts > max_parts {
-            return Err(ResourceError::TooLarge);
+        let transfer_size =
+            usize::try_from(adv.transfer_size).map_err(|_| ResourceError::TooLarge)?;
+        let expected_parts = transfer_size.div_ceil(sdu.max(1));
+        if total_parts != expected_parts {
+            return Err(ResourceError::PartCountMismatch);
         }
-        let parts_vec: Vec<Option<Vec<u8>>> = vec![None; total_parts];
-        let mut hashmap_vec: Vec<Option<[u8; RESOURCE_MAPHASH_LEN]>> = vec![None; total_parts];
+
+        // Part storage grows as parts arrive, so an accepted advertisement
+        // that is never followed by data holds no per-part allocation. The
+        // hashmap holds only the entries the advertisement carries.
+        let initial_hashes = core::cmp::min(adv.hashmap.len() / RESOURCE_MAPHASH_LEN, total_parts);
+        let parts_vec: Vec<Option<Vec<u8>>> = Vec::new();
+        let mut hashmap_vec: Vec<Option<[u8; RESOURCE_MAPHASH_LEN]>> =
+            Vec::with_capacity(initial_hashes);
 
         // Populate initial hashmap from advertisement
-        let initial_hashes = adv.hashmap.len() / RESOURCE_MAPHASH_LEN;
-        let mut hashmap_height = 0;
-        for (i, slot) in hashmap_vec.iter_mut().enumerate().take(initial_hashes) {
-            if i < total_parts {
-                let start = i * RESOURCE_MAPHASH_LEN;
-                let end = start + RESOURCE_MAPHASH_LEN;
-                let mut h = [0u8; RESOURCE_MAPHASH_LEN];
-                h.copy_from_slice(&adv.hashmap[start..end]);
-                *slot = Some(h);
-                hashmap_height += 1;
-            }
+        for chunk in adv
+            .hashmap
+            .chunks_exact(RESOURCE_MAPHASH_LEN)
+            .take(initial_hashes)
+        {
+            let mut h = [0u8; RESOURCE_MAPHASH_LEN];
+            h.copy_from_slice(chunk);
+            hashmap_vec.push(Some(h));
         }
+        let hashmap_height = hashmap_vec.len();
 
         let mut window_state = WindowState::new();
         if let Some(prev_w) = previous_window {
@@ -194,6 +204,28 @@ impl ResourceReceiver {
             advertisement_packet: adv_data.to_vec(),
             max_decompressed_size: RESOURCE_AUTO_COMPRESS_MAX_SIZE,
         })
+    }
+
+    fn has_part(&self, index: usize) -> bool {
+        self.parts.get(index).is_some_and(Option::is_some)
+    }
+
+    fn store_part(&mut self, index: usize, data: Vec<u8>) {
+        if self.parts.len() <= index {
+            self.parts.resize(index + 1, None);
+        }
+        self.parts[index] = Some(data);
+    }
+
+    fn hash_at(&self, index: usize) -> Option<&[u8; RESOURCE_MAPHASH_LEN]> {
+        self.hashmap.get(index).and_then(Option::as_ref)
+    }
+
+    fn store_hash(&mut self, index: usize, hash: [u8; RESOURCE_MAPHASH_LEN]) {
+        if self.hashmap.len() <= index {
+            self.hashmap.resize(index + 1, None);
+        }
+        self.hashmap[index] = Some(hash);
     }
 
     /// Accept the advertised resource. Begins transfer.
@@ -278,17 +310,17 @@ impl ResourceReceiver {
         let mut matched = false;
         let search_end = core::cmp::min(search_start + self.window.window, self.total_parts);
         for i in search_start..search_end {
-            if let Some(ref h) = self.hashmap[i] {
+            if let Some(h) = self.hash_at(i) {
                 if *h == part_hash {
-                    if self.parts[i].is_none() {
-                        self.parts[i] = Some(part_data.to_vec());
+                    if !self.has_part(i) {
+                        self.store_part(i, part_data.to_vec());
                         self.rtt_rxd_bytes += part_data.len();
                         self.received_count += 1;
                         self.outstanding_parts = self.outstanding_parts.saturating_sub(1);
 
                         // Walk forward to extend consecutive height
                         let mut cp = (self.consecutive_completed_height + 1) as usize;
-                        while cp < self.total_parts && self.parts[cp].is_some() {
+                        while cp < self.total_parts && self.has_part(cp) {
                             self.consecutive_completed_height = cp as isize;
                             cp += 1;
                         }
@@ -404,12 +436,12 @@ impl ResourceReceiver {
             let idx = segment_start + i;
             let start = i * RESOURCE_MAPHASH_LEN;
             let end = start + RESOURCE_MAPHASH_LEN;
-            if self.hashmap[idx].is_none() {
+            if self.hash_at(idx).is_none() {
                 self.hashmap_height += 1;
             }
             let mut h = [0u8; RESOURCE_MAPHASH_LEN];
             h.copy_from_slice(&hashmap_bytes[start..end]);
-            self.hashmap[idx] = Some(h);
+            self.store_hash(idx, h);
         }
 
         self.waiting_for_hmu = false;
@@ -434,9 +466,9 @@ impl ResourceReceiver {
         let mut i = 0;
 
         for pn in pn_start..search_end {
-            if self.parts[pn].is_none() {
-                match self.hashmap[pn] {
-                    Some(ref h) => {
+            if !self.has_part(pn) {
+                match self.hash_at(pn) {
+                    Some(h) => {
                         requested_hashes.extend_from_slice(h);
                         self.outstanding_parts += 1;
                         i += 1;
@@ -456,7 +488,7 @@ impl ResourceReceiver {
         if hashmap_exhausted == RESOURCE_HASHMAP_IS_EXHAUSTED {
             // Append last known map hash
             if self.hashmap_height > 0 {
-                if let Some(ref last_hash) = self.hashmap[self.hashmap_height - 1] {
+                if let Some(last_hash) = self.hash_at(self.hashmap_height - 1) {
                     request_data.extend_from_slice(last_hash);
                 } else {
                     request_data.extend_from_slice(&[0u8; RESOURCE_MAPHASH_LEN]);
@@ -555,6 +587,12 @@ impl ResourceReceiver {
         }
 
         self.status = ResourceStatus::Assembling;
+
+        // Part storage grows as parts arrive; a short vector means a part is missing.
+        if self.parts.len() != self.total_parts {
+            self.status = ResourceStatus::Failed;
+            return Err(vec![ResourceAction::Failed(ResourceError::InvalidState)]);
+        }
 
         // Size from the parts actually held, not the advertised transfer size.
         // Reserving once avoids geometric growth and copying the joined prefix.
@@ -985,7 +1023,192 @@ mod tests {
             Err(err) => err,
         };
 
-        assert_eq!(err, ResourceError::TooLarge);
+        assert_eq!(err, ResourceError::PartCountMismatch);
+    }
+
+    fn sized_advertisement(transfer_size: u64, num_parts: u64) -> ResourceAdvertisement {
+        ResourceAdvertisement {
+            transfer_size,
+            data_size: transfer_size,
+            num_parts,
+            resource_hash: vec![0x11; 32],
+            random_hash: vec![0x22; RESOURCE_RANDOM_HASH_SIZE],
+            original_hash: vec![0x33; 32],
+            hashmap: vec![0x44; RESOURCE_MAPHASH_LEN * num_parts.min(512) as usize],
+            flags: AdvFlags {
+                encrypted: true,
+                compressed: false,
+                split: false,
+                is_request: false,
+                is_response: false,
+                has_metadata: false,
+            },
+            segment_index: 1,
+            total_segments: 1,
+            request_id: None,
+        }
+    }
+
+    fn receive_advertisement(
+        adv: &ResourceAdvertisement,
+        sdu: usize,
+    ) -> Result<ResourceReceiver, ResourceError> {
+        ResourceReceiver::from_advertisement(&adv.pack(0), sdu, 0.5, 1000.0, None, None)
+    }
+
+    #[test]
+    fn part_count_above_transfer_size_is_refused() {
+        let adv = sized_advertisement(1, 140_000);
+        assert_eq!(
+            receive_advertisement(&adv, RESOURCE_SDU).err(),
+            Some(ResourceError::PartCountMismatch)
+        );
+        assert_eq!(
+            receive_advertisement(&adv, 1).err(),
+            Some(ResourceError::PartCountMismatch)
+        );
+    }
+
+    #[test]
+    fn part_count_below_transfer_size_is_refused() {
+        let sdu = RESOURCE_SDU;
+        let adv = sized_advertisement(10 * sdu as u64 + 1, 10);
+        assert_eq!(
+            receive_advertisement(&adv, sdu).err(),
+            Some(ResourceError::PartCountMismatch)
+        );
+    }
+
+    #[test]
+    fn part_count_matching_transfer_size_is_accepted() {
+        let sdu = RESOURCE_SDU;
+        let receiver = receive_advertisement(&sized_advertisement(1, 1), sdu).unwrap();
+        assert_eq!(receiver.total_parts, 1);
+
+        let receiver = receive_advertisement(&sized_advertisement(sdu as u64 + 1, 2), sdu).unwrap();
+        assert_eq!(receiver.total_parts, 2);
+    }
+
+    #[test]
+    fn transfer_size_on_sdu_boundary_needs_no_extra_part() {
+        let sdu = RESOURCE_SDU;
+        let exact = 3 * sdu as u64;
+        let receiver = receive_advertisement(&sized_advertisement(exact, 3), sdu).unwrap();
+        assert_eq!(receiver.total_parts, 3);
+        assert_eq!(
+            receive_advertisement(&sized_advertisement(exact, 4), sdu).err(),
+            Some(ResourceError::PartCountMismatch)
+        );
+        assert_eq!(
+            receive_advertisement(&sized_advertisement(exact, 2), sdu).err(),
+            Some(ResourceError::PartCountMismatch)
+        );
+    }
+
+    #[test]
+    fn split_segment_part_count_follows_segment_transfer_size() {
+        let sdu = RESOURCE_SDU;
+        let segment_size = RESOURCE_MAX_EFFICIENT_SIZE as u64 + 61;
+        let segment_parts = segment_size.div_ceil(sdu as u64);
+        let mut adv = sized_advertisement(segment_size, segment_parts);
+        adv.data_size = 3 * RESOURCE_MAX_EFFICIENT_SIZE as u64;
+        adv.flags.split = true;
+        adv.segment_index = 2;
+        adv.total_segments = 3;
+
+        let receiver = receive_advertisement(&adv, sdu).unwrap();
+        assert_eq!(receiver.total_parts as u64, segment_parts);
+        assert_eq!(receiver.segment_index, 2);
+
+        // The logical size of the whole split resource does not set the count.
+        adv.num_parts = adv.data_size.div_ceil(sdu as u64);
+        assert_eq!(
+            receive_advertisement(&adv, sdu).err(),
+            Some(ResourceError::PartCountMismatch)
+        );
+    }
+
+    #[test]
+    fn transfer_size_above_segment_limit_is_refused_up_front() {
+        let limit = 3 * RESOURCE_MAX_EFFICIENT_SIZE as u64;
+        let adv = sized_advertisement(limit + 1, (limit + 1).div_ceil(RESOURCE_SDU as u64));
+        assert_eq!(
+            receive_advertisement(&adv, RESOURCE_SDU).err(),
+            Some(ResourceError::InvalidAdvertisement)
+        );
+    }
+
+    #[test]
+    fn idle_accepted_advertisement_holds_no_part_storage() {
+        let sdu = 48;
+        let limit = 3 * RESOURCE_MAX_EFFICIENT_SIZE as u64;
+        let parts = limit.div_ceil(sdu as u64);
+        let mut receiver = receive_advertisement(&sized_advertisement(limit, parts), sdu).unwrap();
+        assert_eq!(receiver.total_parts as u64, parts);
+
+        let actions = receiver.accept(1000.0);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendRequest(_))));
+        assert_eq!(receiver.parts.capacity(), 0);
+        assert!(receiver.hashmap.capacity() <= RESOURCE_HASHMAP_MAX_LEN);
+        assert_eq!(receiver.hashmap.len(), receiver.hashmap_height);
+    }
+
+    #[test]
+    fn part_storage_grows_with_received_parts() {
+        let mut rng = rns_crypto::FixedRng::new(&[0x42; 64]);
+        let sdu = 8;
+        let data: Vec<u8> = (0..100u8).collect();
+        let mut sender = ResourceSender::new(
+            &data,
+            None,
+            sdu,
+            &identity_encrypt,
+            &NoopCompressor,
+            &mut rng,
+            1000.0,
+            false,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+        let mut receiver = ResourceReceiver::from_advertisement(
+            &sender.get_advertisement(0),
+            sdu,
+            0.5,
+            1000.0,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(receiver.total_parts > 1);
+        assert!(receiver.parts.is_empty());
+
+        let request = receiver
+            .accept(1000.0)
+            .into_iter()
+            .find_map(|action| match action {
+                ResourceAction::SendRequest(request) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        let first_part = sender
+            .handle_request(&request, 1001.0)
+            .into_iter()
+            .find_map(|action| match action {
+                ResourceAction::SendPart(part) => Some(part),
+                _ => None,
+            })
+            .unwrap();
+        receiver.receive_part(&first_part, 1002.0);
+        assert_eq!(receiver.received_count, 1);
+        assert_eq!(receiver.parts.len(), 1);
     }
 
     #[test]

@@ -119,6 +119,8 @@ pub enum ResourceError {
     MsgpackError,
     InvalidState,
     CollisionDetected,
+    /// The advertised part count differs from ceil(transfer size / SDU).
+    PartCountMismatch,
 }
 
 impl fmt::Display for ResourceError {
@@ -137,6 +139,9 @@ impl fmt::Display for ResourceError {
             ResourceError::MsgpackError => write!(f, "Msgpack error"),
             ResourceError::InvalidState => write!(f, "Invalid resource state"),
             ResourceError::CollisionDetected => write!(f, "Hashmap collision detected"),
+            ResourceError::PartCountMismatch => {
+                write!(f, "Resource part count does not match transfer size")
+            }
         }
     }
 }

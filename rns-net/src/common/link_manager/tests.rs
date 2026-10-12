@@ -2247,6 +2247,56 @@ fn retried_resource_advertisements_do_not_repeat_application_approval() {
 }
 
 #[test]
+fn incoming_resources_per_link_are_capped() {
+    use super::resource_handling::MAX_ACTIVE_INCOMING_RESOURCES;
+
+    let (mut sender, mut receiver, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    receiver.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+    let mut advertise = |sender: &mut LinkManager, receiver: &LinkManager, index: usize| {
+        let payload = format!("item {index}");
+        let actions = sender.send_resource(&link_id, payload.as_bytes(), None, &mut rng);
+        first_resource_advertisement(receiver, &link_id, &actions).pack(0)
+    };
+    let mut first_hash = None;
+    for index in 0..MAX_ACTIVE_INCOMING_RESOURCES {
+        let adv = advertise(&mut sender, &receiver, index);
+        let actions = receiver.handle_resource_adv(&link_id, &adv, &mut OsRng);
+        match actions.as_slice() {
+            [LinkManagerAction::ResourceAcceptQuery { resource_hash, .. }] => {
+                first_hash.get_or_insert_with(|| resource_hash.clone());
+            }
+            other => panic!("expected an accept query, got {other:?}"),
+        }
+    }
+
+    let adv = advertise(&mut sender, &receiver, MAX_ACTIVE_INCOMING_RESOURCES);
+    let refused = receiver.handle_resource_adv(&link_id, &adv, &mut OsRng);
+    assert!(!refused
+        .iter()
+        .any(|action| matches!(action, LinkManagerAction::ResourceAcceptQuery { .. })));
+    assert!(refused.iter().any(|action| match action {
+        LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+            .is_ok_and(|packet| packet.context == constants::CONTEXT_RESOURCE_RCL),
+        _ => false,
+    }));
+    assert_eq!(
+        receiver.links[&link_id].incoming_resources.len(),
+        MAX_ACTIVE_INCOMING_RESOURCES
+    );
+
+    // A finished transfer frees its slot for the next advertisement.
+    receiver.accept_resource(&link_id, &first_hash.unwrap(), false, &mut OsRng);
+    let adv = advertise(&mut sender, &receiver, MAX_ACTIVE_INCOMING_RESOURCES + 1);
+    assert!(matches!(
+        receiver
+            .handle_resource_adv(&link_id, &adv, &mut OsRng)
+            .as_slice(),
+        [LinkManagerAction::ResourceAcceptQuery { .. }]
+    ));
+}
+
+#[test]
 fn test_resource_full_transfer() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;

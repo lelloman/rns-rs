@@ -1,5 +1,10 @@
 use super::*;
 
+/// Incoming transfers a link keeps in progress at once. A Python sender
+/// advertises one resource at a time per link; the headroom covers concurrent
+/// requests and responses. Further advertisements are refused until one ends.
+pub(super) const MAX_ACTIVE_INCOMING_RESOURCES: usize = 16;
+
 pub(super) struct ResourceSendParams<'a> {
     pub(super) data: &'a [u8],
     pub(super) metadata: Option<&'a [u8]>,
@@ -286,6 +291,25 @@ impl LinkManager {
             .any(|existing| existing.resource_hash == receiver.resource_hash)
         {
             return Vec::new();
+        }
+
+        let active_incoming = link
+            .incoming_resources
+            .iter()
+            .filter(|existing| existing.status < rns_core::resource::ResourceStatus::Complete)
+            .count();
+        if active_incoming >= MAX_ACTIVE_INCOMING_RESOURCES {
+            log::debug!(
+                "refused resource advertisement on link {:02x?}: {} transfers in progress",
+                &link_id[..4],
+                active_incoming
+            );
+            let reject_actions = {
+                let mut receiver = receiver;
+                receiver.reject()
+            };
+            let _ = link;
+            return self.process_resource_actions(link_id, reject_actions, rng);
         }
 
         let strategy = link.resource_strategy;

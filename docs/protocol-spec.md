@@ -787,8 +787,12 @@ request/response size limits.
 ### 14.15 Validation and Failure Rules
 
 - Hashes and request identifiers MUST have their exact specified lengths.
-- Part counts MUST be non-zero and bounded by the advertised transfer size and
-  collision-guard requirements.
+- Part counts MUST be non-zero and equal `ceil(t / sdu)`, where `t` is the
+  advertised transfer size of the segment and `sdu` the link's Resource SDU.
+  Python derives the count this way and ignores `n`, so any other value cannot
+  complete and is refused.
+- rns-rs keeps at most 16 incoming Resources in progress per link and refuses
+  further advertisements with a receiver cancel until one finishes.
 - Metadata length MUST fit its 24-bit prefix and the first logical segment.
 - Uncompressed output MUST remain within the receiver's selected local policy.
 - HMU data for a different Resource, malformed HMU MessagePack, invalid proof,
