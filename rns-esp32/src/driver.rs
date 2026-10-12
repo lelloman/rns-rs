@@ -89,8 +89,12 @@ pub struct Driver {
 impl Driver {
     /// Create a new driver with the given transport config and event receiver.
     pub fn new(config: TransportConfig, rx: mpsc::Receiver<Event>) -> Self {
+        let mut engine = TransportEngine::new(config);
+        // Key the engine's tables so a sender cannot grind packet hashes
+        // into colliding slots.
+        engine.seed_table_hashing(&mut EspRng);
         Driver {
-            engine: TransportEngine::new(config),
+            engine,
             interfaces: Vec::new(),
             rng: EspRng,
             rx,
