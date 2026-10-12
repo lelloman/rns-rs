@@ -333,6 +333,8 @@ impl Driver {
     }
 
     pub(crate) fn handle_tick_event(&mut self) {
+        // Close sockets of detached interfaces served on this thread.
+        self.rx.sweep_stopped_sources();
         #[cfg(feature = "hooks")]
         {
             let ctx = HookContext::Tick;

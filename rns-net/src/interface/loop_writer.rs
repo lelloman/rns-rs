@@ -31,6 +31,12 @@ pub(crate) fn write_key(id: InterfaceId) -> usize {
     ((id.0 as usize) << 1) | 1
 }
 
+/// Poller key for read interest on an interface's socket (or, for a
+/// listening interface, its listener).
+pub(crate) fn read_key(id: InterfaceId) -> usize {
+    (id.0 as usize) << 1
+}
+
 /// The interface a poller key belongs to, and whether it is a write key.
 pub(crate) fn key_target(key: usize) -> (InterfaceId, bool) {
     (InterfaceId((key >> 1) as u64), key & 1 == 1)
@@ -495,7 +501,8 @@ mod tests {
     fn keys_round_trip_and_separate_directions() {
         let id = InterfaceId(41);
         assert_eq!(key_target(write_key(id)), (id, true));
-        assert_eq!(key_target(write_key(id) - 1), (id, false));
+        assert_eq!(key_target(read_key(id)), (id, false));
+        assert_eq!(read_key(id) + 1, write_key(id));
     }
 
     #[test]

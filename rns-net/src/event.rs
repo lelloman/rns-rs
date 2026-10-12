@@ -78,6 +78,60 @@ enum QueueClass {
 
 const INBOUND_QUEUE_COUNT: usize = 4;
 
+/// A socket served on the receiving thread instead of by its own thread.
+///
+/// Sources are registered on the queue's poller with a key, and whichever
+/// thread receives from the queue calls [`LoopSource::on_ready`] when the
+/// socket is readable. Sources enqueue what they produce with
+/// [`EventSender::push_from_loop`], which never blocks that thread.
+pub(crate) trait LoopSource: Send {
+    fn fd(&self) -> std::os::fd::RawFd;
+    /// Serve a readable socket.
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus;
+    /// Whether the source should be closed at the next sweep (e.g. its
+    /// interface was detached).
+    fn stopped(&self) -> bool {
+        false
+    }
+    /// Called once when the source is removed, before it is dropped.
+    fn on_removed(&mut self) {}
+}
+
+/// What to do with a source after [`LoopSource::on_ready`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceStatus {
+    /// Keep watching for readability.
+    Rearm,
+    /// Stop reading until the receiver has drained the queue (inbound data
+    /// is full); transport flow control then slows the sender.
+    Suspend,
+    /// Deregister and drop the source.
+    Remove,
+}
+
+pub(crate) struct LoopContext<'a> {
+    /// Scratch buffer shared by all sources for socket reads.
+    pub(crate) buf: &'a mut [u8],
+    added: Vec<(usize, Box<dyn LoopSource>)>,
+}
+
+impl LoopContext<'_> {
+    /// Register another source once the current one returns.
+    pub(crate) fn add_source(&mut self, key: usize, source: Box<dyn LoopSource>) {
+        self.added.push((key, source));
+    }
+}
+
+/// Bytes of scratch space shared by sources for one read.
+const LOOP_READ_BUFFER: usize = 64 * 1024;
+
+#[derive(Default)]
+struct SourceRegistry {
+    sources: HashMap<usize, Box<dyn LoopSource>>,
+    suspended: Vec<usize>,
+    buf: Vec<u8>,
+}
+
 struct QueuedEvent {
     sequence: u64,
     event: Event,
@@ -159,6 +213,7 @@ struct QueueShared {
     /// The receiver can wait here instead of on `changed`, together with any
     /// sources registered on it. Producers wake it with `Poller::notify`.
     poller: Arc<polling::Poller>,
+    sources: Mutex<SourceRegistry>,
     sender_count: AtomicUsize,
     control_capacity: usize,
     inbound_capacities: [usize; INBOUND_QUEUE_COUNT],
@@ -178,6 +233,39 @@ impl QueueShared {
         }
         if state.receiver_parked {
             self.wake_poller();
+        }
+    }
+
+    /// Add `source` to the registry and watch it for readability. The
+    /// registry lock is held across both, so a receiver serving the key
+    /// always finds the source.
+    fn add_source(
+        &self,
+        registry: &mut SourceRegistry,
+        key: usize,
+        source: Box<dyn LoopSource>,
+    ) -> std::io::Result<()> {
+        // SAFETY: the source owns the descriptor and is deleted from the
+        // poller before it is dropped (see `remove_source`).
+        unsafe { self.poller.add(source.fd(), polling::Event::readable(key)) }?;
+        registry.sources.insert(key, source);
+        Ok(())
+    }
+
+    fn remove_source(&self, mut source: Box<dyn LoopSource>) {
+        // SAFETY: the source still owns its descriptor here.
+        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(source.fd()) };
+        if let Err(error) = self.poller.delete(fd) {
+            log::warn!("failed to deregister a loop source: {error}");
+        }
+        source.on_removed();
+    }
+
+    fn arm_source(&self, key: usize, source: &dyn LoopSource) {
+        // SAFETY: the source owns its descriptor while registered.
+        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(source.fd()) };
+        if let Err(error) = self.poller.modify(fd, polling::Event::readable(key)) {
+            log::warn!("failed to re-arm a loop source: {error}");
         }
     }
 
@@ -278,6 +366,64 @@ impl EventSender {
     /// receiver like a queued event does.
     pub(crate) fn poller(&self) -> &Arc<polling::Poller> {
         &self.shared.poller
+    }
+
+    /// Serve `source` on the receiving thread from now on.
+    pub(crate) fn register_source(
+        &self,
+        key: usize,
+        source: Box<dyn LoopSource>,
+    ) -> std::io::Result<()> {
+        let mut registry = self
+            .shared
+            .sources
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        self.shared.add_source(&mut registry, key, source)
+    }
+
+    /// Enqueue events produced on the receiving thread itself, by a loop
+    /// source. Never blocks, since the caller is the queue's consumer: data
+    /// frames are always queued, past capacity if need be, so none is lost;
+    /// announce, path-request and ingress-limited frames keep their
+    /// drop-on-full policy; control events are always queued. Returns
+    /// whether inbound data still has room, so a source stops reading once
+    /// it does not.
+    pub(crate) fn push_from_loop(
+        &self,
+        events: impl IntoIterator<Item = Event>,
+    ) -> Result<bool, std::sync::mpsc::RecvError> {
+        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        if !state.receiver_alive {
+            return Err(std::sync::mpsc::RecvError);
+        }
+        for event in events {
+            let sequence = state.next_sequence;
+            match self.classify(&event, &state) {
+                Some(class) => {
+                    let index = class as usize;
+                    if class != QueueClass::Data
+                        && state.inbound[index].len() >= self.shared.inbound_capacities[index]
+                    {
+                        state.inbound_dropped[index] =
+                            state.inbound_dropped[index].saturating_add(1);
+                        continue;
+                    }
+                    state.inbound[index].push_back(QueuedEvent { sequence, event });
+                }
+                None => {
+                    if let Event::SendLinkTracked { completion, .. } = &event {
+                        completion.admit();
+                    }
+                    state.control.push_back(QueuedEvent { sequence, event });
+                }
+            }
+            state.next_sequence = state.next_sequence.wrapping_add(1);
+        }
+        let data = QueueClass::Data as usize;
+        let room = state.inbound[data].len() < self.shared.inbound_capacities[data];
+        self.shared.notify_change(&state, false);
+        Ok(room)
     }
 
     pub(crate) fn local_ratchets(&self) -> &crate::local_ratchet::Registry {
@@ -653,6 +799,7 @@ impl EventReceiver {
         if self.has_prefetched() {
             return Ok(());
         }
+        self.resume_suspended();
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.has_events() || self.shared.sender_count.load(Ordering::Acquire) == 0 {
             return Ok(());
@@ -671,33 +818,102 @@ impl EventReceiver {
         result
     }
 
+    /// Sources suspended because inbound data was full read again once the
+    /// receiver is about to wait, i.e. has drained the queue.
+    fn resume_suspended(&self) {
+        let mut registry = self
+            .shared
+            .sources
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let registry = &mut *registry;
+        for key in registry.suspended.drain(..) {
+            if let Some(source) = registry.sources.get(&key) {
+                self.shared.arm_source(key, source.as_ref());
+            }
+        }
+    }
+
+    /// Serve the loop sources `ready` reports readable. Keys of other kinds
+    /// (the driver's writers) are left to the caller.
+    pub(crate) fn serve_sources(&self, ready: &polling::Events) {
+        let mut registry = self
+            .shared
+            .sources
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let registry = &mut *registry;
+        if registry.buf.is_empty() {
+            registry.buf = vec![0; LOOP_READ_BUFFER];
+        }
+        let mut cx = LoopContext {
+            buf: &mut registry.buf,
+            added: Vec::new(),
+        };
+        for event in ready.iter() {
+            if !event.readable {
+                continue;
+            }
+            let Some(mut source) = registry.sources.remove(&event.key) else {
+                continue;
+            };
+            match source.on_ready(&mut cx) {
+                SourceStatus::Rearm => {
+                    self.shared.arm_source(event.key, source.as_ref());
+                    registry.sources.insert(event.key, source);
+                }
+                SourceStatus::Suspend => {
+                    registry.suspended.push(event.key);
+                    registry.sources.insert(event.key, source);
+                }
+                SourceStatus::Remove => self.shared.remove_source(source),
+            }
+        }
+        for (key, source) in std::mem::take(&mut cx.added) {
+            if let Err(error) = self.shared.add_source(registry, key, source) {
+                log::warn!("failed to register a loop source: {error}");
+            }
+        }
+    }
+
+    /// Close sources that report themselves stopped.
+    pub(crate) fn sweep_stopped_sources(&self) {
+        let mut registry = self
+            .shared
+            .sources
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let stopped: Vec<usize> = registry
+            .sources
+            .iter()
+            .filter(|(_, source)| source.stopped())
+            .map(|(key, _)| *key)
+            .collect();
+        for key in stopped {
+            registry.suspended.retain(|suspended| *suspended != key);
+            if let Some(source) = registry.sources.remove(&key) {
+                self.shared.remove_source(source);
+            }
+        }
+    }
+
     pub fn recv(&self) -> Result<Event, std::sync::mpsc::RecvError> {
         self.recv_classified().map(|received| received.event)
     }
 
+    /// Blocking receive. While waiting it serves loop sources, so any
+    /// receiver drives the sockets registered on the queue.
     pub(crate) fn recv_classified(&self) -> Result<ReceivedEvent, std::sync::mpsc::RecvError> {
-        if let Some(event) = self.prefetched.borrow_mut().pop_front() {
-            return Ok(event);
-        }
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut ready = polling::Events::new();
         loop {
-            if let Some(event) = self.pop_locked(&mut state) {
-                let mut prefetched = self.prefetched.borrow_mut();
-                while prefetched.len() + 1 < RECEIVE_BATCH {
-                    match self.pop_locked(&mut state) {
-                        Some(next) => prefetched.push_back(next),
-                        None => break,
-                    }
-                }
-                drop(prefetched);
-                drop(state);
-                self.shared.wake_async_senders();
+            if let Some(event) = self.try_recv_classified()? {
                 return Ok(event);
             }
-            if self.shared.sender_count.load(Ordering::Acquire) == 0 {
-                return Err(std::sync::mpsc::RecvError);
+            ready.clear();
+            if let Err(error) = self.wait(&mut ready, None) {
+                log::warn!("event receiver wait failed: {error}");
             }
-            state = self.shared.wait_changed(state);
+            self.serve_sources(&ready);
         }
     }
 
@@ -726,30 +942,21 @@ impl EventReceiver {
             return Ok(event.event);
         }
         let deadline = Instant::now() + timeout;
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut ready = polling::Events::new();
         loop {
-            if let Some(event) = self.pop_locked(&mut state) {
-                drop(state);
-                self.shared.wake_async_senders();
-                return Ok(event.event);
-            }
-            if self.shared.sender_count.load(Ordering::Acquire) == 0 {
-                return Err(std::sync::mpsc::RecvTimeoutError::Disconnected);
+            match self.try_recv_classified() {
+                Ok(Some(event)) => return Ok(event.event),
+                Ok(None) => {}
+                Err(_) => return Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
             };
-            state.waiters += 1;
-            let (mut next_state, result) = self
-                .shared
-                .changed
-                .wait_timeout(state, remaining)
-                .unwrap_or_else(|p| p.into_inner());
-            next_state.waiters -= 1;
-            state = next_state;
-            if result.timed_out() && !state.has_events() {
-                return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
+            ready.clear();
+            if let Err(error) = self.wait(&mut ready, Some(remaining)) {
+                log::warn!("event receiver wait failed: {error}");
             }
+            self.serve_sources(&ready);
         }
     }
 }
@@ -781,6 +988,7 @@ pub(crate) fn channel_with_queue_capacities(
         state: Mutex::new(QueueState::new()),
         changed: Condvar::new(),
         poller: Arc::new(polling::Poller::new().expect("create the driver event poller")),
+        sources: Mutex::default(),
         sender_count: AtomicUsize::new(1),
         control_capacity: control_capacity.max(1),
         inbound_capacities: inbound_capacities
@@ -1238,6 +1446,27 @@ mod tests {
             done.recv_timeout(Duration::from_millis(50)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         ));
+    }
+
+    #[test]
+    fn loop_pushes_never_drop_data_but_keep_the_burst_class_limits() {
+        let (tx, rx) = channel_with_capacity(2);
+        let data = (0..5).map(|id| frame(id, [0xC1; 16], rns_core::constants::PACKET_TYPE_DATA));
+        assert_eq!(tx.push_from_loop(data), Ok(false));
+        let announces =
+            (10..15).map(|id| frame(id, [0xC2; 16], rns_core::constants::PACKET_TYPE_ANNOUNCE));
+        tx.push_from_loop(announces).unwrap();
+        tx.push_from_loop((0..3).map(|_| Event::Tick)).unwrap();
+        let snapshot = tx.inbound_queue_snapshot();
+        assert_eq!(snapshot.heights[..2], [5, 2]);
+        assert_eq!(snapshot.dropped, [0, 3, 0, 0]);
+        let mut received = 0;
+        while rx.try_recv_classified().unwrap().is_some() {
+            received += 1;
+        }
+        assert_eq!(received, 5 + 2 + 3);
+        drop(rx);
+        assert!(tx.push_from_loop([Event::Tick]).is_err());
     }
 
     #[test]

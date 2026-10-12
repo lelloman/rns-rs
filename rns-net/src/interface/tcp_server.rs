@@ -4,18 +4,16 @@
 //! Each client gets a dynamically allocated InterfaceId.
 //! Matches Python `TCPServerInterface` from `TCPInterface.py`.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
 use rns_core::constants;
 use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo};
 
-use crate::event::{Event, EventSender};
+use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
 use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
@@ -131,30 +129,37 @@ fn start_with_template(
     let ingress_control = config.ingress_control;
     let active_connections = Arc::new(AtomicUsize::new(0));
     let control = ListenerControl::new();
-    let listener_control = control.clone();
-    thread::Builder::new()
-        .name(format!("tcp-server-{}", config.interface_id.0))
-        .spawn(move || {
-            listener_loop(ListenerLoopContext {
-                listener,
-                name,
-                tx,
-                next_id,
-                runtime,
-                ingress_control,
-                active_connections,
-                control: listener_control,
-                dynamic_template,
-                ifac_size,
-                underlay_mark,
-            });
-        })?;
+    let listener_key = crate::interface::loop_writer::read_key(config.interface_id);
+    tx.register_source(
+        listener_key,
+        Box::new(ListenerSource {
+            listener,
+            name,
+            tx: tx.clone(),
+            next_id,
+            runtime,
+            ingress_control,
+            active_connections,
+            control: control.clone(),
+            dynamic_template,
+            ifac_size,
+            underlay_mark,
+        }),
+    )?;
 
     Ok(control)
 }
 
-/// Listener thread: accepts connections and spawns reader threads.
-struct ListenerLoopContext {
+/// Connections accepted per readiness before other sources get a turn.
+const ACCEPT_BURST: usize = 64;
+
+/// Bytes read from one client per readiness before other sources get a
+/// turn; the client is re-armed and served again on the next pass.
+const CLIENT_READ_BUDGET: usize = 256 * 1024;
+
+/// The listening socket, served on the driver thread: accepts clients,
+/// registers them with the driver and adds a source per client.
+struct ListenerSource {
     listener: TcpListener,
     name: String,
     tx: EventSender,
@@ -168,52 +173,66 @@ struct ListenerLoopContext {
     underlay_mark: Option<u32>,
 }
 
-fn listener_loop(context: ListenerLoopContext) {
-    let ListenerLoopContext {
-        listener,
-        name,
-        tx,
-        next_id,
-        runtime,
-        ingress_control,
-        active_connections,
-        control,
-        dynamic_template,
-        ifac_size,
-        underlay_mark,
-    } = context;
-    loop {
-        if control.should_stop() {
-            log::info!("[{}] listener stopping", name);
-            return;
+impl LoopSource for ListenerSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.listener.as_raw_fd()
+    }
+
+    fn stopped(&self) -> bool {
+        self.control.should_stop()
+    }
+
+    fn on_removed(&mut self) {
+        log::info!("[{}] listener stopping", self.name);
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        if self.control.should_stop() {
+            return SourceStatus::Remove;
         }
-
-        let stream_result = listener.accept().map(|(stream, _)| stream);
-        let stream = match stream_result {
-            Ok(s) => s,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(std::time::Duration::from_millis(50));
-                continue;
+        for _ in 0..ACCEPT_BURST {
+            let stream = match self.listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    log::warn!("[{}] accept failed: {}", self.name, e);
+                    break;
+                }
+            };
+            match self.admit(stream) {
+                Admitted::Client(id, source) => {
+                    cx.add_source(crate::interface::loop_writer::read_key(id), source)
+                }
+                Admitted::Rejected => {}
+                Admitted::DriverGone => return SourceStatus::Remove,
             }
-            Err(e) => {
-                log::warn!("[{}] accept failed: {}", name, e);
-                continue;
-            }
-        };
+        }
+        SourceStatus::Rearm
+    }
+}
 
-        if let Err(error) = super::apply_underlay_mark(stream.as_raw_fd(), underlay_mark) {
+enum Admitted {
+    Client(InterfaceId, Box<dyn LoopSource>),
+    Rejected,
+    DriverGone,
+}
+
+impl ListenerSource {
+    fn admit(&self, stream: TcpStream) -> Admitted {
+        let name = &self.name;
+        if let Err(error) = super::apply_underlay_mark(stream.as_raw_fd(), self.underlay_mark) {
             log::error!(
                 "[{}] failed to mark accepted underlay socket: {}",
                 name,
                 error
             );
-            drop(stream);
-            continue;
+            return Admitted::Rejected;
         }
 
-        let max_connections = lock_or_recover(&runtime, "tcp server runtime").max_connections;
+        let max_connections = lock_or_recover(&self.runtime, "tcp server runtime").max_connections;
         if let Some(max) = max_connections {
-            if active_connections.load(Ordering::Relaxed) >= max {
+            if self.active_connections.load(Ordering::Relaxed) >= max {
                 let peer = stream.peer_addr().ok();
                 log::warn!(
                     "[{}] max connections ({}) reached, rejecting {:?}",
@@ -221,14 +240,11 @@ fn listener_loop(context: ListenerLoopContext) {
                     max,
                     peer
                 );
-                drop(stream);
-                continue;
+                return Admitted::Rejected;
             }
         }
 
-        active_connections.fetch_add(1, Ordering::Relaxed);
-
-        let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
+        let client_id = InterfaceId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let peer_addr = stream.peer_addr().ok();
 
         log::info!(
@@ -248,7 +264,7 @@ fn listener_loop(context: ListenerLoopContext) {
             Ok(s) => s,
             Err(e) => {
                 log::warn!("[{}] failed to clone stream: {}", name, e);
-                continue;
+                return Admitted::Rejected;
             }
         };
 
@@ -282,113 +298,124 @@ fn listener_loop(context: ListenerLoopContext) {
             op_freq: 0.0,
             op_samples: 0,
             started: 0.0,
-            ingress_control,
+            ingress_control: self.ingress_control,
         };
 
-        // Send InterfaceUp with InterfaceInfo for dynamic registration
-        let registration_result = if let Some(template) = &dynamic_template {
-            tx.send(Event::DynamicInterfaceUp {
+        // Register the client with the driver before any of its frames: the
+        // queue never delivers a frame ahead of an older control event.
+        let registration = if let Some(template) = &self.dynamic_template {
+            Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
                 registration: Box::new(template.registration(info)),
-            })
+            }
         } else {
-            tx.send(Event::InterfaceUp(
-                client_id,
-                Some(writer),
-                Some(Box::new(info)),
-            ))
+            Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
         };
-        if registration_result.is_err() {
-            // Driver shut down
-            return;
+        if self.tx.push_from_loop([registration]).is_err() {
+            return Admitted::DriverGone;
         }
 
-        // Spawn reader thread for this client
-        let client_tx = tx.clone();
-        let client_name = name.clone();
-        let client_active = active_connections.clone();
-        let client_control = control.clone();
-        thread::Builder::new()
-            .name(format!("tcp-server-reader-{}", client_id.0))
-            .spawn(move || {
-                client_reader_loop(
-                    stream,
-                    client_id,
-                    client_name,
-                    client_tx,
-                    client_active,
-                    ifac_size,
-                    client_control,
-                );
-            })
-            .ok();
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+        Admitted::Client(
+            client_id,
+            Box::new(ClientSource {
+                stream,
+                id: client_id,
+                name: name.clone(),
+                tx: self.tx.clone(),
+                active_connections: Arc::clone(&self.active_connections),
+                decoder: hdlc::Decoder::reticulum(HW_MTU, self.ifac_size),
+                control: self.control.clone(),
+            }),
+        )
     }
 }
 
-/// Per-client reader thread: reads HDLC frames, sends to driver.
-fn client_reader_loop(
-    mut stream: TcpStream,
+/// One accepted client, read on the driver thread.
+struct ClientSource {
+    stream: TcpStream,
     id: InterfaceId,
     name: String,
     tx: EventSender,
     active_connections: Arc<AtomicUsize>,
-    ifac_size: usize,
+    decoder: hdlc::Decoder,
     control: ListenerControl,
-) {
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
-    let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
-    let mut buf = vec![0u8; 64 * 1024];
+}
 
-    loop {
-        if control.should_stop() {
-            active_connections.fetch_sub(1, Ordering::Relaxed);
-            return;
+impl LoopSource for ClientSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    fn stopped(&self) -> bool {
+        self.control.should_stop()
+    }
+
+    fn on_removed(&mut self) {
+        self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        if self.control.should_stop() {
+            return SourceStatus::Remove;
         }
-        match stream.read(&mut buf) {
-            Ok(0) => {
-                log::info!("[{}] client {} disconnected", name, id.0);
-                active_connections.fetch_sub(1, Ordering::Relaxed);
-                let _ = tx.send(Event::InterfaceDown(id));
-                return;
-            }
-            Ok(n) => {
-                let decoded = decoder.feed_with_diagnostics(&buf[..n]);
-                for frame_len in decoded.invalid_frame_lengths {
-                    log::debug!(
-                        "[{}] invalid HDLC frame of {} bytes received from client {}, dropping frame",
-                        name,
-                        frame_len,
-                        id.0,
-                    );
-                }
-                // One queue lock for every frame decoded from this read.
-                let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
-                    interface_id: id,
-                    data: frame,
-                    rssi: None,
-                    snr: None,
-                });
-                if tx.send_batch(frames).is_err() {
-                    // Driver shut down
-                    active_connections.fetch_sub(1, Ordering::Relaxed);
-                    return;
+        let mut read = 0;
+        while read < CLIENT_READ_BUDGET {
+            // SAFETY: `cx.buf` is a valid writable buffer for the call.
+            // MSG_DONTWAIT keeps the socket's own mode untouched.
+            let n = unsafe {
+                libc::recv(
+                    self.stream.as_raw_fd(),
+                    cx.buf.as_mut_ptr().cast(),
+                    cx.buf.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            };
+            if n < 0 {
+                let e = io::Error::last_os_error();
+                match e.kind() {
+                    io::ErrorKind::WouldBlock => return SourceStatus::Rearm,
+                    io::ErrorKind::Interrupted => continue,
+                    _ => {
+                        log::warn!("[{}] client {} read error: {}", self.name, self.id.0, e);
+                        let _ = self.tx.push_from_loop([Event::InterfaceDown(self.id)]);
+                        return SourceStatus::Remove;
+                    }
                 }
             }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                        | io::ErrorKind::Interrupted
-                ) => {}
-            Err(e) => {
-                log::warn!("[{}] client {} read error: {}", name, id.0, e);
-                active_connections.fetch_sub(1, Ordering::Relaxed);
-                let _ = tx.send(Event::InterfaceDown(id));
-                return;
+            if n == 0 {
+                log::info!("[{}] client {} disconnected", self.name, self.id.0);
+                let _ = self.tx.push_from_loop([Event::InterfaceDown(self.id)]);
+                return SourceStatus::Remove;
+            }
+            let n = n as usize;
+            read += n;
+            let decoded = self.decoder.feed_with_diagnostics(&cx.buf[..n]);
+            for frame_len in decoded.invalid_frame_lengths {
+                log::debug!(
+                    "[{}] invalid HDLC frame of {} bytes received from client {}, dropping frame",
+                    self.name,
+                    frame_len,
+                    self.id.0,
+                );
+            }
+            let id = self.id;
+            let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
+                interface_id: id,
+                data: frame,
+                rssi: None,
+                snr: None,
+            });
+            match self.tx.push_from_loop(frames) {
+                Ok(true) => {}
+                // Inbound data is full: stop reading until the driver has
+                // caught up, so TCP flow control slows the sender.
+                Ok(false) => return SourceStatus::Suspend,
+                Err(_) => return SourceStatus::Remove,
             }
         }
+        SourceStatus::Rearm
     }
 }
 
@@ -480,8 +507,10 @@ pub(crate) fn runtime_handle_from_config(config: &TcpServerConfig) -> TcpServerR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::net::TcpStream;
     use std::sync::mpsc::RecvTimeoutError;
+    use std::thread;
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
@@ -800,6 +829,68 @@ mod tests {
             }
             other => panic!("expected Frame, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn a_flood_into_a_small_queue_suspends_reading_without_losing_frames() {
+        const FRAMES: u32 = 3000;
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel_with_capacity(4);
+        let snapshot_tx = tx.clone();
+        start(
+            make_server_config(port, 4, None),
+            tx,
+            Arc::new(AtomicU64::new(4000)),
+        )
+        .unwrap();
+        let mut client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(4000), _, _)
+        ));
+
+        let writer = thread::spawn(move || {
+            let mut wire = Vec::new();
+            for seq in 0..FRAMES {
+                let mut payload = vec![0u8; 32];
+                payload[2..18].copy_from_slice(&[0x5A; 16]);
+                payload[20..24].copy_from_slice(&seq.to_be_bytes());
+                wire.extend(hdlc::frame(&payload));
+            }
+            client.write_all(&wire).unwrap();
+            client
+        });
+
+        for expected in 0..FRAMES {
+            match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+                Event::Frame {
+                    interface_id, data, ..
+                } => {
+                    assert_eq!(interface_id, InterfaceId(4000));
+                    let seq = u32::from_be_bytes(data[20..24].try_into().unwrap());
+                    assert_eq!(seq, expected, "frames lost or reordered");
+                }
+                other => panic!("expected Frame, got {:?}", other),
+            }
+        }
+        let _client = writer.join().unwrap();
+        assert_eq!(snapshot_tx.inbound_queue_snapshot().dropped, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_stopped_listener_is_closed_at_the_next_sweep() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let control = start(
+            make_server_config(port, 5, None),
+            tx,
+            Arc::new(AtomicU64::new(5000)),
+        )
+        .unwrap();
+        control.request_stop();
+        rx.sweep_stopped_sources();
+        let refused = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::ConnectionRefused);
     }
 
     #[test]

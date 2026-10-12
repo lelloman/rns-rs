@@ -354,9 +354,11 @@ impl Driver {
         }
     }
 
-    /// Serve sockets the driver poller reported ready: writers that had
-    /// bytes left over continue writing.
+    /// Serve sockets the driver poller reported ready: loop sources read
+    /// (queueing what they decode), and writers that had bytes left over
+    /// continue writing.
     pub(crate) fn handle_ready_sources(&mut self, ready: &polling::Events) {
+        self.rx.serve_sources(ready);
         for event in ready.iter() {
             let (interface, is_write) = crate::interface::loop_writer::key_target(event.key);
             if is_write && event.writable {
