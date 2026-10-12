@@ -85,6 +85,16 @@ Then refresh the lockfile:
 cargo check --workspace
 ```
 
+Refresh `rns-esp32/Cargo.lock` after every version bump and commit it.
+`rns-esp32` is excluded from the workspace and keeps its own lock file, which
+pins the path versions of `rns-crypto` and `rns-core`; CI and the ESP32
+release build use `--locked` and fail if it is out of date:
+
+```bash
+cargo update --workspace --manifest-path rns-esp32/Cargo.toml
+cargo metadata --locked --manifest-path rns-esp32/Cargo.toml --format-version 1 > /dev/null
+```
+
 ## 4. Verify locally before publishing
 
 Run the full workspace checks first:
@@ -143,7 +153,7 @@ Example:
 
 ```bash
 git status --short
-git add Cargo.toml Cargo.lock \
+git add Cargo.toml Cargo.lock rns-esp32/Cargo.lock \
   rns-crypto/Cargo.toml \
   rns-core/Cargo.toml \
   rns-hooks/Cargo.toml \
@@ -267,6 +277,7 @@ Use this as the final release gate:
 
 - `git status --short` is empty before publish
 - all intended version bumps are committed
+- `rns-esp32/Cargo.lock` is refreshed and committed
 - `cargo check --workspace` passes
 - `cargo test --workspace` passes
 - publishable crate manifests do not inherit `publish = false`

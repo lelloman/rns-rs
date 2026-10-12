@@ -125,6 +125,23 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
+  esp32-lockfile:
+    name: ESP32 Lockfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      # Run from the repository root: rns-esp32/rust-toolchain.toml selects the
+      # Espressif toolchain, which is not needed to resolve the lock file.
+      - name: Check rns-esp32/Cargo.lock is up to date
+        run: cargo metadata --locked --manifest-path rns-esp32/Cargo.toml --format-version 1 > /dev/null
+
   reticulum-interop:
     name: Reticulum ${{ matrix.reticulum.version }} Interop
     runs-on: ubuntu-latest
