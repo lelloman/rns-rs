@@ -385,6 +385,10 @@ impl Driver {
         // Re-arm sources that backed off after an error, e.g. a listener
         // whose accept failed.
         self.rx.resume_paused_sources();
+        // Let driver-run writers notice peers that stopped reading.
+        for entry in self.interfaces.values_mut() {
+            entry.writer.tick();
+        }
         #[cfg(feature = "hooks")]
         {
             let ctx = HookContext::Tick;

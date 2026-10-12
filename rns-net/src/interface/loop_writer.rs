@@ -11,13 +11,14 @@
 use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{BorrowedFd, RawFd};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rns_core::transport::types::InterfaceId;
 
-use super::{AsyncWriterMetrics, Writer, ASYNC_WRITER_BACKPRESSURE_WAIT};
+use super::transmit_buffer::{EgressController, EGRESS_DEAD_TIME, EGRESS_HIGH_WATERMARK};
+use super::{AsyncWriterMetrics, EgressControl, Writer, ASYNC_WRITER_BACKPRESSURE_WAIT};
 use crate::event::EventSender;
 use crate::link_send::{Completion, LinkSendError};
 
@@ -44,6 +45,55 @@ pub(crate) fn read_key(id: InterfaceId) -> usize {
 /// The interface a poller key belongs to, and whether it is a write key.
 pub(crate) fn key_target(key: usize) -> (InterfaceId, bool) {
     (InterfaceId((key >> 1) as u64), key & 1 == 1)
+}
+
+/// Egress rules a writer asks the driver to apply instead of its default
+/// backpressure (see [`Writer::loop_egress`]). Frames are admitted up to a
+/// byte budget and dropped, not waited for, beyond it or while the peer is
+/// judged stalled, so one slow peer never holds up the driver.
+pub struct LoopEgress {
+    control: EgressControl,
+    stall: Option<StallWatch>,
+}
+
+/// Disconnects a peer that stops reading.
+struct StallWatch {
+    controller: EgressController,
+    started: Instant,
+    /// When buffered bytes last stopped draining.
+    stall_started: Option<Instant>,
+    /// How long bytes may stay unwritten; `None` means [`EGRESS_DEAD_TIME`].
+    timeout: Box<dyn Fn() -> Option<Duration> + Send>,
+    /// Set when the peer is dropped for a write stall.
+    flag: Arc<AtomicBool>,
+}
+
+impl LoopEgress {
+    /// Admit frames within `control`'s budget, recording what is dropped.
+    pub(crate) fn budget(control: EgressControl) -> Self {
+        Self {
+            control,
+            stall: None,
+        }
+    }
+
+    /// Also judge the peer stalled when it drains too slowly, and drop the
+    /// connection when bytes stay unwritten for `timeout` or the peer makes
+    /// no progress for [`EGRESS_DEAD_TIME`], setting `flag`.
+    pub(crate) fn with_stall_watch(
+        mut self,
+        timeout: impl Fn() -> Option<Duration> + Send + 'static,
+        flag: Arc<AtomicBool>,
+    ) -> Self {
+        self.stall = Some(StallWatch {
+            controller: EgressController::default(),
+            started: Instant::now(),
+            stall_started: None,
+            timeout: Box::new(timeout),
+            flag,
+        });
+        self
+    }
 }
 
 pub(crate) struct LoopWriter {
@@ -75,19 +125,21 @@ pub(crate) struct LoopWriter {
     interface_id: InterfaceId,
     interface_name: String,
     event_tx: EventSender,
+    egress: Option<LoopEgress>,
 }
 
 pub(crate) fn wrap(
-    inner: Box<dyn Writer>,
+    mut inner: Box<dyn Writer>,
     fd: RawFd,
     interface_id: InterfaceId,
     interface_name: &str,
     event_tx: EventSender,
 ) -> (Box<dyn Writer>, AsyncWriterMetrics) {
+    let egress = inner.loop_egress();
     let metrics = AsyncWriterMetrics {
         queued_frames: Arc::default(),
-        worker_alive: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        egress_control: None,
+        worker_alive: Arc::new(AtomicBool::new(true)),
+        egress_control: egress.as_ref().map(|egress| egress.control.clone()),
         space: Arc::default(),
         space_waiters: Arc::default(),
     };
@@ -127,6 +179,7 @@ pub(crate) fn wrap(
         interface_id,
         interface_name: interface_name.to_string(),
         event_tx,
+        egress,
     };
     (Box::new(writer), metrics)
 }
@@ -142,7 +195,12 @@ impl LoopWriter {
 
     /// Whether a frame of `bytes` encoded bytes fits now.
     fn fits(&self, bytes: usize) -> bool {
-        self.buffered() == 0 || self.buffered() + bytes <= LOOP_WRITER_BUFFER_LIMIT
+        let limit = if self.egress.is_some() {
+            EGRESS_HIGH_WATERMARK
+        } else {
+            LOOP_WRITER_BUFFER_LIMIT
+        };
+        self.buffered() == 0 || self.buffered() + bytes <= limit
     }
 
     fn append(&mut self, data: &[u8]) {
@@ -171,6 +229,20 @@ impl LoopWriter {
             if self.failed {
                 return Err(Self::offline());
             }
+        }
+        if let Some(egress) = &self.egress {
+            if egress.control.stalled() || !self.fits(bytes) {
+                egress.control.record_drop(bytes);
+                log::debug!(
+                    "[{}:{}] egress control dropped outbound frame of {} bytes",
+                    self.interface_name,
+                    self.interface_id.0,
+                    bytes
+                );
+            } else {
+                self.append(data);
+            }
+            return Ok(());
         }
         if !self.fits(bytes) && (self.skip_wait || !self.wait_for_space(bytes)) {
             self.skip_wait = true;
@@ -216,6 +288,7 @@ impl LoopWriter {
     /// Write as much as the socket takes without blocking, complete what was
     /// written, and keep writable interest exactly while bytes remain.
     fn drain(&mut self) {
+        let sent_before = self.sent;
         while !self.failed && self.head < self.out.len() {
             let pending = &self.out[self.head..];
             // SAFETY: `pending` is a valid initialized slice; MSG_DONTWAIT
@@ -258,6 +331,56 @@ impl LoopWriter {
             self.head = 0;
         }
         self.set_writable_interest(self.buffered() > 0);
+        if self.egress.is_some() {
+            self.watch_stall(self.sent > sent_before);
+        }
+    }
+
+    /// Re-judge a stall-watched peer after a write attempt, and drop it once
+    /// it stayed unwritable too long.
+    fn watch_stall(&mut self, progressed: bool) {
+        let buffered = self.buffered();
+        let sent = self.sent as usize;
+        let Some(egress) = &mut self.egress else {
+            return;
+        };
+        let Some(watch) = &mut egress.stall else {
+            return;
+        };
+        if self.failed {
+            return;
+        }
+        if progressed || buffered == 0 {
+            watch.stall_started = None;
+        }
+        let dead = watch
+            .controller
+            .evaluate(watch.started.elapsed(), buffered, buffered, sent);
+        egress.control.set_stalled(watch.controller.stalled());
+        let exceeded = if dead {
+            Some(EGRESS_DEAD_TIME)
+        } else if buffered == 0 {
+            None
+        } else {
+            let now = Instant::now();
+            let started = *watch.stall_started.get_or_insert(now);
+            let timeout = (watch.timeout)().unwrap_or(EGRESS_DEAD_TIME);
+            (now.duration_since(started) >= timeout).then_some(timeout)
+        };
+        let Some(timeout) = exceeded else {
+            return;
+        };
+        log::warn!(
+            "[{}] backbone client {} disconnected due to write stall timeout ({:?})",
+            self.interface_name,
+            self.interface_id.0,
+            timeout
+        );
+        watch.flag.store(true, Ordering::Relaxed);
+        self.fail(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("backbone writer stalled for {:?}", timeout),
+        ));
     }
 
     fn complete_written(&mut self) {
@@ -387,6 +510,17 @@ impl Writer for LoopWriter {
 
     fn send_frame_deferred(&mut self, data: &[u8]) -> io::Result<()> {
         self.send_frame(data)
+    }
+
+    fn tick(&mut self) {
+        if !self.failed
+            && self
+                .egress
+                .as_ref()
+                .is_some_and(|egress| egress.stall.is_some())
+        {
+            self.drain();
+        }
     }
 
     fn flush_pending(&mut self) {
@@ -792,5 +926,103 @@ mod tests {
         assert_eq!(take_down_reports(&rx), 1);
         writer.flush_pending();
         assert_eq!(take_down_reports(&rx), 0);
+    }
+
+    /// A socket writer that asks for egress rules.
+    struct Budgeted(TcpStream, Option<LoopEgress>);
+
+    impl Writer for Budgeted {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            unreachable!("the loop writer writes the descriptor itself")
+        }
+
+        fn loop_egress(&mut self) -> Option<LoopEgress> {
+            self.1.take()
+        }
+
+        fn shutdown(&mut self) {
+            let _ = self.0.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    /// A writer whose peer never reads, with a small send buffer.
+    fn budgeted(egress: LoopEgress) -> Fixture {
+        let (tx, rx) = crate::event::channel();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        socket2::SockRef::from(&stream)
+            .set_send_buffer_size(4096)
+            .unwrap();
+        socket2::SockRef::from(&peer)
+            .set_recv_buffer_size(4096)
+            .unwrap();
+        let fd = stream.as_raw_fd();
+        let poller = Arc::clone(tx.poller());
+        let (writer, metrics) = wrap(
+            Box::new(Budgeted(stream, Some(egress))),
+            fd,
+            InterfaceId(7),
+            "test",
+            tx,
+        );
+        Fixture {
+            writer,
+            metrics,
+            peer,
+            rx,
+            poller,
+        }
+    }
+
+    #[test]
+    fn an_egress_budget_drops_frames_instead_of_waiting() {
+        let control = EgressControl::new(EGRESS_HIGH_WATERMARK);
+        let mut f = budgeted(LoopEgress::budget(control.clone()));
+        let frame = vec![0x55; 64 * 1024];
+        let started = Instant::now();
+        for _ in 0..(2 * EGRESS_HIGH_WATERMARK / frame.len()) {
+            f.writer.send_frame(&frame).unwrap();
+            f.writer.flush_pending();
+        }
+        // No send waited for the socket, and frames past the budget were
+        // dropped and counted rather than refused.
+        assert!(started.elapsed() < ASYNC_WRITER_BACKPRESSURE_WAIT * 8);
+        let dropped = control.dropped_frames.load(Ordering::Relaxed);
+        assert!(dropped > 0, "expected drops past the byte budget");
+        assert!(f.metrics.egress_control.is_some());
+        assert!(f.metrics.queued_frames() * frame.len() <= EGRESS_HIGH_WATERMARK + frame.len());
+        drop(f.peer);
+    }
+
+    #[test]
+    fn a_stall_watched_peer_that_stops_reading_is_dropped_on_a_tick() {
+        let control = EgressControl::new(EGRESS_HIGH_WATERMARK);
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut f = budgeted(
+            LoopEgress::budget(control)
+                .with_stall_watch(|| Some(Duration::from_millis(50)), Arc::clone(&flag)),
+        );
+        let frame = vec![0x55; 64 * 1024];
+        for _ in 0..8 {
+            f.writer.send_frame(&frame).unwrap();
+        }
+        f.writer.flush_pending();
+        assert!(!flag.load(Ordering::Relaxed));
+        assert_eq!(take_down_reports(&f.rx), 0);
+
+        // Nothing new is sent: only the driver's tick sees the stall.
+        std::thread::sleep(Duration::from_millis(80));
+        f.writer.tick();
+        assert!(flag.load(Ordering::Relaxed));
+        assert_eq!(take_down_reports(&f.rx), 1);
+        assert!(f.writer.send_frame(&frame).is_err());
+
+        // The socket was shut down, so the peer sees the end of the stream.
+        f.peer
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut sink = Vec::new();
+        f.peer.read_to_end(&mut sink).unwrap();
     }
 }

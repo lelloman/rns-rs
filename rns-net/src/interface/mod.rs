@@ -310,6 +310,19 @@ pub trait Writer: Send {
         None
     }
 
+    /// Byte-budget egress rules for a [`Writer::loop_socket`] writer, taken
+    /// once when the driver starts writing it. Without them the driver
+    /// applies its default backpressure.
+    #[doc(hidden)]
+    fn loop_egress(&mut self) -> Option<loop_writer::LoopEgress> {
+        None
+    }
+
+    /// Called by the driver once per tick, so driver-run writers can detect
+    /// a peer that stopped reading even when nothing new is sent.
+    #[doc(hidden)]
+    fn tick(&mut self) {}
+
     fn shutdown(&mut self) {}
 }
 

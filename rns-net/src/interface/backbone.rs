@@ -29,6 +29,7 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
+use crate::interface::loop_writer::LoopEgress;
 use crate::interface::transmit_buffer::{
     EgressController, TransmitBuffer, EGRESS_DEAD_TIME, EGRESS_HIGH_WATERMARK,
 };
@@ -451,6 +452,20 @@ impl Writer for BackboneWriter {
 
     fn egress_control(&self) -> Option<EgressControl> {
         Some(self.egress_control.clone())
+    }
+
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
+        Some(self.stream.as_raw_fd())
+    }
+
+    fn loop_egress(&mut self) -> Option<LoopEgress> {
+        let runtime = Arc::clone(&self.runtime);
+        Some(
+            LoopEgress::budget(self.egress_control.clone()).with_stall_watch(
+                move || lock_or_recover(&runtime, "backbone runtime").write_stall_timeout,
+                Arc::clone(&self.write_stall_flag),
+            ),
+        )
     }
 
     fn shutdown(&mut self) {
@@ -1529,6 +1544,14 @@ impl Writer for BackboneClientWriter {
 
     fn egress_control(&self) -> Option<EgressControl> {
         Some(self.egress_control.clone())
+    }
+
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
+        Some(self.stream.as_raw_fd())
+    }
+
+    fn loop_egress(&mut self) -> Option<LoopEgress> {
+        Some(LoopEgress::budget(self.egress_control.clone()))
     }
 }
 
