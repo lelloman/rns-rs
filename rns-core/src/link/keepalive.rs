@@ -6,13 +6,26 @@ use crate::constants::{
 /// Compute keepalive interval from RTT.
 ///
 /// `keepalive = clamp(rtt * (KEEPALIVE_MAX / KEEPALIVE_MAX_RTT), KEEPALIVE_MIN, KEEPALIVE_MAX)`
+///
+/// A non-finite RTT yields `KEEPALIVE_MAX`, so the result is always finite.
 pub fn compute_keepalive(rtt: f64) -> f64 {
     let ka = rtt * (LINK_KEEPALIVE_MAX / LINK_KEEPALIVE_MAX_RTT);
+    if ka.is_nan() {
+        return LINK_KEEPALIVE_MAX;
+    }
     ka.clamp(LINK_KEEPALIVE_MIN, LINK_KEEPALIVE_MAX)
 }
 
 /// Compute stale_time from keepalive interval.
+///
+/// The keepalive is bounded to `[KEEPALIVE_MIN, KEEPALIVE_MAX]` first, so the
+/// result is always finite.
 pub fn compute_stale_time(keepalive: f64) -> f64 {
+    let keepalive = if keepalive.is_nan() {
+        LINK_KEEPALIVE_MAX
+    } else {
+        keepalive.clamp(LINK_KEEPALIVE_MIN, LINK_KEEPALIVE_MAX)
+    };
     keepalive * LINK_STALE_FACTOR
 }
 
@@ -126,5 +139,20 @@ mod tests {
         assert!(!is_establishment_timeout(100.0, 30.0, 120.0));
         assert!(is_establishment_timeout(100.0, 30.0, 130.0));
         assert!(is_establishment_timeout(100.0, 30.0, 135.0));
+    }
+
+    #[test]
+    fn keepalive_and_stale_time_are_finite_for_non_finite_rtt() {
+        assert_eq!(compute_keepalive(f64::NAN), LINK_KEEPALIVE_MAX);
+        assert_eq!(compute_keepalive(f64::INFINITY), LINK_KEEPALIVE_MAX);
+        assert_eq!(compute_keepalive(f64::NEG_INFINITY), LINK_KEEPALIVE_MIN);
+        assert_eq!(
+            compute_stale_time(f64::NAN),
+            LINK_KEEPALIVE_MAX * LINK_STALE_FACTOR
+        );
+        assert_eq!(
+            compute_stale_time(f64::INFINITY),
+            LINK_KEEPALIVE_MAX * LINK_STALE_FACTOR
+        );
     }
 }

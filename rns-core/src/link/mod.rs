@@ -12,7 +12,8 @@ use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::Rng;
 
 use crate::constants::{
-    LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, MTU, PATHFINDER_M,
+    LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, LINK_MTU_MAX,
+    LINK_MTU_MIN, MTU, PATHFINDER_M,
 };
 
 pub use types::{LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason};
@@ -352,11 +353,8 @@ impl LinkEngine {
         }
 
         let measured_rtt = now - self.request_time;
-        let rtt = if measured_rtt > initiator_rtt {
-            measured_rtt
-        } else {
-            initiator_rtt
-        };
+        // `f64::max` ignores a NaN operand, so a NaN can never be selected.
+        let rtt = measured_rtt.max(initiator_rtt);
 
         self.rtt = Some(rtt);
         self.state = LinkState::Active;
@@ -701,14 +699,22 @@ impl LinkEngine {
 /// Compute link MDU from MTU.
 ///
 /// MDU = floor((mtu - IFAC_MIN_SIZE - HEADER_MINSIZE - TOKEN_OVERHEAD) / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
+///
+/// Saturates at 0 for MTUs too small to carry one AES block.
 fn compute_mdu(mtu: usize) -> usize {
     use crate::constants::{AES128_BLOCKSIZE, HEADER_MINSIZE, IFAC_MIN_SIZE, TOKEN_OVERHEAD};
     let numerator = mtu.saturating_sub(IFAC_MIN_SIZE + HEADER_MINSIZE + TOKEN_OVERHEAD);
-    (numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
+    ((numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE).saturating_sub(1)
 }
 
+/// Resolve the link MTU from the signalled value: absent or 0 means the
+/// default Reticulum MTU; anything else is clamped to
+/// `[LINK_MTU_MIN, LINK_MTU_MAX]`.
 fn effective_link_mtu(signalled_mtu: Option<u32>) -> u32 {
-    signalled_mtu.filter(|mtu| *mtu != 0).unwrap_or(MTU as u32)
+    signalled_mtu
+        .filter(|mtu| *mtu != 0)
+        .map(|mtu| mtu.clamp(LINK_MTU_MIN, LINK_MTU_MAX))
+        .unwrap_or(MTU as u32)
 }
 use alloc::vec;
 
@@ -1435,5 +1441,179 @@ mod tests {
         let ct = initiator.encrypt(b"AES128 test", &mut rng_enc).unwrap();
         let pt = responder.decrypt(&ct).unwrap();
         assert_eq!(pt, b"AES128 test");
+    }
+
+    /// Run LINKREQUEST + LRPROOF with the given signalled MTU. Returns the
+    /// active initiator and the responder still waiting for its LRRTT.
+    fn handshake_pair_with_mtu(mtu: Option<u32>) -> (LinkEngine, LinkEngine) {
+        let mut rng_id = make_rng(0x01);
+        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
+        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
+        let dest_hash = [0xDD; 16];
+
+        let mut rng_init = make_rng(0x10);
+        let (mut initiator, request_data) = LinkEngine::new_initiator(
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            mtu,
+            100.0,
+            &mut rng_init,
+        );
+        let mut hashable = vec![0x00, 0x00];
+        hashable.extend_from_slice(&dest_hash);
+        hashable.push(0x00);
+        hashable.extend_from_slice(&request_data);
+        initiator.set_link_id_from_hashable(&hashable, request_data.len());
+
+        let mut rng_resp = make_rng(0x20);
+        let (responder, lrproof_data) = LinkEngine::new_responder(
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
+
+        let mut rng_lrrtt = make_rng(0x30);
+        initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
+        (initiator, responder)
+    }
+
+    fn raw_rtt_payload(rtt: f64) -> Vec<u8> {
+        let mut data = vec![0xcb];
+        data.extend_from_slice(&rtt.to_be_bytes());
+        data
+    }
+
+    #[test]
+    fn compute_mdu_keeps_values_for_regular_mtus() {
+        assert_eq!(compute_mdu(500), 431);
+        assert_eq!(compute_mdu(508), 431);
+        assert_eq!(compute_mdu(1064), 991);
+        assert_eq!(compute_mdu(8192), 8111);
+        assert_eq!(compute_mdu(262_144), 262_063);
+        assert_eq!(compute_mdu(LINK_MTU_MAX as usize), 2_097_071);
+    }
+
+    #[test]
+    fn compute_mdu_saturates_for_small_mtus() {
+        for mtu in [0usize, 1, 50, 67, 68, 83] {
+            assert_eq!(compute_mdu(mtu), 0, "mtu {mtu}");
+        }
+        assert_eq!(compute_mdu(LINK_MTU_MIN as usize), 15);
+    }
+
+    #[test]
+    fn effective_link_mtu_is_clamped_and_mdu_monotone() {
+        assert_eq!(effective_link_mtu(None), MTU as u32);
+        assert_eq!(effective_link_mtu(Some(0)), MTU as u32);
+        assert_eq!(effective_link_mtu(Some(1)), LINK_MTU_MIN);
+        assert_eq!(effective_link_mtu(Some(50)), LINK_MTU_MIN);
+        assert_eq!(effective_link_mtu(Some(83)), LINK_MTU_MIN);
+        assert_eq!(effective_link_mtu(Some(84)), 84);
+        assert_eq!(effective_link_mtu(Some(500)), 500);
+        assert_eq!(effective_link_mtu(Some(LINK_MTU_MAX)), LINK_MTU_MAX);
+        assert_eq!(effective_link_mtu(Some(u32::MAX)), LINK_MTU_MAX);
+
+        let mut prev = 0usize;
+        for mtu in [1u32, 50, 83, 84, 500, LINK_MTU_MAX] {
+            let mdu = compute_mdu(effective_link_mtu(Some(mtu)) as usize);
+            assert!(mdu >= 15, "mtu {mtu} gave mdu {mdu}");
+            assert!(mdu >= prev, "mdu not monotone at mtu {mtu}");
+            prev = mdu;
+        }
+    }
+
+    #[test]
+    fn small_signalled_mtu_is_raised_to_minimum_on_both_sides() {
+        let (initiator, mut responder) = handshake_pair_with_mtu(Some(70));
+        assert_eq!(responder.mtu(), LINK_MTU_MIN);
+        assert_eq!(responder.mdu(), 15);
+        assert_eq!(initiator.mtu(), LINK_MTU_MIN);
+        assert_eq!(initiator.mdu(), 15);
+        assert_eq!(initiator.state(), LinkState::Active);
+
+        let mut rng = make_rng(0x40);
+        let lrrtt = initiator.encrypt(&pack_rtt(0.3), &mut rng).unwrap();
+        responder.handle_lrrtt(&lrrtt, 101.0).unwrap();
+        assert_eq!(responder.state(), LinkState::Active);
+
+        let ct = initiator.encrypt(b"hello", &mut rng).unwrap();
+        assert_eq!(responder.decrypt(&ct).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn signalled_mtu_edge_values_do_not_panic() {
+        for mtu in [0u32, 1, 50, 83, 84, 500, LINK_MTU_MAX] {
+            let (initiator, responder) = handshake_pair_with_mtu(Some(mtu));
+            assert!(responder.mtu() >= LINK_MTU_MIN);
+            assert!(responder.mdu() >= 15);
+            assert_eq!(initiator.mtu(), responder.mtu());
+            assert_eq!(initiator.mdu(), responder.mdu());
+        }
+    }
+
+    #[test]
+    fn non_finite_or_negative_lrrtt_is_rejected() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            let (initiator, mut responder) = handshake_pair_with_mtu(Some(500));
+            let mut rng = make_rng(0x40);
+            let lrrtt = initiator.encrypt(&raw_rtt_payload(bad), &mut rng).unwrap();
+            assert!(
+                matches!(
+                    responder.handle_lrrtt(&lrrtt, 101.0),
+                    Err(LinkError::InvalidData)
+                ),
+                "rtt {bad}"
+            );
+            assert_eq!(responder.state(), LinkState::Handshake);
+            assert_eq!(responder.rtt(), None);
+            assert!(responder.keepalive_interval.is_finite());
+            assert!(responder.stale_time.is_finite());
+
+            // The peer goes silent: the pending link still times out.
+            let deadline = responder.request_time + responder.establishment_timeout;
+            let actions = responder.tick(deadline + 1.0);
+            assert_eq!(responder.state(), LinkState::Closed);
+            assert_eq!(actions.len(), 1);
+        }
+    }
+
+    #[test]
+    fn valid_lrrtt_updates_rtt_and_timers() {
+        let (initiator, mut responder) = handshake_pair_with_mtu(Some(500));
+        let mut rng = make_rng(0x40);
+        // Larger than the responder's own measurement (0.5s), so it is selected.
+        let lrrtt = initiator.encrypt(&pack_rtt(0.9), &mut rng).unwrap();
+        responder.handle_lrrtt(&lrrtt, 101.0).unwrap();
+        assert_eq!(responder.state(), LinkState::Active);
+        assert_eq!(responder.rtt(), Some(0.9));
+        assert_eq!(responder.keepalive_interval, compute_keepalive(0.9));
+        assert_eq!(
+            responder.stale_time,
+            compute_stale_time(compute_keepalive(0.9))
+        );
+    }
+
+    #[test]
+    fn non_finite_rtt_keeps_timers_finite_and_link_goes_stale() {
+        let (_, mut responder, _) = active_link_pair();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            responder.set_rtt(bad);
+            assert!(responder.keepalive_interval.is_finite(), "rtt {bad}");
+            assert!(responder.stale_time.is_finite(), "rtt {bad}");
+            assert!(responder.stale_time <= LINK_KEEPALIVE_MAX * 2.0);
+        }
+
+        let stale_time = responder.stale_time;
+        responder.tick(101.0 + stale_time + 1.0);
+        assert_eq!(responder.state(), LinkState::Stale);
     }
 }

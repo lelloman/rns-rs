@@ -199,11 +199,15 @@ pub fn pack_rtt(rtt: f64) -> Vec<u8> {
 }
 
 /// Unpack RTT from msgpack float64.
+///
+/// Returns `None` for malformed input and for values that are not a finite,
+/// non-negative number of seconds.
 pub fn unpack_rtt(data: &[u8]) -> Option<f64> {
     if data.len() == 9 && data[0] == 0xcb {
         let mut bytes = [0u8; 8];
         bytes.copy_from_slice(&data[1..9]);
-        Some(f64::from_be_bytes(bytes))
+        let rtt = f64::from_be_bytes(bytes);
+        (rtt.is_finite() && rtt >= 0.0).then_some(rtt)
     } else {
         None
     }
@@ -379,5 +383,23 @@ mod tests {
         let packed = pack_rtt(0.0);
         let unpacked = unpack_rtt(&packed).unwrap();
         assert_eq!(unpacked, 0.0);
+    }
+
+    #[test]
+    fn unpack_rtt_rejects_non_finite_and_negative_values() {
+        for bad in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.0,
+            -f64::MIN_POSITIVE,
+        ] {
+            let mut data = vec![0xcb];
+            data.extend_from_slice(&bad.to_be_bytes());
+            assert_eq!(unpack_rtt(&data), None, "rtt {bad}");
+        }
+        assert_eq!(unpack_rtt(&pack_rtt(0.0)), Some(0.0));
+        assert_eq!(unpack_rtt(&pack_rtt(-0.0)), Some(-0.0));
+        assert_eq!(unpack_rtt(&pack_rtt(2.5)), Some(2.5));
     }
 }

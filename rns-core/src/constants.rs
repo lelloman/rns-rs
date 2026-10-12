@@ -344,6 +344,15 @@ pub const LINK_MDU: usize = {
 /// Link MTU bytemask (21-bit MTU field)
 pub const LINK_MTU_BYTEMASK: u32 = 0x1FFFFF;
 
+/// Smallest link MTU that leaves room for one AES block of link payload:
+/// IFAC_MIN_SIZE + HEADER_MINSIZE + TOKEN_OVERHEAD + AES128_BLOCKSIZE = 84.
+/// Smaller signalled MTUs are raised to this value.
+pub const LINK_MTU_MIN: u32 =
+    (IFAC_MIN_SIZE + HEADER_MINSIZE + TOKEN_OVERHEAD + AES128_BLOCKSIZE) as u32;
+
+/// Largest MTU expressible in the 21-bit link signalling field.
+pub const LINK_MTU_MAX: u32 = LINK_MTU_BYTEMASK;
+
 /// Link mode bytemask (3-bit mode field in upper byte)
 pub const LINK_MODE_BYTEMASK: u8 = 0xE0;
 
