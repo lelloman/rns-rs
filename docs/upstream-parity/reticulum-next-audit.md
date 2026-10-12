@@ -167,6 +167,31 @@ commits 2-5 are non-runtime. The remaining parity work is procedural:
 
 ## Acceptance Record
 
+- `2026-10-12`: Both daily VPS snapshots were healthy and complete, with one
+  capture per host, all public interfaces up (EU 42/42, US 28/28), no failed
+  rolling traffic queries, and zero idle timeout or provider bridge drop and
+  disconnect events over 24 hours. The impaired dual-VPS `--daily` smoke passed
+  all four Resource sizes through 1 MiB, concurrent links, and forced reconnect
+  recovery using the freshly built `011e182` working tree. Both upstream
+  refreshes succeeded (`05:11:48Z` GitHub, `05:11:53Z` rgit); the five-commit
+  inventory from October 6 is unchanged, with the GitHub tip (`e40191b3`)
+  behind the baseline and the rgit tip (`a29bfb51`) ahead. EU runs `f369205`
+  while US runs `011e182`; both are behind `origin/master` (`b5ea255`), and US
+  now matches `origin/dev` (`011e182`) while EU remains behind it. Mapping
+  commits and promotion acceptance remain pending.
+
+- `2026-10-11`: Both daily VPS snapshots were healthy and complete, with one
+  capture per host, all public interfaces up (EU 34/34, US 25/25), no failed
+  rolling traffic queries, and zero idle timeout or provider bridge drop and
+  disconnect events over 24 hours. The impaired dual-VPS `--daily` smoke passed
+  all four Resource sizes through 1 MiB, concurrent links, and forced reconnect
+  recovery using the freshly built `011e182` working tree. Both upstream
+  refreshes succeeded (`11:08:34Z` GitHub, `11:08:39Z` rgit); the five-commit
+  inventory and both remote tips are unchanged from October 6. EU now runs
+  `f369205` while US remains at `62385c8`; both are behind `origin/master`
+  (`b5ea255`) and `origin/dev` (`011e182`). Mapping commits and promotion
+  acceptance remain pending.
+
 - `2026-10-09`: Both daily VPS snapshots were healthy and complete, with one
   capture per host, all public interfaces up (EU 36/36, US 26/26), no failed
   rolling traffic queries, and zero idle timeout events over 24 hours. The
