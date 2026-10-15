@@ -6,585 +6,69 @@
 [![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
 [![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.5.6-blue)](docs/upstream-parity/reticulum-1.5.6-rgit-parity.md)
 
-A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
+A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum),
+the cryptography-based networking stack for building resilient networks with
+readily available hardware.
 
-This port tracks the accepted Python Reticulum baseline documented in [UPSTREAM.md](UPSTREAM.md), with Python-generated conformance vectors and live Python/Rust interoperability tests covering the implemented protocol capabilities. `rns-crypto` and `rns-core` support `no_std` builds with default features disabled. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
+rns-rs is a port of the Python reference implementation. It tracks an accepted
+upstream baseline commit by commit, is checked against Python-generated
+conformance vectors and live Python/Rust interoperability tests, and joins
+existing Reticulum networks alongside Python nodes. The protocol and
+transport crates build without `std`, and the same code base runs on servers,
+ARMv7 boards, Android, and an ESP32 LoRa node.
 
-## Performance
+On top of the Reticulum protocol it adds two opt-in extensions: a programmable
+[hook system](docs/hooks.md) for the transport pipeline, and
+[Direct Link](docs/direct-link.md), which upgrades an established link to a
+direct UDP path through NAT.
 
-rns-rs prioritises reliability, correctness, security, traffic management, and
-practical performance across constrained and fast links. Upstream's Python
-throughput figures are specific to that implementation and its execution
-environment; they are not measurements or guarantees for this Rust port.
-
-Native performance claims should identify the hardware, build profile, enabled
-features, workload, network conditions, and measurement method. Routing-only
-microbenchmarks and end-to-end application throughput measure different work;
-comparisons need equivalent behaviour and settings, alongside correctness and
-interoperability validation.
-
-## Workspace Crates
-
-| Crate | `no_std` | Description |
-|-------|----------|-------------|
-| [`rns-crypto`](https://crates.io/crates/rns-crypto) | Yes | Cryptographic primitives: X25519, Ed25519, AES-128/256-CBC, SHA-256/512, HMAC, HKDF, tokens, and identities |
-| [`rns-core`](https://crates.io/crates/rns-core) | Yes | Wire protocol, destinations and packets, transport routing, links, channels, buffers, resources, and the hole-punch state machine |
-| [`rns-net`](https://crates.io/crates/rns-net) | No | Network node and driver with TCP, UDP, Local, Serial, KISS, AX.25, RNode, Pipe, Backbone, Auto, I2P, and Weave interfaces, configuration, discovery, and Direct Link support |
-| [`rns-server`](https://crates.io/crates/rns-server) | No | Batteries-included node supervisor with an embedded control plane and optional hook, sentinel, and statistics sidecars |
-| [`rns-cli`](https://crates.io/crates/rns-cli) | No | CLI programs: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, `rncp`, `rnx`, plus feature-gated `rns-sentineld` and `rns-statsd` sidecars |
-| [`rns-git`](https://crates.io/crates/rns-git) | No | Git over Reticulum: the `rngit` repository server and management client, `git-remote-rns`, and the `rngcs` signing helper |
-| [`rns-ctl`](https://crates.io/crates/rns-ctl) | No | Unified daemon and control CLI with HTTP/WebSocket APIs, status, probe, path, identity, runtime configuration, backbone, and hook management |
-| [`rns-hooks`](https://crates.io/crates/rns-hooks) | No | Programmable transport-pipeline hook runtime with sandboxed WASM, trusted native dynamic-library, and built-in backends |
-| [`rns-hooks-abi`](https://crates.io/crates/rns-hooks-abi) | Yes | Shared ABI types and constants used by hook hosts, native hooks, and WASM guests |
-| [`rns-hooks-sdk`](https://crates.io/crates/rns-hooks-sdk) | Yes | Guest-side `no_std` SDK for writing `rns-hooks` WASM programs |
-| [`rns-stats-hook`](https://crates.io/crates/rns-stats-hook) | WASM builds | Statistics hook used by `rns-statsd`, available as a WASM guest or built-in hook |
-| [`rns-sentinel-hook`](https://crates.io/crates/rns-sentinel-hook) | WASM builds | Sentinel policy hook used by `rns-sentineld`, available as a WASM guest or built-in hook |
-| [`rns-tun`](rns-tun/README.md) | No | Authenticated IPv4 tunnelling over Reticulum, with the Linux `rntun` CLI and shared Android tunnel support |
-| [`rns-tun-android`](rns-tun-android/README.md) | No | Android JNI host boundary for `rns-tun`, used by the Android VPN client |
-| [`rns-bench`](tools/rns-bench/) | No | Native benchmark workloads and measurement tools |
-
-For `rns-crypto` and `rns-core`, disable default features to build without `std`.
-The separately built [ESP32 firmware](rns-esp32/README.md) is excluded from the
-root workspace.
-
-## Building
-
-```bash
-cargo build
-```
-
-### Selecting CLI interfaces
-
-`rns-cli` and `rns-ctl` include all network interfaces by default. For a Linux
-server that needs TCP and local shared-instance connections only:
-
-```bash
-cargo build --release -p rns-cli --bin rnsd --no-default-features --features iface-tcp
-cargo build --release -p rns-ctl --no-default-features --features iface-tcp
-```
-
-Both packages expose `iface-tcp`, `iface-udp`, `iface-auto`,
-`iface-serial`, `iface-kiss`, `iface-ax25-kiss`, `iface-pipe`, `iface-rnode`,
-`iface-backbone`, `iface-i2p`, and `iface-weave`. AX.25 KISS also enables KISS;
-Weave is Linux-only. The local interface stays enabled because the CLI tools
-require shared-instance and remote-management APIs.
-Configure only interfaces included in the binary; disabling features does not
-rewrite an existing configuration or its default AutoInterface.
-
-Build the selected packages explicitly: Cargo combines dependency features, so
-building other workspace packages together can enable their interfaces too.
-`--no-default-features` now removes the implicit full interface set from these
-two packages; omit it to retain the previous full build. Hooks remain opt-in
-and can be combined with the selected interfaces. This reduces compiled code,
-not runtime queue limits or protocol functionality on retained interfaces.
-
-### Smaller deployment artifacts on Linux
-
-To remove symbol tables from a deployment copy while retaining its matching
-unstripped executable for diagnostics (GNU binutils):
-
-```bash
-cargo build --release -p rns-cli --bin rnsd
-mkdir -p dist
-cp target/release/rnsd dist/rnsd.unstripped
-strip --strip-all -o dist/rnsd dist/rnsd.unstripped
-```
-
-Keep the matching unstripped file with the release artifacts. The default
-release build has symbol names but no full source-level debug information;
-use the existing `profiling` Cargo profile when source-level profiling is
-needed. Stripping reduces disk size, not runtime memory or protocol work.
-See [release-profile measurements](bench/release-profile-findings.md) for the
-size and runtime tradeoffs of compiler options.
-
-### Selected Workspace Feature Flags
-
-The flags below are common selections accepted by root workspace build commands. This is not an exhaustive list: individual package manifests define additional crate-specific features, including the complete set of `rns-net` `iface-*` flags and the low-level `rns-hooks` backend features.
-
-| Flag | Effect |
-|------|--------|
-| `rns-hooks` | Compatibility alias for `rns-hooks-native` |
-| `rns-hooks-wasm` | Enables WASM hooks (compiles in wasmtime) |
-| `rns-hooks-native` | Enables trusted native dynamic-library hooks without wasmtime |
-| `rns-hooks-builtin` | Enables static built-in hooks without wasmtime or dynamic libraries |
-| `tls` | Enables TLS support in rns-ctl (compiles in rustls) |
-| `iface-ax25-kiss` | Enables `AX25KISSInterface` (enabled by default in `rns-net`) |
-| `iface-weave` | Enables Linux `WeaveInterface` support (enabled by default in `rns-net`) |
-
-```bash
-cargo build --features rns-hooks           # Enable native dynamic-library hooks
-cargo build --features rns-hooks-native    # Enable native dynamic-library hooks explicitly
-cargo build --features rns-hooks-wasm      # Enable WASM hooks
-cargo build --features rns-hooks-builtin   # Enable static built-in hooks
-cargo build --features tls          # Enable TLS in rns-ctl
-```
-
-To compile WASM guest hooks, including the examples under `rns-hooks/examples/`, add the WASM target. The host-side Wasmtime backend itself does not require this target:
-
-```bash
-rustup target add wasm32-unknown-unknown
-```
-
-## Running Tests
-
-Committed conformance vectors retain their historical, pinned Reticulum 1.4.0 provenance. The current upstream reference is Reticulum 1.5.6 at canonical commit `49ae71e0` (canonical `RNS` tree `def82bf5`): the 1.5.6 discovery auto-connect transport gating and static-transport-identity handling, followed by a source-only changelog/manual advancement. Exact-target interop, workspace and feature suites, native and ARMv7 release builds, the full Docker E2E matrix, and the impaired dual-VPS daily smoke all passed at the 1.5.5 release-tag acceptance; the 1.5.6 changes and rgit advancement re-ran the workspace and feature suites, formatting, host lint, native-hook release builds, and the live daily smoke. See [UPSTREAM.md](UPSTREAM.md) and the [parity record](docs/upstream-parity/reticulum-1.5.6-rgit-parity.md) for the accepted commit and validation evidence.
-
-```bash
-# Generate fixtures from the pinned Reticulum 1.4.0 checkout
-RETICULUM_UPSTREAM_DIR=/path/to/Reticulum python3 tests/generate_vectors.py
-
-# Run tests for the default workspace members
-cargo test
-
-# Run tests for a specific crate
-cargo test -p rns-crypto
-cargo test -p rns-core
-cargo test -p rns-net
-cargo test -p rns-cli
-cargo test -p rns-git
-cargo test -p rns-ctl
-cargo test -p rns-hooks
-```
-
-## Developer Checks
-
-Standard host-side validation commands:
-
-```bash
-# Full workspace tests
-cargo test --workspace
-
-# Warning-free host-safe workspace lint
-bash scripts/lint-host.sh
-```
-
-The lint script treats every host warning as an error and enables native
-`rns-hooks` coverage, but intentionally does not use
-workspace-wide `--all-features`. That would enable `rns-crypto/espidf`, which
-pulls in `esp-idf-sys` and fails on normal `x86_64-unknown-linux-gnu` host
-machines. ESP32 validation remains separate under `rns-esp32/`.
-
-### Docker E2E Tests
-
-There are 20 numbered Docker-based end-to-end suites that validate multi-node behaviour across chain, mesh, and star topologies. The full runner also includes standalone shared-client reconnection, `rns-server` supervision, NAT traversal, and privileged Linux `rntun` split/full-tunnel scenarios:
-
-```bash
-# Run all Docker e2e tests
-./tests/docker/run-all.sh
-
-# Run a specific suite on the default 3-node chain
-./tests/docker/run.sh --topology chain-3 --suite 01
-
-# Run only the privileged Linux rntun acceptance suite
-./tests/docker/rntun/run.sh
-```
-
-## rns-server
-
-`rns-server` is the default program to run for a single node. In the normal deployment model, it is the only binary you need to build or ship. Hook-enabled builds self-spawn `rnsd`, `rns-sentineld`, and `rns-statsd` from the same executable.
-
-If you just want to run a node, start here.
-
-If you want to tinker with the transport internals, build custom workflows, or run pieces independently, the lower-level binaries and hook system are still available separately.
-
-Development startup:
-
-```bash
-cargo run --bin rns-server -- start --config /path/to/node
-```
-
-Release-style startup:
+## Quick start
 
 ```bash
 cargo build --release --bin rns-server
-./target/release/rns-server start --config /path/to/node
+mkdir -p ~/.reticulum
+cargo run --release --bin rnsd -- --exampleconfig > ~/.reticulum/config
+# edit ~/.reticulum/config and enable at least one interface, then:
+./target/release/rns-server start --config ~/.reticulum
 ```
 
-If you want native dynamic-library hooks enabled in the node runtime:
-
-```bash
-cargo build --release --bin rns-server --features rns-hooks
-./target/release/rns-server start --config /path/to/node
-```
-
-Useful docs:
-
-- [docs/rns-server-operator-runbook.md](docs/rns-server-operator-runbook.md)
-
-## Interface Ingress Control
-
-rns-rs accepts the Python-compatible ingress-control keys in any interface
-section. This example uses custom thresholds and timings:
-
-```ini
-ingress_control = Yes
-ic_max_held_announces = 256
-ic_burst_hold = 60
-ic_burst_freq_new = 3.5
-ic_burst_freq = 12
-ic_pr_burst_freq_new = 3.5
-ic_pr_burst_freq = 12
-egress_control = No
-ec_pr_freq = 5
-ic_new_time = 7200
-ic_burst_penalty = 300
-ic_held_release_interval = 30
-```
-
-The default timings are `ic_burst_hold = 15`, `ic_burst_penalty = 15`, and
-`ic_held_release_interval = 5` seconds. Default announce frequency thresholds
-are `ic_burst_freq_new = 3` and `ic_burst_freq = 10`; default path-request
-thresholds are `ic_pr_burst_freq_new = 3` and `ic_pr_burst_freq = 8` per second.
-The other values in the example match their defaults.
-
-Ingress control defaults to enabled on Auto, Backbone, TCP client/server, UDP,
-and I2P interfaces. It defaults to disabled on local/serial/KISS/RNode/Pipe-style
-interfaces. Spawned dynamic interfaces inherit the full ingress-control config
-from their parent interface.
-
-### Inbound Queue Tuning
-
-Inbound packets use four independent queues, drained in priority order: data,
-announces, path requests, then ingress-limited traffic. Their positive maximum
-lengths can be set in `[reticulum]`:
-
-```ini
-qlen_in_data = 1024
-qlen_in_announce = 128
-qlen_in_pr = 128
-qlen_in_il = 8
-```
-
-The values above are the defaults. A packet is dropped when its class queue is
-full. A lower-priority queue begins draining only after all higher-priority
-queues before the same control-event barrier are empty.
-
-Link MTU discovery is enabled by default. To omit MTU signalling from outbound
-link requests and use the protocol-default Link MTU, set this in `[reticulum]`:
-
-```ini
-link_mtu_discovery = No
-```
-
-### Linux Underlay Socket Marking
-
-On Linux, a node can apply one nonzero `SO_MARK` value to the IP sockets it owns:
-
-```ini
-[reticulum]
-underlay_mark = 51820
-```
-
-The mark is applied before outbound TCP connects and before UDP sends, and is
-retained across interface reconnects. It covers TCP client/server, UDP, Auto,
-Backbone, I2P SAM, TCP-backed RNode, probe/STUN, and direct-UDP sockets created
-by `rns-net`. Node startup fails if the configured mark cannot be applied; the
-service therefore needs the Linux capability required for `SO_MARK` or must run
-with equivalent privilege.
-
-This setting only labels sockets owned by `rns-net`. It does not label DNS
-resolver traffic, subprocesses behind `PipeInterface`, or an external carrier
-daemon such as the I2P router. A full-tunnel application must provide separate
-bypass rules for those dependencies or reject an incompatible configuration.
-
-## Low-Level Tools
-
-These are lower-level building blocks for development, debugging, custom setups,
-and transport tinkering. Most users should prefer `rns-server`.
-
-Build and run the CLI binaries:
-
-```bash
-# Run the daemon directly
-cargo run --bin rnsd -- --config /path/to/config
-
-# Check network status
-cargo run --bin rnstatus
-
-# Query paths
-cargo run --bin rnpath
-
-# Probe connectivity
-cargo run --bin rnprobe -- <destination_hash>
-
-# Identity management
-cargo run --bin rnid
-
-# Remote shell over Reticulum
-cargo run --bin rnsh -- -l -n -- /bin/sh
-cargo run --bin rnsh -- <destination_hash>
-```
-
-Utility docs:
-
-- [docs/rnstatus.md](docs/rnstatus.md)
-- [docs/rnsh.md](docs/rnsh.md)
-- [docs/rns-git.md](docs/rns-git.md)
-
-## Git over RNS
-
-`rns-git` provides a repository server and Git remote helper for Reticulum links:
-
-```bash
-# Print repository and client identities
-cargo run -p rns-git --bin rngit -- --print-identity
-
-# Start the repository server after editing ~/.config/rngit/server_config
-cargo run -p rns-git --bin rngit
-
-# Configure a repository remote once git-remote-rns is on PATH
-git remote add origin rns://<destination_hash>/<repository>
-```
-
-## rns-ctl
-
-`rns-ctl` combines the daemon and HTTP/WebSocket control server with status,
-probe, path, identity, runtime configuration, backbone, and hook management in
-a single binary:
-
-```bash
-# Start the HTTP/WebSocket control server
-cargo run --bin rns-ctl -- http -c /path/to/config
-
-# Start the RNS daemon
-cargo run --bin rns-ctl -- daemon -c /path/to/config
-
-# Check network status
-cargo run --bin rns-ctl -- status
-
-# Probe path reachability
-cargo run --bin rns-ctl -- probe <destination_hash>
-
-# Display/manage path table
-cargo run --bin rns-ctl -- path -t
-
-# Identity management
-cargo run --bin rns-ctl -- id -g /path/to/identity
-
-# Manage hooks through an authenticated control server
-cargo run --bin rns-ctl -- hook list --token "$(cat ~/.reticulum/http-token)"
-```
-
-The `http` subcommand starts an HTTP/WebSocket control server:
-
-```bash
-# Run with auth token
-cargo run --bin rns-ctl -- http --token my-secret-token
-
-# Run with disabled auth (for testing)
-cargo run --bin rns-ctl -- http --disable-auth
-
-# Run on a custom port
-cargo run --bin rns-ctl -- http --port 9090
-```
-
-Without `--token` (or `RNSCTL_AUTH_TOKEN`), and unless auth is disabled, the server generates a bearer token at startup and writes it to `<config dir>/http-token` with mode `0600`, replacing any previous one. The token is printed once when stdout is a terminal; it is never written to the log, which records only the file path.
-
-Request bodies are limited to 4 MiB (`413` above that), the bearer token is checked before a body is read, and at most 64 connections are served at once (`503` beyond that).
-
-The server exposes:
-- HTTP API on `http://localhost:8080` (configurable via `--port` or `RNSCTL_HTTP_PORT`)
-- WebSocket endpoint at `ws://localhost:8080/ws`
-
-## Direct Link (NAT Hole Punching)
-
-> **rns-rs extension** — this feature is not present in the original Python Reticulum implementation.
-
-rns-rs can upgrade an existing Reticulum link to a direct peer-to-peer UDP connection, bypassing transport nodes entirely. This reduces latency and offloads bandwidth from shared infrastructure.
-
-The protocol uses a STUN-like probe to discover public endpoints, negotiates the upgrade over the existing link's channel, then both peers simultaneously punch through their NATs.
-
-**Configuration:**
-- Facilitator (transport node): `probe_port = 4343` in `[reticulum]`
-- Client (behind NAT): `probe_addr = <facilitator_ip>:4343` in `[reticulum]`
-- Incoming policy: `direct_connect_policy = identified_only` (default),
-  `accept_all`, `reject`, or `ask_app`. `identified_only` avoids revealing the
-  responder's public endpoint until the peer has completed Reticulum
-  `LINKIDENTIFY`; `ask_app` fails closed unless the application callback accepts.
-- Endpoint ranges: by default the facilitator and peer endpoints named in an
-  upgrade request must be globally routable unicast addresses. LAN-only
-  deployments can set `direct_connect_allow_private_endpoints = yes` to also
-  accept private, shared (100.64/10), link-local and IPv6 unique-local addresses.
-
-The public policy variant and `NodeConfig::direct_connect_policy` field are
-available in `rns-net` 0.7.1 and later.
-
-**API (via rns-ctl):**
-- `POST /api/direct_connect {"link_id": "..."}` — initiate upgrade
-- `GET /api/link_events` — monitor for `direct_established` / `direct_failed`
-
-See [docs/direct-link-protocol.md](docs/direct-link-protocol.md) for the full protocol specification.
-
-## Hooks
-
-> **rns-rs extension** — this feature is not present in the original Python Reticulum implementation.
-
-rns-rs includes an eBPF-inspired programmable hook system that lets users attach WASM modules or trusted native dynamic libraries to points in the transport pipeline. Hooks can inspect, filter, modify, or mirror packets, announces, links, and interfaces — without modifying rns-rs itself.
-
-**Design principles:**
-
-- **Crash-safe WASM hooks** — WASM traps, invalid results, and fuel exhaustion are isolated by the runtime and fail open, so processing continues as if the hook returned `Continue`
-- **Trusted native hooks** — native hooks run in-process and are not crash-safe; they can block, corrupt, or terminate the node and must only load trusted code
-- **Fuel-limited WASM** — WASM invocations run with a bounded fuel budget to prevent runaway execution; bytes copied by host functions are charged against the same budget
-- **Bounded WASM resources** — each WASM hook instance is limited to 16 MiB of linear memory (a failed `memory.grow` traps), 64-bit memories are rejected at load time, and each invocation may inject at most 64 actions (256 KiB) and emit at most 256 provider events (256 KiB); further calls return `-3`
-- **Instance persistence** — WASM linear memory survives across calls, so hooks can maintain counters, caches, or bloom filters
-- **Native backend** — native hooks are loaded with `dlopen`/`LoadLibrary` and run in-process for targets where Wasmtime is unavailable, such as ARMv7
-- **Hot-reload** — hooks can be reloaded at runtime without restarting the node (`rns-ctl hook reload`)
-- **Zero overhead when disabled** — hook backends are behind cargo feature flags; `rns-hooks-native` does not compile in Wasmtime
-
-**Hook points (21 total):**
-
-| Category | Hook Points |
-|----------|------------|
-| Packet lifecycle | `PreIngress`, `PreDispatch` |
-| Announce processing | `AnnounceReceived`, `PathUpdated`, `AnnounceRetransmit` |
-| Link lifecycle | `LinkRequestReceived`, `LinkEstablished`, `LinkClosed` |
-| Interface lifecycle | `InterfaceUp`, `InterfaceDown`, `InterfaceConfigChanged` |
-| Backbone peer lifecycle | `BackbonePeerConnected`, `BackbonePeerDisconnected`, `BackbonePeerIdleTimeout`, `BackbonePeerWriteStall`, `BackbonePeerPenalty` |
-| Per-action | `SendOnInterface`, `BroadcastOnAllInterfaces`, `DeliverLocal`, `TunnelSynthesize` |
-| Periodic | `Tick` |
-
-**Verdicts:** each hook returns a verdict that controls what happens next:
-
-- `Continue` — pass through normally
-- `Drop` — block the packet/action
-- `Modify` — replace the packet bytes (applied at `PreIngress`, `SendOnInterface`, `BroadcastOnAllInterfaces` and `DeliverLocal`; the replacement must decode as a packet and fit the interface MTU, otherwise the packet is dropped; elsewhere `Modify` acts as `Continue`)
-- `Halt` — stop the hook chain (no further hooks at this attach point are executed)
-
-See [docs/native-hooks.md](docs/native-hooks.md#verdicts) for how each hook point handles the verdicts.
-
-**Configuration:**
-
-```ini
-[hooks]
-  [[drop_tick]]
-    path = /tmp/drop_tick.so
-    type = native
-    attach_point = Tick
-    priority = 10
-    enabled = Yes
-
-  [[log_announce]]
-    path = /tmp/log_announce.wasm
-    type = wasm
-    attach_point = AnnounceReceived
-    priority = 5
-    enabled = Yes
-```
-
-**CLI management:**
-
-The hook CLI talks to the HTTP control server, which enables bearer authentication by default. Pass the token given with `rns-ctl http --token`, or the generated one stored in `<config dir>/http-token` (omit `--token` only when the server was explicitly started with `--disable-auth`):
-
-```bash
-RNSCTL_TOKEN="$(cat ~/.reticulum/http-token)"
-rns-ctl hook list --token "$RNSCTL_TOKEN"                                                # list loaded hooks and their status
-rns-ctl hook load <path-or-builtin-id> --point <HookPoint> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin] [--priority N] [--name name]
-rns-ctl hook unload <name> --point <HookPoint> --token "$RNSCTL_TOKEN"                   # unload a running hook
-rns-ctl hook reload <name> --point <HookPoint> --path <hook_file_or_builtin_id> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin]
-```
-
-`--type` defaults to `wasm` (or `builtin` on builds without the WASM backend); native hooks must be requested with `--type native`. Native hooks are loaded only from the configured hooks directory when requested through the CLI or HTTP API: the path must be absolute and resolve to a file inside `<config dir>/hooks` (override with `rns-ctl http --hooks-dir PATH`, `RNSCTL_HOOKS_DIR`, or `hooks_dir` in `rns-server.json`). Hooks listed in the `[hooks]` section of the config file are loaded at startup from the path given there. See [docs/native-hooks.md](docs/native-hooks.md#accepted-paths).
-
-**Writing hooks:**
-
-Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook_abi_version` plus `rns_hook_on_call`; see `rns-hooks/examples/native_noop` and [docs/native-hooks.md](docs/native-hooks.md). Use the `rns-hooks-sdk` crate to write WASM hooks in `no_std` Rust. Each WASM hook exports an `on_hook` function that receives a context and returns a verdict. Built-in hooks are linked Rust functions registered by ID; see [docs/builtin-hooks.md](docs/builtin-hooks.md).
-
-| Example | Description |
-|---------|-------------|
-| `packet_logger` | Log packets passing through a hook point |
-| `announce_filter` | Drop announces exceeding a configurable hop count |
-| `announce_dedup` | Deduplicate repeated announces using persistent state |
-| `allowlist` | Allow only packets from known source hashes |
-| `link_guard` | Guard link establishment with custom policies |
-| `rate_limiter` | Rate-limit packets per interface |
-| `metrics` | Collect counters and statistics across hook invocations |
-| `packet_mirror` | Mirror packets to an additional destination |
-| `path_modifier` | Demonstrate the Modify verdict by raising the hop count of received announces at `PreIngress` |
-| `stats_scraper` | Emit packet and announce statistics for collection by the statistics sidecar |
-
-## Local destination ratchets
-
-Applications can opt an IN SINGLE destination into rotating packet-encryption
-keys. The `message` example demonstrates two peers with persistent ratchet files
-in a temporary demo directory:
-
-```bash
-cargo run -p rns-net --example message
-```
-
-For a long-lived application, keep its identity and private ratchet file across
-restarts. Create the owner, attach it before announcing, and use the same owner
-when decrypting delivered packets:
-
-```rust,ignore
-let ratchets = rns_net::LocalRatchets::persistent(
-    &destination,
-    rns_crypto::identity::Identity::from_private_key(&identity.get_private_key().unwrap()),
-    app_state.join("destination-ratchets"),
-)?;
-ratchets.set_interval(30 * 60)?;
-ratchets.set_retained(512)?;
-ratchets.enforce(); // optional: reject packets encrypted to the identity key
-node.attach_local_ratchets(ratchets.clone())?;
-node.register_destination(destination.hash.0, destination.dest_type.to_wire_constant())?;
-node.announce(&destination, &identity, None).await?;
-// Inside the application's receive path, after unpacking the raw packet:
-let decrypted = ratchets.decrypt(&packet.data)?;
-// decrypted.plaintext and decrypted.ratchet_id belong to this result only.
-```
-
-The defaults are 30 minutes between rotations and 512 retained keys, including
-the current key. Reapply interval, retention, and enforcement settings when
-reopening an owner; the file stores key history, not policy. Rotation occurs on a
-fresh announcement when the interval has elapsed; the first announcement after reload rotates too. A backward clock jump
-postpones rotation. Retention accepts 1–4096 keys and is count-based, independent
-of received public-key expiry. Smaller rings reduce decryption work and retain
-less history, but reject delayed packets sooner. Announcements have 32 fewer bytes
-available for application data. Link key exchange remains independent.
-
-Private files use signed MessagePack compatible with Python's retained-key files,
-plus a destination binding that Rust validates when present. Assign legacy Python
-files to the correct destination yourself: their signature identifies the owner,
-not the destination. The filesystem store uses Unix advisory locking, private file
-permissions, atomic replacement and synchronization. Keep these files outside the
-received-public-ratchet cache. They are not encrypted at rest; backups retain keys
-and limit the protection gained from retiring them. In-memory key buffers are
-zeroized on retirement/drop, but that cannot erase backups or filesystem history.
-
-Only one writer may own a private file. Do not share an active file with a Python
-process, which does not honor Rust's lock. Applications on other platforms can
-supply `LocalRatchetStore`; `MemoryRatchetStore` explicitly opts into losing keys
-on restart. A store failure blocks new announcements, preserves existing receive
-state, and leaves enforcement enabled. Fix the storage problem and call
-`ratchets.recover()` to reload and durably reconcile the file. Missing or corrupt
-history requires explicit operator recovery; it is never silently recreated.
-
-The attached owner is shared with reconnect replay and survives destination
-unregistration until node shutdown. Queued announcements keep advertised keys
-retained until local writes complete; rotation/pruning can return `WouldBlock`
-until those writes finish. Obsolete cached announcements are suppressed. Raw
-packet callbacks and transport proofs do not imply successful decryption: apply
-`ratchets.decrypt` before accepting data. Enforcement does not filter raw callbacks.
-
-Sending to a remote ratcheted destination uses `NodeConfig::ratchet_store` for
-received public keys; file-configured nodes initialize this automatically. Custom
-`NodeConfig` applications must configure that cache themselves, as the example
-does. Enabling a local private owner alone does not configure remote-key storage.
-
-## Interoperability
-
-rns-rs supports interoperability with Python Reticulum for exchanging announces,
-establishing links, and transferring resources. A Rust node can join a Reticulum
-network alongside Python nodes. The accepted upstream baseline, test coverage,
-and validation dates are recorded in [UPSTREAM.md](UPSTREAM.md) and the
-[upstream-parity records](docs/upstream-parity/). Those records distinguish tests
-rerun for each advancement from earlier validation; physical hardware validation
-remains unclaimed.
-
-The current wire-level protocol is described in [docs/protocol-spec.md](docs/protocol-spec.md).
-
-## Authorship and Provenance
+`rns-server` supervises the node daemon and optional sidecars and serves a
+control plane with a built-in UI on `127.0.0.1:8080`. The
+[Getting Started](docs/getting-started.md) page walks through this in detail,
+including a minimal config that joins a public transport node.
+
+## What is in the box
+
+| | |
+|---|---|
+| **Run a node** | `rns-server` (supervisor, control plane, UI), or `rnsd` with the classic tools, or the all-in-one `rns-ctl` |
+| **Operate it** | `rnstatus`, `rnpath`, `rnprobe`, `rnid`, HTTP/WebSocket API, statistics and sentinel sidecars |
+| **Use the network** | `rnsh` remote shell, `rncp` file transfer, `rnx` remote commands, `rngit` and `git-remote-rns` for Git over Reticulum, `rntun` IPv4 tunnelling on Linux and Android |
+| **Build on it** | `rns-crypto`, `rns-core`, and `rns-net` crates on crates.io; `rns-hooks-sdk` for WASM hooks |
+| **Embed it** | `rns-esp32` firmware for the Heltec WiFi LoRa 32 V3 |
+
+## Documentation
+
+The wiki lives in [`docs/`](docs/README.md). Good entry points:
+
+- [Getting Started](docs/getting-started.md), then [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md): crates, layering, binaries, interfaces
+- [Building](docs/building.md): feature flags, interface selection, hook backends, cross-building
+- [CLI Tools](docs/cli-tools.md) and [rns-ctl](docs/rns-ctl.md)
+- [rns-server Operator Runbook](docs/rns-server-operator-runbook.md)
+- [Hooks](docs/hooks.md), [Direct Link](docs/direct-link.md), [Local Destination Ratchets](docs/local-ratchets.md)
+- [Interoperability](docs/interoperability.md) and the [Protocol Specification](docs/protocol-spec.md)
+- [Development](docs/development.md): tests, lint, Docker end-to-end suites, CI, benchmarks
+
+## Upstream tracking
+
+The accepted Python Reticulum baseline, with its commit, validation runs, and
+every completed porting queue, is recorded in [UPSTREAM.md](UPSTREAM.md). Each
+advancement has an audit and an acceptance record under
+[docs/upstream-parity/](docs/upstream-parity/README.md). Physical radio
+hardware validation remains unclaimed.
+
+## Authorship and provenance
 
 rns-rs is an independent reimplementation of Reticulum's reference
 implementation (RNS). It is not a clean-room design: it is a derivative work
@@ -592,11 +76,10 @@ distributed under the [Reticulum License](LICENSE), retaining the original
 copyright notice and crediting the reference implementation.
 
 The project is developed with substantial machine (LLM) assistance under human
-direction and review. The maintainer sets scope, makes the design decisions, and
-reviews and accepts or rejects every change. The commit history,
-[upstream-parity audits](docs/upstream-parity/), and
-conformance/interop fixtures document how the implementation was produced and
-verified.
+direction and review. The maintainer sets scope, makes the design decisions,
+and reviews and accepts or rejects every change. The commit history, the
+upstream-parity audits, and the conformance and interop fixtures document how
+the implementation was produced and verified.
 
 Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 

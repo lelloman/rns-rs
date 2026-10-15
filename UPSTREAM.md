@@ -103,7 +103,7 @@ ratcheted announcements/reconnect replay, and optional enforced decryption.
 The 2026-10-03 follow-up is covered by `rns-crypto::ratchet` vectors pinned to this
 1.5.6 baseline, `rns-net::local_ratchet` lifecycle/failure tests, a real shared-daemon
 restart test, and live bidirectional Python tests including private-file exchange.
-See [local destination ratchets](README.md#local-destination-ratchets) for the API,
+See [local destination ratchets](docs/local-ratchets.md) for the API,
 storage contract, and bounded retention policy. Historical fixture provenance is
 unchanged; new vectors live in `tests/fixtures/crypto/local_ratchet_1_5_6.json`.
 The fifteenth commit prevents tunnel expiration from being rebound to a path

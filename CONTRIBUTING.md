@@ -25,7 +25,7 @@ so.
 
 ## Development
 
-See the [Developer Checks](README.md#developer-checks) section of the README
+See the [Development](docs/development.md) page of the documentation
 for the standard validation commands: `cargo test --workspace`,
 `bash scripts/lint-host.sh`, `cargo fmt --check`, and the Docker end-to-end
 suites. New behavior should come with focused tests, and protocol-facing
