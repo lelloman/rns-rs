@@ -167,6 +167,53 @@ commits 2-5 are non-runtime. The remaining parity work is procedural:
 
 ## Acceptance Record
 
+- `2026-10-15`: Both daily VPS snapshots were healthy and complete, with one
+  capture per host, all public interfaces up (EU 60/60, US 27/27), no failed
+  rolling traffic queries, and zero idle timeout or provider bridge drop and
+  disconnect events over 24 hours. The impaired dual-VPS `--daily` smoke passed
+  all four Resource sizes through 1 MiB, concurrent links, and forced reconnect
+  recovery using the freshly built `8685057` working tree. Both upstream
+  refreshes succeeded (`05:45:55Z` GitHub, `05:46:00Z` rgit); the five-commit
+  inventory from October 6 is unchanged, with the GitHub tip (`e40191b3`)
+  behind the baseline and the rgit tip (`a29bfb51`) ahead. Both hosts continue
+  to run the dev build `8685057` (`rns-server 0.4.1560` / `rns-ctl 0.5.1560`)
+  matching `origin/dev`; neither matches `origin/master` (`ceba647`), but `dev`
+  and `master` are content-identical trees. No deployment, restart, or
+  reconfiguration was performed by this run. Mapping commits and promotion
+  acceptance remain pending.
+
+- `2026-10-14`: Both daily VPS snapshots were healthy and complete, with one
+  capture per host, all public interfaces up (EU 41/41, US 27/27), no failed
+  rolling traffic queries, and zero idle timeout or provider bridge drop and
+  disconnect events over 24 hours. The impaired dual-VPS `--daily` smoke passed
+  all four Resource sizes through 1 MiB, concurrent links, and forced reconnect
+  recovery using the freshly built `8685057` working tree. Both upstream
+  refreshes succeeded (`06:38:58Z` GitHub, `06:39:03Z` rgit); the five-commit
+  inventory from October 6 is unchanged, with the GitHub tip (`e40191b3`)
+  behind the baseline and the rgit tip (`a29bfb51`) ahead. Both hosts continue
+  to run the dev build `8685057` (`rns-server 0.4.1560` / `rns-ctl 0.5.1560`)
+  matching `origin/dev`; neither matches `origin/master` (`ceba647`), but `dev`
+  and `master` are content-identical trees. No deployment, restart, or
+  reconfiguration was performed by this run. Mapping commits and promotion
+  acceptance remain pending.
+
+- `2026-10-13`: Both daily VPS snapshots were healthy and complete, with one
+  capture per host, all public interfaces up (EU 45/45, US 27/27), no failed
+  rolling traffic queries, and zero idle timeout or provider bridge drop and
+  disconnect events over 24 hours. The impaired dual-VPS `--daily` smoke passed
+  all four Resource sizes through 1 MiB, concurrent links, and forced reconnect
+  recovery using the freshly built `8685057` working tree. Both upstream
+  refreshes succeeded (`06:00:26Z` GitHub, `06:00:31Z` rgit); the five-commit
+  inventory from October 6 is unchanged, with the GitHub tip (`e40191b3`)
+  behind the baseline and the rgit tip (`a29bfb51`) ahead. Both hosts were
+  promoted the same day from `3a0eea0` to the dev build `8685057`
+  (`rns-server 0.4.1560` / `rns-ctl 0.5.1560`); a second healthy capture after
+  the restarts confirmed both now match `origin/dev` (`8685057`). Neither
+  matches `origin/master` (`ceba647`), but `dev` and `master` are
+  content-identical trees, and these versions were published to crates.io the
+  same day from `master`. Mapping commits and promotion acceptance remain
+  pending.
+
 - `2026-10-12`: Both daily VPS snapshots were healthy and complete, with one
   capture per host, all public interfaces up (EU 42/42, US 28/28), no failed
   rolling traffic queries, and zero idle timeout or provider bridge drop and
