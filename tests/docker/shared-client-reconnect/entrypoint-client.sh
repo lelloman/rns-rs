@@ -14,21 +14,19 @@ RNSD_PID=$!
 echo "$RNSD_PID" > /tmp/rnsd.pid
 echo "Started rnsd with PID $RNSD_PID"
 
-# Wait for rnsd to start accepting connections on shared instance port.
-# On Linux, LocalClient tries Unix abstract socket first then TCP 37428.
-# We poll TCP as a reliable check.
+# Wait for rnsd to start accepting shared instance connections. On Linux
+# the shared instance listens on the abstract Unix socket rns/default
+# (shown as @rns/default in /proc/net/unix), not on TCP 37428.
 for i in $(seq 1 60); do
-  if [ -e /proc/$RNSD_PID ]; then
-    # Try connecting to the shared instance port
-    if timeout 1 sh -c "echo | curl -sf telnet://127.0.0.1:37428 2>/dev/null" 2>/dev/null; then
-      break
-    fi
-    # Also check via /dev/tcp if available, else just wait
-    sleep 0.5
-  else
+  if ! kill -0 "$RNSD_PID" 2>/dev/null; then
     echo "ERROR: rnsd exited prematurely"
     exit 1
   fi
+  if grep -q '@rns/default$' /proc/net/unix; then
+    echo "Shared instance socket is up"
+    break
+  fi
+  sleep 0.5
 done
 
 # Extra settle time for rnsd to fully initialize
