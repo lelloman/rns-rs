@@ -152,33 +152,58 @@ landed.
 
 **Final disposition:** Non-runtime.
 
+## Mapping Verification
+
+| Upstream commit | Local mapping commit |
+|---|---|
+| `f0875ac44ee13d82160c1a0c43f2480391b8d3dc` | `9e6d19611757b153d57b3900d9ca7437c0bcd1de` |
+| `cadee01f9ee3de96e7f10b936176a4dfea7965b7` | `7fec7439c7e8d0baf4601ed5501207ed6816cd1b` |
+| `2578750bf7df7a598fc77e49212c79a2061e50e3` | `f91a8fa6c50b6785c258b7d6d400af57c1af8ae6` |
+| `318b78b416ee909f56ba83999e83c03f805747e4` | `71855eabb88dfdda8b6ac18d1131448916e2177f` |
+| `a29bfb51c468945c96a1ee22cae0114e993e2391` | `3054d355bdb3ea0600774edda361f4c8c4d6e276` |
+
+The mapping commits are non-empty, appear in the same ancestry order as the
+upstream range, and each reviewed upstream hash appears exactly once in an
+`Upstream-Commit` trailer. `scripts/check_upstream_drift.py` was rerun after
+every mapping and remained fresh with the same five commits ahead.
+
 ## Integration Plan
 
-No runtime behavior change is outstanding: commit 1 is structurally covered and
-commits 2-5 are non-runtime. The remaining parity work is procedural:
-
-1. Land one non-empty rns-rs mapping commit per upstream commit according to
-   [README.md](README.md), each carrying the
-   `Upstream-Commit: <40-character hash>` trailer (commit 1 documenting the
-   writer-recreation invariant; commit 2 recording the upstream-only test and
-   native coverage; commits 3-5 recording non-runtime handling).
-2. Re-run `scripts/check_upstream_drift.py` after each mapping commit.
-3. Complete the promotion gates below, then rename this file to
-   `reticulum-1.5.7-audit.md` once the signed `1.5.7` tag or final promotion
-   target is available.
+All five in-range commits have ordered, non-empty mappings and every promotion
+gate below is satisfied. Commit 1 is structurally covered with a documented
+invariant and a focused native regression; commits 2-5 are non-runtime. The
+accepted record is [reticulum-1.5.7-parity.md](reticulum-1.5.7-parity.md); this
+audit is retained as the detailed work record.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition and a unique mapping.
+- [x] Focused regressions pass (`fresh_egress_state_does_not_immediately_reescalate_after_teardown`).
+- [x] Fixture provenance and byte stability checked; historical fixtures unchanged.
+- [x] Exact-target live Python/Rust interop passes at `a29bfb51` (2/2 `python_interop`, 6/6 `utility_interop`).
+- [x] Workspace, `rns-hooks` feature, and `rns-ctl` tls suites, formatting, and warning-free host lint passed (2026-10-16).
+- [x] Native-hook release builds and all five ARMv7 cross builds passed; Docker E2E matrix and dual-VPS `--daily` smoke passed.
+- [x] Native documentation checked; no user-facing documentation change required.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
+
+- `2026-10-16` (promotion): Landed the ordered mapping commits `9e6d196`
+  (`f0875ac4`), `7fec743` (`cadee01f`), `f91a8fa` (`2578750b`), `71855ea`
+  (`318b78b4`), and `3054d35` (`a29bfb51`), each carrying a unique
+  `Upstream-Commit` trailer; `check_upstream_drift.py` stayed fresh with the
+  same five commits ahead after every mapping. Promotion gates: `cargo test
+  --workspace` passed (2,833), `cargo test --workspace --features rns-hooks`
+  passed (2,892), `cargo test -p rns-ctl --features tls` passed (133),
+  `cargo fmt --check` and `bash scripts/lint-host.sh` passed,
+  `node --test rns-ctl/assets/app.smoke.test.js` passed (4), the Python tool
+  tests passed (19), native-hook `rns-server`/`rns-ctl` release builds passed
+  (`0.4.1567-3054d35` / `0.5.1567-3054d35`), all five ARMv7 cross builds
+  passed, exact-target interop at `a29bfb51` passed (2/2 `python_interop`,
+  6/6 `utility_interop`), the Docker E2E matrix passed (11 runs, 102 checks, 0
+  failed), and the impaired dual-VPS `--daily` smoke passed on `3054d35`. The
+  baseline was promoted to `a29bfb51c468945c96a1ee22cae0114e993e2391` in
+  `UPSTREAM.md`.
 
 - `2026-10-16`: Both daily VPS snapshots were healthy and complete, with one
   capture per host, all public interfaces up (EU 49/49, US 27/27), no failed

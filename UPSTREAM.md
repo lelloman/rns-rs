@@ -8,26 +8,45 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.5.6`
-- Version metadata commit: `2bae9ff0dca17ba39531d7f8c3078efd3a55ad62`
-- Normative commit: `49ae71e06cadf5d846849661578a8ad9fcede443`
-- Commit date: `2026-10-02 11:56:21 +0200`
+- Version: `1.5.7`
+- Version metadata commit: `2578750bf7df7a598fc77e49212c79a2061e50e3`
+- Normative commit: `a29bfb51c468945c96a1ee22cae0114e993e2391`
+- Commit date: `2026-10-05 13:53:50 +0200`
 - Subject: `Updated documentation`
 
 The normative baseline is the canonical `rgit/master` tip accepted on
-2026-10-02 as Reticulum 1.5.6. The tip advanced two further source-only commits
-past `2bae9ff0` (the version bump that declared 1.5.6): `1e6ebd3f` edits the
-upstream `Changelog.md` and `49ae71e0` regenerates the upstream `docs/manual/`
-output. The `RNS` tree is unchanged at
-`def82bf5dd3c9686e798ca032927d2e625829b50` and the root tree is
-`6a2af93c968be263dc918c2288f3553e2553c1e5`. The GitHub mirror still reported
-`e40191b3` at acceptance, so this baseline tracks the canonical rgit tip. All
-forty commits since the release baseline
-`3f95b472820ddfb27f736143fb0b4d0d3aa610f1` were reviewed and mapped
-individually; the live interface management, discovery auto-connect criteria,
-IFAC sanitization, spawned announce-cap propagation, Backbone detach,
-`rnstatus` discovery filters, and the 1.5.6 discovery auto-connect and
-static-transport-identity fixes landed in native code.
+2026-10-16 as Reticulum 1.5.7. No signed `1.5.7` tag is published; the version
+is asserted from `RNS/_version.py` at the target. The tip advanced five commits
+past the accepted 1.5.6 baseline: `f0875ac4` fixes a Python-only Backbone
+egress-control TX stall-state deadlock, `cadee01f` updates the upstream
+egress-control test, `2578750b` bumps `RNS/_version.py` from `1.5.6` to `1.5.7`,
+`318b78b4` edits the upstream `Changelog.md`, and `a29bfb51` regenerates the
+upstream `docs/manual/` output. The `RNS` tree is
+`c8cde8d039e59ad1d60ec9ac28ac180b0ab5499c` and the root tree is
+`24d4c393de9fd57b933836cea68891fd953ab060`. The GitHub mirror remains at
+`e40191b3`, behind the canonical rgit tip, which is allowed. The only runtime
+change is structurally covered: rns-rs builds a fresh Backbone writer, with a
+fresh `TransmitBuffer` and `EgressController`, for every connection and drops
+the stalled writer with its socket on teardown, so no egress drain or stall
+state can survive a reconnect. The invariant is documented on
+`BackboneClientWriter` and guarded by the
+`fresh_egress_state_does_not_immediately_reescalate_after_teardown` regression.
+The earlier 1.5.6 acceptance, which reviewed forty commits since the `1.5.5`
+release baseline `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` and landed the live
+interface management, discovery auto-connect criteria, IFAC sanitization,
+spawned announce-cap propagation, Backbone detach, `rnstatus` discovery filters,
+and the 1.5.6 discovery fixes, remains recorded in its own parity document.
+
+For the 1.5.7 promotion on 2026-10-16, `cargo test --workspace` (2,833 passed),
+`cargo test --workspace --features rns-hooks` (2,892 passed), `cargo test -p
+rns-ctl --features tls` (133 passed), `cargo fmt --check`, `bash
+scripts/lint-host.sh`, the Python tool tests (19 passed), the `rns-ctl` web
+smoke (4 passed), native-hook `rns-server`/`rns-ctl` release builds
+(`0.4.1567-3054d35` / `0.5.1567-3054d35`), all five ARMv7 cross builds,
+exact-target Python/Rust interop at `a29bfb51` (2/2 `python_interop`, 6/6
+`utility_interop`), the full Docker E2E matrix (11 runs, 102 checks, 0
+failures), and the impaired dual-VPS `--daily` smoke all passed. Physical
+hardware validation remains unclaimed.
 
 The complete `rns-net` library suite, the default workspace suite (2,545
 passed), the `rns-hooks` feature suite (2,592 passed), formatting, host lint,
@@ -46,11 +65,11 @@ tree; Docker, cross-build, and exact-target interop were not rerun. Historical
 fixture provenance is unchanged. Physical hardware validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.6-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.6-rgit-parity.md),
+[`docs/upstream-parity/reticulum-1.5.7-parity.md`](docs/upstream-parity/reticulum-1.5.7-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.6-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.6-rgit-audit.md).
-The earlier 1.5.6, 1.5.5 release-tag, and 1.5.5 rgit acceptances and all 1.5.4
-records remain unchanged.
+[`docs/upstream-parity/reticulum-1.5.7-audit.md`](docs/upstream-parity/reticulum-1.5.7-audit.md).
+The earlier 1.5.6, 1.5.6 rgit, 1.5.5 release-tag, and 1.5.5 rgit acceptances
+and all 1.5.4 records remain unchanged.
 
 ## Completed 1.5.0 rgit Development Porting Queue
 
