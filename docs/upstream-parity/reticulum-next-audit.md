@@ -48,7 +48,7 @@ Every commit in the audited range must appear exactly once.
 | 2 | `cadee01f9ee3de96e7f10b936176a4dfea7965b7` | Updated egress control test | Non-runtime | Upstream-only Python test for the persistent-instance reset; Rust has no persistent egress instance. Native coverage in `transmit_buffer.rs` tests. Mapping landed. |
 | 3 | `2578750bf7df7a598fc77e49212c79a2061e50e3` | Updated version | Non-runtime | `RNS/_version.py` `1.5.6` -> `1.5.7`; the promoted baseline records `RNS.__version__ == "1.5.7"`. Mapping landed. |
 | 4 | `318b78b416ee909f56ba83999e83c03f805747e4` | Updated changelog | Non-runtime | `Changelog.md` release note; not vendored and no runtime counterpart. Mapping landed. |
-| 5 | `a29bfb51c468945c96a1ee22cae0114e993e2391` | Updated documentation | Non-runtime | Generated `docs/manual/` HTML/asset rebuild only. Mapping commit pending. |
+| 5 | `a29bfb51c468945c96a1ee22cae0114e993e2391` | Updated documentation | Non-runtime | Generated `docs/manual/` HTML/asset rebuild only; not vendored. Mapping landed. |
 
 ## Per-Commit Analysis
 
@@ -146,7 +146,9 @@ assets (`.buildinfo`, `documentation_options.js`, HTML pages, `objects.inv`).
 
 **Rust applicability:** Generated upstream documentation artifacts only.
 
-**Local handling and evidence:** Non-runtime. Mapping commit pending.
+**Local handling and evidence:** Non-runtime. The regenerated `docs/manual/`
+Sphinx output is not vendored; the `RNS` tree is unchanged from commit 4. Mapping
+landed.
 
 **Final disposition:** Non-runtime.
 
