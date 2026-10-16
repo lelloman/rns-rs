@@ -5271,3 +5271,269 @@ fn test_issue183_h1_data_not_forwarded_without_local_client_path() {
         assert_eq!(engine.reverse_table_count(), 0);
     }
 }
+
+// =========================================================================
+// Shared instance without transport: local client announces and path
+// requests (Transport.py:2351-2395, 3420-3600)
+// =========================================================================
+
+/// Client A's announce from `make_issue183_daemon`, re-emitted later (newer
+/// random hash) with the given context, e.g. as a path response.
+fn build_issue183_client_announce(context: u8, random_hash: [u8; 10]) -> Vec<u8> {
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+    let dest_hash =
+        crate::destination::destination_hash("issue4", &["test"], Some(identity.hash()));
+    let name_hash = crate::destination::name_hash("issue4", &["test"]);
+    let (announce_data, _) = crate::announce::AnnounceData::pack(
+        &identity,
+        &dest_hash,
+        &name_hash,
+        &random_hash,
+        None,
+        None,
+    )
+    .unwrap();
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_ANNOUNCE,
+    };
+    RawPacket::pack(flags, 0, &dest_hash, None, context, &announce_data)
+        .unwrap()
+        .raw
+}
+
+/// Announces for `dest_hash` sent on `iface` among `actions`.
+fn issue183_announces_on<'a>(
+    actions: &'a [TransportAction],
+    iface: InterfaceId,
+    dest_hash: &[u8; 16],
+) -> Vec<&'a [u8]> {
+    issue183_sends_on(actions, iface)
+        .into_iter()
+        .filter(|raw| {
+            let packet = RawPacket::unpack(raw).expect("sent packet must parse");
+            packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+                && packet.destination_hash == *dest_hash
+        })
+        .collect()
+}
+
+/// Path request packets for `dest_hash` sent on `iface` among `actions`,
+/// returned as their data (destination, optional transport id, tag).
+fn issue183_path_requests_on(
+    actions: &[TransportAction],
+    iface: InterfaceId,
+    dest_hash: &[u8; 16],
+) -> Vec<Vec<u8>> {
+    let path_request_dest =
+        crate::destination::destination_hash("rnstransport", &["path", "request"], None);
+    issue183_sends_on(actions, iface)
+        .into_iter()
+        .filter_map(|raw| {
+            let packet = RawPacket::unpack(raw).expect("sent packet must parse");
+            (packet.destination_hash == path_request_dest && packet.data().starts_with(dest_hash))
+                .then(|| packet.data().to_vec())
+        })
+        .collect()
+}
+
+fn assert_issue183_rebroadcast_announce(raw: &[u8], dest_hash: &[u8; 16], context: u8) {
+    let packet = RawPacket::unpack(raw).expect("rebroadcast announce must parse");
+    assert_eq!(packet.flags.header_type, constants::HEADER_2);
+    assert_eq!(packet.flags.transport_type, constants::TRANSPORT_TRANSPORT);
+    assert_eq!(packet.transport_id, Some([0x42; 16]));
+    assert_eq!(packet.destination_hash, *dest_hash);
+    // Client A is 0 hops behind the daemon; the receiver adds its own hop.
+    assert_eq!(packet.hops, 0);
+    assert_eq!(packet.context, context);
+}
+
+#[test]
+fn test_shared_instance_rebroadcasts_local_client_announce_once() {
+    for transport_enabled in [false, true] {
+        let (mut engine, dest_hash) = make_issue183_daemon(transport_enabled);
+        assert!(
+            engine.announce_table.contains_key(&dest_hash),
+            "local client announce must be queued for rebroadcast \
+             (transport_enabled={transport_enabled})"
+        );
+
+        // A local client announce is rebroadcast immediately, exactly once.
+        let mut rng = rns_crypto::FixedRng::new(&[0x21; 32]);
+        let first = engine.tick(1000.5, &mut rng);
+        let sends = issue183_announces_on(&first, InterfaceId(3), &dest_hash);
+        assert_eq!(
+            sends.len(),
+            1,
+            "announce must reach the external interface on the first job run \
+             (transport_enabled={transport_enabled})"
+        );
+        assert_issue183_rebroadcast_announce(sends[0], &dest_hash, constants::CONTEXT_NONE);
+        if !transport_enabled {
+            // Local clients already got it through the local client relay.
+            assert!(issue183_announces_on(&first, InterfaceId(1), &dest_hash).is_empty());
+            assert!(issue183_announces_on(&first, InterfaceId(2), &dest_hash).is_empty());
+        }
+
+        for now in [1002.0, 1008.0, 1015.0, 1030.0] {
+            let later = engine.tick(now, &mut rng);
+            for iface in [1, 2, 3] {
+                assert!(
+                    issue183_announces_on(&later, InterfaceId(iface), &dest_hash).is_empty(),
+                    "announce must be rebroadcast only once (iface {iface}, t={now}, \
+                     transport_enabled={transport_enabled})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_shared_instance_without_transport_relays_path_request_to_local_client() {
+    let (mut engine, dest_hash) = make_issue183_daemon(false);
+    let mut rng = rns_crypto::FixedRng::new(&[0x22; 32]);
+    // Flush the rebroadcast of the initial announce.
+    engine.tick(1000.5, &mut rng);
+
+    // An adjacent peer asks for client A's destination.
+    let tag = [0x77; 16];
+    let actions = engine.handle_path_request(
+        &make_path_request_data(&dest_hash, &tag),
+        InterfaceId(3),
+        1003.0,
+    );
+    for iface in [1, 2] {
+        let requests = issue183_path_requests_on(&actions, InterfaceId(iface), &dest_hash);
+        assert_eq!(
+            requests.len(),
+            1,
+            "path request must be forwarded to local client {iface}"
+        );
+        // Without transport: destination + fresh tag, no transport id.
+        assert_eq!(requests[0].len(), 32);
+        assert_ne!(&requests[0][16..], &tag[..]);
+    }
+    assert!(issue183_path_requests_on(&actions, InterfaceId(3), &dest_hash).is_empty());
+
+    // Client A answers with a path response, which goes to the requester.
+    let response = build_issue183_client_announce(constants::CONTEXT_PATH_RESPONSE, [0x43; 10]);
+    engine.handle_inbound(
+        InboundFrame::new(&response, InterfaceId(1), 1004.0),
+        &mut rng,
+    );
+    let relayed = engine.tick(1004.5, &mut rng);
+    let sends = issue183_announces_on(&relayed, InterfaceId(3), &dest_hash);
+    assert_eq!(sends.len(), 1, "path response must reach the requester");
+    assert_issue183_rebroadcast_announce(sends[0], &dest_hash, constants::CONTEXT_PATH_RESPONSE);
+    assert!(issue183_announces_on(&relayed, InterfaceId(1), &dest_hash).is_empty());
+    assert!(issue183_announces_on(&relayed, InterfaceId(2), &dest_hash).is_empty());
+
+    for now in [1006.0, 1012.0, 1020.0] {
+        let later = engine.tick(now, &mut rng);
+        for iface in [1, 2, 3] {
+            assert!(issue183_announces_on(&later, InterfaceId(iface), &dest_hash).is_empty());
+        }
+    }
+}
+
+#[test]
+fn test_shared_instance_without_transport_ignores_unsolicited_local_path_response() {
+    let (mut engine, dest_hash) = make_issue183_daemon(false);
+    let mut rng = rns_crypto::FixedRng::new(&[0x23; 32]);
+    engine.tick(1000.5, &mut rng);
+
+    let response = build_issue183_client_announce(constants::CONTEXT_PATH_RESPONSE, [0x43; 10]);
+    engine.handle_inbound(
+        InboundFrame::new(&response, InterfaceId(1), 1004.0),
+        &mut rng,
+    );
+    assert!(!engine.announce_table.contains_key(&dest_hash));
+    for now in [1004.5, 1010.0] {
+        let actions = engine.tick(now, &mut rng);
+        assert!(issue183_announces_on(&actions, InterfaceId(3), &dest_hash).is_empty());
+    }
+}
+
+#[test]
+fn test_shared_instance_forwards_local_client_path_request() {
+    for transport_enabled in [false, true] {
+        let (mut engine, _) = make_issue183_daemon(transport_enabled);
+        let unknown_dest = [0xE5; 16];
+        let tag = [0x31; 16];
+        let actions = engine.handle_path_request(
+            &make_path_request_data(&unknown_dest, &tag),
+            InterfaceId(2),
+            1003.0,
+        );
+
+        let requests = issue183_path_requests_on(&actions, InterfaceId(3), &unknown_dest);
+        assert_eq!(
+            requests.len(),
+            1,
+            "local client path request must be forwarded to the network \
+             (transport_enabled={transport_enabled})"
+        );
+        // As Transport.request_path: the transport id is included only with
+        // transport enabled, and the request carries a fresh tag.
+        let tag_start = if transport_enabled {
+            assert_eq!(requests[0].len(), 48);
+            assert_eq!(&requests[0][16..32], &[0x42; 16]);
+            32
+        } else {
+            assert_eq!(requests[0].len(), 32);
+            16
+        };
+        assert_ne!(&requests[0][tag_start..], &tag[..]);
+        assert!(issue183_path_requests_on(&actions, InterfaceId(2), &unknown_dest).is_empty());
+    }
+}
+
+#[test]
+fn test_shared_instance_without_transport_or_local_clients_ignores_path_request() {
+    let mut config = make_config(false);
+    config.identity_hash = Some([0x42; 16]);
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(3, constants::MODE_FULL));
+    engine.register_interface(make_interface(4, constants::MODE_FULL));
+
+    let actions = engine.handle_path_request(
+        &make_path_request_data(&[0xE6; 16], &[0x32; 16]),
+        InterfaceId(3),
+        1003.0,
+    );
+    assert!(actions.is_empty());
+    assert!(engine.announce_table.is_empty());
+}
+
+#[test]
+fn test_shared_instance_with_transport_answers_path_request_for_local_client_immediately() {
+    let (mut engine, dest_hash) = make_issue183_daemon(true);
+    let mut rng = rns_crypto::FixedRng::new(&[0x24; 32]);
+    engine.tick(1000.5, &mut rng);
+
+    let actions = engine.handle_path_request(
+        &make_path_request_data(&dest_hash, &[0x78; 16]),
+        InterfaceId(3),
+        1003.0,
+    );
+    assert!(
+        actions.is_empty(),
+        "known path is answered from the path table"
+    );
+    let entry = engine
+        .announce_table
+        .get(&dest_hash)
+        .expect("path response must be queued");
+    assert_eq!(entry.attached_interface, Some(InterfaceId(3)));
+    assert!(entry.block_rebroadcasts);
+    // Transport.py: the next hop is a local client, so answer immediately.
+    assert_eq!(entry.retransmit_timeout, 1003.0);
+
+    let answered = engine.tick(1003.1, &mut rng);
+    let sends = issue183_announces_on(&answered, InterfaceId(3), &dest_hash);
+    assert_eq!(sends.len(), 1);
+    assert_issue183_rebroadcast_announce(sends[0], &dest_hash, constants::CONTEXT_PATH_RESPONSE);
+}
