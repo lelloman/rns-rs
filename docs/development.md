@@ -67,9 +67,13 @@ behaviour on generated chain, mesh, and star topologies: health, announces
 over one and many hops, packet delivery, proofs, identity recall, path tables,
 convergence, scale, link lifecycle, channels, resource transfer, concurrent
 links, node restart, burst traffic, and sentinel blacklisting. Separate
-directories add shared-client reconnection, `rns-server` supervision, NAT
-traversal for Direct Link, and the privileged Linux `rntun` suite with real TUN
-devices.
+directories add shared-client reconnection, links between sibling clients of a
+shared instance and from a directly adjacent peer (issue #183, run with the
+daemon's transport both disabled and enabled), `rns-server`
+supervision, NAT traversal for Direct Link, and the privileged Linux `rntun`
+suite with real TUN devices. The shared-instance-links test also builds a
+Python image with `rns==1.5.7` from PyPI (override with `RNS_VERSION`), so it
+needs network access on first run.
 
 ```bash
 ./tests/docker/run-all.sh                                 # full matrix
@@ -77,6 +81,7 @@ devices.
 ./tests/docker/nat-punch/run.sh
 ./tests/docker/rns-server/run.sh
 ./tests/docker/shared-client-reconnect/run.sh
+./tests/docker/shared-instance-links/run.sh
 ./tests/docker/rntun/run.sh                               # needs privileged containers
 ```
 

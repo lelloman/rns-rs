@@ -1,0 +1,6 @@
+# rns-rs shared client (rns-ctl http --daemon). No interfaces of its own:
+# it attaches to the shared instance running in the same container.
+[reticulum]
+share_instance = Yes
+shared_instance_port = 37428
+instance_control_port = 37429

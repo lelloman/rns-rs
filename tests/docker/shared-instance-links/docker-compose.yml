@@ -1,0 +1,60 @@
+# Shared instance sibling and adjacent-peer links (GitHub issue #183).
+#
+# - daemon:      rns-ctl daemon as shared instance (enable_transport from
+#                DAEMON_ENABLE_TRANSPORT, default False) plus two rns-rs
+#                shared clients A (8091) and B (8092)
+# - py-sibling:  Python RNS shared client in the daemon's network namespace
+#                (8093), attached through the abstract socket rns/default
+# - py-external: standalone Python RNS node with a TCPClientInterface to the
+#                daemon (8094), one hop away from the clients behind it
+
+services:
+  daemon:
+    image: rns-test
+    container_name: sil-daemon
+    volumes:
+      - ./configs/daemon:/etc/rns/daemon:ro
+      - ./configs/client:/etc/rns/client:ro
+      - ./entrypoint-daemon.sh:/entrypoint-daemon.sh:ro
+    entrypoint: ["bash", "/entrypoint-daemon.sh"]
+    environment:
+      - DAEMON_ENABLE_TRANSPORT=${DAEMON_ENABLE_TRANSPORT:-False}
+    ports:
+      - "8091:8080"
+      - "8092:8081"
+      - "8093:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  py-sibling:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        RNS_VERSION: ${RNS_VERSION:-1.5.7}
+    image: rns-test-python-sil
+    container_name: sil-py-sibling
+    network_mode: "service:daemon"
+    volumes:
+      - ./configs/py-sibling:/etc/rns:ro
+    command: ["8082"]
+    depends_on:
+      daemon:
+        condition: service_healthy
+
+  py-external:
+    image: rns-test-python-sil
+    container_name: sil-py-external
+    volumes:
+      - ./configs/py-external:/etc/rns:ro
+    command: ["8080"]
+    ports:
+      - "8094:8080"
+    depends_on:
+      daemon:
+        condition: service_healthy
+      py-sibling:
+        condition: service_started

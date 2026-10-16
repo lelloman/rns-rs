@@ -1,0 +1,15 @@
+# Python Reticulum node directly adjacent (1 hop) to the shared daemon.
+# It addresses destinations behind the daemon with HEADER_1 packets.
+[reticulum]
+enable_transport = False
+share_instance = No
+
+[logging]
+loglevel = 5
+
+[interfaces]
+  [[RNS Daemon]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = daemon
+    target_port = 4965

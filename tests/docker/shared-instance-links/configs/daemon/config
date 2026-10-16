@@ -1,0 +1,14 @@
+# Shared instance daemon (rns-ctl daemon). entrypoint-daemon.sh rewrites
+# enable_transport from DAEMON_ENABLE_TRANSPORT. False, as on a typical
+# desktop rnsd, is the configuration broken by issue #183.
+[reticulum]
+enable_transport = False
+share_instance = Yes
+shared_instance_port = 37428
+instance_control_port = 37429
+
+[interfaces]
+  [[TCP Server]]
+    type = TCPServerInterface
+    listen_ip = 0.0.0.0
+    listen_port = 4965

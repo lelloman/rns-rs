@@ -1,0 +1,12 @@
+# Python Reticulum shared client. The rns-rs daemon already owns the
+# shared instance (abstract Unix socket rns/default), so this instance
+# attaches to it as a client exactly like a Python app on the same host.
+[reticulum]
+share_instance = Yes
+shared_instance_port = 37428
+instance_control_port = 37429
+
+[logging]
+loglevel = 5
+
+[interfaces]

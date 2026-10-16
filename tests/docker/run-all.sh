@@ -244,6 +244,9 @@ run_standalone() {
 run_standalone "${SCRIPT_DIR}/shared-client-reconnect" \
   "Shared client reconnection (issue #3)"
 
+run_standalone "${SCRIPT_DIR}/shared-instance-links" \
+  "Shared instance sibling and adjacent-peer links (issue #183)"
+
 run_standalone "${SCRIPT_DIR}/rns-server" \
   "rns-server process supervision"
 
