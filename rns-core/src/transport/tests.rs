@@ -4916,3 +4916,358 @@ fn seeding_table_hashing_keeps_reverse_entries() {
     engine.set_packet_hashlist_max_entries(1000);
     assert_eq!(engine.packet_hashlist.hashing_seed(), seed);
 }
+
+// =========================================================================
+// Issue #183: shared instance forwards HEADER_1 packets to local clients
+// =========================================================================
+
+/// Shared daemon with two local clients (A on iface 1, B on iface 2) and one
+/// external interface (iface 3). Client A has announced a destination, which
+/// the daemon records at 0 hops behind iface 1.
+fn make_issue183_daemon(transport_enabled: bool) -> (TransportEngine, [u8; 16]) {
+    let mut config = make_config(transport_enabled);
+    config.identity_hash = Some([0x42; 16]);
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_local_client_interface(1));
+    engine.register_interface(make_local_client_interface(2));
+    engine.register_interface(make_interface(3, constants::MODE_FULL));
+
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+    let dest_hash =
+        crate::destination::destination_hash("issue4", &["test"], Some(identity.hash()));
+    let name_hash = crate::destination::name_hash("issue4", &["test"]);
+    let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
+    let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
+    engine.handle_inbound(
+        InboundFrame::new(&announce_raw, InterfaceId(1), 1000.0),
+        &mut rng,
+    );
+    assert_eq!(engine.hops_to(&dest_hash), Some(0));
+    (engine, dest_hash)
+}
+
+fn build_issue183_h1(
+    dest_hash: &[u8; 16],
+    destination_type: u8,
+    packet_type: u8,
+    context: u8,
+    payload: &[u8],
+) -> RawPacket {
+    RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type,
+            packet_type,
+        },
+        0,
+        dest_hash,
+        None,
+        context,
+        payload,
+    )
+    .unwrap()
+}
+
+fn issue183_sends_on(actions: &[TransportAction], iface: InterfaceId) -> Vec<&[u8]> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            TransportAction::SendOnInterface { interface, raw } if *interface == iface => {
+                Some(&raw[..])
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_issue183_forwarded_h1(raw: &[u8], dest_hash: &[u8; 16], hops: u8, payload: &[u8]) {
+    let flags = PacketFlags::unpack(raw[0]);
+    assert_eq!(flags.header_type, constants::HEADER_1);
+    assert_eq!(flags.transport_type, constants::TRANSPORT_BROADCAST);
+    assert_eq!(raw[1], hops);
+    assert_eq!(&raw[2..18], dest_hash);
+    assert_eq!(raw[18], constants::CONTEXT_NONE);
+    assert_eq!(&raw[19..], payload);
+}
+
+#[test]
+fn test_issue183_sibling_h1_linkrequest_forwarded_to_local_client() {
+    for transport_enabled in [false, true] {
+        let (mut engine, dest_hash) = make_issue183_daemon(transport_enabled);
+        let payload = [0x5A; constants::LINK_ECPUBSIZE];
+        let packet = build_issue183_h1(
+            &dest_hash,
+            constants::DESTINATION_SINGLE,
+            constants::PACKET_TYPE_LINKREQUEST,
+            constants::CONTEXT_NONE,
+            &payload,
+        );
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&packet.raw, InterfaceId(2), 1001.0),
+            &mut rng,
+        );
+
+        let sends = issue183_sends_on(&actions, InterfaceId(1));
+        assert_eq!(
+            sends.len(),
+            1,
+            "sibling LINKREQUEST must reach client A (transport_enabled={transport_enabled})"
+        );
+        assert_issue183_forwarded_h1(sends[0], &dest_hash, 0, &payload);
+        assert!(issue183_sends_on(&actions, InterfaceId(2)).is_empty());
+
+        let link_id = actions
+            .iter()
+            .find_map(|action| match action {
+                TransportAction::LinkRequestReceived {
+                    link_id,
+                    destination_hash,
+                    receiving_interface,
+                } => {
+                    assert_eq!(*destination_hash, dest_hash);
+                    assert_eq!(*receiving_interface, InterfaceId(2));
+                    Some(*link_id)
+                }
+                _ => None,
+            })
+            .expect("forwarded LINKREQUEST should report LinkRequestReceived");
+        let entry = engine
+            .link_table
+            .get(&link_id)
+            .expect("forwarded LINKREQUEST should create a link table entry");
+        assert_eq!(entry.next_hop_interface, InterfaceId(1));
+        assert_eq!(entry.received_interface, InterfaceId(2));
+        assert_eq!(entry.remaining_hops, 0);
+        assert_eq!(entry.destination_hash, dest_hash);
+    }
+}
+
+#[test]
+fn test_issue183_sibling_h1_data_forwarded_to_local_client() {
+    for transport_enabled in [false, true] {
+        let (mut engine, dest_hash) = make_issue183_daemon(transport_enabled);
+        let packet = build_issue183_h1(
+            &dest_hash,
+            constants::DESTINATION_SINGLE,
+            constants::PACKET_TYPE_DATA,
+            constants::CONTEXT_NONE,
+            b"hello sibling",
+        );
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x12; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&packet.raw, InterfaceId(2), 1001.0),
+            &mut rng,
+        );
+
+        let sends = issue183_sends_on(&actions, InterfaceId(1));
+        assert_eq!(
+            sends.len(),
+            1,
+            "sibling DATA must reach client A (transport_enabled={transport_enabled})"
+        );
+        assert_issue183_forwarded_h1(sends[0], &dest_hash, 0, b"hello sibling");
+        assert!(issue183_sends_on(&actions, InterfaceId(2)).is_empty());
+        assert_eq!(engine.reverse_table_count(), 1);
+    }
+}
+
+#[test]
+fn test_issue183_external_h1_packets_forwarded_to_local_client() {
+    for transport_enabled in [false, true] {
+        for (packet_type, payload) in [
+            (
+                constants::PACKET_TYPE_DATA,
+                &b"hello from adjacent peer"[..],
+            ),
+            (
+                constants::PACKET_TYPE_LINKREQUEST,
+                &[0x5B; constants::LINK_ECPUBSIZE][..],
+            ),
+        ] {
+            let (mut engine, dest_hash) = make_issue183_daemon(transport_enabled);
+            let packet = build_issue183_h1(
+                &dest_hash,
+                constants::DESTINATION_SINGLE,
+                packet_type,
+                constants::CONTEXT_NONE,
+                payload,
+            );
+
+            let mut rng = rns_crypto::FixedRng::new(&[0x13; 32]);
+            let actions = engine.handle_inbound(
+                InboundFrame::new(&packet.raw, InterfaceId(3), 1001.0),
+                &mut rng,
+            );
+
+            let sends = issue183_sends_on(&actions, InterfaceId(1));
+            assert_eq!(
+                sends.len(),
+                1,
+                "external HEADER_1 packet type {packet_type} must reach client A \
+                 (transport_enabled={transport_enabled})"
+            );
+            // The adjacent peer is one hop away from client A, as in Python,
+            // which forwards with the post-ingress hop count.
+            assert_issue183_forwarded_h1(sends[0], &dest_hash, 1, payload);
+            assert!(issue183_sends_on(&actions, InterfaceId(3)).is_empty());
+        }
+    }
+}
+
+#[test]
+fn test_issue183_sibling_link_handshake_routes_lrproof_back() {
+    for transport_enabled in [false, true] {
+        let (mut engine, dest_hash) = make_issue183_daemon(transport_enabled);
+        let request = build_issue183_h1(
+            &dest_hash,
+            constants::DESTINATION_SINGLE,
+            constants::PACKET_TYPE_LINKREQUEST,
+            constants::CONTEXT_NONE,
+            &[0x5C; constants::LINK_ECPUBSIZE],
+        );
+        let mut rng = rns_crypto::FixedRng::new(&[0x14; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&request.raw, InterfaceId(2), 1001.0),
+            &mut rng,
+        );
+        let link_id = actions
+            .iter()
+            .find_map(|action| match action {
+                TransportAction::LinkRequestReceived { link_id, .. } => Some(*link_id),
+                _ => None,
+            })
+            .expect("forwarded LINKREQUEST should report LinkRequestReceived");
+        // Client A derives the same link id from the HEADER_1 request it got.
+        let mut forwarded = issue183_sends_on(&actions, InterfaceId(1));
+        let forwarded = RawPacket::unpack(forwarded.pop().expect("LINKREQUEST forwarded")).unwrap();
+        assert_eq!(
+            crate::link::handshake::compute_link_id(
+                &forwarded.get_hashable_part(),
+                forwarded.data().len() - constants::LINK_ECPUBSIZE
+            ),
+            link_id
+        );
+
+        let proof = build_issue183_h1(
+            &link_id,
+            constants::DESTINATION_LINK,
+            constants::PACKET_TYPE_PROOF,
+            constants::CONTEXT_LRPROOF,
+            &[0x6D; 96],
+        );
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&proof.raw, InterfaceId(1), 1002.0),
+            &mut rng,
+        );
+
+        let sends = issue183_sends_on(&actions, InterfaceId(2));
+        assert_eq!(
+            sends.len(),
+            1,
+            "LRPROOF must be routed back to client B (transport_enabled={transport_enabled})"
+        );
+        assert_eq!(sends[0][1], 0);
+        assert_eq!(&sends[0][2..18], &link_id);
+        assert_eq!(&sends[0][19..], &[0x6D; 96][..]);
+        assert!(engine.link_table.get(&link_id).unwrap().validated);
+    }
+}
+
+#[test]
+fn test_issue183_sibling_data_proof_routes_back() {
+    for transport_enabled in [false, true] {
+        let (mut engine, dest_hash) = make_issue183_daemon(transport_enabled);
+        let data = build_issue183_h1(
+            &dest_hash,
+            constants::DESTINATION_SINGLE,
+            constants::PACKET_TYPE_DATA,
+            constants::CONTEXT_NONE,
+            b"prove me",
+        );
+        let mut rng = rns_crypto::FixedRng::new(&[0x16; 32]);
+        engine.handle_inbound(
+            InboundFrame::new(&data.raw, InterfaceId(2), 1001.0),
+            &mut rng,
+        );
+
+        let proof_dest = data.get_truncated_hash();
+        let proof = build_issue183_h1(
+            &proof_dest,
+            constants::DESTINATION_SINGLE,
+            constants::PACKET_TYPE_PROOF,
+            constants::CONTEXT_NONE,
+            &[0x7E; 96],
+        );
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&proof.raw, InterfaceId(1), 1002.0),
+            &mut rng,
+        );
+
+        let sends = issue183_sends_on(&actions, InterfaceId(2));
+        assert_eq!(
+            sends.len(),
+            1,
+            "DATA proof must be routed back to client B (transport_enabled={transport_enabled})"
+        );
+        assert_issue183_forwarded_h1(sends[0], &proof_dest, 0, &[0x7E; 96]);
+        assert_eq!(engine.reverse_table_count(), 0);
+    }
+}
+
+#[test]
+fn test_issue183_h1_data_not_forwarded_without_local_client_path() {
+    for transport_enabled in [false, true] {
+        let (mut engine, _) = make_issue183_daemon(transport_enabled);
+
+        // A 0-hop path on a non-local-client interface is not "behind" a
+        // local client and must not be treated as transport-addressed.
+        let external_dest = [0xE1; 16];
+        engine.upsert_path_destination(
+            external_dest,
+            make_path_entry(1000.0, 0, InterfaceId(3), external_dest),
+            1000.0,
+        );
+        // A destination behind a local client but more than 0 hops away
+        // still needs an explicit transport id.
+        let far_dest = [0xE2; 16];
+        engine.upsert_path_destination(
+            far_dest,
+            make_path_entry(1000.0, 1, InterfaceId(1), [0xAB; 16]),
+            1000.0,
+        );
+        let unknown_dest = [0xE3; 16];
+
+        for (dest, iface) in [
+            (external_dest, InterfaceId(2)),
+            (far_dest, InterfaceId(3)),
+            (unknown_dest, InterfaceId(2)),
+            (unknown_dest, InterfaceId(3)),
+        ] {
+            let packet = build_issue183_h1(
+                &dest,
+                constants::DESTINATION_SINGLE,
+                constants::PACKET_TYPE_DATA,
+                constants::CONTEXT_NONE,
+                b"not for a local client",
+            );
+            let mut rng = rns_crypto::FixedRng::new(&[0x15; 32]);
+            let actions =
+                engine.handle_inbound(InboundFrame::new(&packet.raw, iface, 1001.0), &mut rng);
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| matches!(action, TransportAction::SendOnInterface { .. })),
+                "HEADER_1 DATA to {:02x?} from {:?} must not be forwarded \
+                 (transport_enabled={transport_enabled})",
+                &dest[..2],
+                iface
+            );
+        }
+        assert_eq!(engine.reverse_table_count(), 0);
+    }
+}
