@@ -45,7 +45,7 @@ Every commit in the audited range must appear exactly once.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `f0875ac44ee13d82160c1a0c43f2480391b8d3dc` | Fixed EC TX stall state deadlock on BackboneInterface initiator instances | Structurally covered | Fresh `TransmitBuffer`/`EgressController` per writer on every connection (`ClientLink::reconnect_loop`, `Server` accept); writer dropped on teardown. Invariant documented on `BackboneClientWriter`; regression `fresh_egress_state_does_not_immediately_reescalate_after_teardown` added. Mapping landed. |
-| 2 | `cadee01f9ee3de96e7f10b936176a4dfea7965b7` | Updated egress control test | Non-runtime | Upstream Python test for the persistent-instance reset; Rust has no persistent egress instance. Native coverage already exists in `transmit_buffer.rs` tests. Mapping commit pending. |
+| 2 | `cadee01f9ee3de96e7f10b936176a4dfea7965b7` | Updated egress control test | Non-runtime | Upstream-only Python test for the persistent-instance reset; Rust has no persistent egress instance. Native coverage in `transmit_buffer.rs` tests. Mapping landed. |
 | 3 | `2578750bf7df7a598fc77e49212c79a2061e50e3` | Updated version | Non-runtime | `RNS/_version.py` `1.5.6` -> `1.5.7`. Mapping commit pending. |
 | 4 | `318b78b416ee909f56ba83999e83c03f805747e4` | Updated changelog | Non-runtime | `Changelog.md` release note. Mapping commit pending. |
 | 5 | `a29bfb51c468945c96a1ee22cae0114e993e2391` | Updated documentation | Non-runtime | Generated `docs/manual/` HTML/asset rebuild only. Mapping commit pending. |
@@ -100,10 +100,15 @@ invariant introduced by commit 1. rns-rs has no equivalent persistent instance;
 the tested state cannot persist across reconnection because the writer owning it
 is dropped and recreated.
 
-**Local handling and evidence:** Upstream-only Python test. The relevant
-native invariants (three zero-drain ticks escalate; fresh state is unstalled)
-are covered by `transmit_buffer.rs` unit tests. No runtime change required. A
-non-empty mapping commit is still required by the parity procedure.
+**Local handling and evidence:** Upstream-only Python test. The tested scenario
+is the persistent-instance reset introduced by commit 1. rns-rs has no
+equivalent persistent instance: the writer that owns the egress state is dropped
+and recreated per connection, so the tested state cannot survive. The relevant
+native invariants (three zero-drain ticks escalate; fresh state is unstalled and
+does not re-escalate) are covered by `transmit_buffer.rs` unit tests, including
+`fresh_egress_state_does_not_immediately_reescalate_after_teardown`. No runtime
+change is required; this mapping records the source-only review and the native
+coverage.
 
 **Final disposition:** Non-runtime.
 
