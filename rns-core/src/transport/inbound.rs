@@ -56,6 +56,14 @@ pub fn forward_transport_packet(
         new_raw.push(packet.hops);
         new_raw.extend_from_slice(tail);
         new_raw
+    } else if packet.flags.header_type == constants::HEADER_1 {
+        // remaining_hops == 0 for a HEADER_1 packet to a local client: there
+        // is no transport header to strip, only update hops.
+        let mut new_raw = Vec::with_capacity(packet.raw.len());
+        new_raw.push(packet.raw[0]);
+        new_raw.push(packet.hops);
+        new_raw.extend_from_slice(&packet.raw[2..]);
+        new_raw
     } else {
         // remaining_hops == 0: final local delivery, strip transport header.
         let new_flags = (constants::HEADER_1 << 6)

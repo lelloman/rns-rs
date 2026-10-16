@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "foldhash",
  "hashbrown",

@@ -14,7 +14,7 @@ authors = ["rns-rs contributors"]
 
 [workspace.dependencies]
 rns-crypto = { version = "0.2.0", path = "rns-crypto" }
-rns-core = { version = "0.3.0", path = "rns-core" }
+rns-core = { version = "0.3.1", path = "rns-core" }
 rns-net = { version = "0.8.0", path = "rns-net" }
 rns-hooks = { version = "0.2.0", path = "rns-hooks", default-features = false }
 rns-tun = { version = "0.1.0", path = "rns-tun", default-features = false }

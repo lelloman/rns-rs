@@ -251,8 +251,23 @@ impl TransportEngine {
         if !(self.config.transport_enabled || self.config.identity_hash.is_some()) {
             return;
         }
-        if ctx.packet.transport_id.is_none()
-            || ctx.packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+        // Transport.py: clients behind a shared instance are announced with a
+        // "spoofed" hop count of 0, so they look directly reachable and
+        // senders strip the transport header. Treat a packet for such a
+        // client as addressed to us so normal forwarding handles it (#183).
+        let for_local_client = ctx.packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
+            && self
+                .path_table
+                .get(&ctx.packet.destination_hash)
+                .and_then(|ps| ps.primary())
+                .is_some_and(|entry| {
+                    entry.hops == 0 && self.interface_is_local_client(entry.receiving_interface)
+                });
+        let transport_id = match ctx.packet.transport_id {
+            None if for_local_client => self.config.identity_hash,
+            transport_id => transport_id,
+        };
+        if transport_id.is_none() || ctx.packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
         {
             if ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA {
                 log::debug!(
@@ -271,7 +286,7 @@ impl TransportEngine {
         let Some(identity_hash) = self.config.identity_hash else {
             return;
         };
-        if ctx.packet.transport_id != Some(identity_hash) {
+        if transport_id != Some(identity_hash) {
             if ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA {
                 log::debug!(
                     "TransportForward: DATA dest={:02x}{:02x}{:02x}{:02x}.. transport mismatch got={:02x?} own={:02x?} iface={}",
@@ -1157,8 +1172,17 @@ impl TransportEngine {
     ) {
         let packet = &ctx.packet;
         if packet.context == constants::CONTEXT_LRPROOF {
-            // Link request proof routing
-            if (self.config.transport_enabled)
+            // Link request proof routing. As in Transport.py, a shared
+            // instance without transport also routes proofs for links to or
+            // from its local clients (#183).
+            let for_local_client_link =
+                self.link_table
+                    .get(&packet.destination_hash)
+                    .is_some_and(|entry| {
+                        self.interface_is_local_client(entry.next_hop_interface)
+                            || self.interface_is_local_client(entry.received_interface)
+                    });
+            if (self.config.transport_enabled || ctx.from_local_client || for_local_client_link)
                 && self.link_table.contains_key(&packet.destination_hash)
             {
                 let link_entry = self.link_table.get(&packet.destination_hash).cloned();
@@ -1220,11 +1244,15 @@ impl TransportEngine {
                 });
             }
         } else {
-            // Regular proof: check reverse table
-            if self.config.transport_enabled {
+            // Regular proof: check reverse table. As in Transport.py, a shared
+            // instance without transport also routes proofs to or from its
+            // local clients (#183).
+            let proof_for_local_client = self
+                .reverse_table
+                .get(&packet.destination_hash)
+                .is_some_and(|entry| self.interface_is_local_client(entry.receiving_interface));
+            if self.config.transport_enabled || ctx.from_local_client || proof_for_local_client {
                 if let Some(reverse_entry) = self.reverse_table.remove(&packet.destination_hash) {
-                    let proof_for_local_client =
-                        self.interface_is_local_client(reverse_entry.receiving_interface);
                     if let Some(action) = route_proof_via_reverse(
                         packet,
                         &reverse_entry,
