@@ -47,7 +47,7 @@ Every commit in the audited range must appear exactly once.
 | 1 | `f0875ac44ee13d82160c1a0c43f2480391b8d3dc` | Fixed EC TX stall state deadlock on BackboneInterface initiator instances | Structurally covered | Fresh `TransmitBuffer`/`EgressController` per writer on every connection (`ClientLink::reconnect_loop`, `Server` accept); writer dropped on teardown. Invariant documented on `BackboneClientWriter`; regression `fresh_egress_state_does_not_immediately_reescalate_after_teardown` added. Mapping landed. |
 | 2 | `cadee01f9ee3de96e7f10b936176a4dfea7965b7` | Updated egress control test | Non-runtime | Upstream-only Python test for the persistent-instance reset; Rust has no persistent egress instance. Native coverage in `transmit_buffer.rs` tests. Mapping landed. |
 | 3 | `2578750bf7df7a598fc77e49212c79a2061e50e3` | Updated version | Non-runtime | `RNS/_version.py` `1.5.6` -> `1.5.7`; the promoted baseline records `RNS.__version__ == "1.5.7"`. Mapping landed. |
-| 4 | `318b78b416ee909f56ba83999e83c03f805747e4` | Updated changelog | Non-runtime | `Changelog.md` release note. Mapping commit pending. |
+| 4 | `318b78b416ee909f56ba83999e83c03f805747e4` | Updated changelog | Non-runtime | `Changelog.md` release note; not vendored and no runtime counterpart. Mapping landed. |
 | 5 | `a29bfb51c468945c96a1ee22cae0114e993e2391` | Updated documentation | Non-runtime | Generated `docs/manual/` HTML/asset rebuild only. Mapping commit pending. |
 
 ## Per-Commit Analysis
@@ -133,7 +133,9 @@ baseline. No Rust version surface changes. Mapping landed.
 **Rust applicability:** Documentation only; the changelog must not be treated as
 acceptance evidence.
 
-**Local handling and evidence:** Non-runtime. Mapping commit pending.
+**Local handling and evidence:** Non-runtime. The upstream `Changelog.md`
+release note is not vendored and carries no acceptance weight; the runtime
+behavior it describes is dispositioned under commit 1. Mapping landed.
 
 **Final disposition:** Non-runtime.
 
