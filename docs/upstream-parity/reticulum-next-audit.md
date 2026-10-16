@@ -44,7 +44,7 @@ Every commit in the audited range must appear exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `f0875ac44ee13d82160c1a0c43f2480391b8d3dc` | Fixed EC TX stall state deadlock on BackboneInterface initiator instances | Structurally covered | Fresh `TransmitBuffer`/`EgressController` per writer at `rns-net/src/interface/backbone.rs:1781` (client reconnect) and `:995` (server accept); writer dropped on teardown. Mapping commit pending. |
+| 1 | `f0875ac44ee13d82160c1a0c43f2480391b8d3dc` | Fixed EC TX stall state deadlock on BackboneInterface initiator instances | Structurally covered | Fresh `TransmitBuffer`/`EgressController` per writer on every connection (`ClientLink::reconnect_loop`, `Server` accept); writer dropped on teardown. Invariant documented on `BackboneClientWriter`; regression `fresh_egress_state_does_not_immediately_reescalate_after_teardown` added. Mapping landed. |
 | 2 | `cadee01f9ee3de96e7f10b936176a4dfea7965b7` | Updated egress control test | Non-runtime | Upstream Python test for the persistent-instance reset; Rust has no persistent egress instance. Native coverage already exists in `transmit_buffer.rs` tests. Mapping commit pending. |
 | 3 | `2578750bf7df7a598fc77e49212c79a2061e50e3` | Updated version | Non-runtime | `RNS/_version.py` `1.5.6` -> `1.5.7`. Mapping commit pending. |
 | 4 | `318b78b416ee909f56ba83999e83c03f805747e4` | Updated changelog | Non-runtime | `Changelog.md` release note. Mapping commit pending. |
@@ -75,13 +75,15 @@ stale drain/zero-tick state or buffered frames can survive into the next
 connection. The failure mode the upstream patch repairs cannot be expressed in
 this design.
 
-**Local handling and evidence:** Structural invariant recorded above. Native
-egress lifecycle tests already exercise stall gating, release, empty reset and
-dead-peer escalation in
-`rns-net/src/interface/transmit_buffer.rs:474-526`; the reconnect path that
-discards the writer is covered by the Backbone reconnect paths. A non-empty
-mapping commit documenting this invariant is still required by the parity
-procedure.
+**Local handling and evidence:** The per-connection writer recreation invariant
+is documented on `BackboneClientWriter`. A focused regression,
+`fresh_egress_state_does_not_immediately_reescalate_after_teardown` in
+`rns-net/src/interface/transmit_buffer.rs`, proves that a replacement writer
+starts with an empty buffer and an unstalled controller that does not
+re-escalate, mirroring upstream's `test_12_ec_state_reset_on_teardown`. Native
+egress lifecycle tests continue to exercise stall gating, release, empty reset
+and dead-peer escalation. This mapping commit documents the invariant and lands
+the regression.
 
 **Final disposition:** Structurally covered.
 
@@ -166,6 +168,22 @@ commits 2-5 are non-runtime. The remaining parity work is procedural:
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
+
+- `2026-10-16`: Both daily VPS snapshots were healthy and complete, with one
+  capture per host, all public interfaces up (EU 49/49, US 27/27), no failed
+  rolling traffic queries, and zero idle timeout or provider bridge drop and
+  disconnect events over 24 hours. The impaired dual-VPS `--daily` smoke passed
+  all four Resource sizes through 1 MiB, concurrent links, and forced reconnect
+  recovery using the freshly built `8ee352e` working tree. Both upstream
+  refreshes succeeded (`06:16:28Z` GitHub, `06:16:33Z` rgit); the five-commit
+  inventory from October 6 is unchanged, with the GitHub tip (`e40191b3`)
+  behind the baseline and the rgit tip (`a29bfb51`) ahead. Both hosts run the
+  dev build `8685057` (`rns-server 0.4.1560` / `rns-ctl 0.5.1560`); `origin/dev`
+  and `origin/master` have both advanced to `8ee352e`, so neither host matches
+  either ref and both are two commits behind. No deployment, restart, or
+  reconfiguration was performed by this run. The reviewed report database
+  (SHA-256 `d2898171`) was published to `vps-eu`. Mapping commits and promotion
+  acceptance remain pending.
 
 - `2026-10-15`: Both daily VPS snapshots were healthy and complete, with one
   capture per host, all public interfaces up (EU 60/60, US 27/27), no failed

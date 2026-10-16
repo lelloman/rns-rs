@@ -524,4 +524,27 @@ mod tests {
         assert!(controller.stalled());
         assert!(controller.evaluate(Duration::from_secs(13), buffered, buffered, 0));
     }
+
+    #[test]
+    fn fresh_egress_state_does_not_immediately_reescalate_after_teardown() {
+        let buffered = EGRESS_MID_WATERMARK + 1;
+        {
+            let mut stalled = EgressController::default();
+            for tick in 1..=4 {
+                stalled.evaluate(Duration::from_secs(tick), buffered, buffered, 0);
+            }
+            assert!(stalled.stalled());
+        }
+
+        // Teardown drops the stalled writer; reconnect builds a fresh writer
+        // with an empty buffer and an unstalled controller, mirroring upstream's
+        // BackboneInterface._dp_ec_reset (rgit `f0875ac4`). The replacement must
+        // start clean and must not re-escalate on its first ticks.
+        let mut fresh = EgressController::default();
+        let fresh_buffer = TransmitBuffer::new();
+        assert!(!fresh.stalled());
+        assert_eq!(fresh_buffer.buffered_bytes(), 0);
+        assert!(!fresh.evaluate(Duration::from_secs(1), 0, 0, 0));
+        assert!(!fresh.stalled());
+    }
 }

@@ -1464,6 +1464,15 @@ impl Default for BackboneClientConfig {
 }
 
 /// Writer that sends HDLC-framed data over a TCP stream (client mode).
+///
+/// A fresh writer is constructed for every connection: the initial connect in
+/// [`start_client`] and each reconnect in [`ClientLink::reconnect_loop`]. Its
+/// [`TransmitBuffer`] and [`EgressController`] therefore always start empty and
+/// unstalled, and the stalled writer is dropped together with its socket on
+/// teardown, so no egress drain/stall state can survive into the next
+/// connection. This structurally covers upstream's `BackboneInterface._dp_ec_reset`
+/// (rgit `f0875ac4`), which resets the same counters on a persistent Python
+/// initiator instance.
 struct BackboneClientWriter {
     stream: TcpStream,
     transmit_buffer: TransmitBuffer,
