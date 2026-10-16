@@ -26,14 +26,12 @@
 #   8. Single DATA packet with proof between rns-rs siblings B -> A
 #
 # run.sh runs this once per daemon enable_transport mode (exported as
-# DAEMON_ENABLE_TRANSPORT). With transport disabled, the rns-rs shared
-# instance does not yet rebroadcast its local clients' announces to other
-# interfaces, nor answer path requests for them, as Python does
-# (Transport.py, "transport_enabled() or is_from_local_client"), so
-# py-external cannot discover a path to destinations behind the daemon.
-# Steps 5 and 7 are therefore skipped in that mode and covered by the
-# transport-enabled pass, where py-external still sees them at 1 hop and
-# sends HEADER_1 packets.
+# DAEMON_ENABLE_TRANSPORT). In both modes py-external discovers the paths
+# to destinations behind the daemon, which sees them at 1 hop and sends
+# HEADER_1 packets: as in Python (Transport.py, "transport_enabled() or
+# is_from_local_client"), a shared instance without transport still
+# rebroadcasts its local clients' announces and relays path requests to
+# them and their path responses back.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -53,15 +51,6 @@ echo "=== Shared Instance Links E2E Test (issue #183, enable_transport=${TRANSPO
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
-
-# external_discovery_supported — see the header: false on a daemon without
-# transport, where py-external cannot learn paths to the daemon's clients.
-external_discovery_supported() { [[ "${TRANSPORT,,}" == "true" ]]; }
-
-skip_step() {
-  echo "  SKIP: $1"
-  record_result "SKIP" "$1"
-}
 
 # py_post PORT PATH BODY — like ctl_post, but prints the error JSON on 500.
 py_post() {
@@ -328,22 +317,14 @@ fi
 
 py_to_rns "$PORT_PY_SIB" "py-sibling" "pysib"
 rns_to_py "$PORT_PY_SIB" "py-sibling"
-if external_discovery_supported; then
-  py_to_rns "$PORT_PY_EXT" "py-external" "pyext"
-else
-  skip_step "py-external->A: no path discovery through a non-transport shared instance"
-fi
+py_to_rns "$PORT_PY_EXT" "py-external" "pyext"
 rns_to_py "$PORT_PY_EXT" "py-external"
 
 # ── Step 7: Python external -> Python sibling ───────────────────────────────
 
 echo ""
 echo "--- py-external -> py-sibling ---"
-if ! external_discovery_supported; then
-  skip_step "py-external->py-sibling: no path discovery through a non-transport shared instance"
-else
-  py_ext_to_py_sib
-fi
+py_ext_to_py_sib
 
 # ── Step 8: Single DATA packet with proof B -> A ────────────────────────────
 

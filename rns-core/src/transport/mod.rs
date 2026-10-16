@@ -225,6 +225,10 @@ pub struct TransportEngine {
     path_requests: BTreeMap<[u8; 16], f64>,
     discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
     discovery_path_request_deadlines: BTreeMap<[u8; 16], f64>,
+    /// Path requests for destinations behind a local client, by destination:
+    /// the requesting interface and when it asked (Transport.py
+    /// `pending_local_path_requests`).
+    pending_local_path_requests: BTreeMap<[u8; 16], (InterfaceId, f64)>,
     path_destination_cap_evict_count: usize,
     // Job timing
     announces_last_checked: f64,

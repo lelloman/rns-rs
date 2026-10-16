@@ -37,6 +37,7 @@ impl TransportEngine {
             path_requests: BTreeMap::new(),
             discovery_path_requests: BTreeMap::new(),
             discovery_path_request_deadlines: BTreeMap::new(),
+            pending_local_path_requests: BTreeMap::new(),
             path_destination_cap_evict_count: 0,
             announces_last_checked: 0.0,
             tables_last_culled: 0.0,
@@ -61,6 +62,8 @@ impl TransportEngine {
         self.drop_links_for_interface(id);
         self.announce_queues.remove_interface(id);
         self.ingress_control.remove_interface(&id);
+        self.pending_local_path_requests
+            .retain(|_, (interface, _)| *interface != id);
     }
 
     // =========================================================================
@@ -507,6 +510,18 @@ impl TransportEngine {
             .get(&iface)
             .map(|i| i.is_local_client)
             .unwrap_or(false)
+    }
+
+    /// Whether `iface` is a local client this engine serves as a shared
+    /// instance (Transport.py `from_local_client`). A shared client also
+    /// flags its interface to the daemon as a local client, but it has no
+    /// transport identity.
+    pub(super) fn serves_local_client(&self, iface: InterfaceId) -> bool {
+        self.config.identity_hash.is_some() && self.interface_is_local_client(iface)
+    }
+
+    pub(super) fn serves_local_clients(&self) -> bool {
+        self.config.identity_hash.is_some() && self.has_local_clients()
     }
 
     /// Packet filter: dedup + basic validity.

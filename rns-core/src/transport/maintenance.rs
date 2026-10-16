@@ -96,6 +96,13 @@ impl TransportEngine {
         });
         self.discovery_path_request_deadlines
             .retain(|destination, _| self.discovery_path_requests.contains_key(destination));
+        // Transport.py culls these only when the requesting interface is
+        // gone; also expire them, as a local client answers right away.
+        self.pending_local_path_requests
+            .retain(|_, (interface, requested_at)| {
+                self.interfaces.contains_key(interface)
+                    && ctx.now < *requested_at + constants::PATH_REQUEST_TIMEOUT
+            });
         self.tunnel_table
             .void_missing_interfaces(|id| self.interfaces.contains_key(id));
         self.tunnel_table.cull(ctx.now);
@@ -151,6 +158,10 @@ impl TransportEngine {
                         .interfaces
                         .iter()
                         .filter(|(_, info)| info.out_capable)
+                        // Without transport, the only rebroadcasts are local
+                        // client announces, which the local client relay has
+                        // already delivered to the other local clients.
+                        .filter(|(_, info)| self.config.transport_enabled || !info.is_local_client)
                         .filter(|(id, _)| {
                             if let Some(ref ex) = exclude {
                                 **id != *ex

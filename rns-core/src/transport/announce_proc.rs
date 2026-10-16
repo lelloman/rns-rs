@@ -54,8 +54,10 @@ pub fn build_retransmit_announce(
 
 /// Create a PathEntry and optionally an AnnounceEntry from a validated announce.
 ///
-/// The AnnounceEntry is created only if `transport_enabled` is true and
-/// `is_path_response` is false.
+/// The AnnounceEntry is created only if `transport_enabled` or
+/// `from_local_client` is true and `is_path_response` and `rate_blocked` are
+/// false (Transport.py:2351). A local client's announce is rebroadcast
+/// immediately, and only once.
 #[allow(clippy::too_many_arguments)]
 pub fn process_validated_announce(
     destination_hash: [u8; 16],
@@ -72,6 +74,7 @@ pub fn process_validated_announce(
     expires: f64,
     rng_value: f64,
     transport_enabled: bool,
+    from_local_client: bool,
     is_path_response: bool,
     rate_blocked: bool,
     original_raw: Option<Vec<u8>>,
@@ -97,26 +100,32 @@ pub fn process_validated_announce(
         announce_raw: original_raw,
     };
 
-    let announce_entry = if transport_enabled && !is_path_response && !rate_blocked {
-        let retransmit_timeout = now + (rng_value * constants::PATHFINDER_RW);
+    let announce_entry =
+        if (transport_enabled || from_local_client) && !is_path_response && !rate_blocked {
+            let (retransmit_timeout, retries) = if from_local_client {
+                // Starting at PATHFINDER_R, the announce job sends it once.
+                (now, constants::PATHFINDER_R)
+            } else {
+                (now + (rng_value * constants::PATHFINDER_RW), 0)
+            };
 
-        Some(AnnounceEntry {
-            timestamp: now,
-            retransmit_timeout,
-            retries: 0,
-            received_from,
-            hops,
-            packet_raw: packet_raw.to_vec(),
-            packet_data: packet_data.to_vec(),
-            destination_hash,
-            context_flag,
-            local_rebroadcasts: 0,
-            block_rebroadcasts: false,
-            attached_interface: None,
-        })
-    } else {
-        None
-    };
+            Some(AnnounceEntry {
+                timestamp: now,
+                retransmit_timeout,
+                retries,
+                received_from,
+                hops,
+                packet_raw: packet_raw.to_vec(),
+                packet_data: packet_data.to_vec(),
+                destination_hash,
+                context_flag,
+                local_rebroadcasts: 0,
+                block_rebroadcasts: false,
+                attached_interface: None,
+            })
+        } else {
+            None
+        };
 
     (path_entry, announce_entry)
 }
@@ -245,6 +254,7 @@ mod tests {
             2000.0,
             0.5,
             true,  // transport enabled
+            false, // not from a local client
             false, // not path response
             false, // not rate blocked
             None,
@@ -279,6 +289,7 @@ mod tests {
             2000.0,
             0.5,
             false, // transport disabled
+            false, // not from a local client
             false,
             false,
             None,
@@ -305,7 +316,8 @@ mod tests {
             2000.0,
             0.5,
             true,
-            true, // path response → no announce entry
+            false, // not from a local client
+            true,  // path response → no announce entry
             false,
             None,
         );
@@ -330,6 +342,7 @@ mod tests {
             2000.0,
             0.5,
             true,
+            false, // not from a local client
             false,
             true, // rate blocked → no announce entry
             None,
@@ -363,6 +376,7 @@ mod tests {
             2000.0,
             0.5,
             false,
+            false, // not from a local client
             false,
             false,
             None,

@@ -5450,7 +5450,6 @@ fn test_shared_instance_without_transport_ignores_unsolicited_local_path_respons
         InboundFrame::new(&response, InterfaceId(1), 1004.0),
         &mut rng,
     );
-    assert!(!engine.announce_table.contains_key(&dest_hash));
     for now in [1004.5, 1010.0] {
         let actions = engine.tick(now, &mut rng);
         assert!(issue183_announces_on(&actions, InterfaceId(3), &dest_hash).is_empty());
@@ -5536,4 +5535,33 @@ fn test_shared_instance_with_transport_answers_path_request_for_local_client_imm
     let sends = issue183_announces_on(&answered, InterfaceId(3), &dest_hash);
     assert_eq!(sends.len(), 1);
     assert_issue183_rebroadcast_announce(sends[0], &dest_hash, constants::CONTEXT_PATH_RESPONSE);
+}
+
+#[test]
+fn test_shared_client_does_not_relay_for_its_shared_instance() {
+    // A shared client flags its interface to the daemon as a local client
+    // but has no transport identity; it must not act as a shared instance.
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_local_client_interface(1));
+
+    let response = build_issue183_client_announce(constants::CONTEXT_NONE, [0x42; 10]);
+    let mut rng = rns_crypto::FixedRng::new(&[0x25; 32]);
+    engine.handle_inbound(
+        InboundFrame::new(&response, InterfaceId(1), 1000.0),
+        &mut rng,
+    );
+    let dest_hash = RawPacket::unpack(&response).unwrap().destination_hash;
+    assert!(engine.has_path(&dest_hash));
+    assert!(engine.announce_table.is_empty());
+
+    for dest in [dest_hash, [0xE7; 16]] {
+        let actions = engine.handle_path_request(
+            &make_path_request_data(&dest, &[0x33; 16]),
+            InterfaceId(1),
+            1001.0,
+        );
+        assert!(actions.is_empty());
+    }
+    assert!(engine.announce_table.is_empty());
+    assert!(engine.pending_local_path_requests.is_empty());
 }

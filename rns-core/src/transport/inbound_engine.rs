@@ -1019,6 +1019,7 @@ impl TransportEngine {
             expires,
             rng_value,
             self.config.transport_enabled,
+            self.serves_local_client(ctx.iface),
             is_path_response,
             rate_blocked,
             Some(ctx.original_raw.to_vec()),
@@ -1075,6 +1076,29 @@ impl TransportEngine {
         // Store announce for retransmission
         if let Some(ann) = announce_entry {
             self.insert_announce_entry(ctx.packet.destination_hash, ann, ctx.now);
+        } else if is_path_response && self.serves_local_client(ctx.iface) {
+            // Transport.py:2375-2395: relay a local client's path response,
+            // immediately and once, to an interface that asked for it.
+            if let Some((requesting_interface, _)) = self
+                .pending_local_path_requests
+                .remove(&ctx.packet.destination_hash)
+            {
+                let entry = AnnounceEntry {
+                    timestamp: ctx.now,
+                    retransmit_timeout: ctx.now,
+                    retries: constants::PATHFINDER_R,
+                    received_from: ctx.received_from,
+                    hops: ctx.packet.hops,
+                    packet_raw: ctx.packet.raw.clone(),
+                    packet_data: ctx.packet.data().to_vec(),
+                    destination_hash: ctx.packet.destination_hash,
+                    context_flag: ctx.packet.flags.context_flag,
+                    local_rebroadcasts: 0,
+                    block_rebroadcasts: true,
+                    attached_interface: Some(requesting_interface),
+                };
+                self.insert_announce_entry(ctx.packet.destination_hash, entry, ctx.now);
+            }
         }
 
         // Emit actions

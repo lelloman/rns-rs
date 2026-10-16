@@ -97,6 +97,16 @@ impl TransportEngine {
             self.batch_inflight_path_request(&ctx, ingress_limited);
             return Vec::new();
         }
+        let from_local_client = self.serves_local_client(ctx.interface_id);
+        // Transport.py:3439-3448: remember who asked for a destination behind
+        // a local client, so the client's path response can be relayed back.
+        if self
+            .next_hop_interface(&ctx.destination_hash)
+            .is_some_and(|iface| self.serves_local_client(iface))
+        {
+            self.pending_local_path_requests
+                .insert(ctx.destination_hash, (ctx.interface_id, ctx.now));
+        }
         if self.local_destinations.contains_key(&ctx.destination_hash) {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Ignoring path request for {:02x?}: destination is local",
@@ -104,21 +114,83 @@ impl TransportEngine {
             );
             return Vec::new();
         }
-        if self.config.transport_enabled && self.handle_known_path_request(&ctx) {
+        // Transport.py:3459: a shared instance answers its local clients from
+        // the path table even without transport.
+        if (self.config.transport_enabled || from_local_client)
+            && self.handle_known_path_request(&ctx, from_local_client)
+        {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Answering path request for {:02x?}: path is known",
                 &ctx.destination_hash[..4],
             );
             return Vec::new();
         }
-        if self.config.transport_enabled {
+        if from_local_client {
+            // Transport.py:3523-3530: forward on all other interfaces.
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Forwarding path request from local client for {:02x?} to all other interfaces",
+                &ctx.destination_hash[..4],
+            );
+            return self.forward_path_request(&ctx, |info| info.id != ctx.interface_id);
+        }
+        if self.config.transport_enabled && self.discovery_search_mode(ctx.interface_id).is_some() {
             return self.handle_discovery_path_request(&ctx, ingress_limited);
         }
+        if self.serves_local_clients() {
+            // Transport.py:3585-3590: forward on all local client interfaces;
+            // a client's path response is relayed back to the requester.
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Forwarding path request for {:02x?} to local clients",
+                &ctx.destination_hash[..4],
+            );
+            return self.forward_path_request(&ctx, |info| info.is_local_client);
+        }
         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-            "Ignoring path request for {:02x?}: transport is disabled",
+            "Ignoring path request for {:02x?}: no path known",
             &ctx.destination_hash[..4],
         );
         Vec::new()
+    }
+
+    /// Send a new path request for `ctx`'s destination on the interfaces
+    /// selected by `select`, as `Transport.request_path` does without a tag.
+    fn forward_path_request(
+        &mut self,
+        ctx: &AcceptedPathRequest,
+        select: impl Fn(&InterfaceInfo) -> bool,
+    ) -> Vec<TransportAction> {
+        // Python uses a fresh random tag. The engine has no RNG here, so
+        // derive one from the request that was answered; it differs from the
+        // incoming tag and is recorded so echoes of it are dropped.
+        let mut seed = Vec::with_capacity(16 + 16 + 8 + 8);
+        seed.extend_from_slice(&ctx.destination_hash);
+        seed.extend_from_slice(&ctx.tag[..ctx.tag_len]);
+        seed.extend_from_slice(&ctx.interface_id.0.to_be_bytes());
+        seed.extend_from_slice(&ctx.now.to_bits().to_be_bytes());
+        let tag = hash::truncated_hash(&seed);
+        let mut unique_tag = [0u8; 32];
+        unique_tag[..16].copy_from_slice(&ctx.destination_hash);
+        unique_tag[16..].copy_from_slice(&tag);
+        self.insert_discovery_pr_tag(unique_tag);
+
+        let transport_identity_hash = if self.config.transport_enabled {
+            self.config.identity_hash.as_ref()
+        } else {
+            None
+        };
+        let Some((raw, _)) =
+            build_path_request_packet(&ctx.destination_hash, transport_identity_hash, &tag)
+        else {
+            return Vec::new();
+        };
+        self.interfaces
+            .values()
+            .filter(|info| info.out_capable && select(info))
+            .map(|info| TransportAction::SendOnInterface {
+                interface: info.id,
+                raw: raw.clone().into(),
+            })
+            .collect()
     }
 
     fn parse_path_request(
@@ -217,7 +289,11 @@ impl TransportEngine {
         self.path_requests.insert(destination_hash, now);
     }
 
-    fn handle_known_path_request(&mut self, ctx: &AcceptedPathRequest) -> bool {
+    fn handle_known_path_request(
+        &mut self,
+        ctx: &AcceptedPathRequest,
+        from_local_client: bool,
+    ) -> bool {
         let Some(path) = self
             .path_table
             .get(&ctx.destination_hash)
@@ -243,16 +319,21 @@ impl TransportEngine {
         if let Some(existing) = self.announce_table.get(&ctx.destination_hash).cloned() {
             self.insert_held_announce(ctx.destination_hash, existing, ctx.now);
         }
-        let retransmit_timeout = if let Some(iface_info) = self.interfaces.get(&ctx.interface_id) {
-            let base = ctx.now + constants::PATH_REQUEST_GRACE;
-            if iface_info.mode == constants::MODE_ROAMING {
-                base + constants::PATH_REQUEST_RG
+        // Transport.py:3492-3506: answer local clients, and requests for
+        // destinations behind a local client, immediately.
+        let retransmit_timeout =
+            if from_local_client || self.interface_is_local_client(path.receiving_interface) {
+                ctx.now
+            } else if let Some(iface_info) = self.interfaces.get(&ctx.interface_id) {
+                let base = ctx.now + constants::PATH_REQUEST_GRACE;
+                if iface_info.mode == constants::MODE_ROAMING {
+                    base + constants::PATH_REQUEST_RG
+                } else {
+                    base
+                }
             } else {
-                base
-            }
-        } else {
-            ctx.now + constants::PATH_REQUEST_GRACE
-        };
+                ctx.now + constants::PATH_REQUEST_GRACE
+            };
 
         let Ok(parsed) = RawPacket::unpack(raw) else {
             return false;
@@ -277,6 +358,14 @@ impl TransportEngine {
         true
     }
 
+    /// Whether a path request on `interface_id` searches for unknown paths
+    /// (`should_search_for_unknown` in Transport.py), and in which modes.
+    fn discovery_search_mode(&self, interface_id: InterfaceId) -> Option<Option<&'static [u8]>> {
+        self.interfaces
+            .get(&interface_id)
+            .and_then(|info| search_mode_filter(info.mode, info.recursive_prs))
+    }
+
     fn handle_discovery_path_request(
         &mut self,
         ctx: &AcceptedPathRequest,
@@ -296,13 +385,7 @@ impl TransportEngine {
             return Vec::new();
         };
 
-        let search_mode_filter: Option<&[u8]> = if recursive_prs
-            || constants::DISCOVER_PATHS_FOR.contains(&mode)
-        {
-            None
-        } else if mode == constants::MODE_BOUNDARY {
-            Some(&constants::BOUNDARY_SEARCH_MODES)
-        } else {
+        let Some(search_mode_filter) = search_mode_filter(mode, recursive_prs) else {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Not discovering path to {:02x?}: recursive path discovery is disabled on interface {}",
                 &ctx.destination_hash[..4],
@@ -414,6 +497,18 @@ impl TransportEngine {
         }
 
         actions
+    }
+}
+
+/// Interface modes to search for an unknown path requested on an interface
+/// in `mode`: `None` if it does not search, `Some(None)` for all modes.
+fn search_mode_filter(mode: u8, recursive_prs: bool) -> Option<Option<&'static [u8]>> {
+    if recursive_prs || constants::DISCOVER_PATHS_FOR.contains(&mode) {
+        Some(None)
+    } else if mode == constants::MODE_BOUNDARY {
+        Some(Some(&constants::BOUNDARY_SEARCH_MODES))
+    } else {
+        None
     }
 }
 
