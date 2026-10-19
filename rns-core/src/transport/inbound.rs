@@ -34,7 +34,7 @@ pub fn forward_transport_packet(
     remaining_hops: u8,
     _outbound_interface: InterfaceId,
 ) -> Vec<u8> {
-    if remaining_hops > 1 || (remaining_hops == 1 && next_hop != packet.destination_hash) {
+    if remaining_hops > 1 {
         // Replace transport_id with next_hop, update hops. A one-hop path can
         // still point at a final transport node for destinations behind it.
         let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
