@@ -88,9 +88,9 @@ impl HookManager {
         #[cfg(not(feature = "wasm"))]
         {
             let _ = (name, bytes, priority);
-            return Err(HookError::CompileError(
+            Err(HookError::CompileError(
                 "WASM hook backend not enabled".to_string(),
-            ));
+            ))
         }
         #[cfg(feature = "wasm")]
         {
@@ -339,7 +339,7 @@ impl HookManager {
                 provider_events_enabled,
                 data_override,
             );
-            return None;
+            None
         }
 
         #[cfg(feature = "wasm")]

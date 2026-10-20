@@ -288,11 +288,11 @@ impl ServerConfig {
             feature = "rns-hooks-builtin"
         )))]
         {
-            return vec![ProcessSpec {
+            vec![ProcessSpec {
                 role: Role::Rnsd,
                 command: self.command_for_override(&self.rnsd_bin),
                 args: self.rnsd_args(),
-            }];
+            }]
         }
 
         #[cfg(any(
@@ -575,10 +575,10 @@ impl ServerConfig {
             feature = "rns-hooks-builtin"
         )))]
         {
-            return vec![ProcessReadiness {
+            vec![ProcessReadiness {
                 role: Role::Rnsd,
                 target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
-            }];
+            }]
         }
 
         #[cfg(any(

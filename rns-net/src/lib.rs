@@ -4,6 +4,29 @@
 //! Reads standard Python RNS config files, opens TCP server/client, UDP, and
 //! Local interfaces, persists identity and known destinations.
 
+// Builds with only some of the built-in interfaces (rns-tun-android uses just
+// TCP, UDP and Auto) leave parts of the shared socket, writer and event-loop
+// machinery without callers. Silence the resulting unused-code lints for such
+// partial builds only; the default build, which has every interface, keeps
+// them and is what CI lints.
+#![cfg_attr(
+    not(all(
+        feature = "iface-tcp",
+        feature = "iface-udp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-serial",
+        feature = "iface-kiss",
+        feature = "iface-ax25-kiss",
+        feature = "iface-pipe",
+        feature = "iface-rnode",
+        feature = "iface-backbone",
+        feature = "iface-i2p",
+        feature = "iface-weave"
+    )),
+    allow(dead_code, unused_imports, unused_variables, unused_mut)
+)]
+
 #[cfg(feature = "hooks")]
 extern crate rns_hooks_crate as rns_hooks;
 

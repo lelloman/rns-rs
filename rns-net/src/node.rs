@@ -3788,6 +3788,7 @@ impl RnsNode {
 
     /// Construct an RnsNode from its constituent parts.
     /// Used by `shared_client` to build a client-mode node.
+    #[cfg(any(feature = "iface-local", test))]
     pub(crate) fn from_parts(
         tx: EventSender,
         driver_handle: thread::JoinHandle<()>,
