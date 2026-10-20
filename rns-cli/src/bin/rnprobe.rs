@@ -555,20 +555,26 @@ fn query_path_info(
 }
 
 /// Extract hop count for a destination from a path table RPC response.
+/// Find `dest_hash`'s hop count in a `path_table` RPC response.
+///
+/// The daemon, like Python's `Reticulum.get_path_table`, returns one dict per
+/// entry with `hash` and `hops` keys. Positional list entries are still
+/// accepted for older daemons. Returns 0 when the destination is not listed.
 fn extract_hops_from_path_table(response: &PickleValue, dest_hash: &[u8; 16]) -> u8 {
-    if let PickleValue::List(entries) = response {
-        for entry in entries {
-            if let PickleValue::List(fields) = entry {
-                if fields.len() >= 4 {
-                    if let Some(hash_bytes) = fields[0].as_bytes() {
-                        if hash_bytes == dest_hash {
-                            if let PickleValue::Int(h) = &fields[3] {
-                                return *h as u8;
-                            }
-                        }
-                    }
-                }
-            }
+    let PickleValue::List(entries) = response else {
+        return 0;
+    };
+    for entry in entries {
+        let (hash, hops) = match entry {
+            PickleValue::Dict(_) => (entry.get("hash"), entry.get("hops")),
+            PickleValue::List(fields) if fields.len() >= 4 => (fields.first(), fields.get(3)),
+            _ => continue,
+        };
+        if hash.and_then(PickleValue::as_bytes) != Some(&dest_hash[..]) {
+            continue;
+        }
+        if let Some(PickleValue::Int(h)) = hops {
+            return u8::try_from(*h).unwrap_or(u8::MAX);
         }
     }
     0
@@ -742,6 +748,41 @@ mod tests {
         let mut hash = [0u8; 16];
         hash.copy_from_slice(&dest);
         assert_eq!(extract_hops_from_path_table(&table, &hash), 3);
+    }
+
+    /// The daemon's real `path_table` format: one dict per entry. rnprobe -v
+    /// used to print "0 hops" for every path because it only parsed lists.
+    #[test]
+    fn extract_hops_from_dict_entries() {
+        let entry = |hash: u8, hops: i64| {
+            PickleValue::Dict(vec![
+                (
+                    PickleValue::String("hash".into()),
+                    PickleValue::Bytes(vec![hash; 16]),
+                ),
+                (
+                    PickleValue::String("timestamp".into()),
+                    PickleValue::Float(1000.0),
+                ),
+                (
+                    PickleValue::String("via".into()),
+                    PickleValue::Bytes(vec![0xBB; 16]),
+                ),
+                (PickleValue::String("hops".into()), PickleValue::Int(hops)),
+                (
+                    PickleValue::String("expires".into()),
+                    PickleValue::Float(2000.0),
+                ),
+                (
+                    PickleValue::String("interface".into()),
+                    PickleValue::String("BackboneInterface/1".into()),
+                ),
+            ])
+        };
+        let table = PickleValue::List(vec![entry(0xCC, 5), entry(0xAA, 10)]);
+        assert_eq!(extract_hops_from_path_table(&table, &[0xAA; 16]), 10);
+        assert_eq!(extract_hops_from_path_table(&table, &[0xCC; 16]), 5);
+        assert_eq!(extract_hops_from_path_table(&table, &[0xDD; 16]), 0);
     }
 
     #[test]
