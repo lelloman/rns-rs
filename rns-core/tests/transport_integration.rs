@@ -1385,7 +1385,7 @@ fn test_multipath_announce_stores_alternative_via_different_nexthop() {
     harness.add_interface(2, constants::MODE_FULL);
 
     // First announce: H2 with transport_id = [0xA1; 16] (next_hop)
-    let rh1 = make_random_hash_with_timebase(1000000, [0x01, 0x02, 0x03, 0x04, 0x05]);
+    let rh1 = make_random_hash_with_timebase(10000, [0x01, 0x02, 0x03, 0x04, 0x05]);
     let raw1 = build_announce_packet(&identity, &dest_hash, &name_hash, &rh1, 2, None);
     let actions1 = harness.inbound(&raw1, InterfaceId(1));
 
@@ -1400,7 +1400,7 @@ fn test_multipath_announce_stores_alternative_via_different_nexthop() {
 
     // Second announce: different random_hash (newer timebase), arrives on different interface
     harness.advance_time(10.0);
-    let rh2 = make_random_hash_with_timebase(2000000, [0x11, 0x12, 0x13, 0x14, 0x15]);
+    let rh2 = make_random_hash_with_timebase(20000, [0x11, 0x12, 0x13, 0x14, 0x15]);
     let raw2 = build_announce_packet(&identity, &dest_hash, &name_hash, &rh2, 3, None);
     let actions2 = harness.inbound(&raw2, InterfaceId(2));
 

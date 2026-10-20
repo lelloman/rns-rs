@@ -922,6 +922,7 @@ impl TransportEngine {
                 path_set,
                 ctx.packet.hops,
                 ctx.announce_emitted,
+                ctx.now,
                 current_gravity,
                 announce_gravity,
             )

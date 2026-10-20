@@ -5391,6 +5391,13 @@ fn test_issue183_h1_data_not_forwarded_without_local_client_path() {
 // requests (Transport.py:2351-2395, 3420-3600)
 // =========================================================================
 
+/// Random hash for client A's re-emitted announce: emission time 1004 s
+/// (bytes 5..10), matching the test clock. The initial announce's `[0x42; 10]`
+/// decodes to an implausibly-future emission time that path selection
+/// ignores, so the re-emission must carry a plausible one to be newer.
+const ISSUE183_REEMITTED_RANDOM_HASH: [u8; 10] =
+    [0x43, 0x43, 0x43, 0x43, 0x43, 0, 0, 0, 0x03, 0xEC];
+
 /// Client A's announce from `make_issue183_daemon`, re-emitted later (newer
 /// random hash) with the given context, e.g. as a path response.
 fn build_issue183_client_announce(context: u8, random_hash: [u8; 10]) -> Vec<u8> {
@@ -5533,7 +5540,10 @@ fn test_shared_instance_without_transport_relays_path_request_to_local_client() 
     assert!(issue183_path_requests_on(&actions, InterfaceId(3), &dest_hash).is_empty());
 
     // Client A answers with a path response, which goes to the requester.
-    let response = build_issue183_client_announce(constants::CONTEXT_PATH_RESPONSE, [0x43; 10]);
+    let response = build_issue183_client_announce(
+        constants::CONTEXT_PATH_RESPONSE,
+        ISSUE183_REEMITTED_RANDOM_HASH,
+    );
     engine.handle_inbound(
         InboundFrame::new(&response, InterfaceId(1), 1004.0),
         &mut rng,
@@ -5559,7 +5569,10 @@ fn test_shared_instance_without_transport_ignores_unsolicited_local_path_respons
     let mut rng = rns_crypto::FixedRng::new(&[0x23; 32]);
     engine.tick(1000.5, &mut rng);
 
-    let response = build_issue183_client_announce(constants::CONTEXT_PATH_RESPONSE, [0x43; 10]);
+    let response = build_issue183_client_announce(
+        constants::CONTEXT_PATH_RESPONSE,
+        ISSUE183_REEMITTED_RANDOM_HASH,
+    );
     engine.handle_inbound(
         InboundFrame::new(&response, InterfaceId(1), 1004.0),
         &mut rng,

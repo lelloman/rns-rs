@@ -393,9 +393,13 @@ impl TransportEngine {
                 Some(existing) => {
                     // Restore if fewer/equal hops or existing expired, but never
                     // overwrite a path learned from a more recent announce.
+                    // Implausibly-future emission times are ignored (deliberate
+                    // deviation from Python, see MAX_EMISSION_TIME_SKEW_SECS).
                     if tunnel_path.hops <= existing.hops || existing.expires < now {
-                        let existing_timebase = timebase_from_random_blobs(&existing.random_blobs);
-                        let tunnel_timebase = timebase_from_random_blobs(&tunnel_path.random_blobs);
+                        let existing_timebase =
+                            trusted_timebase_from_random_blobs(&existing.random_blobs, now);
+                        let tunnel_timebase =
+                            trusted_timebase_from_random_blobs(&tunnel_path.random_blobs, now);
                         tunnel_timebase >= existing_timebase
                     } else {
                         false
