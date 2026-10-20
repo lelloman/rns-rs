@@ -273,6 +273,10 @@ pub fn run_linux_client(
         Ok(())
     })();
     stop.store(true, Ordering::Relaxed);
+    // Close the Link explicitly, as Python's Link.teardown() does, so the
+    // gateway releases the session at once instead of waiting for the
+    // keepalive timeout.
+    close_link(&private, link_id, LINK_CLOSE_TIMEOUT);
     let _ = device.close();
     let teardown = configurator.teardown(&applied);
     status.update(|value| {
@@ -353,6 +357,32 @@ fn reconnect(
     )
     .map_err(other)?;
     Ok((link_id, accepted, link_mdu, transport))
+}
+
+/// Upper bound on waiting for the node to confirm a Link teardown on exit.
+const LINK_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Tear down `link_id` and wait until the node reports it closed, so the
+/// LINKCLOSE packet leaves before the process exits. Best effort: a link that
+/// is already gone, or a node that never confirms, only costs the timeout.
+fn close_link(private: &PrivateNode, link_id: [u8; 16], timeout: Duration) {
+    if private.node.teardown_link(link_id).is_err() {
+        return;
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            log::warn!("rntun Link teardown was not confirmed before exit");
+            return;
+        }
+        match private.events.recv_timeout(remaining) {
+            Ok(NodeEvent::LinkClosed { link_id: id, .. }) if id == link_id => return,
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
 }
 
 fn random_packet_id() -> u64 {

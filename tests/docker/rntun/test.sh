@@ -133,6 +133,11 @@ assert_command "split tunnel does not alter resolver state" docker exec "$CLIENT
 stop_client
 assert_command "orderly split teardown removes route and TUN" wait_for 10 "split cleanup" docker exec "$CLIENT" sh -c \
   "! ip rule show | grep -q 'to 198.18.0.0/24 lookup 21076' && ! ip link show rntun-split >/dev/null 2>&1 && test ! -e /data/client-split/linux-ownership.json"
+# An orderly client exit closes its Link, so the gateway must drop the session
+# promptly rather than after the keepalive timeout. The full-tunnel phase below
+# expects exactly one gateway session.
+assert_command "gateway releases the split session on orderly exit" wait_for 10 "gateway split release" \
+  status_field_is "$GATEWAY" "$GATEWAY_CONFIG" '.sessions | length' 0
 
 echo ""
 echo "=== Full tunnel, DNS selection, IPv6 blocking, and NAT ==="
