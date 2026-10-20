@@ -24,6 +24,18 @@ cargo build --release -p rns-ctl
 
 Run any subcommand with `--help` for its options.
 
+The client subcommands (`status`, `probe`, `path`, `config`, `backbone`) talk
+to a running node over its shared-instance RPC socket. They authenticate with
+a key derived from that node's `storage/transport_identity`, so they must be
+pointed at the node's config directory. Without `-c`, they use
+`~/.reticulum`, which on a server running `rns-server` from another directory
+holds a different identity, and the call fails authentication:
+
+```bash
+rns-ctl status -c /var/lib/rns-node
+rns-ctl probe -c /var/lib/rns-node <destination_hash>
+```
+
 ## The HTTP server
 
 ```bash

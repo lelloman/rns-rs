@@ -166,18 +166,46 @@ target/release/rns-server --version
 target/release/rns-ctl --version
 ```
 
-Install the binaries on both VPS experiment nodes and restart the service:
+Only `rns-server` and `rns-ctl` are installed. `rns-server` spawns `rnsd`,
+`rns-sentineld` and `rns-statsd` from its own executable, so do not install
+those binaries separately or enable standalone `rnsd.service` /
+`rns-ctl.service` units: on 2026-09-23 a leftover standalone `rnsd` took the
+node's ports after a reboot. Use `rns-ctl -c /var/lib/rns-node` for status,
+path and probe commands; standalone `rnstatus`, `rnpath` and `rnprobe` are not
+installed.
+
+Install the binaries on both VPS experiment nodes and restart the service.
+Keep exactly one rollback copy, named after the commit being replaced:
 
 ```bash
 for host in vps-eu vps-us; do
   echo "== $host =="
   scp target/release/rns-server target/release/rns-ctl "root@$host:/tmp/"
-  ssh "root@$host" 'install -m 0755 /tmp/rns-server /usr/local/bin/rns-server'
-  ssh "root@$host" 'install -m 0755 /tmp/rns-ctl /usr/local/bin/rns-ctl'
-  ssh "root@$host" 'systemctl restart rns-server'
-  ssh "root@$host" '/usr/local/bin/rns-server --version; /usr/local/bin/rns-ctl --version; systemctl is-active rns-server'
+  ssh "root@$host" 'set -e; cd /usr/local/bin
+    old=$(./rns-server --version | sed -E "s/.*-([0-9a-f]+)$/\1/")
+    rm -f rns-server.prev-* rns-ctl.prev-*
+    cp -p rns-server "rns-server.prev-$old"; cp -p rns-ctl "rns-ctl.prev-$old"
+    install -m 0755 /tmp/rns-server rns-server
+    install -m 0755 /tmp/rns-ctl rns-ctl
+    rm -f /tmp/rns-server /tmp/rns-ctl
+    systemctl restart rns-server'
+  ssh "root@$host" '/usr/local/bin/rns-server --version; systemctl is-active rns-server'
 done
 ```
+
+The supervised processes take up to about 30 seconds to report ready on a busy
+node. Then check them and the interfaces:
+
+```bash
+for host in vps-eu vps-us; do
+  echo "== $host =="
+  ssh "root@$host" 'curl -s 127.0.0.1:18080/api/processes; echo
+    rns-ctl status -c /var/lib/rns-node | grep -c "Status    : Up"'
+done
+```
+
+To roll back, install `rns-server.prev-<sha>` and `rns-ctl.prev-<sha>` over the
+current binaries and restart the service.
 
 After deploying, run the manual backbone smoke test below.
 
@@ -217,9 +245,10 @@ With the defaults, the sixth connection lasting less than 20 seconds blocks the
 remote address for 12 hours from that connection. A connection lasting exactly
 20 seconds is not counted. Setting `block_fast_flapping = no` disables both new
 tracking and rejection based on previously recorded flaps for that listener.
-`rnstatus` reports the current number of blocked addresses as `Blocked` under
-the listener. Pass `-b` or `--blocked-ips` to list the blocked addresses below
-that count.
+`rnstatus`, or `rns-ctl status` on the VPS nodes, reports the current number of
+blocked addresses as `Blocked` under the listener. Pass `-b` or
+`--blocked-ips` to list the blocked addresses below that count, for example
+`rns-ctl status -c /var/lib/rns-node -b`.
 
 ### Manual Backbone Smoke Test
 
