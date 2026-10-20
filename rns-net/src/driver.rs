@@ -622,6 +622,10 @@ struct SharedAnnounceRecord {
     app_data: Option<Vec<u8>>,
 }
 
+/// Cache of path-response announces for local destinations:
+/// (destination, path-request tag) → (created, raw announce).
+type LocalPathResponseCache = HashMap<([u8; 16], Vec<u8>), (f64, Vec<u8>)>;
+
 #[derive(Debug, Clone)]
 pub(crate) struct KnownDestinationState {
     announced: crate::destination::AnnouncedIdentity,
@@ -745,6 +749,10 @@ pub struct Driver {
     shared_announces: HashMap<[u8; 16], SharedAnnounceRecord>,
     /// Shared local interfaces that went down and should replay announces on reconnect.
     shared_reconnect_pending: HashMap<InterfaceId, bool>,
+    /// Path-response announces recently sent for local destinations, keyed by
+    /// (destination, path-request tag), replayed byte-for-byte for a repeated
+    /// tag within `LOCAL_PATH_RESPONSE_WINDOW`: (created, raw announce).
+    pub(crate) local_path_responses: LocalPathResponseCache,
     /// Hole-punch manager for direct P2P connections.
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
@@ -964,6 +972,7 @@ impl Driver {
             local_destinations,
             shared_announces: HashMap::new(),
             shared_reconnect_pending: HashMap::new(),
+            local_path_responses: HashMap::new(),
             holepunch_manager: HolePunchManager::new(
                 vec![],
                 rns_core::holepunch::ProbeProtocol::Rnsp,

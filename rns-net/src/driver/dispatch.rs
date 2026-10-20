@@ -1588,6 +1588,13 @@ impl Driver {
                         entry.stats.protocol_violations += 1;
                     }
                 }
+                TransportAction::AnnounceLocalPathResponse {
+                    destination_hash,
+                    tag,
+                    interface,
+                } => {
+                    self.answer_local_path_request(destination_hash, tag, interface);
+                }
             }
         }
 

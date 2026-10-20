@@ -273,6 +273,19 @@ pub enum TransportAction {
     LinkClosed { link_id: [u8; 16] },
     /// A malformed or cryptographically invalid packet was rejected.
     ProtocolViolation { interface: InterfaceId },
+    /// A path request arrived for a destination registered on this node.
+    ///
+    /// Python `Transport.path_request()` answers it with
+    /// `destination.announce(path_response=True, tag=tag,
+    /// attached_interface=...)`. The engine holds no destination keys, so the
+    /// caller must build an announce with context `PATH_RESPONSE` and send it
+    /// only on `interface`. Path requests without a tag are dropped earlier,
+    /// so `tag` always holds 1..=16 bytes.
+    AnnounceLocalPathResponse {
+        destination_hash: [u8; 16],
+        tag: Vec<u8>,
+        interface: InterfaceId,
+    },
 }
 
 /// A blackholed identity entry.

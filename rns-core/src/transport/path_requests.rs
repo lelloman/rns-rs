@@ -107,12 +107,19 @@ impl TransportEngine {
             self.pending_local_path_requests
                 .insert(ctx.destination_hash, (ctx.interface_id, ctx.now));
         }
+        // Transport.py:3450-3457: a destination local to this system answers
+        // with a path-response announce on the requesting interface, whether
+        // or not transport is enabled. The caller holds the keys to build it.
         if self.local_destinations.contains_key(&ctx.destination_hash) {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-                "Ignoring path request for {:02x?}: destination is local",
+                "Answering path request for {:02x?}: destination is local",
                 &ctx.destination_hash[..4],
             );
-            return Vec::new();
+            return alloc::vec![TransportAction::AnnounceLocalPathResponse {
+                destination_hash: ctx.destination_hash,
+                tag: ctx.tag[..ctx.tag_len].to_vec(),
+                interface: ctx.interface_id,
+            }];
         }
         // Transport.py:3459: a shared instance answers its local clients from
         // the path table even without transport.

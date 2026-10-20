@@ -5715,6 +5715,9 @@ fn local_ratchets_survive_shared_daemon_restart() {
     alice
         .register_destination(destination.hash.0, destination.dest_type.to_wire_constant())
         .unwrap();
+    let remote_ratchets = Arc::new(rns_net::storage::FsRatchetStore::new(
+        directory.path().join("remote"),
+    ));
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob = RnsNode::start(
         NodeConfig {
@@ -5737,9 +5740,7 @@ fn local_ratchets_survive_shared_daemon_restart() {
                 ifac: None,
                 discovery: None,
             }],
-            ratchet_store: Some(Arc::new(rns_net::storage::FsRatchetStore::new(
-                directory.path().join("remote"),
-            ))),
+            ratchet_store: Some(remote_ratchets.clone()),
             ..Default::default()
         },
         Box::new(TestCallbacks::new(bob_tx)),
@@ -5806,6 +5807,32 @@ fn local_ratchets_survive_shared_daemon_restart() {
                 refreshed.is_some(),
                 "daemon must answer from ratcheted replay"
             );
+            // Bob's path request also reaches Alice (the daemon forwards
+            // PLAIN broadcasts to local clients), and Alice answers it for
+            // her local destination as Python does. That announce may rotate
+            // the ratchet again and, with one retained key, retire the one
+            // the daemon's cached replay carried. Wait until Bob holds
+            // Alice's current ratchet before sending.
+            let deadline = Instant::now() + TIMEOUT;
+            loop {
+                use rns_net::storage::RatchetStore;
+                let held = remote_ratchets
+                    .current(
+                        &destination.hash.0,
+                        rns_net::time::now(),
+                        rns_core::constants::RATCHET_EXPIRY as f64,
+                    )
+                    .unwrap()
+                    .map(|entry| entry.ratchet);
+                if held.is_some() && held == owner.current_public() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Bob never learned Alice's current ratchet"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
             assert_ne!(owner.current_public().unwrap(), first);
         }
     }
@@ -5924,6 +5951,68 @@ fn test_buffered_compressed_resource_burst_preserves_payloads_and_proofs() {
         }
     }
     alice.shutdown();
+    bob.shutdown();
+    transport.shutdown();
+}
+
+/// Transport.py:3450-3457: a node answers a path request for a destination it
+/// hosts itself with a PATH_RESPONSE announce on the requesting interface.
+#[test]
+fn test_path_request_answered_for_destination_hosted_on_transport_node() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    // Host an in-process destination on the transport node and announce it
+    // before any peer is connected, so the only way a peer can learn the
+    // path is by asking for it.
+    let host_identity = Identity::new(&mut OsRng);
+    let host_dest = Destination::single_in(
+        APP_NAME,
+        &["path", "response"],
+        IdentityHash(*host_identity.hash()),
+    );
+    transport
+        .register_destination_with_proof(&host_dest, None)
+        .unwrap();
+    transport
+        .announce_queued(&host_dest, &host_identity, Some(b"hosted"))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    let bob_identity = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob = start_client_node(port, &bob_identity, Box::new(TestCallbacks::new(bob_tx)));
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+    assert_eq!(bob.hops_to(&host_dest.hash).unwrap(), None);
+
+    let mut hops = None;
+    for _ in 0..5 {
+        bob.request_path(&host_dest.hash).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            hops = bob.hops_to(&host_dest.hash).unwrap();
+            if hops.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if hops.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        hops,
+        Some(1),
+        "Bob must learn a 1-hop path from the response"
+    );
+    let announced = wait_for_announce(&bob_rx, &host_dest.hash, TIMEOUT)
+        .expect("Bob did not see the path-response announce");
+    assert_eq!(announced.app_data.as_deref(), Some(b"hosted".as_slice()));
+
     bob.shutdown();
     transport.shutdown();
 }

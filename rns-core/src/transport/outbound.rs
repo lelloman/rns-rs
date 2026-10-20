@@ -124,20 +124,20 @@ pub(crate) fn route_outbound_with_options(
                 continue;
             }
 
-            if let Some(attached) = attached_interface {
-                if iface_info.id != attached {
-                    continue;
-                }
-            }
-
-            let should_transmit = should_transmit_announce(
-                iface_info,
-                &packet.destination_hash,
-                packet.hops,
-                local_destinations,
-                path_table,
-                interfaces,
-            );
+            // Transport.py:1445-1459: an announce with an attached interface
+            // (such as a path response) goes out on that interface only, and
+            // the interface-mode filters apply only to unattached announces.
+            let should_transmit = match attached_interface {
+                Some(attached) => iface_info.id == attached,
+                None => should_transmit_announce(
+                    iface_info,
+                    &packet.destination_hash,
+                    packet.hops,
+                    local_destinations,
+                    path_table,
+                    interfaces,
+                ),
+            };
 
             if should_transmit {
                 actions.push(TransportAction::SendOnInterface {

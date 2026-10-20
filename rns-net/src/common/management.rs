@@ -105,6 +105,16 @@ pub fn announce_random_blob(rng: &mut dyn rns_crypto::Rng, now: f64) -> [u8; 10]
     random_hash
 }
 
+/// Packet context for a built-in announce: `PATH_RESPONSE` when it answers
+/// a path request, as Python `Destination.announce(path_response=True)`.
+fn announce_context(path_response: bool) -> u8 {
+    if path_response {
+        constants::CONTEXT_PATH_RESPONSE
+    } else {
+        constants::CONTEXT_NONE
+    }
+}
+
 /// Build an announce packet for the probe responder destination.
 ///
 /// Returns raw packet bytes ready for `engine.handle_outbound()`.
@@ -112,6 +122,7 @@ pub fn build_probe_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
+    path_response: bool,
 ) -> Option<Vec<u8>> {
     let identity_hash = *identity.hash();
     let dest_hash = probe_dest_hash(&identity_hash);
@@ -141,7 +152,7 @@ pub fn build_probe_announce(
         0,
         &dest_hash,
         None,
-        constants::CONTEXT_NONE,
+        announce_context(path_response),
         &announce_data,
     )
     .ok()?;
@@ -481,6 +492,7 @@ pub fn build_management_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
+    path_response: bool,
 ) -> Option<Vec<u8>> {
     let identity_hash = *identity.hash();
     let dest_hash = management_dest_hash(&identity_hash);
@@ -510,7 +522,7 @@ pub fn build_management_announce(
         0,
         &dest_hash,
         None,
-        constants::CONTEXT_NONE,
+        announce_context(path_response),
         &announce_data,
     )
     .ok()?;
@@ -525,6 +537,7 @@ pub fn build_blackhole_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
+    path_response: bool,
 ) -> Option<Vec<u8>> {
     let identity_hash = *identity.hash();
     let dest_hash = blackhole_dest_hash(&identity_hash);
@@ -554,7 +567,7 @@ pub fn build_blackhole_announce(
         0,
         &dest_hash,
         None,
-        constants::CONTEXT_NONE,
+        announce_context(path_response),
         &announce_data,
     )
     .ok()?;

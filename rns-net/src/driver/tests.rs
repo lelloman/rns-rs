@@ -11499,3 +11499,281 @@ mod hook_modify {
         assert_eq!(rejected(&driver, HookPoint::Tick), 0);
     }
 }
+
+// ---- Path requests for local destinations (Transport.py:3450-3457) ----
+
+fn local_path_request_frame(driver: &Driver, dest: &[u8; 16], tag: &[u8; 16]) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(dest);
+    // Requesting transport instance id + tag, as a transport node sends it.
+    data.extend_from_slice(&[0x77; 16]);
+    data.extend_from_slice(tag);
+    RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &driver.path_request_dest,
+        None,
+        constants::CONTEXT_NONE,
+        &data,
+    )
+    .unwrap()
+    .raw
+}
+
+struct LocalPathResponseFixture {
+    driver: Driver,
+    tx: crate::event::EventSender,
+    sent_1: Arc<Mutex<Vec<Vec<u8>>>>,
+    sent_2: Arc<Mutex<Vec<Vec<u8>>>>,
+    probe_dest: [u8; 16],
+    mgmt_dest: [u8; 16],
+    app_dest: [u8; 16],
+}
+
+/// A transport driver hosting the probe responder, the management
+/// destination and an in-process app destination that was announced once.
+/// With `via_events`, the app destination is registered and its announce
+/// record stored through queued node API events, applied by `run()`.
+fn local_path_response_fixture(via_events: bool) -> LocalPathResponseFixture {
+    let (tx, rx) = event::channel();
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let transport_identity = Identity::new(&mut OsRng);
+    let mut config = make_transport_config(true);
+    config.identity_hash = Some(*transport_identity.hash());
+    let mut driver = Driver::new(config, rx, tx.clone(), Box::new(callbacks));
+    let (writer_1, sent_1) = MockWriter::new();
+    let (writer_2, sent_2) = MockWriter::new();
+    for (id, writer) in [(1, writer_1), (2, writer_2)] {
+        driver.engine.register_interface(make_interface_info(id));
+        driver
+            .interfaces
+            .insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
+    }
+    driver.transport_identity = Some(Identity::from_private_key(
+        &transport_identity.get_private_key().unwrap(),
+    ));
+
+    // Built-in destinations, registered as node.rs does.
+    let probe_dest = crate::management::probe_dest_hash(transport_identity.hash());
+    let mgmt_dest = crate::management::management_dest_hash(transport_identity.hash());
+    for dest in [probe_dest, mgmt_dest] {
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
+        driver
+            .local_destinations
+            .insert(dest, constants::DESTINATION_SINGLE);
+    }
+    driver.probe_responder_hash = Some(probe_dest);
+    driver.management_config.enable_remote_management = true;
+
+    // In-process app destination, registered and announced via the node API.
+    let app_identity = Identity::new(&mut OsRng);
+    let app_dest =
+        rns_core::destination::destination_hash("pathresp", &["svc"], Some(app_identity.hash()));
+    let name_hash = rns_core::destination::name_hash("pathresp", &["svc"]);
+    let identity_prv_key = app_identity.get_private_key().unwrap();
+    let app_data = Some(b"hello".to_vec());
+    if via_events {
+        tx.send(Event::RegisterDestination {
+            dest_hash: app_dest,
+            dest_type: constants::DESTINATION_SINGLE,
+        })
+        .unwrap();
+        tx.send(Event::StoreSharedAnnounce {
+            dest_hash: app_dest,
+            name_hash,
+            identity_prv_key,
+            app_data,
+        })
+        .unwrap();
+    } else {
+        driver
+            .engine
+            .register_destination(app_dest, constants::DESTINATION_SINGLE);
+        driver
+            .local_destinations
+            .insert(app_dest, constants::DESTINATION_SINGLE);
+        driver.shared_announces.insert(
+            app_dest,
+            SharedAnnounceRecord {
+                name_hash,
+                identity_prv_key,
+                app_data,
+            },
+        );
+    }
+
+    LocalPathResponseFixture {
+        driver,
+        tx,
+        sent_1,
+        sent_2,
+        probe_dest,
+        mgmt_dest,
+        app_dest,
+    }
+}
+
+fn path_responses_for(frames: &[Vec<u8>], dest: &[u8; 16]) -> Vec<Vec<u8>> {
+    frames
+        .iter()
+        .filter(|raw| {
+            RawPacket::unpack(raw).is_ok_and(|p| {
+                p.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+                    && p.destination_hash == *dest
+                    && p.context == constants::CONTEXT_PATH_RESPONSE
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+fn is_announce(raw: &[u8]) -> bool {
+    RawPacket::unpack(raw).is_ok_and(|p| p.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE)
+}
+
+#[test]
+fn transport_node_answers_path_requests_for_local_destinations() {
+    let LocalPathResponseFixture {
+        mut driver,
+        tx,
+        sent_1,
+        sent_2,
+        probe_dest,
+        mgmt_dest,
+        app_dest,
+    } = local_path_response_fixture(true);
+    let unknown_dest = [0x5E; 16];
+
+    for (dest, tag) in [
+        (probe_dest, [0xA1; 16]),
+        (mgmt_dest, [0xA2; 16]),
+        (app_dest, [0xB2; 16]),
+        (unknown_dest, [0xC3; 16]),
+    ] {
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: local_path_request_frame(&driver, &dest, &tag),
+            rssi: None,
+            snr: None,
+        })
+        .unwrap();
+    }
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let frames_1 = sent_1.lock().unwrap().clone();
+    let frames_2 = sent_2.lock().unwrap().clone();
+    for dest in [probe_dest, mgmt_dest, app_dest] {
+        let answers = path_responses_for(&frames_1, &dest);
+        assert_eq!(
+            answers.len(),
+            1,
+            "expected one path response for {dest:02x?}"
+        );
+        let packet = RawPacket::unpack(&answers[0]).unwrap();
+        let announce = AnnounceData::unpack(packet.data(), false).unwrap();
+        assert!(announce.validate(&dest).is_ok());
+    }
+    assert!(
+        !frames_2.iter().any(|raw| is_announce(raw)),
+        "path responses must go out on the requesting interface only"
+    );
+    let app_answer = RawPacket::unpack(&path_responses_for(&frames_1, &app_dest)[0]).unwrap();
+    let app_announce = AnnounceData::unpack(app_answer.data(), false).unwrap();
+    assert_eq!(app_announce.app_data.as_deref(), Some(&b"hello"[..]));
+    // A path request for a destination this node does not host draws no
+    // announce for it.
+    assert!(!frames_1.iter().any(|raw| RawPacket::unpack(raw)
+        .is_ok_and(|p| p.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+            && p.destination_hash == unknown_dest)));
+}
+
+#[test]
+fn local_path_response_replays_identical_bytes_for_repeated_tag() {
+    let LocalPathResponseFixture {
+        mut driver,
+        sent_1,
+        sent_2,
+        probe_dest,
+        mgmt_dest,
+        app_dest,
+        ..
+    } = local_path_response_fixture(false);
+
+    let answer = |driver: &mut Driver, dest: [u8; 16], tag: &[u8]| {
+        sent_1.lock().unwrap().clear();
+        driver.dispatch_all(vec![TransportAction::AnnounceLocalPathResponse {
+            destination_hash: dest,
+            tag: tag.to_vec(),
+            interface: InterfaceId(1),
+        }]);
+        let answers = path_responses_for(&sent_1.lock().unwrap(), &dest);
+        assert_eq!(answers.len(), 1, "expected one path response");
+        answers[0].clone()
+    };
+
+    for dest in [probe_dest, mgmt_dest, app_dest] {
+        let first = answer(&mut driver, dest, &[0x11; 16]);
+        let repeat = answer(&mut driver, dest, &[0x11; 16]);
+        assert_eq!(first, repeat, "repeated tag must replay identical bytes");
+        let other_tag = answer(&mut driver, dest, &[0x22; 16]);
+        assert_ne!(first, other_tag, "a new tag builds a fresh announce");
+    }
+    assert!(!sent_2.lock().unwrap().iter().any(|raw| is_announce(raw)));
+
+    // Entries expire after the replay window.
+    assert_eq!(driver.local_path_responses.len(), 6);
+    let later = time::now() + Driver::LOCAL_PATH_RESPONSE_WINDOW + 1.0;
+    driver.expire_local_path_responses(later);
+    assert!(driver.local_path_responses.is_empty());
+
+    // The cache is bounded.
+    for i in 0..(Driver::LOCAL_PATH_RESPONSE_MAX_ENTRIES + 5) {
+        let tag = (i as u32).to_be_bytes();
+        driver.dispatch_all(vec![TransportAction::AnnounceLocalPathResponse {
+            destination_hash: probe_dest,
+            tag: tag.to_vec(),
+            interface: InterfaceId(1),
+        }]);
+    }
+    assert_eq!(
+        driver.local_path_responses.len(),
+        Driver::LOCAL_PATH_RESPONSE_MAX_ENTRIES
+    );
+}
+
+#[test]
+fn registered_but_never_announced_destination_is_not_answered() {
+    let LocalPathResponseFixture {
+        mut driver,
+        tx,
+        sent_1,
+        ..
+    } = local_path_response_fixture(false);
+    let never_announced = [0x6D; 16];
+    tx.send(Event::RegisterDestination {
+        dest_hash: never_announced,
+        dest_type: constants::DESTINATION_SINGLE,
+    })
+    .unwrap();
+    tx.send(Event::Frame {
+        interface_id: InterfaceId(1),
+        data: local_path_request_frame(&driver, &never_announced, &[0xD4; 16]),
+        rssi: None,
+        snr: None,
+    })
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    assert!(!sent_1.lock().unwrap().iter().any(|raw| is_announce(raw)));
+    assert!(driver.local_path_responses.is_empty());
+}

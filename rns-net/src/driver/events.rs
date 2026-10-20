@@ -439,6 +439,7 @@ impl Driver {
             .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
         self.completed_proofs
             .retain(|_, (_, received)| now - *received < 120.0);
+        self.expire_local_path_responses(now);
 
         self.tick_discovery_announcer(now);
         #[cfg(feature = "iface-backbone")]
@@ -2595,19 +2596,19 @@ impl Driver {
 
         // Build announce packets first (immutable borrow of identity), then dispatch
         let mgmt_raw = if self.management_config.enable_remote_management {
-            management::build_management_announce(identity, &mut self.rng, now)
+            management::build_management_announce(identity, &mut self.rng, now, false)
         } else {
             None
         };
 
         let bh_raw = if self.management_config.publish_blackhole {
-            management::build_blackhole_announce(identity, &mut self.rng, now)
+            management::build_blackhole_announce(identity, &mut self.rng, now, false)
         } else {
             None
         };
 
         let probe_raw = if self.probe_responder_hash.is_some() {
-            management::build_probe_announce(identity, &mut self.rng, now)
+            management::build_probe_announce(identity, &mut self.rng, now, false)
         } else {
             None
         };
@@ -2634,6 +2635,112 @@ impl Driver {
                 log::debug!("Emitted {} announce", label);
             }
         }
+    }
+
+    /// How long a path-response announce is replayed for a repeated tag
+    /// (Python `Destination.PR_TAG_WINDOW`).
+    pub(crate) const LOCAL_PATH_RESPONSE_WINDOW: f64 = 30.0;
+    /// Upper bound on cached path-response announces.
+    pub(crate) const LOCAL_PATH_RESPONSE_MAX_ENTRIES: usize = 1024;
+
+    /// Answer a path request for a destination hosted on this node, as Python
+    /// `Transport.path_request()` does with
+    /// `destination.announce(path_response=True, tag=tag, attached_interface=...)`.
+    ///
+    /// The announce has context `PATH_RESPONSE` and goes out only on the
+    /// interface the request arrived on. A repeated tag within
+    /// `LOCAL_PATH_RESPONSE_WINDOW` replays the same bytes, like
+    /// `Destination.path_responses`.
+    pub(crate) fn answer_local_path_request(
+        &mut self,
+        dest_hash: [u8; 16],
+        tag: Vec<u8>,
+        interface: InterfaceId,
+    ) {
+        let now = time::now();
+        self.expire_local_path_responses(now);
+
+        let key = (dest_hash, tag);
+        let raw = if let Some((_, raw)) = self.local_path_responses.get(&key) {
+            raw.clone()
+        } else {
+            let Some(raw) = self.build_local_path_response(&dest_hash, now) else {
+                return;
+            };
+            if self.local_path_responses.len() >= Self::LOCAL_PATH_RESPONSE_MAX_ENTRIES {
+                if let Some(oldest) = self
+                    .local_path_responses
+                    .iter()
+                    .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
+                    .map(|(key, _)| key.clone())
+                {
+                    self.local_path_responses.remove(&oldest);
+                }
+            }
+            self.local_path_responses.insert(key, (now, raw.clone()));
+            raw
+        };
+
+        let Ok(packet) = RawPacket::unpack(&raw) else {
+            return;
+        };
+        // Locally originated (hops 0), so the engine applies no announce
+        // bandwidth queue, and an attached interface skips mode filtering.
+        let actions = self.engine.handle_outbound(
+            &packet,
+            rns_core::constants::DESTINATION_SINGLE,
+            Some(interface),
+            now,
+        );
+        self.dispatch_all(actions);
+        log::debug!(
+            "Answered path request for local destination {:02x?} on interface {}",
+            &dest_hash[..4],
+            interface.0,
+        );
+    }
+
+    /// Drop path-response announces older than the replay window.
+    pub(crate) fn expire_local_path_responses(&mut self, now: f64) {
+        self.local_path_responses
+            .retain(|_, (created, _)| now - *created <= Self::LOCAL_PATH_RESPONSE_WINDOW);
+    }
+
+    /// Build a fresh `PATH_RESPONSE` announce for a local destination.
+    fn build_local_path_response(&mut self, dest_hash: &[u8; 16], now: f64) -> Option<Vec<u8>> {
+        use crate::management;
+
+        if let Some(identity) = self.transport_identity.as_ref() {
+            let identity_hash = *identity.hash();
+            if self.probe_responder_hash == Some(*dest_hash) {
+                return management::build_probe_announce(identity, &mut self.rng, now, true);
+            }
+            if self.management_config.enable_remote_management
+                && *dest_hash == management::management_dest_hash(&identity_hash)
+            {
+                return management::build_management_announce(identity, &mut self.rng, now, true);
+            }
+            if self.management_config.publish_blackhole
+                && *dest_hash == management::blackhole_dest_hash(&identity_hash)
+            {
+                return management::build_blackhole_announce(identity, &mut self.rng, now, true);
+            }
+        }
+
+        if let Some(record) = self.shared_announces.get(dest_hash).cloned() {
+            return self.build_shared_announce_raw(dest_hash, &record, true);
+        }
+
+        // Known gap: the driver only holds announce keys for SINGLE
+        // destinations that were announced through the node API at least
+        // once (`shared_announces`). A destination that is registered but
+        // never announced cannot be answered here, whereas Python announces
+        // it on demand from the Destination object.
+        log::debug!(
+            "Cannot answer path request for local destination {:02x?}: no announce record",
+            &dest_hash[..4],
+        );
+        None
     }
 
     /// Handle a management request by querying engine state and sending a response.

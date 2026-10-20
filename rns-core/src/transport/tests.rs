@@ -2970,6 +2970,120 @@ fn test_path_request_not_forwarded_on_full() {
     assert!(!engine.discovery_path_requests.contains_key(&dest));
 }
 
+fn expect_local_path_response(
+    actions: &[TransportAction],
+    dest: &[u8; 16],
+    tag: &[u8],
+    iface: InterfaceId,
+) {
+    assert_eq!(actions.len(), 1, "unexpected actions: {actions:?}");
+    match &actions[0] {
+        TransportAction::AnnounceLocalPathResponse {
+            destination_hash,
+            tag: action_tag,
+            interface,
+        } => {
+            assert_eq!(destination_hash, dest);
+            assert_eq!(action_tag.as_slice(), tag);
+            assert_eq!(*interface, iface);
+        }
+        other => panic!("expected AnnounceLocalPathResponse, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_request_for_local_destination_requests_path_response() {
+    for transport_enabled in [true, false] {
+        let mut engine = TransportEngine::new(make_config(transport_enabled));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_ACCESS_POINT));
+        let dest = [0xE1; 16];
+        engine.register_destination(dest, constants::DESTINATION_SINGLE);
+
+        // A plain request (dest + tag) on interface 2.
+        let tag = [0x5A; 16];
+        let data = make_path_request_data(&dest, &tag);
+        let actions = engine.handle_path_request(&data, InterfaceId(2), 1000.0);
+        expect_local_path_response(&actions, &dest, &tag, InterfaceId(2));
+
+        // A transport request (dest + requestor id + tag) on interface 1,
+        // with a short tag that must be passed through unpadded.
+        let short_tag = [0x33; 4];
+        let data = make_transport_path_request_data(&dest, &[0x77; 16], &short_tag);
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1001.0);
+        expect_local_path_response(&actions, &dest, &short_tag, InterfaceId(1));
+
+        // A repeated tag is dropped by the discovery tag dedup before it
+        // reaches the local answer, as in Python.
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1002.0);
+        assert!(actions.is_empty(), "duplicate tag answered: {actions:?}");
+        assert!(!engine.discovery_path_requests.contains_key(&dest));
+    }
+}
+
+#[test]
+fn path_request_for_non_local_destination_does_not_request_path_response() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_ACCESS_POINT));
+    engine.register_destination([0xE1; 16], constants::DESTINATION_SINGLE);
+
+    for (dest, iface) in [([0xE2; 16], 1), ([0xE3; 16], 2)] {
+        let data = make_path_request_data(&dest, &[0x5B; 16]);
+        let actions = engine.handle_path_request(&data, InterfaceId(iface), 1000.0);
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, TransportAction::AnnounceLocalPathResponse { .. })),
+            "non-local destination answered: {actions:?}"
+        );
+    }
+}
+
+#[test]
+fn attached_announce_bypasses_interface_mode_filters() {
+    // Transport.py:1445-1459: mode filters only apply to unattached announces.
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    let dest = [0xE4; 16];
+    engine.register_destination(dest, constants::DESTINATION_SINGLE);
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        },
+        0,
+        &dest,
+        None,
+        constants::CONTEXT_PATH_RESPONSE,
+        &[0xAB; 148],
+    )
+    .unwrap();
+
+    let sent_on = |actions: Vec<TransportAction>| -> Vec<InterfaceId> {
+        actions
+            .into_iter()
+            .filter_map(|a| match a {
+                TransportAction::SendOnInterface { interface, .. } => Some(interface),
+                _ => None,
+            })
+            .collect()
+    };
+    let attached = engine.handle_outbound(
+        &packet,
+        constants::DESTINATION_SINGLE,
+        Some(InterfaceId(1)),
+        1000.0,
+    );
+    assert_eq!(sent_on(attached), vec![InterfaceId(1)]);
+    let unattached = engine.handle_outbound(&packet, constants::DESTINATION_SINGLE, None, 1000.0);
+    assert_eq!(sent_on(unattached), vec![InterfaceId(2)]);
+}
+
 #[test]
 fn test_path_request_forwarded_on_full_with_recursive_prs() {
     let mut engine = TransportEngine::new(make_config(true));
