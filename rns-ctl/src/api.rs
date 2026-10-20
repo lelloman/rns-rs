@@ -29,6 +29,11 @@ use crate::state::{
 use crate::stats_api;
 
 /// Handle for the node, wrapped so shutdown() can consume it.
+///
+/// Request handlers hold this lock while they wait for the node's driver
+/// thread to answer, so code that runs on the driver thread (the `Callbacks`
+/// implementation in `bridge.rs`) must never take it: doing so deadlocks the
+/// driver against any in-flight request.
 pub type NodeHandle = std::sync::Arc<std::sync::Mutex<Option<RnsNode>>>;
 
 /// Execute a closure with a reference to the node, returning an error response if the node is gone.
@@ -852,11 +857,13 @@ fn handle_post_destination(
                         sig_prv.copy_from_slice(&prv[32..64]);
                         let mut sig_pub = [0u8; 32];
                         sig_pub.copy_from_slice(&pubk[32..64]);
+                        // 1 = AcceptAll: links to API destinations accept
+                        // incoming resources from the start.
                         let _ = n.register_link_destination_with_max_request_size(
                             dest.hash.0,
                             sig_prv,
                             sig_pub,
-                            0,
+                            1,
                             dest.max_request_size,
                         );
                     }
@@ -1002,9 +1009,16 @@ fn handle_post_link(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         sig_pub.copy_from_slice(&recalled.public_key[32..64]);
 
         match n.create_link(dh, sig_pub) {
-            Ok(link_id) => HttpResponse::created(json!({
-                "link_id": to_hex(&link_id),
-            })),
+            Ok(link_id) => {
+                // Accept incoming resources on links this API opens. This is
+                // set here, on the request thread, and not from the
+                // link-established callback: callbacks run on the driver
+                // thread and must never take the node handle lock.
+                let _ = n.set_resource_strategy(link_id, 1); // 1 = AcceptAll
+                HttpResponse::created(json!({
+                    "link_id": to_hex(&link_id),
+                }))
+            }
             Err(_) => HttpResponse::internal_error("Create link failed"),
         }
     })

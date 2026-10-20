@@ -67,17 +67,12 @@ impl Callbacks for CtlCallbacks {
         rtt: f64,
         is_initiator: bool,
     ) {
-        // Set resource strategy to AcceptAll so this node can receive resources on this link
-        let node_handle = {
-            let s = read_state(&self.state);
-            s.node_handle.clone()
-        };
-        if let Some(nh) = node_handle {
-            if let Some(node) = lock_node_handle(&nh).as_ref() {
-                let _ = node.set_resource_strategy(link_id.0, 1); // 1 = AcceptAll
-            }
-        }
-
+        // Callbacks run on the node's driver thread. HTTP handlers hold the
+        // node handle lock while they wait for the driver to answer, so taking
+        // that lock here deadlocks the whole control plane whenever a request
+        // is in flight as a link comes up. The resource strategy for links is
+        // therefore set where they are created or registered (api.rs), never
+        // from a callback.
         let record = LinkEventRecord {
             link_id: to_hex(&link_id.0),
             event_type: "established".into(),
@@ -244,5 +239,44 @@ impl Callbacks for CtlCallbacks {
         let event = WsEvent::link(&record);
         push_link_event(&self.state, record);
         broadcast(&self.ws_broadcast, event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex, RwLock};
+    use std::time::Duration;
+
+    /// Callbacks run on the node's driver thread, and HTTP handlers hold the
+    /// node handle lock while they wait for the driver to answer. A callback
+    /// that takes that lock therefore deadlocks the control plane as soon as
+    /// a request is in flight when a link comes up, which happened live
+    /// during concurrent link setup through the backbone. This test holds
+    /// the lock the way a waiting handler does and requires the callback to
+    /// finish anyway.
+    #[test]
+    fn link_established_callback_does_not_take_the_node_lock() {
+        let node_handle: Arc<Mutex<Option<rns_net::RnsNode>>> = Arc::new(Mutex::new(None));
+        let state: SharedState = Arc::new(RwLock::new(CtlState::default()));
+        write_state(&state).node_handle = Some(node_handle.clone());
+        let ws: WsBroadcast = Arc::new(Mutex::new(Vec::new()));
+        let mut callbacks = CtlCallbacks::new(state.clone(), ws);
+
+        let held_by_request_handler = lock_node_handle(&node_handle);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            callbacks.on_link_established(LinkId([7u8; 16]), DestHash([1u8; 16]), 0.5, true);
+            let _ = done_tx.send(());
+        });
+        assert!(
+            done_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "on_link_established blocked on the node handle lock"
+        );
+        drop(held_by_request_handler);
+
+        let events = &read_state(&state).link_events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "established");
     }
 }
