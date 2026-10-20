@@ -9970,8 +9970,8 @@ fn send_probe_unknown_dest_returns_none() {
     driver.run();
 
     match resp_rx.recv().unwrap() {
-        QueryResponse::SendProbe(None) => {}
-        other => panic!("expected SendProbe(None), got {:?}", other),
+        QueryResponse::SendProbe(Err(event::SendProbeError::UnknownIdentity)) => {}
+        other => panic!("expected SendProbe(Err(UnknownIdentity)), got {:?}", other),
     }
 }
 
@@ -10043,7 +10043,7 @@ fn send_probe_known_dest_returns_packet_hash() {
 
     // Verify probe sent
     match probe_response {
-        QueryResponse::SendProbe(Some((packet_hash, _hops))) => {
+        QueryResponse::SendProbe(Ok((packet_hash, _hops))) => {
             // Packet hash should be non-zero
             assert_ne!(packet_hash, [0u8; 32]);
             // Should be tracked in sent_packets
@@ -10057,7 +10057,121 @@ fn send_probe_known_dest_returns_packet_hash() {
             assert_eq!(flags.packet_type, constants::PACKET_TYPE_DATA);
             assert_eq!(flags.destination_type, constants::DESTINATION_SINGLE);
         }
-        other => panic!("expected SendProbe(Some(..)), got {:?}", other),
+        other => panic!("expected SendProbe(Ok(..)), got {:?}", other),
+    }
+}
+
+fn probe_test_driver() -> (Driver, [u8; 16]) {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(
+        TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            local_hops_delta: 0,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
+        },
+        rx,
+        tx.clone(),
+        Box::new(cbs),
+    );
+    let info = make_interface_info(1);
+    driver.engine.register_interface(info);
+    let (writer, _sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let remote_identity = Identity::new(&mut OsRng);
+    let dest_hash = rns_core::destination::destination_hash(
+        "rnstransport",
+        &["probe"],
+        Some(remote_identity.hash()),
+    );
+    let inject_response = driver.handle_query_mut(QueryRequest::InjectIdentity {
+        dest_hash,
+        identity_hash: *remote_identity.hash(),
+        public_key: remote_identity.get_public_key().unwrap(),
+        app_data: None,
+        hops: 1,
+        received_at: 0.0,
+    });
+    assert!(matches!(
+        inject_response,
+        QueryResponse::InjectIdentity(true)
+    ));
+    (driver, dest_hash)
+}
+
+#[test]
+fn max_probe_payload_size_is_largest_encrypted_payload_fitting_mtu() {
+    // 399 at MTU 500: 19-byte HEADER_1 + 32 ephemeral key + 16 IV + 400
+    // padded ciphertext + 32 HMAC = 499 bytes; 400 bytes pads to 416 and
+    // produces a 515-byte packet.
+    assert_eq!(event::MAX_PROBE_PAYLOAD_SIZE, 399);
+
+    let remote = Identity::new(&mut OsRng);
+    let public = Identity::from_public_key(&remote.get_public_key().unwrap()).unwrap();
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let pack = |size: usize| {
+        let ciphertext = public.encrypt(&vec![0u8; size], &mut OsRng).unwrap();
+        RawPacket::pack(
+            flags,
+            0,
+            &[0x11; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &ciphertext,
+        )
+    };
+    assert!(pack(event::MAX_PROBE_PAYLOAD_SIZE).is_ok());
+    assert!(pack(event::MAX_PROBE_PAYLOAD_SIZE + 1).is_err());
+}
+
+#[test]
+fn send_probe_payload_size_limits() {
+    let (mut driver, dest_hash) = probe_test_driver();
+    for size in [1, 16, 300, event::MAX_PROBE_PAYLOAD_SIZE] {
+        match driver.handle_query_mut(QueryRequest::SendProbe {
+            dest_hash,
+            payload_size: size,
+        }) {
+            QueryResponse::SendProbe(Ok(_)) => {}
+            other => panic!("size {}: expected SendProbe(Ok(..)), got {:?}", size, other),
+        }
+    }
+    for size in [event::MAX_PROBE_PAYLOAD_SIZE + 1, 400, 1000] {
+        match driver.handle_query_mut(QueryRequest::SendProbe {
+            dest_hash,
+            payload_size: size,
+        }) {
+            QueryResponse::SendProbe(Err(event::SendProbeError::PayloadTooLarge { max })) => {
+                assert_eq!(max, event::MAX_PROBE_PAYLOAD_SIZE);
+            }
+            other => panic!(
+                "size {}: expected SendProbe(Err(PayloadTooLarge)), got {:?}",
+                size, other
+            ),
+        }
     }
 }
 

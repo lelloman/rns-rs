@@ -16,8 +16,8 @@ pub use crate::common::event::{
     LinkDatagramError, LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry,
     ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
     ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
-    TrafficDetail,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SendProbeError,
+    SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
 };
 
 /// Concrete Event type using boxed sync Writer.

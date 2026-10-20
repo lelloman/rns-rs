@@ -726,7 +726,9 @@ impl Driver {
                     })
             }
             // Mutating queries handled by handle_query_mut
-            QueryRequest::SendProbe { .. } => QueryResponse::SendProbe(None),
+            QueryRequest::SendProbe { .. } => {
+                QueryResponse::SendProbe(Err(crate::event::SendProbeError::PackFailed))
+            }
             QueryRequest::CheckProof { .. } => QueryResponse::CheckProof(None),
         }
     }
@@ -769,6 +771,17 @@ impl Driver {
                 dest_hash,
                 payload_size,
             } => {
+                use crate::event::{SendProbeError, MAX_PROBE_PAYLOAD_SIZE};
+                if payload_size > MAX_PROBE_PAYLOAD_SIZE {
+                    log::warn!(
+                        "Probe payload of {} bytes exceeds maximum of {} bytes",
+                        payload_size,
+                        MAX_PROBE_PAYLOAD_SIZE,
+                    );
+                    return QueryResponse::SendProbe(Err(SendProbeError::PayloadTooLarge {
+                        max: MAX_PROBE_PAYLOAD_SIZE,
+                    }));
+                }
                 // Look up the identity for this destination hash
                 let announced = self.known_destination_announced(&dest_hash);
                 match announced {
@@ -816,23 +829,23 @@ impl Driver {
                                             payload_size,
                                             &dest_hash[..4],
                                         );
-                                        QueryResponse::SendProbe(Some((packet_hash, hops)))
+                                        QueryResponse::SendProbe(Ok((packet_hash, hops)))
                                     }
-                                    Err(_) => {
-                                        log::warn!("Failed to pack probe packet");
-                                        QueryResponse::SendProbe(None)
+                                    Err(e) => {
+                                        log::warn!("Failed to pack probe packet: {:?}", e);
+                                        QueryResponse::SendProbe(Err(SendProbeError::PackFailed))
                                     }
                                 }
                             }
-                            Err(_) => {
-                                log::warn!("Failed to encrypt probe payload");
-                                QueryResponse::SendProbe(None)
+                            Err(e) => {
+                                log::warn!("Failed to encrypt probe payload: {:?}", e);
+                                QueryResponse::SendProbe(Err(SendProbeError::EncryptFailed))
                             }
                         }
                     }
                     None => {
                         log::debug!("No known identity for probe dest {:02x?}", &dest_hash[..4]);
-                        QueryResponse::SendProbe(None)
+                        QueryResponse::SendProbe(Err(SendProbeError::UnknownIdentity))
                     }
                 }
             }

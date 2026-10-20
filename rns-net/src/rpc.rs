@@ -440,6 +440,34 @@ fn recv_bytes<S: Read>(stream: &mut S) -> io::Result<Vec<u8>> {
     }
 }
 
+/// Default probe payload size when the request omits `size`.
+const DEFAULT_PROBE_PAYLOAD_SIZE: usize = 16;
+
+/// Encode a failed `send_probe` for RPC clients.
+///
+/// `UnknownIdentity` stays `None` for compatibility with older clients. Other
+/// failures return `{"error": <code>, ...}` so clients can tell them apart.
+fn send_probe_error_pickle(err: crate::event::SendProbeError) -> PickleValue {
+    use crate::event::SendProbeError;
+    let code = match err {
+        SendProbeError::UnknownIdentity => return PickleValue::None,
+        SendProbeError::PayloadTooLarge { .. } => "payload_too_large",
+        SendProbeError::EncryptFailed => "encrypt_failed",
+        SendProbeError::PackFailed => "pack_failed",
+    };
+    let mut entries = vec![(
+        PickleValue::String("error".into()),
+        PickleValue::String(code.into()),
+    )];
+    if let SendProbeError::PayloadTooLarge { max } = err {
+        entries.push((
+            PickleValue::String("max_size".into()),
+            PickleValue::Int(max as i64),
+        ));
+    }
+    PickleValue::Dict(entries)
+}
+
 /// Translate an RPC request dict to a query event and get response.
 fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Result<PickleValue> {
     if let Some(operation) = request.get("manage").and_then(PickleValue::as_str) {
@@ -864,17 +892,20 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
             if hash_bytes.len() >= 16 {
                 let mut dest_hash = [0u8; 16];
                 dest_hash.copy_from_slice(&hash_bytes[..16]);
-                let payload_size = request
-                    .get("size")
-                    .and_then(|v| v.as_int())
-                    .and_then(|n| {
-                        if n > 0 && n <= 400 {
-                            Some(n as usize)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(16);
+                // Missing or non-positive sizes fall back to the default;
+                // oversize requests are rejected rather than silently
+                // replaced, so the caller learns the real limit.
+                let payload_size = match request.get("size").and_then(|v| v.as_int()) {
+                    Some(n) if n > 0 => usize::try_from(n).unwrap_or(usize::MAX),
+                    _ => DEFAULT_PROBE_PAYLOAD_SIZE,
+                };
+                if payload_size > crate::event::MAX_PROBE_PAYLOAD_SIZE {
+                    return Ok(send_probe_error_pickle(
+                        crate::event::SendProbeError::PayloadTooLarge {
+                            max: crate::event::MAX_PROBE_PAYLOAD_SIZE,
+                        },
+                    ));
+                }
                 let resp = send_query(
                     event_tx,
                     QueryRequest::SendProbe {
@@ -882,8 +913,8 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         payload_size,
                     },
                 )?;
-                if let QueryResponse::SendProbe(Some((packet_hash, hops))) = resp {
-                    return Ok(PickleValue::Dict(vec![
+                return Ok(match resp {
+                    QueryResponse::SendProbe(Ok((packet_hash, hops))) => PickleValue::Dict(vec![
                         (
                             PickleValue::String("packet_hash".into()),
                             PickleValue::Bytes(packet_hash.to_vec()),
@@ -892,10 +923,10 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                             PickleValue::String("hops".into()),
                             PickleValue::Int(hops as i64),
                         ),
-                    ]));
-                } else {
-                    return Ok(PickleValue::None);
-                }
+                    ]),
+                    QueryResponse::SendProbe(Err(err)) => send_probe_error_pickle(err),
+                    _ => PickleValue::None,
+                });
             }
         }
     }
@@ -4124,7 +4155,9 @@ mod tests {
             {
                 assert_eq!(dest_hash, [0xAA; 16]);
                 assert_eq!(payload_size, 16); // default
-                let _ = resp_tx.send(QueryResponse::SendProbe(None));
+                let _ = resp_tx.send(QueryResponse::SendProbe(Err(
+                    crate::event::SendProbeError::UnknownIdentity,
+                )));
             }
         });
 
@@ -4157,7 +4190,7 @@ mod tests {
             {
                 assert_eq!(dest_hash, [0xCC; 16]);
                 assert_eq!(payload_size, 32);
-                let _ = resp_tx.send(QueryResponse::SendProbe(Some((packet_hash, 3))));
+                let _ = resp_tx.send(QueryResponse::SendProbe(Ok((packet_hash, 3))));
             }
         });
 
@@ -4225,7 +4258,9 @@ mod tests {
                 .and_then(|event| event.into_query().ok())
             {
                 assert_eq!(payload_size, 16); // default, not negative
-                let _ = resp_tx.send(QueryResponse::SendProbe(None));
+                let _ = resp_tx.send(QueryResponse::SendProbe(Err(
+                    crate::event::SendProbeError::UnknownIdentity,
+                )));
             }
         });
 
@@ -4244,17 +4279,44 @@ mod tests {
 
     #[test]
     fn send_probe_rpc_size_too_large() {
+        let (event_tx, _event_rx) = crate::event::channel();
+
+        // Oversize requests are rejected before reaching the driver instead
+        // of being silently replaced by the default size.
+        let request = PickleValue::Dict(vec![
+            (
+                PickleValue::String("send_probe".into()),
+                PickleValue::Bytes(vec![0xDD; 16]),
+            ),
+            (
+                PickleValue::String("size".into()),
+                PickleValue::Int(crate::event::MAX_PROBE_PAYLOAD_SIZE as i64 + 1),
+            ),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(
+            response.get("error").and_then(|v| v.as_str()),
+            Some("payload_too_large")
+        );
+        assert_eq!(
+            response.get("max_size").and_then(|v| v.as_int()),
+            Some(crate::event::MAX_PROBE_PAYLOAD_SIZE as i64)
+        );
+    }
+
+    #[test]
+    fn send_probe_rpc_max_size_reaches_driver() {
         let (event_tx, event_rx) = crate::event::channel();
 
-        // Size > 400 should be clamped to default (16)
         let driver = thread::spawn(move || {
             if let Some((QueryRequest::SendProbe { payload_size, .. }, resp_tx)) = event_rx
                 .recv()
                 .ok()
                 .and_then(|event| event.into_query().ok())
             {
-                assert_eq!(payload_size, 16); // default, not 999
-                let _ = resp_tx.send(QueryResponse::SendProbe(None));
+                assert_eq!(payload_size, crate::event::MAX_PROBE_PAYLOAD_SIZE);
+                let _ = resp_tx.send(QueryResponse::SendProbe(Ok(([0xEE; 32], 2))));
             }
         });
 
@@ -4263,11 +4325,44 @@ mod tests {
                 PickleValue::String("send_probe".into()),
                 PickleValue::Bytes(vec![0xDD; 16]),
             ),
-            (PickleValue::String("size".into()), PickleValue::Int(999)),
+            (
+                PickleValue::String("size".into()),
+                PickleValue::Int(crate::event::MAX_PROBE_PAYLOAD_SIZE as i64),
+            ),
         ]);
 
         let response = handle_rpc_request(&request, &event_tx).unwrap();
-        assert_eq!(response, PickleValue::None);
+        assert_eq!(response.get("hops").unwrap().as_int().unwrap(), 2);
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn send_probe_rpc_driver_payload_too_large_is_reported() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Some((QueryRequest::SendProbe { .. }, resp_tx)) = event_rx
+                .recv()
+                .ok()
+                .and_then(|event| event.into_query().ok())
+            {
+                let _ = resp_tx.send(QueryResponse::SendProbe(Err(
+                    crate::event::SendProbeError::PayloadTooLarge { max: 123 },
+                )));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("send_probe".into()),
+            PickleValue::Bytes(vec![0xDD; 16]),
+        )]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(
+            response.get("error").and_then(|v| v.as_str()),
+            Some("payload_too_large")
+        );
+        assert_eq!(response.get("max_size").and_then(|v| v.as_int()), Some(123));
         driver.join().unwrap();
     }
 

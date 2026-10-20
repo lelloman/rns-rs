@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use rns_cli::args::Args;
 use rns_cli::format::prettyhexrep;
 use rns_net::config;
+use rns_net::event::MAX_PROBE_PAYLOAD_SIZE;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
@@ -66,6 +67,11 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.0);
     let verbosity = args.verbosity;
+
+    if let Some(message) = oversize_probe_error(payload_size) {
+        eprintln!("{}", message);
+        process::exit(3);
+    }
 
     // Positional args: destination_hash
     let dest_hash_hex = match args.positional.first() {
@@ -253,11 +259,28 @@ fn send_and_wait_probe(
 ) -> bool {
     // Send probe
     let (packet_hash, hops) = match send_probe_rpc(addr, auth_key, dest_hash, payload_size) {
-        Ok(Some(result)) => result,
-        Ok(None) => {
+        Ok(ProbeSendOutcome::Sent(packet_hash, hops)) => (packet_hash, hops),
+        Ok(ProbeSendOutcome::UnknownIdentity) => {
             eprintln!(
                 "Could not send probe to {} (identity not known)",
                 prettyhexrep(dest_hash),
+            );
+            return false;
+        }
+        Ok(ProbeSendOutcome::PayloadTooLarge { max }) => {
+            eprintln!(
+                "Could not send probe to {}: payload of {} bytes exceeds the maximum of {} bytes",
+                prettyhexrep(dest_hash),
+                payload_size,
+                max,
+            );
+            return false;
+        }
+        Ok(ProbeSendOutcome::Failed(reason)) => {
+            eprintln!(
+                "Could not send probe to {} ({})",
+                prettyhexrep(dest_hash),
+                reason,
             );
             return false;
         }
@@ -346,12 +369,69 @@ fn request_path(addr: &RpcAddr, auth_key: &[u8; 32], dest_hash: &[u8; 16]) -> Re
     Ok(())
 }
 
+/// Size on the wire of a probe carrying `payload_size` random bytes: HEADER_1
+/// header, ephemeral public key, IV, PKCS7-padded ciphertext and HMAC.
+fn probe_packet_size(payload_size: usize) -> usize {
+    use rns_core::constants::{AES128_BLOCKSIZE, HEADER_MINSIZE, KEYSIZE, TOKEN_OVERHEAD};
+    HEADER_MINSIZE
+        + KEYSIZE / 16
+        + TOKEN_OVERHEAD
+        + (payload_size / AES128_BLOCKSIZE + 1) * AES128_BLOCKSIZE
+}
+
+/// Python-`rnprobe`-style error for payloads that cannot fit in one packet.
+fn oversize_probe_error(payload_size: usize) -> Option<String> {
+    if payload_size <= MAX_PROBE_PAYLOAD_SIZE {
+        return None;
+    }
+    Some(format!(
+        "Error: Probe packet size of {} bytes exceed MTU of {} bytes (maximum probe payload is {} bytes)",
+        probe_packet_size(payload_size),
+        rns_core::constants::MTU,
+        MAX_PROBE_PAYLOAD_SIZE,
+    ))
+}
+
+/// Result of a `send_probe` RPC call.
+#[derive(Debug, PartialEq)]
+enum ProbeSendOutcome {
+    Sent([u8; 32], u8),
+    UnknownIdentity,
+    PayloadTooLarge { max: usize },
+    Failed(String),
+}
+
+fn parse_send_probe_response(response: &PickleValue) -> ProbeSendOutcome {
+    if let Some(code) = response.get("error").and_then(|v| v.as_str()) {
+        return match code {
+            "payload_too_large" => ProbeSendOutcome::PayloadTooLarge {
+                max: response
+                    .get("max_size")
+                    .and_then(|v| v.as_int())
+                    .and_then(|n| usize::try_from(n).ok())
+                    .unwrap_or(MAX_PROBE_PAYLOAD_SIZE),
+            },
+            other => ProbeSendOutcome::Failed(other.replace('_', " ")),
+        };
+    }
+    let packet_hash = response.get("packet_hash").and_then(|v| v.as_bytes());
+    let hops = response.get("hops").and_then(|v| v.as_int());
+    match (packet_hash, hops) {
+        (Some(ph), Some(h)) if ph.len() >= 32 => {
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&ph[..32]);
+            ProbeSendOutcome::Sent(hash, h as u8)
+        }
+        _ => ProbeSendOutcome::UnknownIdentity,
+    }
+}
+
 fn send_probe_rpc(
     addr: &RpcAddr,
     auth_key: &[u8; 32],
     dest_hash: &[u8; 16],
     payload_size: usize,
-) -> Result<Option<([u8; 32], u8)>, String> {
+) -> Result<ProbeSendOutcome, String> {
     let mut client =
         RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
     let response = client
@@ -367,30 +447,7 @@ fn send_probe_rpc(
         ]))
         .map_err(|e| format!("RPC call: {}", e))?;
 
-    match &response {
-        PickleValue::Dict(entries) => {
-            let packet_hash = entries
-                .iter()
-                .find(|(k, _)| *k == PickleValue::String("packet_hash".into()))
-                .and_then(|(_, v)| v.as_bytes());
-            let hops = entries
-                .iter()
-                .find(|(k, _)| *k == PickleValue::String("hops".into()))
-                .and_then(|(_, v)| v.as_int());
-            if let (Some(ph), Some(h)) = (packet_hash, hops) {
-                if ph.len() >= 32 {
-                    let mut hash = [0u8; 32];
-                    hash.copy_from_slice(&ph[..32]);
-                    Ok(Some((hash, h as u8)))
-                } else {
-                    Ok(None)
-                }
-            } else {
-                Ok(None)
-            }
-        }
-        _ => Ok(None),
-    }
+    Ok(parse_send_probe_response(&response))
 }
 
 fn check_proof_rpc(
@@ -545,7 +602,10 @@ fn print_usage(usage_name: &str) {
     println!("Options:");
     println!("  -c, --config PATH     Config directory path");
     println!("  -t, --timeout SECS    Timeout in seconds (default: 15)");
-    println!("  -s, --size BYTES      Probe payload size (default: 16)");
+    println!(
+        "  -s, --size BYTES      Probe payload size (default: 16, max: {})",
+        MAX_PROBE_PAYLOAD_SIZE
+    );
     println!("  -n, --count N         Number of probes to send (default: 1)");
     println!("  -w, --wait SECS       Seconds between probes (default: 0)");
     println!("  -v, --verbose         Increase verbosity");
@@ -556,6 +616,62 @@ fn print_usage(usage_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversize_probe_error_matches_mtu_boundary() {
+        assert_eq!(MAX_PROBE_PAYLOAD_SIZE, 399);
+        assert_eq!(probe_packet_size(MAX_PROBE_PAYLOAD_SIZE), 499);
+        assert!(oversize_probe_error(16).is_none());
+        assert!(oversize_probe_error(MAX_PROBE_PAYLOAD_SIZE).is_none());
+        let msg = oversize_probe_error(400).unwrap();
+        assert!(msg.contains("515 bytes exceed MTU of 500 bytes"), "{}", msg);
+        assert!(
+            msg.contains("maximum probe payload is 399 bytes"),
+            "{}",
+            msg
+        );
+    }
+
+    #[test]
+    fn parse_send_probe_response_distinguishes_outcomes() {
+        assert_eq!(
+            parse_send_probe_response(&PickleValue::None),
+            ProbeSendOutcome::UnknownIdentity
+        );
+        let sent = PickleValue::Dict(vec![
+            (
+                PickleValue::String("packet_hash".into()),
+                PickleValue::Bytes(vec![0xAB; 32]),
+            ),
+            (PickleValue::String("hops".into()), PickleValue::Int(2)),
+        ]);
+        assert_eq!(
+            parse_send_probe_response(&sent),
+            ProbeSendOutcome::Sent([0xAB; 32], 2)
+        );
+        let too_large = PickleValue::Dict(vec![
+            (
+                PickleValue::String("error".into()),
+                PickleValue::String("payload_too_large".into()),
+            ),
+            (
+                PickleValue::String("max_size".into()),
+                PickleValue::Int(399),
+            ),
+        ]);
+        assert_eq!(
+            parse_send_probe_response(&too_large),
+            ProbeSendOutcome::PayloadTooLarge { max: 399 }
+        );
+        let pack_failed = PickleValue::Dict(vec![(
+            PickleValue::String("error".into()),
+            PickleValue::String("pack_failed".into()),
+        )]);
+        assert_eq!(
+            parse_send_probe_response(&pack_failed),
+            ProbeSendOutcome::Failed("pack failed".into())
+        );
+    }
 
     #[test]
     fn parse_valid_hash() {

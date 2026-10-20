@@ -718,6 +718,33 @@ pub enum QueryRequest {
     },
 }
 
+/// Largest random payload a probe can carry in a single HEADER_1 DATA packet
+/// to a SINGLE destination without exceeding [`rns_core::constants::MTU`].
+///
+/// The payload is encrypted as `ephemeral pubkey (KEYSIZE/16) || IV || AES-CBC
+/// ciphertext (PKCS7-padded, so always at least one byte of padding) || HMAC`,
+/// then prefixed with the HEADER_1 packet header. With MTU 500 this is 399
+/// bytes, matching what Python's `rnprobe` can send before `Packet.pack()`
+/// raises for exceeding the MTU.
+pub const MAX_PROBE_PAYLOAD_SIZE: usize = {
+    use rns_core::constants::{AES128_BLOCKSIZE, HEADER_MINSIZE, KEYSIZE, MTU, TOKEN_OVERHEAD};
+    let numerator = MTU - HEADER_MINSIZE - TOKEN_OVERHEAD - KEYSIZE / 16;
+    (numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
+};
+
+/// Why a [`QueryRequest::SendProbe`] could not be sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendProbeError {
+    /// No announced identity is known for the destination.
+    UnknownIdentity,
+    /// The requested payload does not fit in a single packet.
+    PayloadTooLarge { max: usize },
+    /// Encrypting the payload to the remote identity failed.
+    EncryptFailed,
+    /// Packing the probe packet failed.
+    PackFailed,
+}
+
 /// Responses to queries.
 #[derive(Debug)]
 pub enum QueryResponse {
@@ -757,8 +784,8 @@ pub enum QueryResponse {
     MarkKnownDestinationUsed(bool),
     /// List of discovered interfaces.
     DiscoveredInterfaces(Vec<crate::common::discovery::DiscoveredInterface>),
-    /// Probe sent: (packet_hash, hops) or None if identity unknown.
-    SendProbe(Option<([u8; 32], u8)>),
+    /// Probe sent: (packet_hash, hops), or why it could not be sent.
+    SendProbe(Result<([u8; 32], u8), SendProbeError>),
     /// Proof check: RTT if received, None if still pending.
     CheckProof(Option<f64>),
     /// Runtime-config entries currently supported by the daemon.
