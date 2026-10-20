@@ -775,6 +775,28 @@ pub fn load_or_create_identity(identities_dir: &Path) -> io::Result<Identity> {
     }
 }
 
+/// Path of the persisted transport identity (`storage/transport_identity`).
+///
+/// Matches Python's `Reticulum.storagepath + "/transport_identity"`.
+pub fn transport_identity_path(paths: &StoragePaths) -> PathBuf {
+    paths.storage.join("transport_identity")
+}
+
+/// Load the identity whose private key keys the shared-instance RPC socket.
+///
+/// The daemon (like Python's `Reticulum.rpc_key`) derives the RPC auth key
+/// from the persisted transport identity. A config dir the daemon has not yet
+/// initialized may lack it; the daemon then seeds it from the node identity,
+/// so fall back to `storage/identities/identity`.
+pub fn load_rpc_identity(paths: &StoragePaths) -> io::Result<Identity> {
+    let path = transport_identity_path(paths);
+    if path.exists() {
+        load_identity(&path)
+    } else {
+        load_or_create_identity(&paths.identities)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1170,6 +1192,30 @@ mod tests {
         fs::write(dir.join("destination_table"), b"not-msgpack").unwrap();
         let error = load_transport_state(&dir).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_rpc_identity_prefers_transport_identity() {
+        let dir = temp_dir();
+        let paths = ensure_storage_dirs(&dir).unwrap();
+
+        // Without transport_identity, fall back to identities/identity.
+        let node = load_rpc_identity(&paths).unwrap();
+        assert_eq!(
+            *load_identity(&paths.identities.join("identity"))
+                .unwrap()
+                .hash(),
+            *node.hash()
+        );
+
+        // With a distinct transport_identity, it takes precedence.
+        let transport = Identity::new(&mut OsRng);
+        save_identity(&transport, &transport_identity_path(&paths)).unwrap();
+        let rpc = load_rpc_identity(&paths).unwrap();
+        assert_eq!(*rpc.hash(), *transport.hash());
+        assert_ne!(*rpc.hash(), *node.hash());
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

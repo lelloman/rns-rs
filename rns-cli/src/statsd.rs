@@ -306,8 +306,7 @@ impl RuntimeConfig {
             config::parse("").map_err(|e| e.to_string())?
         };
         let paths = storage::ensure_storage_dirs(&config_dir).map_err(|e| e.to_string())?;
-        let identity =
-            storage::load_or_create_identity(&paths.identities).map_err(|e| e.to_string())?;
+        let identity = storage::load_rpc_identity(&paths).map_err(|e| e.to_string())?;
         let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
         let provider_socket = socket_override
             .map(PathBuf::from)

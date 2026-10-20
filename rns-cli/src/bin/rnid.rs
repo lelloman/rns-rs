@@ -437,8 +437,7 @@ fn rpc_client(args: &Args) -> Result<RpcClient, String> {
         config::parse("").map_err(|e| format!("Error parsing default config: {}", e))?
     };
     let paths = storage::ensure_storage_dirs(&config_dir).map_err(|e| e.to_string())?;
-    let identity =
-        storage::load_or_create_identity(&paths.identities).map_err(|e| e.to_string())?;
+    let identity = storage::load_rpc_identity(&paths).map_err(|e| e.to_string())?;
     let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
     let rpc_addr = RpcAddr::Tcp(
         "127.0.0.1".into(),

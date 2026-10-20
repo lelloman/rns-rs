@@ -607,7 +607,7 @@ impl ServerConfig {
 
     fn rnsd_drain_config(&self) -> Option<RnsdDrainConfig> {
         let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir).ok()?;
-        let identity = rns_net::storage::load_or_create_identity(&paths.identities).ok()?;
+        let identity = rns_net::storage::load_rpc_identity(&paths).ok()?;
         let private_key = identity.get_private_key()?;
         Some(RnsdDrainConfig {
             rpc_addr: RpcAddr::Tcp(

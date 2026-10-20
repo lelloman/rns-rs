@@ -180,7 +180,7 @@ fn connect(config_path: Option<&str>) -> RpcClient {
         }
     };
 
-    let identity = match storage::load_or_create_identity(&paths.identities) {
+    let identity = match storage::load_rpc_identity(&paths) {
         Ok(id) => id,
         Err(e) => {
             eprintln!("Error loading identity: {}", e);

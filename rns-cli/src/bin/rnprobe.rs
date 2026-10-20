@@ -112,8 +112,14 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     // Connect to rnsd via RPC
     let rpc_port = rns_config.reticulum.instance_control_port;
-    let identity_path = config_dir.join("storage").join("identity");
-    let identity = match storage::load_identity(&identity_path) {
+    let paths = match storage::ensure_storage_dirs(&config_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        }
+    };
+    let identity = match storage::load_rpc_identity(&paths) {
         Ok(id) => id,
         Err(e) => {
             eprintln!("Failed to load identity (is rnsd running?): {}", e);
