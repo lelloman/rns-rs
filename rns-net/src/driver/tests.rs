@@ -1277,6 +1277,113 @@ fn backbone_peer_pool_rotates_after_runtime_disconnect() {
 }
 
 #[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_configured_peer_reclaims_slot_from_discovered() {
+    // A configured peer drops (e.g. the remote restarts) while the pool is
+    // full; a discovered standby takes its slot while it waits to retry. Once
+    // the configured peer may retry, it must get its slot back instead of
+    // waiting for some unrelated peer to disconnect.
+    let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let configured_port = listener_a.local_addr().unwrap().port();
+    let discovered_port = listener_b.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![make_pool_candidate("configured", configured_port, 7081)],
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "discovered",
+            "127.0.0.1",
+            Some(discovered_port),
+            0x75,
+            1,
+            20,
+            time::now(),
+        ))
+    );
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.members[0].interface_id, Some(7081));
+    assert_eq!(status.members[1].state, "standby");
+
+    driver.handle_backbone_peer_pool_down(InterfaceId(7081));
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.members[0].state, "standby");
+    assert_eq!(status.members[0].failure_count, 1);
+    let discovered_id = status.members[1].interface_id.unwrap();
+    assert!(driver.interfaces.contains_key(&InterfaceId(discovered_id)));
+
+    std::thread::sleep(Duration::from_millis(30));
+    driver.maintain_backbone_peer_pool();
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.members[0].name, "configured");
+    assert_eq!(status.members[0].interface_id, Some(7081));
+    assert!(matches!(
+        status.members[0].state.as_str(),
+        "connecting" | "active"
+    ));
+    assert_eq!(status.members[1].source, "discovered");
+    assert_eq!(status.members[1].state, "standby");
+    assert_eq!(status.members[1].failure_count, 0);
+    assert!(!driver.interfaces.contains_key(&InterfaceId(discovered_id)));
+    assert!(driver
+        .engine
+        .interface_info(&InterfaceId(discovered_id))
+        .is_none());
+    drop(listener_a);
+    drop(listener_b);
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_full_pool_keeps_active_configured_peer() {
+    // Configured peers rotate among themselves; a ready configured standby
+    // never evicts another configured peer.
+    let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port_a = listener_a.local_addr().unwrap().port();
+    let port_b = listener_b.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![
+            make_pool_candidate_with_priority("high", port_a, 7091, 90),
+            make_pool_candidate_with_priority("low", port_b, 7092, 10),
+        ],
+    );
+    driver.handle_backbone_peer_pool_down(InterfaceId(7091));
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.members[1].interface_id, Some(7092));
+
+    std::thread::sleep(Duration::from_millis(30));
+    driver.maintain_backbone_peer_pool();
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.members[0].state, "standby");
+    assert_eq!(status.members[1].interface_id, Some(7092));
+    drop(listener_a);
+    drop(listener_b);
+}
+
+#[cfg(feature = "iface-backbone")]
 fn register_test_backbone(driver: &mut Driver, name: &str) {
     let startup = BackboneServerRuntime {
         max_connections: Some(8),

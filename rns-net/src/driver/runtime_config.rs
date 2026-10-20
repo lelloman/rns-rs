@@ -385,6 +385,7 @@ impl Driver {
                     retry_after: None,
                     cooldown_until: None,
                     last_error: None,
+                    control: None,
                 })
                 .collect(),
         });
@@ -550,6 +551,7 @@ impl Driver {
             retry_after: None,
             cooldown_until: None,
             last_error: None,
+            control: None,
         });
         Self::sort_backbone_peer_pool_candidates(pool);
         self.maintain_backbone_peer_pool();
@@ -783,9 +785,6 @@ impl Driver {
                 .iter()
                 .filter(|candidate| candidate.active_id.is_some())
                 .count();
-            if active >= pool.settings.max_connected {
-                return;
-            }
             let next = pool.candidates.iter().position(|candidate| {
                 candidate.active_id.is_none()
                     && candidate
@@ -800,10 +799,107 @@ impl Driver {
             let Some(index) = next else {
                 return;
             };
-            if let Err(err) = self.start_backbone_peer_pool_candidate(index) {
-                self.record_backbone_peer_pool_failure(index, err.to_string());
+            // A full pool only makes room for a configured peer, and only by
+            // evicting a discovered peer it outranks. Otherwise a configured
+            // peer whose slot a discovered one took while it was reconnecting
+            // would stay down until some other peer happened to disconnect.
+            let evict = if active >= pool.settings.max_connected {
+                if pool.candidates[index].config.source
+                    != BackbonePeerPoolCandidateSource::Configured
+                {
+                    return;
+                }
+                let victim = pool
+                    .candidates
+                    .iter()
+                    .enumerate()
+                    .skip(index + 1)
+                    .rev()
+                    .find(|(_, candidate)| {
+                        candidate.active_id.is_some()
+                            && candidate.config.source
+                                == BackbonePeerPoolCandidateSource::Discovered
+                    })
+                    .and_then(|(_, candidate)| candidate.active_id);
+                let Some(victim) = victim else {
+                    return;
+                };
+                Some(victim)
+            } else {
+                None
+            };
+            match self.start_backbone_peer_pool_candidate(index) {
+                Ok(()) => {
+                    if let Some(victim) = evict {
+                        self.evict_backbone_peer_pool_member(victim, index);
+                    }
+                }
+                Err(err) => self.record_backbone_peer_pool_failure(index, err.to_string()),
             }
         }
+    }
+
+    /// Disconnect the active discovered member `id` to give its slot to the
+    /// candidate at `replacement`, which has just connected. The evicted
+    /// member goes back to standby without counting a failure.
+    #[cfg(feature = "iface-backbone")]
+    fn evict_backbone_peer_pool_member(&mut self, id: InterfaceId, replacement: usize) {
+        let Some(pool) = self.backbone_peer_pool.as_ref() else {
+            return;
+        };
+        let replacement_name = pool
+            .candidates
+            .get(replacement)
+            .map(|candidate| candidate.config.client.name.clone())
+            .unwrap_or_default();
+        let Some((index, name)) = self.release_backbone_peer_pool_member(id) else {
+            return;
+        };
+        log::info!(
+            "[{}] backbone peer pool full, disconnecting discovered peer [{}] in favour of configured peer",
+            replacement_name,
+            name
+        );
+        if let Some(candidate) = self
+            .backbone_peer_pool
+            .as_mut()
+            .and_then(|pool| pool.candidates.get_mut(index))
+        {
+            candidate.retry_after = None;
+        }
+        self.callbacks.on_interface_down(id);
+    }
+
+    /// Stop and deregister the pool member running as interface `id`, and
+    /// mark its candidate inactive. Returns the candidate index and the
+    /// interface name, or `None` if no candidate is active as `id`.
+    #[cfg(feature = "iface-backbone")]
+    fn release_backbone_peer_pool_member(&mut self, id: InterfaceId) -> Option<(usize, String)> {
+        let pool = self.backbone_peer_pool.as_mut()?;
+        let (index, candidate) = pool
+            .candidates
+            .iter_mut()
+            .enumerate()
+            .find(|(_, candidate)| candidate.active_id == Some(id))?;
+        candidate.active_id = None;
+        if let Some(control) = candidate.control.take() {
+            control.request_stop();
+        }
+        let candidate_name = candidate.config.client.name.clone();
+
+        let name = if let Some(entry) = self.interfaces.remove(&id) {
+            entry.info.name
+        } else {
+            candidate_name
+        };
+        self.interface_runtime_defaults.remove(&name);
+        self.interface_ifac_runtime.remove(&name);
+        self.interface_ifac_runtime_defaults.remove(&name);
+        self.backbone_client_runtime.remove(&name);
+        if self.engine.interface_info(&id).is_some() {
+            self.engine.deregister_interface(id);
+        }
+        Some((index, name))
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -835,12 +931,13 @@ impl Driver {
         let interface_type_name = candidate.config.interface_type_name.clone();
         let is_discovered = candidate.config.source == BackbonePeerPoolCandidateSource::Discovered;
         let wire_ifac_size = if ifac_enabled { ifac_runtime.size } else { 0 };
+        let control = crate::interface::ListenerControl::new();
         let writer = start_client_with_ifac(
             client.clone(),
             self.event_tx.clone(),
             wire_ifac_size,
             self.underlay_mark,
-            crate::interface::ListenerControl::new(),
+            control.clone(),
         )?;
         let info = rns_core::transport::types::InterfaceInfo {
             id,
@@ -916,6 +1013,7 @@ impl Driver {
                 candidate.active_id = Some(id);
                 candidate.retry_after = None;
                 candidate.last_error = None;
+                candidate.control = Some(control);
             }
         }
         Ok(())
@@ -952,28 +1050,9 @@ impl Driver {
 
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn handle_backbone_peer_pool_down(&mut self, id: InterfaceId) {
-        let Some((index, candidate_name)) = self.backbone_peer_pool.as_ref().and_then(|pool| {
-            pool.candidates
-                .iter()
-                .enumerate()
-                .find(|(_, candidate)| candidate.active_id == Some(id))
-                .map(|(index, candidate)| (index, candidate.config.client.name.clone()))
-        }) else {
+        let Some((index, _)) = self.release_backbone_peer_pool_member(id) else {
             return;
         };
-
-        let name = if let Some(entry) = self.interfaces.remove(&id) {
-            entry.info.name
-        } else {
-            candidate_name
-        };
-        self.interface_runtime_defaults.remove(&name);
-        self.interface_ifac_runtime.remove(&name);
-        self.interface_ifac_runtime_defaults.remove(&name);
-        self.backbone_client_runtime.remove(&name);
-        if self.engine.interface_info(&id).is_some() {
-            self.engine.deregister_interface(id);
-        }
         self.record_backbone_peer_pool_failure(index, "interface down".into());
         self.maintain_backbone_peer_pool();
     }

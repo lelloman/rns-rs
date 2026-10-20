@@ -341,6 +341,8 @@ struct BackbonePeerPoolCandidate {
     retry_after: Option<f64>,
     cooldown_until: Option<f64>,
     last_error: Option<String>,
+    /// Stops the active connection's reader when the pool evicts it.
+    control: Option<crate::interface::ListenerControl>,
 }
 
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.

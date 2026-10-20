@@ -1648,6 +1648,19 @@ impl ClientLink {
     fn connection_lost(self: &Arc<Self>) {
         let id = self.config.interface_id;
         let _ = self.tx.push_from_loop([Event::InterfaceDown(id)]);
+        let max_tries =
+            lock_or_recover(&self.config.runtime, "backbone runtime").max_reconnect_tries;
+        if max_tries == Some(0) {
+            // Whoever owns this client (the backbone peer pool) reconnects
+            // it. A reconnect thread would only wait out a backoff and then
+            // report the interface down again, possibly after the owner has
+            // already brought it back up under the same id.
+            log::debug!(
+                "[{}] not reconnecting (max_reconnect_tries = 0)",
+                self.config.name
+            );
+            return;
+        }
         let link = Arc::clone(self);
         let spawned = thread::Builder::new()
             .name(format!("bb-reconn-{}", id.0))
@@ -1964,6 +1977,16 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4242);
             let transport_identity = params.get("transport_identity").cloned();
+            // Like Python, retry forever unless max_reconnect_tries is set.
+            let max_reconnect_tries = match params.get("max_reconnect_tries") {
+                Some(value) => Some(value.trim().parse::<u32>().map_err(|_| {
+                    format!(
+                        "invalid Backbone max_reconnect_tries '{}' (expected a non-negative integer)",
+                        value
+                    )
+                })?),
+                None => None,
+            };
             let priority = match params.get("priority") {
                 Some(value) => value.parse::<u8>().map_err(|_| {
                     format!(
@@ -1979,17 +2002,17 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     priority
                 ));
             }
-            Ok(Box::new(BackboneMode::Client(
-                BackboneClientConfig {
-                    name: name.to_string(),
-                    target_host,
-                    target_port,
-                    interface_id: id,
-                    transport_identity,
-                    ..BackboneClientConfig::default()
-                },
-                priority,
-            )))
+            let mut client = BackboneClientConfig {
+                name: name.to_string(),
+                target_host,
+                target_port,
+                interface_id: id,
+                max_reconnect_tries,
+                transport_identity,
+                ..BackboneClientConfig::default()
+            };
+            client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&client)));
+            Ok(Box::new(BackboneMode::Client(client, priority)))
         } else {
             // Server mode
             let listen_ip = params
@@ -3151,6 +3174,78 @@ mod tests {
     }
 
     #[test]
+    fn backbone_client_keeps_reconnecting_until_server_returns() {
+        // The remote node restarts: its listener disappears for several
+        // reconnect attempts, then comes back on the same port. Without
+        // max_reconnect_tries the client must not give up.
+        let port = find_free_port();
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let (tx, rx) = crate::event::channel();
+
+        let mut config = make_client_config(port, 9360);
+        config.reconnect_wait = Duration::from_millis(20);
+        config.max_reconnect_tries = None;
+        config.connect_timeout = Duration::from_millis(200);
+        config.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&config)));
+        let _writer = start_client(config, tx).unwrap();
+
+        let (server_stream, _) = listener.accept().unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            event,
+            Event::InterfaceUp(InterfaceId(9360), None, _)
+        ));
+
+        // Server goes away: connection and listener both close.
+        drop(server_stream);
+        drop(listener);
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(InterfaceId(9360))));
+
+        // Several attempts (backoff 20, 40, 80, 160 ms ...) fail meanwhile.
+        thread::sleep(Duration::from_millis(400));
+        if let Ok(event) = recv_non_peer_event(&rx, Duration::from_millis(10)) {
+            panic!("unexpected event while the server is down: {:?}", event);
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let (_server_stream, _) = listener.accept().unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(5)).unwrap();
+        assert!(
+            matches!(event, Event::InterfaceUp(InterfaceId(9360), Some(_), _)),
+            "expected reconnect InterfaceUp, got {:?}",
+            event
+        );
+    }
+
+    #[test]
+    fn backbone_client_without_reconnect_tries_leaves_reconnecting_to_owner() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let (tx, rx) = crate::event::channel();
+
+        let mut config = make_client_config(port, 9370);
+        config.reconnect_wait = Duration::from_millis(20);
+        config.max_reconnect_tries = Some(0);
+        config.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&config)));
+        let _writer = start_client(config, tx).unwrap();
+
+        let (server_stream, _) = listener.accept().unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+        drop(server_stream);
+
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(InterfaceId(9370))));
+        // No reconnect attempt and no second, late InterfaceDown that could
+        // tear down a connection the owner has since re-established.
+        listener.set_nonblocking(true).unwrap();
+        if let Ok(event) = recv_non_peer_event(&rx, Duration::from_millis(300)) {
+            panic!("unexpected event after the connection closed: {:?}", event);
+        }
+        assert!(listener.accept().is_err());
+    }
+
+    #[test]
     fn backbone_client_stop_prevents_reconnect() {
         let port = find_free_port();
         let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
@@ -3678,6 +3773,37 @@ mod tests {
             BackboneMode::Client(_, priority) => assert_eq!(priority, 87),
             BackboneMode::Server(_) => panic!("expected client config"),
         }
+    }
+
+    #[test]
+    fn backbone_parse_config_reads_client_max_reconnect_tries() {
+        let parse = |value: Option<&str>| {
+            let mut params = HashMap::new();
+            params.insert("remote".into(), "127.0.0.1".into());
+            if let Some(value) = value {
+                params.insert("max_reconnect_tries".into(), value.into());
+            }
+            BackboneInterfaceFactory
+                .parse_config("peer", InterfaceId(1), &params)
+                .map(|config| {
+                    let mode = config.into_any().downcast::<BackboneMode>().unwrap();
+                    match *mode {
+                        BackboneMode::Client(client, _) => client,
+                        BackboneMode::Server(_) => panic!("expected client mode"),
+                    }
+                })
+        };
+
+        let client = parse(None).unwrap();
+        assert_eq!(client.max_reconnect_tries, None);
+        assert_eq!(client.runtime.lock().unwrap().max_reconnect_tries, None);
+
+        let client = parse(Some("7")).unwrap();
+        assert_eq!(client.max_reconnect_tries, Some(7));
+        assert_eq!(client.runtime.lock().unwrap().max_reconnect_tries, Some(7));
+
+        assert!(parse(Some("-1")).is_err());
+        assert!(parse(Some("forever")).is_err());
     }
 
     #[test]
