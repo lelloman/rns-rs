@@ -980,14 +980,23 @@ mod tests {
         let control = EgressControl::new(EGRESS_HIGH_WATERMARK);
         let mut f = budgeted(LoopEgress::budget(control.clone()));
         let frame = vec![0x55; 64 * 1024];
+        let sends = 2 * EGRESS_HIGH_WATERMARK / frame.len();
         let started = Instant::now();
-        for _ in 0..(2 * EGRESS_HIGH_WATERMARK / frame.len()) {
+        for _ in 0..sends {
             f.writer.send_frame(&frame).unwrap();
             f.writer.flush_pending();
         }
         // No send waited for the socket, and frames past the budget were
-        // dropped and counted rather than refused.
-        assert!(started.elapsed() < ASYNC_WRITER_BACKPRESSURE_WAIT * 8);
+        // dropped and counted rather than refused. Waiting would cost at
+        // least one backpressure wait per send; allow a quarter of that so a
+        // loaded machine copying 8 MiB of frames cannot trip the bound.
+        let waiting_floor = ASYNC_WRITER_BACKPRESSURE_WAIT * sends as u32;
+        assert!(
+            started.elapsed() < waiting_floor / 4,
+            "sends took {:?}; waiting on the socket would take at least {:?}",
+            started.elapsed(),
+            waiting_floor,
+        );
         let dropped = control.dropped_frames.load(Ordering::Relaxed);
         assert!(dropped > 0, "expected drops past the byte budget");
         assert!(f.metrics.egress_control.is_some());
@@ -1001,7 +1010,7 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let mut f = budgeted(
             LoopEgress::budget(control)
-                .with_stall_watch(|| Some(Duration::from_millis(50)), Arc::clone(&flag)),
+                .with_stall_watch(|| Some(Duration::from_millis(500)), Arc::clone(&flag)),
         );
         let frame = vec![0x55; 64 * 1024];
         for _ in 0..8 {
@@ -1012,7 +1021,9 @@ mod tests {
         assert_eq!(take_down_reports(&f.rx), 0);
 
         // Nothing new is sent: only the driver's tick sees the stall.
-        std::thread::sleep(Duration::from_millis(80));
+        // Well past the 500 ms stall window, which is long enough that writing
+        // the frames above cannot trip it on a busy machine.
+        std::thread::sleep(Duration::from_millis(600));
         f.writer.tick();
         assert!(flag.load(Ordering::Relaxed));
         assert_eq!(take_down_reports(&f.rx), 1);

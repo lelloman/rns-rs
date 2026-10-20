@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn server_bind_tcp() {
         let port = find_free_port();
-        let instance_name = "test-bind".to_string();
+        let instance_name = crate::test_support::instance_name("test-bind");
         let (tx, _rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7000));
 
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn server_accept_client() {
         let port = find_free_port();
-        let instance_name = "test-accept".to_string();
+        let instance_name = crate::test_support::instance_name("test-accept");
         let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7100));
 
@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn server_stop_prevents_new_accepts() {
         let port = find_free_port();
-        let instance_name = "test-stop".to_string();
+        let instance_name = crate::test_support::instance_name("test-stop");
         let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7150));
 
@@ -1108,7 +1108,7 @@ mod tests {
         let next_id = Arc::new(AtomicU64::new(7200));
 
         let server_config = LocalServerConfig {
-            instance_name: "test-sr".into(),
+            instance_name: crate::test_support::instance_name("test-sr"),
             port,
             interface_id: InterfaceId(72),
         };
@@ -1120,7 +1120,7 @@ mod tests {
         let (client_tx, client_rx) = crate::event::channel();
         let client_config = LocalClientConfig {
             name: "test-client".into(),
-            instance_name: "test-sr".into(),
+            instance_name: crate::test_support::instance_name("test-sr"),
             port,
             interface_id: InterfaceId(73),
             reconnect_wait: Duration::from_secs(1),
@@ -1320,7 +1320,7 @@ mod tests {
     #[test]
     fn multiple_local_clients() {
         let port = find_free_port();
-        let instance_name = "test-multi".to_string();
+        let instance_name = crate::test_support::instance_name("test-multi");
         let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7300));
 
@@ -1352,7 +1352,7 @@ mod tests {
     #[test]
     fn client_disconnect_detected() {
         let port = find_free_port();
-        let instance_name = "test-dc".to_string();
+        let instance_name = crate::test_support::instance_name("test-dc");
         let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7400));
 

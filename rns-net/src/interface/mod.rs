@@ -720,6 +720,9 @@ struct AsyncWriter {
     defer_wake: bool,
     /// A deferred send left the worker asleep with frames queued.
     wake_pending: bool,
+    /// Longest wait for queue space before an unconfirmed frame is refused.
+    /// [`ASYNC_WRITER_BACKPRESSURE_WAIT`] outside tests.
+    backpressure_wait: Duration,
 }
 
 enum Admission {
@@ -789,8 +792,8 @@ impl Writer for AsyncWriter {
 }
 
 impl AsyncWriter {
-    /// Admit an unconfirmed frame, waiting up to
-    /// [`ASYNC_WRITER_BACKPRESSURE_WAIT`] while the worker is busy.
+    /// Admit an unconfirmed frame, waiting up to the backpressure wait
+    /// ([`ASYNC_WRITER_BACKPRESSURE_WAIT`]) while the worker is busy.
     ///
     /// A stalled peer (as reported by the byte-budget controller) is refused
     /// immediately so that one dead connection cannot repeatedly pause the
@@ -819,7 +822,7 @@ impl AsyncWriter {
         // retry fails observes the waiter and must take the lock to notify,
         // which it can only do once this thread is waiting.
         self.metrics.space_waiters.fetch_add(1, Ordering::SeqCst);
-        let deadline = Instant::now() + ASYNC_WRITER_BACKPRESSURE_WAIT;
+        let deadline = Instant::now() + self.backpressure_wait;
         let result = loop {
             match self.try_admit(frame) {
                 Err(error) => break Err(error),
@@ -995,6 +998,26 @@ pub fn wrap_async_writer(
     event_tx: EventSender,
     queue_capacity: usize,
 ) -> (Box<dyn Writer>, AsyncWriterMetrics) {
+    wrap_async_writer_with_wait(
+        writer,
+        interface_id,
+        interface_name,
+        event_tx,
+        queue_capacity,
+        ASYNC_WRITER_BACKPRESSURE_WAIT,
+    )
+}
+
+/// [`wrap_async_writer`] with an explicit backpressure wait, so tests can use
+/// a wait long enough to stay deterministic on a loaded machine.
+fn wrap_async_writer_with_wait(
+    writer: Box<dyn Writer>,
+    interface_id: InterfaceId,
+    interface_name: &str,
+    event_tx: EventSender,
+    queue_capacity: usize,
+    backpressure_wait: Duration,
+) -> (Box<dyn Writer>, AsyncWriterMetrics) {
     if let Some(fd) = writer.loop_socket() {
         return loop_writer::wrap(writer, fd, interface_id, interface_name, event_tx);
     }
@@ -1033,6 +1056,7 @@ pub fn wrap_async_writer(
             skip_wait: false,
             defer_wake: false,
             wake_pending: false,
+            backpressure_wait,
         }),
         metrics,
     )
@@ -1743,7 +1767,11 @@ mod tests {
         let (event_tx, _event_rx) = crate::event::channel();
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        let (mut writer, metrics) = wrap_async_writer(
+        // Far longer than the production wait: the release below must reach
+        // the worker, and a non-waiting send must return, within this bound
+        // even when the machine is busy.
+        let wait = Duration::from_millis(500);
+        let (mut writer, metrics) = wrap_async_writer_with_wait(
             Box::new(BlockingWriter {
                 entered_tx,
                 release_rx,
@@ -1752,6 +1780,7 @@ mod tests {
             "test",
             event_tx,
             1,
+            wait,
         );
         writer.send_frame(&[1]).unwrap();
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -1774,11 +1803,11 @@ mod tests {
         let started = Instant::now();
         let err = writer.send_frame(&[4]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
-        assert!(started.elapsed() >= ASYNC_WRITER_BACKPRESSURE_WAIT);
+        assert!(started.elapsed() >= wait);
         let started = Instant::now();
         let err = writer.send_frame(&[5]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
-        assert!(started.elapsed() < ASYNC_WRITER_BACKPRESSURE_WAIT);
+        assert!(started.elapsed() < wait);
 
         for _ in 0..3 {
             let _ = release_tx.send(());

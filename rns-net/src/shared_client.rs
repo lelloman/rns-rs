@@ -563,7 +563,7 @@ mod tests {
 
         // Start a local server
         let server_config = LocalServerConfig {
-            instance_name: "test-shared-connect".into(),
+            instance_name: crate::test_support::instance_name("test-shared-connect"),
             port,
             interface_id: rns_core::transport::types::InterfaceId(99),
         };
@@ -573,7 +573,7 @@ mod tests {
 
         // Connect as shared client
         let config = SharedClientConfig {
-            instance_name: "test-shared-connect".into(),
+            instance_name: crate::test_support::instance_name("test-shared-connect"),
             port,
             rpc_port: 0,
         };
@@ -594,7 +594,7 @@ mod tests {
         let (server_tx, _server_rx) = crate::event::channel();
 
         let server_config = LocalServerConfig {
-            instance_name: "test-shared-reg".into(),
+            instance_name: crate::test_support::instance_name("test-shared-reg"),
             port,
             interface_id: rns_core::transport::types::InterfaceId(98),
         };
@@ -603,7 +603,7 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         let config = SharedClientConfig {
-            instance_name: "test-shared-reg".into(),
+            instance_name: crate::test_support::instance_name("test-shared-reg"),
             port,
             rpc_port: 0,
         };
@@ -628,7 +628,7 @@ mod tests {
         let (server_tx, server_rx) = crate::event::channel();
 
         let server_config = LocalServerConfig {
-            instance_name: "test-shared-send".into(),
+            instance_name: crate::test_support::instance_name("test-shared-send"),
             port,
             interface_id: rns_core::transport::types::InterfaceId(97),
         };
@@ -637,7 +637,7 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         let config = SharedClientConfig {
-            instance_name: "test-shared-send".into(),
+            instance_name: crate::test_support::instance_name("test-shared-send"),
             port,
             rpc_port: 0,
         };

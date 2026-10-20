@@ -12,3 +12,14 @@ pub(crate) fn port() -> u16 {
     let _ = NEXT_PORT.compare_exchange(0, base, Ordering::SeqCst, Ordering::SeqCst);
     NEXT_PORT.fetch_add(1, Ordering::SeqCst)
 }
+
+/// A shared-instance name that is unique to this test process.
+///
+/// Local-interface tests bind abstract Unix sockets by instance name. Each
+/// test in a process uses its own prefix, and the process id keeps parallel
+/// test processes (nextest, concurrent CI jobs, a developer's running daemon)
+/// from binding or connecting to each other's sockets. The same prefix yields
+/// the same name within a process, so a test's server and client agree.
+pub(crate) fn instance_name(prefix: &str) -> String {
+    format!("{prefix}-{}", std::process::id())
+}
