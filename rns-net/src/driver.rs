@@ -338,6 +338,9 @@ struct BackbonePeerPoolCandidate {
     config: BackbonePeerPoolCandidateConfig,
     active_id: Option<InterfaceId>,
     failures: Vec<f64>,
+    /// Failed attempts since the last successful connect; drives the
+    /// reconnect backoff of configured peers.
+    consecutive_failures: u32,
     retry_after: Option<f64>,
     cooldown_until: Option<f64>,
     last_error: Option<String>,

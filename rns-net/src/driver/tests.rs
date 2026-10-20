@@ -1216,6 +1216,62 @@ fn backbone_peer_pool_removes_stale_standby_discovered_candidates() {
 #[cfg(feature = "iface-backbone")]
 #[test]
 fn backbone_peer_pool_cools_down_failed_peer_and_tries_next() {
+    // Discovered peers that keep failing go on the pool cooldown.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let reachable_port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 1,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(900),
+        },
+        Vec::new(),
+    );
+    for (name, port, seed, hops) in [
+        ("failed", 1, 0xc1, 1),
+        ("replacement", reachable_port, 0xc2, 2),
+    ] {
+        assert!(
+            driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+                name,
+                "127.0.0.1",
+                Some(port),
+                seed,
+                hops,
+                10,
+                time::now(),
+            ))
+        );
+    }
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.cooldown_count, 1);
+    assert_eq!(status.members[0].name.split(" (").next().unwrap(), "failed");
+    assert_eq!(status.members[0].state, "cooldown");
+    assert_eq!(status.members[0].failure_count, 1);
+    let remaining = status.members[0].cooldown_remaining_seconds.unwrap();
+    assert!(remaining > 890.0 && remaining <= 900.0, "{remaining}");
+    assert_eq!(
+        status.members[1].name.split(" (").next().unwrap(),
+        "replacement"
+    );
+    assert!(matches!(
+        status.members[1].state.as_str(),
+        "connecting" | "active"
+    ));
+    drop(listener);
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_configured_failed_peer_backs_off_and_tries_next() {
+    // A failing configured peer still fails over to the next configured one,
+    // but waits out a short backoff instead of the pool cooldown.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let reachable_port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
@@ -1225,7 +1281,7 @@ fn backbone_peer_pool_cools_down_failed_peer_and_tries_next() {
             max_connected: 1,
             failure_threshold: 1,
             failure_window: Duration::from_secs(60),
-            cooldown: Duration::from_secs(60),
+            cooldown: Duration::from_secs(900),
         },
         vec![
             make_pool_candidate("failed", 1, 7011),
@@ -1235,12 +1291,101 @@ fn backbone_peer_pool_cools_down_failed_peer_and_tries_next() {
 
     let status = driver.backbone_peer_pool_status().unwrap();
     assert_eq!(status.active_count, 1);
-    assert_eq!(status.cooldown_count, 1);
+    assert_eq!(status.cooldown_count, 0);
     assert_eq!(status.members[0].name, "failed");
-    assert_eq!(status.members[0].state, "cooldown");
+    assert_eq!(status.members[0].state, "standby");
     assert_eq!(status.members[0].failure_count, 1);
     assert_eq!(status.members[1].name, "replacement");
     assert_eq!(status.members[1].interface_id, Some(7012));
+    let pool = driver.backbone_peer_pool.as_ref().unwrap();
+    assert!(pool.candidates[0].cooldown_until.is_none());
+    assert!(pool.candidates[0].retry_after.unwrap() <= time::now() + 1.0);
+    drop(listener);
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_configured_peer_backoff_is_bounded() {
+    // Python retries a configured Backbone client every 5 s forever. A
+    // configured pool peer that keeps failing must back off like a
+    // standalone client (5 s doubling, capped at 320 s, ±25 % jitter) and
+    // never wait out the pool cooldown.
+    let mut driver = new_test_driver();
+    let mut candidate = make_pool_candidate("down", 1, 7111);
+    candidate.client.reconnect_wait = Duration::from_secs(5);
+    candidate.client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(
+        &candidate.client,
+    )));
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(600),
+            cooldown: Duration::from_secs(900),
+        },
+        vec![candidate],
+    );
+
+    // The initial connect already failed once; keep failing it.
+    for attempt in 1..20u32 {
+        driver.record_backbone_peer_pool_failure(0, "connection refused".into());
+        let now = time::now();
+        let pool = driver.backbone_peer_pool.as_ref().unwrap();
+        let candidate = &pool.candidates[0];
+        assert!(candidate.cooldown_until.is_none());
+        let wait = candidate.retry_after.unwrap() - now;
+        let nominal = 5.0 * f64::from(2u32.pow(attempt.min(6)));
+        assert!(
+            wait >= nominal * 0.75 - 1.0 && wait <= nominal * 1.25,
+            "attempt {attempt}: waits {wait}s, nominal {nominal}s"
+        );
+        assert!(wait <= 320.0 * 1.25);
+    }
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.cooldown_count, 0);
+    assert_eq!(status.members[0].state, "standby");
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_configured_peer_returns_after_repeated_drops() {
+    // Dropping more often than the failure threshold must not park a
+    // configured peer on the cooldown: it reconnects once its backoff
+    // expires, and a successful connect resets the backoff.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 1,
+            failure_window: Duration::from_secs(600),
+            cooldown: Duration::from_secs(900),
+        },
+        vec![make_pool_candidate("configured", port, 7121)],
+    );
+
+    for _ in 0..3 {
+        let status = driver.backbone_peer_pool_status().unwrap();
+        assert_eq!(status.members[0].interface_id, Some(7121));
+        driver.handle_backbone_peer_pool_down(InterfaceId(7121));
+
+        let status = driver.backbone_peer_pool_status().unwrap();
+        assert_eq!(status.cooldown_count, 0);
+        assert_eq!(status.members[0].state, "standby");
+        let pool = driver.backbone_peer_pool.as_ref().unwrap();
+        assert_eq!(pool.candidates[0].consecutive_failures, 1);
+
+        // reconnect_wait is 10 ms: the first retry is due within 12.5 ms.
+        std::thread::sleep(Duration::from_millis(30));
+        driver.maintain_backbone_peer_pool();
+        let pool = driver.backbone_peer_pool.as_ref().unwrap();
+        assert_eq!(pool.candidates[0].consecutive_failures, 0);
+    }
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.members[0].interface_id, Some(7121));
+    assert_eq!(status.members[0].failure_count, 3);
     drop(listener);
 }
 
@@ -1269,8 +1414,9 @@ fn backbone_peer_pool_rotates_after_runtime_disconnect() {
 
     let status = driver.backbone_peer_pool_status().unwrap();
     assert_eq!(status.active_count, 1);
-    assert_eq!(status.cooldown_count, 1);
-    assert_eq!(status.members[0].state, "cooldown");
+    // Configured peers back off instead of entering the pool cooldown.
+    assert_eq!(status.cooldown_count, 0);
+    assert_eq!(status.members[0].state, "standby");
     assert_eq!(status.members[1].interface_id, Some(7022));
     drop(listener_a);
     drop(listener_b);

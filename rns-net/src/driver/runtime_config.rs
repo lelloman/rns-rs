@@ -382,6 +382,7 @@ impl Driver {
                     config,
                     active_id: None,
                     failures: Vec::new(),
+                    consecutive_failures: 0,
                     retry_after: None,
                     cooldown_until: None,
                     last_error: None,
@@ -548,6 +549,7 @@ impl Driver {
             },
             active_id: None,
             failures: Vec::new(),
+            consecutive_failures: 0,
             retry_after: None,
             cooldown_until: None,
             last_error: None,
@@ -1011,6 +1013,7 @@ impl Driver {
         if let Some(pool) = self.backbone_peer_pool.as_mut() {
             if let Some(candidate) = pool.candidates.get_mut(index) {
                 candidate.active_id = Some(id);
+                candidate.consecutive_failures = 0;
                 candidate.retry_after = None;
                 candidate.last_error = None;
                 candidate.control = Some(control);
@@ -1033,17 +1036,29 @@ impl Driver {
         candidate.failures.push(now);
         candidate.last_error = Some(error);
         candidate.active_id = None;
-        if candidate.failures.len() >= pool.settings.failure_threshold {
+        let reconnect_wait = candidate
+            .config
+            .client
+            .runtime
+            .lock()
+            .map(|runtime| runtime.reconnect_wait)
+            .unwrap_or(candidate.config.client.reconnect_wait);
+        if candidate.config.source == BackbonePeerPoolCandidateSource::Configured {
+            // Configured peers are ones the operator asked for: like a
+            // standalone Backbone client (and Python, which retries every
+            // 5 s forever) keep retrying with a bounded backoff instead of
+            // the long cooldown meant for discovered peers.
+            let backoff = crate::interface::backbone::reconnect_backoff(
+                reconnect_wait,
+                candidate.consecutive_failures,
+            );
+            candidate.consecutive_failures = candidate.consecutive_failures.saturating_add(1);
+            candidate.cooldown_until = None;
+            candidate.retry_after = Some(now + backoff.as_secs_f64());
+        } else if candidate.failures.len() >= pool.settings.failure_threshold {
             candidate.cooldown_until = Some(now + pool.settings.cooldown.as_secs_f64());
             candidate.retry_after = None;
         } else {
-            let reconnect_wait = candidate
-                .config
-                .client
-                .runtime
-                .lock()
-                .map(|runtime| runtime.reconnect_wait)
-                .unwrap_or(candidate.config.client.reconnect_wait);
             candidate.retry_after = Some(now + reconnect_wait.as_secs_f64());
         }
     }

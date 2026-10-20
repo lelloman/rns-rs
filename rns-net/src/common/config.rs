@@ -155,11 +155,14 @@ pub struct ReticulumSection {
     pub interface_writer_queue_capacity: usize,
     /// Maximum active outbound Backbone peer-pool connections. Zero disables pooling.
     pub backbone_peer_pool_max_connected: usize,
-    /// Failures within the failure window before a pooled Backbone peer enters cooldown.
+    /// Failures within the failure window before a discovered pooled Backbone
+    /// peer enters cooldown. Configured peers never enter cooldown: they retry
+    /// with the Backbone client backoff (reconnect wait doubled per failure,
+    /// capped at 64x, i.e. 320 s by default, with ±25 % jitter).
     pub backbone_peer_pool_failure_threshold: usize,
     /// Failure accounting window for pooled Backbone peers, in seconds.
     pub backbone_peer_pool_failure_window: u64,
-    /// Cooldown duration for failed pooled Backbone peers, in seconds.
+    /// Cooldown duration for failed discovered pooled Backbone peers, in seconds.
     pub backbone_peer_pool_cooldown: u64,
     #[cfg(feature = "hooks")]
     pub provider_bridge: bool,

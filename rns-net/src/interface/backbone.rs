@@ -1749,7 +1749,27 @@ impl LoopSource for ClientSource {
 
 /// Maximum backoff multiplier: `base_delay * 2^MAX_BACKOFF_SHIFT`.
 /// With a 5 s base this caps at 5 × 2^6 = 320 s ≈ 5 min.
-const MAX_BACKOFF_SHIFT: u32 = 6;
+pub(crate) const MAX_BACKOFF_SHIFT: u32 = 6;
+
+/// Delay before reconnect attempt number `attempt` (0-based): `base`
+/// doubled per attempt up to `base * 2^MAX_BACKOFF_SHIFT`, with ±25 %
+/// jitter to avoid thundering-herd reconnects.
+pub(crate) fn reconnect_backoff(base: Duration, attempt: u32) -> Duration {
+    let backoff = base * 2u32.pow(attempt.min(MAX_BACKOFF_SHIFT));
+    let jitter_range = backoff / 4;
+    if jitter_range.as_nanos() == 0 {
+        return backoff;
+    }
+    let offset = Duration::from_nanos(
+        (std::hash::RandomState::new().build_hasher().finish() % jitter_range.as_nanos() as u64)
+            * 2,
+    );
+    if offset > jitter_range {
+        backoff + (offset - jitter_range)
+    } else {
+        backoff - (jitter_range - offset)
+    }
+}
 
 /// Attempt to reconnect with exponential backoff and jitter.
 /// Returns the new reader stream on success.
@@ -1764,24 +1784,7 @@ fn client_reconnect(
     loop {
         let runtime = lock_or_recover(&config.runtime, "backbone runtime").clone();
 
-        let shift = attempts.min(MAX_BACKOFF_SHIFT);
-        let backoff = runtime.reconnect_wait * 2u32.pow(shift);
-        // Add ±25 % jitter to avoid thundering-herd reconnects.
-        let jitter_range = backoff / 4;
-        let jitter = if jitter_range.as_nanos() > 0 {
-            let offset = Duration::from_nanos(
-                (std::hash::RandomState::new().build_hasher().finish()
-                    % jitter_range.as_nanos() as u64)
-                    * 2,
-            );
-            if offset > jitter_range {
-                backoff + (offset - jitter_range)
-            } else {
-                backoff - (jitter_range - offset)
-            }
-        } else {
-            backoff
-        };
+        let jitter = reconnect_backoff(runtime.reconnect_wait, attempts);
         if !wait_while_active(control, jitter) {
             return None;
         }
