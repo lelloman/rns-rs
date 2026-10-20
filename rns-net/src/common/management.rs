@@ -88,18 +88,35 @@ pub fn probe_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
     destination_hash("rnstransport", &["probe"], Some(transport_identity_hash))
 }
 
+/// Build the 10-byte random blob carried by an announce.
+///
+/// Matches Python `Destination.announce()`: 5 random bytes followed by the
+/// emission time in whole seconds, big-endian, truncated to 5 bytes. Path
+/// update rules compare this emission time, so it must be a real timestamp.
+pub fn announce_random_blob(rng: &mut dyn rns_crypto::Rng, now: f64) -> [u8; 10] {
+    let mut random_hash = [0u8; 10];
+    rng.fill_bytes(&mut random_hash[..5]);
+    let now_secs = if now.is_finite() && now > 0.0 {
+        now as u64
+    } else {
+        0
+    };
+    random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
+    random_hash
+}
+
 /// Build an announce packet for the probe responder destination.
 ///
 /// Returns raw packet bytes ready for `engine.handle_outbound()`.
 pub fn build_probe_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
+    now: f64,
 ) -> Option<Vec<u8>> {
     let identity_hash = *identity.hash();
     let dest_hash = probe_dest_hash(&identity_hash);
     let name_hash = rns_core::destination::name_hash("rnstransport", &["probe"]);
-    let mut random_hash = [0u8; 10];
-    rng.fill_bytes(&mut random_hash);
+    let random_hash = announce_random_blob(rng, now);
 
     let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
         identity,
@@ -463,12 +480,12 @@ pub fn handle_blackhole_list_request(engine: &TransportEngine) -> Option<Vec<u8>
 pub fn build_management_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
+    now: f64,
 ) -> Option<Vec<u8>> {
     let identity_hash = *identity.hash();
     let dest_hash = management_dest_hash(&identity_hash);
     let name_hash = rns_core::destination::name_hash("rnstransport", &["remote", "management"]);
-    let mut random_hash = [0u8; 10];
-    rng.fill_bytes(&mut random_hash);
+    let random_hash = announce_random_blob(rng, now);
 
     let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
         identity,
@@ -507,12 +524,12 @@ pub fn build_management_announce(
 pub fn build_blackhole_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
+    now: f64,
 ) -> Option<Vec<u8>> {
     let identity_hash = *identity.hash();
     let dest_hash = blackhole_dest_hash(&identity_hash);
     let name_hash = rns_core::destination::name_hash("rnstransport", &["info", "blackhole"]);
-    let mut random_hash = [0u8; 10];
-    rng.fill_bytes(&mut random_hash);
+    let random_hash = announce_random_blob(rng, now);
 
     let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
         identity,

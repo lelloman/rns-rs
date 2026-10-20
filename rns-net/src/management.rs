@@ -350,7 +350,7 @@ mod tests {
         use rns_crypto::OsRng;
 
         let identity = Identity::new(&mut OsRng);
-        let raw = build_management_announce(&identity, &mut OsRng);
+        let raw = build_management_announce(&identity, &mut OsRng, time::now());
         assert!(raw.is_some(), "Should build management announce");
 
         let raw = raw.unwrap();
@@ -366,7 +366,7 @@ mod tests {
         use rns_crypto::OsRng;
 
         let identity = Identity::new(&mut OsRng);
-        let raw = build_blackhole_announce(&identity, &mut OsRng);
+        let raw = build_blackhole_announce(&identity, &mut OsRng, time::now());
         assert!(raw.is_some(), "Should build blackhole announce");
 
         let raw = raw.unwrap();
@@ -381,7 +381,7 @@ mod tests {
         use rns_crypto::OsRng;
 
         let identity = Identity::new(&mut OsRng);
-        let raw = build_management_announce(&identity, &mut OsRng).unwrap();
+        let raw = build_management_announce(&identity, &mut OsRng, time::now()).unwrap();
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
         let validated = rns_core::announce::AnnounceData::unpack(pkt.data(), false);
         assert!(validated.is_ok(), "Announce data should unpack");
@@ -400,7 +400,7 @@ mod tests {
         use rns_crypto::OsRng;
 
         let identity = Identity::new(&mut OsRng);
-        let raw = build_blackhole_announce(&identity, &mut OsRng).unwrap();
+        let raw = build_blackhole_announce(&identity, &mut OsRng, time::now()).unwrap();
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
         let ann = rns_core::announce::AnnounceData::unpack(pkt.data(), false).unwrap();
         let result = ann.validate(&pkt.destination_hash);
@@ -427,7 +427,7 @@ mod tests {
         use rns_crypto::OsRng;
 
         let identity = Identity::new(&mut OsRng);
-        let raw = build_probe_announce(&identity, &mut OsRng);
+        let raw = build_probe_announce(&identity, &mut OsRng, time::now());
         assert!(raw.is_some(), "Should build probe announce");
 
         let raw = raw.unwrap();
@@ -443,7 +443,7 @@ mod tests {
         use rns_crypto::OsRng;
 
         let identity = Identity::new(&mut OsRng);
-        let raw = build_probe_announce(&identity, &mut OsRng).unwrap();
+        let raw = build_probe_announce(&identity, &mut OsRng, time::now()).unwrap();
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
         let ann = rns_core::announce::AnnounceData::unpack(pkt.data(), false).unwrap();
         let result = ann.validate(&pkt.destination_hash);
@@ -460,8 +460,8 @@ mod tests {
         use rns_crypto::OsRng;
 
         let identity = Identity::new(&mut OsRng);
-        let mgmt_raw = build_management_announce(&identity, &mut OsRng).unwrap();
-        let bh_raw = build_blackhole_announce(&identity, &mut OsRng).unwrap();
+        let mgmt_raw = build_management_announce(&identity, &mut OsRng, time::now()).unwrap();
+        let bh_raw = build_blackhole_announce(&identity, &mut OsRng, time::now()).unwrap();
 
         let mgmt_pkt = rns_core::packet::RawPacket::unpack(&mgmt_raw).unwrap();
         let bh_pkt = rns_core::packet::RawPacket::unpack(&bh_raw).unwrap();
@@ -470,5 +470,47 @@ mod tests {
             mgmt_pkt.destination_hash, bh_pkt.destination_hash,
             "Management and blackhole should have different dest hashes"
         );
+    }
+
+    #[test]
+    fn test_builtin_announces_encode_emission_time() {
+        use rns_core::transport::pathfinder::timebase_from_random_blob;
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let now = time::now();
+        let builders: [(&str, Option<Vec<u8>>); 3] = [
+            (
+                "management",
+                build_management_announce(&identity, &mut OsRng, now),
+            ),
+            (
+                "blackhole",
+                build_blackhole_announce(&identity, &mut OsRng, now),
+            ),
+            ("probe", build_probe_announce(&identity, &mut OsRng, now)),
+        ];
+        for (label, raw) in builders {
+            let raw = raw.unwrap_or_else(|| panic!("{label} announce should build"));
+            let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+            // public key (64) + name hash (10), then the 10-byte random blob.
+            let blob: [u8; 10] = pkt.data()[74..84].try_into().unwrap();
+            let emitted = timebase_from_random_blob(&blob) as f64;
+            assert!(
+                (emitted - now).abs() <= 60.0,
+                "{label} announce emission time {emitted} not within 60 s of {now}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_announce_random_blob_layout() {
+        use rns_core::transport::pathfinder::timebase_from_random_blob;
+        use rns_crypto::OsRng;
+
+        let blob = announce_random_blob(&mut OsRng, 1_700_000_000.7);
+        assert_eq!(timebase_from_random_blob(&blob), 1_700_000_000);
+        assert_eq!(&blob[5..10], &1_700_000_000u64.to_be_bytes()[3..8]);
     }
 }

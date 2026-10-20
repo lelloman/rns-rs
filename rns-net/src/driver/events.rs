@@ -2345,8 +2345,7 @@ impl Driver {
             Some(identity_hash),
         );
         let name_hash = self.discovery_name_hash;
-        let mut random_hash = [0u8; 10];
-        self.rng.fill_bytes(&mut random_hash);
+        let random_hash = crate::common::management::announce_random_blob(&mut self.rng, now);
 
         let (announce_data, _) = match rns_core::announce::AnnounceData::pack(
             identity,
@@ -2596,19 +2595,19 @@ impl Driver {
 
         // Build announce packets first (immutable borrow of identity), then dispatch
         let mgmt_raw = if self.management_config.enable_remote_management {
-            management::build_management_announce(identity, &mut self.rng)
+            management::build_management_announce(identity, &mut self.rng, now)
         } else {
             None
         };
 
         let bh_raw = if self.management_config.publish_blackhole {
-            management::build_blackhole_announce(identity, &mut self.rng)
+            management::build_blackhole_announce(identity, &mut self.rng, now)
         } else {
             None
         };
 
         let probe_raw = if self.probe_responder_hash.is_some() {
-            management::build_probe_announce(identity, &mut self.rng)
+            management::build_probe_announce(identity, &mut self.rng, now)
         } else {
             None
         };
