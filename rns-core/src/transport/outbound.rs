@@ -15,10 +15,13 @@ pub(crate) struct OutboundRouteOptions {
 ///
 /// Follows Transport.py:939-1179:
 /// 1. If path known and hops > 1 → rewrite HEADER_1 to HEADER_2 with next_hop, send on path interface
-/// 2. If path known and hops == 1 but next hop is another transport → rewrite HEADER_1 to HEADER_2
-/// 3. If path known and hops == 1 on a shared client → rewrite HEADER_1 to HEADER_2
-/// 4. If path known and hops <= 1 otherwise → send as-is on path interface
-/// 5. No path → broadcast on all OUT interfaces (with mode filtering for announces)
+/// 2. If path known and hops == 1 on a shared client → rewrite HEADER_1 to HEADER_2
+///    (Transport.py:1416, `is_connected_to_shared_instance`)
+/// 3. If path known and hops <= 1 otherwise → send as-is on path interface, even
+///    when next_hop is a transport node rather than the destination. As in
+///    Transport.py, the receiving daemon synthesises the transport id for its
+///    local clients (#183), so no transport header is injected here.
+/// 4. No path → broadcast on all OUT interfaces (with mode filtering for announces)
 pub fn route_outbound(
     path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
@@ -69,13 +72,7 @@ pub(crate) fn route_outbound_with_options(
                 .map(|iface| iface.is_local_client)
                 .unwrap_or(false);
 
-            let one_hop_via_transport =
-                path_entry.hops == 1 && path_entry.next_hop != packet.destination_hash;
-
-            if path_entry.hops > 1
-                || one_hop_via_transport
-                || (path_entry.hops == 1 && is_shared_client)
-            {
+            if path_entry.hops > 1 || (path_entry.hops == 1 && is_shared_client) {
                 if packet.flags.header_type == constants::HEADER_1 {
                     let hops = outbound_info
                         .and_then(|iface| local_hops_delta(packet, dest_type, iface, options))
@@ -611,8 +608,12 @@ mod tests {
         }
     }
 
+    /// PR #190: a one-hop path whose next hop is a transport node (e.g. a
+    /// destination that is a local client of a neighbouring daemon) is sent
+    /// as-is, matching Transport.py. Injecting a HEADER_2 here would reach a
+    /// Python rnsd client with the daemon's transport_id still set.
     #[test]
-    fn test_outbound_one_hop_via_transport_injects_transport() {
+    fn test_outbound_one_hop_via_transport_sends_as_is() {
         let dest = [0x24; 16];
         let next_hop = [0xAA; 16];
         let mut paths = BTreeMap::new();
@@ -638,10 +639,9 @@ mod tests {
             TransportAction::SendOnInterface { interface, raw } => {
                 assert_eq!(*interface, InterfaceId(2));
                 let flags = PacketFlags::unpack(raw[0]);
-                assert_eq!(flags.header_type, constants::HEADER_2);
-                assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
-                assert_eq!(&raw[2..18], &next_hop);
-                assert_eq!(&raw[18..], &packet.raw[2..]);
+                assert_eq!(flags.header_type, constants::HEADER_1);
+                assert_eq!(&raw[2..18], &dest);
+                assert_eq!(&raw[..], &packet.raw[..]);
             }
             _ => panic!("Expected SendOnInterface"),
         }

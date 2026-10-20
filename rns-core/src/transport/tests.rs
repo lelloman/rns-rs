@@ -5565,3 +5565,134 @@ fn test_shared_client_does_not_relay_for_its_shared_instance() {
     assert!(engine.announce_table.is_empty());
     assert!(engine.pending_local_path_requests.is_empty());
 }
+
+/// PR #190 setup: a transport daemon (identity X = 0x42) whose path to `D`
+/// is one hop away via a neighbouring transport node `T` (`T != D`) on a
+/// normal interface 2. This is how a destination hosted as a local client of
+/// a neighbouring rnsd looks: the rnsd announces it at 0 hops, so we record
+/// it at 1 hop with next_hop = the rnsd. Interface 1 is a local client.
+fn make_pr190_one_hop_via_transport_engine() -> (TransportEngine, [u8; 16], [u8; 16]) {
+    let mut config = make_config(true);
+    config.identity_hash = Some([0x42; 16]);
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_local_client_interface(1));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+    let dest_hash = [0x99; 16];
+    let next_hop = [0x77; 16];
+    engine.inject_path(
+        dest_hash,
+        make_path_entry(1000.0, 1, InterfaceId(2), next_hop),
+    );
+    (engine, dest_hash, next_hop)
+}
+
+/// PR #190 inbound regression: a HEADER_2 LINKREQUEST addressed to us for a
+/// destination one hop away via another transport node must be forwarded as
+/// HEADER_1, as Transport.py:2032-2037 does. If it kept HEADER_2 addressed to
+/// `T`, a Python rnsd hosting `D` as a local client (default
+/// `local_hops_delta` off) would hand it to the client unchanged, and the
+/// client would drop the LINKREQUEST because its transport_id is not its own
+/// (Transport.py:2541).
+#[test]
+fn test_pr190_one_hop_via_transport_inbound_linkrequest_strips_to_h1() {
+    let (mut engine, dest_hash, next_hop) = make_pr190_one_hop_via_transport_engine();
+    let daemon_id = [0x42; 16];
+    let payload = [0x5A; constants::LINK_ECPUBSIZE];
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_LINKREQUEST,
+        },
+        0,
+        &dest_hash,
+        Some(&daemon_id),
+        constants::CONTEXT_NONE,
+        &payload,
+    )
+    .unwrap();
+
+    let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+    let actions = engine.handle_inbound(
+        InboundFrame::new(&packet.raw, InterfaceId(1), 1001.0),
+        &mut rng,
+    );
+
+    let sends = issue183_sends_on(&actions, InterfaceId(2));
+    assert_eq!(sends.len(), 1, "LINKREQUEST must be forwarded on iface 2");
+    let raw = sends[0];
+    let flags = PacketFlags::unpack(raw[0]);
+    assert_eq!(flags.header_type, constants::HEADER_1);
+    assert_eq!(flags.transport_type, constants::TRANSPORT_BROADCAST);
+    assert_eq!(flags.packet_type, constants::PACKET_TYPE_LINKREQUEST);
+    assert_eq!(&raw[2..18], &dest_hash);
+    assert_ne!(&raw[2..18], &next_hop, "must not be addressed to T");
+    assert_eq!(raw[18], constants::CONTEXT_NONE);
+    assert_eq!(&raw[19..], &payload);
+}
+
+/// PR #190 outbound regression: our own HEADER_1 packet for a destination
+/// one hop away via another transport node is sent as-is, as Transport.py
+/// does when not connected to a shared instance. Injecting a HEADER_2
+/// addressed to `T` would reach a Python rnsd's local client with the rnsd's
+/// transport_id still set, and the client would drop a LINKREQUEST.
+#[test]
+fn test_pr190_one_hop_via_transport_outbound_sends_h1_as_is() {
+    let (mut engine, dest_hash, next_hop) = make_pr190_one_hop_via_transport_engine();
+    let packet = build_issue183_h1(
+        &dest_hash,
+        constants::DESTINATION_SINGLE,
+        constants::PACKET_TYPE_LINKREQUEST,
+        constants::CONTEXT_NONE,
+        &[0x5A; constants::LINK_ECPUBSIZE],
+    );
+
+    let actions = engine.handle_outbound(&packet, constants::DESTINATION_SINGLE, None, 1001.0);
+
+    let sends = issue183_sends_on(&actions, InterfaceId(2));
+    assert_eq!(sends.len(), 1);
+    let raw = sends[0];
+    let flags = PacketFlags::unpack(raw[0]);
+    assert_eq!(flags.header_type, constants::HEADER_1);
+    assert_eq!(flags.transport_type, constants::TRANSPORT_BROADCAST);
+    assert_ne!(&raw[2..18], &next_hop, "must not be addressed to T");
+    assert_eq!(raw, packet.raw.as_slice());
+    assert!(issue183_sends_on(&actions, InterfaceId(1)).is_empty());
+}
+
+/// PR #190 sibling: when the one-hop path interface is a local client (we
+/// are a shared-instance client, Transport.py:1416
+/// `is_connected_to_shared_instance`), the transport header is still
+/// injected so the daemon forwards the packet.
+#[test]
+fn test_pr190_one_hop_via_shared_instance_still_injects_h2() {
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_local_client_interface(1));
+    let dest_hash = [0x99; 16];
+    let daemon_id = [0x77; 16];
+    engine.inject_path(
+        dest_hash,
+        make_path_entry(1000.0, 1, InterfaceId(1), daemon_id),
+    );
+    let packet = build_issue183_h1(
+        &dest_hash,
+        constants::DESTINATION_SINGLE,
+        constants::PACKET_TYPE_LINKREQUEST,
+        constants::CONTEXT_NONE,
+        &[0x5A; constants::LINK_ECPUBSIZE],
+    );
+
+    let actions = engine.handle_outbound(&packet, constants::DESTINATION_SINGLE, None, 1001.0);
+
+    let sends = issue183_sends_on(&actions, InterfaceId(1));
+    assert_eq!(sends.len(), 1);
+    let raw = sends[0];
+    let flags = PacketFlags::unpack(raw[0]);
+    assert_eq!(flags.header_type, constants::HEADER_2);
+    assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+    assert_eq!(&raw[2..18], &daemon_id);
+    assert_eq!(&raw[18..], &packet.raw[2..]);
+}

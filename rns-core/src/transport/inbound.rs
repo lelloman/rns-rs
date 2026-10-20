@@ -35,8 +35,7 @@ pub fn forward_transport_packet(
     _outbound_interface: InterfaceId,
 ) -> Vec<u8> {
     if remaining_hops > 1 {
-        // Replace transport_id with next_hop, update hops. A one-hop path can
-        // still point at a final transport node for destinations behind it.
+        // Replace transport_id with next_hop, update hops.
         let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
         let mut new_raw = Vec::with_capacity(2 + next_hop.len() + tail.len());
         new_raw.push(packet.raw[0]); // flags unchanged
@@ -47,6 +46,11 @@ pub fn forward_transport_packet(
         new_raw
     } else if remaining_hops == 1 {
         // Direct final hop: strip transport headers and deliver as H1.
+        // As in Transport.py:2032-2037 this strips unconditionally, even when
+        // next_hop is a transport node rather than the destination (e.g. the
+        // destination is a local client of a neighbouring daemon): the
+        // receiving daemon re-synthesises the transport id for its local
+        // clients (#183).
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
             | (packet.raw[0] & 0x0F);
@@ -402,8 +406,10 @@ mod tests {
         assert_eq!(&new_raw[2..18], &dest);
     }
 
+    /// PR #190: a one-hop path whose next hop is a transport node still
+    /// strips to HEADER_1, matching Transport.py:2032-2037.
     #[test]
-    fn test_forward_transport_one_hop_to_transport_keeps_header() {
+    fn test_forward_transport_one_hop_to_transport_strips_header() {
         let dest = [0x11; 16];
         let transport_id = [0x22; 16];
         let next_transport = [0x33; 16];
@@ -412,10 +418,13 @@ mod tests {
         let new_raw = forward_transport_packet(&packet, next_transport, 1, InterfaceId(1));
 
         let flags = crate::packet::PacketFlags::unpack(new_raw[0]);
-        assert_eq!(flags.header_type, constants::HEADER_2);
-        assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
-        assert_eq!(&new_raw[2..18], &next_transport);
-        assert_eq!(&new_raw[18..34], &dest);
+        assert_eq!(flags.header_type, constants::HEADER_1);
+        assert_eq!(flags.transport_type, constants::TRANSPORT_BROADCAST);
+        assert_eq!(&new_raw[2..18], &dest);
+        assert_eq!(new_raw.len(), packet.raw.len() - 16);
+        assert!(!new_raw
+            .windows(16)
+            .any(|w| w == next_transport || w == transport_id));
     }
 
     #[test]
