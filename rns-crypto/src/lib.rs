@@ -64,9 +64,41 @@ impl Rng for OsRng {
         #[cfg(not(target_os = "espidf"))]
         {
             use std::io::Read;
-            let mut f = std::fs::File::open("/dev/urandom").expect("Failed to open /dev/urandom");
+            // Opened once: opening it for every draw cost an open and a close
+            // per token IV and random hash. Reads through `&File` need no lock.
+            static URANDOM: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
+            let mut f = URANDOM.get_or_init(|| {
+                std::fs::File::open("/dev/urandom").expect("Failed to open /dev/urandom")
+            });
             f.read_exact(dest)
                 .expect("Failed to read from /dev/urandom");
+        }
+    }
+}
+
+#[cfg(all(test, feature = "std", not(target_os = "espidf")))]
+mod tests {
+    use super::{OsRng, Rng};
+
+    #[test]
+    fn os_rng_fills_buffers_from_concurrent_threads() {
+        let draws: std::vec::Vec<[u8; 32]> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let mut out = [0u8; 32];
+                    OsRng.fill_bytes(&mut out);
+                    out
+                })
+            })
+            .collect::<std::vec::Vec<_>>()
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        for (i, a) in draws.iter().enumerate() {
+            assert_ne!(a, &[0u8; 32]);
+            for b in &draws[i + 1..] {
+                assert_ne!(a, b);
+            }
         }
     }
 }
