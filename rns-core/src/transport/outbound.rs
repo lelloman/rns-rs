@@ -52,7 +52,8 @@ pub(crate) fn route_outbound_with_options(
     options: OutboundRouteOptions,
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
-    let shared_raw: PacketBytes = packet.raw.clone().into();
+    // Built from the slice: cloning the Vec first would copy the packet twice.
+    let shared_raw = PacketBytes::from(packet.raw.as_slice());
 
     // Don't route announces or PLAIN/GROUP via path table
     let use_path_table = packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
@@ -215,7 +216,7 @@ fn raw_for_interface(
     options: OutboundRouteOptions,
 ) -> PacketBytes {
     let Some(hops) = local_hops_delta(packet, dest_type, iface, options) else {
-        return packet.raw.clone().into();
+        return PacketBytes::from(packet.raw.as_slice());
     };
 
     if packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
