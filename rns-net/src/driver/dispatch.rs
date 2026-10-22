@@ -1673,9 +1673,10 @@ impl Driver {
                     match decoded {
                         Ok(packet) => {
                             self.link_manager.record_outbound_packet(&packet);
-                            // No proof ever answers a resource part.
+                            // Track only packets a proof can answer. Kept until
+                            // expiry, the others filled the table under load.
                             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
-                                && !packet.is_link_resource_part()
+                                && !packet.is_unproven_link_data()
                             {
                                 self.sent_packets.insert(
                                     packet.packet_hash,
