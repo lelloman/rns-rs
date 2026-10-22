@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -698,6 +698,9 @@ pub struct Driver {
     pub(crate) callbacks: Box<dyn Callbacks>,
     pub(crate) started: f64,
     pub(crate) lifecycle_state: LifecycleState,
+    /// Whether `lifecycle_state` is still `Active`, shared with the node
+    /// handle so that each API call can check it without a driver query.
+    pub(crate) accepting_work: Arc<AtomicBool>,
     pub(crate) drain_started_at: Option<Instant>,
     pub(crate) drain_deadline: Option<Instant>,
     pub(crate) listener_controls: Vec<crate::interface::ListenerControl>,
@@ -949,6 +952,7 @@ impl Driver {
             callbacks,
             started: time::now(),
             lifecycle_state: LifecycleState::Active,
+            accepting_work: Arc::new(AtomicBool::new(true)),
             drain_started_at: None,
             drain_deadline: None,
             listener_controls: Vec::new(),
@@ -1342,6 +1346,11 @@ impl Driver {
 
     pub(crate) fn set_tick_interval_handle(&mut self, tick_interval_ms: Arc<AtomicU64>) {
         self.tick_interval_ms = tick_interval_ms;
+    }
+
+    /// The flag the node handle reads to refuse new work once draining starts.
+    pub(crate) fn accepting_work_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.accepting_work)
     }
 
     #[allow(dead_code)]

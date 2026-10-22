@@ -256,10 +256,17 @@ impl LinkManager {
             }
         }
         let mut actions = Vec::new();
+        let mut finished_links = Vec::new();
         while let Some((pending, ready)) =
             self.receive_worker.as_mut().and_then(|w| w.receive(false))
         {
+            finished_links.push(pending.link);
             actions.extend(self.finish_receive(pending, ready, rng));
+        }
+        // Not in finish_receive: a part handler waiting on the worker holds an
+        // index into the link's receivers.
+        for link in finished_links {
+            self.prune_concluded_incoming(&link);
         }
         if self
             .receive_worker

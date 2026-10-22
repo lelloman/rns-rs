@@ -453,6 +453,7 @@ mod tests {
             std::thread::spawn(|| {}),
             None,
             Arc::new(std::sync::atomic::AtomicU64::new(1000)),
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
         );
         let dest = crate::Destination::plain("confirmed", &["packet"]);
         let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
@@ -614,6 +615,7 @@ mod tests {
             std::thread::spawn(|| {}),
             None,
             Arc::new(AtomicU64::new(1000)),
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
         );
         let receipt = node.try_send_on_link([1; 16], vec![1], 0).unwrap();
         assert_eq!(

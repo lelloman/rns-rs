@@ -28,6 +28,9 @@ pub(super) struct ManagedLink {
     pub(super) dest_sig_pub_bytes: Option<[u8; 32]>,
     /// Active incoming resource transfers.
     pub(super) incoming_resources: Vec<ResourceReceiver>,
+    /// Hashes of incoming resources concluded since the last tick, so that an
+    /// advertisement retry of one is still ignored after its receiver is gone.
+    pub(super) concluded_incoming: std::collections::HashSet<Vec<u8>>,
     /// Active outgoing resource transfers.
     pub(super) outgoing_resources: Vec<ResourceSender>,
     /// Request IDs awaiting a packet or resource response.

@@ -106,6 +106,7 @@ impl Driver {
         match self.lifecycle_state {
             LifecycleState::Active => {
                 self.lifecycle_state = LifecycleState::Draining;
+                self.accepting_work.store(false, Ordering::Release);
                 self.drain_started_at = Some(now);
                 self.drain_deadline = Some(deadline);
                 log::info!(
@@ -179,6 +180,8 @@ impl Driver {
         }
 
         self.lifecycle_state = LifecycleState::Stopping;
+
+        self.accepting_work.store(false, Ordering::Release);
         self.stop_resource_preparations();
         self.stop_listener_accepts();
 
@@ -222,6 +225,7 @@ impl Driver {
 
         self.link_manager.stop_receive_worker();
         self.lifecycle_state = LifecycleState::Stopped;
+        self.accepting_work.store(false, Ordering::Release);
     }
 
     pub(crate) fn drain_error(&self, op: &str) -> String {
@@ -344,6 +348,7 @@ impl Driver {
         self.event_tx.link_send_pool().close();
         self.pending_link_frames.clear();
         self.lifecycle_state = LifecycleState::Stopping;
+        self.accepting_work.store(false, Ordering::Release);
         self.stop_resource_preparations();
         let resource_actions = self.link_manager.cancel_all_resources(&mut self.rng);
         self.dispatch_link_actions(resource_actions);
