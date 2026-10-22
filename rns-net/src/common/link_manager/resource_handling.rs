@@ -486,24 +486,27 @@ impl LinkManager {
             }
             ResourceStrategy::AcceptAll => {
                 if is_split {
-                    let storage =
-                        match Self::incoming_storage(&link.resource_receive_mode, &original_hash) {
-                            Ok(storage) => storage,
-                            Err(error) => {
-                                let reject_actions = {
-                                    let mut receiver = receiver;
-                                    receiver.reject()
-                                };
-                                let _ = link;
-                                let mut actions =
-                                    self.process_resource_actions(link_id, reject_actions, rng);
-                                actions.push(LinkManagerAction::ResourceFailed {
-                                    link_id: *link_id,
-                                    error: format!("resource storage failed: {error}"),
-                                });
-                                return actions;
-                            }
-                        };
+                    let storage = match Self::incoming_storage(
+                        &link.resource_receive_mode,
+                        &original_hash,
+                        receiver.data_size,
+                    ) {
+                        Ok(storage) => storage,
+                        Err(error) => {
+                            let reject_actions = {
+                                let mut receiver = receiver;
+                                receiver.reject()
+                            };
+                            let _ = link;
+                            let mut actions =
+                                self.process_resource_actions(link_id, reject_actions, rng);
+                            actions.push(LinkManagerAction::ResourceFailed {
+                                link_id: *link_id,
+                                error: format!("resource storage failed: {error}"),
+                            });
+                            return actions;
+                        }
+                    };
                     link.incoming_splits.insert(
                         original_hash,
                         IncomingSplitTransfer {
@@ -566,21 +569,24 @@ impl LinkManager {
                 Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
             {
                 if !link.incoming_splits.contains_key(&original_hash) {
-                    let storage =
-                        match Self::incoming_storage(&link.resource_receive_mode, &original_hash) {
-                            Ok(storage) => storage,
-                            Err(error) => {
-                                let resource_actions = link.incoming_resources[idx].reject();
-                                let _ = link;
-                                let mut actions =
-                                    self.process_resource_actions(link_id, resource_actions, rng);
-                                actions.push(LinkManagerAction::ResourceFailed {
-                                    link_id: *link_id,
-                                    error: format!("resource storage failed: {error}"),
-                                });
-                                return actions;
-                            }
-                        };
+                    let storage = match Self::incoming_storage(
+                        &link.resource_receive_mode,
+                        &original_hash,
+                        link.incoming_resources[idx].data_size,
+                    ) {
+                        Ok(storage) => storage,
+                        Err(error) => {
+                            let resource_actions = link.incoming_resources[idx].reject();
+                            let _ = link;
+                            let mut actions =
+                                self.process_resource_actions(link_id, resource_actions, rng);
+                            actions.push(LinkManagerAction::ResourceFailed {
+                                link_id: *link_id,
+                                error: format!("resource storage failed: {error}"),
+                            });
+                            return actions;
+                        }
+                    };
                     link.incoming_splits.insert(
                         original_hash,
                         IncomingSplitTransfer {

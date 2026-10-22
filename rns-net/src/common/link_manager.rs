@@ -313,12 +313,21 @@ impl LinkManager {
         Some(key)
     }
 
+    /// Storage for an incoming split Resource whose advertised logical size
+    /// is `data_size`.
     fn incoming_storage(
         mode: &ResourceReceiveMode,
         original_hash: &[u8; 32],
+        data_size: u64,
     ) -> std::io::Result<IncomingSplitStorage> {
         match mode {
-            ResourceReceiveMode::Memory { .. } => Ok(IncomingSplitStorage::Memory(Vec::new())),
+            // Reserve the whole Resource once so appending segments never
+            // reallocates and copies the data received so far. The size is the
+            // peer's claim, so the reservation never exceeds the mode's limit.
+            ResourceReceiveMode::Memory { max_bytes } => {
+                let capacity = usize::try_from(data_size.min(*max_bytes)).unwrap_or(0);
+                Ok(IncomingSplitStorage::Memory(Vec::with_capacity(capacity)))
+            }
             ResourceReceiveMode::TemporaryFile { directory, .. } => {
                 let (file, path) = crate::resource::create_receive_file(directory, original_hash)?;
                 Ok(IncomingSplitStorage::File {
