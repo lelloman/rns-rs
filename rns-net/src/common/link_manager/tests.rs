@@ -4837,3 +4837,22 @@ fn pre_rtt_requests_have_a_byte_budget() {
     // even though they are well below the packet-count limit.
     assert_eq!(responder.links[&link_id].pre_rtt_packets.len(), 1);
 }
+
+#[test]
+fn memory_split_storage_reserves_the_advertised_size_up_to_the_limit() {
+    let mode = ResourceReceiveMode::Memory {
+        max_bytes: 64 << 20,
+    };
+    let capacity =
+        |data_size| match LinkManager::incoming_storage(&mode, &[7; 32], data_size).unwrap() {
+            IncomingSplitStorage::Memory(buffer) => {
+                assert!(buffer.is_empty());
+                buffer.capacity()
+            }
+            IncomingSplitStorage::File { .. } => unreachable!(),
+        };
+    assert_eq!(capacity(67_108_800), 67_108_800);
+    // A peer's larger claim never reserves past the configured limit.
+    assert_eq!(capacity(u64::MAX), 64 << 20);
+    assert_eq!(capacity(0), 0);
+}
