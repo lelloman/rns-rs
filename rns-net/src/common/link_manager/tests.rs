@@ -4102,8 +4102,8 @@ fn test_resource_hmu_timeout_extension_in_link_manager_flow() {
     let prime_actions = {
         let managed = resp_mgr.links.get_mut(&link_id).unwrap();
         let receiver = managed.incoming_resources.first_mut().unwrap();
-        let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
-            managed.engine.decrypt(ciphertext).map_err(|_| ())
+        let decrypt_fn = |parts: &[&[u8]], skip: usize| -> Result<Vec<u8>, ()> {
+            managed.engine.decrypt_chunks(parts, skip).map_err(|_| ())
         };
         receiver.tick(
             receiver.last_activity + 0.0001,
@@ -4163,8 +4163,8 @@ fn test_resource_hmu_timeout_extension_in_link_manager_flow() {
     let late_resource_actions = {
         let managed = resp_mgr.links.get_mut(&link_id).unwrap();
         let receiver = managed.incoming_resources.first_mut().unwrap();
-        let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
-            managed.engine.decrypt(ciphertext).map_err(|_| ())
+        let decrypt_fn = |parts: &[&[u8]], skip: usize| -> Result<Vec<u8>, ()> {
+            managed.engine.decrypt_chunks(parts, skip).map_err(|_| ())
         };
         receiver.tick(
             receiver.last_activity + late_delta,

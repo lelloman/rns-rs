@@ -20,6 +20,11 @@ impl HmacSha256 {
     pub fn finalize(&self) -> [u8; 32] {
         self.inner.clone().finalize().into_bytes().into()
     }
+
+    /// Compare the tag with the MAC implementation's constant-time primitive.
+    pub fn verify(self, tag: &[u8]) -> bool {
+        self.inner.verify_slice(tag).is_ok()
+    }
 }
 
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {

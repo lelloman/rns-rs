@@ -24,6 +24,18 @@ pub fn link_decrypt(token: &Token, ciphertext: &[u8]) -> Result<Vec<u8>, LinkErr
         .map_err(|_| LinkError::CryptoError)
 }
 
+/// [`link_decrypt`] of ciphertext held in consecutive chunks, dropping the
+/// first `skip` plaintext bytes (see [`Token::decrypt_chunks`]).
+pub fn link_decrypt_chunks(
+    token: &Token,
+    chunks: &[&[u8]],
+    skip: usize,
+) -> Result<Vec<u8>, LinkError> {
+    token
+        .decrypt_chunks(chunks, skip)
+        .map_err(|_| LinkError::CryptoError)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

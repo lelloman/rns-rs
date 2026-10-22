@@ -11,8 +11,9 @@ fn identity_encrypt(data: &[u8]) -> Vec<u8> {
     data.to_vec()
 }
 
-fn identity_decrypt(data: &[u8]) -> Result<Vec<u8>, ()> {
-    Ok(data.to_vec())
+fn identity_decrypt(parts: &[&[u8]], skip: usize) -> Result<Vec<u8>, ()> {
+    let joined = parts.concat();
+    joined.get(skip..).map(<[u8]>::to_vec).ok_or(())
 }
 
 fn request_data_from(actions: &[ResourceAction]) -> Option<Vec<u8>> {

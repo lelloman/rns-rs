@@ -1783,8 +1783,8 @@ impl LinkManager {
             // Tick incoming resources (receivers)
             let mut receiver_actions = Vec::new();
             for receiver in &mut link.incoming_resources {
-                let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
-                    link.engine.decrypt(ciphertext).map_err(|_| ())
+                let decrypt_fn = |parts: &[&[u8]], skip: usize| -> Result<Vec<u8>, ()> {
+                    link.engine.decrypt_chunks(parts, skip).map_err(|_| ())
                 };
                 receiver_actions.extend(receiver.tick(now, &decrypt_fn, &Bzip2Compressor));
             }
