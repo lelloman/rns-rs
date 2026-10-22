@@ -9470,12 +9470,32 @@ fn inbound_implicit_proof_matches_truncated_destination() {
 
 #[test]
 fn link_dispatch_preserves_route_headers_and_proof_tracking() {
-    for (header, routed, attached) in [
-        (constants::HEADER_1, false, false),
-        (constants::HEADER_1, true, false),
-        (constants::HEADER_1, true, true),
-        (constants::HEADER_2, true, false),
+    for (header, routed, attached, context) in [
+        (constants::HEADER_1, false, false, constants::CONTEXT_NONE),
+        (constants::HEADER_1, true, false, constants::CONTEXT_NONE),
+        (constants::HEADER_1, true, true, constants::CONTEXT_NONE),
+        (constants::HEADER_2, true, false, constants::CONTEXT_NONE),
+        (
+            constants::HEADER_1,
+            false,
+            false,
+            constants::CONTEXT_RESOURCE,
+        ),
+        (
+            constants::HEADER_1,
+            true,
+            false,
+            constants::CONTEXT_RESOURCE,
+        ),
+        (
+            constants::HEADER_2,
+            true,
+            false,
+            constants::CONTEXT_RESOURCE,
+        ),
     ] {
+        // No proof answers a resource part, so it is not tracked.
+        let tracked = usize::from(context != constants::CONTEXT_RESOURCE);
         let mut driver = new_test_driver();
         let (manager, link_id) = active_link_manager_with_route(InterfaceId(1));
         driver.link_manager = manager;
@@ -9504,7 +9524,7 @@ fn link_dispatch_preserves_route_headers_and_proof_tracking() {
             } else {
                 None
             },
-            constants::CONTEXT_RESOURCE,
+            context,
             b"preserve part bytes",
         )
         .unwrap();
@@ -9525,15 +9545,17 @@ fn link_dispatch_preserves_route_headers_and_proof_tracking() {
             attached_interface: attached.then_some(InterfaceId(1)),
         }]);
         assert_eq!(sent.lock().unwrap().as_slice(), &[expected]);
-        assert_eq!(driver.sent_packets.len(), 1);
-        assert_eq!(driver.sent_packets[&packet.packet_hash].0, link_id);
+        assert_eq!(driver.sent_packets.len(), tracked);
+        if tracked == 1 {
+            assert_eq!(driver.sent_packets[&packet.packet_hash].0, link_id);
+        }
         driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
             raw: vec![0],
             dest_type: constants::DESTINATION_LINK,
             attached_interface: None,
         }]);
         assert_eq!(sent.lock().unwrap().len(), 1);
-        assert_eq!(driver.sent_packets.len(), 1);
+        assert_eq!(driver.sent_packets.len(), tracked);
     }
 }
 

@@ -67,7 +67,10 @@ impl TransportEngine {
     /// filter admits without consulting deduplication, is not hashed: no
     /// step that handles it reads the hash. Its hash cannot reject any later
     /// packet either, since a packet with the same hash has the same context.
-    /// [`DecodedPacket::packet_hash`] reports whether hashing was deferred.
+    /// Nor is a resource part for a local link (see
+    /// [`RawPacket::is_link_resource_part`]); its delivery carries a zeroed
+    /// hash. [`DecodedPacket::packet_hash`] reports whether hashing was
+    /// deferred.
     ///
     /// [`handle_decoded_inbound_with_announce_queue`]: Self::handle_decoded_inbound_with_announce_queue
     /// It takes ownership of the wire bytes, which the decoded packet keeps.
@@ -86,7 +89,7 @@ impl TransportEngine {
             return DecodedPacket::unpack_owned(raw);
         }
         let mut packet = RawPacket::unpack_unhashed(raw)?;
-        let hash_deferred = self.forwards_link_packet_unhashed(&packet);
+        let hash_deferred = self.link_packet_hash_unread(&packet);
         if !hash_deferred {
             packet.hash_in_place();
         }
@@ -96,8 +99,24 @@ impl TransportEngine {
         })
     }
 
-    /// Whether every inbound step that handles `packet` leaves its hash unread:
-    /// it is link data for a validated link this node relays, in a context
+    /// Whether every inbound step that handles `packet` leaves its hash unread.
+    fn link_packet_hash_unread(&self, packet: &RawPacket) -> bool {
+        self.forwards_link_packet_unhashed(packet) || self.delivers_resource_part_unhashed(packet)
+    }
+
+    /// A resource part for a local link is only delivered, and its delivery
+    /// hands the part to the resource receiver. Path-table routing would key a
+    /// reverse entry on the hash, so a destination with a path is excluded.
+    fn delivers_resource_part_unhashed(&self, packet: &RawPacket) -> bool {
+        packet.is_link_resource_part()
+            && self
+                .local_destinations
+                .contains_key(&packet.destination_hash)
+            && !self.path_table.contains_key(&packet.destination_hash)
+    }
+
+    /// Whether `packet` is only relayed and leaves its hash unread: it is
+    /// link data for a validated link this node relays, in a context
     /// that [`packet_filter_at_hops`](Self::packet_filter_at_hops) admits
     /// before deduplication, and it is neither delivered locally nor routed
     /// through the path table.
@@ -133,15 +152,18 @@ impl TransportEngine {
         let Some(mut ctx) = self.prepare_decoded_packet(frame) else {
             return Vec::new();
         };
-        // Routing state may have changed since decoding. Any packet that is
-        // no longer only relayed is hashed before a step can read the hash.
-        if ctx.hash_deferred && !self.forwards_link_packet_unhashed(&ctx.packet) {
+        // Routing state may have changed since decoding. Any packet whose hash
+        // a step could now read is hashed first.
+        if ctx.hash_deferred && !self.link_packet_hash_unread(&ctx.packet) {
             ctx.packet.hash_in_place();
             ctx.hash_deferred = false;
         }
         let mut actions = Vec::new();
 
-        self.remember_inbound_packet_hash(&ctx.packet);
+        // A deferred packet's context bypasses deduplication.
+        if !ctx.hash_deferred {
+            self.remember_inbound_packet_hash(&ctx.packet);
+        }
         self.bridge_plain_broadcast(&ctx, &mut actions);
         self.handle_transport_forwarding(&ctx, &mut actions);
         self.handle_link_table_routing(&ctx, &mut actions);

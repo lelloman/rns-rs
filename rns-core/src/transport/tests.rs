@@ -4977,18 +4977,63 @@ fn deferred_hash_is_computed_when_routing_changes_before_handling() {
 }
 
 #[test]
-fn own_link_traffic_is_always_hashed() {
+fn own_link_resource_parts_alone_skip_hashing() {
     let link_id = [0x50; 16];
-    let packet = link_data_packet(&link_id, constants::CONTEXT_RESOURCE, b"resource part");
+    let part = link_data_packet(&link_id, constants::CONTEXT_RESOURCE, b"resource part");
+    let own_link = || {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_destination(link_id, constants::DESTINATION_LINK);
+        engine
+    };
+
+    // Delivered with a zeroed hash, and not recorded for deduplication.
+    let mut engine = own_link();
+    let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+    assert!(decoded.packet_hash().is_none());
+    for now in [1001.0, 1002.0] {
+        let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+        let delivered: Vec<_> = handle_decoded_at(&mut engine, decoded, now)
+            .into_iter()
+            .filter_map(|action| match action {
+                TransportAction::DeliverLocal {
+                    raw, packet_hash, ..
+                } => Some((raw.to_vec(), packet_hash)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(delivered, vec![(part.raw.clone(), [0; 32])]);
+    }
+    assert_eq!(engine.packet_hashlist_len(), 0);
+
+    // Also when this node relays the same link id.
     let mut engine = relay_with_validated_link(link_id);
     engine.register_destination(link_id, constants::DESTINATION_LINK);
-    let decoded = engine.decode_inbound(packet.raw.clone()).unwrap();
-    assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
+    assert!(engine
+        .decode_inbound(part.raw.clone())
+        .unwrap()
+        .packet_hash()
+        .is_none());
 
+    // Other contexts on the same link are hashed.
+    let channel = link_data_packet(&link_id, constants::CONTEXT_CHANNEL, b"channel");
+    let decoded = own_link().decode_inbound(channel.raw.clone()).unwrap();
+    assert_eq!(decoded.packet_hash(), Some(&channel.packet_hash));
+
+    // A path-table route would key a reverse entry on the hash.
+    let mut engine = own_link();
+    engine.path_table.insert(
+        link_id,
+        PathSet::from_single(make_path_entry(1000.0, 1, InterfaceId(1), [0xAA; 16]), 1),
+    );
+    let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+    assert_eq!(decoded.packet_hash(), Some(&part.packet_hash));
+
+    // A part for no local destination is hashed.
     let mut engine = TransportEngine::new(make_config(true));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
-    let decoded = engine.decode_inbound(packet.raw.clone()).unwrap();
-    assert_eq!(decoded.packet_hash(), Some(&packet.packet_hash));
+    let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+    assert_eq!(decoded.packet_hash(), Some(&part.packet_hash));
 }
 
 #[test]

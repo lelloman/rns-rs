@@ -115,8 +115,9 @@ impl<'a> InboundFrame<'a> {
 /// Fields are read-only so cached hashes cannot diverge from the parsed bytes.
 pub struct DecodedPacket {
     packet: RawPacket,
-    /// Set by [`TransportEngine::decode_inbound`] for link traffic it only
-    /// forwards; `packet.packet_hash` is then zeroed until the engine needs it.
+    /// Set by [`TransportEngine::decode_inbound`] for link traffic whose hash
+    /// it leaves unread; `packet.packet_hash` is then zeroed until the engine
+    /// needs it.
     hash_deferred: bool,
 }
 
@@ -160,7 +161,7 @@ pub struct DecodedInboundFrame {
 struct InboundPacketCtx {
     packet: RawPacket,
     /// `packet.packet_hash` is zeroed: the packet is link traffic that is
-    /// only forwarded, which never reads it.
+    /// only forwarded, or a local link resource part, and nothing reads it.
     hash_deferred: bool,
     original_raw: Option<Vec<u8>>,
     iface: InterfaceId,

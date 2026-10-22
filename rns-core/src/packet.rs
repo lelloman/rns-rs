@@ -105,6 +105,34 @@ impl RawPacket {
         &self.raw[Self::data_offset(self.flags.header_type)..]
     }
 
+    /// Whether this packet is a part of a link resource. Nothing reads such
+    /// a packet's hash: the packet filter admits parts before deduplication,
+    /// no proof or receipt covers them, and the resource receiver locates a
+    /// part by its map hash. A part's hash cannot mark any other packet as a
+    /// duplicate either, since the context byte is hashed.
+    #[inline]
+    pub fn is_link_resource_part(&self) -> bool {
+        Self::is_link_resource_part_header(&self.flags, self.context)
+    }
+
+    /// [`RawPacket::is_link_resource_part`] for wire bytes that are not
+    /// unpacked; `false` when they are too short to carry a context byte.
+    pub fn is_link_resource_part_wire(raw: &[u8]) -> bool {
+        let Some(&flags) = raw.first() else {
+            return false;
+        };
+        let flags = PacketFlags::unpack(flags);
+        raw.get(Self::data_offset(flags.header_type) - 1)
+            .is_some_and(|&context| Self::is_link_resource_part_header(&flags, context))
+    }
+
+    #[inline]
+    fn is_link_resource_part_header(flags: &PacketFlags, context: u8) -> bool {
+        flags.packet_type == constants::PACKET_TYPE_DATA
+            && flags.destination_type == constants::DESTINATION_LINK
+            && context == constants::CONTEXT_RESOURCE
+    }
+
     /// Pack fields into raw bytes.
     pub fn pack(
         flags: PacketFlags,
@@ -253,6 +281,17 @@ impl RawPacket {
     /// anything reads `packet_hash`.
     pub(crate) fn unpack_unhashed(raw: Vec<u8>) -> Result<Self, PacketError> {
         Self::unpack_with::<false, _>(raw)
+    }
+
+    /// Unpack owned wire bytes of a packet this node sends. A link resource
+    /// part is left unhashed, its `packet_hash` zeroed, because nothing reads
+    /// it (see [`RawPacket::is_link_resource_part`]).
+    pub fn unpack_outbound(raw: Vec<u8>) -> Result<Self, PacketError> {
+        let mut packet = Self::unpack_unhashed(raw)?;
+        if !packet.is_link_resource_part() {
+            packet.hash_in_place();
+        }
+        Ok(packet)
     }
 
     /// Unpack wire bytes whose packet hash the caller already computed from
@@ -450,6 +489,93 @@ mod tests {
             ),
             format!("{:?}", RawPacket::unpack(&packet.raw[..10]).unwrap_err())
         );
+    }
+
+    #[test]
+    fn only_link_resource_parts_are_sent_unhashed() {
+        let cases = [
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+                constants::CONTEXT_RESOURCE,
+                true,
+            ),
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+                constants::CONTEXT_CHANNEL,
+                false,
+            ),
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+                constants::CONTEXT_RESOURCE_REQ,
+                false,
+            ),
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_PROOF,
+                constants::CONTEXT_RESOURCE,
+                false,
+            ),
+            (
+                constants::DESTINATION_SINGLE,
+                constants::PACKET_TYPE_DATA,
+                constants::CONTEXT_RESOURCE,
+                false,
+            ),
+        ];
+        for header_type in [constants::HEADER_1, constants::HEADER_2] {
+            for (destination_type, packet_type, context, part) in cases {
+                let flags = PacketFlags {
+                    header_type,
+                    context_flag: constants::FLAG_UNSET,
+                    transport_type: constants::TRANSPORT_BROADCAST,
+                    destination_type,
+                    packet_type,
+                };
+                let transport_id = (header_type == constants::HEADER_2).then_some([0x11; 16]);
+                let packet = RawPacket::pack(
+                    flags,
+                    0,
+                    &[0x42; 16],
+                    transport_id.as_ref(),
+                    context,
+                    &[9; 300],
+                )
+                .unwrap();
+                assert_eq!(packet.is_link_resource_part(), part);
+                assert_eq!(RawPacket::is_link_resource_part_wire(&packet.raw), part);
+                let sent = RawPacket::unpack_outbound(packet.raw.clone()).unwrap();
+                assert_eq!(sent.raw, packet.raw);
+                let expected = if part { [0; 32] } else { packet.packet_hash };
+                assert_eq!(sent.packet_hash, expected);
+            }
+        }
+        // Bytes too short to carry a context byte are not a part.
+        let part = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_DATA,
+            },
+            0,
+            &[0x42; 16],
+            None,
+            constants::CONTEXT_RESOURCE,
+            &[9; 4],
+        )
+        .unwrap();
+        let context_at = RawPacket::data_offset(constants::HEADER_1) - 1;
+        assert!(RawPacket::is_link_resource_part_wire(
+            &part.raw[..=context_at]
+        ));
+        assert!(!RawPacket::is_link_resource_part_wire(
+            &part.raw[..context_at]
+        ));
+        assert!(!RawPacket::is_link_resource_part_wire(&[]));
     }
 
     #[test]

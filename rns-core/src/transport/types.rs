@@ -212,6 +212,9 @@ pub enum TransportAction {
     DeliverLocal {
         destination_hash: [u8; 16],
         raw: PacketBytes,
+        /// May be zeroed for a link resource part, whose hash nothing on its delivery
+        /// path reads (see
+        /// [`RawPacket::is_link_resource_part`](crate::packet::RawPacket::is_link_resource_part)).
         packet_hash: [u8; 32],
         receiving_interface: InterfaceId,
     },
