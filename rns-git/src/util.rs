@@ -257,6 +257,25 @@ mod tests {
         saved.restore();
     }
 
+    #[test]
+    fn default_rngit_dir_prefers_config_dir_over_legacy_path() {
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let saved = SavedEnv::capture();
+        std::env::remove_var("RNGIT_CONFIG");
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::set_var("HOME", tmp.path());
+        std::fs::create_dir_all(tmp.path().join(".rngit")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".config").join("rngit")).unwrap();
+
+        assert_eq!(
+            default_rngit_dir(),
+            tmp.path().join(".config").join("rngit")
+        );
+
+        saved.restore();
+    }
+
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
