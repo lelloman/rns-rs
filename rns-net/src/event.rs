@@ -259,6 +259,9 @@ struct QueueShared {
     /// The receiver can wait here instead of on `changed`, together with any
     /// sources registered on it. Producers wake it with `Poller::notify`.
     poller: Arc<polling::Poller>,
+    /// How sources are watched: level-triggered where the poller supports it,
+    /// so a source that keeps reading costs no re-arm per event.
+    source_mode: polling::PollMode,
     sources: Mutex<SourceRegistry>,
     sender_count: AtomicUsize,
     control_capacity: usize,
@@ -305,7 +308,10 @@ impl QueueShared {
     ) -> Result<(), (std::io::Error, Box<dyn LoopSource>)> {
         // SAFETY: the source owns the descriptor and is deleted from the
         // poller before it is dropped (see `remove_source`).
-        if let Err(error) = unsafe { self.poller.add(source.fd(), polling::Event::readable(key)) } {
+        if let Err(error) = unsafe {
+            self.poller
+                .add_with_mode(source.fd(), polling::Event::readable(key), self.source_mode)
+        } {
             return Err((error, source));
         }
         registry.set_deadline(key, source.deadline());
@@ -330,9 +336,36 @@ impl QueueShared {
     fn arm_source(&self, key: usize, source: &dyn LoopSource) {
         // SAFETY: the source owns its descriptor while registered.
         let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(source.fd()) };
-        if let Err(error) = self.poller.modify(fd, polling::Event::readable(key)) {
+        if let Err(error) = self.set_source_interest(fd, key, true) {
             log::warn!("failed to re-arm a loop source: {error}");
         }
+    }
+
+    /// Stop watching a source that stays registered. A oneshot source is
+    /// already unwatched after its event.
+    fn disarm_source(&self, key: usize, source: &dyn LoopSource) {
+        if self.source_mode == polling::PollMode::Oneshot {
+            return;
+        }
+        // SAFETY: the source owns its descriptor while registered.
+        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(source.fd()) };
+        if let Err(error) = self.set_source_interest(fd, key, false) {
+            log::warn!("failed to stop watching a loop source: {error}");
+        }
+    }
+
+    fn set_source_interest(
+        &self,
+        fd: std::os::fd::BorrowedFd<'_>,
+        key: usize,
+        readable: bool,
+    ) -> std::io::Result<()> {
+        let interest = if readable {
+            polling::Event::readable(key)
+        } else {
+            polling::Event::none(key)
+        };
+        self.poller.modify_with_mode(fd, interest, self.source_mode)
     }
 
     fn wake_poller(&self) {
@@ -432,6 +465,17 @@ impl EventSender {
     /// receiver like a queued event does.
     pub(crate) fn poller(&self) -> &Arc<polling::Poller> {
         &self.shared.poller
+    }
+
+    /// Watch a registered loop source for readability again, or stop
+    /// watching it, in the mode sources are registered with.
+    pub(crate) fn set_source_readable(
+        &self,
+        fd: std::os::fd::BorrowedFd<'_>,
+        key: usize,
+        readable: bool,
+    ) -> std::io::Result<()> {
+        self.shared.set_source_interest(fd, key, readable)
     }
 
     /// Serve `source` on the receiving thread from now on.
@@ -974,10 +1018,21 @@ impl EventReceiver {
             };
             let status = source.on_ready(&mut cx);
             match status {
-                SourceStatus::Rearm => self.shared.arm_source(event.key, source.as_ref()),
-                SourceStatus::Suspend => registry.suspended.push(event.key),
-                SourceStatus::Pause => registry.paused.push(event.key),
-                SourceStatus::Hold | SourceStatus::Remove => {}
+                SourceStatus::Rearm => {
+                    if self.shared.source_mode == polling::PollMode::Oneshot {
+                        self.shared.arm_source(event.key, source.as_ref());
+                    }
+                }
+                SourceStatus::Suspend => {
+                    self.shared.disarm_source(event.key, source.as_ref());
+                    registry.suspended.push(event.key);
+                }
+                SourceStatus::Pause => {
+                    self.shared.disarm_source(event.key, source.as_ref());
+                    registry.paused.push(event.key);
+                }
+                SourceStatus::Hold => self.shared.disarm_source(event.key, source.as_ref()),
+                SourceStatus::Remove => {}
             }
             self.keep_or_remove(registry, event.key, source, status);
         }
@@ -1149,6 +1204,12 @@ pub(crate) fn channel_with_queue_capacities(
     control_capacity: usize,
     inbound_capacities: InboundQueueCapacities,
 ) -> (EventSender, EventReceiver) {
+    let poller = Arc::new(polling::Poller::new().expect("create the driver event poller"));
+    let source_mode = if poller.supports_level() {
+        polling::PollMode::Level
+    } else {
+        polling::PollMode::Oneshot
+    };
     let shared = Arc::new(QueueShared {
         local_ratchets: Default::default(),
         link_sends: crate::link_send::SendPool::new(control_capacity),
@@ -1156,7 +1217,8 @@ pub(crate) fn channel_with_queue_capacities(
         async_waiter_count: AtomicUsize::new(0),
         state: Mutex::new(QueueState::new()),
         changed: Condvar::new(),
-        poller: Arc::new(polling::Poller::new().expect("create the driver event poller")),
+        poller,
+        source_mode,
         sources: Mutex::default(),
         sender_count: AtomicUsize::new(1),
         control_capacity: control_capacity.max(1),
