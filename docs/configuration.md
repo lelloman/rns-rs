@@ -52,6 +52,19 @@ Log levels run from `0` (critical only) to `8` (extreme); `7` adds path
 logging. `logtimestamps = no` drops timestamps when an external logger adds its
 own.
 
+## TCP interface MTU
+
+`TCPClientInterface` and `TCPServerInterface` use a 65,535-byte hardware MTU
+unless one of these keys is set:
+
+| Key | Meaning |
+|-----|---------|
+| `bitrate` | Interface bitrate in bits per second. The hardware MTU follows the upstream tiers, from 1,024 bytes at 62.5 kbps to 16,384 at 10 Mbps and 524,288 at 1 Gbps; below 62.5 kbps links stay at the 500-byte base MTU |
+| `fixed_mtu` | Hardware MTU in bytes, at least 500; it overrides `bitrate` |
+
+A server applies them to every client it accepts. The link MTU signalled in
+link requests is the smaller of the two ends' hardware MTUs.
+
 ## Inbound queues
 
 Inbound packets go through four independent queues, drained in priority order:

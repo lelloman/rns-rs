@@ -30,6 +30,10 @@ pub struct TcpServerConfig {
     pub interface_id: InterfaceId,
     pub max_connections: Option<usize>,
     pub ingress_control: IngressControlConfig,
+    /// Bitrate of accepted clients; it also selects their hardware MTU tier.
+    pub bitrate: Option<u64>,
+    /// Hardware MTU of accepted clients, overriding the bitrate tier.
+    pub fixed_mtu: Option<u32>,
     pub runtime: Arc<Mutex<TcpServerRuntime>>,
 }
 
@@ -62,6 +66,8 @@ impl Default for TcpServerConfig {
             interface_id: InterfaceId(0),
             max_connections: None,
             ingress_control: IngressControlConfig::enabled(),
+            bitrate: None,
+            fixed_mtu: None,
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -128,6 +134,8 @@ fn start_with_template(
         .unwrap_or(0);
     let runtime = Arc::clone(&config.runtime);
     let ingress_control = config.ingress_control;
+    let bitrate = config.bitrate;
+    let mtu = super::tcp_hardware_mtu(config.bitrate, config.fixed_mtu);
     let active_connections = Arc::new(AtomicUsize::new(0));
     let control = ListenerControl::new();
     let listener_key = crate::interface::loop_writer::read_key(config.interface_id);
@@ -140,6 +148,8 @@ fn start_with_template(
             next_id,
             runtime,
             ingress_control,
+            bitrate,
+            mtu,
             active_connections,
             control: control.clone(),
             dynamic_template,
@@ -163,6 +173,8 @@ struct ListenerSource {
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<TcpServerRuntime>>,
     ingress_control: IngressControlConfig,
+    bitrate: Option<u64>,
+    mtu: u32,
     active_connections: Arc<AtomicUsize>,
     control: ListenerControl,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
@@ -325,7 +337,7 @@ impl ListenerSource {
             announces_to_internal: None,
             out_capable: true,
             in_capable: true,
-            bitrate: None,
+            bitrate: self.bitrate,
             airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
@@ -334,7 +346,7 @@ impl ListenerSource {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
-            mtu: 65535,
+            mtu: self.mtu,
             ia_freq: 0.0,
             ip_freq: 0.0,
             op_freq: 0.0,
@@ -462,6 +474,7 @@ impl InterfaceFactory for TcpServerFactory {
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
         let max_connections = params.get("max_connections").and_then(|v| v.parse().ok());
+        let (bitrate, fixed_mtu) = super::parse_tcp_rate_params(params)?;
         let mut config = TcpServerConfig {
             name: name.to_string(),
             listen_ip,
@@ -469,6 +482,8 @@ impl InterfaceFactory for TcpServerFactory {
             interface_id: id,
             max_connections,
             ingress_control: IngressControlConfig::enabled(),
+            bitrate,
+            fixed_mtu,
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -543,6 +558,8 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(interface_id),
             max_connections,
+            bitrate: None,
+            fixed_mtu: None,
             ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
@@ -995,6 +1012,8 @@ mod tests {
             next_id: Arc::new(AtomicU64::new(8000)),
             runtime: Arc::clone(&config.runtime),
             ingress_control: config.ingress_control,
+            bitrate: None,
+            mtu: crate::interface::TCP_DEFAULT_MTU,
             active_connections: Arc::new(AtomicUsize::new(0)),
             control: ListenerControl::new(),
             dynamic_template: None,

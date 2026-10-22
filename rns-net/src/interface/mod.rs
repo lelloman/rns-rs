@@ -450,6 +450,52 @@ pub fn shared_medium_hint(interface_type: &str) -> bool {
     )
 }
 
+/// Hardware MTU of a TCP interface unless `bitrate` or `fixed_mtu` is configured.
+pub(crate) const TCP_DEFAULT_MTU: u32 = 65535;
+
+/// The optional `bitrate` and `fixed_mtu` keys of a TCP interface, with
+/// upstream's meaning: `fixed_mtu` sets the hardware MTU and must be at least
+/// the base MTU; `bitrate` is the interface bitrate.
+pub(crate) fn parse_tcp_rate_params(
+    params: &HashMap<String, String>,
+) -> Result<(Option<u64>, Option<u32>), String> {
+    let bitrate = match params.get("bitrate") {
+        Some(value) => Some(
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("invalid bitrate {value:?}"))?,
+        ),
+        None => None,
+    };
+    let fixed_mtu = match params.get("fixed_mtu") {
+        Some(value) => {
+            let mtu = value
+                .parse::<u32>()
+                .map_err(|_| format!("invalid fixed_mtu {value:?}"))?;
+            if (mtu as usize) < rns_core::constants::MTU {
+                return Err(format!("Configured MTU of {mtu} bytes is too small"));
+            }
+            Some(mtu)
+        }
+        None => None,
+    };
+    Ok((bitrate, fixed_mtu))
+}
+
+/// Hardware MTU of a TCP interface: `fixed_mtu` when configured, else
+/// upstream's autoconfiguration tier for a configured `bitrate`, else
+/// [`TCP_DEFAULT_MTU`]. Below the lowest tier upstream sets no hardware MTU,
+/// which leaves links at the base MTU.
+pub(crate) fn tcp_hardware_mtu(bitrate: Option<u64>, fixed_mtu: Option<u32>) -> u32 {
+    match (fixed_mtu, bitrate) {
+        (Some(mtu), _) => mtu,
+        (None, Some(bitrate)) => {
+            backbone::auto_mtu_for_bitrate(bitrate).unwrap_or(rns_core::constants::MTU as u32)
+        }
+        (None, None) => TCP_DEFAULT_MTU,
+    }
+}
+
 pub(crate) fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexGuard<'a, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -1388,6 +1434,63 @@ impl InterfaceStatusView for InterfaceEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tcp_interfaces_take_upstream_bitrate_and_fixed_mtu_keys() {
+        let params = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        for (factory, type_name) in [
+            (
+                &tcp::TcpClientFactory as &dyn InterfaceFactory,
+                "TCPClientInterface",
+            ),
+            (&tcp_server::TcpServerFactory, "TCPServerInterface"),
+        ] {
+            assert_eq!(factory.type_name(), type_name);
+            let rates = |pairs: &[(&str, &str)]| {
+                let config = factory
+                    .parse_config("bench", InterfaceId(1), &params(pairs))
+                    .map_err(|error| error.to_string())?;
+                let any = config.into_any();
+                Ok::<_, String>(
+                    if let Some(c) = any.downcast_ref::<tcp::TcpClientConfig>() {
+                        (c.bitrate, c.fixed_mtu)
+                    } else {
+                        let c = any.downcast_ref::<tcp_server::TcpServerConfig>().unwrap();
+                        (c.bitrate, c.fixed_mtu)
+                    },
+                )
+            };
+            assert_eq!(rates(&[]), Ok((None, None)));
+            assert_eq!(
+                rates(&[("bitrate", "1000000000"), ("fixed_mtu", "500")]),
+                Ok((Some(1_000_000_000), Some(500)))
+            );
+            assert_eq!(
+                rates(&[("fixed_mtu", "499")]),
+                Err("Configured MTU of 499 bytes is too small".to_string())
+            );
+            assert!(rates(&[("bitrate", "fast")]).is_err());
+        }
+    }
+
+    #[test]
+    fn tcp_hardware_mtu_follows_fixed_mtu_then_the_bitrate_tier() {
+        assert_eq!(tcp_hardware_mtu(None, None), TCP_DEFAULT_MTU);
+        assert_eq!(tcp_hardware_mtu(Some(10_000_000), None), 16_384);
+        assert_eq!(tcp_hardware_mtu(Some(1_000_000_000), None), 524_288);
+        assert_eq!(tcp_hardware_mtu(Some(1_000_000_000), Some(500)), 500);
+        assert_eq!(tcp_hardware_mtu(None, Some(1_200)), 1_200);
+        // Below the lowest tier upstream sets no hardware MTU.
+        assert_eq!(
+            tcp_hardware_mtu(Some(9_600), None),
+            rns_core::constants::MTU as u32
+        );
+    }
 
     #[test]
     fn shared_medium_hint_matches_interface_class_defaults() {
