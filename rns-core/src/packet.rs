@@ -126,6 +126,31 @@ impl RawPacket {
             .is_some_and(|&context| Self::is_link_resource_part_header(&flags, context))
     }
 
+    /// Whether a link peer never proves this packet: link data in a context
+    /// with its own protocol handling (requests and responses, resource
+    /// control and parts, keepalives, identification, RTT and close). Only
+    /// plain link data and channel messages are proven, so a sent packet in
+    /// one of these contexts has no receipt to wait for.
+    pub fn is_unproven_link_data(&self) -> bool {
+        self.flags.packet_type == constants::PACKET_TYPE_DATA
+            && self.flags.destination_type == constants::DESTINATION_LINK
+            && matches!(
+                self.context,
+                constants::CONTEXT_REQUEST
+                    | constants::CONTEXT_RESPONSE
+                    | constants::CONTEXT_RESOURCE
+                    | constants::CONTEXT_RESOURCE_ADV
+                    | constants::CONTEXT_RESOURCE_REQ
+                    | constants::CONTEXT_RESOURCE_HMU
+                    | constants::CONTEXT_RESOURCE_ICL
+                    | constants::CONTEXT_RESOURCE_RCL
+                    | constants::CONTEXT_KEEPALIVE
+                    | constants::CONTEXT_LINKIDENTIFY
+                    | constants::CONTEXT_LRRTT
+                    | constants::CONTEXT_LINKCLOSE
+            )
+    }
+
     #[inline]
     fn is_link_resource_part_header(flags: &PacketFlags, context: u8) -> bool {
         flags.packet_type == constants::PACKET_TYPE_DATA
@@ -576,6 +601,73 @@ mod tests {
             &part.raw[..context_at]
         ));
         assert!(!RawPacket::is_link_resource_part_wire(&[]));
+    }
+
+    #[test]
+    fn only_plain_link_data_and_channel_messages_await_proofs() {
+        let packet = |destination_type, packet_type, context| {
+            RawPacket::pack(
+                PacketFlags {
+                    header_type: constants::HEADER_1,
+                    context_flag: constants::FLAG_UNSET,
+                    transport_type: constants::TRANSPORT_BROADCAST,
+                    destination_type,
+                    packet_type,
+                },
+                0,
+                &[0x42; 16],
+                None,
+                context,
+                b"payload",
+            )
+            .unwrap()
+        };
+        let link_data = |context| {
+            packet(
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+                context,
+            )
+        };
+        for context in [constants::CONTEXT_NONE, constants::CONTEXT_CHANNEL] {
+            assert!(
+                !link_data(context).is_unproven_link_data(),
+                "context {context}"
+            );
+        }
+        for context in [
+            constants::CONTEXT_REQUEST,
+            constants::CONTEXT_RESPONSE,
+            constants::CONTEXT_RESOURCE,
+            constants::CONTEXT_RESOURCE_ADV,
+            constants::CONTEXT_RESOURCE_REQ,
+            constants::CONTEXT_RESOURCE_HMU,
+            constants::CONTEXT_RESOURCE_ICL,
+            constants::CONTEXT_RESOURCE_RCL,
+            constants::CONTEXT_KEEPALIVE,
+            constants::CONTEXT_LINKIDENTIFY,
+            constants::CONTEXT_LRRTT,
+            constants::CONTEXT_LINKCLOSE,
+        ] {
+            assert!(
+                link_data(context).is_unproven_link_data(),
+                "context {context}"
+            );
+        }
+        // Only link data qualifies.
+        let request = constants::CONTEXT_REQUEST;
+        assert!(!packet(
+            constants::DESTINATION_SINGLE,
+            constants::PACKET_TYPE_DATA,
+            request
+        )
+        .is_unproven_link_data());
+        assert!(!packet(
+            constants::DESTINATION_LINK,
+            constants::PACKET_TYPE_PROOF,
+            request
+        )
+        .is_unproven_link_data());
     }
 
     #[test]
