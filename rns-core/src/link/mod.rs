@@ -18,7 +18,7 @@ use crate::constants::{
 
 pub use types::{LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason};
 
-use crypto::{create_session_token, link_decrypt, link_encrypt};
+use crypto::{create_session_token, link_decrypt, link_decrypt_chunks, link_encrypt};
 use handshake::{
     build_linkrequest_data, compute_link_id, pack_rtt, parse_linkrequest_data,
     perform_key_exchange, unpack_rtt, validate_lrproof,
@@ -388,6 +388,13 @@ impl LinkEngine {
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, LinkError> {
         let token = self.token.as_ref().ok_or(LinkError::NoSessionKey)?;
         link_decrypt(token, ciphertext)
+    }
+
+    /// Decrypt ciphertext held in consecutive chunks without joining them,
+    /// dropping the first `skip` plaintext bytes.
+    pub fn decrypt_chunks(&self, chunks: &[&[u8]], skip: usize) -> Result<Vec<u8>, LinkError> {
+        let token = self.token.as_ref().ok_or(LinkError::NoSessionKey)?;
+        link_decrypt_chunks(token, chunks, skip)
     }
 
     /// Sign an explicit delivery proof for a packet sent over this Link.

@@ -50,11 +50,26 @@ impl Aes256 {
             return Err(CbcError::UnalignedLength);
         }
         let mut buf = plaintext.to_vec();
+        self.encrypt_cbc_in_place(&mut buf, iv)?;
+        Ok(buf)
+    }
+
+    /// [`encrypt_cbc`](Self::encrypt_cbc) over `buf` in place.
+    pub fn encrypt_cbc_in_place(&self, buf: &mut [u8], iv: &[u8; 16]) -> Result<(), CbcError> {
+        if !buf.len().is_multiple_of(BLOCK_SIZE) {
+            return Err(CbcError::UnalignedLength);
+        }
         let message_len = buf.len();
         Aes256CbcEnc::new(&self.key.into(), iv.into())
-            .encrypt_padded::<NoPadding>(&mut buf, message_len)
+            .encrypt_padded::<NoPadding>(buf, message_len)
             .map_err(|_| CbcError::UnalignedLength)?;
-        Ok(buf)
+        Ok(())
+    }
+
+    /// A CBC decryptor that keeps its chaining state across calls, for
+    /// ciphertext that arrives in pieces.
+    pub(crate) fn cbc_decryptor(&self, iv: &[u8; 16]) -> cbc::Decryptor<aes::Aes256> {
+        Aes256CbcDec::new(&self.key.into(), iv.into())
     }
 
     /// Decrypt block-aligned ciphertext in CBC mode without removing padding.

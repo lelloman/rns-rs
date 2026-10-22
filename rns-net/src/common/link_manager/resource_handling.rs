@@ -795,9 +795,9 @@ impl LinkManager {
             }
             if eligible && self.receive_worker.is_some() {
                 let receiver = &mut link.incoming_resources[idx];
-                let actions = match receiver
-                    .prepare_assembly(&|data| link.engine.decrypt(data).map_err(|_| ()))
-                {
+                let actions = match receiver.prepare_assembly(&|parts, skip| {
+                    link.engine.decrypt_chunks(parts, skip).map_err(|_| ())
+                }) {
                     Ok(assembly) => match self.receive_worker.as_mut().unwrap().submit(
                         *link_id,
                         link.resource_generation.clone(),
@@ -835,8 +835,8 @@ impl LinkManager {
             } else if split_is_response {
                 response_request_id = resource_request_id;
             }
-            let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
-                link.engine.decrypt(ciphertext).map_err(|_| ())
+            let decrypt_fn = |parts: &[&[u8]], skip: usize| -> Result<Vec<u8>, ()> {
+                link.engine.decrypt_chunks(parts, skip).map_err(|_| ())
             };
             let mut assemble_actions =
                 link.incoming_resources[idx].assemble(&decrypt_fn, &Bzip2Compressor);

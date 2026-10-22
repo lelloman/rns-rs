@@ -66,21 +66,16 @@ pub(super) struct AssemblyData {
 }
 impl AssemblyData {
     pub fn run(self, compressor: &dyn Compressor) -> Result<Vec<ResourceAction>, ResourceError> {
-        let mut plaintext = self.plaintext;
-        let input = plaintext
-            .get(RESOURCE_RANDOM_HASH_SIZE..)
-            .ok_or(ResourceError::InvalidPart)?;
+        // The receiver already dropped the random prefix.
+        let plaintext = self.plaintext;
         let decompressed = if self.compressed {
             compressor
-                .decompress_bounded(input, self.limit)
+                .decompress_bounded(&plaintext, self.limit)
                 .map_err(|error| match error {
                     DecompressError::TooLarge => ResourceError::TooLarge,
                     DecompressError::InvalidData => ResourceError::DecompressionFailed,
                 })?
         } else {
-            let len = input.len();
-            plaintext.copy_within(RESOURCE_RANDOM_HASH_SIZE.., 0);
-            plaintext.truncate(len);
             plaintext
         };
         let data_state = data_hash_state(&decompressed);

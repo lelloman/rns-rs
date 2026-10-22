@@ -133,9 +133,9 @@ pub(crate) fn cycle_observed(
         encryption_ns.set(encryption_ns.get() + elapsed(t));
         v
     };
-    let decrypt = |cipher: &[u8]| {
+    let decrypt = |parts: &[&[u8]], skip: usize| {
         let t = Instant::now();
-        let v = token.decrypt(cipher).map_err(|_| ());
+        let v = token.decrypt_chunks(parts, skip).map_err(|_| ());
         decryption_ns.set(decryption_ns.get() + elapsed(t));
         v
     };

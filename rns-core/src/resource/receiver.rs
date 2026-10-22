@@ -9,6 +9,11 @@ use super::window::WindowState;
 use crate::buffer::types::Compressor;
 use crate::constants::*;
 
+/// Decrypts a resource's ciphertext held as its parts, in order, dropping the
+/// first `skip` plaintext bytes (the random prefix). It must authenticate the
+/// whole ciphertext before returning any plaintext.
+pub type PartsDecryptFn<'a> = dyn Fn(&[&[u8]], usize) -> Result<Vec<u8>, ()> + 'a;
+
 /// Resource receiver state machine.
 ///
 /// Unpacks advertisements, requests parts, receives parts, assembles data.
@@ -511,10 +516,9 @@ impl ResourceReceiver {
     }
 
     /// Assemble received parts, decrypt, decompress, verify hash.
-    #[allow(clippy::type_complexity)]
     pub fn assemble(
         &mut self,
-        decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
+        decrypt_fn: &PartsDecryptFn<'_>,
         compressor: &dyn Compressor,
     ) -> Vec<ResourceAction> {
         match self.prepare_data(decrypt_fn) {
@@ -523,13 +527,12 @@ impl ResourceReceiver {
         }
     }
 
-    /// Join and authenticate parts, then transfer owned plaintext to an assembly job.
+    /// Authenticate and decrypt the parts, then transfer owned plaintext to an assembly job.
     /// Keep this receiver alive until completion or cancellation. A pending attempt
     /// ignores duplicate parts and ordinary part-receive timeouts.
-    #[allow(clippy::type_complexity)]
     pub fn prepare_assembly(
         &mut self,
-        decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
+        decrypt_fn: &PartsDecryptFn<'_>,
     ) -> Result<ResourceAssembly, Vec<ResourceAction>> {
         let data = self.prepare_data(decrypt_fn)?;
         let id = AssemblyId::new();
@@ -577,10 +580,9 @@ impl ResourceReceiver {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     fn prepare_data(
         &mut self,
-        decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
+        decrypt_fn: &PartsDecryptFn<'_>,
     ) -> Result<AssemblyData, Vec<ResourceAction>> {
         if self.status >= ResourceStatus::Assembling || self.received_count != self.total_parts {
             return Err(vec![ResourceAction::Failed(ResourceError::InvalidState)]);
@@ -594,8 +596,8 @@ impl ResourceReceiver {
             return Err(vec![ResourceAction::Failed(ResourceError::InvalidState)]);
         }
 
-        // Size from the parts actually held, not the advertised transfer size.
-        // Reserving once avoids geometric growth and copying the joined prefix.
+        // Every part must be held; size from the parts actually held, not the
+        // advertised transfer size.
         let mut stream_len = 0usize;
         for part in &self.parts {
             match part {
@@ -612,24 +614,20 @@ impl ResourceReceiver {
                 }
             }
         }
-        let stream = if self.parts.len() == 1 {
-            // Validation above guarantees this part exists. Reuse its allocation.
-            self.parts[0].take().unwrap()
-        } else {
-            let mut stream = Vec::with_capacity(stream_len);
-            for data in self.parts.iter().flatten() {
-                stream.extend_from_slice(data);
-            }
-            stream
-        };
-        // Assembly is terminal for part reception. Release the redundant parts
-        // before authentication allocates plaintext, including on failure.
-        self.parts = Vec::new();
+        // Assembly is terminal for part reception. The parts are released once
+        // authentication has produced the plaintext, including on failure.
+        let parts = core::mem::take(&mut self.parts);
         self.hashmap = Vec::new();
 
-        // Decrypt
-        let decrypted = if self.flags.encrypted {
-            match decrypt_fn(&stream) {
+        // The plaintext starts with the random prefix, which is dropped here.
+        let plaintext = if self.flags.encrypted {
+            // Each part is authenticated and decrypted in turn, without
+            // joining the ciphertext first.
+            let chunks: Vec<&[u8]> = parts.iter().flatten().map(Vec::as_slice).collect();
+            let decrypted = decrypt_fn(&chunks, RESOURCE_RANDOM_HASH_SIZE);
+            drop(chunks);
+            drop(parts);
+            match decrypted {
                 Ok(d) => d,
                 Err(_) => {
                     self.status = ResourceStatus::Failed;
@@ -639,7 +637,17 @@ impl ResourceReceiver {
                 }
             }
         } else {
-            stream
+            let Some(len) = stream_len.checked_sub(RESOURCE_RANDOM_HASH_SIZE) else {
+                return Err(self.corrupt_actions(ResourceError::InvalidPart));
+            };
+            let mut plaintext = Vec::with_capacity(len);
+            let mut skip = RESOURCE_RANDOM_HASH_SIZE;
+            for data in parts.iter().flatten() {
+                let from = skip.min(data.len());
+                plaintext.extend_from_slice(&data[from..]);
+                skip -= from;
+            }
+            plaintext
         };
 
         let (Ok(resource_hash), Ok(random_hash)) = (
@@ -649,7 +657,7 @@ impl ResourceReceiver {
             return Err(self.corrupt_actions(ResourceError::InvalidAdvertisement));
         };
         Ok(AssemblyData {
-            plaintext: decrypted,
+            plaintext,
             resource_hash,
             random_hash,
             compressed: self.flags.compressed,
@@ -668,11 +676,10 @@ impl ResourceReceiver {
     }
 
     /// Periodic tick. Checks for timeouts.
-    #[allow(clippy::type_complexity)]
     pub fn tick(
         &mut self,
         now: f64,
-        decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
+        decrypt_fn: &PartsDecryptFn<'_>,
         compressor: &dyn Compressor,
     ) -> Vec<ResourceAction> {
         if self.status >= ResourceStatus::Assembling {
@@ -767,8 +774,9 @@ mod tests {
         data.to_vec()
     }
 
-    fn identity_decrypt(data: &[u8]) -> Result<Vec<u8>, ()> {
-        Ok(data.to_vec())
+    fn identity_decrypt(parts: &[&[u8]], skip: usize) -> Result<Vec<u8>, ()> {
+        let joined = parts.concat();
+        joined.get(skip..).map(<[u8]>::to_vec).ok_or(())
     }
 
     struct ExpandingCompressor;
@@ -875,7 +883,7 @@ mod tests {
         assert!(receiver
             .tick(
                 100000.0,
-                &|_| panic!("pending assembly decrypted again"),
+                &|_, _| panic!("pending assembly decrypted again"),
                 &NoopCompressor
             )
             .is_empty());
@@ -908,11 +916,11 @@ mod tests {
     #[test]
     fn assembly_local_failure_and_authentication_failure_cannot_publish_success() {
         let mut receiver = ready_receiver();
-        assert!(receiver.prepare_assembly(&|_| Err(())).is_err());
+        assert!(receiver.prepare_assembly(&|_, _| Err(())).is_err());
         assert!(receiver.assembly_id().is_none());
         assert!(receiver.parts.is_empty() && receiver.hashmap.is_empty());
         assert!(receiver
-            .prepare_assembly(&|_| panic!("failed assembly retried"))
+            .prepare_assembly(&|_, _| panic!("failed assembly retried"))
             .is_err());
         let mut receiver = ready_receiver();
         let job = receiver.prepare_assembly(&identity_decrypt).unwrap();
@@ -949,9 +957,12 @@ mod tests {
         receiver.received_count = receiver.total_parts;
         receiver.transfer_size = u64::MAX;
         let actions = receiver.assemble(
-            &|joined| {
-                assert_eq!(joined, stream);
-                identity_decrypt(joined)
+            &|parts, skip| {
+                // The parts reach decryption as held, without being joined.
+                assert_eq!(parts.len(), stream.len().div_ceil(7));
+                assert!(parts.iter().all(|part| part.len() <= 7));
+                assert_eq!(parts.concat(), stream);
+                identity_decrypt(parts, skip)
             },
             &NoopCompressor,
         );
@@ -965,7 +976,7 @@ mod tests {
         let (_, mut receiver) = make_sender_receiver();
         receiver.received_count = receiver.total_parts;
         let actions = receiver.assemble(
-            &|_| panic!("missing part reached decryption"),
+            &|_, _| panic!("missing part reached decryption"),
             &NoopCompressor,
         );
         assert!(matches!(

@@ -355,9 +355,9 @@ mod tests {
             }
         }
         let job = receiver
-            .prepare_assembly(&|data| {
+            .prepare_assembly(&|parts, skip| {
                 let mut owned = Vec::with_capacity(4096);
-                owned.extend_from_slice(data);
+                owned.extend_from_slice(&parts.concat()[skip..]);
                 Ok(owned)
             })
             .unwrap();
