@@ -535,16 +535,21 @@ impl TransportEngine {
                 .local_destinations
                 .contains_key(&ctx.packet.destination_hash)
         {
-            let mut delivery_raw = ctx.packet.raw.clone();
             // Link responders learn the post-ingress hop metric from the
             // authenticated LRRTT packet. Preserve that field when crossing
             // the action boundary without changing ordinary callback bytes.
-            if ctx.packet.context == constants::CONTEXT_LRRTT && delivery_raw.len() >= 2 {
-                delivery_raw[1] = ctx.packet.hops;
-            }
+            let delivery_raw =
+                if ctx.packet.context == constants::CONTEXT_LRRTT && ctx.packet.raw.len() >= 2 {
+                    let mut raw = ctx.packet.raw.clone();
+                    raw[1] = ctx.packet.hops;
+                    PacketBytes::from(raw)
+                } else {
+                    // One copy into the shared buffer, not a clone and a copy.
+                    PacketBytes::from(ctx.packet.raw.as_slice())
+                };
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: ctx.packet.destination_hash,
-                raw: PacketBytes::from(delivery_raw),
+                raw: delivery_raw,
                 packet_hash: ctx.packet.packet_hash,
                 receiving_interface: ctx.iface,
             });
