@@ -21,7 +21,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use polling::Event as PollEvent;
 use socket2::{SockRef, TcpKeepalive};
 
 use rns_core::constants;
@@ -676,12 +675,7 @@ impl Server {
     fn set_readable(&self, key: usize, fd: std::os::fd::RawFd, readable: bool) {
         // SAFETY: `fd` belongs to a registered peer source (see `ClientState`).
         let source = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-        let interest = if readable {
-            PollEvent::readable(key)
-        } else {
-            PollEvent::none(key)
-        };
-        if let Err(error) = self.tx.poller().modify(source, interest) {
+        if let Err(error) = self.tx.set_source_readable(source, key, readable) {
             log::warn!(
                 "[{}] cannot update peer read interest: {}",
                 self.name,
