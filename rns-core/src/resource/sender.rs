@@ -7,7 +7,7 @@ use rns_crypto::Rng;
 
 use super::advertisement::ResourceAdvertisement;
 use super::parts::{build_hashmap, has_collision, map_hash, prepend_metadata};
-use super::proof::{compute_expected_proof, compute_resource_hash, validate_proof};
+use super::proof::{data_hash_state, finish_with, validate_proof};
 use super::types::*;
 use crate::buffer::types::Compressor;
 use crate::constants::*;
@@ -165,19 +165,20 @@ impl ResourceSender {
         let mut collision_retries = 0;
         const MAX_COLLISION_RETRIES: usize = 100;
 
+        let data_state = data_hash_state(&uncompressed_data);
         loop {
             final_random_hash = {
                 let rh = get_random_hash(rng);
                 rh[..RESOURCE_RANDOM_HASH_SIZE].to_vec()
             };
 
-            resource_hash = compute_resource_hash(&uncompressed_data, &final_random_hash);
+            resource_hash = finish_with(&data_state, &final_random_hash);
             truncated_resource_hash = {
                 let mut t = [0u8; 16];
                 t.copy_from_slice(&resource_hash[..16]);
                 t
             };
-            expected_proof = compute_expected_proof(&uncompressed_data, &resource_hash);
+            expected_proof = finish_with(&data_state, &resource_hash);
 
             part_hashes = if sdu == 0 {
                 Vec::new()
@@ -546,6 +547,7 @@ impl ResourceSender {
 mod tests {
     use super::*;
     use crate::buffer::types::NoopCompressor;
+    use crate::resource::proof::{compute_expected_proof, compute_resource_hash};
 
     fn identity_encrypt(data: &[u8]) -> Vec<u8> {
         data.to_vec()
