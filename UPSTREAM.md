@@ -10,25 +10,38 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.7`
 - Version metadata commit: `2578750bf7df7a598fc77e49212c79a2061e50e3`
-- Normative commit: `a29bfb51c468945c96a1ee22cae0114e993e2391`
-- Commit date: `2026-10-05 13:53:50 +0200`
-- Subject: `Updated documentation`
+- Normative commit: `ee82fa75a75ec67555126eb16796ea1a52716a2b`
+- Commit date: `2026-10-22 01:02:33 +0200`
+- Subject: `Fixed missing reports_phy_stats on Android RNodeInterface`
 
-The normative baseline is the canonical `rgit/master` tip accepted on
-2026-10-16 as Reticulum 1.5.7. No signed `1.5.7` tag is published; the version
-is asserted from `RNS/_version.py` at the target. The tip advanced five commits
-past the accepted 1.5.6 baseline: `f0875ac4` fixes a Python-only Backbone
-egress-control TX stall-state deadlock, `cadee01f` updates the upstream
+The normative baseline is the canonical `rgit/master` tip `ee82fa75`, accepted
+on 2026-10-22 as a same-version Reticulum 1.5.7 advancement from `a29bfb51`. No
+signed `1.5.7` tag is published; the version is asserted from `RNS/_version.py`
+at the target. The advancement adds two Python-only commits: `ae67448e` fixes
+rngit's `~/.config/rngit` configuration-directory selection, and `ee82fa75`
+sets `reports_phy_stats` on the Python Android `RNodeInterface`. Both are
+structurally covered: native `default_rngit_dir` already prefers
+`~/.config/rngit`, and the native RNode reader records RSSI/SNR unconditionally
+without a `reports_phy_stats` gate. The mappings add the
+`default_rngit_dir_prefers_config_dir_over_legacy_path` and
+`rnode_rx_metadata_reports_rssi_and_snr` regressions; no production Rust code
+changed. The target `RNS` tree is
+`45eccb7ec1009d9b24f3d17f42d5cf8848537cec` and the root tree is
+`fde9c85ca4514cc3f1bd32280d19da870fad76a8`. The GitHub mirror remains at
+`e40191b3`, behind the canonical rgit tip, which is allowed.
+
+The original 1.5.7 acceptance on 2026-10-16 covered `a29bfb51` and advanced
+five commits past the accepted 1.5.6 baseline: `f0875ac4` fixes a Python-only
+Backbone egress-control TX stall-state deadlock, `cadee01f` updates the upstream
 egress-control test, `2578750b` bumps `RNS/_version.py` from `1.5.6` to `1.5.7`,
 `318b78b4` edits the upstream `Changelog.md`, and `a29bfb51` regenerates the
-upstream `docs/manual/` output. The `RNS` tree is
-`c8cde8d039e59ad1d60ec9ac28ac180b0ab5499c` and the root tree is
-`24d4c393de9fd57b933836cea68891fd953ab060`. The GitHub mirror remains at
-`e40191b3`, behind the canonical rgit tip, which is allowed. The only runtime
-change is structurally covered: rns-rs builds a fresh Backbone writer, with a
-fresh `TransmitBuffer` and `EgressController`, for every connection and drops
-the stalled writer with its socket on teardown, so no egress drain or stall
-state can survive a reconnect. The invariant is documented on
+upstream `docs/manual/` output. At that commit the `RNS` tree was
+`c8cde8d039e59ad1d60ec9ac28ac180b0ab5499c` and the root tree was
+`24d4c393de9fd57b933836cea68891fd953ab060`. The only runtime change in that
+earlier range is structurally covered: rns-rs builds a fresh Backbone writer,
+with a fresh `TransmitBuffer` and `EgressController`, for every connection and
+drops the stalled writer with its socket on teardown, so no egress drain or
+stall state can survive a reconnect. The invariant is documented on
 `BackboneClientWriter` and guarded by the
 `fresh_egress_state_does_not_immediately_reescalate_after_teardown` regression.
 The earlier 1.5.6 acceptance, which reviewed forty commits since the `1.5.5`
@@ -48,6 +61,13 @@ exact-target Python/Rust interop at `a29bfb51` (2/2 `python_interop`, 6/6
 failures), and the impaired dual-VPS `--daily` smoke all passed. Physical
 hardware validation remains unclaimed.
 
+For the 2026-10-22 rgit advancement, `cargo test --workspace` (2,888 passed),
+`cargo fmt --all --check`, `bash scripts/lint-host.sh`, native-hook
+`rns-server`/`rns-ctl` release builds (`0.6.1600-d06a2af` /
+`0.7.1600-d06a2af`), and the impaired dual-VPS `--daily` smoke all passed.
+Docker, cross-builds, and exact-target interop were not rerun because the native
+runtime changed only by tests. Physical hardware validation remains unclaimed.
+
 The complete `rns-net` library suite, the default workspace suite (2,545
 passed), the `rns-hooks` feature suite (2,592 passed), formatting, host lint,
 native and ARMv7 release/cross builds, the full Docker E2E matrix (11 runs, 102
@@ -65,9 +85,11 @@ tree; Docker, cross-build, and exact-target interop were not rerun. Historical
 fixture provenance is unchanged. Physical hardware validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.7-parity.md`](docs/upstream-parity/reticulum-1.5.7-parity.md),
+[`docs/upstream-parity/reticulum-1.5.7-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.7-rgit-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.7-audit.md`](docs/upstream-parity/reticulum-1.5.7-audit.md).
+[`docs/upstream-parity/reticulum-1.5.7-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.7-rgit-audit.md).
+The original 1.5.7 release acceptance remains in
+[`docs/upstream-parity/reticulum-1.5.7-parity.md`](docs/upstream-parity/reticulum-1.5.7-parity.md).
 The earlier 1.5.6, 1.5.6 rgit, 1.5.5 release-tag, and 1.5.5 rgit acceptances
 and all 1.5.4 records remain unchanged.
 
