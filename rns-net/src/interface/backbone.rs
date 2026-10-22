@@ -46,7 +46,7 @@ pub(crate) const SERVER_BITRATE_GUESS: u64 = 100_000_000;
 /// Standalone Backbone client bitrate estimate.
 pub(crate) const CLIENT_BITRATE_GUESS: u64 = 100_000_000;
 
-const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
+pub(crate) const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
     if bitrate >= 1_000_000_000 {
         Some(524_288)
     } else if bitrate >= 750_000_000 {

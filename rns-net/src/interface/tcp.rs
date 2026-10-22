@@ -30,6 +30,10 @@ pub struct TcpClientConfig {
     pub connect_timeout: Duration,
     /// Linux network interface to bind the socket to (e.g. "usb0").
     pub device: Option<String>,
+    /// Interface bitrate; it also selects the hardware MTU tier, as upstream.
+    pub bitrate: Option<u64>,
+    /// Hardware MTU, overriding the bitrate tier.
+    pub fixed_mtu: Option<u32>,
     pub runtime: Arc<Mutex<TcpClientRuntime>>,
 }
 
@@ -72,6 +76,8 @@ impl Default for TcpClientConfig {
             max_reconnect_tries: None,
             connect_timeout: Duration::from_secs(5),
             device: None,
+            bitrate: None,
+            fixed_mtu: None,
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
                 target_host: "127.0.0.1".into(),
                 target_port: 4242,
@@ -557,6 +563,7 @@ impl InterfaceFactory for TcpClientFactory {
             .get("target_port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
+        let (bitrate, fixed_mtu) = super::parse_tcp_rate_params(params)?;
 
         Ok(Box::new(TcpClientConfig {
             name: name.to_string(),
@@ -564,6 +571,8 @@ impl InterfaceFactory for TcpClientFactory {
             target_port,
             interface_id: id,
             device: params.get("device").cloned(),
+            bitrate,
+            fixed_mtu,
             ..TcpClientConfig::default()
         }))
     }
@@ -590,7 +599,7 @@ impl InterfaceFactory for TcpClientFactory {
             announces_to_internal: ctx.announces_to_internal,
             out_capable: true,
             in_capable: true,
-            bitrate: None,
+            bitrate: tcp_config.bitrate,
             airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
@@ -599,7 +608,7 @@ impl InterfaceFactory for TcpClientFactory {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
-            mtu: 65535,
+            mtu: super::tcp_hardware_mtu(tcp_config.bitrate, tcp_config.fixed_mtu),
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
             ip_freq: 0.0,
@@ -738,6 +747,8 @@ mod tests {
                 connect_timeout: Duration::from_secs(2),
             })),
             device: None,
+            bitrate: None,
+            fixed_mtu: None,
         }
     }
 
@@ -999,6 +1010,8 @@ mod tests {
             max_reconnect_tries: Some(0),
             connect_timeout: Duration::from_millis(500),
             device: None,
+            bitrate: None,
+            fixed_mtu: None,
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
                 target_host: "192.0.2.1".into(),
                 target_port: 12345,
