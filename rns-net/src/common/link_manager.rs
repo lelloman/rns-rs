@@ -637,7 +637,8 @@ impl LinkManager {
         receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        let packet = match RawPacket::unpack(raw) {
+        // The transport engine hashed these bytes on receipt.
+        let packet = match RawPacket::unpack_prehashed(raw, packet_hash) {
             Ok(p) => p,
             Err(_) => return Vec::new(),
         };

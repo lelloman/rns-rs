@@ -255,6 +255,15 @@ impl RawPacket {
         Self::unpack_with::<false, _>(raw)
     }
 
+    /// Unpack wire bytes whose packet hash the caller already computed from
+    /// these exact bytes (for example a delivered packet's hash), instead of
+    /// hashing them again. The hash is trusted, not checked.
+    pub fn unpack_prehashed(raw: &[u8], packet_hash: [u8; 32]) -> Result<Self, PacketError> {
+        let mut packet = Self::unpack_with::<false, _>(raw)?;
+        packet.packet_hash = packet_hash;
+        Ok(packet)
+    }
+
     fn unpack_with<const HASH: bool, B>(input: B) -> Result<Self, PacketError>
     where
         B: AsRef<[u8]> + Into<Vec<u8>>,
@@ -404,6 +413,44 @@ impl RawPacket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unpack_prehashed_matches_unpack_but_keeps_the_given_hash() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            3,
+            &[0x42; 16],
+            None,
+            constants::CONTEXT_RESOURCE,
+            &[9; 300],
+        )
+        .unwrap();
+        let full = RawPacket::unpack(&packet.raw).unwrap();
+        let known = RawPacket::unpack_prehashed(&packet.raw, full.packet_hash).unwrap();
+        assert_eq!(known.raw, full.raw);
+        assert_eq!(known.packet_hash, full.packet_hash);
+        assert_eq!(known.destination_hash, full.destination_hash);
+        assert_eq!((known.hops, known.context), (full.hops, full.context));
+        assert_eq!(known.data(), full.data());
+        // The hash is trusted, not recomputed.
+        let other = RawPacket::unpack_prehashed(&packet.raw, [7; 32]).unwrap();
+        assert_eq!(other.packet_hash, [7; 32]);
+        // Structural errors are the same.
+        assert_eq!(
+            format!(
+                "{:?}",
+                RawPacket::unpack_prehashed(&packet.raw[..10], [0; 32]).unwrap_err()
+            ),
+            format!("{:?}", RawPacket::unpack(&packet.raw[..10]).unwrap_err())
+        );
+    }
 
     #[test]
     fn raw_only_packing_preserves_wire_layout_and_limits() {

@@ -1,25 +1,36 @@
 use alloc::vec::Vec;
 
+use rns_crypto::sha256::Sha256;
+
 use super::types::ResourceError;
-use crate::hash::full_hash;
+
+/// SHA-256 state after absorbing the resource data. The resource hash and the
+/// expected proof are both SHA-256 over this data followed by a short suffix,
+/// so one pass over the data serves both (and every collision retry).
+pub(crate) fn data_hash_state(unencrypted_data: &[u8]) -> Sha256 {
+    let mut state = Sha256::new();
+    state.update(unencrypted_data);
+    state
+}
+
+/// Finish a copy of `state` with `suffix`.
+pub(crate) fn finish_with(state: &Sha256, suffix: &[u8]) -> [u8; 32] {
+    let mut hasher = state.clone();
+    hasher.update(suffix);
+    hasher.digest()
+}
 
 /// Compute resource hash: SHA-256(unencrypted_data + random_hash).
 /// `unencrypted_data` is the metadata-prefixed data BEFORE encryption.
 /// Returns full 32-byte hash.
 pub fn compute_resource_hash(unencrypted_data: &[u8], random_hash: &[u8]) -> [u8; 32] {
-    let mut input = Vec::with_capacity(unencrypted_data.len() + random_hash.len());
-    input.extend_from_slice(unencrypted_data);
-    input.extend_from_slice(random_hash);
-    full_hash(&input)
+    finish_with(&data_hash_state(unencrypted_data), random_hash)
 }
 
 /// Compute expected proof: SHA-256(unencrypted_data + resource_hash).
 /// `unencrypted_data` is the same data used in compute_resource_hash.
 pub fn compute_expected_proof(unencrypted_data: &[u8], resource_hash: &[u8; 32]) -> [u8; 32] {
-    let mut input = Vec::with_capacity(unencrypted_data.len() + 32);
-    input.extend_from_slice(unencrypted_data);
-    input.extend_from_slice(resource_hash);
-    full_hash(&input)
+    finish_with(&data_hash_state(unencrypted_data), resource_hash)
 }
 
 /// Build proof data: [resource_hash: 32 bytes][proof: 32 bytes].
@@ -50,6 +61,34 @@ pub fn validate_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::full_hash;
+
+    fn concatenated(data: &[u8], suffix: &[u8]) -> [u8; 32] {
+        let mut input = data.to_vec();
+        input.extend_from_slice(suffix);
+        full_hash(&input)
+    }
+
+    #[test]
+    fn streamed_hash_and_proof_match_concatenation() {
+        // Block boundaries of SHA-256 (64 bytes) and a multi-part size.
+        for len in [0usize, 1, 55, 56, 63, 64, 65, 127, 128, 1000, 70_001] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7 + 3) as u8).collect();
+            let random = [0x5a, 0x01, 0xfe, 0x33];
+            let hash = compute_resource_hash(&data, &random);
+            assert_eq!(hash, concatenated(&data, &random), "hash, len {len}");
+            let proof = compute_expected_proof(&data, &hash);
+            assert_eq!(proof, concatenated(&data, &hash), "proof, len {len}");
+            // One state serves both suffixes, in either order, repeatedly.
+            let state = data_hash_state(&data);
+            assert_eq!(finish_with(&state, &hash), proof);
+            assert_eq!(finish_with(&state, &random), hash);
+            assert_eq!(
+                finish_with(&state, &[0x5a, 0x01, 0xfe, 0x34]),
+                concatenated(&data, &[0x5a, 0x01, 0xfe, 0x34])
+            );
+        }
+    }
 
     #[test]
     fn test_compute_resource_hash() {

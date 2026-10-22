@@ -944,7 +944,9 @@ impl Driver {
                 self.dispatch_all(actions);
             }
         } else if self.link_manager.is_link_destination(&destination_hash) {
-            if let Ok(packet) = RawPacket::unpack(&raw) {
+            // Only the flags are needed here; a full unpack would copy and
+            // rehash the whole packet.
+            if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
                 let arrived_on_stale_link_route = packet.flags.packet_type
                     == rns_core::constants::PACKET_TYPE_DATA
                     && packet.flags.destination_type == rns_core::constants::DESTINATION_LINK

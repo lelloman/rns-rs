@@ -1,7 +1,7 @@
 //! Owned, authenticated Resource data that can be verified away from its receiver.
 use super::{
     parts::extract_metadata_owned,
-    proof::{build_proof_data, compute_expected_proof, compute_resource_hash},
+    proof::{build_proof_data, data_hash_state, finish_with},
     ResourceAction, ResourceError,
 };
 use crate::{
@@ -83,12 +83,13 @@ impl AssemblyData {
             plaintext.truncate(len);
             plaintext
         };
-        let hash = compute_resource_hash(&decompressed, &self.random_hash);
+        let data_state = data_hash_state(&decompressed);
+        let hash = finish_with(&data_state, &self.random_hash);
         if hash != self.resource_hash {
             return Err(ResourceError::HashMismatch);
         }
         // Proof covers the complete data, including its metadata prefix.
-        let proof = build_proof_data(&hash, &compute_expected_proof(&decompressed, &hash));
+        let proof = build_proof_data(&hash, &finish_with(&data_state, &hash));
         let (data, metadata) = if self.metadata {
             let (metadata, data) =
                 extract_metadata_owned(decompressed).ok_or(ResourceError::InvalidPart)?;
