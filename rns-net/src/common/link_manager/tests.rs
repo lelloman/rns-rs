@@ -2213,7 +2213,29 @@ fn retried_resource_advertisements_deliver_once() {
             "retries must not duplicate application delivery"
         );
         assert_eq!(proofs, 1);
-        assert_eq!(receiver.links[&link_id].incoming_resources.len(), 1);
+        assert_eq!(
+            receiver.links[&link_id].incoming_resources.len()
+                + receiver.links[&link_id].concluded_incoming.len(),
+            1
+        );
+        // Once the concluded receiver is dropped, its hash still screens a
+        // retry until the next tick.
+        receiver.prune_concluded_incoming(&link_id);
+        assert!(receiver.links[&link_id].incoming_resources.is_empty());
+        assert_eq!(receiver.links[&link_id].concluded_incoming.len(), 1);
+        let packet = RawPacket::unpack(&raw_adv).unwrap();
+        let actions = receiver.handle_local_delivery(
+            packet.destination_hash,
+            &raw_adv,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        assert!(actions.iter().all(|action| !matches!(
+            action,
+            LinkManagerAction::SendPacket { .. } | LinkManagerAction::ResourceReceived { .. }
+        )));
+        assert!(receiver.links[&link_id].incoming_resources.is_empty());
     }
 }
 

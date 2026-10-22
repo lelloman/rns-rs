@@ -606,6 +606,7 @@ impl LinkManager {
             remote_identity: None,
             dest_sig_pub_bytes: Some(*dest_sig_pub_bytes),
             incoming_resources: Vec::new(),
+            concluded_incoming: std::collections::HashSet::new(),
             outgoing_resources: Vec::new(),
             pending_requests: HashMap::new(),
             incoming_splits: HashMap::new(),
@@ -747,6 +748,7 @@ impl LinkManager {
             remote_identity: None,
             dest_sig_pub_bytes: None,
             incoming_resources: Vec::new(),
+            concluded_incoming: std::collections::HashSet::new(),
             outgoing_resources: Vec::new(),
             pending_requests: HashMap::new(),
             incoming_splits: HashMap::new(),
@@ -1818,6 +1820,7 @@ impl LinkManager {
                 .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
             link.incoming_resources
                 .retain(|r| r.status < rns_core::resource::ResourceStatus::Complete);
+            link.concluded_incoming.clear();
             let active_split_hashes: Vec<[u8; 32]> = link
                 .outgoing_resources
                 .iter()

@@ -284,11 +284,12 @@ impl LinkManager {
         // Advertisement retries belong to the existing transfer. A second receiver
         // would request the same parts and deliver the payload again. Preserve
         // pending approval, progress and assembly; its normal retry timer handles
-        // lost requests. Completed receivers remain protected until tick cleanup.
-        if link
-            .incoming_resources
-            .iter()
-            .any(|existing| existing.resource_hash == receiver.resource_hash)
+        // lost requests. Concluded receivers remain protected until tick cleanup.
+        if link.concluded_incoming.contains(&receiver.resource_hash)
+            || link
+                .incoming_resources
+                .iter()
+                .any(|existing| existing.resource_hash == receiver.resource_hash)
         {
             return Vec::new();
         }
@@ -717,6 +718,34 @@ impl LinkManager {
 
     /// Handle resource part (CONTEXT_RESOURCE) — feed raw to receiver.
     pub(super) fn handle_resource_part(
+        &mut self,
+        link_id: &LinkId,
+        raw_data: &[u8],
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        let actions = self.receive_resource_part(link_id, raw_data, rng);
+        self.prune_concluded_incoming(link_id);
+        actions
+    }
+
+    /// Drop a link's incoming Resources that have concluded, as soon as they
+    /// do, keeping only their hashes until the next tick. Kept whole until
+    /// then, they piled up under many small Resources, and every advertisement
+    /// and status query scanned them.
+    pub(super) fn prune_concluded_incoming(&mut self, link_id: &LinkId) {
+        if let Some(link) = self.links.get_mut(link_id) {
+            let concluded = &mut link.concluded_incoming;
+            link.incoming_resources.retain(|r| {
+                let active = r.status < rns_core::resource::ResourceStatus::Complete;
+                if !active {
+                    concluded.insert(r.resource_hash.clone());
+                }
+                active
+            });
+        }
+    }
+
+    fn receive_resource_part(
         &mut self,
         link_id: &LinkId,
         raw_data: &[u8],

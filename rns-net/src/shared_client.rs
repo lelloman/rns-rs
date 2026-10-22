@@ -95,6 +95,7 @@ impl RnsNode {
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
+        let accepting_work = driver.accepting_work_handle();
 
         // Connect to the daemon via LocalClientInterface
         let local_config = LocalClientConfig {
@@ -190,6 +191,7 @@ impl RnsNode {
             driver_handle,
             None,
             tick_interval_ms,
+            accepting_work,
         ))
     }
 

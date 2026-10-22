@@ -900,6 +900,8 @@ pub struct RnsNode {
     #[cfg(target_os = "linux")]
     rpc_unix_server: Option<crate::rpc::RpcServer>,
     tick_interval_ms: Arc<AtomicU64>,
+    /// Cleared by the driver when it stops accepting new work.
+    accepting_work: Arc<AtomicBool>,
     #[allow(dead_code)]
     probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
     known_destinations_path: Option<std::path::PathBuf>,
@@ -1538,6 +1540,7 @@ impl RnsNode {
         );
         driver.async_announce_verification = true;
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
+        let accepting_work = driver.accepting_work_handle();
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
         driver.known_destinations_max_entries = config.known_destinations_max_entries;
         driver.ratchet_store = config.ratchet_store.clone();
@@ -2428,6 +2431,7 @@ impl RnsNode {
             #[cfg(target_os = "linux")]
             rpc_unix_server,
             tick_interval_ms,
+            accepting_work,
             probe_server,
             known_destinations_path: None,
             transport_state_dir,
@@ -2518,6 +2522,9 @@ impl RnsNode {
 
     /// Enter drain mode and stop admitting new work.
     pub fn begin_drain(&self, timeout: Duration) -> Result<(), SendError> {
+        // Draining is one-way. Refuse new work from this call on, before the
+        // driver has processed the event.
+        self.accepting_work.store(false, Ordering::Release);
         self.tx
             .send(Event::BeginDrain { timeout })
             .map_err(|_| SendError)
@@ -2532,8 +2539,9 @@ impl RnsNode {
     }
 
     fn reject_new_work_if_draining(&self) -> Result<(), SendError> {
-        let status = self.drain_status()?;
-        if matches!(status.state, crate::event::LifecycleState::Active) {
+        // A flag the driver clears when draining starts, not a driver query:
+        // this runs on every send.
+        if self.accepting_work.load(Ordering::Acquire) {
             Ok(())
         } else {
             Err(SendError)
@@ -3794,6 +3802,7 @@ impl RnsNode {
         driver_handle: thread::JoinHandle<()>,
         rpc_server: Option<crate::rpc::RpcServer>,
         tick_interval_ms: Arc<AtomicU64>,
+        accepting_work: Arc<AtomicBool>,
     ) -> Self {
         RnsNode {
             tx,
@@ -3806,6 +3815,7 @@ impl RnsNode {
             #[cfg(target_os = "linux")]
             rpc_unix_server: None,
             tick_interval_ms,
+            accepting_work,
             probe_server: None,
             known_destinations_path: None,
             transport_state_dir: None,
@@ -4358,6 +4368,7 @@ mod tests {
             #[cfg(target_os = "linux")]
             rpc_unix_server: None,
             tick_interval_ms: Arc::new(AtomicU64::new(1000)),
+            accepting_work: Arc::new(AtomicBool::new(true)),
             probe_server: None,
             known_destinations_path: None,
             transport_state_dir: None,
