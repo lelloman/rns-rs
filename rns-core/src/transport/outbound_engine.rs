@@ -26,8 +26,11 @@ impl TransportEngine {
             },
         );
 
-        // Add to packet hashlist for outbound packets
-        self.packet_hashlist.add(packet.packet_hash);
+        // Add to packet hashlist for outbound packets. A link resource part is
+        // not hashed: its context bypasses deduplication.
+        if !packet.is_link_resource_part() {
+            self.packet_hashlist.add(packet.packet_hash);
+        }
 
         // Gate announces with hops > 0 through the bandwidth queue
         if packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE && packet.hops > 0 {

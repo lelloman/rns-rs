@@ -628,7 +628,8 @@ impl LinkManager {
     ///
     /// Returns actions for the driver to dispatch. The `dest_hash` is the
     /// packet's destination_hash field. `raw` is the full packet bytes.
-    /// `packet_hash` is the SHA-256 hash.
+    /// `packet_hash` is the SHA-256 hash, or zeroed for a resource part,
+    /// whose hash nothing here reads.
     pub fn handle_local_delivery(
         &mut self,
         dest_hash: [u8; 16],
@@ -637,7 +638,8 @@ impl LinkManager {
         receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        // The transport engine hashed these bytes on receipt.
+        // The transport engine hashed these bytes on receipt, unless they are
+        // a resource part.
         let packet = match RawPacket::unpack_prehashed(raw, packet_hash) {
             Ok(p) => p,
             Err(_) => return Vec::new(),

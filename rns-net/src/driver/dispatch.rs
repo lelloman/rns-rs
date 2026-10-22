@@ -847,6 +847,11 @@ impl Driver {
         }
     }
 
+    /// Deliver a packet the engine accepted for a local destination.
+    ///
+    /// `packet_hash` may be zeroed for a link resource part; the link
+    /// manager's resource path does not read it, and every other consumer
+    /// takes it from [`delivered_packet_hash`].
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn dispatch_deliver_local_action(
         &mut self,
@@ -866,6 +871,7 @@ impl Driver {
         #[cfg(feature = "hooks")]
         let (destination_hash, raw, packet_hash) =
             if run_hooks && self.hooks_attached(HookPoint::DeliverLocal) {
+                let packet_hash = delivered_packet_hash(&raw, packet_hash);
                 let pkt_ctx = rns_hooks::PacketContext {
                     flags: 0,
                     hops: 0,
@@ -970,6 +976,7 @@ impl Driver {
                 &mut self.rng,
             );
             if link_actions.is_empty() {
+                let packet_hash = delivered_packet_hash(&raw, packet_hash);
                 if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
                     if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
                         self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
@@ -986,6 +993,7 @@ impl Driver {
                 self.dispatch_link_actions(link_actions);
             }
         } else {
+            let packet_hash = delivered_packet_hash(&raw, packet_hash);
             // Every transported proof is also offered to local receipts. The
             // header carries all the check needs; the packet hash is known.
             if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
@@ -1615,11 +1623,13 @@ impl Driver {
         for action in actions {
             match action {
                 LinkManagerAction::SendPacket {
-                    mut raw,
+                    raw,
                     dest_type,
                     mut attached_interface,
                 } => {
-                    let mut decoded = RawPacket::unpack(&raw);
+                    // Take the bytes instead of copying them; a resource part
+                    // is not hashed, since nothing reads its hash.
+                    let mut decoded = RawPacket::unpack_outbound(raw);
                     if dest_type == rns_core::constants::DESTINATION_LINK
                         && attached_interface.is_none()
                     {
@@ -1631,11 +1641,11 @@ impl Driver {
                                 attached_interface = Some(route_hint.interface);
                                 if packet.flags.header_type == rns_core::constants::HEADER_1 {
                                     if let Some(next_hop) = route_hint.transport_id {
-                                        raw = inject_transport_header(&packet.raw, &next_hop);
+                                        let raw = inject_transport_header(&packet.raw, &next_hop);
                                         // Reparse only when routing changed the wire header,
                                         // releasing the old payload copies first.
                                         drop(decoded);
-                                        decoded = RawPacket::unpack(&raw);
+                                        decoded = RawPacket::unpack_outbound(raw);
                                         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                             "Link SendPacket rewrite: link={:02x?} iface={} header=1->2 tid={:02x?}",
                                             &link_id[..4],
@@ -1663,7 +1673,10 @@ impl Driver {
                     match decoded {
                         Ok(packet) => {
                             self.link_manager.record_outbound_packet(&packet);
-                            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
+                            // No proof ever answers a resource part.
+                            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
+                                && !packet.is_link_resource_part()
+                            {
                                 self.sent_packets.insert(
                                     packet.packet_hash,
                                     (packet.destination_hash, time::now()),
@@ -2109,6 +2122,17 @@ fn is_outbound_path_request(raw: &[u8], path_request_dest: &[u8; 16]) -> bool {
     })
 }
 
+/// The hash of a delivered packet. The engine leaves a link resource part
+/// unhashed, so hash it here for the consumers that read the hash.
+fn delivered_packet_hash(raw: &[u8], packet_hash: [u8; 32]) -> [u8; 32] {
+    if RawPacket::is_link_resource_part_wire(raw) {
+        if let Ok(packet) = RawPacket::unpack(raw) {
+            return packet.packet_hash;
+        }
+    }
+    packet_hash
+}
+
 #[cfg(test)]
 mod classification_tests {
     use super::*;
@@ -2148,6 +2172,32 @@ mod classification_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn delivered_resource_parts_are_hashed_on_demand() {
+        let packet = |context| {
+            RawPacket::pack(
+                rns_core::packet::PacketFlags {
+                    header_type: rns_core::constants::HEADER_1,
+                    context_flag: rns_core::constants::FLAG_UNSET,
+                    transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+                    destination_type: rns_core::constants::DESTINATION_LINK,
+                    packet_type: rns_core::constants::PACKET_TYPE_DATA,
+                },
+                0,
+                &[0x42; 16],
+                None,
+                context,
+                b"payload",
+            )
+            .unwrap()
+        };
+        let part = packet(rns_core::constants::CONTEXT_RESOURCE);
+        assert_eq!(delivered_packet_hash(&part.raw, [0; 32]), part.packet_hash);
+        // Any other packet keeps the hash the engine computed.
+        let channel = packet(rns_core::constants::CONTEXT_CHANNEL);
+        assert_eq!(delivered_packet_hash(&channel.raw, [7; 32]), [7; 32]);
     }
 }
 
