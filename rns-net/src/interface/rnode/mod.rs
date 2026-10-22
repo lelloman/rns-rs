@@ -1563,6 +1563,26 @@ mod tests {
     }
 
     #[test]
+    fn rnode_rx_metadata_reports_rssi_and_snr() {
+        let mut last_rssi = None;
+        let mut last_snr = None;
+
+        assert!(update_pending_rx_metadata(
+            &rnode_kiss::RNodeEvent::StatRssi(57),
+            &mut last_rssi,
+            &mut last_snr,
+        ));
+        assert!(update_pending_rx_metadata(
+            &rnode_kiss::RNodeEvent::StatSnr(-12),
+            &mut last_rssi,
+            &mut last_snr,
+        ));
+
+        assert_eq!(last_rssi, Some(-100));
+        assert_eq!(last_snr, Some(-3.0));
+    }
+
+    #[test]
     fn rnode_sub_writer_format() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
         let mut master = unsafe { transport_from_raw_fd(master_fd) };
