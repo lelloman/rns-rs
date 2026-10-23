@@ -5,7 +5,7 @@ exclude = ["rns-esp32", "vendor/maybe-async-cfg"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license-file = "LICENSE"
 publish = false
@@ -13,9 +13,9 @@ repository = "https://github.com/lelloman/rns-rs"
 authors = ["rns-rs contributors"]
 
 [workspace.dependencies]
-rns-crypto = { version = "0.2.0", path = "rns-crypto" }
-rns-core = { version = "0.5.0", path = "rns-core" }
-rns-net = { version = "0.10.0", path = "rns-net" }
+rns-crypto = { version = "0.2.1", path = "rns-crypto" }
+rns-core = { version = "0.6.0", path = "rns-core" }
+rns-net = { version = "0.11.0", path = "rns-net" }
 rns-hooks = { version = "0.2.0", path = "rns-hooks", default-features = false }
 rns-tun = { version = "0.1.0", path = "rns-tun", default-features = false }
 
