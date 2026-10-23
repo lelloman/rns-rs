@@ -450,6 +450,33 @@ pub fn shared_medium_hint(interface_type: &str) -> bool {
     )
 }
 
+/// Hardware MTU tier shared by TCP and Backbone interfaces.
+pub(crate) const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
+    if bitrate >= 1_000_000_000 {
+        Some(524_288)
+    } else if bitrate >= 750_000_000 {
+        Some(262_144)
+    } else if bitrate >= 400_000_000 {
+        Some(131_072)
+    } else if bitrate >= 200_000_000 {
+        Some(65_536)
+    } else if bitrate >= 100_000_000 {
+        Some(32_768)
+    } else if bitrate >= 10_000_000 {
+        Some(16_384)
+    } else if bitrate >= 5_000_000 {
+        Some(8_192)
+    } else if bitrate >= 2_000_000 {
+        Some(4_096)
+    } else if bitrate >= 1_000_000 {
+        Some(2_048)
+    } else if bitrate >= 62_500 {
+        Some(1_024)
+    } else {
+        None
+    }
+}
+
 /// Hardware MTU of a TCP interface unless `bitrate` or `fixed_mtu` is configured.
 pub(crate) const TCP_DEFAULT_MTU: u32 = 65535;
 
@@ -490,7 +517,7 @@ pub(crate) fn tcp_hardware_mtu(bitrate: Option<u64>, fixed_mtu: Option<u32>) -> 
     match (fixed_mtu, bitrate) {
         (Some(mtu), _) => mtu,
         (None, Some(bitrate)) => {
-            backbone::auto_mtu_for_bitrate(bitrate).unwrap_or(rns_core::constants::MTU as u32)
+            auto_mtu_for_bitrate(bitrate).unwrap_or(rns_core::constants::MTU as u32)
         }
         (None, None) => TCP_DEFAULT_MTU,
     }

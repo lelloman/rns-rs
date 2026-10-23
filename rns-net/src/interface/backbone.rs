@@ -35,8 +35,9 @@ use crate::interface::transmit_buffer::{
     EgressController, TransmitBuffer, EGRESS_DEAD_TIME, EGRESS_HIGH_WATERMARK,
 };
 use crate::interface::{
-    lock_or_recover, wait_while_active, DynamicInterfaceTemplate, EgressControl,
-    InterfaceConfigData, InterfaceFactory, ListenerControl, StartContext, StartResult, Writer,
+    auto_mtu_for_bitrate, lock_or_recover, wait_while_active, DynamicInterfaceTemplate,
+    EgressControl, InterfaceConfigData, InterfaceFactory, ListenerControl, StartContext,
+    StartResult, Writer,
 };
 use crate::BackbonePeerStateEntry;
 
@@ -44,32 +45,6 @@ use crate::BackbonePeerStateEntry;
 pub(crate) const SERVER_BITRATE_GUESS: u64 = 100_000_000;
 /// Standalone Backbone client bitrate estimate.
 pub(crate) const CLIENT_BITRATE_GUESS: u64 = 100_000_000;
-
-pub(crate) const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
-    if bitrate >= 1_000_000_000 {
-        Some(524_288)
-    } else if bitrate >= 750_000_000 {
-        Some(262_144)
-    } else if bitrate >= 400_000_000 {
-        Some(131_072)
-    } else if bitrate >= 200_000_000 {
-        Some(65_536)
-    } else if bitrate >= 100_000_000 {
-        Some(32_768)
-    } else if bitrate >= 10_000_000 {
-        Some(16_384)
-    } else if bitrate >= 5_000_000 {
-        Some(8_192)
-    } else if bitrate >= 2_000_000 {
-        Some(4_096)
-    } else if bitrate >= 1_000_000 {
-        Some(2_048)
-    } else if bitrate >= 62_500 {
-        Some(1_024)
-    } else {
-        None
-    }
-}
 
 /// Effective frame size selected by upstream autoconfiguration at 100 Mbps.
 pub(crate) const HW_MTU: usize = match auto_mtu_for_bitrate(CLIENT_BITRATE_GUESS) {
