@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "foldhash",
  "hashbrown",
@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "cbc",
