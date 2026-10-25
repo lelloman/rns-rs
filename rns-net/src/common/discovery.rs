@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use rns_core::constants;
 use rns_core::msgpack::{self, Value};
 use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock};
 use rns_crypto::sha256::sha256;
@@ -360,6 +361,14 @@ pub fn parse_interface_announce_with_cache(
 ) -> Option<DiscoveredInterface> {
     // Need at least: 1 byte flags + some data + STAMP_SIZE
     if app_data.len() <= STAMP_SIZE + 1 {
+        return None;
+    }
+
+    if hops > constants::PATHFINDER_M - 1 {
+        log::trace!(
+            target: rns_core::logging::PATHING_LOG_TARGET,
+            "Ignored discovered interface with invalid hop count"
+        );
         return None;
     }
 
@@ -943,6 +952,18 @@ mod tests {
 
     fn build_discovery_app_data(interface_type: &str, reachable_on: Option<&str>) -> Vec<u8> {
         pack_discovery_entries(discovery_entries(interface_type, reachable_on))
+    }
+
+    #[test]
+    fn discovery_rejects_hop_count_at_pathfinder_limit() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        assert!(
+            parse_interface_announce(&app_data, &[0x11; 16], constants::PATHFINDER_M - 1, 0)
+                .is_some()
+        );
+        assert!(
+            parse_interface_announce(&app_data, &[0x11; 16], constants::PATHFINDER_M, 0).is_none()
+        );
     }
 
     #[test]

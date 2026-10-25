@@ -54,7 +54,7 @@ and `Needs decision` rows remain unresolved work and are not accepted parity.
 | 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Structurally covered | Rust has no cyclic GC; the platform `malloc_trim` calls are Python-allocator-specific and have no native equivalent to port |
 | 6 | `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | Memory management | Deferred | Keep jemalloc defaults per `bench/relay/allocator-findings.md`; revisit only with native RSS evidence |
 | 7 | `4ebd4dcc5b6cd3ed4683f38ac50dc60a02850e20` | Fixed invalid paths in docs | Non-runtime | Upstream documentation paths only; native `rnsh` already uses its `~/.rns` identity paths |
-| 8 | `9a01a20ce66c4146dd8f8d31f18c19fe7600739d` | Cleanup | Needs port | Discovery handler has no `hops > PATHFINDER_M-1` rejection before stamp acceptance; ingress bounds hops but the handler-level gate is absent |
+| 8 | `9a01a20ce66c4146dd8f8d31f18c19fe7600739d` | Cleanup | Integrated | Discovery rejects hop counts above `PATHFINDER_M-1` before stamp validation; `discovery_rejects_hop_count_at_pathfinder_limit` |
 
 ## Per-Commit Analysis
 
@@ -274,8 +274,13 @@ inbound_engine.rs` rejects packets with `hops > PATHFINDER_M` and
 upstream `> PATHFINDER_M-1` test is not represented explicitly in the discovery
 handler.
 
-**Final disposition:** Needs port (narrow validation; confirm the boundary with
-a focused test).
+**Local handling and evidence:** `parse_interface_announce_with_cache` now
+rejects announcements with `hops > PATHFINDER_M - 1` before consulting the stamp
+cache or performing stamp validation, matching upstream's handler-level gate.
+The focused `discovery_rejects_hop_count_at_pathfinder_limit` regression proves
+that `PATHFINDER_M - 1` is accepted and `PATHFINDER_M` is rejected.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 
