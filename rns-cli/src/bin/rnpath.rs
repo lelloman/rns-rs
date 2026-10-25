@@ -43,6 +43,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     let config_path = args.config_path().map(|s| s.to_string());
     let show_table = args.has("t");
+    let show_usage = args.has("u") || args.has("usage");
     let show_rates = args.has("r");
     let drop_hash = args.get("d").map(|s| s.to_string());
     let drop_via = args.get("x").map(|s| s.to_string());
@@ -70,6 +71,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             config_path.as_deref(),
             remote_timeout,
             show_table,
+            show_usage,
             show_rates,
             remote_blackholed,
             max_hops,
@@ -135,7 +137,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     };
 
     if show_table {
-        show_path_table(&mut client, json_output, max_hops);
+        show_path_table(&mut client, json_output, max_hops, show_usage);
     } else if show_rates {
         show_rate_table(&mut client, json_output);
     } else if let Some(hash_str) = blackhole_hash {
@@ -172,7 +174,12 @@ fn parse_hex_hash(s: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn show_path_table(client: &mut RpcClient, _json_output: bool, max_hops: Option<u8>) {
+fn show_path_table(
+    client: &mut RpcClient,
+    _json_output: bool,
+    max_hops: Option<u8>,
+    show_usage: bool,
+) {
     let max_hops_val = match max_hops {
         Some(h) => PickleValue::Int(h as i64),
         None => PickleValue::None,
@@ -192,10 +199,10 @@ fn show_path_table(client: &mut RpcClient, _json_output: bool, max_hops: Option<
         }
     };
 
-    render_path_table(&response);
+    render_path_table(&response, show_usage);
 }
 
-fn render_path_table(response: &PickleValue) {
+fn render_path_table(response: &PickleValue, show_usage: bool) {
     if let Some(entries) = response.as_list() {
         if entries.is_empty() {
             println!("Path table is empty");
@@ -206,6 +213,16 @@ fn render_path_table(response: &PickleValue) {
             "Destination", "Hops", "Via", "Expires"
         );
         println!("{}", "-".repeat(100));
+        let mut entries: Vec<&PickleValue> = entries.iter().collect();
+        if show_usage {
+            entries.sort_by(|a, b| {
+                let used_a = a.get("used").and_then(|v| v.as_float()).unwrap_or(0.0);
+                let used_b = b.get("used").and_then(|v| v.as_float()).unwrap_or(0.0);
+                used_b
+                    .partial_cmp(&used_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
         for entry in entries {
             let hash = entry
                 .get("hash")
@@ -235,13 +252,26 @@ fn render_path_table(response: &PickleValue) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
+            let usage = if !show_usage {
+                String::new()
+            } else {
+                match entry.get("used").and_then(|v| v.as_float()) {
+                    Some(used) if used > 0.0 => {
+                        let age = rns_net::time::now() - used;
+                        format!(", last used {} ago", prettytime(age.max(0.0)))
+                    }
+                    Some(_) => ", never used".into(),
+                    None => ", no usage info".into(),
+                }
+            };
             println!(
-                "{:<34} {:>6} {:<34} {:<10} {}",
+                "{:<34} {:>6} {:<34} {:<10} {}{}",
                 &hash[..hash.len().min(32)],
                 hops,
                 &via[..via.len().min(32)],
                 expires,
                 interface,
+                usage,
             );
         }
     } else {
@@ -620,6 +650,7 @@ fn remote_path(
     config_path: Option<&str>,
     remote_timeout: f64,
     show_table: bool,
+    show_usage: bool,
     show_rates: bool,
     remote_blackholed: bool,
     max_hops: Option<u8>,
@@ -696,7 +727,7 @@ fn remote_path(
     match result {
         Ok(response) if show_rates => render_rate_table(&response),
         Ok(response) if remote_blackholed => render_blackholed_list(&response),
-        Ok(response) => render_path_table(&response),
+        Ok(response) => render_path_table(&response, show_usage),
         Err(e) => {
             eprintln!("Remote path error: {e}");
             process::exit(1);
@@ -720,6 +751,7 @@ fn print_usage(usage_name: &str) {
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");
     println!("  -t                      Show path table");
+    println!("  -u, --usage             Show and sort by last path use");
     println!("  -m HOPS                 Filter path table by max hops");
     println!("  -r                      Show rate table");
     println!("  -d HASH                 Drop path for destination");

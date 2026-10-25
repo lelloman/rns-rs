@@ -202,6 +202,21 @@ pub const REVERSE_TIMEOUT: f64 = 480.0;
 /// Destination table entry timeout (7 days)
 pub const DESTINATION_TIMEOUT: f64 = 604800.0;
 
+/// Path table entry retainment after the last verifiable liveness event.
+pub const PATH_TIMEOUT: f64 = DESTINATION_TIMEOUT;
+
+/// Linger time for never-used paths on transport instances (1.75 hours).
+pub const UNUSED_PATH_LINGER: f64 = 6300.0;
+
+/// Linger time for never-used paths on leaf instances (5 minutes).
+pub const UNUSED_PATH_LINGER_LEAF: f64 = 300.0;
+
+/// Maximum unused path pool target.
+pub const PATH_POOL_UNUSED_TARGET: usize = 2048;
+
+/// Default announce rate table retainment (1 hour).
+pub const RATE_TABLE_RETAIN: f64 = 3600.0;
+
 /// Tunnel table entry timeout (8 hours)
 pub const TUNNEL_TIMEOUT: f64 = 28800.0;
 

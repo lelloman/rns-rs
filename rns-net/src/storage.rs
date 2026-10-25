@@ -291,6 +291,14 @@ fn parse_dest_hash_hex(s: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
+/// First 16 bytes of the full SHA-256 hash of a public key.
+pub fn full_hash_prefix(public_key: &[u8; 64]) -> [u8; 16] {
+    let full = rns_core::hash::full_hash(public_key);
+    let mut hash = [0u8; 16];
+    hash.copy_from_slice(&full[..16]);
+    hash
+}
+
 /// Save an identity's private key to a file (64 bytes).
 pub fn save_identity(identity: &Identity, path: &Path) -> io::Result<()> {
     let private_key = identity
@@ -586,6 +594,7 @@ fn encode_persisted_path(
         ),
         optional_hash_value(path.interface_hash),
         Value::Bin(path.packet_hash.to_vec()),
+        Value::Float(path.used),
     ])
 }
 
@@ -688,8 +697,8 @@ fn decode_persisted_path(
 
     let fields = value
         .as_array()
-        .filter(|fields| fields.len() == 8)
-        .ok_or_else(|| invalid_transport_data("path entry must contain 8 fields"))?;
+        .filter(|fields| fields.len() == 8 || fields.len() == 9)
+        .ok_or_else(|| invalid_transport_data("path entry must contain 8 or 9 fields"))?;
     let random_blobs = fields[5]
         .as_array()
         .ok_or_else(|| invalid_transport_data("random blobs must be an array"))?
@@ -713,6 +722,10 @@ fn decode_persisted_path(
         random_blobs,
         interface_hash: optional_fixed_bin::<32>(&fields[6], "interface hash")?,
         packet_hash: fixed_bin::<32>(&fields[7], "packet hash")?,
+        used: fields
+            .get(8)
+            .and_then(|value| value.as_number())
+            .unwrap_or(0.0),
     })
 }
 
@@ -1099,6 +1112,7 @@ mod tests {
             random_blobs: vec![[0x33; 10], [0x44; 10]],
             interface_hash: Some([0x55; 32]),
             packet_hash: [0x66; 32],
+            used: 0.0,
         };
         TransportStateSnapshot {
             packet_hashes: vec![[1; 32], [2; 32]],
@@ -1145,7 +1159,7 @@ mod tests {
         let packed = fs::read(dir.join("destination_table")).unwrap();
         let value = rns_core::msgpack::unpack_exact(&packed).unwrap();
         let entry = &value.as_array().unwrap()[0];
-        assert_eq!(entry.as_array().unwrap().len(), 8);
+        assert_eq!(entry.as_array().unwrap().len(), 9);
         assert_eq!(entry.as_array().unwrap()[0].as_bin().unwrap().len(), 16);
         assert_eq!(entry.as_array().unwrap()[6].as_bin().unwrap().len(), 32);
 

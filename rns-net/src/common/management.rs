@@ -198,6 +198,12 @@ pub fn handle_status_request(
     let mut total_txb: u64 = 0;
     let mut total_rxpps = 0.0;
     let mut total_txpps = 0.0;
+    let mut total_rx_packets: u64 = 0;
+    let mut total_tx_packets: u64 = 0;
+    let mut total_announce_rx: u64 = 0;
+    let mut total_announce_tx: u64 = 0;
+    let mut total_path_request_rx: u64 = 0;
+    let mut total_path_request_tx: u64 = 0;
     let mut total_arxb: u64 = 0;
     let mut total_atxb: u64 = 0;
     let mut total_arxc: u64 = 0;
@@ -227,6 +233,12 @@ pub fn handle_status_request(
             total_txb += stats.txb;
             total_rxpps += stats.traffic_rates.rxpps;
             total_txpps += stats.traffic_rates.txpps;
+            total_rx_packets += stats.rx_packets;
+            total_tx_packets += stats.tx_packets;
+            total_announce_rx += stats.arxc;
+            total_announce_tx += stats.atxc;
+            total_path_request_rx += stats.prxc;
+            total_path_request_tx += stats.ptxc;
             total_arxb += stats.arxb;
             total_atxb += stats.atxb;
             total_arxc += stats.arxc;
@@ -358,6 +370,12 @@ pub fn handle_status_request(
         ("txb", Value::UInt(total_txb)),
         ("rxpps", Value::Float(total_rxpps)),
         ("txpps", Value::Float(total_txpps)),
+        ("rxpkts", Value::UInt(total_rx_packets)),
+        ("txpkts", Value::UInt(total_tx_packets)),
+        ("arxpkts", Value::UInt(total_announce_rx)),
+        ("atxpkts", Value::UInt(total_announce_tx)),
+        ("prxpkts", Value::UInt(total_path_request_rx)),
+        ("ptxpkts", Value::UInt(total_path_request_tx)),
         ("rxs", Value::Float(total_rxs)),
         ("txs", Value::Float(total_txs)),
         ("arxb", Value::UInt(total_arxb)),
@@ -377,6 +395,22 @@ pub fn handle_status_request(
         ("prxf", Value::Float(total_prxf)),
         ("ptxf", Value::Float(total_ptxf)),
     ];
+
+    let (path_pool_total, path_pool_unused) = engine.path_pool_counts();
+    let total_links = engine.link_table_count();
+    let active_links = engine.active_link_count();
+    stats.push(("tlinks", Value::UInt(total_links as u64)));
+    stats.push(("alinks", Value::UInt(active_links as u64)));
+    stats.push((
+        "plinks",
+        Value::UInt(total_links.saturating_sub(active_links) as u64),
+    ));
+    stats.push(("tpcount", Value::UInt(path_pool_total as u64)));
+    stats.push(("unupcount", Value::UInt(path_pool_unused as u64)));
+    stats.push((
+        "actpcount",
+        Value::UInt(path_pool_total.saturating_sub(path_pool_unused) as u64),
+    ));
 
     if let Some(identity_hash) = engine.config().identity_hash {
         stats.push(("transport_id", Value::Bin(identity_hash.to_vec())));
@@ -461,7 +495,8 @@ pub fn handle_path_request(data: &[u8], engine: &TransportEngine) -> Option<Vec<
                     (Value::Str("via".into()), Value::Bin(p.2.to_vec())),
                     (Value::Str("hops".into()), Value::UInt(p.3 as u64)),
                     (Value::Str("expires".into()), Value::Float(p.4)),
-                    (Value::Str("interface".into()), Value::Str(p.5.clone())),
+                    (Value::Str("used".into()), Value::Float(p.5)),
+                    (Value::Str("interface".into()), Value::Str(p.6.clone())),
                 ];
                 entries.push(Value::Map(entry));
             }

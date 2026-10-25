@@ -12,6 +12,8 @@ pub struct PathEntry {
     pub random_blobs: Vec<[u8; 10]>,
     pub receiving_interface: InterfaceId,
     pub packet_hash: [u8; 32],
+    /// Last time this path was used for outbound traffic; 0 means never used.
+    pub used: f64,
     /// Original announce raw bytes (pre-hop-increment) for cache/retransmission.
     pub announce_raw: Option<Vec<u8>>,
 }
@@ -252,6 +254,7 @@ mod tests {
             receiving_interface: InterfaceId(1),
             packet_hash: [0xBB; 32],
             announce_raw: None,
+            used: 0.0,
         };
         assert_eq!(entry.hops, 3);
         assert_eq!(entry.receiving_interface, InterfaceId(1));
@@ -268,6 +271,7 @@ mod tests {
             receiving_interface: InterfaceId(1),
             packet_hash: [0x11; 32],
             announce_raw: None,
+            used: 0.0,
         };
         let preferred = PathEntry {
             next_hop: [0xBB; 16],
@@ -324,6 +328,7 @@ mod tests {
             random_blobs: Vec::new(),
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
+            used: 0.0,
             announce_raw: None,
         }
     }

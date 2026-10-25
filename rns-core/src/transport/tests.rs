@@ -89,6 +89,7 @@ fn make_path_entry(
         random_blobs: Vec::new(),
         receiving_interface,
         packet_hash: [0; 32],
+        used: 0.0,
         announce_raw: None,
     }
 }
@@ -177,6 +178,7 @@ fn test_deregister_interface_removes_transport_state() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0x33; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
     engine.reverse_table.insert(
@@ -519,6 +521,7 @@ fn test_expire_path() {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
+                used: 0.0,
             },
             1,
         ),
@@ -670,6 +673,7 @@ fn lrproof_rebalance_fixture() -> (TransportEngine, [u8; 16], [u8; 16], [u8; 32]
             receiving_interface: InterfaceId(2),
             packet_hash: [0xCC; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
 
@@ -1754,6 +1758,7 @@ fn test_tick_culls_expired_path() {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
+                used: 0.0,
             },
             1,
         ),
@@ -2600,6 +2605,7 @@ fn test_tunnel_reattach_does_not_overwrite_newer_path() {
                 receiving_interface: InterfaceId(3),
                 packet_hash: [0x22; 32],
                 announce_raw: None,
+                used: 0.0,
             },
             1,
         ),
@@ -3775,6 +3781,7 @@ fn test_roaming_loop_prevention() {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
+                used: 0.0,
             },
             1,
         ),
@@ -3826,6 +3833,7 @@ fn learned_path_is_answered_while_request_gate_timestamp_remains() {
                 receiving_interface: InterfaceId(2),
                 packet_hash: [0; 32],
                 announce_raw: Some(announce_raw.clone()),
+                used: 0.0,
             },
             1,
         ),
@@ -3870,6 +3878,7 @@ fn test_path_request_discovers_when_known_path_has_no_announce_raw() {
                 receiving_interface: InterfaceId(2),
                 packet_hash: [0; 32],
                 announce_raw: None, // no raw data available
+                used: 0.0,
             },
             1,
         ),
@@ -4210,6 +4219,7 @@ fn transported_link_proof_timeout_uses_outbound_interface_bitrate() {
             receiving_interface: InterfaceId(2),
             packet_hash: [0x39; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
     let packet = RawPacket::pack(
@@ -5833,6 +5843,71 @@ fn test_pr190_one_hop_via_transport_outbound_sends_h1_as_is() {
     assert_ne!(&raw[2..18], &next_hop, "must not be addressed to T");
     assert_eq!(raw, packet.raw.as_slice());
     assert!(issue183_sends_on(&actions, InterfaceId(1)).is_empty());
+}
+
+#[test]
+fn path_pool_counts_report_never_used_destinations() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let mut used = make_path_entry(1000.0, 1, InterfaceId(1), [0x11; 16]);
+    used.used = 2000.0;
+    engine.inject_path([0xAA; 16], used);
+    engine.inject_path(
+        [0xBB; 16],
+        make_path_entry(1000.0, 1, InterfaceId(1), [0x22; 16]),
+    );
+    assert_eq!(engine.path_pool_counts(), (2, 1));
+}
+
+#[test]
+fn link_distribution_counts_per_destination() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let dest = [0xAA; 16];
+    for (link_id, validated) in [([0x01; 16], true), ([0x02; 16], false)] {
+        engine.link_table.insert(
+            link_id,
+            LinkEntry {
+                timestamp: 1000.0,
+                next_hop_transport_id: [0; 16],
+                next_hop_interface: InterfaceId(1),
+                remaining_hops: 1,
+                received_interface: InterfaceId(1),
+                taken_hops: 0,
+                destination_hash: dest,
+                validated,
+                proof_timeout: 0.0,
+            },
+        );
+    }
+    assert_eq!(engine.link_distribution(), vec![(dest, 2, 1)]);
+}
+
+#[test]
+fn outbound_marks_path_used_timestamp() {
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let dest_hash = [0x99; 16];
+    engine.inject_path(
+        dest_hash,
+        make_path_entry(1000.0, 1, InterfaceId(1), dest_hash),
+    );
+    let packet = build_issue183_h1(
+        &dest_hash,
+        constants::DESTINATION_SINGLE,
+        constants::PACKET_TYPE_DATA,
+        constants::CONTEXT_NONE,
+        &[0x5A; 4],
+    );
+
+    engine.handle_outbound(&packet, constants::DESTINATION_SINGLE, None, 1234.0);
+
+    let used = engine
+        .path_table()
+        .get(&dest_hash)
+        .and_then(|paths| paths.primary())
+        .map(|path| path.used)
+        .unwrap();
+    assert_eq!(used, 1234.0);
 }
 
 /// PR #190 sibling: when the one-hop path interface is a local client (we

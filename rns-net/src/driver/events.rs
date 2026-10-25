@@ -487,63 +487,18 @@ impl Driver {
         self.announce_cache_cleanup_counter += 1;
         if self.announce_cache_cleanup_counter >= self.announce_cache_cleanup_interval_ticks {
             self.announce_cache_cleanup_counter = 0;
-            if self.announce_cache.is_some() && self.cache_cleanup_active_hashes.is_none() {
-                self.cache_cleanup_active_hashes = Some(self.engine.active_packet_hashes());
-                self.cache_cleanup_entries = None;
-                self.cache_cleanup_removed = 0;
-            }
-        }
-
-        if self.cache_cleanup_active_hashes.is_some() {
-            if let Some(ref cache) = self.announce_cache {
-                if self.cache_cleanup_entries.is_none() {
-                    match cache.entries() {
-                        Ok(entries) => self.cache_cleanup_entries = Some(entries),
-                        Err(e) => {
-                            log::warn!("Announce cache cleanup failed to open directory: {}", e);
-                            self.cache_cleanup_active_hashes = None;
-                            self.cache_cleanup_entries = None;
-                        }
+            if let Some(cache) = self.announce_cache.as_ref() {
+                let active_hashes = self.engine.active_packet_hashes();
+                match cache.clean(&active_hashes) {
+                    Ok(removed) if removed > 0 => {
+                        log::info!(
+                            "Announce cache cleanup complete: removed {} stale entries",
+                            removed
+                        );
                     }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("Announce cache cleanup failed: {}", e),
                 }
-            }
-
-            if let Some(ref cache) = self.announce_cache {
-                let Some(active_hashes) = self.cache_cleanup_active_hashes.as_ref() else {
-                    self.cache_cleanup_entries = None;
-                    return;
-                };
-                let entries = match self.cache_cleanup_entries.as_mut() {
-                    Some(entries) => entries,
-                    None => return,
-                };
-                match cache.clean_batch(
-                    active_hashes,
-                    entries,
-                    self.announce_cache_cleanup_batch_size,
-                ) {
-                    Ok((removed, finished)) => {
-                        self.cache_cleanup_removed += removed;
-                        if finished {
-                            if self.cache_cleanup_removed > 0 {
-                                log::info!(
-                                    "Announce cache cleanup complete: removed {} stale files",
-                                    self.cache_cleanup_removed
-                                );
-                            }
-                            self.cache_cleanup_active_hashes = None;
-                            self.cache_cleanup_entries = None;
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("Announce cache cleanup failed: {}", e);
-                        self.cache_cleanup_active_hashes = None;
-                        self.cache_cleanup_entries = None;
-                    }
-                }
-            } else {
-                self.cache_cleanup_active_hashes = None;
-                self.cache_cleanup_entries = None;
             }
         }
     }
@@ -1140,7 +1095,7 @@ impl Driver {
                 Event::InterfaceTelemetry {
                     interface_id,
                     telemetry,
-                } => self.handle_interface_telemetry_event(interface_id, telemetry),
+                } => self.handle_interface_telemetry_event(interface_id, *telemetry),
                 Event::InterfaceDown(id) => self.handle_interface_down_event(id),
                 Event::SendOutbound {
                     raw,

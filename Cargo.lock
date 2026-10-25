@@ -2574,6 +2574,7 @@ dependencies = [
  "rns-core",
  "rns-crypto",
  "rns-hooks",
+ "rusqlite",
  "serde",
  "serde_json",
  "socket2",

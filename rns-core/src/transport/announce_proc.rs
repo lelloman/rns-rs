@@ -97,6 +97,7 @@ pub fn process_validated_announce(
         random_blobs,
         receiving_interface,
         packet_hash,
+        used: 0.0,
         announce_raw: original_raw,
     };
 

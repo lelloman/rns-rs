@@ -32,8 +32,8 @@ use crate::event::TrafficDetail;
 use crate::event::{
     BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, BurstClassStats, DrainStatus,
     DynamicBurstStats, Event, EventSender, HookInfo, InterfaceStatsResponse, KnownDestinationEntry,
-    LifecycleState, PathTableEntry, ProviderBridgeStats, QueryRequest, QueryResponse,
-    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    LifecycleState, LinkDistributionEntry, PathTableEntry, ProviderBridgeStats, QueryRequest,
+    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
     RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
@@ -509,6 +509,14 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                 }
                 "profiling_results" => {
                     Ok(crate::profiling::results_pickle().unwrap_or(PickleValue::None))
+                }
+                "link_distribution" => {
+                    let resp = send_query(event_tx, QueryRequest::LinkDistribution)?;
+                    if let QueryResponse::LinkDistribution(entries) = resp {
+                        Ok(link_distribution_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::Dict(Vec::new()))
+                    }
                 }
                 "path_table" => {
                     let max_hops = request
@@ -1252,6 +1260,54 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::Int(stats.total_txb as i64),
         ),
         (
+            PickleValue::String("rxpkts".into()),
+            PickleValue::Int(stats.total_rx_packets as i64),
+        ),
+        (
+            PickleValue::String("txpkts".into()),
+            PickleValue::Int(stats.total_tx_packets as i64),
+        ),
+        (
+            PickleValue::String("arxpkts".into()),
+            PickleValue::Int(stats.total_announce_rx as i64),
+        ),
+        (
+            PickleValue::String("atxpkts".into()),
+            PickleValue::Int(stats.total_announce_tx as i64),
+        ),
+        (
+            PickleValue::String("prxpkts".into()),
+            PickleValue::Int(stats.total_path_request_rx as i64),
+        ),
+        (
+            PickleValue::String("ptxpkts".into()),
+            PickleValue::Int(stats.total_path_request_tx as i64),
+        ),
+        (
+            PickleValue::String("tlinks".into()),
+            PickleValue::Int(stats.total_links as i64),
+        ),
+        (
+            PickleValue::String("alinks".into()),
+            PickleValue::Int(stats.active_links as i64),
+        ),
+        (
+            PickleValue::String("plinks".into()),
+            PickleValue::Int(stats.pending_links as i64),
+        ),
+        (
+            PickleValue::String("tpcount".into()),
+            PickleValue::Int(stats.path_pool_total as i64),
+        ),
+        (
+            PickleValue::String("unupcount".into()),
+            PickleValue::Int(stats.path_pool_unused as i64),
+        ),
+        (
+            PickleValue::String("actpcount".into()),
+            PickleValue::Int(stats.path_pool_active as i64),
+        ),
+        (
             PickleValue::String("rxpps".into()),
             PickleValue::Float(stats.rx_pps),
         ),
@@ -1946,6 +2002,26 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
     PickleValue::Dict(dict)
 }
 
+fn link_distribution_to_pickle(entries: &[LinkDistributionEntry]) -> PickleValue {
+    let mut dict = Vec::with_capacity(entries.len());
+    for entry in entries {
+        dict.push((
+            PickleValue::Bytes(entry.destination_hash.to_vec()),
+            PickleValue::Dict(vec![
+                (
+                    PickleValue::String("total".into()),
+                    PickleValue::Int(entry.total as i64),
+                ),
+                (
+                    PickleValue::String("active".into()),
+                    PickleValue::Int(entry.active as i64),
+                ),
+            ]),
+        ));
+    }
+    PickleValue::Dict(dict)
+}
+
 fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
     let list: Vec<PickleValue> = entries
         .iter()
@@ -1970,6 +2046,10 @@ fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
                 (
                     PickleValue::String("expires".into()),
                     PickleValue::Float(e.expires),
+                ),
+                (
+                    PickleValue::String("used".into()),
+                    PickleValue::Float(e.used),
                 ),
                 (
                     PickleValue::String("interface".into()),
@@ -3498,6 +3578,7 @@ mod tests {
                         traffic: TrafficDetail::default(),
                         probe_responder: None,
                         backbone_peer_pool: None,
+                        ..Default::default()
                     }));
                 }
                 _ => break,
@@ -3944,6 +4025,7 @@ mod tests {
             traffic,
             probe_responder: None,
             backbone_peer_pool: None,
+            ..Default::default()
         };
 
         let pickle = interface_stats_to_pickle(&stats);
@@ -4224,6 +4306,7 @@ mod tests {
                     cooldown_remaining_seconds: None,
                 }],
             }),
+            ..Default::default()
         };
 
         let pickle = interface_stats_to_pickle(&stats);
@@ -4645,6 +4728,7 @@ mod tests {
             traffic: TrafficDetail::default(),
             probe_responder: Some(probe_hash),
             backbone_peer_pool: None,
+            ..Default::default()
         };
 
         let pickle = interface_stats_to_pickle(&stats);

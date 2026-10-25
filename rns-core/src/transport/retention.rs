@@ -49,11 +49,27 @@ impl TransportEngine {
             .insert(dest_hash, PathSet::from_single(entry, max_paths));
     }
 
+    /// Linger time for never-used paths on this instance.
+    pub(crate) fn unused_path_linger(&self) -> f64 {
+        if self.config.transport_enabled {
+            constants::UNUSED_PATH_LINGER
+        } else {
+            constants::UNUSED_PATH_LINGER_LEAF
+        }
+    }
+
     pub(crate) fn enforce_path_destination_cap(&mut self, now: f64) {
         if self.config.max_path_destinations == usize::MAX {
             return;
         }
-        jobs::cull_path_table(&mut self.path_table, &self.interfaces, now);
+        let unused_path_linger = self.unused_path_linger();
+        jobs::cull_path_table(
+            &mut self.path_table,
+            &self.interfaces,
+            now,
+            unused_path_linger,
+            constants::PATH_POOL_UNUSED_TARGET,
+        );
         while self.path_table.len() >= self.config.max_path_destinations {
             let Some(dest_hash) = self.oldest_path_destination() else {
                 break;

@@ -360,6 +360,7 @@ mod tests {
                 receiving_interface: InterfaceId(iface),
                 packet_hash: [0; 32],
                 announce_raw: None,
+                used: 0.0,
             },
             1,
         )

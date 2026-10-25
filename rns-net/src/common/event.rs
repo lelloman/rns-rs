@@ -224,7 +224,7 @@ pub enum Event<W: Send> {
     /// Update optional device/interface telemetry without replacing counters.
     InterfaceTelemetry {
         interface_id: InterfaceId,
-        telemetry: InterfaceTelemetry,
+        telemetry: Box<InterfaceTelemetry>,
     },
     /// An interface went offline (socket closed, error).
     InterfaceDown(InterfaceId),
@@ -620,6 +620,8 @@ pub enum QueryRequest {
     LinkCount,
     /// Get validated or established link count.
     ActiveLinkCount,
+    /// Get per-destination link totals and active counts.
+    LinkDistribution,
     /// Drop a specific path.
     DropPath { dest_hash: [u8; 16] },
     /// Drop all paths that route via a given transport hash.
@@ -757,6 +759,7 @@ pub enum SendProbeError {
 
 /// Responses to queries.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum QueryResponse {
     /// Python-compatible tri-state result: success, failure, or missing name.
     InterfaceManagement(Option<bool>),
@@ -770,6 +773,7 @@ pub enum QueryResponse {
     NextHopIfName(Option<String>),
     LinkCount(usize),
     ActiveLinkCount(usize),
+    LinkDistribution(Vec<LinkDistributionEntry>),
     DropPath(bool),
     DropAllVia(usize),
     DropAnnounceQueues,
@@ -827,8 +831,16 @@ pub enum InterfaceManagementOperation {
     Reload,
 }
 
+/// Per-destination link totals for status reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkDistributionEntry {
+    pub destination_hash: [u8; 16],
+    pub total: usize,
+    pub active: usize,
+}
+
 /// Interface statistics response.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InterfaceStatsResponse {
     pub interfaces: Vec<SingleInterfaceStat>,
     pub transport_id: Option<[u8; 16]>,
@@ -838,6 +850,30 @@ pub struct InterfaceStatsResponse {
     pub total_rxb: u64,
     /// Total transmitted bytes across all interfaces.
     pub total_txb: u64,
+    /// Total received packets across all interfaces.
+    pub total_rx_packets: u64,
+    /// Total transmitted packets across all interfaces.
+    pub total_tx_packets: u64,
+    /// Total received announce packets.
+    pub total_announce_rx: u64,
+    /// Total transmitted announce packets.
+    pub total_announce_tx: u64,
+    /// Total received path-request packets.
+    pub total_path_request_rx: u64,
+    /// Total transmitted path-request packets.
+    pub total_path_request_tx: u64,
+    /// Total links (validated and pending).
+    pub total_links: usize,
+    /// Active (validated) links.
+    pub active_links: usize,
+    /// Pending links.
+    pub pending_links: usize,
+    /// Total path pool destinations.
+    pub path_pool_total: usize,
+    /// Never-used path pool destinations.
+    pub path_pool_unused: usize,
+    /// Path pool destinations with at least one use.
+    pub path_pool_active: usize,
     /// Aggregate received packets per second, excluding local shared-instance traffic.
     pub rx_pps: f64,
     /// Aggregate transmitted packets per second, excluding local shared-instance traffic.
@@ -1033,6 +1069,7 @@ pub struct PathTableEntry {
     pub via: [u8; 16],
     pub hops: u8,
     pub expires: f64,
+    pub used: f64,
     pub interface: InterfaceId,
     pub interface_name: String,
 }

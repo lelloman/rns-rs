@@ -49,7 +49,7 @@ use self::types::{
     BlackholeEntry, InterfaceId, InterfaceInfo, PacketBytes, TransportAction, TransportConfig,
 };
 
-pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, String);
+pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, f64, String);
 pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
 /// Parsed LRPROOF data used to rebalance an existing link route.
 pub type LrproofRebalanceCandidate = ([u8; 16], [u8; 16], u8, Vec<u8>);

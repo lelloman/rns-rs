@@ -61,6 +61,7 @@ pub mod resource;
 pub mod rpc;
 pub mod serial;
 pub mod storage;
+pub mod storage_sqlite;
 pub use common::compressor;
 pub use common::link_manager;
 pub use local_ratchet::{FileRatchetStore, LocalRatchetStore, LocalRatchets, MemoryRatchetStore};

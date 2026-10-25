@@ -333,6 +333,7 @@ mod tests {
             random_blobs: blobs.to_vec(),
             receiving_interface: InterfaceId(1),
             packet_hash: [0xBB; 32],
+            used: 0.0,
             announce_raw: None,
         }
     }
