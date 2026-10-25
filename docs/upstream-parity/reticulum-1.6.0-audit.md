@@ -19,13 +19,14 @@
 
 The target is the fresh `rgit/master` tip, not a signed release. GitHub's tip
 `e40191b3d193b46b7f2d8a44424a594cd758839b` is behind the accepted baseline and
-is allowed to lag. Because 1.6.0 is still marked pending upstream and no tag
-contains the target, this document remains the single active
-`reticulum-next-audit.md`; it is not renamed to a versioned audit yet.
+is allowed to lag. The upstream version is known (`1.6.0`), so this audit uses
+the versioned filename even though the release is still marked pending and no
+tag contains the target.
 
-This inventory was produced by the 2026-10-25 daily VPS check. Mapping commits
-are landing in upstream ancestry order. `Needs port`, `Needs coordinated port`,
-and `Needs decision` rows remain unresolved work and are not accepted parity.
+This inventory was produced by the 2026-10-25 daily VPS check. All eight
+mapping commits have landed in upstream ancestry order. Promotion is still
+pending because upstream marks 1.6.0 as a pending release and no tag contains
+the reviewed target; `UPSTREAM.md` remains on the 1.5.7 baseline.
 
 ## Audit Vocabulary
 
@@ -261,18 +262,9 @@ interface when `hops > RNS.Transport.PATHFINDER_M-1`, before checking caches or
 validating the stamp. Reuses the computed value in the discovered-interface
 entry.
 
-**Rust applicability:** The native transport already bounds hop counts at
-packet-header and inbound layers, but the discovery handler does not apply the
-handler-level gate before accepting or validating a discovery announce. The
-practical gap is narrow (the boundary hop value), so a focused regression is
-needed before deciding whether behavior already matches.
-
-**Local handling and evidence:** `rns-net/src/common/discovery.rs` checks stamp
-validity and caches but has no hop-count gate. `rns-core/src/transport/
-inbound_engine.rs` rejects packets with `hops > PATHFINDER_M` and
-`rns-net/src/packet_header.rs` rejects raw header hops `>= PATHFINDER_M`; the
-upstream `> PATHFINDER_M-1` test is not represented explicitly in the discovery
-handler.
+**Rust applicability:** Native packet-header and inbound layers already bound
+hop counts, but the discovery handler needed the same handler-level gate before
+stamp work.
 
 **Local handling and evidence:** `parse_interface_announce_with_cache` now
 rejects announcements with `hops > PATHFINDER_M - 1` before consulting the stamp
@@ -282,33 +274,66 @@ that `PATHFINDER_M - 1` is accepted and `PATHFINDER_M` is rejected.
 
 **Final disposition:** Integrated.
 
+## Mapping Verification
+
+| Upstream commit | Local mapping commit |
+|---|---|
+| `f3ebec9cb1b93e467c0d15d56b501c7c9b350fa8` | `e218481581d6264cfc43597a3e3ffc0d327d1b2c` |
+| `e24d2073123cd4c624b5ebd1e8b09d83fa78ceab` | `2a49e91914307ff6bf4bce6d5b8e807f0d219330` |
+| `af8d05819d363240c133e4bc644bfde0d4620a71` | `157513605e5b08614e07545104c75790aa7ee763` |
+| `044d4c9adc4781165eea1fa223ece5ef278df787` | `f642ee2b221fa5b64b8e70f7629cce47401370e2` |
+| `156290733e50011028dc38fca14fd047dc02cb36` | `5446867c9a0f8a50b1629bf328538b8189a8fba8` |
+| `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | `9ab0470d57dc172ab68eada505448147b301a440` |
+| `4ebd4dcc5b6cd3ed4683f38ac50dc60a02850e20` | `217e1f7262db6655c4f234153a53cc6345ad7f0d` |
+| `9a01a20ce66c4146dd8f8d31f18c19fe7600739d` | `9174bd061008459e7eb573fde5c01246796592da` |
+
+Each mapping commit is non-empty, appears in the same ancestry order as the
+upstream range, and carries exactly one `Upstream-Commit` trailer for its
+reviewed hash.
+
 ## Integration Plan
 
-1. Add the discovery hop-count gate and a boundary regression for
-   `PATHFINDER_M-1`.
-2. Record the native allocator/RSS decision for the memory-management commits;
-   no production memory policy change is planned.
-3. Keep `UPSTREAM.md` and the README badge on 1.5.7 until every row has a final
-   disposition and all promotion gates pass.
+All eight commits have a final disposition and a unique mapping. No mapping
+work remains outstanding. Promotion is deliberately not performed: upstream
+marks 1.6.0 as pending and no signed tag contains the reviewed target, so
+`UPSTREAM.md`, the README badge, and the parity-record set remain at 1.5.7.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] No wire, crypto, or fixture format changed; transport-state and SQLite
+  storage round-trip tests cover the new persistence fields.
+- [x] Exact-target live Python/Rust interop passes at `9a01a20`:
+  `python_interop` 2/2 and `utility_interop` 6/6.
+- [x] Workspace tests, formatting, and warning-free lint pass.
+- [ ] Required build, Docker, hardware, and manual gates are complete: the
+  release builds, Docker E2E (84/84), and impaired dual-VPS `--daily` smoke
+  passed, but physical hardware validation remains unclaimed.
+- [x] Native documentation records the SQLite stores and `rnpath --usage`.
+- [ ] A final parity record is created from `PARITY-TEMPLATE.md` (blocked on the
+  pending 1.6.0 release target).
 
 ## Acceptance Record
 
-- `2026-10-25`: Daily VPS check found eight commits ahead of the accepted
-  baseline on the fresh `rgit/master` tip. Both remotes refreshed successfully;
-  GitHub remained behind the baseline and rgit advanced. This initial audit
-  inventories all eight commits. No code was integrated, no local mapping
-  commits exist, and no promotion gate is claimed as passed.
+- `2026-10-25`: Landed the eight mapping commits in upstream ancestry order,
+  each with one full `Upstream-Commit` trailer.
+- `2026-10-25`: `cargo test --workspace`, `cargo fmt --all --check`, and
+  `bash scripts/lint-host.sh` passed.
+- `2026-10-25`: Native-hook release builds produced
+  `rns-server 0.6.1622-9174bd0` and `rns-ctl 0.7.1622-9174bd0`.
+- `2026-10-25`: Exact-target interop at `9a01a20` passed: `python_interop`
+  2/2 (`python_rns_bidirectional_tcp_interop`,
+  `python_rns_local_ratchets_bidirectional_and_restart`) and
+  `utility_interop` 6/6.
+- `2026-10-25`: Docker `tests/docker/rns-server/run.sh` passed 84 checks with
+  0 failures.
+- `2026-10-25`: The impaired dual-VPS `--daily` Backbone smoke passed on the
+  new binary at 2026-10-25T07:49:23Z; output is in
+  `data/smoke-logs/integration-2026-10-25T074923Z.log`.
+- `2026-10-25`: Physical hardware validation remains unclaimed. No deployment,
+  restart, or reconfiguration of the VPS nodes was performed as part of this
+  integration.
 
 Evidence:
 
@@ -316,3 +341,5 @@ Evidence:
   fetch timestamps and the eight-commit inventory.
 - `data/daily-report-2026-10-25.md`: daily operational report for the check that
   produced this audit.
+- `data/smoke-logs/integration-2026-10-25T074923Z.log`: passing impaired
+  dual-VPS `--daily` Backbone smoke run on the integrated binary.
