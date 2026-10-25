@@ -53,7 +53,7 @@ and `Needs decision` rows remain unresolved work and are not accepted parity.
 | 4 | `044d4c9adc4781165eea1fa223ece5ef278df787` | Added internal stamps module | Structurally covered | Native stamps in `rns-core/src/stamp.rs`, discovery validation in `rns-net/src/common/discovery.rs`, and `generated_discovery_stamp_is_accepted_without_external_stamper` |
 | 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Structurally covered | Rust has no cyclic GC; the platform `malloc_trim` calls are Python-allocator-specific and have no native equivalent to port |
 | 6 | `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | Memory management | Deferred | Keep jemalloc defaults per `bench/relay/allocator-findings.md`; revisit only with native RSS evidence |
-| 7 | `4ebd4dcc5b6cd3ed4683f38ac50dc60a02850e20` | Fixed invalid paths in docs | Non-runtime | Upstream documentation paths only |
+| 7 | `4ebd4dcc5b6cd3ed4683f38ac50dc60a02850e20` | Fixed invalid paths in docs | Non-runtime | Upstream documentation paths only; native `rnsh` already uses its `~/.rns` identity paths |
 | 8 | `9a01a20ce66c4146dd8f8d31f18c19fe7600739d` | Cleanup | Needs port | Discovery handler has no `hops > PATHFINDER_M-1` rejection before stamp acceptance; ingress bounds hops but the handler-level gate is absent |
 
 ## Per-Commit Analysis
@@ -246,6 +246,10 @@ No protocol or runtime behavior changes.
 **Local handling and evidence:** No native runtime mapping is required. Native
 documentation should be checked separately if it makes the same obsolete path
 claims, but that is not an upstream runtime behavior.
+
+Native `rnsh` already resolves its default initiator and listener identities
+under the `~/.rns` directory and migrates the older storage path, so this
+upstream documentation correction does not imply a runtime change here.
 
 **Final disposition:** Non-runtime.
 
