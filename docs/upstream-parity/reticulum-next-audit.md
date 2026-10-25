@@ -52,7 +52,7 @@ and `Needs decision` rows remain unresolved work and are not accepted parity.
 | 3 | `af8d05819d363240c133e4bc644bfde0d4620a71` | Updated version | Non-runtime | Version metadata only; target remains `1.6.0` pending release; no Rust version change until promotion |
 | 4 | `044d4c9adc4781165eea1fa223ece5ef278df787` | Added internal stamps module | Structurally covered | Native stamps in `rns-core/src/stamp.rs`, discovery validation in `rns-net/src/common/discovery.rs`, and `generated_discovery_stamp_is_accepted_without_external_stamper` |
 | 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Structurally covered | Rust has no cyclic GC; the platform `malloc_trim` calls are Python-allocator-specific and have no native equivalent to port |
-| 6 | `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | Memory management | Needs decision | Upstream gates `malloc_trim` on RSS surplus; local allocator configuration differs |
+| 6 | `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | Memory management | Deferred | Keep jemalloc defaults per `bench/relay/allocator-findings.md`; revisit only with native RSS evidence |
 | 7 | `4ebd4dcc5b6cd3ed4683f38ac50dc60a02850e20` | Fixed invalid paths in docs | Non-runtime | Upstream documentation paths only |
 | 8 | `9a01a20ce66c4146dd8f8d31f18c19fe7600739d` | Cleanup | Needs port | Discovery handler has no `hops > PATHFINDER_M-1` rejection before stamp acceptance; ingress bounds hops but the handler-level gate is absent |
 
@@ -225,7 +225,15 @@ port.
 `MALLOC_ARENA_MAX` guidance exists in the native runtime. The release binaries
 and service packaging would need a deliberate allocator decision.
 
-**Final disposition:** Needs decision.
+The operator decision is to defer this change. The RSS-gated `malloc_trim` and
+`MALLOC_ARENA_MAX=2` guidance target glibc/Python deployments. The native
+daemon's allocator findings record mixed RSS/latency results and explicitly
+recommend keeping jemalloc with no production arena or decay tuning. There is
+no native evidence that the upstream threshold or arena limit would improve the
+daemon, so the policy remains unchanged until a native RSS regression is
+measured.
+
+**Final disposition:** Deferred.
 
 ### 7. `4ebd4dc` — Fixed invalid paths in docs
 
