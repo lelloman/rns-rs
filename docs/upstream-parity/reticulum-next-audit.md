@@ -49,7 +49,7 @@ and `Needs decision` rows remain unresolved work and are not accepted parity.
 |---:|---|---|---|---|
 | 1 | `f3ebec9cb1b93e467c0d15d56b501c7c9b350fa8` | Added ifstat parameters | Integrated | RNode phy telemetry now flows through `InterfaceTelemetry` into native status/RPC/`rns-ctl`; `signal_quality_matches_python_mapping_and_clamps`, `interface_stats_include_phy_telemetry`, and `interface_stats_pickle_format` regressions |
 | 2 | `e24d2073123cd4c624b5ebd1e8b09d83fa78ceab` | Merged staging | Integrated | SQLite known-destination/ratchet and announce-cache stores with legacy import and file fallback; path usage/culling; `rnpath --usage`; expanded status counters and `link_distribution`; focused regressions |
-| 3 | `af8d05819d363240c133e4bc644bfde0d4620a71` | Updated version | Non-runtime | Version metadata only; target `1.6.0` is pending release |
+| 3 | `af8d05819d363240c133e4bc644bfde0d4620a71` | Updated version | Non-runtime | Version metadata only; target remains `1.6.0` pending release; no Rust version change until promotion |
 | 4 | `044d4c9adc4781165eea1fa223ece5ef278df787` | Added internal stamps module | Structurally covered | `rns-core/src/stamp.rs` and its use in `rns-net/src/discovery.rs` / `rns-net/src/common/discovery.rs` already provide the stamp algorithm without LXMF |
 | 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Needs decision | Rust has no Python GC and uses a different allocator strategy; allocator/RSS policy must be chosen explicitly |
 | 6 | `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | Memory management | Needs decision | Upstream gates `malloc_trim` on RSS surplus; local allocator configuration differs |
@@ -151,7 +151,8 @@ file fallback, path usage marking, unused-path linger and pool culling,
 but the upstream release is still marked pending and no target tag exists.
 
 **Local handling and evidence:** `UPSTREAM.md` still records the 1.5.7 baseline
-commit. No promotion is attempted by this audit.
+commit. No promotion is attempted by this audit; the target version and ref are
+recorded in the scope section for the eventual promotion.
 
 **Final disposition:** Non-runtime.
 
