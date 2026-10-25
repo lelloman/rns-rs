@@ -840,6 +840,36 @@ impl Driver {
         entry.stats.endpoint_id = telemetry.endpoint_id;
         entry.stats.via_switch_id = telemetry.via_switch_id;
         entry.stats.peers = telemetry.peers;
+        if telemetry.rssi.is_some() {
+            entry.stats.rssi = telemetry.rssi;
+        }
+        if telemetry.snr.is_some() {
+            entry.stats.snr = telemetry.snr;
+        }
+        if telemetry.signal_quality.is_some() {
+            entry.stats.signal_quality = telemetry.signal_quality;
+        }
+        if telemetry.frequency.is_some() {
+            entry.stats.frequency = telemetry.frequency;
+        }
+        if telemetry.bandwidth.is_some() {
+            entry.stats.bandwidth = telemetry.bandwidth;
+        }
+        if telemetry.txpower.is_some() {
+            entry.stats.txpower = telemetry.txpower;
+        }
+        if telemetry.spreading_factor.is_some() {
+            entry.stats.spreading_factor = telemetry.spreading_factor;
+        }
+        if telemetry.coding_rate.is_some() {
+            entry.stats.coding_rate = telemetry.coding_rate;
+        }
+        if telemetry.channel.is_some() {
+            entry.stats.channel = telemetry.channel;
+        }
+        if telemetry.modulation.is_some() {
+            entry.stats.modulation = telemetry.modulation;
+        }
     }
 
     pub(crate) fn handle_interface_telemetry_event(

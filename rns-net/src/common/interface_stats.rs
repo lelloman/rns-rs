@@ -50,6 +50,19 @@ pub struct InterfaceStats {
     pub endpoint_id: Option<[u8; 8]>,
     pub via_switch_id: Option<[u8; 4]>,
     pub peers: Option<usize>,
+    /// Last reported receive signal strength in dBm.
+    pub rssi: Option<i16>,
+    /// Last reported signal-to-noise ratio in dB.
+    pub snr: Option<f32>,
+    /// Signal quality percentage derived from SNR and spreading factor.
+    pub signal_quality: Option<f64>,
+    pub frequency: Option<u32>,
+    pub bandwidth: Option<u32>,
+    pub txpower: Option<i8>,
+    pub spreading_factor: Option<u8>,
+    pub coding_rate: Option<u8>,
+    pub channel: Option<u32>,
+    pub modulation: Option<String>,
     pub started: f64,
     /// Recent incoming announce timestamps (bounded).
     pub ia_timestamps: Vec<f64>,
