@@ -51,7 +51,7 @@ and `Needs decision` rows remain unresolved work and are not accepted parity.
 | 2 | `e24d2073123cd4c624b5ebd1e8b09d83fa78ceab` | Merged staging | Integrated | SQLite known-destination/ratchet and announce-cache stores with legacy import and file fallback; path usage/culling; `rnpath --usage`; expanded status counters and `link_distribution`; focused regressions |
 | 3 | `af8d05819d363240c133e4bc644bfde0d4620a71` | Updated version | Non-runtime | Version metadata only; target remains `1.6.0` pending release; no Rust version change until promotion |
 | 4 | `044d4c9adc4781165eea1fa223ece5ef278df787` | Added internal stamps module | Structurally covered | Native stamps in `rns-core/src/stamp.rs`, discovery validation in `rns-net/src/common/discovery.rs`, and `generated_discovery_stamp_is_accepted_without_external_stamper` |
-| 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Needs decision | Rust has no Python GC and uses a different allocator strategy; allocator/RSS policy must be chosen explicitly |
+| 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Structurally covered | Rust has no cyclic GC; the platform `malloc_trim` calls are Python-allocator-specific and have no native equivalent to port |
 | 6 | `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | Memory management | Needs decision | Upstream gates `malloc_trim` on RSS surplus; local allocator configuration differs |
 | 7 | `4ebd4dcc5b6cd3ed4683f38ac50dc60a02850e20` | Fixed invalid paths in docs | Non-runtime | Upstream documentation paths only |
 | 8 | `9a01a20ce66c4146dd8f8d31f18c19fe7600739d` | Cleanup | Needs port | Discovery handler has no `hops > PATHFINDER_M-1` rejection before stamp acceptance; ingress bounds hops but the handler-level gate is absent |
@@ -198,9 +198,15 @@ useful depends on the selected global allocator and deployment configuration.
 (for example `tikv-jemallocator`) in some binaries. Adopting upstream's
 libc-specific calls verbatim would not be meaningful.
 
-**Final disposition:** Needs decision. Choose an explicit native memory policy
-(allocator, arena limits, and whether any RSS-gated trim is desirable) before
-mapping this commit.
+The operator decision is to make no production memory-policy change. Rust has
+no cyclic garbage collector, so the canonical `gc.collect()` batching has no
+native equivalent. The platform trim calls target CPython's allocator, while
+the native daemon uses jemalloc; `bench/relay/allocator-findings.md` recommends
+keeping that allocator and not tuning arena/decay settings without separate
+native evidence. This commit is therefore structurally covered by the native
+runtime's different memory model.
+
+**Final disposition:** Structurally covered.
 
 ### 6. `3e83fcc` — Memory management
 
