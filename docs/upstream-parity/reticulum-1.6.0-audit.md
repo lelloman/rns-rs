@@ -24,9 +24,10 @@ the versioned filename even though the release is still marked pending and no
 tag contains the target.
 
 This inventory was produced by the 2026-10-25 daily VPS check. All eight
-mapping commits have landed in upstream ancestry order. Promotion is still
-pending because upstream marks 1.6.0 as a pending release and no tag contains
-the reviewed target; `UPSTREAM.md` remains on the 1.5.7 baseline.
+mapping commits landed in upstream ancestry order and the promotion gates
+passed. Reticulum 1.6.0 was accepted at the canonical rgit tip on 2026-10-25;
+the final acceptance record is
+[reticulum-1.6.0-parity.md](reticulum-1.6.0-parity.md).
 
 ## Audit Vocabulary
 
@@ -300,9 +301,11 @@ reviewed hash.
 ## Integration Plan
 
 All eight commits have a final disposition and a unique mapping. No mapping
-work remains outstanding. Promotion is deliberately not performed: upstream
-marks 1.6.0 as pending and no signed tag contains the reviewed target, so
-`UPSTREAM.md`, the README badge, and the parity-record set remain at 1.5.7.
+work remains outstanding. Reticulum 1.6.0 was promoted at
+`9a01a20ce66c4146dd8f8d31f18c19fe7600739d`; the accepted target is a canonical
+rgit development tip because upstream still marks the release pending and no
+signed tag contains it. See
+[reticulum-1.6.0-parity.md](reticulum-1.6.0-parity.md).
 
 ## Promotion Gates
 
@@ -313,12 +316,13 @@ marks 1.6.0 as pending and no signed tag contains the reviewed target, so
 - [x] Exact-target live Python/Rust interop passes at `9a01a20`:
   `python_interop` 2/2 and `utility_interop` 6/6.
 - [x] Workspace tests, formatting, and warning-free lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are complete: the
-  release builds, Docker E2E (84/84), and impaired dual-VPS `--daily` smoke
-  passed, but physical hardware validation remains unclaimed.
+- [x] Required build, Docker, hardware, and manual gates are recorded: host
+  release and all five ARMv7 builds, the full Docker matrix (12 runs, 102
+  checks, 0 failures), the tarball, and the impaired dual-VPS `--daily` smoke
+  passed; physical hardware validation remains unclaimed.
 - [x] Native documentation records the SQLite stores and `rnpath --usage`.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md` (blocked on the
-  pending 1.6.0 release target).
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`:
+  [reticulum-1.6.0-parity.md](reticulum-1.6.0-parity.md).
 
 ## Acceptance Record
 
@@ -337,9 +341,16 @@ marks 1.6.0 as pending and no signed tag contains the reviewed target, so
 - `2026-10-25`: The impaired dual-VPS `--daily` Backbone smoke passed on the
   new binary at 2026-10-25T07:49:23Z; output is in
   `data/smoke-logs/integration-2026-10-25T074923Z.log`.
+- `2026-10-25`: Full promotion gates passed: Python tools 19/19, web smoke 4/4,
+  TLS 134, hooks workspace suite, built-in hook tests 5/5, all five ARMv7
+  builds, tarball packaging, the full Docker matrix (12 runs, 102 checks, 0
+  failures), and RustSec audit for both lockfiles after `ctutils` 0.4.5.
 - `2026-10-25`: Physical hardware validation remains unclaimed. No deployment,
   restart, or reconfiguration of the VPS nodes was performed as part of this
   integration.
+- `2026-10-25`: Promoted Reticulum 1.6.0 at the canonical rgit tip
+  `9a01a20ce66c4146dd8f8d31f18c19fe7600739d`; see
+  [reticulum-1.6.0-parity.md](reticulum-1.6.0-parity.md).
 
 Evidence:
 
