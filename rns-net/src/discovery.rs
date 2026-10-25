@@ -1829,6 +1829,17 @@ mod tests {
     }
 
     #[test]
+    fn generated_discovery_stamp_is_accepted_without_external_stamper() {
+        let packed = b"internal stamps module";
+        let cost = 8;
+        let (stamp, value) = generate_discovery_stamp(packed, cost);
+        assert!(value >= u32::from(cost));
+        let infohash = sha256(packed);
+        let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
+        assert!(stamp_valid(&stamp, cost, &workblock));
+    }
+
+    #[test]
     fn test_discovery_name_hash_deterministic() {
         let h1 = discovery_name_hash();
         let h2 = discovery_name_hash();
