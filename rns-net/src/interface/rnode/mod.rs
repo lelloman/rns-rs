@@ -18,7 +18,7 @@ use transport::Transport;
 
 use rns_core::transport::types::{AirtimeProfile, InterfaceId};
 
-use crate::event::{Event, EventSender};
+use crate::event::{Event, EventSender, InterfaceTelemetry};
 use crate::interface::{lock_or_recover, Writer};
 use crate::rnode_kiss;
 use crate::serial::{Parity, SerialConfig};
@@ -470,7 +470,15 @@ fn reader_loop(
                 }
                 Ok(n) => {
                     for event in decoder.feed(&buf[..n]) {
+                        let phy_stat = matches!(
+                            &event,
+                            rnode_kiss::RNodeEvent::StatRssi(_)
+                                | rnode_kiss::RNodeEvent::StatSnr(_)
+                        );
                         if update_pending_rx_metadata(&event, &mut last_rssi, &mut last_snr) {
+                            if phy_stat {
+                                publish_phy_telemetry(&tx, &config, last_rssi, last_snr);
+                            }
                             continue;
                         }
                         match event {
@@ -709,6 +717,48 @@ fn signal_interface_up(
             )
         });
         let _ = tx.send(Event::InterfaceUp(sub_id, new_writer, None));
+    }
+    publish_phy_telemetry(tx, config, None, None);
+}
+
+/// Python RNodeInterface's signal-quality mapping, clamped to 0..100 and
+/// rounded to one decimal place.
+fn signal_quality(spreading_factor: u8, snr: f32) -> f64 {
+    let sfs = spreading_factor.saturating_sub(7) as f64;
+    let q_snr_min = -9.0 - sfs * 2.0;
+    let q_snr_max = 6.0;
+    let span = q_snr_max - q_snr_min;
+    if span <= 0.0 {
+        return 0.0;
+    }
+    let quality = (((f64::from(snr) - q_snr_min) / span) * 100.0).clamp(0.0, 100.0);
+    (quality * 10.0).round() / 10.0
+}
+
+fn publish_phy_telemetry(
+    tx: &EventSender,
+    config: &RNodeConfig,
+    rssi: Option<i16>,
+    snr: Option<f32>,
+) {
+    for (i, sub) in config.subinterfaces.iter().enumerate() {
+        let telemetry = InterfaceTelemetry {
+            rssi,
+            snr,
+            signal_quality: snr.map(|snr| signal_quality(sub.spreading_factor, snr)),
+            frequency: Some(sub.frequency),
+            bandwidth: Some(sub.bandwidth),
+            txpower: Some(sub.txpower),
+            spreading_factor: Some(sub.spreading_factor),
+            coding_rate: Some(sub.coding_rate),
+            channel: None,
+            modulation: Some("LoRa".to_string()),
+            ..Default::default()
+        };
+        let _ = tx.send(Event::InterfaceTelemetry {
+            interface_id: InterfaceId(config.base_interface_id.0 + i as u64),
+            telemetry,
+        });
     }
 }
 
@@ -1499,6 +1549,16 @@ mod tests {
         assert!(flow_state.lock().unwrap().ready);
 
         unsafe { libc::close(master_fd) };
+    }
+
+    #[test]
+    fn signal_quality_matches_python_mapping_and_clamps() {
+        assert_eq!(signal_quality(8, -11.0), 0.0);
+        assert_eq!(signal_quality(8, -2.5), 50.0);
+        assert_eq!(signal_quality(8, 6.0), 100.0);
+        assert_eq!(signal_quality(8, 30.0), 100.0);
+        assert_eq!(signal_quality(8, -40.0), 0.0);
+        assert_eq!(signal_quality(10, -2.5), 59.5);
     }
 
     #[test]

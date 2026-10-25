@@ -116,6 +116,7 @@ mod tests {
                     oa_timestamps: vec![],
                     ip_timestamps: vec![],
                     op_timestamps: vec![],
+                    ..Default::default()
                 },
                 interface_type: "TestInterface".to_string(),
                 send_retry_at: None,

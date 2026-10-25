@@ -296,6 +296,36 @@ pub fn handle_status_request(
             "held_announces",
             Value::UInt(engine.held_announce_count(&id) as u64),
         ));
+        if let Some(rssi) = stats.rssi {
+            ifstats.push(("rssi", Value::Int(i64::from(rssi))));
+        }
+        if let Some(snr) = stats.snr {
+            ifstats.push(("snr", Value::Float(f64::from(snr))));
+        }
+        if let Some(quality) = stats.signal_quality {
+            ifstats.push(("signal_quality", Value::Float(quality)));
+        }
+        if let Some(frequency) = stats.frequency {
+            ifstats.push(("frequency", Value::UInt(u64::from(frequency))));
+        }
+        if let Some(bandwidth) = stats.bandwidth {
+            ifstats.push(("bandwidth", Value::UInt(u64::from(bandwidth))));
+        }
+        if let Some(txpower) = stats.txpower {
+            ifstats.push(("txpower", Value::Int(i64::from(txpower))));
+        }
+        if let Some(sf) = stats.spreading_factor {
+            ifstats.push(("sf", Value::UInt(u64::from(sf))));
+        }
+        if let Some(cr) = stats.coding_rate {
+            ifstats.push(("cr", Value::UInt(u64::from(cr))));
+        }
+        if let Some(channel) = stats.channel {
+            ifstats.push(("channel", Value::UInt(u64::from(channel))));
+        }
+        if let Some(modulation) = stats.modulation.as_ref() {
+            ifstats.push(("modulation", Value::Str(modulation.clone())));
+        }
 
         // IFAC info
         ifstats.push(("ifac_signature", Value::Nil));

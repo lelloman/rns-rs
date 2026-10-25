@@ -6902,6 +6902,50 @@ fn interface_stats_include_announce_rate_control_values() {
 }
 
 #[test]
+fn interface_stats_include_phy_telemetry() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "radio");
+
+    driver.handle_interface_telemetry_event(
+        InterfaceId(1),
+        event::InterfaceTelemetry {
+            rssi: Some(-101),
+            snr: Some(7.25),
+            signal_quality: Some(88.5),
+            frequency: Some(868_000_000),
+            bandwidth: Some(125_000),
+            txpower: Some(14),
+            spreading_factor: Some(8),
+            coding_rate: Some(5),
+            channel: Some(3),
+            modulation: Some("LoRa".into()),
+            ..Default::default()
+        },
+    );
+
+    let response = driver.handle_query(QueryRequest::InterfaceStats);
+    let QueryResponse::InterfaceStats(stats) = response else {
+        panic!("expected interface stats");
+    };
+    let radio = stats
+        .interfaces
+        .iter()
+        .find(|iface| iface.name == "radio")
+        .expect("radio interface stats should be present");
+
+    assert_eq!(radio.rssi, Some(-101));
+    assert_eq!(radio.snr, Some(7.25));
+    assert_eq!(radio.signal_quality, Some(88.5));
+    assert_eq!(radio.frequency, Some(868_000_000));
+    assert_eq!(radio.bandwidth, Some(125_000));
+    assert_eq!(radio.txpower, Some(14));
+    assert_eq!(radio.spreading_factor, Some(8));
+    assert_eq!(radio.coding_rate, Some(5));
+    assert_eq!(radio.channel, Some(3));
+    assert_eq!(radio.modulation.as_deref(), Some("LoRa"));
+}
+
+#[test]
 fn runtime_config_sets_generic_interface_values() {
     let mut driver = new_test_driver();
     register_test_generic_interface(&mut driver, 1, "public");

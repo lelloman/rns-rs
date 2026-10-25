@@ -23,10 +23,9 @@ is allowed to lag. Because 1.6.0 is still marked pending upstream and no tag
 contains the target, this document remains the single active
 `reticulum-next-audit.md`; it is not renamed to a versioned audit yet.
 
-This is the initial inventory produced by the 2026-10-25 daily VPS check. No
-integration mapping commits have been made. `Needs port`, `Needs coordinated
-port`, and `Needs decision` rows are therefore unresolved work, not accepted
-parity.
+This inventory was produced by the 2026-10-25 daily VPS check. Mapping commits
+are landing in upstream ancestry order. `Needs port`, `Needs coordinated port`,
+and `Needs decision` rows remain unresolved work and are not accepted parity.
 
 ## Audit Vocabulary
 
@@ -48,7 +47,7 @@ parity.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `f3ebec9cb1b93e467c0d15d56b501c7c9b350fa8` | Added ifstat parameters | Needs port | No RNode phy-stat fields in the native status/RPC output; `rns-net/src/rnode_kiss.rs` only exposes parsed `StatRssi`/`StatSnr` events |
+| 1 | `f3ebec9cb1b93e467c0d15d56b501c7c9b350fa8` | Added ifstat parameters | Integrated | RNode phy telemetry now flows through `InterfaceTelemetry` into native status/RPC/`rns-ctl`; `signal_quality_matches_python_mapping_and_clamps`, `interface_stats_include_phy_telemetry`, and `interface_stats_pickle_format` regressions |
 | 2 | `e24d2073123cd4c624b5ebd1e8b09d83fa78ceab` | Merged staging | Needs coordinated port | Local path table lacks per-path usage, unused-path pool culling, SQLite managed storage, and the new status metrics; see per-commit analysis |
 | 3 | `af8d05819d363240c133e4bc644bfde0d4620a71` | Updated version | Non-runtime | Version metadata only; target `1.6.0` is pending release |
 | 4 | `044d4c9adc4781165eea1fa223ece5ef278df787` | Added internal stamps module | Structurally covered | `rns-core/src/stamp.rs` and its use in `rns-net/src/discovery.rs` / `rns-net/src/common/discovery.rs` already provide the stamp algorithm without LXMF |
@@ -70,12 +69,19 @@ parity.
 airtime, and related statistics, but the control-plane/status output does not
 publish the complete phy-stat set or the modulation label.
 
-**Local handling and evidence:** `rns-net/src/rnode_kiss.rs` defines
-`CMD_STAT_RSSI` and `CMD_STAT_SNR` and surfaces `RNodeEvent::StatRssi` and
-`StatSnr`; there is no matching ifstats field set in the status/RPC path.
-`rg` finds no `r_modulation`, `signal_quality`, or `txpower` status field.
+**Local handling and evidence:** The native RNode reader now publishes the
+radio configuration and the latest RSSI/SNR through `InterfaceTelemetry`.
+`signal_quality` follows Python's spreading-factor-dependent mapping and is
+clamped to 0..100 with one decimal place. The driver stores the values in
+`InterfaceStats`, and both the shared-instance pickle status and the remote
+management msgpack status expose `rssi`, `snr`, `signal_quality`, `frequency`,
+`bandwidth`, `txpower`, `sf`, `cr`, `channel`, and `modulation`; `rns-ctl`
+exposes the same fields on `/api/interfaces`. Focused regressions:
+`signal_quality_matches_python_mapping_and_clamps`,
+`interface_stats_include_phy_telemetry`, and
+`interface_stats_pickle_format` (the last now asserts the new keys).
 
-**Final disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 2. `e24d207` — Merged staging
 

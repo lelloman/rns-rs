@@ -67,6 +67,16 @@ pub struct InterfaceTelemetry {
     pub endpoint_id: Option<[u8; 8]>,
     pub via_switch_id: Option<[u8; 4]>,
     pub peers: Option<usize>,
+    pub rssi: Option<i16>,
+    pub snr: Option<f32>,
+    pub signal_quality: Option<f64>,
+    pub frequency: Option<u32>,
+    pub bandwidth: Option<u32>,
+    pub txpower: Option<i8>,
+    pub spreading_factor: Option<u8>,
+    pub coding_rate: Option<u8>,
+    pub channel: Option<u32>,
+    pub modulation: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -917,6 +927,16 @@ pub struct SingleInterfaceStat {
     pub endpoint_id: Option<[u8; 8]>,
     pub via_switch_id: Option<[u8; 4]>,
     pub peers: Option<usize>,
+    pub rssi: Option<i16>,
+    pub snr: Option<f32>,
+    pub signal_quality: Option<f64>,
+    pub frequency: Option<u32>,
+    pub bandwidth: Option<u32>,
+    pub txpower: Option<i8>,
+    pub spreading_factor: Option<u8>,
+    pub coding_rate: Option<u8>,
+    pub channel: Option<u32>,
+    pub modulation: Option<String>,
     pub bitrate: Option<u64>,
     /// Hardware MTU advertised for this interface, when known.
     pub mtu: Option<u32>,

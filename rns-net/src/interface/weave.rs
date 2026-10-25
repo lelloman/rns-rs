@@ -626,6 +626,7 @@ impl WeaveSession {
                 endpoint_id: state.endpoint_id,
                 via_switch_id: None,
                 peers: Some(state.peers.len()),
+                ..Default::default()
             },
         });
     }

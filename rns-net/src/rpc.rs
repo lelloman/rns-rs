@@ -1781,6 +1781,67 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
                 .unwrap_or(PickleValue::None),
         ),
         (
+            PickleValue::String("rssi".into()),
+            s.rssi
+                .map(|v| PickleValue::Int(v as i64))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("snr".into()),
+            s.snr
+                .map(|v| PickleValue::Float(f64::from(v)))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("signal_quality".into()),
+            s.signal_quality
+                .map(PickleValue::Float)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("frequency".into()),
+            s.frequency
+                .map(|v| PickleValue::Int(i64::from(v)))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("bandwidth".into()),
+            s.bandwidth
+                .map(|v| PickleValue::Int(i64::from(v)))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("txpower".into()),
+            s.txpower
+                .map(|v| PickleValue::Int(i64::from(v)))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("sf".into()),
+            s.spreading_factor
+                .map(|v| PickleValue::Int(i64::from(v)))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("cr".into()),
+            s.coding_rate
+                .map(|v| PickleValue::Int(i64::from(v)))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("channel".into()),
+            s.channel
+                .map(|v| PickleValue::Int(i64::from(v)))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("modulation".into()),
+            s.modulation
+                .clone()
+                .map(PickleValue::String)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
             PickleValue::String("started".into()),
             PickleValue::Float(s.started),
         ),
@@ -3396,6 +3457,16 @@ mod tests {
                             endpoint_id: None,
                             via_switch_id: None,
                             peers: None,
+                            rssi: None,
+                            snr: None,
+                            signal_quality: None,
+                            frequency: None,
+                            bandwidth: None,
+                            txpower: None,
+                            spreading_factor: None,
+                            coding_rate: None,
+                            channel: None,
+                            modulation: None,
                             bitrate: Some(10_000_000),
                             mtu: Some(262_144),
                             ifac_size: None,
@@ -3832,6 +3903,16 @@ mod tests {
                 endpoint_id: Some([5; 8]),
                 via_switch_id: Some([6; 4]),
                 peers: Some(2),
+                rssi: Some(-101),
+                snr: Some(7.25),
+                signal_quality: Some(88.5),
+                frequency: Some(868_000_000),
+                bandwidth: Some(125_000),
+                txpower: Some(14),
+                spreading_factor: Some(8),
+                coding_rate: Some(5),
+                channel: Some(3),
+                modulation: Some("LoRa".into()),
                 bitrate: Some(1000000),
                 mtu: Some(131_072),
                 ifac_size: Some(16),
@@ -3916,6 +3997,22 @@ mod tests {
         );
         assert_eq!(decoded.get("arxb").unwrap().as_int().unwrap(), 11);
         assert_eq!(decoded.get("prxb").unwrap().as_int().unwrap(), 33);
+        assert_eq!(ifaces[0].get("rssi").unwrap().as_int(), Some(-101));
+        assert_eq!(ifaces[0].get("snr").unwrap().as_float(), Some(7.25));
+        assert_eq!(
+            ifaces[0].get("signal_quality").unwrap().as_float(),
+            Some(88.5)
+        );
+        assert_eq!(
+            ifaces[0].get("frequency").unwrap().as_int(),
+            Some(868_000_000)
+        );
+        assert_eq!(ifaces[0].get("bandwidth").unwrap().as_int(), Some(125_000));
+        assert_eq!(ifaces[0].get("txpower").unwrap().as_int(), Some(14));
+        assert_eq!(ifaces[0].get("sf").unwrap().as_int(), Some(8));
+        assert_eq!(ifaces[0].get("cr").unwrap().as_int(), Some(5));
+        assert_eq!(ifaces[0].get("channel").unwrap().as_int(), Some(3));
+        assert_eq!(ifaces[0].get("modulation").unwrap().as_str(), Some("LoRa"));
         assert!(ifaces[0].get("burst_active").unwrap().as_bool().unwrap());
         assert_eq!(
             ifaces[0]
