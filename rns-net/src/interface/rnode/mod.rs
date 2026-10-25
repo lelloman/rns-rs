@@ -757,7 +757,7 @@ fn publish_phy_telemetry(
         };
         let _ = tx.send(Event::InterfaceTelemetry {
             interface_id: InterfaceId(config.base_interface_id.0 + i as u64),
-            telemetry,
+            telemetry: Box::new(telemetry),
         });
     }
 }
@@ -1972,6 +1972,10 @@ mod tests {
             up,
             Event::InterfaceUp(InterfaceId(41), Some(_), None)
         ));
+
+        while let Ok(event) = rx.try_recv() {
+            assert!(matches!(event, Event::InterfaceTelemetry { .. }));
+        }
 
         control.request_stop();
         assert!(control.should_stop());

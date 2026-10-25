@@ -2132,6 +2132,7 @@ fn driver_validates_and_routes_mismatched_lrproof_using_known_identity() {
             receiving_interface: InterfaceId(2),
             packet_hash: [0xCC; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
 
@@ -2199,6 +2200,7 @@ fn established_initiator_rebalances_destination_path_to_authenticated_hops() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0xCC; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
 
@@ -6946,6 +6948,57 @@ fn interface_stats_include_phy_telemetry() {
 }
 
 #[test]
+fn interface_stats_include_packet_and_path_pool_counts() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "public");
+
+    let entry = driver.interfaces.get_mut(&InterfaceId(1)).unwrap();
+    entry.stats.rx_packets = 10;
+    entry.stats.tx_packets = 20;
+    entry.stats.arxc = 3;
+    entry.stats.atxc = 4;
+    entry.stats.prxc = 5;
+    entry.stats.ptxc = 6;
+
+    let now = time::now();
+    let make_path = |used: f64, next_hop: [u8; 16]| rns_core::transport::tables::PathEntry {
+        timestamp: now,
+        next_hop,
+        hops: 1,
+        expires: now + 3600.0,
+        random_blobs: Vec::new(),
+        receiving_interface: InterfaceId(1),
+        packet_hash: [0; 32],
+        announce_raw: None,
+        used,
+    };
+    driver
+        .engine
+        .inject_path([0xAA; 16], make_path(0.0, [0x11; 16]));
+    driver
+        .engine
+        .inject_path([0xBB; 16], make_path(now, [0x22; 16]));
+
+    let response = driver.handle_query(QueryRequest::InterfaceStats);
+    let QueryResponse::InterfaceStats(stats) = response else {
+        panic!("expected interface stats");
+    };
+
+    assert_eq!(stats.total_rx_packets, 10);
+    assert_eq!(stats.total_tx_packets, 20);
+    assert_eq!(stats.total_announce_rx, 3);
+    assert_eq!(stats.total_announce_tx, 4);
+    assert_eq!(stats.total_path_request_rx, 5);
+    assert_eq!(stats.total_path_request_tx, 6);
+    assert_eq!(stats.path_pool_total, 2);
+    assert_eq!(stats.path_pool_unused, 1);
+    assert_eq!(stats.path_pool_active, 1);
+    assert_eq!(stats.total_links, 0);
+    assert_eq!(stats.active_links, 0);
+    assert_eq!(stats.pending_links, 0);
+}
+
+#[test]
 fn runtime_config_sets_generic_interface_values() {
     let mut driver = new_test_driver();
     register_test_generic_interface(&mut driver, 1, "public");
@@ -7831,6 +7884,7 @@ fn known_destinations_cap_prefers_evicting_oldest_non_active_non_local() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0x55; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
 

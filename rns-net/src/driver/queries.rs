@@ -71,6 +71,12 @@ impl Driver {
         let mut interfaces = Vec::new();
         let mut total_rxb: u64 = 0;
         let mut total_txb: u64 = 0;
+        let mut total_rx_packets: u64 = 0;
+        let mut total_tx_packets: u64 = 0;
+        let mut total_announce_rx: u64 = 0;
+        let mut total_announce_tx: u64 = 0;
+        let mut total_path_request_rx: u64 = 0;
+        let mut total_path_request_tx: u64 = 0;
         let mut rx_pps = 0.0;
         let mut tx_pps = 0.0;
         let mut total_traffic = TrafficDetail::default();
@@ -79,6 +85,12 @@ impl Driver {
             if !entry.info.is_local_client {
                 total_rxb += entry.stats.rxb;
                 total_txb += entry.stats.txb;
+                total_rx_packets += entry.stats.rx_packets;
+                total_tx_packets += entry.stats.tx_packets;
+                total_announce_rx += entry.stats.arxc;
+                total_announce_tx += entry.stats.atxc;
+                total_path_request_rx += entry.stats.prxc;
+                total_path_request_tx += entry.stats.ptxc;
                 rx_pps += entry.stats.traffic_rates.rxpps;
                 tx_pps += entry.stats.traffic_rates.txpps;
                 add_traffic(&mut total_traffic, traffic);
@@ -252,6 +264,9 @@ impl Driver {
             });
         }
         interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+        let (path_pool_total, path_pool_unused) = self.engine.path_pool_counts();
+        let total_links = self.engine.link_table_count() + self.link_manager.link_count();
+        let active_links = self.engine.active_link_count() + self.link_manager.active_link_count();
         QueryResponse::InterfaceStats(InterfaceStatsResponse {
             interfaces,
             transport_id: self.engine.identity_hash().copied(),
@@ -259,6 +274,18 @@ impl Driver {
             transport_uptime: now - self.started,
             total_rxb,
             total_txb,
+            total_rx_packets,
+            total_tx_packets,
+            total_announce_rx,
+            total_announce_tx,
+            total_path_request_rx,
+            total_path_request_tx,
+            total_links,
+            active_links,
+            pending_links: total_links.saturating_sub(active_links),
+            path_pool_total,
+            path_pool_unused,
+            path_pool_active: path_pool_total.saturating_sub(path_pool_unused),
             rx_pps,
             tx_pps,
             traffic: total_traffic,
@@ -292,6 +319,7 @@ impl Driver {
                     via: entry.next_hop,
                     hops: entry.hops,
                     expires: entry.expires,
+                    used: entry.used,
                     interface: entry.receiving_interface,
                     interface_name: iface_name,
                 }
@@ -407,6 +435,7 @@ impl Driver {
                             random_blobs: Vec::new(),
                             receiving_interface: id,
                             packet_hash,
+                            used: 0.0,
                             announce_raw: None,
                         };
                         self.engine.inject_path(dest_hash, entry);
@@ -629,6 +658,19 @@ impl Driver {
             ),
             QueryRequest::ActiveLinkCount => QueryResponse::ActiveLinkCount(
                 self.engine.active_link_count() + self.link_manager.active_link_count(),
+            ),
+            QueryRequest::LinkDistribution => QueryResponse::LinkDistribution(
+                self.engine
+                    .link_distribution()
+                    .into_iter()
+                    .map(
+                        |(destination_hash, total, active)| crate::event::LinkDistributionEntry {
+                            destination_hash,
+                            total,
+                            active,
+                        },
+                    )
+                    .collect(),
             ),
             QueryRequest::DropPath { .. } => {
                 // Mutating queries are handled by handle_query_mut

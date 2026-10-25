@@ -870,11 +870,8 @@ pub struct Driver {
     /// Runtime-configurable interval for starting announce cache cleanup.
     pub(crate) announce_cache_cleanup_interval_ticks: u32,
     /// When set, announce cache cleanup is in progress (contains active packet hashes).
-    pub(crate) cache_cleanup_active_hashes: Option<Vec<[u8; 32]>>,
     /// Directory iterator for incremental announce cache cleanup.
-    pub(crate) cache_cleanup_entries: Option<std::fs::ReadDir>,
     /// Running total of files removed during current cache cleanup cycle.
-    pub(crate) cache_cleanup_removed: usize,
     /// Runtime-configurable announce cache cleanup batch size.
     pub(crate) announce_cache_cleanup_batch_size: usize,
     /// Runtime-configurable management announce interval.
@@ -1054,9 +1051,6 @@ impl Driver {
             known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults
                 .announce_cache_cleanup_interval_ticks,
-            cache_cleanup_active_hashes: None,
-            cache_cleanup_entries: None,
-            cache_cleanup_removed: 0,
             announce_cache_cleanup_batch_size: runtime_config_defaults
                 .announce_cache_cleanup_batch_size,
             management_announce_interval_secs: runtime_config_defaults

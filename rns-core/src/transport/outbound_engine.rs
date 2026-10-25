@@ -13,6 +13,18 @@ impl TransportEngine {
             return Vec::new();
         }
 
+        let uses_path = packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
+            && dest_type != constants::DESTINATION_PLAIN
+            && dest_type != constants::DESTINATION_GROUP
+            && !(dest_type == constants::DESTINATION_LINK && attached_interface.is_some());
+        if uses_path {
+            if let Some(path_set) = self.path_table.get_mut(&packet.destination_hash) {
+                if let Some(entry) = path_set.primary_mut() {
+                    entry.used = now;
+                }
+            }
+        }
+
         let actions = route_outbound_with_options(
             &self.path_table,
             &self.interfaces,

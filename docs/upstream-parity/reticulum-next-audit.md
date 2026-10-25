@@ -48,7 +48,7 @@ and `Needs decision` rows remain unresolved work and are not accepted parity.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `f3ebec9cb1b93e467c0d15d56b501c7c9b350fa8` | Added ifstat parameters | Integrated | RNode phy telemetry now flows through `InterfaceTelemetry` into native status/RPC/`rns-ctl`; `signal_quality_matches_python_mapping_and_clamps`, `interface_stats_include_phy_telemetry`, and `interface_stats_pickle_format` regressions |
-| 2 | `e24d2073123cd4c624b5ebd1e8b09d83fa78ceab` | Merged staging | Needs coordinated port | Local path table lacks per-path usage, unused-path pool culling, SQLite managed storage, and the new status metrics; see per-commit analysis |
+| 2 | `e24d2073123cd4c624b5ebd1e8b09d83fa78ceab` | Merged staging | Integrated | SQLite known-destination/ratchet and announce-cache stores with legacy import and file fallback; path usage/culling; `rnpath --usage`; expanded status counters and `link_distribution`; focused regressions |
 | 3 | `af8d05819d363240c133e4bc644bfde0d4620a71` | Updated version | Non-runtime | Version metadata only; target `1.6.0` is pending release |
 | 4 | `044d4c9adc4781165eea1fa223ece5ef278df787` | Added internal stamps module | Structurally covered | `rns-core/src/stamp.rs` and its use in `rns-net/src/discovery.rs` / `rns-net/src/common/discovery.rs` already provide the stamp algorithm without LXMF |
 | 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Needs decision | Rust has no Python GC and uses a different allocator strategy; allocator/RSS policy must be chosen explicitly |
@@ -116,10 +116,32 @@ The hashlist and rate-table mechanisms exist but are not the upstream
 implementations. No native `rnpath` usage flag or `link_distribution` RPC was
 found.
 
-**Final disposition:** Needs coordinated port. The path-usage/culling behavior
-and the storage backend are coupled through the status and persistence
-surfaces, so they should be specified together rather than transplanted
-piecemeal.
+**Local handling and evidence:** The operator chose to port the SQLite backend.
+Native `rns-net/src/storage_sqlite.rs` now implements the upstream
+`known_destinations` and `ratchets` schema with a `known_destination_meta`
+side table for native hops/interface/retained state. It imports legacy msgpack
+known-destination files and ratchet directories, falls back to the previous
+file stores when SQLite cannot be opened, and enforces ratchet expiry and
+unknown-destination cleanup. `rns-net/src/announce_cache.rs` now writes
+`announces.db` with the upstream `cached_announces` schema, imports legacy
+announce files, and retains the file backend as a fallback.
+
+Path usage is tracked in `PathEntry.used`, set when an outbound packet uses a
+path, persisted with transport state, and exposed through the path table and
+`rnpath --usage`. Never-used paths linger for 1.75 hours on transport instances
+(5 minutes on leaves) and the unused pool is capped at 2048 destinations.
+Status responses now include total packet and announce/path-request counters,
+link totals/active/pending counts, and path-pool total/unused/active counts;
+`link_distribution` is available through the RPC and remote management. The
+native announce rate table and packet hashlist already provide the upstream
+optimizations through different data structures and need no separate port.
+
+Focused regressions cover the SQLite round trip, legacy known-destination and
+ratchet import, read-only behavior, announce-cache store/reopen/clean/import and
+file fallback, path usage marking, unused-path linger and pool culling,
+`path_pool_counts`, and `link_distribution`.
+
+**Final disposition:** Integrated.
 
 ### 3. `af8d058` — Updated version
 
@@ -234,17 +256,11 @@ a focused test).
 
 ## Integration Plan
 
-1. Decide the managed-storage approach for known destinations, ratchets, and
-   cached announces. This decision blocks the `e24d207` storage mapping.
-2. Port path usage tracking, unused-path pool culling, and the `rnpath --usage`
-   surface, with focused tests for path expiry and pool culling.
-3. Add the expanded status/RPC metrics and `link_distribution`, including the
-   RNode phy-stat fields from `f3ebec9`.
-4. Add the discovery hop-count gate and a boundary regression for
+1. Add the discovery hop-count gate and a boundary regression for
    `PATHFINDER_M-1`.
-5. Decide the native allocator/RSS policy for the memory-management commits;
-   record a deliberate no-action or configuration mapping.
-6. Keep `UPSTREAM.md` and the README badge on 1.5.7 until every row has a final
+2. Record the native allocator/RSS decision for the memory-management commits;
+   no production memory policy change is planned.
+3. Keep `UPSTREAM.md` and the README badge on 1.5.7 until every row has a final
    disposition and all promotion gates pass.
 
 ## Promotion Gates

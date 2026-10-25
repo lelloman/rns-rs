@@ -511,10 +511,10 @@ impl WeaveSession {
                 {
                     let _ = self.tx.send(Event::InterfaceTelemetry {
                         interface_id,
-                        telemetry: InterfaceTelemetry {
+                        telemetry: Box::new(InterfaceTelemetry {
                             via_switch_id: Some(via),
                             ..Default::default()
-                        },
+                        }),
                     });
                 }
             }
@@ -619,7 +619,7 @@ impl WeaveSession {
         let state = super::lock_or_recover(&self.config.state, "weave state");
         let _ = self.tx.send(Event::InterfaceTelemetry {
             interface_id: self.config.interface_id,
-            telemetry: InterfaceTelemetry {
+            telemetry: Box::new(InterfaceTelemetry {
                 cpu_load: state.cpu_load.map(f64::from),
                 mem_load: state.mem_load,
                 switch_id: state.switch_id,
@@ -627,7 +627,7 @@ impl WeaveSession {
                 via_switch_id: None,
                 peers: Some(state.peers.len()),
                 ..Default::default()
-            },
+            }),
         });
     }
 

@@ -569,6 +569,7 @@ fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
                             "via": to_hex(&p.via),
                             "hops": p.hops,
                             "expires": p.expires,
+                            "used": p.used,
                             "interface": p.interface_name,
                             "timestamp": p.timestamp,
                         })

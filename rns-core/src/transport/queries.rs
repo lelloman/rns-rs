@@ -194,6 +194,7 @@ impl TransportEngine {
                     random_blobs: Vec::new(),
                     receiving_interface: interface,
                     packet_hash: [0u8; 32],
+                    used: 0.0,
                     announce_raw: None,
                 },
                 now,
@@ -310,11 +311,40 @@ impl TransportEngine {
                     entry.next_hop,
                     entry.hops,
                     entry.expires,
+                    entry.used,
                     iface_name,
                 ));
             }
         }
         result
+    }
+
+    /// Return (total destinations, never-used destinations) in the path pool.
+    pub fn path_pool_counts(&self) -> (usize, usize) {
+        let total = self.path_table.len();
+        let unused = self
+            .path_table
+            .values()
+            .filter(|paths| paths.primary().is_some_and(|path| path.used == 0.0))
+            .count();
+        (total, unused)
+    }
+
+    /// Count active and validated links per destination hash.
+    pub fn link_distribution(&self) -> Vec<([u8; 16], usize, usize)> {
+        let mut distribution: alloc::collections::BTreeMap<[u8; 16], (usize, usize)> =
+            alloc::collections::BTreeMap::new();
+        for entry in self.link_table.values() {
+            let counts = distribution.entry(entry.destination_hash).or_default();
+            counts.0 += 1;
+            if entry.validated {
+                counts.1 += 1;
+            }
+        }
+        distribution
+            .into_iter()
+            .map(|(hash, (total, active))| (hash, total, active))
+            .collect()
     }
 
     pub fn get_rate_table(&self) -> Vec<RateTableRow> {

@@ -24,6 +24,8 @@ pub struct PersistedPath {
     pub random_blobs: Vec<[u8; 10]>,
     pub interface_hash: Option<[u8; 32]>,
     pub packet_hash: [u8; 32],
+    /// Last time this path was used; 0 means never used.
+    pub used: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +93,7 @@ impl TransportEngine {
                         random_blobs: tail_random_blobs(&path.random_blobs),
                         interface_hash,
                         packet_hash: path.packet_hash,
+                        used: 0.0,
                     })
                     .collect();
                 PersistedTunnel {
@@ -161,6 +164,7 @@ impl TransportEngine {
                 random_blobs: path.random_blobs,
                 receiving_interface: interface_id,
                 packet_hash: path.packet_hash,
+                used: path.used,
                 announce_raw: Some(raw),
             };
             self.upsert_path_destination(destination_hash, entry, now);
@@ -218,6 +222,7 @@ impl PersistedPath {
             random_blobs: tail_random_blobs(&entry.random_blobs),
             interface_hash,
             packet_hash: entry.packet_hash,
+            used: entry.used,
         }
     }
 }
@@ -364,6 +369,7 @@ mod tests {
             random_blobs: vec![[0x33; 10]],
             interface_hash: Some(hash::full_hash(iface.as_bytes())),
             packet_hash: packet.packet_hash,
+            used: 0.0,
         }
     }
 
@@ -387,6 +393,7 @@ mod tests {
                 receiving_interface: InterfaceId(1),
                 packet_hash: packet.packet_hash,
                 announce_raw: Some(packet.raw.clone()),
+                used: 0.0,
             },
         );
 
@@ -414,6 +421,7 @@ mod tests {
                 receiving_interface: InterfaceId(404),
                 packet_hash: [7; 32],
                 announce_raw: None,
+                used: 0.0,
             },
         );
         assert!(engine.persistence_snapshot().paths.is_empty());

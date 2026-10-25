@@ -76,7 +76,14 @@ impl TransportEngine {
             return;
         }
 
-        jobs::cull_path_table(&mut self.path_table, &self.interfaces, ctx.now);
+        let unused_path_linger = self.unused_path_linger();
+        jobs::cull_path_table(
+            &mut self.path_table,
+            &self.interfaces,
+            ctx.now,
+            unused_path_linger,
+            constants::PATH_POOL_UNUSED_TARGET,
+        );
         jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
         let (_culled, link_closed_actions) =
             jobs::cull_link_table(&mut self.link_table, &self.interfaces, ctx.now);

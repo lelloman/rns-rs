@@ -417,6 +417,7 @@ impl TransportEngine {
                     random_blobs: tunnel_path.random_blobs.clone(),
                     receiving_interface: interface,
                     packet_hash: tunnel_path.packet_hash,
+                    used: 0.0,
                     announce_raw: None,
                 };
                 self.upsert_path_destination(*dest_hash, entry, now);

@@ -905,6 +905,7 @@ pub struct RnsNode {
     #[allow(dead_code)]
     probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
     known_destinations_path: Option<std::path::PathBuf>,
+    known_destinations_store: Option<Arc<crate::storage_sqlite::KnownDestinationsStore>>,
     transport_state_dir: Option<std::path::PathBuf>,
     ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
     ratchet_expiry: Duration,
@@ -946,8 +947,6 @@ impl RnsNode {
     ) -> io::Result<Self> {
         let paths = storage::ensure_storage_dirs(state_dir)?;
         let known_destinations_path = paths.storage.join("known_destinations");
-        let ratchet_store: Arc<dyn storage::RatchetStore> =
-            Arc::new(storage::FsRatchetStore::new(paths.ratchets.clone()));
 
         // Parse config file
         let config_file = config_dir.join("config");
@@ -1216,12 +1215,78 @@ impl RnsNode {
             _ => rns_core::holepunch::ProbeProtocol::Rnsp,
         };
 
-        let known_destinations = match storage::load_known_destinations(&known_destinations_path) {
-            Ok(destinations) => destinations,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Default::default(),
+        let known_destinations_db = crate::storage_sqlite::default_path(&paths.storage);
+        let mut known_destinations_store: Option<
+            Arc<crate::storage_sqlite::KnownDestinationsStore>,
+        > = None;
+        let (known_destinations, ratchet_store): (
+            std::collections::HashMap<[u8; 16], storage::KnownDestination>,
+            Arc<dyn storage::RatchetStore>,
+        ) = match crate::storage_sqlite::KnownDestinationsStore::open(&known_destinations_db, 16) {
+            Ok(store) => {
+                let store = Arc::new(store);
+                let mut destinations: std::collections::HashMap<
+                    [u8; 16],
+                    storage::KnownDestination,
+                > = store
+                    .load_all()
+                    .map(|entries| entries.into_iter().collect())
+                    .unwrap_or_else(|err| {
+                        log::warn!("failed to load known destinations from database: {}", err);
+                        Default::default()
+                    });
+                if destinations.is_empty() && known_destinations_path.is_file() {
+                    match store.import_legacy(&known_destinations_path) {
+                        Ok(imported) if imported > 0 => {
+                            log::info!(
+                                "imported {} known destinations from legacy storage",
+                                imported
+                            );
+                            let _ = std::fs::rename(
+                                &known_destinations_path,
+                                known_destinations_path.with_extension("imported"),
+                            );
+                            destinations = store
+                                .load_all()
+                                .map(|entries| entries.into_iter().collect())
+                                .unwrap_or_default();
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            log::warn!("could not import legacy known destinations: {}", err)
+                        }
+                    }
+                }
+                let known_destination_hashes: HashSet<[u8; 16]> =
+                    destinations.keys().copied().collect();
+                if let Err(err) = store.import_legacy_ratchets(
+                    &paths.ratchets,
+                    time::now() - rns_config.reticulum.ratchet_expiry as f64,
+                    &known_destination_hashes,
+                ) {
+                    log::warn!("could not import legacy ratchets: {}", err);
+                }
+                known_destinations_store = Some(Arc::clone(&store));
+                (destinations, store)
+            }
             Err(err) => {
-                log::warn!("failed to load known destinations: {}", err);
-                Default::default()
+                log::warn!(
+                        "could not initialise known destinations database, falling back to legacy storage: {}",
+                        err
+                    );
+                let destinations = match storage::load_known_destinations(&known_destinations_path)
+                {
+                    Ok(destinations) => destinations,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => Default::default(),
+                    Err(err) => {
+                        log::warn!("failed to load known destinations: {}", err);
+                        Default::default()
+                    }
+                };
+                (
+                    destinations,
+                    Arc::new(storage::FsRatchetStore::new(paths.ratchets.clone())),
+                )
             }
         };
         let known_destination_hashes: HashSet<[u8; 16]> =
@@ -1406,6 +1471,7 @@ impl RnsNode {
         )?;
 
         node.known_destinations_path = Some(known_destinations_path.clone());
+        node.known_destinations_store = known_destinations_store;
         for (dest_hash, known) in known_destinations {
             let _ = node.query(QueryRequest::RestoreKnownDestination(
                 crate::event::KnownDestinationEntry {
@@ -2434,6 +2500,7 @@ impl RnsNode {
             accepting_work,
             probe_server,
             known_destinations_path: None,
+            known_destinations_store: None,
             transport_state_dir,
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
@@ -3559,9 +3626,9 @@ impl RnsNode {
     }
 
     fn persist_known_destinations(&self) {
-        let Some(path) = self.known_destinations_path.as_ref() else {
+        if self.known_destinations_store.is_none() && self.known_destinations_path.is_none() {
             return;
-        };
+        }
 
         let Ok(entries) = self.known_destinations() else {
             return;
@@ -3587,8 +3654,14 @@ impl RnsNode {
             })
             .collect();
 
-        if let Err(err) = storage::save_known_destinations(&destinations, path) {
-            log::warn!("failed to persist known destinations: {}", err);
+        if let Some(store) = self.known_destinations_store.as_ref() {
+            if let Err(err) = store.save_all(&destinations) {
+                log::warn!("failed to persist known destinations: {}", err);
+            }
+        } else if let Some(path) = self.known_destinations_path.as_ref() {
+            if let Err(err) = storage::save_known_destinations(&destinations, path) {
+                log::warn!("failed to persist known destinations: {}", err);
+            }
         }
     }
 
@@ -3818,6 +3891,7 @@ impl RnsNode {
             accepting_work,
             probe_server: None,
             known_destinations_path: None,
+            known_destinations_store: None,
             transport_state_dir: None,
             ratchet_store: None,
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
@@ -4371,6 +4445,7 @@ mod tests {
             accepting_work: Arc::new(AtomicBool::new(true)),
             probe_server: None,
             known_destinations_path: None,
+            known_destinations_store: None,
             transport_state_dir: None,
             ratchet_store: Some(ratchet_store),
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
@@ -4731,6 +4806,7 @@ share_instance = False
             random_blobs: vec![[0x51; 10]],
             interface_hash: Some(rns_core::hash::full_hash(b"Persistence Test")),
             packet_hash: packet.packet_hash,
+            used: 0.0,
         };
         storage::save_transport_state(
             &TransportStateSnapshot {
@@ -4867,11 +4943,23 @@ share_instance = False
 
         let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
 
-        assert!(paths.ratchets.join(hex(&known_live)).exists());
+        assert!(!paths.ratchets.join(hex(&known_live)).exists());
         assert!(!paths.ratchets.join(hex(&known_expired)).exists());
         assert!(!paths.ratchets.join(hex(&unknown)).exists());
         assert!(!paths.ratchets.join(hex(&known_corrupt)).exists());
         assert!(!paths.ratchets.join("0102.out").exists());
+        assert!(paths.storage.join("known_destinations.imported").exists());
+
+        let store = crate::storage_sqlite::KnownDestinationsStore::open_read_only(
+            &crate::storage_sqlite::default_path(&paths.storage),
+            16,
+        )
+        .unwrap();
+        assert_eq!(store.load_all().unwrap().len(), 3);
+        assert!(store.current(&known_live, now, 300.0).unwrap().is_some());
+        assert!(store.current(&known_expired, now, 300.0).unwrap().is_none());
+        assert!(store.current(&unknown, now, 300.0).unwrap().is_none());
+        assert!(store.current(&known_corrupt, now, 300.0).unwrap().is_none());
 
         node.shutdown();
     }

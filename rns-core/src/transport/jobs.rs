@@ -156,17 +156,40 @@ pub fn cull_path_table(
     path_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     now: f64,
+    unused_path_linger: f64,
+    unused_pool_target: usize,
 ) -> usize {
     let mut culled = 0usize;
-    for ps in path_table.values_mut() {
+    let mut unused: alloc::vec::Vec<(f64, [u8; 16], [u8; 16])> = alloc::vec::Vec::new();
+    for (dest_hash, ps) in path_table.iter_mut() {
         let before = ps.len();
-        ps.cull(now, |iface_id| interfaces.contains_key(iface_id));
+        ps.retain(|p| {
+            now <= p.expires
+                && interfaces.contains_key(&p.receiving_interface)
+                && !(p.used == 0.0 && now > p.timestamp + unused_path_linger)
+        });
         culled += before - ps.len();
+        for path in ps.iter() {
+            if path.used == 0.0 {
+                unused.push((path.expires, *dest_hash, path.next_hop));
+            }
+        }
+    }
+    if unused.len() > unused_pool_target {
+        let remove_count = unused.len() - unused_pool_target;
+        unused.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+        for (_, dest_hash, next_hop) in unused.into_iter().take(remove_count) {
+            if let Some(ps) = path_table.get_mut(&dest_hash) {
+                let before = ps.len();
+                ps.retain(|p| p.next_hop != next_hop);
+                culled += before - ps.len();
+            }
+        }
     }
     path_table.retain(|_, ps| !ps.is_empty());
     if culled > 0 {
         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-            "Removed {} expired or unavailable path table entries",
+            "Removed {} expired, unavailable, or unused path table entries",
             culled,
         );
     }
@@ -500,13 +523,69 @@ mod tests {
                     receiving_interface: InterfaceId(1),
                     packet_hash: [0; 32],
                     announce_raw: None,
+                    used: 0.0,
                 },
                 1,
             ),
         );
 
-        let count = cull_path_table(&mut table, &interfaces, 600.0);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            600.0,
+            crate::constants::UNUSED_PATH_LINGER,
+            crate::constants::PATH_POOL_UNUSED_TARGET,
+        );
         assert_eq!(count, 1);
+    }
+
+    fn path_with_usage(timestamp: f64, expires: f64, used: f64) -> super::super::tables::PathSet {
+        super::super::tables::PathSet::from_single(
+            PathEntry {
+                timestamp,
+                next_hop: [0; 16],
+                hops: 1,
+                expires,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(1),
+                packet_hash: [0; 32],
+                announce_raw: None,
+                used,
+            },
+            1,
+        )
+    }
+
+    #[test]
+    fn test_cull_never_used_paths_after_linger() {
+        let mut table = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+
+        table.insert([0x11; 16], path_with_usage(100.0, 9999.0, 0.0));
+        table.insert([0x22; 16], path_with_usage(100.0, 9999.0, 150.0));
+
+        let count = cull_path_table(&mut table, &interfaces, 300.0, 100.0, 2048);
+        assert_eq!(count, 1);
+        assert!(!table.contains_key(&[0x11; 16]));
+        assert!(table.contains_key(&[0x22; 16]));
+    }
+
+    #[test]
+    fn test_cull_never_used_pool_to_target() {
+        let mut table = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+
+        table.insert([0x31; 16], path_with_usage(100.0, 1000.0, 0.0));
+        table.insert([0x32; 16], path_with_usage(100.0, 2000.0, 0.0));
+        table.insert([0x33; 16], path_with_usage(100.0, 3000.0, 0.0));
+
+        let count = cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2);
+        assert_eq!(count, 1);
+        assert!(!table.contains_key(&[0x31; 16]));
+        assert!(table.contains_key(&[0x32; 16]));
+        assert!(table.contains_key(&[0x33; 16]));
     }
 
     #[test]
@@ -540,12 +619,19 @@ mod tests {
                     receiving_interface: InterfaceId(1),
                     packet_hash: [0; 32],
                     announce_raw: None,
+                    used: 0.0,
                 },
                 1,
             ),
         );
 
-        let count = cull_path_table(&mut table, &interfaces, 1100.0);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            1100.0,
+            crate::constants::UNUSED_PATH_LINGER,
+            crate::constants::PATH_POOL_UNUSED_TARGET,
+        );
         assert_eq!(count, 0);
         assert_eq!(table.len(), 1);
     }

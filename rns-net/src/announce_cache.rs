@@ -1,105 +1,299 @@
-//! Announce cache for disk persistence.
+//! Announce cache for persistence.
 //!
-//! Caches announce packets to disk for path request responses.
-//! File format matches Python: msgpack `[raw_bytes, interface_name_or_nil]`.
-//! Filename: hex-encoded packet_hash (64 chars).
+//! Uses SQLite (`announces.db`) by default, mirroring Python Reticulum's
+//! `cached_announces` table. Legacy per-file caches are imported on first use.
+//! If SQLite cannot be opened, the legacy filesystem backend is retained.
 //!
-//! Python reference: Transport.py:2334-2402
+//! Python reference: Transport.py:3087-3099 and Storage.py AnnounceCache.
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use rns_core::msgpack::{self, Value};
+use rusqlite::{params, Connection, OptionalExtension};
 
-/// Announce cache backed by filesystem.
+enum Backend {
+    Sqlite(SqliteAnnounceCache),
+    Files(FileAnnounceCache),
+}
+
+/// Announce cache with a SQLite backend and a filesystem fallback.
 pub struct AnnounceCache {
-    base_path: PathBuf,
+    backend: Backend,
 }
 
 impl AnnounceCache {
-    /// Create an announce cache at the given directory.
-    /// The directory must already exist (created by `ensure_storage_dirs`).
+    /// Create an announce cache rooted at `base_path`.
+    ///
+    /// The database is written next to the legacy directory as
+    /// `<base_path>.db` (for example `cache/announces.db` for
+    /// `cache/announces`). Legacy files already in `base_path` are imported
+    /// and removed.
     pub fn new(base_path: PathBuf) -> Self {
-        AnnounceCache { base_path }
+        match SqliteAnnounceCache::open(&base_path) {
+            Ok(cache) => {
+                if let Err(error) = cache.import_legacy(&base_path) {
+                    log::warn!("Could not import legacy announce cache: {}", error);
+                }
+                Self {
+                    backend: Backend::Sqlite(cache),
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "Could not initialise announce cache database, falling back to file storage: {}",
+                    error
+                );
+                Self {
+                    backend: Backend::Files(FileAnnounceCache::new(base_path)),
+                }
+            }
+        }
     }
 
-    /// Store a cached announce to disk.
-    ///
-    /// `packet_hash`: 32-byte packet hash (used as filename)
-    /// `raw`: raw announce bytes (pre-hop-increment)
-    /// `interface_name`: optional interface name string
     pub fn store(
         &self,
         packet_hash: &[u8; 32],
         raw: &[u8],
         interface_name: Option<&str>,
     ) -> io::Result<()> {
-        let filename = hex_encode(packet_hash);
-        let path = self.base_path.join(&filename);
+        match &self.backend {
+            Backend::Sqlite(cache) => cache.store(packet_hash, raw, interface_name),
+            Backend::Files(cache) => cache.store(packet_hash, raw, interface_name),
+        }
+    }
 
+    pub fn get(&self, packet_hash: &[u8; 32]) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
+        match &self.backend {
+            Backend::Sqlite(cache) => cache.get(packet_hash),
+            Backend::Files(cache) => cache.get(packet_hash),
+        }
+    }
+
+    /// Remove cached announces whose packet hashes are not in the active set.
+    pub fn clean(&self, active_hashes: &[[u8; 32]]) -> io::Result<usize> {
+        match &self.backend {
+            Backend::Sqlite(cache) => cache.clean(active_hashes),
+            Backend::Files(cache) => {
+                let (removed, _) = cache.clean(active_hashes, 0)?;
+                Ok(removed)
+            }
+        }
+    }
+}
+
+struct SqliteAnnounceCache {
+    conn: Mutex<Connection>,
+}
+
+impl SqliteAnnounceCache {
+    fn open(base_path: &Path) -> io::Result<Self> {
+        let db_path = base_path.with_extension("db");
+        if let Some(parent) = db_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(&db_path).map_err(sql_error)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(sql_error)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA journal_size_limit=8388608;
+             PRAGMA auto_vacuum=INCREMENTAL;
+             CREATE TABLE IF NOT EXISTS cached_announces (
+                packet_hash         BLOB PRIMARY KEY,
+                received            REAL NOT NULL,
+                raw                 BLOB NOT NULL,
+                interface_reference TEXT);
+             PRAGMA user_version = 1;",
+        )
+        .map_err(sql_error)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Connection> {
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn store(
+        &self,
+        packet_hash: &[u8; 32],
+        raw: &[u8],
+        interface_name: Option<&str>,
+    ) -> io::Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO cached_announces VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(packet_hash) DO UPDATE SET
+               received=excluded.received,
+               raw=excluded.raw,
+               interface_reference=excluded.interface_reference",
+            params![
+                packet_hash.to_vec(),
+                now(),
+                raw.to_vec(),
+                interface_name.map(str::to_string)
+            ],
+        )
+        .map_err(sql_error)?;
+        Ok(())
+    }
+
+    fn get(&self, packet_hash: &[u8; 32]) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT raw, interface_reference FROM cached_announces WHERE packet_hash = ?1",
+                params![packet_hash.to_vec()],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        Ok(row)
+    }
+
+    fn clean(&self, active_hashes: &[[u8; 32]]) -> io::Result<usize> {
+        let mut conn = self.lock();
+        let tx = conn.transaction().map_err(sql_error)?;
+        tx.execute("DROP TABLE IF EXISTS temp.active_announces", [])
+            .map_err(sql_error)?;
+        tx.execute(
+            "CREATE TEMP TABLE active_announces (packet_hash BLOB PRIMARY KEY)",
+            [],
+        )
+        .map_err(sql_error)?;
+        {
+            let mut statement = tx
+                .prepare("INSERT OR IGNORE INTO active_announces VALUES (?1)")
+                .map_err(sql_error)?;
+            for hash in active_hashes {
+                statement
+                    .execute(params![hash.to_vec()])
+                    .map_err(sql_error)?;
+            }
+        }
+        let removed = tx
+            .execute(
+                "DELETE FROM cached_announces
+                 WHERE packet_hash NOT IN (SELECT packet_hash FROM active_announces)",
+                [],
+            )
+            .map_err(sql_error)?;
+        tx.commit().map_err(sql_error)?;
+        if removed > 0 {
+            conn.execute("PRAGMA incremental_vacuum", [])
+                .map_err(sql_error)?;
+        }
+        Ok(removed)
+    }
+
+    fn import_legacy(&self, dir_path: &Path) -> io::Result<usize> {
+        if !dir_path.is_dir() {
+            return Ok(0);
+        }
+        let mut imported = 0;
+        for entry in fs::read_dir(dir_path)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let Some(packet_hash) = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(hex_decode)
+            else {
+                let _ = fs::remove_file(&path);
+                continue;
+            };
+            let parsed = fs::read(&path)
+                .ok()
+                .and_then(|data| parse_legacy_announce(&data));
+            if let Some((raw, interface_name)) = parsed {
+                self.store(&packet_hash, &raw, interface_name.as_deref())?;
+                imported += 1;
+            }
+            let _ = fs::remove_file(&path);
+        }
+        Ok(imported)
+    }
+}
+
+fn parse_legacy_announce(data: &[u8]) -> Option<(Vec<u8>, Option<String>)> {
+    let (value, _) = msgpack::unpack(data).ok()?;
+    let arr = value.as_array()?;
+    if arr.is_empty() {
+        return None;
+    }
+    let raw = arr[0].as_bin()?.to_vec();
+    let interface_name = arr
+        .get(1)
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    Some((raw, interface_name))
+}
+
+struct FileAnnounceCache {
+    base_path: PathBuf,
+}
+
+impl FileAnnounceCache {
+    fn new(base_path: PathBuf) -> Self {
+        Self { base_path }
+    }
+
+    fn store(
+        &self,
+        packet_hash: &[u8; 32],
+        raw: &[u8],
+        interface_name: Option<&str>,
+    ) -> io::Result<()> {
+        let path = self.base_path.join(hex_encode(packet_hash));
         let iface_val = match interface_name {
             Some(name) => Value::Str(name.into()),
             None => Value::Nil,
         };
         let data = msgpack::pack(&Value::Array(vec![Value::Bin(raw.to_vec()), iface_val]));
-
         fs::write(path, data)
     }
 
-    /// Retrieve a cached announce from disk.
-    ///
-    /// Returns `(raw_bytes, interface_name_or_none)`.
-    pub fn get(&self, packet_hash: &[u8; 32]) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
-        let filename = hex_encode(packet_hash);
-        let path = self.base_path.join(&filename);
-
+    fn get(&self, packet_hash: &[u8; 32]) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
+        let path = self.base_path.join(hex_encode(packet_hash));
         if !path.is_file() {
             return Ok(None);
         }
-
         let data = fs::read(&path)?;
         let (value, _) = msgpack::unpack(&data).map_err(|e| {
             io::Error::new(io::ErrorKind::InvalidData, format!("msgpack error: {}", e))
         })?;
-
         let arr = value
             .as_array()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected msgpack array"))?;
-
         if arr.is_empty() {
             return Ok(None);
         }
-
         let raw = arr[0]
             .as_bin()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected bin raw bytes"))?;
-
-        let iface_name = if arr.len() > 1 {
-            arr[1].as_str().map(|s| s.to_string())
-        } else {
-            None
-        };
-
+        let iface_name = arr
+            .get(1)
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
         Ok(Some((raw.to_vec(), iface_name)))
     }
 
-    /// Open a directory iterator for incremental cleanup.
-    pub fn entries(&self) -> io::Result<fs::ReadDir> {
+    #[cfg(test)]
+    fn entries(&self) -> io::Result<fs::ReadDir> {
         fs::read_dir(&self.base_path)
     }
 
-    /// Remove cached announces whose packet hashes are not in the active set.
-    ///
-    /// `active_hashes`: set of packet hashes that should be kept.
-    /// `batch_limit`: maximum number of files to process per call (0 = unlimited).
-    /// Returns `(removed_count, finished)` where `finished` is true if all files
-    /// were processed (no more work to do).
-    pub fn clean(
-        &self,
-        active_hashes: &[[u8; 32]],
-        batch_limit: usize,
-    ) -> io::Result<(usize, bool)> {
+    fn clean(&self, active_hashes: &[[u8; 32]], batch_limit: usize) -> io::Result<(usize, bool)> {
         let mut entries = match fs::read_dir(&self.base_path) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((0, true)),
@@ -108,11 +302,7 @@ impl AnnounceCache {
         self.clean_batch(active_hashes, &mut entries, batch_limit)
     }
 
-    /// Incrementally remove stale cached announces from an existing directory iterator.
-    ///
-    /// `entries` keeps iteration state across calls, allowing batched cleanup to
-    /// make forward progress through large directories.
-    pub fn clean_batch(
+    fn clean_batch(
         &self,
         active_hashes: &[[u8; 32]],
         entries: &mut fs::ReadDir,
@@ -128,31 +318,22 @@ impl AnnounceCache {
             if batch_limit > 0 && processed >= batch_limit {
                 return Ok((removed, false));
             }
-
             let Some(entry) = entries.next() else {
                 return Ok((removed, true));
             };
-
             let entry = entry?;
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
             processed += 1;
-
             let filename = match path.file_name().and_then(|n| n.to_str()) {
                 Some(n) => n,
                 None => continue,
             };
-
             match hex_decode(filename) {
-                Some(hash) => {
-                    if !active_set.contains(&hash) {
-                        let _ = fs::remove_file(&path);
-                        removed += 1;
-                    }
-                }
-                None => {
+                Some(hash) if active_set.contains(&hash) => {}
+                _ => {
                     let _ = fs::remove_file(&path);
                     removed += 1;
                 }
@@ -160,11 +341,21 @@ impl AnnounceCache {
         }
     }
 
-    /// Get the base path for testing.
     #[cfg(test)]
-    pub fn base_path(&self) -> &std::path::Path {
+    fn base_path(&self) -> &Path {
         &self.base_path
     }
+}
+
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+fn sql_error(error: rusqlite::Error) -> io::Error {
+    io::Error::other(error.to_string())
 }
 
 /// Encode 32 bytes as 64-char lowercase hex string.
@@ -225,11 +416,8 @@ mod tests {
         let hash = [0xAB; 32];
         let encoded = hex_encode(&hash);
         assert_eq!(encoded.len(), 64);
-        assert_eq!(encoded.len(), 64);
-        // All bytes are 0xAB so hex is "ab" repeated 32 times
         assert!(encoded.chars().all(|c| c == 'a' || c == 'b'));
-        let decoded = hex_decode(&encoded).unwrap();
-        assert_eq!(decoded, hash);
+        assert_eq!(hex_decode(&encoded), Some(hash));
     }
 
     #[test]
@@ -238,108 +426,107 @@ mod tests {
         assert!(hex_decode(&"zz".repeat(32)).is_none());
     }
 
-    #[test]
-    fn test_store_and_get_roundtrip() {
-        let dir = temp_dir();
-        let cache = AnnounceCache::new(dir.clone());
-
-        let hash = [0x42; 32];
-        let raw = vec![0x01, 0x02, 0x03, 0x04, 0x05];
-        cache.store(&hash, &raw, Some("TestInterface")).unwrap();
-
-        let result = cache.get(&hash).unwrap();
-        assert!(result.is_some());
-        let (got_raw, got_name) = result.unwrap();
-        assert_eq!(got_raw, raw);
-        assert_eq!(got_name, Some("TestInterface".to_string()));
-
-        let _ = fs::remove_dir_all(&dir);
+    fn sqlite_cache_dir() -> (PathBuf, PathBuf) {
+        let root = temp_dir();
+        let legacy = root.join("announces");
+        fs::create_dir_all(&legacy).unwrap();
+        (root, legacy)
     }
 
     #[test]
-    fn test_store_with_nil_interface() {
-        let dir = temp_dir();
-        let cache = AnnounceCache::new(dir.clone());
-
-        let hash = [0x55; 32];
-        let raw = vec![0xAA, 0xBB];
-        cache.store(&hash, &raw, None).unwrap();
-
-        let result = cache.get(&hash).unwrap();
-        assert!(result.is_some());
-        let (got_raw, got_name) = result.unwrap();
-        assert_eq!(got_raw, raw);
-        assert_eq!(got_name, None);
-
-        let _ = fs::remove_dir_all(&dir);
+    fn sqlite_store_get_and_reopen() {
+        let (root, dir) = sqlite_cache_dir();
+        {
+            let cache = AnnounceCache::new(dir.clone());
+            cache
+                .store(&[0x42; 32], &[1, 2, 3], Some("TestInterface"))
+                .unwrap();
+        }
+        let reopened = AnnounceCache::new(dir.clone());
+        let (raw, interface) = reopened.get(&[0x42; 32]).unwrap().unwrap();
+        assert_eq!(raw, vec![1, 2, 3]);
+        assert_eq!(interface.as_deref(), Some("TestInterface"));
+        assert!(root.join("announces.db").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn test_get_nonexistent() {
-        let dir = temp_dir();
+    fn sqlite_store_overwrite_and_nil_interface() {
+        let (root, dir) = sqlite_cache_dir();
         let cache = AnnounceCache::new(dir.clone());
-
-        let hash = [0xFF; 32];
-        let result = cache.get(&hash).unwrap();
-        assert!(result.is_none());
-
-        let _ = fs::remove_dir_all(&dir);
+        let hash = [0x77; 32];
+        cache.store(&hash, &[0x01], Some("iface1")).unwrap();
+        cache.store(&hash, &[0x02, 0x03], None).unwrap();
+        let (raw, interface) = cache.get(&hash).unwrap().unwrap();
+        assert_eq!(raw, vec![0x02, 0x03]);
+        assert_eq!(interface, None);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn test_clean_removes_stale() {
-        let dir = temp_dir();
+    fn sqlite_clean_removes_inactive() {
+        let (root, dir) = sqlite_cache_dir();
         let cache = AnnounceCache::new(dir.clone());
-
-        let hash1 = [0x11; 32];
-        let hash2 = [0x22; 32];
-        let hash3 = [0x33; 32];
-
-        cache.store(&hash1, &[0x01], None).unwrap();
-        cache.store(&hash2, &[0x02], None).unwrap();
-        cache.store(&hash3, &[0x03], None).unwrap();
-
-        // Keep only hash2
-        let (removed, finished) = cache.clean(&[hash2], 0).unwrap();
-        assert_eq!(removed, 2);
-        assert!(finished);
-
-        // hash2 should still be there
-        assert!(cache.get(&hash2).unwrap().is_some());
-        // hash1 and hash3 should be gone
-        assert!(cache.get(&hash1).unwrap().is_none());
-        assert!(cache.get(&hash3).unwrap().is_none());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_clean_empty_dir() {
-        let dir = temp_dir();
-        let cache = AnnounceCache::new(dir.clone());
-
-        let (removed, finished) = cache.clean(&[], 0).unwrap();
-        assert_eq!(removed, 0);
-        assert!(finished);
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_clean_batch_progresses_across_calls() {
-        let dir = temp_dir();
-        let cache = AnnounceCache::new(dir.clone());
-
         let keep = [0x10; 32];
         let stale1 = [0x20; 32];
         let stale2 = [0x30; 32];
-
         cache.store(&keep, &[0x01], None).unwrap();
         cache.store(&stale1, &[0x02], None).unwrap();
         cache.store(&stale2, &[0x03], None).unwrap();
 
-        let mut entries = cache.entries().unwrap();
+        assert_eq!(cache.clean(&[keep]).unwrap(), 2);
+        assert!(cache.get(&keep).unwrap().is_some());
+        assert!(cache.get(&stale1).unwrap().is_none());
+        assert!(cache.get(&stale2).unwrap().is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
 
+    #[test]
+    fn sqlite_imports_legacy_files() {
+        let (root, dir) = sqlite_cache_dir();
+        let legacy = FileAnnounceCache::new(dir.clone());
+        legacy
+            .store(&[0x55; 32], &[0xAA, 0xBB], Some("legacy"))
+            .unwrap();
+
+        let cache = AnnounceCache::new(dir.clone());
+        let (raw, interface) = cache.get(&[0x55; 32]).unwrap().unwrap();
+        assert_eq!(raw, vec![0xAA, 0xBB]);
+        assert_eq!(interface.as_deref(), Some("legacy"));
+        assert!(!dir.join(hex_encode(&[0x55; 32])).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn file_backend_get_and_clean() {
+        let dir = temp_dir();
+        let cache = FileAnnounceCache::new(dir.clone());
+        let hash = [0x42; 32];
+        cache
+            .store(&hash, &[1, 2, 3], Some("TestInterface"))
+            .unwrap();
+        let (raw, interface) = cache.get(&hash).unwrap().unwrap();
+        assert_eq!(raw, vec![1, 2, 3]);
+        assert_eq!(interface.as_deref(), Some("TestInterface"));
+        assert_eq!(cache.base_path(), dir.as_path());
+
+        let (removed, finished) = cache.clean(&[], 0).unwrap();
+        assert_eq!(removed, 1);
+        assert!(finished);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_backend_clean_batch_progresses() {
+        let dir = temp_dir();
+        let cache = FileAnnounceCache::new(dir.clone());
+        let keep = [0x10; 32];
+        let stale1 = [0x20; 32];
+        let stale2 = [0x30; 32];
+        cache.store(&keep, &[0x01], None).unwrap();
+        cache.store(&stale1, &[0x02], None).unwrap();
+        cache.store(&stale2, &[0x03], None).unwrap();
+        let mut entries = cache.entries().unwrap();
         let mut removed_total = 0;
         let mut finished = false;
         for _ in 0..4 {
@@ -350,29 +537,20 @@ mod tests {
                 break;
             }
         }
-
         assert!(finished);
         assert_eq!(removed_total, 2);
-        assert!(cache.get(&keep).unwrap().is_some());
-        assert!(cache.get(&stale1).unwrap().is_none());
-        assert!(cache.get(&stale2).unwrap().is_none());
-
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_store_overwrite() {
-        let dir = temp_dir();
+    fn wrapper_falls_back_to_files_when_database_path_is_a_directory() {
+        let (root, dir) = sqlite_cache_dir();
+        // Force `announces.db` to be a directory so SQLite cannot open it.
+        fs::create_dir_all(root.join("announces.db")).unwrap();
         let cache = AnnounceCache::new(dir.clone());
-
-        let hash = [0x77; 32];
-        cache.store(&hash, &[0x01], Some("iface1")).unwrap();
-        cache.store(&hash, &[0x02, 0x03], Some("iface2")).unwrap();
-
-        let result = cache.get(&hash).unwrap().unwrap();
-        assert_eq!(result.0, vec![0x02, 0x03]);
-        assert_eq!(result.1, Some("iface2".to_string()));
-
-        let _ = fs::remove_dir_all(&dir);
+        let hash = [0x88; 32];
+        cache.store(&hash, &[0x01], None).unwrap();
+        assert!(dir.join(hex_encode(&hash)).exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

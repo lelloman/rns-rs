@@ -433,6 +433,7 @@ fn test_transport_routing_interop() {
                             receiving_interface: InterfaceId(1),
                             packet_hash: [0; 32],
                             announce_raw: None,
+                            used: 0.0,
                         },
                         1,
                     ),
@@ -1283,6 +1284,7 @@ fn test_multipath_stores_alternatives() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
         3,
     );
@@ -1296,6 +1298,7 @@ fn test_multipath_stores_alternatives() {
         receiving_interface: InterfaceId(1),
         packet_hash: [0; 32],
         announce_raw: None,
+        used: 0.0,
     });
 
     ps.upsert(PathEntry {
@@ -1307,6 +1310,7 @@ fn test_multipath_stores_alternatives() {
         receiving_interface: InterfaceId(1),
         packet_hash: [0; 32],
         announce_raw: None,
+        used: 0.0,
     });
 
     assert_eq!(ps.len(), 3);
@@ -1330,6 +1334,7 @@ fn test_multipath_failover() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
         3,
     );
@@ -1343,6 +1348,7 @@ fn test_multipath_failover() {
         receiving_interface: InterfaceId(1),
         packet_hash: [0; 32],
         announce_raw: None,
+        used: 0.0,
     });
 
     assert_eq!(ps.primary().unwrap().next_hop, [0x01; 16]);
@@ -1368,6 +1374,7 @@ fn test_multipath_failover() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
     harness.engine.mark_path_unresponsive(&dest, None);
@@ -1434,6 +1441,7 @@ fn test_multipath_capacity_eviction() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
         2,
     );
@@ -1447,6 +1455,7 @@ fn test_multipath_capacity_eviction() {
         receiving_interface: InterfaceId(1),
         packet_hash: [0; 32],
         announce_raw: None,
+        used: 0.0,
     });
 
     // Now at capacity (2)
@@ -1462,6 +1471,7 @@ fn test_multipath_capacity_eviction() {
         receiving_interface: InterfaceId(1),
         packet_hash: [0; 32],
         announce_raw: None,
+        used: 0.0,
     });
 
     // Still at capacity
@@ -1487,6 +1497,7 @@ fn test_multipath_same_nexthop_updates_in_place() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
         3,
     );
@@ -1501,6 +1512,7 @@ fn test_multipath_same_nexthop_updates_in_place() {
         receiving_interface: InterfaceId(1),
         packet_hash: [0; 32],
         announce_raw: None,
+        used: 0.0,
     });
 
     // Should not create a duplicate — still 1 path
@@ -1558,6 +1570,7 @@ fn test_multipath_drop_all_via_partial() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
 
@@ -1578,6 +1591,7 @@ fn test_multipath_drop_all_via_partial() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
     );
 
@@ -1604,6 +1618,7 @@ fn test_multipath_cull_individual_paths() {
             receiving_interface: InterfaceId(1),
             packet_hash: [0; 32],
             announce_raw: None,
+            used: 0.0,
         },
         3,
     );
@@ -1617,6 +1632,7 @@ fn test_multipath_cull_individual_paths() {
         receiving_interface: InterfaceId(1),
         packet_hash: [0; 32],
         announce_raw: None,
+        used: 0.0,
     });
 
     assert_eq!(ps.len(), 2);
