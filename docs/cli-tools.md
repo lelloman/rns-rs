@@ -18,7 +18,7 @@ All tools accept `--config DIR` to select the config directory (default
 |------|---------|------|
 | `rnsd` | The node daemon | below |
 | `rnstatus` | Interface status, traffic counters, attach/detach/reload | [rnstatus](rnstatus.md) |
-| `rnpath` | Display and manage the path table, request paths | `rnpath --help` |
+| `rnpath` | Display and manage the path table, request paths | `rnpath --help`; `rnpath -t -u` shows and sorts by last path use |
 | `rnprobe` | Send a probe packet to a destination and measure RTT | `rnprobe --help` |
 | `rnid` | Identity creation, inspection, encryption, and signatures | `rnid --help` |
 | `rnsh` | Remote shell over a Reticulum link | [rnsh](rnsh.md) |

@@ -23,6 +23,11 @@ A node keeps everything in one directory: the Reticulum `config` file,
 identities, path tables, logs, and the `rns-server.json` product config. The
 default is `~/.reticulum`; pass `--config PATH` to use another location.
 
+Known destinations and received ratchets are persisted in
+`storage/known_destinations.db`, and cached announces in `cache/announces.db`.
+Legacy msgpack and per-file storage is imported on first start; the older file
+stores remain the fallback if SQLite cannot be opened.
+
 Start from the example config shipped with `rnsd`:
 
 ```bash
