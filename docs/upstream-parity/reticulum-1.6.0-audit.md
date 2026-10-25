@@ -137,6 +137,12 @@ link totals/active/pending counts, and path-pool total/unused/active counts;
 native announce rate table and packet hashlist already provide the upstream
 optimizations through different data structures and need no separate port.
 
+The native shared-instance client does not own a known-destination table; it
+queries the daemon, so upstream's read-only client load has no direct native
+equivalent. The `packet_hash` column is stored as zero because the native
+in-memory known-destination state does not retain the announce packet hash;
+RNS does not read that column for transport decisions.
+
 Focused regressions cover the SQLite round trip, legacy known-destination and
 ratchet import, read-only behavior, announce-cache store/reopen/clean/import and
 file fallback, path usage marking, unused-path linger and pool culling,
