@@ -180,7 +180,7 @@ rns-rs commit must contain exactly one `Upstream-Commit` trailer.
 
 | Version | Audit | Final parity record |
 |---|---|---|
-| 1.6.0 (pending release) | [Audit](reticulum-1.6.0-audit.md) | Pending |
+| 1.6.0 | [Audit](reticulum-1.6.0-audit.md) | [Parity](reticulum-1.6.0-parity.md) |
 | 1.5.7 | [Audit](reticulum-1.5.7-audit.md) | [Parity](reticulum-1.5.7-parity.md) |
 | 1.5.6 rgit `49ae71e0` | [Audit](reticulum-1.5.6-rgit-audit.md) | [Parity](reticulum-1.5.6-rgit-parity.md) |
 | 1.5.6 | [Audit](reticulum-1.5.6-audit.md) | [Parity](reticulum-1.5.6-parity.md) |

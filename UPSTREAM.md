@@ -8,13 +8,31 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.5.7`
-- Version metadata commit: `2578750bf7df7a598fc77e49212c79a2061e50e3`
-- Normative commit: `ee82fa75a75ec67555126eb16796ea1a52716a2b`
-- Commit date: `2026-10-22 01:02:33 +0200`
-- Subject: `Fixed missing reports_phy_stats on Android RNodeInterface`
+- Version: `1.6.0`
+- Version metadata commit: `af8d05819d363240c133e4bc644bfde0d4620a71`
+- Normative commit: `9a01a20ce66c4146dd8f8d31f18c19fe7600739d`
+- Commit date: `2026-10-25 02:11:47 +0200`
+- Subject: `Cleanup`
 
-The normative baseline is the canonical `rgit/master` tip `ee82fa75`, accepted
+The normative baseline is the canonical `rgit/master` tip `9a01a20c`, accepted
+on 2026-10-25 as Reticulum 1.6.0 from `ee82fa75`. No signed 1.6.0 tag is
+published and upstream marks the release pending, so the version is asserted
+from `RNS/_version.py` at the target. The range adds RNode phy-stat status
+fields, path usage tracking and unused-pool culling, SQLite known-destination,
+ratchet, and announce-cache stores with legacy import and file fallback,
+expanded status metrics and `link_distribution`, `rnpath --usage`, native
+discovery stamps, and a discovery hop-count gate. The Python GC and
+`malloc_trim` commits are structurally covered or deferred; the native daemon
+keeps jemalloc defaults. The target `RNS` tree is
+`461df28e901e3dd8ed3877a375c28e11a9fd2a0e` and the root tree is
+`5c1bcc90971538c5df028fd9a40dc2e3cd1a5d94`. The GitHub mirror remains at
+`e40191b3`, behind the canonical rgit tip, which is allowed. Acceptance
+evidence is in
+[`docs/upstream-parity/reticulum-1.6.0-parity.md`](docs/upstream-parity/reticulum-1.6.0-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.0-audit.md`](docs/upstream-parity/reticulum-1.6.0-audit.md).
+
+The previous 1.5.7 baseline was the canonical `rgit/master` tip `ee82fa75`, accepted
 on 2026-10-22 as a same-version Reticulum 1.5.7 advancement from `a29bfb51`. No
 signed `1.5.7` tag is published; the version is asserted from `RNS/_version.py`
 at the target. The advancement adds two Python-only commits: `ae67448e` fixes
@@ -49,6 +67,18 @@ release baseline `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` and landed the live
 interface management, discovery auto-connect criteria, IFAC sanitization,
 spawned announce-cap propagation, Backbone detach, `rnstatus` discovery filters,
 and the 1.5.6 discovery fixes, remains recorded in its own parity document.
+
+For the 2026-10-25 1.6.0 promotion, `cargo test --workspace`,
+`cargo test --workspace --features rns-hooks` (rns-net 1,167 passed),
+`cargo test -p rns-ctl --features tls` (134 passed), `cargo fmt --all --check`,
+`bash scripts/lint-host.sh`, the Python tool tests (19 passed), the `rns-ctl`
+web smoke (4 passed), native-hook `rns-server`/`rns-ctl` release builds
+(`0.6.1622-9174bd0` / `0.7.1622-9174bd0`), all five ARMv7 cross builds, the
+packaged tarball, exact-target Python/Rust interop at `9a01a20` (2/2
+`python_interop`, 6/6 `utility_interop`), the full Docker E2E matrix (12 runs,
+102 checks, 0 failures), `cargo audit` for both lockfiles after updating
+`ctutils` to 0.4.5, and the impaired dual-VPS `--daily` smoke all passed.
+Physical hardware validation remains unclaimed.
 
 For the 1.5.7 promotion on 2026-10-16, `cargo test --workspace` (2,833 passed),
 `cargo test --workspace --features rns-hooks` (2,892 passed), `cargo test -p
@@ -85,10 +115,12 @@ tree; Docker, cross-build, and exact-target interop were not rerun. Historical
 fixture provenance is unchanged. Physical hardware validation remains unclaimed.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.7-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.7-rgit-parity.md),
+[`docs/upstream-parity/reticulum-1.6.0-parity.md`](docs/upstream-parity/reticulum-1.6.0-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.7-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.7-rgit-audit.md).
-The original 1.5.7 release acceptance remains in
+[`docs/upstream-parity/reticulum-1.6.0-audit.md`](docs/upstream-parity/reticulum-1.6.0-audit.md).
+The 1.5.7 rgit acceptance remains in
+[`docs/upstream-parity/reticulum-1.5.7-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.7-rgit-parity.md),
+and the original 1.5.7 release acceptance in
 [`docs/upstream-parity/reticulum-1.5.7-parity.md`](docs/upstream-parity/reticulum-1.5.7-parity.md).
 The earlier 1.5.6, 1.5.6 rgit, 1.5.5 release-tag, and 1.5.5 rgit acceptances
 and all 1.5.4 records remain unchanged.
