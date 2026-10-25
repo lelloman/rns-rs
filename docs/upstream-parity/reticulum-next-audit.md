@@ -1,0 +1,268 @@
+# Reticulum 1.6.0 Upstream Audit
+
+## Scope and Baseline
+
+- audit date: `2026-10-25`
+- previous accepted version: `1.5.7`
+- previous normative commit: `ee82fa75a75ec67555126eb16796ea1a52716a2b`
+- target version: `1.6.0` (upstream `Changelog.md` still marks the release `Pending`)
+- target tag or ref: `rgit/master` tip (no tag contains the target)
+- target normative commit: `9a01a20ce66c4146dd8f8d31f18c19fe7600739d`
+- target root tree: `5c1bcc90971538c5df028fd9a40dc2e3cd1a5d94`
+- target `RNS` tree: `461df28e901e3dd8ed3877a375c28e11a9fd2a0e`
+- version assertion: `RNS.__version__ == "1.6.0"` at the target commit
+- audited range: `ee82fa75a75ec67555126eb16796ea1a52716a2b..9a01a20ce66c4146dd8f8d31f18c19fe7600739d`
+- commits in range: `8`
+- repositories checked: normative `rgit` remote and the GitHub mirror
+- local branch and revision inspected: detached `HEAD` at
+  `ee82fa75a75ec67555126eb16796ea1a52716a2b`
+
+The target is the fresh `rgit/master` tip, not a signed release. GitHub's tip
+`e40191b3d193b46b7f2d8a44424a594cd758839b` is behind the accepted baseline and
+is allowed to lag. Because 1.6.0 is still marked pending upstream and no tag
+contains the target, this document remains the single active
+`reticulum-next-audit.md`; it is not renamed to a versioned audit yet.
+
+This is the initial inventory produced by the 2026-10-25 daily VPS check. No
+integration mapping commits have been made. `Needs port`, `Needs coordinated
+port`, and `Needs decision` rows are therefore unresolved work, not accepted
+parity.
+
+## Audit Vocabulary
+
+- **Needs port**: compatible behavior is absent or observably different.
+- **Needs coordinated port**: related changes must be implemented together.
+- **Needs decision**: architecture differs and the compatibility surface must
+  be chosen explicitly.
+- **Integrated**: applicable behavior is implemented with recorded evidence.
+- **Structurally covered**: the Rust design already provides the behavior or
+  avoids the upstream failure through a different invariant.
+- **Documentation follow-up**: native documentation is required after the
+  related behavior exists.
+- **Deferred**: applicable work is deliberately postponed with rationale and
+  impact recorded.
+- **Non-runtime**: metadata, changelog, generated artifacts, or upstream-only
+  tests require no independent Rust runtime change.
+
+## Commit Inventory
+
+| # | Upstream commit | Subject | Final disposition | Local evidence |
+|---:|---|---|---|---|
+| 1 | `f3ebec9cb1b93e467c0d15d56b501c7c9b350fa8` | Added ifstat parameters | Needs port | No RNode phy-stat fields in the native status/RPC output; `rns-net/src/rnode_kiss.rs` only exposes parsed `StatRssi`/`StatSnr` events |
+| 2 | `e24d2073123cd4c624b5ebd1e8b09d83fa78ceab` | Merged staging | Needs coordinated port | Local path table lacks per-path usage, unused-path pool culling, SQLite managed storage, and the new status metrics; see per-commit analysis |
+| 3 | `af8d05819d363240c133e4bc644bfde0d4620a71` | Updated version | Non-runtime | Version metadata only; target `1.6.0` is pending release |
+| 4 | `044d4c9adc4781165eea1fa223ece5ef278df787` | Added internal stamps module | Structurally covered | `rns-core/src/stamp.rs` and its use in `rns-net/src/discovery.rs` / `rns-net/src/common/discovery.rs` already provide the stamp algorithm without LXMF |
+| 5 | `156290733e50011028dc38fca14fd047dc02cb36` | Added canonical gc handling and platform-aware malloc trim | Needs decision | Rust has no Python GC and uses a different allocator strategy; allocator/RSS policy must be chosen explicitly |
+| 6 | `3e83fcc18b4cae4372b36b0d0cb48f2a904d0974` | Memory management | Needs decision | Upstream gates `malloc_trim` on RSS surplus; local allocator configuration differs |
+| 7 | `4ebd4dcc5b6cd3ed4683f38ac50dc60a02850e20` | Fixed invalid paths in docs | Non-runtime | Upstream documentation paths only |
+| 8 | `9a01a20ce66c4146dd8f8d31f18c19fe7600739d` | Cleanup | Needs port | Discovery handler has no `hops > PATHFINDER_M-1` rejection before stamp acceptance; ingress bounds hops but the handler-level gate is absent |
+
+## Per-Commit Analysis
+
+### 1. `f3ebec9` — Added ifstat parameters
+
+**Upstream change:** Adds `rssi`, `snr`, `signal_quality`, `frequency`,
+`bandwidth`, `txpower`, `sf`, `cr`, `channel`, and `modulation` to the
+`ifstats` entries in the RPC/status structure, and initialises
+`r_modulation = "LoRa"` on `RNodeInterface` and `RNodeMultiInterface`.
+
+**Rust applicability:** The native RNode driver already parses RSSI, SNR,
+airtime, and related statistics, but the control-plane/status output does not
+publish the complete phy-stat set or the modulation label.
+
+**Local handling and evidence:** `rns-net/src/rnode_kiss.rs` defines
+`CMD_STAT_RSSI` and `CMD_STAT_SNR` and surfaces `RNodeEvent::StatRssi` and
+`StatSnr`; there is no matching ifstats field set in the status/RPC path.
+`rg` finds no `r_modulation`, `signal_quality`, or `txpower` status field.
+
+**Final disposition:** Needs port.
+
+### 2. `e24d207` — Merged staging
+
+**Upstream change:** The core 1.6.0 feature commit. It adds path usage
+tracking (`path_table[hash][7]`), unused-path pool monitoring and culling,
+`PATH_TIMEOUT`/`UNUSED_PATH_LINGER` semantics, and an announce rate table
+rewrite. It also introduces `RNS/Storage.py` with a SQLite-backed
+`KnownDestinationsStore` and `AnnounceCache`, imports legacy known-destination
+and ratchet files into that database, persists cached announces, adds new
+status metrics (`rxpkts`, `txpkts`, announce/proof counters, link counts, path
+pool counts), adds `rnpath --usage`, and adds `link_distribution` to the RPC.
+It also fixes the RNode phy-stat Android regression and the `rngit` config path
+typo noted in the changelog.
+
+**Rust applicability:** This is the largest compatibility surface in the
+range. The native engine already owns a typed path table, file-based known
+destinations with `last_used_at`, file-based ratchets, packet hashlist, and
+announce rate defaults, but the following observed behaviors are absent or
+different:
+
+- per-path usage timestamps and `rnpath --usage` output;
+- unused-path pool target (`PATH_POOL_UNUSED_TARGET`) and leaf linger rules;
+- SQLite managed storage with legacy import fallback;
+- cached-announce persistence backed by that store;
+- the expanded status counters and link/path-pool distribution fields.
+
+**Local handling and evidence:** `rns-core/src/transport/tables.rs`
+`PathEntry` has no usage field. `rns-net/src/storage.rs` implements
+`KnownDestination` with `last_used_at` and an `FsRatchetStore`, not a SQLite
+store. `rns-net/src/common/event.rs` has `PathTableEntry` but no usage field.
+The hashlist and rate-table mechanisms exist but are not the upstream
+implementations. No native `rnpath` usage flag or `link_distribution` RPC was
+found.
+
+**Final disposition:** Needs coordinated port. The path-usage/culling behavior
+and the storage backend are coupled through the status and persistence
+surfaces, so they should be specified together rather than transplanted
+piecemeal.
+
+### 3. `af8d058` — Updated version
+
+**Upstream change:** Bumps `RNS/_version.py` from `1.5.7` to `1.6.0`.
+
+**Rust applicability:** Version metadata only. The target version is now known,
+but the upstream release is still marked pending and no target tag exists.
+
+**Local handling and evidence:** `UPSTREAM.md` still records the 1.5.7 baseline
+commit. No promotion is attempted by this audit.
+
+**Final disposition:** Non-runtime.
+
+### 4. `044d4c9` — Added internal stamps module
+
+**Upstream change:** Adds `RNS/Stamps.py` (workblock expansion, stamp value,
+stamp validation, and platform-specific parallel stamp generation) and switches
+interface discovery from the optional `LXMF.LXStamper` dependency to the
+internal module. Removes the LXMF installation note from the discovery docs.
+
+**Rust applicability:** The native implementation already performs the same
+proof-of-work algorithm for discovery. The LXMF dependency removal is specific
+to the Python package layout and has no Rust runtime equivalent.
+
+**Local handling and evidence:** `rns-core/src/stamp.rs` implements
+`stamp_workblock`, `stamp_value`, `stamp_valid`, and `leading_zeros`, with
+tests. `rns-net/src/discovery.rs` generates discovery stamps with
+`generate_discovery_stamp`; `rns-net/src/common/discovery.rs` validates them
+before accepting an interface. Discovery uses these native functions rather
+than an external LXMF module.
+
+**Final disposition:** Structurally covered.
+
+### 5. `1562907` — Added canonical gc handling and platform-aware malloc trim
+
+**Upstream change:** Replaces scattered `gc.collect()` calls with a single
+`garbage_collect()` helper and adds a throttled, platform-aware `trim_heap()`
+that calls `malloc_trim` (Linux), `malloc_zone_pressure_relief` (macOS),
+`mallopt(M_PURGE)` (Android), or `HeapTrim` (Windows). It also tracks
+`should_collect` and `mem_dirty` on `Transport`.
+
+**Rust applicability:** Rust has no cyclic garbage collector and the native
+crates do not manage Python objects. The observable intent is reducing RSS
+after large tables are culled; whether a comparable allocator-level trim is
+useful depends on the selected global allocator and deployment configuration.
+
+**Local handling and evidence:** No native equivalent of `gc.collect()` or
+`malloc_trim()` policy exists. The workspace uses Rust allocator crates
+(for example `tikv-jemallocator`) in some binaries. Adopting upstream's
+libc-specific calls verbatim would not be meaningful.
+
+**Final disposition:** Needs decision. Choose an explicit native memory policy
+(allocator, arena limits, and whether any RSS-gated trim is desirable) before
+mapping this commit.
+
+### 6. `3e83fcc` — Memory management
+
+**Upstream change:** Refines the previous commit: raises the collection
+throttle to 1440 seconds, adds `mem_trim_gate_mb = 8`, tracks the last RSS,
+reads `VmRSS` from `/proc/self/status`, and only trims when RSS has grown by at
+least the gate. Adds `MALLOC_ARENA_MAX=2` to the example systemd units and
+documents the setting.
+
+**Rust applicability:** The RSS-gated `malloc_trim` policy is tied to Python's
+allocator behavior. A native daemon may still benefit from an arena or
+allocator limit, but that is an explicit deployment choice rather than a direct
+port.
+
+**Local handling and evidence:** No `VmRSS`-gated trim logic or
+`MALLOC_ARENA_MAX` guidance exists in the native runtime. The release binaries
+and service packaging would need a deliberate allocator decision.
+
+**Final disposition:** Needs decision.
+
+### 7. `4ebd4dc` — Fixed invalid paths in docs
+
+**Upstream change:** Corrects documented storage paths for `rncp`, `rnx`, and
+`rnsh` (`storage/identities`, `~/.rns/identity`).
+
+**Rust applicability:** Documentation-only change in the upstream repository.
+No protocol or runtime behavior changes.
+
+**Local handling and evidence:** No native runtime mapping is required. Native
+documentation should be checked separately if it makes the same obsolete path
+claims, but that is not an upstream runtime behavior.
+
+**Final disposition:** Non-runtime.
+
+### 8. `9a01a20` — Cleanup
+
+**Upstream change:** In `InterfaceAnnounceHandler`, computes
+`hops = RNS.Transport.hops_to(destination_hash)` once and rejects the discovered
+interface when `hops > RNS.Transport.PATHFINDER_M-1`, before checking caches or
+validating the stamp. Reuses the computed value in the discovered-interface
+entry.
+
+**Rust applicability:** The native transport already bounds hop counts at
+packet-header and inbound layers, but the discovery handler does not apply the
+handler-level gate before accepting or validating a discovery announce. The
+practical gap is narrow (the boundary hop value), so a focused regression is
+needed before deciding whether behavior already matches.
+
+**Local handling and evidence:** `rns-net/src/common/discovery.rs` checks stamp
+validity and caches but has no hop-count gate. `rns-core/src/transport/
+inbound_engine.rs` rejects packets with `hops > PATHFINDER_M` and
+`rns-net/src/packet_header.rs` rejects raw header hops `>= PATHFINDER_M`; the
+upstream `> PATHFINDER_M-1` test is not represented explicitly in the discovery
+handler.
+
+**Final disposition:** Needs port (narrow validation; confirm the boundary with
+a focused test).
+
+## Integration Plan
+
+1. Decide the managed-storage approach for known destinations, ratchets, and
+   cached announces. This decision blocks the `e24d207` storage mapping.
+2. Port path usage tracking, unused-path pool culling, and the `rnpath --usage`
+   surface, with focused tests for path expiry and pool culling.
+3. Add the expanded status/RPC metrics and `link_distribution`, including the
+   RNode phy-stat fields from `f3ebec9`.
+4. Add the discovery hop-count gate and a boundary regression for
+   `PATHFINDER_M-1`.
+5. Decide the native allocator/RSS policy for the memory-management commits;
+   record a deliberate no-action or configuration mapping.
+6. Keep `UPSTREAM.md` and the README badge on 1.5.7 until every row has a final
+   disposition and all promotion gates pass.
+
+## Promotion Gates
+
+- [ ] Every upstream commit has a final disposition.
+- [ ] Focused regressions pass for every applicable behavior change.
+- [ ] Fixture provenance and byte stability are checked where applicable.
+- [ ] Exact-target live Python/Rust interop passes.
+- [ ] Workspace tests, feature suites, formatting, and lint pass.
+- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [ ] Native documentation is updated for user-visible behavior.
+- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+
+## Acceptance Record
+
+- `2026-10-25`: Daily VPS check found eight commits ahead of the accepted
+  baseline on the fresh `rgit/master` tip. Both remotes refreshed successfully;
+  GitHub remained behind the baseline and rgit advanced. This initial audit
+  inventories all eight commits. No code was integrated, no local mapping
+  commits exist, and no promotion gate is claimed as passed.
+
+Evidence:
+
+- `data/upstream-drift-2026-10-25.json`: fresh drift report with both remote
+  fetch timestamps and the eight-commit inventory.
+- `data/daily-report-2026-10-25.md`: daily operational report for the check that
+  produced this audit.
