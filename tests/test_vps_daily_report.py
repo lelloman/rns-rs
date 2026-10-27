@@ -21,7 +21,7 @@ from vps_daily_report import (  # noqa: E402
 
 
 class StatusJsonTests(unittest.TestCase):
-    def test_derives_legacy_summary_from_json_and_skips_local(self) -> None:
+    def test_derives_summary_from_json_and_skips_local(self) -> None:
         status, rows = status_from_json(
             {
                 "transport_uptime": 183845.9,
@@ -37,29 +37,33 @@ class StatusJsonTests(unittest.TestCase):
         )
 
         self.assertEqual(status["transport_uptime"], "2d 3h 4m")
-        self.assertEqual(status["primary_peer_name"], "Primary Backbone")
-        self.assertTrue(status["primary_peer_up"])
+        self.assertEqual(status["primary_peer_name"], "")
+        self.assertFalse(status["primary_peer_up"])
         self.assertEqual(status["backbone_up_count"], 1)
-        self.assertEqual(status["named_peer_up_count"], 0)
+        self.assertEqual(status["named_peer_up_count"], 1)
+        self.assertEqual(status["named_peer_total_count"], 2)
+        self.assertEqual(status["named_peers_down"], ["Named Peer"])
         self.assertEqual([row["interface_kind"] for row in rows], [
             "local", "configured_public", "backbone_discovered", "configured_public"
         ])
 
-    def test_down_primary_and_remaining_counts(self) -> None:
+    def test_counts_every_interface_regardless_of_order(self) -> None:
         status, _ = status_from_json(
             {
                 "transport_uptime": 30,
                 "interfaces": [
-                    {"name": "Primary", "status": False},
+                    {"name": "BackboneInterface/10001", "status": True},
+                    {"name": "Down Peer", "status": False},
                     {"name": "BackboneInterface/10002", "status": True},
                     {"name": "Named Peer", "status": True},
                 ],
             },
             parse_utc("2026-08-14 12:00:00 UTC"),
         )
-        self.assertFalse(status["primary_peer_up"])
-        self.assertEqual(status["backbone_up_count"], 1)
+        self.assertEqual(status["backbone_up_count"], 2)
         self.assertEqual(status["named_peer_up_count"], 1)
+        self.assertEqual(status["named_peer_total_count"], 2)
+        self.assertEqual(status["named_peers_down"], ["Down Peer"])
 
     def test_no_public_interfaces(self) -> None:
         status, _ = status_from_json(
@@ -67,8 +71,9 @@ class StatusJsonTests(unittest.TestCase):
             parse_utc("2026-08-14 12:00:00 UTC"),
         )
         self.assertEqual(status["transport_uptime"], "now")
-        self.assertEqual(status["primary_peer_name"], "")
-        self.assertFalse(status["primary_peer_up"])
+        self.assertEqual(status["backbone_up_count"], 0)
+        self.assertEqual(status["named_peer_total_count"], 0)
+        self.assertEqual(status["named_peers_down"], [])
 
     def test_rejects_malformed_required_fields(self) -> None:
         capture = parse_utc("2026-08-14 12:00:00 UTC")

@@ -358,6 +358,7 @@ def ensure_schema(conn: sqlite3.Connection) -> int:
         "rns_ctl_dev_version": "TEXT NOT NULL DEFAULT ''",
         "rns_ctl_matches_master": "INTEGER NOT NULL DEFAULT 0",
         "rns_ctl_matches_dev": "INTEGER NOT NULL DEFAULT 0",
+        "named_peer_total_count": "INTEGER NOT NULL DEFAULT -1",
     }.items():
         if column not in columns:
             conn.execute(f"ALTER TABLE daily_checks ADD COLUMN {column} {definition}")
@@ -496,22 +497,20 @@ def status_from_json(
     if "transport_uptime" not in response:
         raise ValueError("status JSON is missing transport_uptime")
     rows = parse_interface_snapshots(response, capture_dt)
-    public = [row for row in rows if row["public_candidate"]]
-    primary = public[0] if public else None
-    remaining = public[1:]
+    backbone = [row for row in rows if row["interface_kind"] == "backbone_discovered"]
+    configured = [row for row in rows if row["interface_kind"] == "configured_public"]
     status = {
         "transport_uptime": pretty_duration(response["transport_uptime"]),
-        "primary_peer_name": primary["interface_name"] if primary else "",
-        "primary_peer_up": bool(primary and primary["status"]),
-        "backbone_up_count": sum(
-            1
-            for row in remaining
-            if row["status"] and row["interface_kind"] == "backbone_discovered"
-        ),
-        "named_peer_up_count": sum(
-            1
-            for row in remaining
-            if row["status"] and row["interface_kind"] == "configured_public"
+        # The legacy "primary peer" was just the first public interface in the
+        # status list, which reorders as interfaces reconnect. It is no longer
+        # collected; the columns stay for history and new rows store ''/0.
+        "primary_peer_name": "",
+        "primary_peer_up": False,
+        "backbone_up_count": sum(1 for row in backbone if row["status"]),
+        "named_peer_up_count": sum(1 for row in configured if row["status"]),
+        "named_peer_total_count": len(configured),
+        "named_peers_down": sorted(
+            row["interface_name"] for row in configured if not row["status"]
         ),
     }
     return status, rows
@@ -764,6 +763,8 @@ ORDER BY packet_type, direction;
         "primary_peer_up": int(status["primary_peer_up"]),
         "backbone_up_count": int(status["backbone_up_count"]),
         "named_peer_up_count": int(status["named_peer_up_count"]),
+        "named_peer_total_count": int(status["named_peer_total_count"]),
+        "named_peers_down": status["named_peers_down"],
         "blacklist_total_entries": len(blacklist),
         "blacklist_reject_nonzero_entries": sum(
             1 for row in blacklist if row.get("reject_count", 0) > 0
@@ -823,13 +824,13 @@ def write_db(
                 child_rns_statsd_ready, child_rns_sentineld_ready,
                 established_sessions_4242, transport_uptime, primary_peer_name,
                 primary_peer_up, backbone_up_count, named_peer_up_count,
-                blacklist_total_entries, blacklist_reject_nonzero_entries,
+                named_peer_total_count, blacklist_total_entries, blacklist_reject_nonzero_entries,
                 blacklist_active_entries, blacklist_connected_entries,
                 provider_bridge_dropped_24h, provider_bridge_disconnected_24h,
                 idle_timeout_events_24h, announce_total, announce_latest_utc,
                 announce_1h, announce_24h, packet_freshness_max_age_seconds,
                 health_state
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
                 snapshot[key]
@@ -874,6 +875,7 @@ def write_db(
                     "primary_peer_up",
                     "backbone_up_count",
                     "named_peer_up_count",
+                    "named_peer_total_count",
                     "blacklist_total_entries",
                     "blacklist_reject_nonzero_entries",
                     "blacklist_active_entries",
@@ -1039,8 +1041,10 @@ def main() -> int:
                         for row in packet_traffic_rows
                     },
                     "idle_timeout_events_24h": snapshot["idle_timeout_events_24h"],
-                    "primary_peer_name": snapshot["primary_peer_name"],
-                    "primary_peer_up": bool(snapshot["primary_peer_up"]),
+                    "backbone_up_count": snapshot["backbone_up_count"],
+                    "named_peer_up_count": snapshot["named_peer_up_count"],
+                    "named_peer_total_count": snapshot["named_peer_total_count"],
+                    "named_peers_down": snapshot["named_peers_down"],
                     "interfaces_total": len(interface_rows),
                     "public_interfaces_total": len(public_interfaces),
                     "public_interfaces_up": sum(
