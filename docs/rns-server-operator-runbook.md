@@ -450,10 +450,20 @@ incomplete even if the row was inserted. Do not push the shared DB until both
 host snapshots have been reviewed, the smoke test has passed, and any duplicate
 same-day rows are understood.
 
-Historical `primary_peer_name` and `primary_peer_up` values are preserved as
-captured. Reports before the JSON-only collector change can show a false-down
-primary because probe-responder text was once mistaken for an interface; use
-the per-interface snapshots when interpreting those rows. The migration only
+Peer health is reported as two counts over every public interface:
+`backbone_up_count` (discovered `BackboneInterface/*` peers up) and
+`named_peer_up_count` out of `named_peer_total_count` (configured peers up out
+of configured total). The `--stdout-summary` output also lists any configured
+peers that are down in `named_peers_down`. Rows captured before 2026-10-27 have
+`named_peer_total_count = -1` (not collected), and their two up-counts skip one
+public interface, so they can read one lower than the true value.
+
+The `primary_peer_name` and `primary_peer_up` columns are legacy and are no
+longer collected; new rows store `''` and `0`. The collector used to label the
+first public interface in the node's status list as the "primary" peer, but
+that order changes as interfaces reconnect, so the label carried no
+operational meaning. Do not report it or compare it across days. Historical
+values are preserved as captured. The migration only
 clamps negative historical packet-freshness ages to zero and recomputes their
 summary maximum.
 
@@ -532,15 +542,16 @@ restarted, or reconfigured anything; if not, say so.>
 | Maximum packet-freshness age, seconds | <n> | <n> |
 | Established port-4242 sessions | <n> | <n> |
 | Active blacklist entries | <active> (<total> total) | <active> (<total> total) |
-| Backbone / named peers up | <n> / <n> | <n> / <n> |
+| Discovered backbone peers up | <n> | <n> |
+| Configured peers up / total | <up>/<total> | <up>/<total> |
 | Service uptime | <...> | <...> |
 | Transport uptime | <...> | <...> |
 | Installed commit (server and ctl) | <short sha> | <short sha> |
 
 <Note that packet totals count observations across interfaces, whether all 16
 traffic queries succeeded or a `-1` sentinel was recorded, and the
-`integrity_check` and `vps_history_dashboard.py --check` results. Name each
-host's primary peer and whether it was up.>
+`integrity_check` and `vps_history_dashboard.py --check` results. Name any
+configured peer that was down.>
 
 ## Version drift
 
