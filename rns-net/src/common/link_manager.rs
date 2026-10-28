@@ -19,6 +19,7 @@ use rns_core::link::{LinkAction, LinkEngine, LinkMode};
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::resource::{ResourceAction, ResourceReceiver, ResourceSender};
 use rns_crypto::ed25519::Ed25519PrivateKey;
+use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::{OsRng, Rng};
 
 use super::time;
@@ -556,34 +557,32 @@ impl LinkManager {
         mtu: u32,
         rng: &mut dyn Rng,
     ) -> (LinkId, Vec<LinkManagerAction>) {
-        self.create_link_with_cost(dest_hash, dest_sig_pub_bytes, hops, mtu, None, rng)
+        self.create_link_with_keys(dest_hash, dest_sig_pub_bytes, hops, mtu, None, rng)
     }
 
-    /// Create an outbound link, stamping the link request when the destination
-    /// has announced a non-zero link request cost.
-    pub fn create_link_with_cost(
+    /// Create an outbound link, using pre-generated link request keys when
+    /// given. A stamped link request supplies keys ground ahead of time, off
+    /// the driver thread; this method never performs stamp work itself.
+    pub fn create_link_with_keys(
         &mut self,
         dest_hash: &[u8; 16],
         dest_sig_pub_bytes: &[u8; 32],
         hops: u8,
         mtu: u32,
-        link_cost: Option<u8>,
+        keys: Option<(X25519PrivateKey, Ed25519PrivateKey)>,
         rng: &mut dyn Rng,
     ) -> (LinkId, Vec<LinkManagerAction>) {
         let mode = LinkMode::Aes256Cbc;
         let signalled_mtu = self.link_mtu_discovery.then_some(mtu);
-        let stamp_cost = link_cost
-            .filter(|cost| *cost > 0 && rns_core::constants::STAMP_LRS)
-            .map(|cost| cost.min(rns_core::constants::LINK_COST_CAP));
-        let (mut engine, request_data) = match stamp_cost {
-            Some(cost) => LinkEngine::new_initiator_stamped(
+        let (mut engine, request_data) = match keys {
+            Some((prv, sig_prv)) => LinkEngine::new_initiator_with_keys(
                 dest_hash,
                 hops,
                 mode,
                 signalled_mtu,
                 time::now(),
-                rng,
-                cost,
+                prv,
+                sig_prv,
             ),
             None => {
                 LinkEngine::new_initiator(dest_hash, hops, mode, signalled_mtu, time::now(), rng)

@@ -115,6 +115,7 @@ mod dispatch;
 mod events;
 mod interface_management;
 mod lifecycle;
+mod link_stamps;
 mod queries;
 mod resource_preparation;
 mod runtime_config;

@@ -68,12 +68,29 @@ pub fn generate_stamped_key(
     material: &[u8],
     stamp_cost: u8,
 ) -> (X25519PrivateKey, X25519PublicKey, u32) {
+    generate_stamped_key_until(rng, material, stamp_cost, &mut || false)
+        .expect("stamped key generation without a stop condition always completes")
+}
+
+/// Like [`generate_stamped_key`], but gives up and returns `None` as soon as
+/// `should_stop` reports true. The search is unbounded, so callers that run
+/// it on a latency-sensitive path must supply a deadline or cancellation flag,
+/// as upstream does with `LINK_STAMP_TIMEOUT` and `cancel_work`.
+pub fn generate_stamped_key_until(
+    rng: &mut dyn Rng,
+    material: &[u8],
+    stamp_cost: u8,
+    should_stop: &mut dyn FnMut() -> bool,
+) -> Option<(X25519PrivateKey, X25519PublicKey, u32)> {
     loop {
+        if should_stop() {
+            return None;
+        }
         let prv = X25519PrivateKey::generate(rng);
         let public = prv.public_key();
         let value = stamp_value(material, &public.public_bytes());
         if value >= u32::from(stamp_cost) {
-            return (prv, public, value);
+            return Some((prv, public, value));
         }
     }
 }
@@ -529,6 +546,29 @@ mod tests {
         let sig = id.sign(msg).unwrap();
         assert!(id.verify(&sig, msg));
         assert!(!id.verify(&sig, b"Wrong message"));
+    }
+
+    #[test]
+    fn stamped_key_generation_until_meets_cost_when_never_stopped() {
+        let mut rng = crate::OsRng;
+        let material = b"link request material";
+        let (prv, public, value) =
+            generate_stamped_key_until(&mut rng, material, 4, &mut || false).unwrap();
+        assert!(value >= 4);
+        assert_eq!(public.public_bytes(), prv.public_key().public_bytes());
+        assert_eq!(stamp_value(material, &public.public_bytes()), value);
+    }
+
+    #[test]
+    fn stamped_key_generation_stops_when_asked() {
+        let mut rng = crate::OsRng;
+        let mut polls = 0u32;
+        let result = generate_stamped_key_until(&mut rng, b"material", 100, &mut || {
+            polls += 1;
+            polls > 3
+        });
+        assert!(result.is_none());
+        assert_eq!(polls, 4);
     }
 
     #[test]

@@ -12210,3 +12210,304 @@ fn registered_but_never_announced_destination_is_not_answered() {
     assert!(!sent_1.lock().unwrap().iter().any(|raw| is_announce(raw)));
     assert!(driver.local_path_responses.is_empty());
 }
+
+// =========================================================================
+// Stamped link requests
+// =========================================================================
+
+/// Driver with one online interface whose outbound frames are captured, and a
+/// known destination `dest` learnt on that interface with the given announced
+/// link request cost.
+fn stamped_link_driver(
+    tx: event::EventSender,
+    rx: event::EventReceiver,
+    dest: [u8; 16],
+    lr_cost: Option<u8>,
+) -> (Driver, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(cbs));
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let mut state = make_known_destination_state(dest, time::now(), InterfaceId(1));
+    state.lr_cost = lr_cost;
+    driver.known_destinations.insert(dest, state);
+    (driver, sent)
+}
+
+fn sent_link_request(sent: &[Vec<u8>], dest: [u8; 16]) -> Option<RawPacket> {
+    sent.iter()
+        .filter_map(|raw| RawPacket::unpack(raw).ok())
+        .find(|packet| {
+            packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
+                && packet.destination_hash == dest
+        })
+}
+
+fn shutdown_after(tx: event::EventSender, delay: Duration) {
+    thread::spawn(move || {
+        thread::sleep(delay);
+        let _ = tx.send(Event::Shutdown);
+    });
+}
+
+#[test]
+fn create_link_without_announced_cost_is_answered_synchronously() {
+    for lr_cost in [None, Some(0)] {
+        let (tx, rx) = event::channel();
+        let dest = [0x6A; 16];
+        let (mut driver, sent) = stamped_link_driver(tx, rx, dest, lr_cost);
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        driver.handle_create_link(dest, [0xAA; 32], resp_tx);
+
+        // No stamp work: the link exists and the caller is answered before the
+        // handler returns.
+        let link_id = resp_rx
+            .try_recv()
+            .unwrap_or_else(|_| panic!("lr_cost {lr_cost:?}: no synchronous answer"));
+        assert_ne!(link_id, [0u8; 16]);
+        assert_eq!(driver.link_manager.link_count(), 1);
+        assert_eq!(
+            driver.link_manager.link_state(&link_id),
+            Some(rns_core::link::LinkState::Pending)
+        );
+        driver.flush_pending_link_frames();
+        driver.flush_writers();
+        assert!(sent_link_request(&sent.lock().unwrap(), dest).is_some());
+    }
+}
+
+#[test]
+fn create_link_with_announced_cost_defers_until_the_worker_reports() {
+    let (tx, rx) = event::channel();
+    let dest = [0x6B; 16];
+    let (mut driver, sent) = stamped_link_driver(tx.clone(), rx, dest, Some(4));
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    let started = Instant::now();
+    driver.handle_create_link(dest, [0xAA; 32], resp_tx);
+    assert!(started.elapsed() < Duration::from_secs(1));
+
+    // Nothing happens on the driver thread until the worker posts the keys.
+    assert!(matches!(resp_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(driver.link_manager.link_count(), 0);
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+    assert!(sent.lock().unwrap().is_empty());
+
+    // Running the event loop delivers the worker's CompleteStampedLink.
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+    let link_id = resp_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_ne!(link_id, [0u8; 16]);
+    let request = sent_link_request(&sent.lock().unwrap(), dest).expect("LINKREQUEST sent");
+    let value = rns_core::link::handshake::link_request_stamp_value(&dest, request.data())
+        .expect("link request parses");
+    assert!(value >= 4);
+}
+
+#[test]
+fn stamped_link_request_timeout_fails_the_link_without_blocking_the_driver() {
+    let mut driver = new_test_driver();
+    let (resp_tx, resp_rx) = mpsc::channel();
+    let started = Instant::now();
+    // Cost 100 is unattainable; an already-expired deadline must make the
+    // worker give up and answer with the all-zero link id (STAMP_FAILURE).
+    driver.spawn_stamped_link_keys([0x6D; 16], [0xAA; 32], 100, Duration::ZERO, resp_tx);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "stamp work must not run on the driver thread"
+    );
+    assert_eq!(
+        resp_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        [0u8; 16]
+    );
+    assert_eq!(driver.link_manager.link_count(), 0);
+}
+
+#[test]
+fn create_link_with_announced_cost_stamps_off_thread_and_completes() {
+    let (tx, rx) = event::channel();
+    let dest = [0x6C; 16];
+    let (mut driver, sent) = stamped_link_driver(tx.clone(), rx, dest, Some(4));
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(Event::CreateLink {
+        dest_hash: dest,
+        dest_sig_pub_bytes: [0xAA; 32],
+        response_tx: resp_tx,
+    })
+    .unwrap();
+    // The completion event is posted by the worker well within this delay;
+    // the control queue is FIFO, so it is handled before the shutdown.
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+
+    // The shutdown that ends the run tears pending links down, so only the
+    // response and the frame that went out are checked.
+    let link_id = resp_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_ne!(link_id, [0u8; 16]);
+
+    let request = sent_link_request(&sent.lock().unwrap(), dest)
+        .expect("stamped LINKREQUEST sent on the recalled interface");
+    let value = rns_core::link::handshake::link_request_stamp_value(&dest, request.data())
+        .expect("link request parses");
+    assert!(value >= 4, "link request key must carry the announced cost");
+}
+
+#[test]
+fn complete_stamped_link_event_rebuilds_the_worker_keys_exactly() {
+    let (tx, rx) = event::channel();
+    let dest = [0x6E; 16];
+    let (mut driver, sent) = stamped_link_driver(tx.clone(), rx, dest, Some(4));
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (prv, sig_prv, stamp_value) =
+        crate::stamps::generate_stamped_link_keys(&dest, 4, deadline).unwrap();
+    let expected_pub = prv.public_key().public_bytes();
+    let expected_sig_pub = sig_prv.public_key().public_bytes();
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(Event::CompleteStampedLink(Box::new(
+        crate::common::event::StampedLinkKeys {
+            dest_hash: dest,
+            dest_sig_pub_bytes: [0xAA; 32],
+            prv_bytes: prv.private_bytes(),
+            sig_prv_bytes: sig_prv.private_bytes(),
+            stamp_value,
+            response_tx: resp_tx,
+        },
+    )))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+
+    let link_id = resp_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_ne!(link_id, [0u8; 16]);
+    let request = sent_link_request(&sent.lock().unwrap(), dest).expect("LINKREQUEST sent");
+    let (peer_pub, peer_sig_pub, _, _) =
+        rns_core::link::handshake::parse_linkrequest_data(request.data()).unwrap();
+    assert_eq!(peer_pub, expected_pub, "X25519 key must be the stamped one");
+    assert_eq!(
+        peer_sig_pub, expected_sig_pub,
+        "Ed25519 key is part of the stamp material"
+    );
+    assert_eq!(
+        rns_core::link::handshake::link_request_stamp_value(&dest, request.data()),
+        Some(stamp_value)
+    );
+    // `sent` is the writer of the interface the destination was learnt on, so
+    // finding the request there proves the recalled route hint was applied.
+}
+
+#[test]
+fn complete_stamped_link_while_draining_is_rejected() {
+    let (tx, rx) = event::channel();
+    let dest = [0x6F; 16];
+    let (mut driver, sent) = stamped_link_driver(tx.clone(), rx, dest, Some(4));
+    driver.begin_drain(Duration::from_secs(30));
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (prv, sig_prv, stamp_value) =
+        crate::stamps::generate_stamped_link_keys(&dest, 1, deadline).unwrap();
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(Event::CompleteStampedLink(Box::new(
+        crate::common::event::StampedLinkKeys {
+            dest_hash: dest,
+            dest_sig_pub_bytes: [0xAA; 32],
+            prv_bytes: prv.private_bytes(),
+            sig_prv_bytes: sig_prv.private_bytes(),
+            stamp_value,
+            response_tx: resp_tx,
+        },
+    )))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+
+    assert_eq!(
+        resp_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        [0u8; 16],
+        "a draining node must not open new links"
+    );
+    assert_eq!(driver.link_manager.link_count(), 0);
+    assert!(sent.lock().unwrap().is_empty());
+}
+
+#[test]
+fn stamped_link_caller_is_not_left_waiting_when_the_driver_is_gone() {
+    let mut driver = new_test_driver();
+    let (resp_tx, resp_rx) = mpsc::channel();
+    driver.spawn_stamped_link_keys([0x70; 16], [0xAA; 32], 4, Duration::from_secs(30), resp_tx);
+    // The driver goes away before (or while) the worker finishes. Either the
+    // worker's post fails and it answers with the zero id, or the completion
+    // event is dropped with the queue and the channel closes. The caller must
+    // never hang; RnsNode::create_link maps both outcomes to an error.
+    drop(driver);
+    match resp_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(link_id) => assert_eq!(link_id, [0u8; 16]),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("caller left waiting for a stamped link"),
+    }
+}
+
+#[test]
+fn driver_stays_responsive_while_a_stamp_is_being_ground() {
+    let (tx, rx) = event::channel();
+    let plain_dest = [0x71; 16];
+    let (mut driver, sent) = stamped_link_driver(tx.clone(), rx, plain_dest, None);
+
+    // Start an unattainable stamp with a 3 s watchdog on the worker thread.
+    let stamped_dest = [0x72; 16];
+    let (stamped_tx, stamped_rx) = mpsc::channel();
+    let started = Instant::now();
+    driver.spawn_stamped_link_keys(
+        stamped_dest,
+        [0xAA; 32],
+        100,
+        Duration::from_secs(3),
+        stamped_tx,
+    );
+
+    // Meanwhile an unstamped link to another destination must go through
+    // immediately.
+    let (plain_tx, plain_rx) = mpsc::channel();
+    tx.send(Event::CreateLink {
+        dest_hash: plain_dest,
+        dest_sig_pub_bytes: [0xBB; 32],
+        response_tx: plain_tx,
+    })
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+
+    let plain_link = plain_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_ne!(plain_link, [0u8; 16]);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "unstamped link waited on the stamp worker"
+    );
+    assert!(sent_link_request(&sent.lock().unwrap(), plain_dest).is_some());
+    assert!(sent_link_request(&sent.lock().unwrap(), stamped_dest).is_none());
+
+    // The watchdog then fails the stamped link.
+    assert_eq!(
+        stamped_rx.recv_timeout(Duration::from_secs(6)).unwrap(),
+        [0u8; 16]
+    );
+    assert!(started.elapsed() >= Duration::from_secs(3));
+}

@@ -147,6 +147,51 @@ pub fn generate_stamped_key(material: &[u8], stamp_cost: u8) -> Option<(Vec<u8>,
     ))
 }
 
+/// Material covered by a link request stamp: `destination_hash || ed25519_pub`.
+pub fn link_request_stamp_material(
+    destination_hash: &[u8; 16],
+    sig_pub_bytes: &[u8; 32],
+) -> [u8; 48] {
+    let mut material = [0u8; 48];
+    material[..16].copy_from_slice(destination_hash);
+    material[16..].copy_from_slice(sig_pub_bytes);
+    material
+}
+
+/// Generate the keys for a stamped link request to `destination_hash`.
+///
+/// The Ed25519 signing key is generated first because it is part of the stamp
+/// material; the X25519 key is then ground until its public half carries at
+/// least `stamp_cost`. Gives up and returns `None` once `deadline` passes,
+/// mirroring upstream's `LINK_STAMP_TIMEOUT` watchdog. This is unbounded
+/// work and must not run on the driver thread.
+pub fn generate_stamped_link_keys(
+    destination_hash: &[u8; 16],
+    stamp_cost: u8,
+    deadline: std::time::Instant,
+) -> Option<(
+    rns_crypto::x25519::X25519PrivateKey,
+    rns_crypto::ed25519::Ed25519PrivateKey,
+    u32,
+)> {
+    use rns_crypto::OsRng;
+
+    if stamp_cost > constants::STAMP_COST_CAP {
+        return None;
+    }
+    let mut rng = OsRng;
+    let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
+    let material =
+        link_request_stamp_material(destination_hash, &sig_prv.public_key().public_bytes());
+    let (prv, _public, value) = rns_crypto::identity::generate_stamped_key_until(
+        &mut rng,
+        &material,
+        stamp_cost,
+        &mut || std::time::Instant::now() >= deadline,
+    )?;
+    Some((prv, sig_prv, value))
+}
+
 /// Generate a detached stamp with the given cost using rayon workers.
 ///
 /// Returns `(stamp, value)`, or `None` when the cost is above the protocol cap.
@@ -245,6 +290,76 @@ mod tests {
         assert_eq!(public.len(), 32);
         assert!(value >= 4);
         assert!(stamp_valid(&public, 4, material));
+    }
+
+    #[test]
+    fn stamped_link_keys_meet_cost_and_bind_destination() {
+        let dest_hash = [0x5A; 16];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let (prv, sig_prv, value) = generate_stamped_link_keys(&dest_hash, 4, deadline).unwrap();
+        let material =
+            link_request_stamp_material(&dest_hash, &sig_prv.public_key().public_bytes());
+        let recomputed =
+            rns_crypto::identity::stamp_value(&material, &prv.public_key().public_bytes());
+        assert_eq!(recomputed, value);
+        assert!(value >= 4);
+    }
+
+    #[test]
+    fn stamped_link_keys_give_up_at_deadline() {
+        let deadline = std::time::Instant::now();
+        let started = std::time::Instant::now();
+        assert!(generate_stamped_link_keys(&[0x5B; 16], 100, deadline).is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn stamped_link_keys_honour_a_future_deadline() {
+        // Cost 100 is unattainable, so the only way out is the deadline.
+        let timeout = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let result = generate_stamped_link_keys(&[0x5B; 16], 100, started + timeout);
+        assert!(result.is_none());
+        assert!(started.elapsed() >= timeout);
+        assert!(started.elapsed() < timeout + std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn stamped_link_keys_reject_cost_above_protocol_cap() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let started = std::time::Instant::now();
+        assert!(
+            generate_stamped_link_keys(&[0x5C; 16], constants::STAMP_COST_CAP + 1, deadline)
+                .is_none()
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn stamped_link_keys_are_fresh_per_call() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let (prv_a, sig_a, _) = generate_stamped_link_keys(&[0x5D; 16], 1, deadline).unwrap();
+        let (prv_b, sig_b, _) = generate_stamped_link_keys(&[0x5D; 16], 1, deadline).unwrap();
+        assert_ne!(prv_a.private_bytes(), prv_b.private_bytes());
+        assert_ne!(sig_a.private_bytes(), sig_b.private_bytes());
+    }
+
+    #[test]
+    fn link_request_stamp_material_is_destination_then_signing_key() {
+        let material = link_request_stamp_material(&[0x11; 16], &[0x22; 32]);
+        assert_eq!(&material[..16], &[0x11; 16]);
+        assert_eq!(&material[16..], &[0x22; 32]);
+        // Must agree with the responder-side parser in rns-core.
+        let dest_hash = [0x5E; 16];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let (prv, sig_prv, value) = generate_stamped_link_keys(&dest_hash, 3, deadline).unwrap();
+        let mut request = Vec::with_capacity(64);
+        request.extend_from_slice(&prv.public_key().public_bytes());
+        request.extend_from_slice(&sig_prv.public_key().public_bytes());
+        assert_eq!(
+            rns_core::link::handshake::link_request_stamp_value(&dest_hash, &request),
+            Some(value)
+        );
     }
 
     #[test]

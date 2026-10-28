@@ -1221,58 +1221,37 @@ impl Driver {
                         let _ = response_tx.send([0u8; 16]);
                         continue;
                     }
-                    let next_hop_interface = self.engine.next_hop_interface(&dest_hash);
-                    let recalled_route_hint = if next_hop_interface.is_none() {
-                        self.known_destination_route_hint(&dest_hash)
-                    } else {
-                        None
-                    };
-                    if recalled_route_hint.is_some() {
-                        let _ = self.mark_known_destination_used(&dest_hash);
+                    self.handle_create_link(dest_hash, dest_sig_pub_bytes, response_tx);
+                }
+                Event::CompleteStampedLink(keys) => {
+                    let crate::common::event::StampedLinkKeys {
+                        dest_hash,
+                        dest_sig_pub_bytes,
+                        prv_bytes,
+                        sig_prv_bytes,
+                        stamp_value,
+                        response_tx,
+                    } = *keys;
+                    if self.is_draining() {
+                        self.reject_new_work("complete stamped link");
+                        let _ = response_tx.send([0u8; 16]);
+                        continue;
                     }
-                    let attached_interface =
-                        next_hop_interface.or(recalled_route_hint.map(|(iface, _)| iface));
-                    let hops = self
-                        .engine
-                        .hops_to(&dest_hash)
-                        .or_else(|| recalled_route_hint.map(|(_, hops)| hops))
-                        .unwrap_or(0);
-                    let mtu = attached_interface
-                        .and_then(|iface_id| self.interfaces.get(&iface_id))
-                        .map(|entry| entry.info.mtu)
-                        .unwrap_or(rns_core::constants::MTU as u32);
-                    let link_cost = self.recall_link_cost(&dest_hash);
-                    let (link_id, mut link_actions) = self.link_manager.create_link_with_cost(
-                        &dest_hash,
-                        &dest_sig_pub_bytes,
-                        hops,
-                        mtu,
-                        link_cost,
-                        &mut self.rng,
+                    log::trace!(
+                        "Completing stamped link request to {:02x?} with value {}",
+                        &dest_hash[..4],
+                        stamp_value
                     );
-                    if let Some(iface) = attached_interface {
-                        self.link_manager.set_link_route_hint(&link_id, iface, None);
-                    }
-                    if next_hop_interface.is_none() {
-                        if let Some(iface) = attached_interface {
-                            for action in &mut link_actions {
-                                if let LinkManagerAction::SendPacket {
-                                    dest_type,
-                                    attached_interface,
-                                    ..
-                                } = action
-                                {
-                                    if *dest_type == rns_core::constants::DESTINATION_LINK
-                                        && attached_interface.is_none()
-                                    {
-                                        *attached_interface = Some(iface);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    let _ = response_tx.send(link_id);
-                    self.dispatch_link_actions(link_actions);
+                    let keys = (
+                        rns_crypto::x25519::X25519PrivateKey::from_bytes(&prv_bytes),
+                        rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv_bytes),
+                    );
+                    self.complete_create_link(
+                        dest_hash,
+                        dest_sig_pub_bytes,
+                        Some(keys),
+                        response_tx,
+                    );
                 }
                 Event::SendRequest {
                     link_id,
