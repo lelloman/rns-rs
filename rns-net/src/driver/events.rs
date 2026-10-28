@@ -43,7 +43,10 @@ impl Driver {
             }
             return false;
         }
-        if is_path_request && parsed_packet.data().len() > 48 {
+        if is_path_request
+            && parsed_packet.data().len() > rns_core::constants::PATH_REQUEST_LENGTH
+            && parsed_packet.data().len() != rns_core::constants::PATH_REQUEST_STAMPED_LENGTH
+        {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
             }
@@ -2239,6 +2242,27 @@ impl Driver {
         let mut tag = [0u8; 16];
         self.rng.fill_bytes(&mut tag);
         data.extend_from_slice(&tag);
+
+        if rns_core::constants::STAMP_PRS {
+            let mut material = Vec::with_capacity(32);
+            material.extend_from_slice(&dest_hash);
+            material.extend_from_slice(&tag);
+            match crate::stamps::generate_stamp(
+                &material,
+                rns_core::constants::PATH_REQUEST_STAMP_VALUE,
+                rns_core::constants::STAMP_LENGTH,
+                0,
+            ) {
+                Some((stamp, _)) => data.extend_from_slice(&crate::stamps::ext_payload(&stamp, 0)),
+                None => {
+                    log::warn!(
+                        "could not generate path request stamp for {:02x?}; request cancelled",
+                        &dest_hash[..4]
+                    );
+                    return;
+                }
+            }
+        }
 
         // Build as BROADCAST DATA PLAIN packet to rnstransport.path.request
         let flags = rns_core::packet::PacketFlags {

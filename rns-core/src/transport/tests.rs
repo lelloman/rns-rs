@@ -2857,6 +2857,63 @@ fn test_path_request_forwarded_on_ap() {
     assert!(engine.discovery_path_requests.contains_key(&dest));
 }
 
+fn make_stamped_path_request_data(
+    dest_hash: &[u8; 16],
+    requestor_transport_id: &[u8; 16],
+    tag: &[u8],
+    ext_payload: &[u8],
+) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(dest_hash);
+    data.extend_from_slice(requestor_transport_id);
+    data.extend_from_slice(tag);
+    data.extend_from_slice(ext_payload);
+    data
+}
+
+#[test]
+fn stamped_path_request_is_forwarded_without_treating_extension_as_tag() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+    let dest = [0xDA; 16];
+    let tag = [0x0A; 16];
+    let mut ext = [0u8; constants::EXT_PAYLOAD_LENGTH];
+    ext[0] = constants::EXT_PAYLOAD_MARKER;
+    ext[1] = 0;
+    ext[2..].copy_from_slice(&[0xAA; constants::STAMP_LENGTH]);
+    let data = make_stamped_path_request_data(&dest, &[0x99; 16], &tag, &ext);
+
+    let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+    assert_eq!(actions.len(), 1);
+    let TransportAction::SendOnInterface { raw, .. } = &actions[0] else {
+        panic!("Expected SendOnInterface for stamped path request");
+    };
+    let packet = RawPacket::unpack(raw).expect("forwarded stamped path request");
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&dest);
+    expected.extend_from_slice(&[0x42; 16]);
+    expected.extend_from_slice(&tag);
+    expected.extend_from_slice(&ext);
+    assert_eq!(packet.data(), expected);
+}
+
+#[test]
+fn path_request_with_oversized_non_stamped_length_is_dropped() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+    let dest = [0xDB; 16];
+    let tag = [0x0B; 16];
+    let mut data = make_transport_path_request_data(&dest, &[0x99; 16], &tag);
+    data.push(0xFF);
+
+    let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+    assert!(actions.is_empty());
+}
+
 #[test]
 fn test_recursive_path_request_rebuilds_transport_payload() {
     let mut engine = TransportEngine::new(make_config(true));
