@@ -138,7 +138,7 @@ impl TransportEngine {
                 "Forwarding path request from local client for {:02x?} to all other interfaces",
                 &ctx.destination_hash[..4],
             );
-            return self.forward_path_request(&ctx, |info| info.id != ctx.interface_id);
+            return self.forward_path_request(&ctx, |info| info.id != ctx.interface_id, false);
         }
         if self.config.transport_enabled && self.discovery_search_mode(ctx.interface_id).is_some() {
             return self.handle_discovery_path_request(&ctx, ingress_limited);
@@ -150,7 +150,7 @@ impl TransportEngine {
                 "Forwarding path request for {:02x?} to local clients",
                 &ctx.destination_hash[..4],
             );
-            return self.forward_path_request(&ctx, |info| info.is_local_client);
+            return self.forward_path_request(&ctx, |info| info.is_local_client, true);
         }
         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
             "Ignoring path request for {:02x?}: no path known",
@@ -165,10 +165,17 @@ impl TransportEngine {
         &mut self,
         ctx: &AcceptedPathRequest,
         select: impl Fn(&InterfaceInfo) -> bool,
+        relay_to_local_clients: bool,
     ) -> Vec<TransportAction> {
         // A stamped request is relayed with its original tag and extension:
         // the stamp covers the tag, so deriving a new one would invalidate it.
-        let tag: Vec<u8> = if ctx.ext_payload.is_some() {
+        // During the transition, a stamping node marks an unstamped request
+        // relayed to local clients with the 0xFF sentinel flags byte.
+        let ext_payload = ctx.ext_payload.or_else(|| {
+            (relay_to_local_clients && constants::STAMP_PRS && !constants::STAMPS_ENFORCED)
+                .then(unstamped_relay_payload)
+        });
+        let tag: Vec<u8> = if ext_payload.is_some() {
             ctx.tag[..ctx.tag_len].to_vec()
         } else {
             // Python uses a fresh random tag. The engine has no RNG here, so
@@ -196,7 +203,7 @@ impl TransportEngine {
             &ctx.destination_hash,
             transport_identity_hash,
             &tag,
-            ctx.ext_payload.as_ref(),
+            ext_payload.as_ref(),
         ) else {
             return Vec::new();
         };
@@ -564,6 +571,15 @@ fn search_mode_filter(mode: u8, recursive_prs: bool) -> Option<Option<&'static [
     } else {
         None
     }
+}
+
+/// Transitional extension payload marking an unstamped request relayed by a
+/// stamp-aware node to its local clients.
+pub(crate) fn unstamped_relay_payload() -> [u8; constants::EXT_PAYLOAD_LENGTH] {
+    let mut ext = [0u8; constants::EXT_PAYLOAD_LENGTH];
+    ext[0] = constants::EXT_PAYLOAD_MARKER;
+    ext[1] = 0xFF;
+    ext
 }
 
 /// Build a path request frame, optionally appending a stamp extension.
