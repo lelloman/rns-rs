@@ -913,7 +913,7 @@ impl TransportEngine {
 
     fn process_verified_announce(
         &mut self,
-        ctx: VerifiedAnnounceCtx<'_>,
+        mut ctx: VerifiedAnnounceCtx<'_>,
         rng: &mut dyn Rng,
         actions: &mut Vec<TransportAction>,
     ) {
@@ -921,6 +921,15 @@ impl TransportEngine {
             return;
         }
         if ctx.packet.hops > constants::PATHFINDER_M {
+            return;
+        }
+
+        let stamp_status = ctx.validated.apply_stamp(
+            &ctx.packet.destination_hash,
+            constants::DESTINATION_STAMP_COST,
+        );
+        if constants::STAMPS_ENFORCED && stamp_status != crate::announce::AnnounceStampStatus::Valid
+        {
             return;
         }
 
@@ -1139,6 +1148,8 @@ impl TransportEngine {
                 random_hash: ctx.validated.random_hash,
                 ratchet: ctx.validated.ratchet,
                 app_data: ctx.validated.app_data,
+                stamp: ctx.validated.stamp,
+                stamp_value: ctx.validated.stamp_value,
                 hops: ctx.packet.hops,
                 receiving_interface: ctx.iface,
                 rx: RxMetadata {

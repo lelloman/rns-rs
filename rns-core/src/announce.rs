@@ -6,6 +6,7 @@ use rns_crypto::sha256::Sha256;
 
 use crate::constants;
 use crate::hash;
+use crate::stamp::{stamp_valid, stamp_value, stamp_workblock};
 
 #[derive(Debug)]
 pub enum AnnounceError {
@@ -56,6 +57,74 @@ pub struct ValidatedAnnounce {
     pub random_hash: [u8; 10],
     pub ratchet: Option<[u8; 32]>,
     pub app_data: Option<Vec<u8>>,
+    /// Detached destination stamp parsed from the announce, if present.
+    pub stamp: Option<[u8; constants::STAMP_LENGTH]>,
+    /// Stamp value (leading zero bits), or `0` when absent or invalid.
+    pub stamp_value: u32,
+}
+
+/// Outcome of checking an announce's optional stamp extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnounceStampStatus {
+    /// No stamp extension was present.
+    NotStamped,
+    /// A stamp extension was present and met the required cost.
+    Valid,
+    /// A stamp extension was present but was below the required cost.
+    Invalid,
+}
+
+impl ValidatedAnnounce {
+    /// Parse and validate an announce stamp extension in-place.
+    ///
+    /// Mirrors upstream `Identity.validate_announce`: only a valid stamp is
+    /// stripped from `app_data`. A present-but-invalid stamp stays in
+    /// `app_data` and records value `0`, while enforcement decides whether the
+    /// announce is accepted.
+    pub fn apply_stamp(
+        &mut self,
+        destination_hash: &[u8; 16],
+        required_value: u8,
+    ) -> AnnounceStampStatus {
+        if !constants::STAMPS_ENABLED {
+            return AnnounceStampStatus::NotStamped;
+        }
+        let Some(app_data) = self.app_data.as_ref() else {
+            return AnnounceStampStatus::NotStamped;
+        };
+        if app_data.len() < constants::EXT_PAYLOAD_LENGTH {
+            return AnnounceStampStatus::NotStamped;
+        }
+
+        let ext = &app_data[app_data.len() - constants::EXT_PAYLOAD_LENGTH..];
+        if ext[0] != constants::EXT_PAYLOAD_MARKER {
+            return AnnounceStampStatus::NotStamped;
+        }
+
+        let mut stamp = [0u8; constants::STAMP_LENGTH];
+        stamp.copy_from_slice(&ext[constants::EXT_HEADER_LENGTH..]);
+        self.stamp = Some(stamp);
+
+        let mut material = Vec::with_capacity(16 + 64 + 10);
+        material.extend_from_slice(destination_hash);
+        material.extend_from_slice(&self.public_key);
+        material.extend_from_slice(&self.name_hash);
+        let workblock = stamp_workblock(&material, 0);
+
+        if stamp_valid(&stamp, required_value, &workblock) {
+            let stripped_len = app_data.len() - constants::EXT_PAYLOAD_LENGTH;
+            self.app_data = if stripped_len == 0 {
+                None
+            } else {
+                Some(app_data[..stripped_len].to_vec())
+            };
+            self.stamp_value = stamp_value(&workblock, &stamp);
+            AnnounceStampStatus::Valid
+        } else {
+            self.stamp_value = 0;
+            AnnounceStampStatus::Invalid
+        }
+    }
 }
 
 impl AnnounceData {
@@ -233,6 +302,8 @@ impl AnnounceData {
             random_hash: self.random_hash,
             ratchet: self.ratchet,
             app_data: self.app_data.clone(),
+            stamp: None,
+            stamp_value: 0,
         }
     }
 
@@ -526,5 +597,95 @@ mod tests {
         let mut material = parsed.signed_data(&dh);
         material.extend_from_slice(&parsed.signature);
         assert_eq!(parsed.signature_cache_key(&dh), hash::full_hash(&material));
+    }
+
+    fn stamped_announce(
+        app_data: Option<&[u8]>,
+        cost: u8,
+    ) -> (AnnounceData, [u8; 16], [u8; constants::STAMP_LENGTH], u32) {
+        use rns_crypto::{OsRng, Rng};
+
+        let identity = Identity::from_private_key(&[0x42; 64]);
+        let id_hash = *identity.hash();
+        let nh = destination::name_hash("testapp", &["aspect"]);
+        let dh = destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
+        let public_key = identity.get_public_key().unwrap();
+
+        let mut material = Vec::new();
+        material.extend_from_slice(&dh);
+        material.extend_from_slice(&public_key);
+        material.extend_from_slice(&nh);
+        let workblock = stamp_workblock(&material, 0);
+
+        let mut rng = OsRng;
+        let mut stamp = [0u8; constants::STAMP_LENGTH];
+        loop {
+            rng.fill_bytes(&mut stamp);
+            if stamp_valid(&stamp, cost, &workblock) {
+                break;
+            }
+        }
+        let value = stamp_value(&workblock, &stamp);
+
+        let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
+        wire.push(constants::EXT_PAYLOAD_MARKER);
+        wire.push(0);
+        wire.extend_from_slice(&stamp);
+
+        let (data, _) =
+            AnnounceData::pack(&identity, &dh, &nh, &[0x31; 10], None, Some(&wire)).unwrap();
+        (
+            AnnounceData::unpack(&data, false).unwrap(),
+            dh,
+            stamp,
+            value,
+        )
+    }
+
+    #[test]
+    fn test_announce_stamp_valid_is_stripped_and_valued() {
+        let (parsed, dh, stamp, value) = stamped_announce(Some(b"app-data"), 4);
+        let mut validated = parsed.validate(&dh).unwrap();
+        assert_eq!(validated.apply_stamp(&dh, 4), AnnounceStampStatus::Valid);
+        assert_eq!(validated.stamp, Some(stamp));
+        assert_eq!(validated.stamp_value, value);
+        assert_eq!(validated.app_data.as_deref(), Some(b"app-data".as_slice()));
+    }
+
+    #[test]
+    fn test_announce_stamp_valid_without_app_data_strips_to_none() {
+        let (parsed, dh, _, _) = stamped_announce(None, 4);
+        let mut validated = parsed.validate(&dh).unwrap();
+        assert_eq!(validated.apply_stamp(&dh, 4), AnnounceStampStatus::Valid);
+        assert_eq!(validated.app_data, None);
+    }
+
+    #[test]
+    fn test_announce_stamp_below_required_value_is_kept_and_invalid() {
+        let (parsed, dh, stamp, _) = stamped_announce(Some(b"app-data"), 4);
+        let mut validated = parsed.validate(&dh).unwrap();
+        assert_eq!(
+            validated.apply_stamp(&dh, 200),
+            AnnounceStampStatus::Invalid
+        );
+        assert_eq!(validated.stamp, Some(stamp));
+        assert_eq!(validated.stamp_value, 0);
+        assert_eq!(
+            validated.app_data.as_ref().map(|data| data.len()),
+            Some(b"app-data".len() + constants::EXT_PAYLOAD_LENGTH)
+        );
+    }
+
+    #[test]
+    fn test_announce_without_stamp_is_not_stamped() {
+        let (parsed, dh) = signed_announce(Some(b"app-data"), None);
+        let mut validated = parsed.validate(&dh).unwrap();
+        assert_eq!(
+            validated.apply_stamp(&dh, 4),
+            AnnounceStampStatus::NotStamped
+        );
+        assert_eq!(validated.stamp, None);
+        assert_eq!(validated.stamp_value, 0);
+        assert_eq!(validated.app_data.as_deref(), Some(b"app-data".as_slice()));
     }
 }

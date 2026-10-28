@@ -52,6 +52,38 @@ pub const NAME_HASH_LENGTH: usize = 80;
 /// Derived key length in bytes
 pub const DERIVED_KEY_LENGTH: usize = 64;
 
+/// Detached stamp length in bytes (14-byte stamps keep the search space viable)
+pub const STAMP_LENGTH: usize = 14;
+
+/// Extension payload header length in bytes (marker + flags)
+pub const EXT_HEADER_LENGTH: usize = 2;
+
+/// Extension payload length in bytes (header + stamp)
+pub const EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH;
+
+/// Marker identifying a stamp extension payload. Never a valid msgpack
+/// object boundary, so it cannot be confused with application data.
+pub const EXT_PAYLOAD_MARKER: u8 = 0xC1;
+
+/// Whether incoming announces are checked for stamps.
+pub const STAMPS_ENABLED: bool = true;
+
+/// Whether stamp requirements are enforced. Disabled during the upstream
+/// transition period; unstamped announces are still accepted.
+pub const STAMPS_ENFORCED: bool = false;
+
+/// Hard cap on stamp cost.
+pub const STAMP_COST_CAP: u8 = 100;
+
+/// Default required announce stamp cost.
+pub const DESTINATION_STAMP_COST: u8 = 18;
+
+/// Default target stamp value for emitted announces.
+pub const DESTINATION_STAMP_VALUE: u8 = 18;
+
+/// Whether destination announces emitted by this instance are stamped.
+pub const STAMP_DESTINATIONS: bool = false;
+
 // --- From Packet.py ---
 
 /// Packet types

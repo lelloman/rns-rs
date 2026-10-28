@@ -266,6 +266,8 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
             random_hash: [0x34; 10],
             ratchet: None,
             app_data: Some(app_data.clone()),
+            stamp: None,
+            stamp_value: 0,
             hops: 1,
             receiving_interface: InterfaceId(9),
             rx: rns_core::transport::RxMetadata::default(),
@@ -355,6 +357,8 @@ fn dispatch_announce_received_persists_ratchet() {
                 random_hash: [0x99; 10],
                 ratchet: Some(ratchet),
                 app_data: None,
+                stamp: None,
+                stamp_value: 0,
                 hops: 1,
                 receiving_interface: InterfaceId(1),
                 rx: rns_core::transport::RxMetadata::default(),
@@ -413,6 +417,8 @@ fn make_known_destination_state(
         was_used: false,
         last_used_at: None,
         retained: false,
+        stamp: None,
+        stamp_value: 0,
     }
 }
 
@@ -7581,6 +7587,39 @@ fn management_announces_not_emitted_before_delay() {
 // =========================================================================
 
 #[test]
+fn announce_stamp_is_stored_and_recalled() {
+    let mut driver = new_test_driver();
+    let dest = [0x91; 16];
+    let stamp = [0xAB; rns_core::constants::STAMP_LENGTH];
+
+    driver.dispatch_all(vec![TransportAction::AnnounceReceived(Box::new(
+        rns_core::transport::types::ReceivedAnnounce {
+            destination_hash: dest,
+            identity_hash: [0x92; 16],
+            public_key: [0x93; 64],
+            name_hash: [0x94; 10],
+            random_hash: [0x95; 10],
+            ratchet: None,
+            app_data: Some(b"payload".to_vec()),
+            stamp: Some(stamp),
+            stamp_value: 19,
+            hops: 1,
+            receiving_interface: InterfaceId(1),
+            rx: rns_core::transport::RxMetadata::default(),
+        },
+    ))]);
+
+    let entry = driver
+        .known_destination_entries()
+        .into_iter()
+        .find(|entry| entry.dest_hash == dest)
+        .expect("announce stored");
+    assert_eq!(entry.stamp, Some(stamp));
+    assert_eq!(entry.stamp_value, 19);
+    assert_eq!(driver.recall_stamp_value(&dest), Some(19));
+}
+
+#[test]
 fn announce_received_populates_known_destinations() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
@@ -7698,6 +7737,8 @@ fn known_destinations_cleanup_respects_ttl() {
             was_used: false,
             last_used_at: None,
             retained: false,
+            stamp: None,
+            stamp_value: 0,
         },
     );
     driver.known_destinations.insert(
@@ -7717,6 +7758,8 @@ fn known_destinations_cleanup_respects_ttl() {
             was_used: false,
             last_used_at: None,
             retained: false,
+            stamp: None,
+            stamp_value: 0,
         },
     );
 
@@ -8153,6 +8196,8 @@ fn used_known_destination_cleanup_uses_last_used_time() {
             was_used: true,
             last_used_at: Some(time::now() - 5.0),
             retained: false,
+            stamp: None,
+            stamp_value: 0,
         },
     );
 
@@ -9777,6 +9822,8 @@ fn inbound_proof_with_valid_signature_fires_callback() {
             was_used: false,
             last_used_at: None,
             retained: false,
+            stamp: None,
+            stamp_value: 0,
         },
     );
 
@@ -9898,6 +9945,8 @@ fn inbound_proof_with_invalid_signature_rejected() {
             was_used: false,
             last_used_at: None,
             retained: false,
+            stamp: None,
+            stamp_value: 0,
         },
     );
 

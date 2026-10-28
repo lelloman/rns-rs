@@ -19,8 +19,28 @@ impl Driver {
                 was_used: false,
                 last_used_at: None,
                 retained: false,
+                stamp: None,
+                stamp_value: 0,
             },
         );
+    }
+
+    pub(crate) fn record_known_destination_stamp(
+        &mut self,
+        dest_hash: [u8; 16],
+        stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
+        stamp_value: u32,
+    ) {
+        if let Some(state) = self.known_destinations.get_mut(&dest_hash) {
+            state.stamp = stamp;
+            state.stamp_value = stamp_value;
+        }
+    }
+
+    pub(crate) fn recall_stamp_value(&self, dest_hash: &[u8; 16]) -> Option<u32> {
+        self.known_destinations
+            .get(dest_hash)
+            .map(|state| state.stamp_value)
     }
 
     pub(crate) fn known_destination_entry(
@@ -38,6 +58,8 @@ impl Driver {
             was_used: state.was_used,
             last_used_at: state.last_used_at,
             retained: state.retained,
+            stamp: state.stamp,
+            stamp_value: state.stamp_value,
         }
     }
 

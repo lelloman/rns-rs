@@ -906,6 +906,7 @@ pub struct RnsNode {
     probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
     known_destinations_path: Option<std::path::PathBuf>,
     known_destinations_store: Option<Arc<crate::storage_sqlite::KnownDestinationsStore>>,
+    stamp_store: Option<crate::stamps::DestinationStampStore>,
     transport_state_dir: Option<std::path::PathBuf>,
     ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
     ratchet_expiry: Duration,
@@ -1472,6 +1473,7 @@ impl RnsNode {
 
         node.known_destinations_path = Some(known_destinations_path.clone());
         node.known_destinations_store = known_destinations_store;
+        node.stamp_store = Some(crate::stamps::DestinationStampStore::new(&paths.storage));
         for (dest_hash, known) in known_destinations {
             let _ = node.query(QueryRequest::RestoreKnownDestination(
                 crate::event::KnownDestinationEntry {
@@ -1487,6 +1489,11 @@ impl RnsNode {
                     was_used: known.was_used,
                     last_used_at: known.last_used_at,
                     retained: known.retained,
+                    stamp: known
+                        .stamp
+                        .as_deref()
+                        .and_then(|stamp| stamp.try_into().ok()),
+                    stamp_value: known.stamp_value,
                 },
             ));
         }
@@ -2501,6 +2508,7 @@ impl RnsNode {
             probe_server,
             known_destinations_path: None,
             known_destinations_store: None,
+            stamp_store: None,
             transport_state_dir,
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
@@ -3348,13 +3356,45 @@ impl RnsNode {
         } else {
             None
         };
+        let wire_app_data: Option<Vec<u8>> = if rns_core::constants::STAMP_DESTINATIONS {
+            let public_key = identity.get_public_key().ok_or(SendError)?;
+            let material =
+                crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
+            let store = self.stamp_store.as_ref().ok_or(SendError)?;
+            let (stamp, _value) = match store.load(
+                &dest.hash.0,
+                &material,
+                rns_core::constants::DESTINATION_STAMP_COST,
+            ) {
+                Some(entry) => entry,
+                None => {
+                    let (stamp, value) = crate::stamps::generate_stamp(
+                        &material,
+                        rns_core::constants::DESTINATION_STAMP_VALUE,
+                        rns_core::constants::STAMP_LENGTH,
+                        0,
+                    )
+                    .ok_or(SendError)?;
+                    if let Err(error) = store.store(&dest.hash.0, &stamp, value) {
+                        log::warn!("failed to persist destination stamp: {error}");
+                    }
+                    (stamp, value)
+                }
+            };
+            let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
+            wire.extend_from_slice(&crate::stamps::ext_payload(&stamp, 0));
+            Some(wire)
+        } else {
+            app_data.map(|data| data.to_vec())
+        };
+
         let (announce_data, has_ratchet) = rns_core::announce::AnnounceData::pack(
             identity,
             &dest.hash.0,
             &name_hash,
             &random_hash,
             ratchet.as_ref(),
-            app_data,
+            wire_app_data.as_deref(),
         )
         .map_err(|_| SendError)?;
 
@@ -3388,7 +3428,7 @@ impl RnsNode {
                     dest_hash: dest.hash.0,
                     name_hash,
                     identity_prv_key,
-                    app_data: app_data.map(|d| d.to_vec()),
+                    app_data: wire_app_data,
                 })
             })
         } else {
@@ -3649,6 +3689,8 @@ impl RnsNode {
                         was_used: entry.was_used,
                         last_used_at: entry.last_used_at,
                         retained: entry.retained,
+                        stamp: entry.stamp.map(|stamp| stamp.to_vec()),
+                        stamp_value: entry.stamp_value,
                     },
                 )
             })
@@ -3892,6 +3934,7 @@ impl RnsNode {
             probe_server: None,
             known_destinations_path: None,
             known_destinations_store: None,
+            stamp_store: None,
             transport_state_dir: None,
             ratchet_store: None,
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
@@ -4446,6 +4489,7 @@ mod tests {
             probe_server: None,
             known_destinations_path: None,
             known_destinations_store: None,
+            stamp_store: None,
             transport_state_dir: None,
             ratchet_store: Some(ratchet_store),
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
@@ -4722,6 +4766,8 @@ mod tests {
                     was_used: true,
                     last_used_at: Some(last_used_at),
                     retained: true,
+                    stamp: None,
+                    stamp_value: 0,
                 }),
                 response_tx,
             ))
@@ -4876,6 +4922,8 @@ share_instance = False
                     was_used: false,
                     last_used_at: None,
                     retained: false,
+                    stamp: None,
+                    stamp_value: 0,
                 },
             ),
             (
@@ -4890,6 +4938,8 @@ share_instance = False
                     was_used: false,
                     last_used_at: None,
                     retained: false,
+                    stamp: None,
+                    stamp_value: 0,
                 },
             ),
             (
@@ -4904,6 +4954,8 @@ share_instance = False
                     was_used: false,
                     last_used_at: None,
                     retained: false,
+                    stamp: None,
+                    stamp_value: 0,
                 },
             ),
         ]);

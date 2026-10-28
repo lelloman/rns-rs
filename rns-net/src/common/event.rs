@@ -565,6 +565,8 @@ pub struct KnownDestinationEntry {
     pub was_used: bool,
     pub last_used_at: Option<f64>,
     pub retained: bool,
+    pub stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
+    pub stamp_value: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

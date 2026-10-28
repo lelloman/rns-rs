@@ -86,7 +86,8 @@ impl KnownDestinationsStore {
             .prepare(
                 "SELECT k.destination_hash, k.last_heard, k.public_key, k.app_data,
                         k.used, k.identity_hash, COALESCE(m.hops, 0),
-                        COALESCE(m.receiving_interface, 0), COALESCE(m.retained, 0)
+                        COALESCE(m.receiving_interface, 0), COALESCE(m.retained, 0),
+                        k.stamp, COALESCE(k.stamp_value, 0)
                  FROM known_destinations k
                  LEFT JOIN known_destination_meta m
                    ON m.destination_hash = k.destination_hash",
@@ -104,6 +105,8 @@ impl KnownDestinationsStore {
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
+                    row.get::<_, Option<Vec<u8>>>(9)?,
+                    row.get::<_, i64>(10)?,
                 ))
             })
             .map_err(sql_error)?;
@@ -120,6 +123,8 @@ impl KnownDestinationsStore {
                 hops,
                 receiving_interface,
                 retained,
+                stamp,
+                stamp_value,
             ) = row.map_err(sql_error)?;
             let Ok(destination_hash) = fixed_16(&destination_hash) else {
                 continue;
@@ -144,6 +149,8 @@ impl KnownDestinationsStore {
                     was_used: used != 0.0,
                     last_used_at: (used > 0.0).then_some(used),
                     retained: retained != 0,
+                    stamp,
+                    stamp_value: stamp_value.clamp(0, u32::MAX as i64) as u32,
                 },
             ));
         }
@@ -468,8 +475,8 @@ fn upsert_destination(
             destination.public_key.to_vec(),
             destination.app_data.clone(),
             used,
-            Option::<Vec<u8>>::None,
-            0i64,
+            destination.stamp.clone(),
+            i64::from(destination.stamp_value),
             destination.identity_hash.to_vec(),
         ],
     )
@@ -583,6 +590,8 @@ mod tests {
             was_used: used.is_some(),
             last_used_at: used,
             retained,
+            stamp: Some(vec![hash; 14]),
+            stamp_value: u32::from(hash),
         }
     }
 
@@ -606,6 +615,8 @@ mod tests {
         assert!(used.was_used);
         assert_eq!(used.last_used_at, Some(2_000.0));
         assert!(used.retained);
+        assert_eq!(used.stamp.as_deref(), Some(&[0x11; 14][..]));
+        assert_eq!(used.stamp_value, 0x11);
         let never = &loaded[&[0x22; 16]];
         assert!(!never.was_used);
         assert_eq!(never.last_used_at, None);

@@ -486,6 +486,8 @@ impl Driver {
                         was_used: entry.was_used,
                         last_used_at: entry.last_used_at,
                         retained: entry.retained,
+                        stamp: entry.stamp,
+                        stamp_value: entry.stamp_value,
                     },
                 );
                 Some(QueryResponse::RestoreKnownDestination(true))

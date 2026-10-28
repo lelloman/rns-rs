@@ -190,6 +190,10 @@ pub struct ReceivedAnnounce {
     pub random_hash: [u8; 10],
     pub ratchet: Option<[u8; 32]>,
     pub app_data: Option<Vec<u8>>,
+    /// Detached destination stamp, when present on the announce.
+    pub stamp: Option<[u8; crate::constants::STAMP_LENGTH]>,
+    /// Stamp value, or `0` when absent or invalid.
+    pub stamp_value: u32,
     pub hops: u8,
     pub receiving_interface: InterfaceId,
     pub rx: RxMetadata,
