@@ -216,6 +216,27 @@ series.
   cover compilation, ABI validation, host calls, traps, persistence, and live
   attachment behavior.
 
+## Wasmtime feature trim (2026-10-28)
+
+- `cargo audit` flagged RUSTSEC-2026-0391, -0398, -0403, and -0410 (plus
+  further zstd-safe advisories classed as warnings) in `zstd 0.13.3`,
+  `zstd-safe 7.2.4`, and `zstd-sys 2.0.16`, all reached only through
+  Wasmtime's default `cache` feature via `wasmtime-internal-cache`. No
+  published Wasmtime release, including 50.0.0, depends on the fixed
+  `zstd 0.14.3` yet.
+- The hook runtime never enables the compiled-module cache, so `rns-hooks`
+  now depends on Wasmtime 48 with `default-features = false` and the explicit
+  feature set `cranelift`, `runtime`, `std`, `gc`, `gc-null`,
+  `parallel-compilation`, and `wat`. `gc` with the null collector is kept only
+  because `Config::wasm_exceptions` is gated behind it and the runtime calls
+  it to keep the exception proposal disabled; `wat` keeps text-format modules
+  accepted as before. Dropping the defaults also removes the component model,
+  profiling, coredump, debug, and address-symbolisation dependencies, 23
+  crates in total, from `Cargo.lock`.
+- The complete `rns-hooks` suite, the built-in hook E2E cases, the control API
+  hook lifecycle test, and the workspace `rns-hooks` feature build pass after
+  the change; `cargo audit` reports no vulnerabilities for either lockfile.
+
 ## SSD1306 0.10 assessment
 
 - The official 0.10.0 changelog and complete nine-commit `v0.9.0...v0.10.0`
