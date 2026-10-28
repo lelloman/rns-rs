@@ -205,7 +205,15 @@ done
 ```
 
 To roll back, install `rns-server.prev-<sha>` and `rns-ctl.prev-<sha>` over the
-current binaries and restart the service.
+current binaries and restart the service. Builds that include the link
+request cost (the stamp series after the 1.6.0 promotion) migrate the SQLite
+known-destinations store to `user_version` 2 by adding an `lr_cost` column.
+The migration is one-way: an older binary opens the migrated database but its
+positional inserts fail against the extra column, so known destinations stop
+being persisted and a `failed to persist known destinations` warning is
+logged until the newer binary is reinstalled. The node keeps running. Expect
+this when rolling back across that boundary, or restore the pre-upgrade
+`storage/` copy together with the old binary.
 
 After deploying, run the manual backbone smoke test below.
 

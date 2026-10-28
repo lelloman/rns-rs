@@ -51,18 +51,18 @@ Every commit in the audited range must appear exactly once.
 | 1 | `d1da5c3d67dc30e9af300d5776c7e94c42b5a33b` | Implemented destination stamps | Integrated | `0eaf7dd`; announce stamp parse/strip, known-destination stamp persistence, rayon generation, `data/stamps` store, RPC fields |
 | 2 | `d2dd730801ca91197f22be56c85d5d855d97faed` | Adjusted stamp defaults | Integrated | `ca33cdb`; destination defaults 20 and PR defaults 19 |
 | 3 | `d3ec00cd510e7f8b72e3249a8a74a0d60f5c9f42` | Cleanup | Integrated | `8231a7e`; destination defaults 23; PR tag propagation landed in #4 |
-| 4 | `156c7323a510f1be3adfb8288e521559599d3809` | Implemented path request stamps | Integrated | `2c4a936`; 64-byte PR parsing, validation, relay, outbound emission gate |
+| 4 | `156c7323a510f1be3adfb8288e521559599d3809` | Implemented path request stamps | Integrated | `2c4a936` plus review follow-up; 64-byte PR parsing, validation, relay, outbound emission gate, unconditional transport id, oversized-tag truncation |
 | 5 | `7ec975fc886de62c80bfebf1b2b108991ea75204` | Cleanup | Non-runtime | `f67dac1`; `ext_payload` naming already native, invariant documented |
 | 6 | `51be88fbd83417c8d21d2ce74922faa401658cee` | Fixed unused path cull order | Structurally covered | `5992827`; `cull_path_table` takes earliest-expiring unused paths |
 | 7 | `c68066edffd14c3755ceb181c621a4f806ddfd46` | Merge branch 'master' into dev_pr_stamps | Structurally covered | `512b234`; cull-order regression independent of insertion order |
-| 8 | `7c1b648607a13d9d7517f5a82c9a59c1bd776935` | Improved PR stamp handling | Integrated | `0979c93`; 0xFF relaying sentinel for unstamped requests to local clients |
+| 8 | `7c1b648607a13d9d7517f5a82c9a59c1bd776935` | Improved PR stamp handling | Integrated | `0979c93` plus review follow-up; 0xFF relaying sentinel for unstamped requests relayed to local clients and recursively |
 | 9 | `8d5871915a4a0b846d2c7e637842ed0c8916425c` | Cleanup | Non-runtime | `5e3b1b3`; constant-order invariant documented |
 | 10 | `c3af19893f7e056bbe04f53f57133eddadc4ed71` | Cleanup | Non-runtime | `cc23e6f`; legacy derived-key constant never existed natively |
 | 11 | `30c6428e0b59bfc05563167c72c2e0f21ef015c0` | Added link establishment cost to announces | Integrated | `f712c8f`; 17-byte announce extension anchor, `lr_cost` persistence, SQLite v2 migration |
 | 12 | `9955e1bf6777a1e5cddfd423de86b5a6824a64cc` | Implemented Identity stamps and added stamp key generation to stamper | Integrated | `6816147`; stamped X25519 keys and stamped `Identity` constructor |
 | 13 | `c37b5f7f44900e1d80c166678d8bac565f238046` | Cleanup | Non-runtime | `970eae8`; idempotent migration comment |
-| 14 | `ba8c2d76db20be55a22578b840f78ef0489ef053` | Implemented link request stamps | Integrated | `5fe5f87`; X25519 key stamp validation, stamped initiator, recalled cost |
-| 15 | `ca6451a02aead88734e47193dc228055d42c9854` | Parameter tuning | Integrated | `6bd6601`; link cost 11 and stamp timeout 15 |
+| 14 | `ba8c2d76db20be55a22578b840f78ef0489ef053` | Implemented link request stamps | Integrated | `5fe5f87` plus review follow-up; X25519 key stamp validation, off-thread stamped initiator with timeout, recalled cost |
+| 15 | `ca6451a02aead88734e47193dc228055d42c9854` | Parameter tuning | Integrated | `6bd6601`; link cost 11 and stamp timeout 15, the timeout bounding the link stamp worker |
 
 ## Per-Commit Analysis
 
@@ -126,11 +126,22 @@ restructure.
 64-byte stamped form and extension payload were absent.
 
 **Local handling and evidence:** `parse_path_request` accepts the 64-byte form,
-validates over `destination_hash || tag`, and rejects oversized non-stamped
-requests. Stamped requests relay verbatim with their original tag; outbound
-emission is gated by `STAMP_PRS` (default false). Evidence:
-`stamped_path_request_is_forwarded_without_treating_extension_as_tag` and
-`path_request_with_oversized_non_stamped_length_is_dropped`.
+validates over `destination_hash || tag`, drops requests longer than the
+stamped length, and processes 49 to 63 byte unstamped requests with the tag
+truncated to 16 bytes, as upstream does, while the driver counts the protocol
+violation. Relayed requests keep their original tag in every branch, and own
+and relayed requests always carry the transport identity, matching the
+upstream 1.6.0 "path requests always carry transport ID" change in this
+commit. Outbound emission is gated by `STAMP_PRS` (default false). Evidence:
+`stamped_path_request_is_forwarded_without_treating_extension_as_tag`,
+`path_request_with_oversized_tag_is_truncated_and_forwarded`,
+`path_request_longer_than_stamped_length_is_dropped`,
+`test_shared_instance_without_transport_relays_path_request_to_local_client`,
+and `test_shared_instance_forwards_local_client_path_request`.
+
+**Caveat:** when `STAMP_PRS` is enabled upstream stamps requests forwarded on
+behalf of local clients through its stamper queue; the native engine forwards
+them unstamped. See the deferred stamper queue under Remaining Work.
 
 **Final disposition:** Integrated.
 
@@ -182,9 +193,10 @@ unstamped requests relayed to local clients with a sentinel extension.
 **Rust applicability:** The native relay needed the same transition marker.
 
 **Local handling and evidence:** `unstamped_relay_payload()` emits marker
-`0xC1`, flags `0xFF`, zero stamp, and is used only when `STAMP_PRS` is enabled
-and enforcement is off. `0979c93`;
-`unstamped_relay_payload_has_marker_and_sentinel_flags`.
+`0xC1`, flags `0xFF`, zero stamp, and is applied when `STAMP_PRS` is enabled to
+unstamped requests relayed to local clients and to unstamped recursive
+discovery requests, the two sites upstream marks. `0979c93` and review
+follow-up; `unstamped_relay_payload_has_marker_and_sentinel_flags`.
 
 **Final disposition:** Integrated.
 
@@ -266,9 +278,41 @@ always generated an unconstrained X25519 key.
 X25519 key over `destination_hash || ed25519_public_key` and enforce the
 announced cost only when `LR_STAMPS_ENFORCED` (off). The initiator generates a
 stamped key when the destination announced a non-zero cost and `STAMP_LRS` is
-enabled (default true). Evidence:
-`stamped_link_request_carries_required_value` and
-`create_link_with_cost_stamps_the_link_request`. `5fe5f87`.
+enabled (default true). As upstream defers key generation to a thread with a
+`LINK_STAMP_TIMEOUT` watchdog, the driver grinds the key on a helper thread
+(`rns-net/src/driver/link_stamps.rs`), posts it back as
+`Event::CompleteStampedLink`, and on timeout answers the caller with the
+all-zero link id that `RnsNode::create_link` maps to an error; the driver
+thread never blocks. Evidence, layer by layer: key search
+(`stamped_key_generation_until_meets_cost_when_never_stopped`,
+`stamped_key_generation_stops_when_asked`), link engine
+(`stamped_link_request_carries_required_value`,
+`initiator_with_keys_uses_the_supplied_keys`), key helper
+(`stamped_link_keys_meet_cost_and_bind_destination`,
+`stamped_link_keys_give_up_at_deadline`,
+`stamped_link_keys_honour_a_future_deadline`,
+`stamped_link_keys_reject_cost_above_protocol_cap`,
+`stamped_link_keys_are_fresh_per_call`,
+`link_request_stamp_material_is_destination_then_signing_key`), link manager
+(`create_link_with_stamped_keys_emits_stamped_link_request`,
+`stamped_link_request_completes_the_handshake_with_a_responder`,
+`create_link_with_keys_none_generates_fresh_unstamped_keys`), and driver
+(`create_link_without_announced_cost_is_answered_synchronously`,
+`create_link_with_announced_cost_defers_until_the_worker_reports`,
+`create_link_with_announced_cost_stamps_off_thread_and_completes`,
+`complete_stamped_link_event_rebuilds_the_worker_keys_exactly`,
+`complete_stamped_link_while_draining_is_rejected`,
+`stamped_link_request_timeout_fails_the_link_without_blocking_the_driver`,
+`stamped_link_caller_is_not_left_waiting_when_the_driver_is_gone`,
+`driver_stays_responsive_while_a_stamp_is_being_ground`). `5fe5f87` and
+review follow-up. The first mapping ground the key synchronously on the
+driver thread without a timeout; measured at 0.09 s for cost 11 and 0.8 s for
+cost 16 in release mode, a destination announcing the cap would have stalled
+every client that tried to link to it.
+
+**Caveat:** the responder enforces against the global `LINK_REQUEST_STAMP_COST`
+and there is no per-destination `set_link_cost`; both matter only once
+`STAMP_DESTINATIONS` or `LR_STAMPS_ENFORCED` is enabled.
 
 **Final disposition:** Integrated.
 
@@ -293,7 +337,16 @@ versioned parity record can be created:
 - run exact-target Python/Rust interoperability against `ca6451a0`;
 - record build, Docker, hardware, and manual gates honestly (the daily
   dual-VPS Backbone smoke is operational evidence, not promotion acceptance);
-- document the user-visible stamp knobs natively.
+- document the user-visible stamp knobs natively;
+- **Deferred:** the upstream stamper queue (`WorkerQueues`, `stamper_job`,
+  `pr_stamp_cache`) that stamps own and locally forwarded path requests and
+  stamped announces asynchronously. Natively `handle_request_path` and
+  announce emission generate stamps inline and locally forwarded requests are
+  not stamped. Dormant while `STAMP_PRS` and `STAMP_DESTINATIONS` are false;
+  must be implemented before either flag is enabled;
+- **Deferred:** per-destination link request cost (`Destination.set_link_cost`)
+  and responder enforcement against the announced cost rather than the global
+  default. Dormant while `LR_STAMPS_ENFORCED` is false.
 
 No version bump exists upstream, so `UPSTREAM.md` remains at `9a01a20c` and
 this file stays the active audit.
@@ -311,3 +364,13 @@ this file stays the active audit.
   (`8e100d3`, `85e71f4`) carry the new known-destination and announce fields
   into the `rnid` test and hook-injected announce conversion. No deployment,
   restart, or reconfiguration of the VPS nodes was performed.
+- `2026-10-28`: Review of the series against the upstream diff found that
+  stamped link request keys were ground synchronously on the driver thread
+  without the upstream timeout, that own and relayed path requests omitted the
+  transport identity without transport enabled, that relayed requests derived
+  a fresh tag instead of keeping the original, that the 0xFF sentinel was
+  missing from the recursive branch, and that 49 to 63 byte path requests were
+  dropped instead of truncated. All five were corrected in a follow-up without
+  an `Upstream-Commit` trailer; the stamper queue and per-destination link
+  cost were recorded as deferred. Both VPS nodes still run `fa4936b`, the
+  1.6.0 promotion tree; nothing was deployed.
