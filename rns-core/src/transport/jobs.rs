@@ -149,11 +149,26 @@ pub fn cull_link_table(
     (count, actions)
 }
 
+/// Whether paths learnt on this interface are treated as slow: a known,
+/// non-zero bitrate below `PATH_SLOW_BITRATE`.
+fn is_slow_interface(
+    interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
+    interface_id: &InterfaceId,
+) -> bool {
+    interfaces
+        .get(interface_id)
+        .and_then(|info| info.bitrate)
+        .is_some_and(|bitrate| 0 < bitrate && bitrate < crate::constants::PATH_SLOW_BITRATE)
+}
+
 /// Cull expired entries from the path table.
 ///
 /// Culls individual paths within each PathSet, then removes empty PathSets.
-/// When the never-used pool exceeds its target, entries are sorted by expiry
-/// ascending and the earliest-expiring ones are removed first. Removing the
+/// Never-used paths expire after `unused_path_linger`, multiplied by
+/// `PATH_SLOW_LINGER_FACTOR` on slow interfaces, where paths are expensive to
+/// relearn. When the never-used pool exceeds its target, entries on fast
+/// interfaces are removed before entries on slow ones, each group ordered by
+/// expiry ascending so the earliest-expiring ones go first. Removing the
 /// newest entries instead would keep stale paths and discard fresh ones.
 pub fn cull_path_table(
     path_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::PathSet>,
@@ -163,25 +178,34 @@ pub fn cull_path_table(
     unused_pool_target: usize,
 ) -> usize {
     let mut culled = 0usize;
-    let mut unused: alloc::vec::Vec<(f64, [u8; 16], [u8; 16])> = alloc::vec::Vec::new();
+    let mut unused: alloc::vec::Vec<(u8, f64, [u8; 16], [u8; 16])> = alloc::vec::Vec::new();
     for (dest_hash, ps) in path_table.iter_mut() {
         let before = ps.len();
         ps.retain(|p| {
+            let linger = if is_slow_interface(interfaces, &p.receiving_interface) {
+                unused_path_linger * crate::constants::PATH_SLOW_LINGER_FACTOR
+            } else {
+                unused_path_linger
+            };
             now <= p.expires
                 && interfaces.contains_key(&p.receiving_interface)
-                && !(p.used == 0.0 && now > p.timestamp + unused_path_linger)
+                && !(p.used == 0.0 && now > p.timestamp + linger)
         });
         culled += before - ps.len();
         for path in ps.iter() {
             if path.used == 0.0 {
-                unused.push((path.expires, *dest_hash, path.next_hop));
+                let slow = u8::from(is_slow_interface(interfaces, &path.receiving_interface));
+                unused.push((slow, path.expires, *dest_hash, path.next_hop));
             }
         }
     }
     if unused.len() > unused_pool_target {
         let remove_count = unused.len() - unused_pool_target;
-        unused.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
-        for (_, dest_hash, next_hop) in unused.into_iter().take(remove_count) {
+        unused.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal))
+        });
+        for (_, _, dest_hash, next_hop) in unused.into_iter().take(remove_count) {
             if let Some(ps) = path_table.get_mut(&dest_hash) {
                 let before = ps.len();
                 ps.retain(|p| p.next_hop != next_hop);
@@ -608,6 +632,143 @@ mod tests {
         assert!(!table.contains_key(&[0x42; 16]));
         assert!(table.contains_key(&[0x41; 16]));
         assert!(table.contains_key(&[0x43; 16]));
+    }
+
+    fn path_on_interface(
+        interface: InterfaceId,
+        timestamp: f64,
+        expires: f64,
+        used: f64,
+    ) -> super::super::tables::PathSet {
+        super::super::tables::PathSet::from_single(
+            PathEntry {
+                timestamp,
+                next_hop: [0; 16],
+                hops: 1,
+                expires,
+                random_blobs: Vec::new(),
+                receiving_interface: interface,
+                packet_hash: [0; 32],
+                announce_raw: None,
+                used,
+            },
+            1,
+        )
+    }
+
+    fn slow_and_fast_interfaces() -> BTreeMap<InterfaceId, InterfaceInfo> {
+        let mut interfaces = BTreeMap::new();
+        let mut slow = make_interface_info(1);
+        slow.bitrate = Some(crate::constants::PATH_SLOW_BITRATE - 1);
+        interfaces.insert(InterfaceId(1), slow);
+        let mut fast = make_interface_info(2);
+        fast.bitrate = Some(crate::constants::PATH_SLOW_BITRATE);
+        interfaces.insert(InterfaceId(2), fast);
+        // No bitrate known: not slow.
+        interfaces.insert(InterfaceId(3), make_interface_info(3));
+        // A zero bitrate is "unknown", not slow.
+        let mut zero = make_interface_info(4);
+        zero.bitrate = Some(0);
+        interfaces.insert(InterfaceId(4), zero);
+        interfaces
+    }
+
+    #[test]
+    fn never_used_paths_on_slow_interfaces_linger_longer() {
+        let interfaces = slow_and_fast_interfaces();
+        let linger = 100.0;
+        let mut table = BTreeMap::new();
+        for (dest, iface) in [(0x51u8, 1u64), (0x52, 2), (0x53, 3), (0x54, 4)] {
+            table.insert(
+                [dest; 16],
+                path_on_interface(InterfaceId(iface), 100.0, 99_999.0, 0.0),
+            );
+        }
+        // Past the plain linger: everything but the slow-interface path goes.
+        let now = 100.0 + linger + 1.0;
+        let count = cull_path_table(&mut table, &interfaces, now, linger, 2048);
+        assert_eq!(count, 3);
+        assert!(table.contains_key(&[0x51; 16]));
+
+        // The slow-interface path survives until the factored linger passes.
+        let before_factored = 100.0 + linger * crate::constants::PATH_SLOW_LINGER_FACTOR;
+        assert_eq!(
+            cull_path_table(&mut table, &interfaces, before_factored, linger, 2048),
+            0
+        );
+        assert_eq!(
+            cull_path_table(&mut table, &interfaces, before_factored + 1.0, linger, 2048),
+            1
+        );
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn used_paths_on_slow_interfaces_are_not_special() {
+        let interfaces = slow_and_fast_interfaces();
+        let mut table = BTreeMap::new();
+        table.insert(
+            [0x61; 16],
+            path_on_interface(InterfaceId(1), 100.0, 500.0, 150.0),
+        );
+        // A used path expires on its own timer regardless of the interface.
+        assert_eq!(
+            cull_path_table(&mut table, &interfaces, 499.0, 10.0, 2048),
+            0
+        );
+        assert_eq!(
+            cull_path_table(&mut table, &interfaces, 501.0, 10.0, 2048),
+            1
+        );
+    }
+
+    #[test]
+    fn unused_pool_cull_removes_fast_interface_paths_before_slow_ones() {
+        let interfaces = slow_and_fast_interfaces();
+        let mut table = BTreeMap::new();
+        // Slow-interface paths expire earliest, which would make them the
+        // first victims under plain expiry ordering.
+        table.insert(
+            [0x71; 16],
+            path_on_interface(InterfaceId(1), 100.0, 1000.0, 0.0),
+        );
+        table.insert(
+            [0x72; 16],
+            path_on_interface(InterfaceId(1), 100.0, 1100.0, 0.0),
+        );
+        table.insert(
+            [0x73; 16],
+            path_on_interface(InterfaceId(2), 100.0, 3000.0, 0.0),
+        );
+        table.insert(
+            [0x74; 16],
+            path_on_interface(InterfaceId(3), 100.0, 2000.0, 0.0),
+        );
+        table.insert(
+            [0x75; 16],
+            path_on_interface(InterfaceId(4), 100.0, 4000.0, 0.0),
+        );
+
+        // Cull two to reach a pool target of three: the two earliest-expiring
+        // fast-interface paths go, the slow-interface ones stay.
+        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, 3);
+        assert_eq!(count, 2);
+        assert!(table.contains_key(&[0x71; 16]));
+        assert!(table.contains_key(&[0x72; 16]));
+        assert!(!table.contains_key(&[0x74; 16]), "fast, expires 2000");
+        assert!(!table.contains_key(&[0x73; 16]), "fast, expires 3000");
+        assert!(table.contains_key(&[0x75; 16]), "fast, expires 4000");
+
+        // The last fast-interface path goes before any slow one.
+        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, 2);
+        assert_eq!(count, 1);
+        assert!(!table.contains_key(&[0x75; 16]));
+
+        // Once only slow-interface paths remain they are culled by expiry.
+        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, 1);
+        assert_eq!(count, 1);
+        assert!(!table.contains_key(&[0x71; 16]));
+        assert!(table.contains_key(&[0x72; 16]));
     }
 
     #[test]
