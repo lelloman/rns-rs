@@ -566,6 +566,11 @@ fn search_mode_filter(mode: u8, recursive_prs: bool) -> Option<Option<&'static [
     }
 }
 
+/// Build a path request frame, optionally appending a stamp extension.
+///
+/// The extension is opaque here: the caller supplies the verified payload so
+/// a relayed request keeps the exact `marker | flags | stamp` bytes that the
+/// original sender signed the stamp for.
 fn build_path_request_packet(
     destination_hash: &[u8; 16],
     transport_identity_hash: Option<&[u8; 16]>,
