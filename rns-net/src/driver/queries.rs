@@ -128,6 +128,7 @@ impl Driver {
                 protocol_violations: entry.stats.protocol_violations,
                 ifac_violations: entry.stats.ifac_violations,
                 packet_filter_hits: entry.stats.packet_filter_hits,
+                hop_limiter_hits: entry.stats.hop_limiter_hits,
                 rx_packets: entry.stats.rx_packets,
                 tx_packets: entry.stats.tx_packets,
                 cpu_load: entry.stats.cpu_load,
@@ -186,6 +187,7 @@ impl Driver {
             let mut protocol_violations = 0;
             let mut ifac_violations = 0;
             let mut packet_filter_hits = 0;
+            let mut hop_limiter_hits = 0;
             let mut tx_drops = 0;
             let mut tx_dropped_bytes = 0;
             let mut tx_stalled = false;
@@ -197,6 +199,7 @@ impl Driver {
                         protocol_violations += child.stats.protocol_violations;
                         ifac_violations += child.stats.ifac_violations;
                         packet_filter_hits += child.stats.packet_filter_hits;
+                        hop_limiter_hits += child.stats.hop_limiter_hits;
                         if let Some(metrics) = &child.async_writer_metrics {
                             tx_drops += metrics.tx_drops();
                             tx_dropped_bytes += metrics.tx_dropped_bytes();
@@ -223,6 +226,7 @@ impl Driver {
                 protocol_violations,
                 ifac_violations,
                 packet_filter_hits,
+                hop_limiter_hits,
                 rx_packets: 0,
                 tx_packets: 0,
                 cpu_load: None,

@@ -10,7 +10,9 @@ pub enum PacketError {
     MissingTransportId,
     InvalidHeaderType,
     ZeroLengthData,
-    /// Hop counts at or above PATHFINDER_M are invalid on received wire packets.
+    /// Hop counts at or above `HOP_LIMITER` are dropped on received wire
+    /// packets. Upstream counts these as interface `hop_limiter_hits`, not as
+    /// protocol violations.
     InvalidHopCount(u8),
 }
 
@@ -339,7 +341,7 @@ impl RawPacket {
 
         let flags = PacketFlags::unpack(raw[0]);
         let hops = raw[1];
-        if hops >= constants::PATHFINDER_M {
+        if hops >= constants::HOP_LIMITER {
             return Err(PacketError::InvalidHopCount(hops));
         }
 

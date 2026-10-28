@@ -4227,6 +4227,47 @@ fn packet_filter_protocol_rejections_are_not_counted_as_duplicate_hits() {
 }
 
 #[test]
+fn hop_limited_frame_counts_a_hop_limiter_hit_not_a_protocol_violation() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "hop-limiter");
+
+    let mut limited = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &[0x33; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"too far",
+    )
+    .unwrap()
+    .raw;
+    // Upstream drops packets whose hop count is not below HOP_LIMITER and
+    // counts them on the interface as hop_limiter_hits, separately from
+    // protocol violations.
+    limited[1] = constants::HOP_LIMITER;
+    driver.handle_frame_event(InterfaceId(1), limited.clone(), None, None);
+    limited[1] = u8::MAX;
+    driver.handle_frame_event(InterfaceId(1), limited.clone(), None, None);
+
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(stats.hop_limiter_hits, 2);
+    assert_eq!(stats.protocol_violations, 0);
+    assert_eq!(stats.packet_filter_hits, 0);
+
+    // One hop below the limit passes the decoder; whatever the packet filter
+    // then decides, it is no longer a hop limiter hit.
+    limited[1] = constants::HOP_LIMITER - 1;
+    driver.handle_frame_event(InterfaceId(1), limited, None, None);
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.hop_limiter_hits, 2);
+}
+
+#[test]
 fn excessive_path_request_data_counts_a_protocol_violation() {
     let mut driver = new_test_driver();
     register_test_generic_interface(&mut driver, 1, "path-request-violations");
@@ -6315,6 +6356,7 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     child.stats.protocol_violations = 5;
     child.stats.ifac_violations = 6;
     child.stats.packet_filter_hits = 7;
+    child.stats.hop_limiter_hits = 8;
     driver.interfaces.insert(child_id, child);
     driver
         .dynamic_interface_parents
@@ -6338,6 +6380,7 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     assert_eq!(public.protocol_violations, 5);
     assert_eq!(public.ifac_violations, 6);
     assert_eq!(public.packet_filter_hits, 7);
+    assert_eq!(public.hop_limiter_hits, 8);
 }
 
 #[cfg(feature = "iface-backbone")]

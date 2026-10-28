@@ -962,6 +962,7 @@ pub struct SingleInterfaceStat {
     pub protocol_violations: u64,
     pub ifac_violations: u64,
     pub packet_filter_hits: u64,
+    pub hop_limiter_hits: u64,
     pub rx_packets: u64,
     pub tx_packets: u64,
     pub cpu_load: Option<f64>,
