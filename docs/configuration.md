@@ -83,6 +83,34 @@ is empty.
 
 The values shown are the defaults. Each must be a positive integer.
 
+## Stamps
+
+Reticulum 1.6.0 adds proof-of-work stamps to destination announces, path
+requests, and link requests. Neither Python Reticulum nor this implementation
+exposes a configuration key for them: the behaviour is fixed at build time by
+constants in `rns-core/src/constants.rs` that mirror the upstream `Transport`
+class attributes. The defaults match upstream at the current parity target.
+
+| Constant | Default | Effect |
+|----------|---------|--------|
+| `STAMP_DESTINATIONS` | `false` | Stamp announces emitted by this instance (target value `DESTINATION_STAMP_VALUE`, 23) |
+| `STAMP_PRS` | `false` | Stamp path requests emitted by this instance (target value `PATH_REQUEST_STAMP_VALUE`, 19) |
+| `STAMP_LRS` | `true` | Stamp outbound link requests to destinations that announced a non-zero link cost |
+| `LR_STAMPS_ENFORCED` | `false` | Reject inbound link requests whose stamp is missing or below the required cost |
+| `LINK_REQUEST_STAMP_COST` | `11` | Required link request cost when a destination announces none |
+| `LINK_COST_CAP` | `40` | Hard cap on an announced link request cost |
+| `LINK_STAMP_TIMEOUT` | `15` | Seconds allowed for grinding a stamped link request key before the link fails |
+
+With these defaults a node validates inbound announce and path request stamps,
+records announced link costs, and grinds a stamped link request key when a peer
+asks for one, but emits no stamped announces or path requests and refuses
+nothing for lack of a stamp. Stamped link request keys are ground on a worker
+thread so the driver stays responsive. Turning the emission flags on is not
+supported until the asynchronous stamper queue is implemented; see the active
+audit under `docs/upstream-parity/`. The only runtime stamp setting is the
+per-interface `discovery_stamp_value` for discovery announces, described in
+[Interface Discovery](interface-discovery.md#advertised-locations).
+
 ## Ingress control
 
 Any interface section accepts the Python-compatible ingress-control keys.

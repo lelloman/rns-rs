@@ -49,6 +49,13 @@ announce:
     location_cmd = ~/bin/reticulum-location
 ```
 
+`discovery_stamp_value` sets the proof-of-work target for the stamp carried
+by each discovery announce. The default is 16, matching upstream; higher values
+make announces costlier to forge and costlier to generate. Each due announce
+grinds a fresh stamp on a worker thread, so a high value costs CPU at every
+announce interval. Received discovery announces must carry a stamp of at
+least the default value or they are ignored.
+
 `discovery_lxmf_address` is an optional 32-character hexadecimal LXMF
 destination hash for contacting the interface operator. Remote systems retain
 and display it in detailed discovery information, making it possible to

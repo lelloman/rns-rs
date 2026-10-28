@@ -461,7 +461,14 @@ versioned parity record can be created:
   Must be rerun if the promotion target moves again;
 - record build, Docker, hardware, and manual gates honestly (the daily
   dual-VPS Backbone smoke is operational evidence, not promotion acceptance);
-- document the user-visible stamp knobs natively;
+- ~~document the user-visible stamp knobs natively~~: done on 2026-10-28 in
+  `docs/configuration.md` (Stamps section: no configuration key exists on
+  either side, the compile-time constants and their defaults are listed) and
+  `docs/rnstatus.md` (Hop Limit counter);
+- add 1.6.0 to the pinned CI interop matrix: **blocked** because the matrix
+  clones from the GitHub mirror, which is still at `e40191b3` (1.5.5); none of
+  the 1.6.0 commits are on GitHub yet, so the exact-target interop stays a
+  manual gate from a local rgit checkout until the mirror catches up;
 - **Deferred:** the upstream stamper queue (`WorkerQueues`, `stamper_job`,
   `pr_stamp_cache`) that stamps own and locally forwarded path requests and
   stamped announces asynchronously. Natively `handle_request_path` and
