@@ -248,20 +248,49 @@ impl TransportEngine {
         let tag_len = tag_bytes.len().min(16);
 
         if constants::STAMPS_ENABLED {
-            let valid = ext_payload.is_some_and(|ext| {
-                if ext[0] != constants::EXT_PAYLOAD_MARKER {
-                    return false;
+            // Diagnostics follow upstream 5d38ce30: stamped requests log their
+            // value, unstamped relays from stamp-aware nodes (0xFF sentinel)
+            // are noted on the pathing target, and plain unstamped requests
+            // stay at trace until enforcement makes them a drop.
+            let valid = match ext_payload {
+                None => {
+                    log::trace!("Unstamped path request for {:02x?}", &destination_hash[..4]);
+                    false
                 }
-                let mut material = Vec::with_capacity(16 + tag_len);
-                material.extend_from_slice(&destination_hash);
-                material.extend_from_slice(&tag_bytes[..tag_len]);
-                let workblock = crate::stamp::stamp_workblock(&material, 0);
-                crate::stamp::stamp_valid(
-                    &ext[constants::EXT_HEADER_LENGTH..],
-                    constants::PATH_REQUEST_STAMP_COST,
-                    &workblock,
-                )
-            });
+                Some(ext) if ext[0] != constants::EXT_PAYLOAD_MARKER => {
+                    log::debug!(
+                        "Unrecognized stamp payload in path request for {:02x?}",
+                        &destination_hash[..4]
+                    );
+                    false
+                }
+                Some(ext) => {
+                    let mut material = Vec::with_capacity(16 + tag_len);
+                    material.extend_from_slice(&destination_hash);
+                    material.extend_from_slice(&tag_bytes[..tag_len]);
+                    let workblock = crate::stamp::stamp_workblock(&material, 0);
+                    let stamp = &ext[constants::EXT_HEADER_LENGTH..];
+                    let value = crate::stamp::stamp_value(&workblock, stamp);
+                    let valid = value >= u32::from(constants::PATH_REQUEST_STAMP_COST);
+                    if valid {
+                        log::debug!(
+                            "Stamped path request for {:02x?} with value {value}",
+                            &destination_hash[..4]
+                        );
+                    } else if ext[1] == constants::PR_FLAG_UNSTAMPED_RELAY {
+                        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                            "Unstamped relayed path request from stamp-aware node for {:02x?}",
+                            &destination_hash[..4]
+                        );
+                    } else {
+                        log::debug!(
+                            "Invalid or insufficient (v:{value}) path request stamp for {:02x?}",
+                            &destination_hash[..4]
+                        );
+                    }
+                    valid
+                }
+            };
             if constants::STAMPS_ENFORCED && !valid {
                 return None;
             }
@@ -570,7 +599,7 @@ fn search_mode_filter(mode: u8, recursive_prs: bool) -> Option<Option<&'static [
 pub(crate) fn unstamped_relay_payload() -> [u8; constants::PR_EXT_PAYLOAD_LENGTH] {
     let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
     ext[0] = constants::EXT_PAYLOAD_MARKER;
-    ext[1] = 0xFF;
+    ext[1] = constants::PR_FLAG_UNSTAMPED_RELAY;
     ext
 }
 
