@@ -69,6 +69,10 @@ pub const EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH + LR_COST
 /// Path request extension payload length in bytes (header + stamp)
 pub const PR_EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH;
 
+/// Extension flags byte marking an unstamped path request relayed by a
+/// stamp-aware node (transitional sentinel, upstream 7c1b6486).
+pub const PR_FLAG_UNSTAMPED_RELAY: u8 = 0xFF;
+
 /// Marker identifying a stamp extension payload. Never a valid msgpack
 /// object boundary, so it cannot be confused with application data.
 pub const EXT_PAYLOAD_MARKER: u8 = 0xC1;
