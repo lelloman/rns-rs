@@ -50,7 +50,8 @@ pub const SIGLENGTH: usize = KEYSIZE;
 /// derived announce and destination layouts read in one block.
 pub const NAME_HASH_LENGTH: usize = 80;
 
-/// Derived key length in bytes
+/// Derived key length in bytes. The retired 32-byte legacy derivation is not
+/// part of the current wire format and has no native constant.
 pub const DERIVED_KEY_LENGTH: usize = 64;
 
 /// Detached stamp length in bytes (14-byte stamps keep the search space viable)
