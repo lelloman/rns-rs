@@ -59,6 +59,34 @@ fn test_create_link() {
 }
 
 #[test]
+fn create_link_with_cost_stamps_the_link_request() {
+    let mut mgr = LinkManager::new();
+    let mut rng = OsRng;
+    let dest_hash = [0xDC; 16];
+    let sig_pub_bytes = [0xAA; 32];
+
+    let (_, actions) = mgr.create_link_with_cost(
+        &dest_hash,
+        &sig_pub_bytes,
+        1,
+        constants::MTU as u32,
+        Some(4),
+        &mut rng,
+    );
+    let raw = actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            _ => None,
+        })
+        .expect("link request packet");
+    let packet = RawPacket::unpack(&raw).unwrap();
+    let value = rns_core::link::handshake::link_request_stamp_value(&dest_hash, packet.data())
+        .expect("stamped link request value");
+    assert!(value >= 4);
+}
+
+#[test]
 fn malformed_linkrequest_reports_protocol_violation() {
     let mut manager = LinkManager::new();
     let mut rng = make_rng(0x19);

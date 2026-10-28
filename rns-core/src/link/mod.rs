@@ -94,8 +94,41 @@ impl LinkEngine {
         rng: &mut dyn Rng,
     ) -> (Self, Vec<u8>) {
         let prv = X25519PrivateKey::generate(rng);
-        let pub_bytes = prv.public_key().public_bytes();
         let sig_prv = Ed25519PrivateKey::generate(rng);
+        Self::from_initiator_keys(dest_hash, hops, mode, mtu, now, prv, sig_prv)
+    }
+
+    /// Create an initiator link whose X25519 public key carries a stamp of at
+    /// least `stamp_cost` over `destination_hash || ed25519_public_key`.
+    pub fn new_initiator_stamped(
+        dest_hash: &[u8; 16],
+        hops: u8,
+        mode: LinkMode,
+        mtu: Option<u32>,
+        now: f64,
+        rng: &mut dyn Rng,
+        stamp_cost: u8,
+    ) -> (Self, Vec<u8>) {
+        let sig_prv = Ed25519PrivateKey::generate(rng);
+        let sig_pub_bytes = sig_prv.public_key().public_bytes();
+        let mut material = [0u8; 48];
+        material[..16].copy_from_slice(dest_hash);
+        material[16..].copy_from_slice(&sig_pub_bytes);
+        let (prv, _public, _value) =
+            rns_crypto::identity::generate_stamped_key(rng, &material, stamp_cost);
+        Self::from_initiator_keys(dest_hash, hops, mode, mtu, now, prv, sig_prv)
+    }
+
+    fn from_initiator_keys(
+        dest_hash: &[u8; 16],
+        hops: u8,
+        mode: LinkMode,
+        mtu: Option<u32>,
+        now: f64,
+        prv: X25519PrivateKey,
+        sig_prv: Ed25519PrivateKey,
+    ) -> (Self, Vec<u8>) {
+        let pub_bytes = prv.public_key().public_bytes();
         let sig_pub_bytes = sig_prv.public_key().public_bytes();
 
         let request_data = build_linkrequest_data(&pub_bytes, &sig_pub_bytes, mtu, mode);
@@ -1622,5 +1655,22 @@ mod tests {
         let stale_time = responder.stale_time;
         responder.tick(101.0 + stale_time + 1.0);
         assert_eq!(responder.state(), LinkState::Stale);
+    }
+
+    #[test]
+    fn stamped_link_request_carries_required_value() {
+        let mut rng = rns_crypto::OsRng;
+        let dest_hash = [0xAB; 16];
+        let (_engine, data) = LinkEngine::new_initiator_stamped(
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            None,
+            0.0,
+            &mut rng,
+            4,
+        );
+        let value = handshake::link_request_stamp_value(&dest_hash, &data).unwrap();
+        assert!(value >= 4);
     }
 }

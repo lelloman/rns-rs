@@ -556,10 +556,39 @@ impl LinkManager {
         mtu: u32,
         rng: &mut dyn Rng,
     ) -> (LinkId, Vec<LinkManagerAction>) {
+        self.create_link_with_cost(dest_hash, dest_sig_pub_bytes, hops, mtu, None, rng)
+    }
+
+    /// Create an outbound link, stamping the link request when the destination
+    /// has announced a non-zero link request cost.
+    pub fn create_link_with_cost(
+        &mut self,
+        dest_hash: &[u8; 16],
+        dest_sig_pub_bytes: &[u8; 32],
+        hops: u8,
+        mtu: u32,
+        link_cost: Option<u8>,
+        rng: &mut dyn Rng,
+    ) -> (LinkId, Vec<LinkManagerAction>) {
         let mode = LinkMode::Aes256Cbc;
         let signalled_mtu = self.link_mtu_discovery.then_some(mtu);
-        let (mut engine, request_data) =
-            LinkEngine::new_initiator(dest_hash, hops, mode, signalled_mtu, time::now(), rng);
+        let stamp_cost = link_cost
+            .filter(|cost| *cost > 0 && rns_core::constants::STAMP_LRS)
+            .map(|cost| cost.min(rns_core::constants::LINK_COST_CAP));
+        let (mut engine, request_data) = match stamp_cost {
+            Some(cost) => LinkEngine::new_initiator_stamped(
+                dest_hash,
+                hops,
+                mode,
+                signalled_mtu,
+                time::now(),
+                rng,
+                cost,
+            ),
+            None => {
+                LinkEngine::new_initiator(dest_hash, hops, mode, signalled_mtu, time::now(), rng)
+            }
+        };
 
         // Build the LINKREQUEST packet to compute link_id
         let flags = PacketFlags {
@@ -700,6 +729,26 @@ impl LinkManager {
 
         let hashable = packet.get_hashable_part();
         let now = time::now();
+
+        let stamp_value =
+            rns_core::link::handshake::link_request_stamp_value(dest_hash, packet.data());
+        if let Some(value) = stamp_value {
+            if rns_core::constants::LR_STAMPS_ENFORCED
+                && value < u32::from(rns_core::constants::LINK_REQUEST_STAMP_COST)
+            {
+                log::debug!(
+                    "LINKREQUEST for {:02x?} has insufficient stamp value {}",
+                    &dest_hash[..4],
+                    value
+                );
+                return Vec::new();
+            }
+            log::trace!(
+                "LINKREQUEST for {:02x?} carries stamp value {}",
+                &dest_hash[..4],
+                value
+            );
+        }
 
         // Create responder engine
         let (engine, lrproof_data) = match LinkEngine::new_responder(
