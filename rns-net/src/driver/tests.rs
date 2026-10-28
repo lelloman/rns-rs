@@ -268,6 +268,7 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
             app_data: Some(app_data.clone()),
             stamp: None,
             stamp_value: 0,
+            lr_cost: None,
             hops: 1,
             receiving_interface: InterfaceId(9),
             rx: rns_core::transport::RxMetadata::default(),
@@ -359,6 +360,7 @@ fn dispatch_announce_received_persists_ratchet() {
                 app_data: None,
                 stamp: None,
                 stamp_value: 0,
+                lr_cost: None,
                 hops: 1,
                 receiving_interface: InterfaceId(1),
                 rx: rns_core::transport::RxMetadata::default(),
@@ -419,6 +421,7 @@ fn make_known_destination_state(
         retained: false,
         stamp: None,
         stamp_value: 0,
+        lr_cost: None,
     }
 }
 
@@ -7603,6 +7606,7 @@ fn announce_stamp_is_stored_and_recalled() {
             app_data: Some(b"payload".to_vec()),
             stamp: Some(stamp),
             stamp_value: 19,
+            lr_cost: Some(19),
             hops: 1,
             receiving_interface: InterfaceId(1),
             rx: rns_core::transport::RxMetadata::default(),
@@ -7616,7 +7620,9 @@ fn announce_stamp_is_stored_and_recalled() {
         .expect("announce stored");
     assert_eq!(entry.stamp, Some(stamp));
     assert_eq!(entry.stamp_value, 19);
+    assert_eq!(entry.lr_cost, Some(19));
     assert_eq!(driver.recall_stamp_value(&dest), Some(19));
+    assert_eq!(driver.recall_link_cost(&dest), Some(19));
 }
 
 #[test]
@@ -7739,6 +7745,7 @@ fn known_destinations_cleanup_respects_ttl() {
             retained: false,
             stamp: None,
             stamp_value: 0,
+            lr_cost: None,
         },
     );
     driver.known_destinations.insert(
@@ -7760,6 +7767,7 @@ fn known_destinations_cleanup_respects_ttl() {
             retained: false,
             stamp: None,
             stamp_value: 0,
+            lr_cost: None,
         },
     );
 
@@ -8198,6 +8206,7 @@ fn used_known_destination_cleanup_uses_last_used_time() {
             retained: false,
             stamp: None,
             stamp_value: 0,
+            lr_cost: None,
         },
     );
 
@@ -9824,6 +9833,7 @@ fn inbound_proof_with_valid_signature_fires_callback() {
             retained: false,
             stamp: None,
             stamp_value: 0,
+            lr_cost: None,
         },
     );
 
@@ -9947,6 +9957,7 @@ fn inbound_proof_with_invalid_signature_rejected() {
             retained: false,
             stamp: None,
             stamp_value: 0,
+            lr_cost: None,
         },
     );
 

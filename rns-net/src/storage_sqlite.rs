@@ -87,7 +87,7 @@ impl KnownDestinationsStore {
                 "SELECT k.destination_hash, k.last_heard, k.public_key, k.app_data,
                         k.used, k.identity_hash, COALESCE(m.hops, 0),
                         COALESCE(m.receiving_interface, 0), COALESCE(m.retained, 0),
-                        k.stamp, COALESCE(k.stamp_value, 0)
+                        k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost
                  FROM known_destinations k
                  LEFT JOIN known_destination_meta m
                    ON m.destination_hash = k.destination_hash",
@@ -107,6 +107,7 @@ impl KnownDestinationsStore {
                     row.get::<_, i64>(8)?,
                     row.get::<_, Option<Vec<u8>>>(9)?,
                     row.get::<_, i64>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
                 ))
             })
             .map_err(sql_error)?;
@@ -125,6 +126,7 @@ impl KnownDestinationsStore {
                 retained,
                 stamp,
                 stamp_value,
+                lr_cost,
             ) = row.map_err(sql_error)?;
             let Ok(destination_hash) = fixed_16(&destination_hash) else {
                 continue;
@@ -151,6 +153,11 @@ impl KnownDestinationsStore {
                     retained: retained != 0,
                     stamp,
                     stamp_value: stamp_value.clamp(0, u32::MAX as i64) as u32,
+                    lr_cost: lr_cost
+                        .filter(|cost| {
+                            (0..=i64::from(rns_core::constants::STAMP_COST_CAP)).contains(cost)
+                        })
+                        .map(|cost| cost as u8),
                 },
             ));
         }
@@ -422,6 +429,10 @@ impl RatchetStore for KnownDestinationsStore {
 }
 
 fn create_schema(conn: &Connection) -> io::Result<()> {
+    let db_version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0);
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS known_destinations (
             destination_hash BLOB PRIMARY KEY,
@@ -432,6 +443,7 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
             used             REAL NOT NULL DEFAULT 0,
             stamp            BLOB,
             stamp_value      INTEGER,
+            lr_cost          INTEGER,
             identity_hash    BLOB NOT NULL);
          CREATE TABLE IF NOT EXISTS ratchets (
             destination_hash BLOB PRIMARY KEY,
@@ -441,10 +453,22 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
             destination_hash    BLOB PRIMARY KEY,
             hops                INTEGER NOT NULL DEFAULT 0,
             receiving_interface INTEGER NOT NULL DEFAULT 0,
-            retained            INTEGER NOT NULL DEFAULT 0);
-         PRAGMA user_version = 1;",
+            retained            INTEGER NOT NULL DEFAULT 0);",
     )
-    .map_err(sql_error)
+    .map_err(sql_error)?;
+
+    if db_version > 0 && db_version < 2 {
+        // Version 2 adds the announced link request cost. On migrated
+        // databases the column trails identity_hash, so writes name columns.
+        conn.execute(
+            "ALTER TABLE known_destinations ADD COLUMN lr_cost INTEGER",
+            [],
+        )
+        .map_err(sql_error)?;
+    }
+
+    conn.execute_batch("PRAGMA user_version = 2;")
+        .map_err(sql_error)
 }
 
 fn upsert_destination(
@@ -458,7 +482,10 @@ fn upsert_destination(
         (false, None) => 0.0,
     };
     conn.execute(
-        "INSERT INTO known_destinations VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+        "INSERT INTO known_destinations
+           (destination_hash, last_heard, packet_hash, public_key, app_data,
+            used, stamp, stamp_value, lr_cost, identity_hash)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
          ON CONFLICT(destination_hash) DO UPDATE SET
            last_heard=excluded.last_heard,
            packet_hash=excluded.packet_hash,
@@ -467,6 +494,7 @@ fn upsert_destination(
            used=excluded.used,
            stamp=excluded.stamp,
            stamp_value=excluded.stamp_value,
+           lr_cost=excluded.lr_cost,
            identity_hash=excluded.identity_hash",
         params![
             destination_hash.to_vec(),
@@ -477,6 +505,7 @@ fn upsert_destination(
             used,
             destination.stamp.clone(),
             i64::from(destination.stamp_value),
+            destination.lr_cost.map(i64::from),
             destination.identity_hash.to_vec(),
         ],
     )
@@ -592,6 +621,7 @@ mod tests {
             retained,
             stamp: Some(vec![hash; 14]),
             stamp_value: u32::from(hash),
+            lr_cost: Some(hash),
         }
     }
 
@@ -617,10 +647,63 @@ mod tests {
         assert!(used.retained);
         assert_eq!(used.stamp.as_deref(), Some(&[0x11; 14][..]));
         assert_eq!(used.stamp_value, 0x11);
+        assert_eq!(used.lr_cost, Some(0x11));
         let never = &loaded[&[0x22; 16]];
         assert!(!never.was_used);
         assert_eq!(never.last_used_at, None);
         assert!(!never.retained);
+    }
+
+    #[test]
+    fn sqlite_migrates_v1_schema_and_adds_lr_cost() {
+        let dir = temp_dir();
+        let path = default_path(&dir);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE known_destinations (
+                    destination_hash BLOB PRIMARY KEY,
+                    last_heard       REAL NOT NULL,
+                    packet_hash      BLOB NOT NULL,
+                    public_key       BLOB NOT NULL,
+                    app_data         BLOB,
+                    used             REAL NOT NULL DEFAULT 0,
+                    stamp            BLOB,
+                    stamp_value      INTEGER,
+                    identity_hash    BLOB NOT NULL);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO known_destinations VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![
+                    [0x77u8; 16].to_vec(),
+                    1_500.0f64,
+                    vec![0u8; 32],
+                    [0x77u8; 64].to_vec(),
+                    Option::<Vec<u8>>::None,
+                    0.0f64,
+                    Some(vec![0x77u8; 14]),
+                    20i64,
+                    [0x77u8; 16].to_vec(),
+                ],
+            )
+            .unwrap();
+        }
+
+        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, [0x77; 16]);
+        assert_eq!(loaded[0].1.stamp.as_deref(), Some(&[0x77; 14][..]));
+        assert_eq!(loaded[0].1.stamp_value, 20);
+        assert_eq!(loaded[0].1.lr_cost, None);
+
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
     }
 
     #[test]

@@ -2253,7 +2253,9 @@ impl Driver {
                 rns_core::constants::STAMP_LENGTH,
                 0,
             ) {
-                Some((stamp, _)) => data.extend_from_slice(&crate::stamps::ext_payload(&stamp, 0)),
+                Some((stamp, _)) => {
+                    data.extend_from_slice(&crate::stamps::path_request_ext_payload(&stamp, 0))
+                }
                 None => {
                     log::warn!(
                         "could not generate path request stamp for {:02x?}; request cancelled",

@@ -2737,6 +2737,13 @@ fn known_destination_entry_to_pickle(entry: &KnownDestinationEntry) -> PickleVal
             PickleValue::String("stamp_value".into()),
             PickleValue::Int(i64::from(entry.stamp_value)),
         ),
+        (
+            PickleValue::String("lr_cost".into()),
+            entry
+                .lr_cost
+                .map(|cost| PickleValue::Int(i64::from(cost)))
+                .unwrap_or(PickleValue::None),
+        ),
     ])
 }
 
@@ -2825,6 +2832,11 @@ fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestina
         retained: get_bool("retained")?,
         stamp,
         stamp_value,
+        lr_cost: value
+            .get("lr_cost")
+            .and_then(|v| v.as_int())
+            .filter(|cost| (0..=i64::from(rns_core::constants::STAMP_COST_CAP)).contains(cost))
+            .map(|cost| cost as u8),
     })
 }
 

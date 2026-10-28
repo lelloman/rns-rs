@@ -60,8 +60,14 @@ pub const STAMP_LENGTH: usize = 14;
 /// Extension payload header length in bytes (marker + flags)
 pub const EXT_HEADER_LENGTH: usize = 2;
 
-/// Extension payload length in bytes (header + stamp)
-pub const EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH;
+/// Announced link request cost length in bytes (trailing anchor)
+pub const LR_COST_LENGTH: usize = 1;
+
+/// Announce extension payload length in bytes (header + stamp + link cost)
+pub const EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH + LR_COST_LENGTH;
+
+/// Path request extension payload length in bytes (header + stamp)
+pub const PR_EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH;
 
 /// Marker identifying a stamp extension payload. Never a valid msgpack
 /// object boundary, so it cannot be confused with application data.
@@ -71,7 +77,7 @@ pub const EXT_PAYLOAD_MARKER: u8 = 0xC1;
 pub const PATH_REQUEST_LENGTH: usize = 48;
 
 /// Stamped path request length: unstamped data plus the extension payload.
-pub const PATH_REQUEST_STAMPED_LENGTH: usize = PATH_REQUEST_LENGTH + EXT_PAYLOAD_LENGTH;
+pub const PATH_REQUEST_STAMPED_LENGTH: usize = PATH_REQUEST_LENGTH + PR_EXT_PAYLOAD_LENGTH;
 
 /// Whether incoming announces are checked for stamps.
 pub const STAMPS_ENABLED: bool = true;
@@ -95,6 +101,10 @@ pub const PATH_REQUEST_STAMP_COST: u8 = 19;
 /// Default target stamp value for emitted path requests.
 pub const PATH_REQUEST_STAMP_VALUE: u8 = 19;
 
+/// Default required link request stamp cost when a destination does not
+/// announce its own.
+pub const LINK_REQUEST_STAMP_COST: u8 = 19;
+
 /// Whether destination announces emitted by this instance are stamped.
 pub const STAMP_DESTINATIONS: bool = false;
 
@@ -103,6 +113,7 @@ pub const STAMP_PRS: bool = false;
 
 const _: () = assert!(DESTINATION_STAMP_COST <= STAMP_COST_CAP);
 const _: () = assert!(PATH_REQUEST_STAMP_COST <= STAMP_COST_CAP);
+const _: () = assert!(LINK_REQUEST_STAMP_COST <= STAMP_COST_CAP);
 
 // --- From Packet.py ---
 
@@ -713,11 +724,14 @@ mod tests {
     fn stamp_defaults_match_upstream_parameters() {
         assert_eq!(STAMP_LENGTH, 14);
         assert_eq!(EXT_HEADER_LENGTH, 2);
-        assert_eq!(EXT_PAYLOAD_LENGTH, 16);
+        assert_eq!(EXT_PAYLOAD_LENGTH, 17);
+        assert_eq!(PR_EXT_PAYLOAD_LENGTH, 16);
+        assert_eq!(PATH_REQUEST_STAMPED_LENGTH, 64);
         assert_eq!(EXT_PAYLOAD_MARKER, 0xC1);
         assert_eq!(DESTINATION_STAMP_COST, 23);
         assert_eq!(DESTINATION_STAMP_VALUE, 23);
         assert_eq!(PATH_REQUEST_STAMP_COST, 19);
         assert_eq!(PATH_REQUEST_STAMP_VALUE, 19);
+        assert_eq!(LINK_REQUEST_STAMP_COST, 19);
     }
 }
