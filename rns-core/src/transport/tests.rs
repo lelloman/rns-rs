@@ -2900,6 +2900,14 @@ fn stamped_path_request_is_forwarded_without_treating_extension_as_tag() {
 }
 
 #[test]
+fn unstamped_relay_payload_has_marker_and_sentinel_flags() {
+    let ext = crate::transport::path_requests::unstamped_relay_payload();
+    assert_eq!(ext[0], constants::EXT_PAYLOAD_MARKER);
+    assert_eq!(ext[1], 0xFF);
+    assert!(ext[2..].iter().all(|byte| *byte == 0));
+}
+
+#[test]
 fn path_request_with_oversized_non_stamped_length_is_dropped() {
     let mut engine = TransportEngine::new(make_config(true));
     engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
