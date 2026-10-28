@@ -103,7 +103,7 @@ pub const PATH_REQUEST_STAMP_VALUE: u8 = 19;
 
 /// Default required link request stamp cost when a destination does not
 /// announce its own.
-pub const LINK_REQUEST_STAMP_COST: u8 = 14;
+pub const LINK_REQUEST_STAMP_COST: u8 = 11;
 
 /// Whether destination announces emitted by this instance are stamped.
 pub const STAMP_DESTINATIONS: bool = false;
@@ -122,7 +122,7 @@ pub const LR_STAMPS_ENFORCED: bool = false;
 pub const LINK_COST_CAP: u8 = 40;
 
 /// Timeout for deferred link request stamp generation (seconds).
-pub const LINK_STAMP_TIMEOUT: u64 = 16;
+pub const LINK_STAMP_TIMEOUT: u64 = 15;
 
 const _: () = assert!(DESTINATION_STAMP_COST <= STAMP_COST_CAP);
 const _: () = assert!(PATH_REQUEST_STAMP_COST <= STAMP_COST_CAP);
@@ -746,8 +746,8 @@ mod tests {
         assert_eq!(DESTINATION_STAMP_VALUE, 23);
         assert_eq!(PATH_REQUEST_STAMP_COST, 19);
         assert_eq!(PATH_REQUEST_STAMP_VALUE, 19);
-        assert_eq!(LINK_REQUEST_STAMP_COST, 14);
+        assert_eq!(LINK_REQUEST_STAMP_COST, 11);
         assert_eq!(LINK_COST_CAP, 40);
-        assert_eq!(LINK_STAMP_TIMEOUT, 16);
+        assert_eq!(LINK_STAMP_TIMEOUT, 15);
     }
 }
