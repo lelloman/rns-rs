@@ -457,9 +457,10 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
     )
     .map_err(sql_error)?;
 
+    // Version 2 adds the announced link request cost. The migration is a
+    // single idempotent step; on migrated databases the column trails
+    // identity_hash, so writes name their target columns.
     if db_version > 0 && db_version < 2 {
-        // Version 2 adds the announced link request cost. On migrated
-        // databases the column trails identity_hash, so writes name columns.
         conn.execute(
             "ALTER TABLE known_destinations ADD COLUMN lr_cost INTEGER",
             [],
