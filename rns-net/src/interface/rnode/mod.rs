@@ -1973,9 +1973,16 @@ mod tests {
             Event::InterfaceUp(InterfaceId(41), Some(_), None)
         ));
 
-        while let Ok(event) = rx.try_recv() {
-            assert!(matches!(event, Event::InterfaceTelemetry { .. }));
-        }
+        // signal_interface_up publishes telemetry right after InterfaceUp;
+        // wait for it so it cannot land in the post-stop silence window.
+        let telemetry = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            telemetry,
+            Event::InterfaceTelemetry {
+                interface_id: InterfaceId(41),
+                ..
+            }
+        ));
 
         control.request_stop();
         assert!(control.should_stop());
