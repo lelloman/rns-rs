@@ -899,6 +899,10 @@ fn violation_status_lines(iface: &PickleValue) -> Vec<String> {
         .get("packet_filter_hits")
         .and_then(|value| value.as_int())
         .unwrap_or(0);
+    let hop_limited = iface
+        .get("hop_limiter_hits")
+        .and_then(|value| value.as_int())
+        .unwrap_or(0);
     let mut lines = Vec::new();
     if protocol > 0 || ifac > 0 {
         lines.push(format!(
@@ -912,6 +916,9 @@ fn violation_status_lines(iface: &PickleValue) -> Vec<String> {
     }
     if filter > 0 {
         lines.push(format!("    Flt. Hits : {filter}"));
+    }
+    if hop_limited > 0 {
+        lines.push(format!("    Hop Limit : {hop_limited}"));
     }
     lines
 }
@@ -2393,10 +2400,18 @@ mod tests {
                 PickleValue::String("packet_filter_hits".into()),
                 PickleValue::Int(7),
             ),
+            (
+                PickleValue::String("hop_limiter_hits".into()),
+                PickleValue::Int(4),
+            ),
         ]);
         assert_eq!(
             violation_status_lines(&iface),
-            vec!["    Violations: 3 protocol, 2 IFAC", "    Flt. Hits : 7"]
+            vec![
+                "    Violations: 3 protocol, 2 IFAC",
+                "    Flt. Hits : 7",
+                "    Hop Limit : 4"
+            ]
         );
         assert_eq!(interface_sort_value(&iface, "pvs"), SortValue::Int(3));
         assert_eq!(interface_sort_value(&iface, "ivs"), SortValue::Int(2));

@@ -128,9 +128,15 @@ impl Driver {
         // The decoded packet keeps the frame's bytes as its `raw`.
         let decoded_packet = match self.engine.decode_inbound(packet) {
             Ok(packet) => packet,
-            Err(_) => {
+            Err(error) => {
                 if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                    entry.stats.protocol_violations += 1;
+                    // Upstream checks the hop count right after unpacking and
+                    // counts the drop separately from protocol violations.
+                    if matches!(error, rns_core::packet::PacketError::InvalidHopCount(_)) {
+                        entry.stats.hop_limiter_hits += 1;
+                    } else {
+                        entry.stats.protocol_violations += 1;
+                    }
                 }
                 return;
             }

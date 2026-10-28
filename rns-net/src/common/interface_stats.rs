@@ -41,6 +41,8 @@ pub struct InterfaceStats {
     pub protocol_violations: u64,
     pub ifac_violations: u64,
     pub packet_filter_hits: u64,
+    /// Inbound packets dropped because their hop count reached `HOP_LIMITER`.
+    pub hop_limiter_hits: u64,
     pub traffic_rates: TrafficRates,
     pub rx_packets: u64,
     pub tx_packets: u64,

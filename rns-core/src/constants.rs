@@ -212,6 +212,12 @@ pub const TRANSPORT_TUNNEL: u8 = 0x03;
 /// Maximum hops
 pub const PATHFINDER_M: u8 = 128;
 
+/// Inbound packets whose hop count has reached this limit are dropped before
+/// the packet filter and counted per interface as `hop_limiter_hits`
+/// (upstream `Transport.HOP_LIMITER`, which upstream notes should become
+/// locally configurable).
+pub const HOP_LIMITER: u8 = PATHFINDER_M;
+
 // --- PATHFINDER algorithm ---
 
 /// Retransmit retries (total sends = PATHFINDER_R + 1)
