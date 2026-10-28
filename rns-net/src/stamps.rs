@@ -127,6 +127,26 @@ pub fn path_request_ext_payload(stamp: &[u8], flags: u8) -> Vec<u8> {
     payload
 }
 
+/// Generate an internally stamped X25519 keypair.
+///
+/// Returns `(private_key, public_key, value)`. The public key itself is the
+/// stamp, validated as `stamp_valid(public_key, cost, material)`.
+pub fn generate_stamped_key(material: &[u8], stamp_cost: u8) -> Option<(Vec<u8>, Vec<u8>, u32)> {
+    use rns_crypto::OsRng;
+
+    if stamp_cost > constants::STAMP_COST_CAP {
+        return None;
+    }
+    let mut rng = OsRng;
+    let (private, public, value) =
+        rns_crypto::identity::generate_stamped_key(&mut rng, material, stamp_cost);
+    Some((
+        private.private_bytes().to_vec(),
+        public.public_bytes().to_vec(),
+        value,
+    ))
+}
+
 /// Generate a detached stamp with the given cost using rayon workers.
 ///
 /// Returns `(stamp, value)`, or `None` when the cost is above the protocol cap.
@@ -215,6 +235,16 @@ mod tests {
         assert_eq!(loaded.1, value);
         assert!(store.load(&[0x44; 16], material, 200).is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stamped_key_public_half_validates_against_material() {
+        let material = b"identity stamp material";
+        let (private, public, value) = generate_stamped_key(material, 4).unwrap();
+        assert_eq!(private.len(), 32);
+        assert_eq!(public.len(), 32);
+        assert!(value >= 4);
+        assert!(stamp_valid(&public, 4, material));
     }
 
     #[test]
