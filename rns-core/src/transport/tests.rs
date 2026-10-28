@@ -5758,6 +5758,99 @@ fn test_shared_instance_forwards_local_client_path_request() {
 }
 
 #[test]
+fn stamping_shared_instance_queues_stamps_for_unstamped_local_client_path_requests() {
+    for transport_enabled in [false, true] {
+        let unknown_dest = [0xE6; 16];
+        let tag = [0x32; 16];
+        let request = make_path_request_data(&unknown_dest, &tag);
+
+        // Without STAMP_PRS the request is forwarded as-is (the default).
+        let (mut plain, _) = make_issue183_daemon(transport_enabled);
+        assert!(!plain.stamp_prs());
+        let forwarded_on: BTreeSet<u64> = plain
+            .handle_path_request(&request, InterfaceId(2), 1003.0)
+            .iter()
+            .filter_map(|action| match action {
+                TransportAction::SendOnInterface { interface, .. } => Some(interface.0),
+                _ => None,
+            })
+            .collect();
+        assert!(forwarded_on.contains(&3));
+
+        // With STAMP_PRS, Transport.request_path finds no stamp for the
+        // client's tag and queues one stamper job per egress interface
+        // instead of sending anything.
+        let (mut engine, _) = make_issue183_daemon(transport_enabled);
+        engine.set_stamp_prs(true);
+        let actions = engine.handle_path_request(&request, InterfaceId(2), 1003.0);
+        assert!(
+            !actions
+                .iter()
+                .any(|action| matches!(action, TransportAction::SendOnInterface { .. })),
+            "nothing goes out before the stamp exists (transport_enabled={transport_enabled})"
+        );
+        let stamp_jobs: BTreeSet<u64> = actions
+            .iter()
+            .map(|action| match action {
+                TransportAction::StampPathRequest {
+                    destination_hash,
+                    tag: job_tag,
+                    interface,
+                } => {
+                    assert_eq!(*destination_hash, unknown_dest);
+                    assert_eq!(job_tag, &tag);
+                    interface.0
+                }
+                other => panic!("unexpected action {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            stamp_jobs, forwarded_on,
+            "one stamp job per interface the unstamped node would have forwarded on"
+        );
+        assert!(
+            !stamp_jobs.contains(&2),
+            "never back to the requesting client"
+        );
+
+        // A stamped client request keeps its own stamp and is forwarded at once.
+        let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
+        ext[0] = constants::EXT_PAYLOAD_MARKER;
+        ext[2..].copy_from_slice(&[0xAB; constants::STAMP_LENGTH]);
+        let stamped = make_stamped_path_request_data(&[0xE7; 16], &[0x77; 16], &tag, &ext);
+        let actions = engine.handle_path_request(&stamped, InterfaceId(2), 1004.0);
+        assert!(
+            !actions
+                .iter()
+                .any(|action| matches!(action, TransportAction::StampPathRequest { .. })),
+            "a stamped request is not re-stamped"
+        );
+        let forwarded = issue183_path_requests_on(&actions, InterfaceId(3), &[0xE7; 16]);
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(forwarded[0].len(), constants::PATH_REQUEST_STAMPED_LENGTH);
+        assert_eq!(&forwarded[0][48..], &ext[..]);
+
+        // The frame the stamper job eventually sends is the same wire format.
+        let built = engine
+            .build_path_request(&unknown_dest, &tag, Some(&ext))
+            .expect("path request builds");
+        let packet = RawPacket::unpack(&built).unwrap();
+        let mut expected = unknown_dest.to_vec();
+        expected.extend_from_slice(&[0x42; 16]);
+        expected.extend_from_slice(&tag);
+        expected.extend_from_slice(&ext);
+        assert_eq!(packet.data(), &expected[..]);
+        assert_eq!(
+            engine
+                .build_path_request(&unknown_dest, &tag[..4], None)
+                .map(|raw| RawPacket::unpack(&raw).unwrap().data().len()),
+            Some(36),
+            "short tags are kept verbatim"
+        );
+    }
+}
+
+#[test]
 fn test_shared_instance_without_transport_or_local_clients_ignores_path_request() {
     let mut config = make_config(false);
     config.identity_hash = Some([0x42; 16]);

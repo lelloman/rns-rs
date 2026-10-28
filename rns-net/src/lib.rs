@@ -60,6 +60,7 @@ pub mod remote_management;
 pub mod resource;
 pub mod rpc;
 pub mod serial;
+pub mod stamper;
 pub mod stamps;
 pub mod storage;
 pub mod storage_sqlite;

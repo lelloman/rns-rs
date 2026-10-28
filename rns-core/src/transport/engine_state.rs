@@ -35,6 +35,7 @@ impl TransportEngine {
             discovery_pr_tags: VecDeque::new(),
             discovery_pr_tag_set: BTreeSet::new(),
             path_requests: BTreeMap::new(),
+            stamp_prs: constants::STAMP_PRS,
             discovery_path_requests: BTreeMap::new(),
             discovery_path_request_deadlines: BTreeMap::new(),
             pending_local_path_requests: BTreeMap::new(),

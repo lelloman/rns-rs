@@ -78,10 +78,12 @@ and the mapping-hash table.
   release acceptance. The GitHub mirror lags the accepted baseline and upstream
   still marks 1.6.0 as pending.
 - The asynchronous stamper queue (`WorkerQueues`, `stamper_job`,
-  `pr_stamp_cache`) is deferred. Natively announce and path request stamps are
-  generated inline and locally forwarded path requests are not stamped. This is
-  dormant while `STAMP_PRS` and `STAMP_DESTINATIONS` are false, as upstream,
-  and must be implemented before either flag is enabled.
+  `pr_stamp_cache`) was deferred at promotion and implemented the same day in a
+  follow-up (`rns-net/src/stamper.rs`; see the audit's acceptance record).
+  Own announces without a persisted stamp, own path requests and unstamped
+  path requests forwarded for local clients are stamped on the worker thread.
+  It is dormant while `STAMP_PRS` and `STAMP_DESTINATIONS` are false, as
+  upstream.
 - Per-destination link request cost (`Destination.set_link_cost`) and
   responder enforcement against the announced cost are deferred. Dormant while
   `LR_STAMPS_ENFORCED` is false, as upstream.

@@ -12506,6 +12506,132 @@ fn stamped_link_caller_is_not_left_waiting_when_the_driver_is_gone() {
     }
 }
 
+fn stamping_path_request_driver(
+    tx: event::EventSender,
+    rx: event::EventReceiver,
+) -> (Driver, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut config = make_transport_config(false);
+    config.identity_hash = Some([0x42; 16]);
+    let mut driver = Driver::new(config, rx, tx.clone(), Box::new(cbs));
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+    driver.engine.set_stamp_prs(true);
+    driver.set_stamper(Arc::new(crate::stamper::Stamper::with_targets(
+        tx,
+        None,
+        crate::stamper::StampTargets {
+            destination_cost: 6,
+            destination_value: 6,
+            path_request_value: 6,
+        },
+    )));
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    (driver, sent)
+}
+
+fn sent_path_requests(sent: &[Vec<u8>], dest: &[u8; 16]) -> Vec<Vec<u8>> {
+    let path_request_dest =
+        rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
+    sent.iter()
+        .filter_map(|raw| RawPacket::unpack(raw).ok())
+        .filter(|packet| {
+            packet.destination_hash == path_request_dest && packet.data().starts_with(dest)
+        })
+        .map(|packet| packet.data().to_vec())
+        .collect()
+}
+
+fn assert_valid_path_request_stamp(data: &[u8], dest: &[u8; 16], tag: &[u8]) {
+    assert_eq!(data.len(), constants::PATH_REQUEST_STAMPED_LENGTH);
+    assert_eq!(&data[16..32], &[0x42; 16], "transport identity");
+    assert_eq!(&data[32..48], tag);
+    assert_eq!(data[48], constants::EXT_PAYLOAD_MARKER);
+    assert_eq!(
+        data[49], 0x00,
+        "a stamped request, not the unstamped-relay sentinel"
+    );
+    let material = crate::stamper::Stamper::path_request_stamp_material(dest, tag);
+    let workblock = rns_core::stamp::stamp_workblock(&material, 0);
+    assert!(rns_core::stamp::stamp_valid(&data[50..], 6, &workblock));
+}
+
+#[test]
+fn own_path_request_with_stamp_prs_is_stamped_off_thread_then_broadcast() {
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = stamping_path_request_driver(tx.clone(), rx);
+    let dest = [0xA1; 16];
+
+    let started = Instant::now();
+    driver.handle_request_path(dest);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    // Nothing is sent until the worker reports; the request is already
+    // recorded as pending so duplicates are gated meanwhile.
+    driver.flush_writers();
+    assert!(sent_path_requests(&sent.lock().unwrap(), &dest).is_empty());
+
+    // Running the event loop delivers the worker's SendStampedPathRequest.
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_writers();
+    let requests = sent_path_requests(&sent.lock().unwrap(), &dest);
+    assert_eq!(requests.len(), 1, "exactly one stamped request goes out");
+    let tag = requests[0][32..48].to_vec();
+    assert_valid_path_request_stamp(&requests[0], &dest, &tag);
+    assert_eq!(driver.stamper.cached_path_request_stamps(), 1);
+}
+
+#[test]
+fn stamp_path_request_action_sends_the_stamped_request_on_that_interface_only() {
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = stamping_path_request_driver(tx.clone(), rx);
+    // A second interface that must not see the forwarded request.
+    driver.engine.register_interface(make_interface_info(2));
+    let (other_writer, other_sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(2), make_entry(2, Box::new(other_writer), true));
+
+    let dest = [0xA2; 16];
+    let tag = vec![0x5A; 16];
+    driver.dispatch_all(vec![TransportAction::StampPathRequest {
+        destination_hash: dest,
+        tag: tag.clone(),
+        interface: InterfaceId(1),
+    }]);
+    driver.flush_writers();
+    assert!(sent_path_requests(&sent.lock().unwrap(), &dest).is_empty());
+
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_writers();
+    let requests = sent_path_requests(&sent.lock().unwrap(), &dest);
+    assert_eq!(requests.len(), 1);
+    assert_valid_path_request_stamp(&requests[0], &dest, &tag);
+    assert!(
+        sent_path_requests(&other_sent.lock().unwrap(), &dest).is_empty(),
+        "a forwarded request goes out only on the interface it was queued for"
+    );
+}
+
+#[test]
+fn path_request_without_stamp_prs_is_sent_synchronously_with_the_transport_identity() {
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = stamping_path_request_driver(tx, rx);
+    driver.engine.set_stamp_prs(false);
+    let dest = [0xA3; 16];
+    driver.handle_request_path(dest);
+    driver.flush_writers();
+    let requests = sent_path_requests(&sent.lock().unwrap(), &dest);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].len(), constants::PATH_REQUEST_LENGTH);
+    assert_eq!(&requests[0][16..32], &[0x42; 16]);
+    assert_eq!(driver.stamper.queued(), 0);
+}
+
 #[test]
 fn driver_stays_responsive_while_a_stamp_is_being_ground() {
     let (tx, rx) = event::channel();

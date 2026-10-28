@@ -298,6 +298,9 @@ pub enum Event<W: Send> {
     /// thread. Internal to the driver; carries the link request keys and the
     /// original `CreateLink` responder.
     CompleteStampedLink(Box<StampedLinkKeys>),
+    /// A path request stamp ground by the stamper worker; the driver builds
+    /// and sends the request.
+    SendStampedPathRequest(Box<crate::stamper::StampedPathRequest>),
     /// Send a request on an established link.
     SendRequest {
         link_id: [u8; 16],
@@ -1338,6 +1341,11 @@ impl<W: Send> fmt::Debug for Event<W> {
             Event::RequestPath { dest_hash } => f
                 .debug_struct("RequestPath")
                 .field("dest_hash", dest_hash)
+                .finish(),
+            Event::SendStampedPathRequest(request) => f
+                .debug_struct("SendStampedPathRequest")
+                .field("dest_hash", &request.destination_hash)
+                .field("interface", &request.interface)
                 .finish(),
             Event::RegisterProofStrategy {
                 dest_hash,

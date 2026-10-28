@@ -168,9 +168,12 @@ commit. Outbound emission is gated by `STAMP_PRS` (default false). Evidence:
 `test_shared_instance_without_transport_relays_path_request_to_local_client`,
 and `test_shared_instance_forwards_local_client_path_request`.
 
-**Caveat:** when `STAMP_PRS` is enabled upstream stamps requests forwarded on
-behalf of local clients through its stamper queue; the native engine forwards
-them unstamped. See the deferred stamper queue under Remaining Work.
+**Caveat (resolved 2026-10-28):** when `STAMP_PRS` is enabled upstream stamps
+requests forwarded on behalf of local clients through its stamper queue; the
+native engine initially forwarded them unstamped. The stamper queue follow-up
+now has the engine return one `StampPathRequest` action per egress interface
+for such a request, which the driver hands to the shared stamper (see
+Remaining Work and the acceptance record).
 
 **Final disposition:** Integrated.
 
@@ -473,20 +476,28 @@ versioned parity record can be created:
   clones from the GitHub mirror, which is still at `e40191b3` (1.5.5); none of
   the 1.6.0 commits are on GitHub yet, so the exact-target interop stays a
   manual gate from a local rgit checkout until the mirror catches up;
-- **Deferred:** the upstream stamper queue (`WorkerQueues`, `stamper_job`,
-  `pr_stamp_cache`) that stamps own and locally forwarded path requests and
-  stamped announces asynchronously. Natively `handle_request_path` and
-  announce emission generate stamps inline and locally forwarded requests are
-  not stamped. Dormant while `STAMP_PRS` and `STAMP_DESTINATIONS` are false;
-  must be implemented before either flag is enabled;
+- **Implemented (follow-up, 2026-10-28):** the upstream stamper queue
+  (`WorkerQueues`, `stamper_job`, `pr_stamp_cache`) that stamps own and
+  locally forwarded path requests and stamped announces asynchronously, as
+  `rns-net/src/stamper.rs`. One lazily started `rns-stamper` thread drains two
+  bounded queues (32 path request jobs before 32 announce jobs, keyed
+  replacement, full queue drops with a debug log, like upstream) and keeps the
+  256-entry path request stamp cache. The engine gained a runtime `stamp_prs`
+  switch and a `StampPathRequest` action for unstamped local client requests;
+  the driver's own `RequestPath` defers to the worker and sends on
+  `SendStampedPathRequest`; the node API (`announce`, `try_announce`,
+  `announce_queued`) defers an announce whose destination has no persisted
+  stamp and otherwise stays synchronous. Both emission flags remain false, so
+  the worker never starts in a default node;
 - **Deferred:** per-destination link request cost (`Destination.set_link_cost`)
   and responder enforcement against the announced cost rather than the global
   default. Dormant while `LR_STAMPS_ENFORCED` is false.
 
 No version bump exists upstream. The tip was promoted on 2026-10-28 as a
 same-version rgit advancement; `UPSTREAM.md` now records `5d38ce30` and the
-parity record carries the acceptance gates. The two deferred items above remain
-open and dormant behind their flags.
+parity record carries the acceptance gates. Of the two items that were deferred
+at promotion, the stamper queue has since been implemented and per-destination
+link cost remains open and dormant behind `LR_STAMPS_ENFORCED`.
 
 ## Acceptance Record
 
@@ -543,3 +554,21 @@ open and dormant behind their flags.
   untouched by this series. `scripts/check_upstream_drift.py --no-fetch`
   reports 20 commits ahead with the active audit present. Nothing was deployed
   to the VPS nodes.
+- `2026-10-28`: Stamper queue follow-up on `dev`, after the promoted tree was
+  merged into `master` (`master` tip `0060849`, the same tree as `0f06421`).
+  `rns-net/src/stamper.rs` ports `WorkerQueues`, `stamper_job`
+  and `pr_stamp_cache`; `TransportEngine` gained `stamp_prs()` /
+  `set_stamp_prs()`, `build_path_request()` and the `StampPathRequest` action;
+  the driver gained `send_path_request`, `enqueue_path_request_stamp` and the
+  `SendStampedPathRequest` event; `RnsNode` gained `announce_needs_stamp` and
+  the stamper hand-off in all three announce APIs, with the announce builder
+  moved to a free function the worker shares. Tests: seven stamper unit tests
+  (priority order, keyed replacement, per-queue capacity, bounded cache,
+  worker emission of a stamped path request with cache reuse, worker grind,
+  persistence and emission of a stamped announce, worker stop on drop),
+  `stamping_shared_instance_queues_stamps_for_unstamped_local_client_path_requests`
+  in `rns-core`, three driver tests (own request deferred then broadcast
+  stamped, `StampPathRequest` sent only on its interface, synchronous path
+  without `STAMP_PRS`) and
+  `announce_without_persisted_stamp_is_deferred_to_the_stamper` in `rns-net`.
+  No wire format or default behaviour changed; the flags stay false.

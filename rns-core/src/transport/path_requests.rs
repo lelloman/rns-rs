@@ -172,13 +172,26 @@ impl TransportEngine {
         // tag was recorded on acceptance so echoes are dropped. During the
         // transition, a stamping node marks an unstamped request relayed to
         // local clients with the 0xFF sentinel flags byte (upstream 7c1b6486).
-        // A request forwarded on behalf of a local client would instead be
-        // stamped by this node when STAMP_PRS is on; that stamper queue is
-        // deferred, so such requests are forwarded unstamped.
-        let ext_payload = ctx.ext_payload.or_else(|| {
-            (relay_to_local_clients && constants::STAMP_PRS).then(unstamped_relay_payload)
-        });
         let tag = &ctx.tag[..ctx.tag_len];
+        if !relay_to_local_clients && self.stamp_prs && ctx.ext_payload.is_none() {
+            // Transport.py:3826-3828 with STAMP_PRS: `request_path` finds no
+            // stamp for the client's tag and queues one stamper job per
+            // egress interface. The stamp is ground off the engine thread and
+            // the request goes out once it is ready.
+            return self
+                .interfaces
+                .values()
+                .filter(|info| info.out_capable && select(info))
+                .map(|info| TransportAction::StampPathRequest {
+                    destination_hash: ctx.destination_hash,
+                    tag: tag.to_vec(),
+                    interface: info.id,
+                })
+                .collect();
+        }
+        let ext_payload = ctx
+            .ext_payload
+            .or_else(|| (relay_to_local_clients && self.stamp_prs).then(unstamped_relay_payload));
 
         // Path requests always carry the transport identity since 1.6.0.
         let Some((raw, _)) = build_path_request_packet(
@@ -364,6 +377,39 @@ impl TransportEngine {
         self.path_requests.insert(destination_hash, now);
     }
 
+    /// Whether this node stamps the path requests it emits and the unstamped
+    /// ones it forwards for local clients (`Transport.STAMP_PRS`).
+    pub fn stamp_prs(&self) -> bool {
+        self.stamp_prs
+    }
+
+    /// Override the compile-time `STAMP_PRS` default.
+    #[doc(hidden)]
+    pub fn set_stamp_prs(&mut self, enabled: bool) {
+        self.stamp_prs = enabled;
+    }
+
+    /// Build a path request frame for `destination_hash` as this node emits
+    /// it: `destination_hash || transport_id || tag`, plus the optional stamp
+    /// extension payload.
+    ///
+    /// This is the frame `Transport.request_path` sends, with or without the
+    /// `ext_payload` a stamper job produced.
+    pub fn build_path_request(
+        &self,
+        destination_hash: &[u8; 16],
+        tag: &[u8],
+        ext_payload: Option<&[u8; constants::PR_EXT_PAYLOAD_LENGTH]>,
+    ) -> Option<Vec<u8>> {
+        build_path_request_packet(
+            destination_hash,
+            self.config.identity_hash.as_ref(),
+            tag,
+            ext_payload,
+        )
+        .map(|(raw, _)| raw)
+    }
+
     fn handle_known_path_request(
         &mut self,
         ctx: &AcceptedPathRequest,
@@ -509,7 +555,7 @@ impl TransportEngine {
         // generating a stamp for a request it did not originate.
         let ext_payload = ctx
             .ext_payload
-            .or_else(|| constants::STAMP_PRS.then(unstamped_relay_payload));
+            .or_else(|| self.stamp_prs.then(unstamped_relay_payload));
         let Some((path_request_raw, path_request_len)) = build_path_request_packet(
             &ctx.destination_hash,
             self.config.identity_hash.as_ref(),
