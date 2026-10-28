@@ -592,6 +592,25 @@ mod tests {
     }
 
     #[test]
+    fn unused_path_pool_order_is_by_expiry_not_insertion() {
+        let mut table = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+
+        // Insert newest-expiring first so insertion order and expiry order
+        // disagree; culling must still drop the earliest-expiring entry.
+        table.insert([0x41; 16], path_with_usage(100.0, 3000.0, 0.0));
+        table.insert([0x42; 16], path_with_usage(100.0, 1000.0, 0.0));
+        table.insert([0x43; 16], path_with_usage(100.0, 2000.0, 0.0));
+
+        let count = cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2);
+        assert_eq!(count, 1);
+        assert!(!table.contains_key(&[0x42; 16]));
+        assert!(table.contains_key(&[0x41; 16]));
+        assert!(table.contains_key(&[0x43; 16]));
+    }
+
+    #[test]
     fn test_cull_path_states() {
         let mut states = BTreeMap::new();
         let path_table = BTreeMap::new(); // empty path table
