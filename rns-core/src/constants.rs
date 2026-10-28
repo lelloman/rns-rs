@@ -46,7 +46,8 @@ pub const HASHLENGTH: usize = 256;
 /// Signature length in bits (Ed25519)
 pub const SIGLENGTH: usize = KEYSIZE;
 
-/// Name hash length in bits
+/// Name hash length in bits. Defined with the other identity sizes so the
+/// derived announce and destination layouts read in one block.
 pub const NAME_HASH_LENGTH: usize = 80;
 
 /// Derived key length in bytes
