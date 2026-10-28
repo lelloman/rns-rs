@@ -1102,6 +1102,8 @@ impl Driver {
                         name_hash,
                         ratchet,
                         app_data,
+                        stamp,
+                        stamp_value,
                         hops,
                         receiving_interface,
                         rx,
@@ -1229,6 +1231,7 @@ impl Driver {
                         snr: rx.snr,
                     };
                     self.upsert_known_destination(destination_hash, announced.clone());
+                    self.record_known_destination_stamp(destination_hash, stamp, stamp_value);
                     log::debug!(
                         "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
                         destination_hash[0],
@@ -1245,9 +1248,15 @@ impl Driver {
                     next_hop,
                     interface,
                 } => {
+                    let stamp_value = self.recall_stamp_value(&destination_hash);
+                    let value_str = match stamp_value {
+                        Some(0) | None => String::from(" (unstamped)"),
+                        Some(value) => format!(" (value {value})"),
+                    };
                     log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-                        "Destination {:02x?} is now {} hops away via {:02x?} on interface {}",
+                        "Destination {:02x?}{} is now {} hops away via {:02x?} on interface {}",
                         &destination_hash[..4],
+                        value_str,
                         hops,
                         &next_hop[..4],
                         interface.0,

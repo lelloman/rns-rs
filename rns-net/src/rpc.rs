@@ -2726,6 +2726,17 @@ fn known_destination_entry_to_pickle(entry: &KnownDestinationEntry) -> PickleVal
             PickleValue::String("retained".into()),
             PickleValue::Bool(entry.retained),
         ),
+        (
+            PickleValue::String("stamp".into()),
+            entry
+                .stamp
+                .map(|stamp| PickleValue::Bytes(stamp.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("stamp_value".into()),
+            PickleValue::Int(i64::from(entry.stamp_value)),
+        ),
     ])
 }
 
@@ -2784,6 +2795,20 @@ fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestina
         .and_then(|v| v.as_bytes())
         .map(|bytes| bytes.to_vec());
     let last_used_at = value.get("last_used_at").and_then(|v| v.as_float());
+    let stamp = value
+        .get("stamp")
+        .and_then(|v| v.as_bytes())
+        .filter(|bytes| bytes.len() == rns_core::constants::STAMP_LENGTH)
+        .map(|bytes| {
+            let mut stamp = [0u8; rns_core::constants::STAMP_LENGTH];
+            stamp.copy_from_slice(bytes);
+            stamp
+        });
+    let stamp_value = value
+        .get("stamp_value")
+        .and_then(|v| v.as_int())
+        .unwrap_or(0)
+        .clamp(0, i64::from(u32::MAX)) as u32;
 
     Ok(KnownDestinationEntry {
         dest_hash,
@@ -2798,6 +2823,8 @@ fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestina
         was_used: get_bool("was_used")?,
         last_used_at,
         retained: get_bool("retained")?,
+        stamp,
+        stamp_value,
     })
 }
 

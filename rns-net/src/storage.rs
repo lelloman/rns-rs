@@ -39,6 +39,10 @@ pub struct KnownDestination {
     pub was_used: bool,
     pub last_used_at: Option<f64>,
     pub retained: bool,
+    /// Last heard announce stamp, if any.
+    pub stamp: Option<Vec<u8>>,
+    /// Last heard announce stamp value, or `0` when absent.
+    pub stamp_value: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -361,6 +365,11 @@ pub fn save_known_destinations(
                     None => Value::Nil,
                 },
                 Value::Bool(dest.retained),
+                match &dest.stamp {
+                    Some(stamp) => Value::Bin(stamp.clone()),
+                    None => Value::Nil,
+                },
+                Value::UInt(u64::from(dest.stamp_value)),
             ]);
             (key, value)
         })
@@ -480,6 +489,11 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
             .get(8)
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
+        let stamp = arr
+            .get(9)
+            .and_then(|value| value.as_bin())
+            .map(|b| b.to_vec());
+        let stamp_value = arr.get(10).and_then(|value| value.as_uint()).unwrap_or(0) as u32;
 
         result.insert(
             dest_hash,
@@ -493,6 +507,8 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
                 was_used,
                 last_used_at,
                 retained,
+                stamp,
+                stamp_value,
             },
         );
     }
@@ -901,6 +917,8 @@ mod tests {
                 was_used: true,
                 last_used_at: Some(1700000010.0),
                 retained: true,
+                stamp: Some(vec![0xAA; 14]),
+                stamp_value: 21,
             },
         );
         dests.insert(
@@ -915,6 +933,8 @@ mod tests {
                 was_used: false,
                 last_used_at: None,
                 retained: false,
+                stamp: None,
+                stamp_value: 0,
             },
         );
 
@@ -933,12 +953,16 @@ mod tests {
         assert!(d1.was_used);
         assert_eq!(d1.last_used_at, Some(1700000010.0));
         assert!(d1.retained);
+        assert_eq!(d1.stamp.as_deref(), Some(&[0xAA; 14][..]));
+        assert_eq!(d1.stamp_value, 21);
 
         let d2 = &loaded[&[0x02u8; 16]];
         assert_eq!(d2.app_data, None);
         assert!(!d2.was_used);
         assert_eq!(d2.last_used_at, None);
         assert!(!d2.retained);
+        assert_eq!(d2.stamp, None);
+        assert_eq!(d2.stamp_value, 0);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -962,6 +986,8 @@ mod tests {
                 was_used: false,
                 last_used_at: None,
                 retained: false,
+                stamp: None,
+                stamp_value: 0,
             },
         );
 
