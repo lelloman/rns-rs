@@ -166,28 +166,38 @@ impl TransportEngine {
         ctx: &AcceptedPathRequest,
         select: impl Fn(&InterfaceInfo) -> bool,
     ) -> Vec<TransportAction> {
-        // Python uses a fresh random tag. The engine has no RNG here, so
-        // derive one from the request that was answered; it differs from the
-        // incoming tag and is recorded so echoes of it are dropped.
-        let mut seed = Vec::with_capacity(16 + 16 + 8 + 8);
-        seed.extend_from_slice(&ctx.destination_hash);
-        seed.extend_from_slice(&ctx.tag[..ctx.tag_len]);
-        seed.extend_from_slice(&ctx.interface_id.0.to_be_bytes());
-        seed.extend_from_slice(&ctx.now.to_bits().to_be_bytes());
-        let tag = hash::truncated_hash(&seed);
-        let mut unique_tag = [0u8; 32];
-        unique_tag[..16].copy_from_slice(&ctx.destination_hash);
-        unique_tag[16..].copy_from_slice(&tag);
-        self.insert_discovery_pr_tag(unique_tag);
+        // A stamped request is relayed with its original tag and extension:
+        // the stamp covers the tag, so deriving a new one would invalidate it.
+        let tag: Vec<u8> = if ctx.ext_payload.is_some() {
+            ctx.tag[..ctx.tag_len].to_vec()
+        } else {
+            // Python uses a fresh random tag. The engine has no RNG here, so
+            // derive one from the request that was answered; it differs from
+            // the incoming tag and is recorded so echoes of it are dropped.
+            let mut seed = Vec::with_capacity(16 + 16 + 8 + 8);
+            seed.extend_from_slice(&ctx.destination_hash);
+            seed.extend_from_slice(&ctx.tag[..ctx.tag_len]);
+            seed.extend_from_slice(&ctx.interface_id.0.to_be_bytes());
+            seed.extend_from_slice(&ctx.now.to_bits().to_be_bytes());
+            let derived = hash::truncated_hash(&seed);
+            let mut unique_tag = [0u8; 32];
+            unique_tag[..16].copy_from_slice(&ctx.destination_hash);
+            unique_tag[16..].copy_from_slice(&derived);
+            self.insert_discovery_pr_tag(unique_tag);
+            derived.to_vec()
+        };
 
         let transport_identity_hash = if self.config.transport_enabled {
             self.config.identity_hash.as_ref()
         } else {
             None
         };
-        let Some((raw, _)) =
-            build_path_request_packet(&ctx.destination_hash, transport_identity_hash, &tag)
-        else {
+        let Some((raw, _)) = build_path_request_packet(
+            &ctx.destination_hash,
+            transport_identity_hash,
+            &tag,
+            ctx.ext_payload.as_ref(),
+        ) else {
             return Vec::new();
         };
         self.interfaces
@@ -213,10 +223,24 @@ impl TransportEngine {
         let mut destination_hash = [0u8; 16];
         destination_hash.copy_from_slice(&data[..16]);
 
-        let tag_bytes = if data.len() > 32 {
-            Some(&data[32..])
-        } else if data.len() > 16 {
-            Some(&data[16..])
+        // Stamped 1.6.0+ requests carry a 16-byte extension payload after the
+        // destination hash, transport id and tag.
+        let (request_len, ext_payload) = if data.len() == constants::PATH_REQUEST_STAMPED_LENGTH {
+            let mut ext = [0u8; constants::EXT_PAYLOAD_LENGTH];
+            ext.copy_from_slice(&data[constants::PATH_REQUEST_LENGTH..]);
+            (constants::PATH_REQUEST_LENGTH, Some(ext))
+        } else {
+            if data.len() > constants::PATH_REQUEST_LENGTH {
+                return None;
+            }
+            (data.len(), None)
+        };
+        let request_data = &data[..request_len];
+
+        let tag_bytes = if request_data.len() > 32 {
+            Some(&request_data[32..])
+        } else if request_data.len() > 16 {
+            Some(&request_data[16..])
         } else {
             None
         };
@@ -229,6 +253,27 @@ impl TransportEngine {
         };
 
         let tag_len = tag_bytes.len().min(16);
+
+        if constants::STAMPS_ENABLED {
+            let valid = ext_payload.is_some_and(|ext| {
+                if ext[0] != constants::EXT_PAYLOAD_MARKER {
+                    return false;
+                }
+                let mut material = Vec::with_capacity(16 + tag_len);
+                material.extend_from_slice(&destination_hash);
+                material.extend_from_slice(&tag_bytes[..tag_len]);
+                let workblock = crate::stamp::stamp_workblock(&material, 0);
+                crate::stamp::stamp_valid(
+                    &ext[constants::EXT_HEADER_LENGTH..],
+                    constants::PATH_REQUEST_STAMP_COST,
+                    &workblock,
+                )
+            });
+            if constants::STAMPS_ENFORCED && !valid {
+                return None;
+            }
+        }
+
         let mut unique_tag = [0u8; 32];
         unique_tag[..16].copy_from_slice(&destination_hash);
         unique_tag[16..16 + tag_len].copy_from_slice(&tag_bytes[..tag_len]);
@@ -250,6 +295,7 @@ impl TransportEngine {
             now,
             destination_hash,
             already_in_flight,
+            ext_payload,
         })
     }
 
@@ -440,6 +486,7 @@ impl TransportEngine {
             &ctx.destination_hash,
             self.config.identity_hash.as_ref(),
             &ctx.tag[..ctx.tag_len],
+            ctx.ext_payload.as_ref(),
         ) else {
             return Vec::new();
         };
@@ -523,13 +570,21 @@ fn build_path_request_packet(
     destination_hash: &[u8; 16],
     transport_identity_hash: Option<&[u8; 16]>,
     tag: &[u8],
+    ext_payload: Option<&[u8; constants::EXT_PAYLOAD_LENGTH]>,
 ) -> Option<(Vec<u8>, usize)> {
-    let mut data = Vec::with_capacity(16 + transport_identity_hash.map_or(0, |_| 16) + tag.len());
+    let mut data = Vec::with_capacity(
+        16 + transport_identity_hash.map_or(0, |_| 16)
+            + tag.len()
+            + ext_payload.map_or(0, |_| constants::EXT_PAYLOAD_LENGTH),
+    );
     data.extend_from_slice(destination_hash);
     if let Some(identity_hash) = transport_identity_hash {
         data.extend_from_slice(identity_hash);
     }
     data.extend_from_slice(tag);
+    if let Some(ext) = ext_payload {
+        data.extend_from_slice(ext);
+    }
 
     let flags = crate::packet::PacketFlags {
         header_type: constants::HEADER_1,

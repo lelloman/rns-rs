@@ -65,6 +65,12 @@ pub const EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH;
 /// object boundary, so it cannot be confused with application data.
 pub const EXT_PAYLOAD_MARKER: u8 = 0xC1;
 
+/// Unstamped 1.6.0 path request length: destination hash, transport id, tag.
+pub const PATH_REQUEST_LENGTH: usize = 48;
+
+/// Stamped path request length: unstamped data plus the extension payload.
+pub const PATH_REQUEST_STAMPED_LENGTH: usize = PATH_REQUEST_LENGTH + EXT_PAYLOAD_LENGTH;
+
 /// Whether incoming announces are checked for stamps.
 pub const STAMPS_ENABLED: bool = true;
 
@@ -89,6 +95,12 @@ pub const PATH_REQUEST_STAMP_VALUE: u8 = 19;
 
 /// Whether destination announces emitted by this instance are stamped.
 pub const STAMP_DESTINATIONS: bool = false;
+
+/// Whether path requests emitted by this instance are stamped.
+pub const STAMP_PRS: bool = false;
+
+const _: () = assert!(DESTINATION_STAMP_COST <= STAMP_COST_CAP);
+const _: () = assert!(PATH_REQUEST_STAMP_COST <= STAMP_COST_CAP);
 
 // --- From Packet.py ---
 
@@ -705,7 +717,5 @@ mod tests {
         assert_eq!(DESTINATION_STAMP_VALUE, 23);
         assert_eq!(PATH_REQUEST_STAMP_COST, 19);
         assert_eq!(PATH_REQUEST_STAMP_VALUE, 19);
-        assert!(DESTINATION_STAMP_COST <= STAMP_COST_CAP);
-        assert!(PATH_REQUEST_STAMP_COST <= STAMP_COST_CAP);
     }
 }

@@ -198,6 +198,7 @@ pub struct AcceptedPathRequest {
     now: f64,
     destination_hash: [u8; 16],
     already_in_flight: bool,
+    ext_payload: Option<[u8; constants::EXT_PAYLOAD_LENGTH]>,
 }
 
 /// The core transport/routing engine.
