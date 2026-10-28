@@ -1,11 +1,11 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.6.0 rgit `5d38ce30` Upstream Audit
 
 ## Scope and Baseline
 
 - audit date: `2026-10-28`
 - previous accepted version: `1.6.0`
 - previous normative commit: `9a01a20ce66c4146dd8f8d31f18c19fe7600739d`
-- target version: pending (upstream `RNS.__version__` is still `1.6.0`)
+- target version: `1.6.0` (unchanged from the accepted baseline; same-version rgit advancement)
 - target tag or ref: `rgit:master` tip `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
   (extended on 2026-10-28 from the earlier tip `ca6451a02aead88734e47193dc228055d42c9854`)
 - target normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
@@ -25,8 +25,12 @@ afternoon refresh (2026-10-28T14:41Z) rgit had advanced to `5d38ce30` with five
 further commits, inventoried as 16 to 20 below. The new commits implement announcement, path-request and
 link-request stamps and landed on `master`; the `dev_pr_stamps` name only
 survives in the subject of the historical merge commit `c68066ed`. No new tag
-or version bump identifies a promotion target yet, so a versioned parity record
-is not created.
+or version bump exists, so the tip is accepted as a same-version canonical
+`rgit/master` advancement with the qualified `-rgit` record filenames; the
+acceptance authority is
+[reticulum-1.6.0-rgit-parity.md](reticulum-1.6.0-rgit-parity.md). This file
+was the active `reticulum-next-audit.md` until promotion and was renamed
+without rewriting its point-in-time findings.
 
 ## Audit Vocabulary
 
@@ -479,8 +483,10 @@ versioned parity record can be created:
   and responder enforcement against the announced cost rather than the global
   default. Dormant while `LR_STAMPS_ENFORCED` is false.
 
-No version bump exists upstream, so `UPSTREAM.md` remains at `9a01a20c` and
-this file stays the active audit.
+No version bump exists upstream. The tip was promoted on 2026-10-28 as a
+same-version rgit advancement; `UPSTREAM.md` now records `5d38ce30` and the
+parity record carries the acceptance gates. The two deferred items above remain
+open and dormant behind their flags.
 
 ## Acceptance Record
 
