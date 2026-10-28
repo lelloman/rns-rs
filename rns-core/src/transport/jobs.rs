@@ -152,6 +152,9 @@ pub fn cull_link_table(
 /// Cull expired entries from the path table.
 ///
 /// Culls individual paths within each PathSet, then removes empty PathSets.
+/// When the never-used pool exceeds its target, entries are sorted by expiry
+/// ascending and the earliest-expiring ones are removed first. Removing the
+/// newest entries instead would keep stale paths and discard fresh ones.
 pub fn cull_path_table(
     path_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
