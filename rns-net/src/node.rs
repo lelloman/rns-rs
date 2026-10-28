@@ -907,6 +907,12 @@ pub struct RnsNode {
     known_destinations_path: Option<std::path::PathBuf>,
     known_destinations_store: Option<Arc<crate::storage_sqlite::KnownDestinationsStore>>,
     stamp_store: Option<crate::stamps::DestinationStampStore>,
+    /// `Transport.STAMP_DESTINATIONS`: whether announces from this node carry
+    /// a destination stamp. Defaults to the compile-time constant.
+    stamp_destinations: bool,
+    stamp_targets: crate::stamper::StampTargets,
+    /// Shared with the driver; grinds stamps off the calling thread.
+    stamper: Option<Arc<crate::stamper::Stamper>>,
     transport_state_dir: Option<std::path::PathBuf>,
     ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
     ratchet_expiry: Duration,
@@ -1473,7 +1479,7 @@ impl RnsNode {
 
         node.known_destinations_path = Some(known_destinations_path.clone());
         node.known_destinations_store = known_destinations_store;
-        node.stamp_store = Some(crate::stamps::DestinationStampStore::new(&paths.storage));
+        node.set_stamp_store(crate::stamps::DestinationStampStore::new(&paths.storage));
         for (dest_hash, known) in known_destinations {
             let _ = node.query(QueryRequest::RestoreKnownDestination(
                 crate::event::KnownDestinationEntry {
@@ -1602,6 +1608,8 @@ impl RnsNode {
         );
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        let stamper = Arc::new(crate::stamper::Stamper::new(tx.clone(), None));
+        driver.set_stamper(Arc::clone(&stamper));
         driver.underlay_mark = config.underlay_mark;
         driver
             .link_manager
@@ -2510,6 +2518,9 @@ impl RnsNode {
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,
+            stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
+            stamp_targets: crate::stamper::StampTargets::default(),
+            stamper: Some(stamper),
             transport_state_dir,
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
@@ -3180,6 +3191,15 @@ impl RnsNode {
         app_data: Option<&[u8]>,
     ) -> Result<(), crate::TransmissionError> {
         let permit = self.tx.link_send_pool().acquire().await?;
+        if self.announce_needs_stamp(dest, identity) {
+            // Destination.announce with STAMP_DESTINATIONS and no stamp yet:
+            // the stamper grinds it and submits the announce; the receipt
+            // resolves when that announce has been written.
+            let (completion, receipt) = crate::link_send::Completion::new(permit);
+            self.enqueue_stamped_announce(dest, identity, app_data, Some(completion))
+                .map_err(|_| crate::TransmissionError::QueueFull)?;
+            return receipt.await;
+        }
         let (packet, replay) = self
             .build_announce(dest, identity, app_data)
             .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
@@ -3204,6 +3224,16 @@ impl RnsNode {
         app_data: Option<&[u8]>,
     ) -> Result<crate::TransmissionReceipt, crate::TransmissionError> {
         let permit = self.tx.link_send_pool().try_acquire()?;
+        if self.announce_needs_stamp(dest, identity) {
+            // Deferred to the stamper; the receipt resolves once the stamped
+            // announce has been written, or with `Interrupted` if a newer
+            // announce for the same destination replaces this one in the
+            // queue.
+            let (completion, receipt) = crate::link_send::Completion::new(permit);
+            self.enqueue_stamped_announce(dest, identity, app_data, Some(completion))
+                .map_err(|_| crate::TransmissionError::QueueFull)?;
+            return Ok(receipt);
+        }
         let (packet, replay) = self
             .build_announce(dest, identity, app_data)
             .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
@@ -3295,6 +3325,13 @@ impl RnsNode {
         app_data: Option<&[u8]>,
     ) -> Result<(), SendError> {
         self.reject_new_work_if_draining()?;
+        if self.announce_needs_stamp(dest, identity) {
+            // Destination.announce with STAMP_DESTINATIONS and no stamp yet
+            // queues the announce for background stamping and emission.
+            return self
+                .enqueue_stamped_announce(dest, identity, app_data, None)
+                .map_err(|_| SendError);
+        }
         let (packet, replay) = self.build_announce(dest, identity, app_data)?;
         if let Some(replay) = replay {
             self.tx
@@ -3321,125 +3358,99 @@ impl RnsNode {
         ),
         SendError,
     > {
+        build_announce_packet(
+            &self.tx,
+            self.stamp_store.as_ref(),
+            self.stamp_destinations,
+            self.stamp_targets,
+            dest,
+            identity,
+            app_data,
+        )
+    }
+
+    /// Whether `Destination.announce` would hand this announce to the
+    /// stamper: destination stamping is on and no persisted stamp meets the
+    /// required cost.
+    fn announce_needs_stamp(
+        &self,
+        dest: &crate::destination::Destination,
+        identity: &Identity,
+    ) -> bool {
+        if !self.stamp_destinations || self.stamper.is_none() {
+            return false;
+        }
+        let (Some(store), Some(public_key)) =
+            (self.stamp_store.as_ref(), identity.get_public_key())
+        else {
+            return false;
+        };
         let name_hash = rns_core::destination::name_hash(
             &dest.app_name,
             &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         );
+        let material =
+            crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
+        store
+            .load(&dest.hash.0, &material, self.stamp_targets.destination_cost)
+            .is_none()
+    }
 
-        let mut random_hash = [0u8; 10];
-        OsRng.fill_bytes(&mut random_hash[..5]);
-        // Bytes [5:10] must be the emission timestamp (seconds since epoch,
-        // big-endian, truncated to 5 bytes) so that path table dedup can
-        // compare announce freshness.  Matches Python: int(time.time()).to_bytes(5, "big")
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
+    /// `Transport.enqueue_stamped_announce`: the worker grinds the stamp and
+    /// emits the announce; a full queue drops it.
+    fn enqueue_stamped_announce(
+        &self,
+        dest: &crate::destination::Destination,
+        identity: &Identity,
+        app_data: Option<&[u8]>,
+        completion: Option<crate::link_send::Completion>,
+    ) -> Result<(), crate::stamper::QueueFull> {
+        let stamper = self.stamper.as_ref().ok_or(crate::stamper::QueueFull)?;
+        let identity_prv_key = identity
+            .get_private_key()
+            .ok_or(crate::stamper::QueueFull)?;
+        let result = stamper.enqueue_announce(crate::stamper::AnnounceStampJob {
+            dest: dest.clone(),
+            identity_prv_key,
+            app_data: app_data.map(|data| data.to_vec()),
+            completion,
+        });
+        if result.is_err() {
+            log::debug!(
+                "Stamp queue full, dropping announce for {:02x?}",
+                &dest.hash.0[..4]
+            );
+        }
+        result
+    }
 
-        let owner = self
-            .tx
-            .local_ratchets()
-            .lock()
-            .unwrap()
-            .get(&dest.hash.0)
-            .cloned();
-        let ratchet = if let Some(owner) = owner {
-            if dest.direction != rns_core::types::Direction::In
-                || owner.identity_hash() != *identity.hash()
-            {
-                return Err(SendError);
-            }
-            Some(owner.public_for_announce(now_secs).map_err(|error| {
-                log::error!("local ratchet announcement failed: {error}");
-                SendError
-            })?)
-        } else {
-            None
-        };
-        let wire_app_data: Option<Vec<u8>> = if rns_core::constants::STAMP_DESTINATIONS {
-            let public_key = identity.get_public_key().ok_or(SendError)?;
-            let material =
-                crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
-            let store = self.stamp_store.as_ref().ok_or(SendError)?;
-            let (stamp, _value) = match store.load(
-                &dest.hash.0,
-                &material,
-                rns_core::constants::DESTINATION_STAMP_COST,
-            ) {
-                Some(entry) => entry,
-                None => {
-                    let (stamp, value) = crate::stamps::generate_stamp(
-                        &material,
-                        rns_core::constants::DESTINATION_STAMP_VALUE,
-                        rns_core::constants::STAMP_LENGTH,
-                        0,
-                    )
-                    .ok_or(SendError)?;
-                    if let Err(error) = store.store(&dest.hash.0, &stamp, value) {
-                        log::warn!("failed to persist destination stamp: {error}");
-                    }
-                    (stamp, value)
-                }
-            };
-            let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
-            wire.extend_from_slice(&crate::stamps::announce_ext_payload(
-                &stamp,
-                0,
-                rns_core::constants::LINK_REQUEST_STAMP_COST,
-            ));
-            Some(wire)
-        } else {
-            app_data.map(|data| data.to_vec())
-        };
+    /// Use `store` for destination stamps, here and in the stamper.
+    pub(crate) fn set_stamp_store(&mut self, store: crate::stamps::DestinationStampStore) {
+        if let Some(stamper) = self.stamper.as_ref() {
+            stamper.set_stamp_store(Some(store.clone()));
+        }
+        self.stamp_store = Some(store);
+    }
 
-        let (announce_data, has_ratchet) = rns_core::announce::AnnounceData::pack(
-            identity,
-            &dest.hash.0,
-            &name_hash,
-            &random_hash,
-            ratchet.as_ref(),
-            wire_app_data.as_deref(),
-        )
-        .map_err(|_| SendError)?;
+    /// Override `STAMP_DESTINATIONS` and the stamp targets for this node and
+    /// its stamper.
+    #[doc(hidden)]
+    pub fn set_destination_stamping(
+        &mut self,
+        enabled: bool,
+        targets: crate::stamper::StampTargets,
+    ) {
+        self.stamp_destinations = enabled;
+        self.stamp_targets = targets;
+        if let Some(stamper) = self.stamper.as_ref() {
+            stamper.set_targets(targets);
+        }
+    }
 
-        let context_flag = if has_ratchet {
-            rns_core::constants::FLAG_SET
-        } else {
-            rns_core::constants::FLAG_UNSET
-        };
-
-        let flags = rns_core::packet::PacketFlags {
-            header_type: rns_core::constants::HEADER_1,
-            context_flag,
-            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
-            destination_type: rns_core::constants::DESTINATION_SINGLE,
-            packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
-        };
-
-        let packet = rns_core::packet::RawPacket::pack(
-            flags,
-            0,
-            &dest.hash.0,
-            None,
-            rns_core::constants::CONTEXT_NONE,
-            &announce_data,
-        )
-        .map_err(|_| SendError)?;
-
-        let replay = if dest.dest_type == rns_core::types::DestinationType::Single {
-            identity.get_private_key().map(|identity_prv_key| {
-                Box::new(crate::common::event::AnnounceReplay {
-                    dest_hash: dest.hash.0,
-                    name_hash,
-                    identity_prv_key,
-                    app_data: wire_app_data,
-                })
-            })
-        } else {
-            None
-        };
-        Ok((packet, replay))
+    /// The stamper shared with the driver.
+    #[doc(hidden)]
+    pub fn stamper(&self) -> Option<&Arc<crate::stamper::Stamper>> {
+        self.stamper.as_ref()
     }
 
     /// Queue an encrypted (SINGLE) or plaintext (PLAIN) packet to a destination.
@@ -3941,6 +3952,9 @@ impl RnsNode {
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,
+            stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
+            stamp_targets: crate::stamper::StampTargets::default(),
+            stamper: None,
             transport_state_dir: None,
             ratchet_store: None,
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
@@ -4025,6 +4039,187 @@ impl RnsNode {
             let _ = handle.join();
         }
     }
+}
+
+/// Make sure a destination stamp meeting `targets.destination_cost` is
+/// persisted for `dest`, grinding one at `targets.destination_value` when
+/// none is. This is the stamp half of `Destination._announce`, run by the
+/// stamper off the calling thread.
+pub(crate) fn ensure_destination_stamp(
+    store: &crate::stamps::DestinationStampStore,
+    targets: crate::stamper::StampTargets,
+    dest: &crate::destination::Destination,
+    identity: &Identity,
+) -> Result<(), String> {
+    let public_key = identity
+        .get_public_key()
+        .ok_or_else(|| "identity has no public key".to_string())?;
+    let name_hash = rns_core::destination::name_hash(
+        &dest.app_name,
+        &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    );
+    let material = crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
+    if store
+        .load(&dest.hash.0, &material, targets.destination_cost)
+        .is_some()
+    {
+        return Ok(());
+    }
+    let started = std::time::Instant::now();
+    let (stamp, value) = crate::stamps::generate_stamp(
+        &material,
+        targets.destination_value,
+        rns_core::constants::STAMP_LENGTH,
+        0,
+    )
+    .ok_or_else(|| "stamp cost is above the protocol cap".to_string())?;
+    if let Err(error) = store.store(&dest.hash.0, &stamp, value) {
+        log::warn!("failed to persist destination stamp: {error}");
+    }
+    log::debug!(
+        "Generated and persisted stamp with value {value} for {:02x?} in {:?}",
+        &dest.hash.0[..4],
+        started.elapsed()
+    );
+    Ok(())
+}
+
+/// Build an announce packet for `dest`, signed by `identity`.
+///
+/// With `stamp_destinations` the app data is extended with the destination
+/// stamp from `stamp_store`, grinding one inline when none is persisted, as
+/// `Destination._announce` does. The node API checks for a missing stamp
+/// first and defers to the stamper, so the inline grind only runs when a
+/// stamp disappeared between that check and this call.
+pub(crate) fn build_announce_packet(
+    tx: &EventSender,
+    stamp_store: Option<&crate::stamps::DestinationStampStore>,
+    stamp_destinations: bool,
+    targets: crate::stamper::StampTargets,
+    dest: &crate::destination::Destination,
+    identity: &Identity,
+    app_data: Option<&[u8]>,
+) -> Result<
+    (
+        rns_core::packet::RawPacket,
+        Option<Box<crate::common::event::AnnounceReplay>>,
+    ),
+    SendError,
+> {
+    let name_hash = rns_core::destination::name_hash(
+        &dest.app_name,
+        &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    );
+
+    let mut random_hash = [0u8; 10];
+    OsRng.fill_bytes(&mut random_hash[..5]);
+    // Bytes [5:10] must be the emission timestamp (seconds since epoch,
+    // big-endian, truncated to 5 bytes) so that path table dedup can
+    // compare announce freshness.  Matches Python: int(time.time()).to_bytes(5, "big")
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
+
+    let owner = tx
+        .local_ratchets()
+        .lock()
+        .unwrap()
+        .get(&dest.hash.0)
+        .cloned();
+    let ratchet = if let Some(owner) = owner {
+        if dest.direction != rns_core::types::Direction::In
+            || owner.identity_hash() != *identity.hash()
+        {
+            return Err(SendError);
+        }
+        Some(owner.public_for_announce(now_secs).map_err(|error| {
+            log::error!("local ratchet announcement failed: {error}");
+            SendError
+        })?)
+    } else {
+        None
+    };
+    let wire_app_data: Option<Vec<u8>> = if stamp_destinations {
+        let public_key = identity.get_public_key().ok_or(SendError)?;
+        let material =
+            crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
+        let store = stamp_store.ok_or(SendError)?;
+        let (stamp, _value) = match store.load(&dest.hash.0, &material, targets.destination_cost) {
+            Some(entry) => entry,
+            None => {
+                let (stamp, value) = crate::stamps::generate_stamp(
+                    &material,
+                    targets.destination_value,
+                    rns_core::constants::STAMP_LENGTH,
+                    0,
+                )
+                .ok_or(SendError)?;
+                if let Err(error) = store.store(&dest.hash.0, &stamp, value) {
+                    log::warn!("failed to persist destination stamp: {error}");
+                }
+                (stamp, value)
+            }
+        };
+        let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
+        wire.extend_from_slice(&crate::stamps::announce_ext_payload(
+            &stamp,
+            0,
+            rns_core::constants::LINK_REQUEST_STAMP_COST,
+        ));
+        Some(wire)
+    } else {
+        app_data.map(|data| data.to_vec())
+    };
+
+    let (announce_data, has_ratchet) = rns_core::announce::AnnounceData::pack(
+        identity,
+        &dest.hash.0,
+        &name_hash,
+        &random_hash,
+        ratchet.as_ref(),
+        wire_app_data.as_deref(),
+    )
+    .map_err(|_| SendError)?;
+
+    let context_flag = if has_ratchet {
+        rns_core::constants::FLAG_SET
+    } else {
+        rns_core::constants::FLAG_UNSET
+    };
+
+    let flags = rns_core::packet::PacketFlags {
+        header_type: rns_core::constants::HEADER_1,
+        context_flag,
+        transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+        destination_type: rns_core::constants::DESTINATION_SINGLE,
+        packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
+    };
+
+    let packet = rns_core::packet::RawPacket::pack(
+        flags,
+        0,
+        &dest.hash.0,
+        None,
+        rns_core::constants::CONTEXT_NONE,
+        &announce_data,
+    )
+    .map_err(|_| SendError)?;
+
+    let replay = if dest.dest_type == rns_core::types::DestinationType::Single {
+        identity.get_private_key().map(|identity_prv_key| {
+            Box::new(crate::common::event::AnnounceReplay {
+                dest_hash: dest.hash.0,
+                name_hash,
+                identity_prv_key,
+                app_data: wire_app_data,
+            })
+        })
+    } else {
+        None
+    };
+    Ok((packet, replay))
 }
 
 impl Drop for RnsNode {
@@ -4496,6 +4691,9 @@ mod tests {
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,
+            stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
+            stamp_targets: crate::stamper::StampTargets::default(),
+            stamper: None,
             transport_state_dir: None,
             ratchet_store: Some(ratchet_store),
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
@@ -5918,6 +6116,92 @@ enable_transport = False
     // =========================================================================
     // Phase 9c: Announce + Discovery node-level tests
     // =========================================================================
+
+    #[test]
+    fn announce_without_persisted_stamp_is_deferred_to_the_stamper() {
+        let dir = tempdir().unwrap();
+        let store = crate::stamps::DestinationStampStore::new(dir.path());
+        let targets = crate::stamper::StampTargets {
+            destination_cost: 6,
+            destination_value: 6,
+            path_request_value: 6,
+        };
+        let mut node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
+        node.set_stamp_store(store.clone());
+        node.set_destination_stamping(true, targets);
+        let stamper = Arc::clone(node.stamper().expect("started nodes share a stamper"));
+        assert_eq!(
+            stamper.targets(),
+            targets,
+            "the stamper grinds at the node's targets"
+        );
+
+        let identity = Identity::from_private_key(&[0x51; 64]);
+        let dest = crate::Destination::single_in(
+            "stamper",
+            &["node"],
+            rns_core::types::IdentityHash(*identity.hash()),
+        );
+        node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())
+            .unwrap();
+        assert!(node.announce_needs_stamp(&dest, &identity));
+
+        // Destination.announce with STAMP_DESTINATIONS and no stamp: the call
+        // returns at once and the worker grinds, persists and emits.
+        let started = std::time::Instant::now();
+        node.announce_queued(&dest, &identity, Some(b"first"))
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let name_hash = rns_core::destination::name_hash("stamper", &["node"]);
+        let material = crate::stamps::destination_stamp_material(
+            &dest.hash.0,
+            &identity.get_public_key().unwrap(),
+            &name_hash,
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while store
+            .load(&dest.hash.0, &material, targets.destination_cost)
+            .is_none()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "stamp was never persisted"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        // From now on announces are synchronous: the persisted stamp is reused.
+        assert!(!node.announce_needs_stamp(&dest, &identity));
+        node.announce_queued(&dest, &identity, Some(b"second"))
+            .unwrap();
+        assert_eq!(stamper.queued(), 0);
+        let receipt = node
+            .try_announce(&dest, &identity, None)
+            .expect("synchronous stamped announce is admitted");
+        // No interfaces: the receipt settles either way, it must not hang.
+        let _ = futures::executor::block_on(receipt);
+
+        // A confirmed-transmission announce for a destination still without a
+        // stamp also defers, and its receipt settles once the worker emitted.
+        let other_identity = Identity::from_private_key(&[0x52; 64]);
+        let other = crate::Destination::single_in(
+            "stamper",
+            &["node", "other"],
+            rns_core::types::IdentityHash(*other_identity.hash()),
+        );
+        node.register_destination(other.hash.0, other.dest_type.to_wire_constant())
+            .unwrap();
+        let started = std::time::Instant::now();
+        let receipt = node
+            .try_announce(&other, &other_identity, Some(b"deferred"))
+            .expect("deferred announce is admitted");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let _ = futures::executor::block_on(receipt);
+        assert!(!node.announce_needs_stamp(&other, &other_identity));
+
+        node.shutdown();
+    }
 
     #[test]
     fn announce_builds_valid_packet() {

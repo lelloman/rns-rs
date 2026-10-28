@@ -772,6 +772,9 @@ pub struct Driver {
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
     pub(crate) event_tx: crate::event::EventSender,
+    /// Grinds own path request and announce stamps off the driver thread.
+    /// Replaced by the node's shared instance at startup.
+    pub(crate) stamper: Arc<crate::stamper::Stamper>,
     /// Maximum queued outbound frames per interface writer worker.
     pub(crate) interface_writer_queue_capacity: usize,
     /// Linux mark inherited by dynamically created IP underlay sockets.
@@ -991,6 +994,7 @@ impl Driver {
                 rns_core::holepunch::ProbeProtocol::Rnsp,
                 None,
             ),
+            stamper: Arc::new(crate::stamper::Stamper::new(tx.clone(), None)),
             event_tx: tx,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             underlay_mark: None,
@@ -1347,6 +1351,12 @@ impl Driver {
 
     pub(crate) fn set_tick_interval_handle(&mut self, tick_interval_ms: Arc<AtomicU64>) {
         self.tick_interval_ms = tick_interval_ms;
+    }
+
+    /// Share the node's stamper, so announces and path requests wait in the
+    /// same priority queues as upstream's single stamper thread.
+    pub(crate) fn set_stamper(&mut self, stamper: Arc<crate::stamper::Stamper>) {
+        self.stamper = stamper;
     }
 
     /// The flag the node handle reads to refuse new work once draining starts.

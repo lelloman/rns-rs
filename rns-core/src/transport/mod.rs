@@ -228,6 +228,10 @@ pub struct TransportEngine {
     discovery_pr_tags: VecDeque<[u8; 32]>,
     discovery_pr_tag_set: BTreeSet<[u8; 32]>,
     path_requests: BTreeMap<[u8; 16], f64>,
+    /// Whether path requests emitted or forwarded for local clients by this
+    /// node are stamped (`Transport.STAMP_PRS`). Defaults to the compile-time
+    /// constant; settable so the stamping path can be exercised.
+    stamp_prs: bool,
     discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
     discovery_path_request_deadlines: BTreeMap<[u8; 16], f64>,
     /// Path requests for destinations behind a local client, by destination:

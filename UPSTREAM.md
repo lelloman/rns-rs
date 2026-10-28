@@ -25,8 +25,8 @@ culling, and path-request stamp diagnostics. Natively every stamp emission flag
 stays off and link request stamps are not enforced, matching the upstream
 defaults; inbound stamps are validated, announced link costs are recorded, and
 stamped link request keys are ground off the driver thread with the upstream
-timeout. The asynchronous stamper queue and per-destination link cost are
-deferred behind those flags. The target `RNS` tree is
+timeout. The asynchronous stamper queue was implemented in a follow-up after
+promotion; per-destination link cost remains deferred behind its flag. The target `RNS` tree is
 `8bd88056db225a1a6bd7b0e76a1b99f3e0c667df` and the root tree is
 `dd5fb64d2e3778f7f20f70db461148885ee20082`. The GitHub mirror remains at
 `e40191b3`, behind the canonical rgit tip, which is allowed. Acceptance

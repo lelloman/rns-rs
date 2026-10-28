@@ -105,11 +105,23 @@ With these defaults a node validates inbound announce and path request stamps,
 records announced link costs, and grinds a stamped link request key when a peer
 asks for one, but emits no stamped announces or path requests and refuses
 nothing for lack of a stamp. Stamped link request keys are ground on a worker
-thread so the driver stays responsive. Turning the emission flags on is not
-supported until the asynchronous stamper queue is implemented; see the active
-audit under `docs/upstream-parity/`. The only runtime stamp setting is the
+thread so the driver stays responsive. The only runtime stamp setting is the
 per-interface `discovery_stamp_value` for discovery announces, described in
 [Interface Discovery](interface-discovery.md#advertised-locations).
+
+Stamps for emitted announces and path requests follow the upstream stamper
+queue. A single lazily started worker thread drains two bounded queues, path
+requests before announces, each holding at most 32 jobs; a newer job for the
+same destination (and interface, for path requests) replaces the queued one,
+and a full queue drops the job with a debug log. With `STAMP_DESTINATIONS` an
+announce for a destination without a persisted stamp returns at once and the
+worker grinds the stamp, persists it under `storage/stamps/`, and emits the
+announce; later announces for that destination reuse the stored stamp
+synchronously. With `STAMP_PRS` the node's own path requests, and unstamped
+requests forwarded on behalf of local clients, wait for the worker; generated
+path request stamps are cached by destination and tag (256 entries) so one
+grind serves a request relayed on several interfaces. None of this runs while
+both flags are off, which is the upstream default.
 
 ## Ingress control
 

@@ -1229,6 +1229,19 @@ impl Driver {
                     }
                     self.handle_create_link(dest_hash, dest_sig_pub_bytes, response_tx);
                 }
+                Event::SendStampedPathRequest(request) => {
+                    if self.is_draining() {
+                        self.reject_new_work("send stamped path request");
+                        continue;
+                    }
+                    let crate::stamper::StampedPathRequest {
+                        destination_hash,
+                        tag,
+                        ext_payload,
+                        interface,
+                    } = *request;
+                    self.send_path_request(destination_hash, &tag, Some(&ext_payload), interface);
+                }
                 Event::CompleteStampedLink(keys) => {
                     let crate::common::event::StampedLinkKeys {
                         dest_hash,
@@ -2213,71 +2226,92 @@ impl Driver {
         }
     }
 
-    /// Build and send a path request packet for a destination.
+    /// Emit a path request for a destination, as `Transport.request_path`
+    /// without an interface.
+    ///
+    /// The request is `dest_hash || transport_id || random_tag`; since
+    /// Reticulum 1.6.0 (upstream 156c7323) it always carries the transport
+    /// identity. With `STAMP_PRS` the request also needs a stamp over the
+    /// destination hash and tag: a cached one is appended at once, otherwise
+    /// the request is recorded as pending and handed to the stamper, which
+    /// posts it back as `Event::SendStampedPathRequest`.
     pub(crate) fn handle_request_path(&mut self, dest_hash: [u8; 16]) {
-        // Build path request data: dest_hash(16) || transport_id(16) || random_tag(16).
-        // Since Reticulum 1.6.0 (upstream 156c7323) path requests always carry
-        // the transport identity, whether or not transport is enabled.
-        let mut data = Vec::with_capacity(48);
-        data.extend_from_slice(&dest_hash);
-        if let Some(id_hash) = self.engine.identity_hash() {
-            data.extend_from_slice(id_hash);
-        }
-
-        // Random tag (16 bytes)
         let mut tag = [0u8; 16];
         self.rng.fill_bytes(&mut tag);
-        data.extend_from_slice(&tag);
 
-        if rns_core::constants::STAMP_PRS {
-            let mut material = Vec::with_capacity(32);
-            material.extend_from_slice(&dest_hash);
-            material.extend_from_slice(&tag);
-            match crate::stamps::generate_stamp(
-                &material,
-                rns_core::constants::PATH_REQUEST_STAMP_VALUE,
-                rns_core::constants::STAMP_LENGTH,
-                0,
-            ) {
-                Some((stamp, _)) => {
-                    data.extend_from_slice(&crate::stamps::path_request_ext_payload(&stamp, 0))
+        if self.engine.stamp_prs() {
+            match self.stamper.cached_path_request_stamp(&dest_hash, &tag) {
+                Some(stamp) => {
+                    let payload = crate::stamps::path_request_ext_payload(&stamp, 0);
+                    let mut ext_payload = [0u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH];
+                    ext_payload.copy_from_slice(&payload);
+                    self.send_path_request(dest_hash, &tag, Some(&ext_payload), None);
                 }
                 None => {
-                    log::warn!(
-                        "could not generate path request stamp for {:02x?}; request cancelled",
-                        &dest_hash[..4]
-                    );
-                    return;
+                    self.engine
+                        .record_outbound_path_request(dest_hash, time::now());
+                    self.enqueue_path_request_stamp(dest_hash, tag.to_vec(), None);
                 }
             }
+            return;
         }
+        self.send_path_request(dest_hash, &tag, None, None);
+    }
 
-        // Build as BROADCAST DATA PLAIN packet to rnstransport.path.request
-        let flags = rns_core::packet::PacketFlags {
-            header_type: rns_core::constants::HEADER_1,
-            context_flag: rns_core::constants::FLAG_UNSET,
-            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
-            destination_type: rns_core::constants::DESTINATION_PLAIN,
-            packet_type: rns_core::constants::PACKET_TYPE_DATA,
+    /// `Transport.enqueue_stamped_pr`: a full queue drops the request.
+    pub(crate) fn enqueue_path_request_stamp(
+        &mut self,
+        dest_hash: [u8; 16],
+        tag: Vec<u8>,
+        interface: Option<InterfaceId>,
+    ) {
+        let job = crate::stamper::PathRequestStampJob {
+            destination_hash: dest_hash,
+            tag,
+            interface,
         };
-
-        if let Ok(packet) = RawPacket::pack(
-            flags,
-            0,
-            &self.path_request_dest,
-            None,
-            rns_core::constants::CONTEXT_NONE,
-            &data,
-        ) {
-            let now = time::now();
-            self.engine.record_outbound_path_request(dest_hash, now);
-            let actions = self.engine.handle_outbound(
-                &packet,
-                rns_core::constants::DESTINATION_PLAIN,
-                None,
-                now,
+        if self.stamper.enqueue_path_request(job).is_err() {
+            log::debug!(
+                "Stamp queue full, dropping path request for {:02x?}",
+                &dest_hash[..4]
             );
-            self.dispatch_all(actions);
+        }
+    }
+
+    /// Build and send a path request frame, broadcast when `interface` is
+    /// `None` or on that interface alone when forwarding a local client's
+    /// request.
+    pub(crate) fn send_path_request(
+        &mut self,
+        dest_hash: [u8; 16],
+        tag: &[u8],
+        ext_payload: Option<&[u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH]>,
+        interface: Option<InterfaceId>,
+    ) {
+        let Some(raw) = self.engine.build_path_request(&dest_hash, tag, ext_payload) else {
+            return;
+        };
+        let now = time::now();
+        match interface {
+            Some(interface) => {
+                self.dispatch_all(vec![TransportAction::SendOnInterface {
+                    interface,
+                    raw: raw.into(),
+                }]);
+            }
+            None => {
+                let Ok(packet) = RawPacket::unpack(&raw) else {
+                    return;
+                };
+                self.engine.record_outbound_path_request(dest_hash, now);
+                let actions = self.engine.handle_outbound(
+                    &packet,
+                    rns_core::constants::DESTINATION_PLAIN,
+                    None,
+                    now,
+                );
+                self.dispatch_all(actions);
+            }
         }
     }
 

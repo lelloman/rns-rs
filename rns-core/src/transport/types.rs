@@ -295,6 +295,21 @@ pub enum TransportAction {
         tag: Vec<u8>,
         interface: InterfaceId,
     },
+    /// A path request must be stamped by this node before it is sent on
+    /// `interface`.
+    ///
+    /// Produced only while path request stamping is on, for a request from a
+    /// local client that carried no stamp. Python `Transport.request_path`
+    /// hands such a request to the stamper queue; the caller grinds the stamp
+    /// off the engine thread and then sends `destination_hash || transport_id
+    /// || tag || marker | flags | stamp` on `interface`. One action is produced
+    /// per egress interface, matching upstream's one queue entry per
+    /// `destination_hash + interface` key. `tag` holds 1..=16 bytes.
+    StampPathRequest {
+        destination_hash: [u8; 16],
+        tag: Vec<u8>,
+        interface: InterfaceId,
+    },
 }
 
 /// A blackholed identity entry.

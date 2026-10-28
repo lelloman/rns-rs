@@ -1620,6 +1620,13 @@ impl Driver {
                 } => {
                     self.answer_local_path_request(destination_hash, tag, interface);
                 }
+                TransportAction::StampPathRequest {
+                    destination_hash,
+                    tag,
+                    interface,
+                } => {
+                    self.enqueue_path_request_stamp(destination_hash, tag, Some(interface));
+                }
             }
         }
 
