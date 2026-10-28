@@ -6,21 +6,23 @@
 - previous accepted version: `1.6.0`
 - previous normative commit: `9a01a20ce66c4146dd8f8d31f18c19fe7600739d`
 - target version: pending (upstream `RNS.__version__` is still `1.6.0`)
-- target tag or ref: `rgit:master` tip `ca6451a02aead88734e47193dc228055d42c9854`
-- target normative commit: `ca6451a02aead88734e47193dc228055d42c9854`
-- target root tree: `a3b5484c6f56df70832deeaf725a42bda8abb63b`
-- target `RNS` tree: `ff3e6127789b6111f265055fea7593f903feccfe`
+- target tag or ref: `rgit:master` tip `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
+  (extended on 2026-10-28 from the earlier tip `ca6451a02aead88734e47193dc228055d42c9854`)
+- target normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
+- target root tree: `dd5fb64d2e3778f7f20f70db461148885ee20082`
+- target `RNS` tree: `8bd88056db225a1a6bd7b0e76a1b99f3e0c667df`
 - version assertion: `RNS.__version__ == "1.6.0"` (unchanged; no version bump yet)
-- audited range: `9a01a20ce66c4146dd8f8d31f18c19fe7600739d..ca6451a02aead88734e47193dc228055d42c9854`
-- commits in range: `15`
+- audited range: `9a01a20ce66c4146dd8f8d31f18c19fe7600739d..5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
+- commits in range: `20` (15 inventoried at the first tip, 5 added when rgit advanced the same day)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` from accepted `74bef18`
 
 The GitHub `master` tip is `e40191b3d193b46b7f2d8a44424a594cd758839b`, which
 is `behind` the accepted baseline and is allowed mirror lag. The normative rgit
-`master` tip `ca6451a0` (committed 2026-10-28T01:22Z) is `ahead` of the baseline
-by the 15 commits inventoried below. Both refreshes succeeded at
-2026-10-28T06:16Z. The new commits implement announcement, path-request and
+`master` tip `ca6451a0` (committed 2026-10-28T01:22Z) was `ahead` of the
+baseline by 15 commits at the morning refresh (2026-10-28T06:16Z); by the
+afternoon refresh (2026-10-28T14:41Z) rgit had advanced to `5d38ce30` with five
+further commits, inventoried as 16 to 20 below. The new commits implement announcement, path-request and
 link-request stamps and landed on `master`; the `dev_pr_stamps` name only
 survives in the subject of the historical merge commit `c68066ed`. No new tag
 or version bump identifies a promotion target yet, so a versioned parity record
@@ -63,6 +65,11 @@ Every commit in the audited range must appear exactly once.
 | 13 | `c37b5f7f44900e1d80c166678d8bac565f238046` | Cleanup | Non-runtime | `970eae8`; idempotent migration comment |
 | 14 | `ba8c2d76db20be55a22578b840f78ef0489ef053` | Implemented link request stamps | Integrated | `5fe5f87` plus review follow-up; X25519 key stamp validation, off-thread stamped initiator with timeout, recalled cost |
 | 15 | `ca6451a02aead88734e47193dc228055d42c9854` | Parameter tuning | Integrated | `6bd6601`; link cost 11 and stamp timeout 15, the timeout bounding the link stamp worker |
+| 16 | `4867e889e2bf470af93f5ff58ae558789cb56087` | Added improved Android stamp job runner | Non-runtime | `aeb5241`; Python per-platform worker strategy, the rayon generator covers all native targets |
+| 17 | `134db17c817065f90b8b8064ac7bf703227c7cf1` | Added transport hop limiter | Integrated | `13d0947`; `HOP_LIMITER`, per-interface `hop_limiter_hits` counted instead of protocol violations, exported over management, RPC and `rnstatus` |
+| 18 | `ba3c42459b23913dfe37ca5d7f4b3875e8431425` | Added slow interface linger time factor and unused pool cull prioritization | Integrated | `8f1eca8`; leaf linger 12 min, `PATH_SLOW_BITRATE`, `PATH_SLOW_LINGER_FACTOR`, fast-first unused pool cull |
+| 19 | `025f6d609f9a181342d3dd9a6738c8bce88a9a8d` | Cleanup | Non-runtime | `ea4e6be`; pathing log marker text |
+| 20 | `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5` | Early-phase PR debug logging | Non-runtime | `6527b6f`; path request stamp diagnostics mirrored, decision unchanged |
 
 ## Per-Commit Analysis
 
@@ -351,22 +358,107 @@ and there is no per-destination `set_link_cost`; both matter only once
 
 **Final disposition:** Integrated.
 
+### 16. `4867e889` — Added improved Android stamp job runner
+
+**Upstream change:** Adds `job_android_persistent`, a fork-context worker pool
+with a shared stop flag and optional `nacl` hashing for Android; at this commit
+`generate_stamp` still dispatches to `job_android`, so the runner is not yet
+wired in.
+
+**Rust applicability:** None. Upstream picks a worker strategy per platform
+because of Python's process model; the native rayon generator in
+`rns-net/src/stamps.rs` covers every target, and the stamp format and value
+computation are unchanged.
+
+**Local handling and evidence:** Documented on `generate_stamp` as the native
+counterpart of all upstream job runners. `aeb5241`.
+
+**Final disposition:** Non-runtime.
+
+### 17. `134db17c` — Added transport hop limiter
+
+**Upstream change:** Adds `Transport.HOP_LIMITER = PATHFINDER_M` and drops
+inbound packets whose hop count is not below it right after unpacking, before
+the packet filter, counting them on the interface as `hop_limiter_hits`
+(`Interface.hop_limiter_hit`). The counter is not yet shown by `rnstatus` or
+exported over RPC upstream.
+
+**Rust applicability:** The native decoder already rejected hop counts at or
+above `PATHFINDER_M` (`PacketError::InvalidHopCount`), but counted them as
+protocol violations.
+
+**Local handling and evidence:** `HOP_LIMITER` added and used by the decoder;
+`InvalidHopCount` decode failures count `hop_limiter_hits` on the receiving
+interface instead of a protocol violation; the counter is carried through the
+interface stats query, the aggregated dynamic-interface stats, the management
+API and the RPC interface stats, and shown by `rnstatus` as `Hop Limit`. The
+RPC key is additive and ignored by Python clients. Evidence:
+`hop_limited_frame_counts_a_hop_limiter_hit_not_a_protocol_violation`, the
+dynamic-interface aggregation test, `interface_stats_pickle_format`, and
+`violation_stats_render_and_sort_independently`. `13d0947`.
+
+**Final disposition:** Integrated.
+
+### 18. `ba3c4245` — Added slow interface linger time factor and unused pool cull prioritization
+
+**Upstream change:** Raises `UNUSED_PATH_LINGER_LEAF` from 5 to 12 minutes,
+adds `PATH_SLOW_BITRATE = 25000` and `PATH_SLOW_LINGER_FACTOR = 10`, multiplies
+the never-used linger by the factor for paths on interfaces with a known
+bitrate below the threshold, and sorts the unused pool by `(slow, expiry)` so
+fast-interface paths are culled first when the pool exceeds its target.
+
+**Rust applicability:** `jobs::cull_path_table` implemented the plain linger and
+expiry-ordered pool cull.
+
+**Local handling and evidence:** Constants added and the leaf linger raised;
+`cull_path_table` derives the slow flag from the receiving interface's
+`bitrate`, applies the factor to never-used paths, and orders the pool cull
+fast-first then by expiry. Evidence:
+`never_used_paths_on_slow_interfaces_linger_longer`,
+`used_paths_on_slow_interfaces_are_not_special`,
+`unused_pool_cull_removes_fast_interface_paths_before_slow_ones`, and the
+existing cull tests. `8f1eca8`.
+
+**Final disposition:** Integrated.
+
+### 19. `025f6d60` — Cleanup
+
+**Upstream change:** Shortens the destination stamp value marker in the
+pathing log line to `(v:N)` / `(v:n)`.
+
+**Rust applicability:** Log text only.
+
+**Local handling and evidence:** The equivalent trace line in
+`rns-net/src/driver/dispatch.rs` uses the same marker. `ea4e6be`.
+
+**Final disposition:** Non-runtime.
+
+### 20. `5d38ce30` — Early-phase PR debug logging
+
+**Upstream change:** Reworks the path request stamp diagnostics: stamped
+requests log their value, unstamped relays with the 0xFF sentinel move to the
+pathing level, invalid stamps log their value, plain unstamped requests drop to
+the extreme level. The accept/drop decision is unchanged.
+
+**Rust applicability:** Diagnostics only; the native validation emitted no logs.
+
+**Local handling and evidence:** The same four diagnostics are emitted from
+`parse_path_request` and the sentinel flags byte is named
+`PR_FLAG_UNSTAMPED_RELAY`; the decision remains gated by `STAMPS_ENFORCED`.
+Covered by the existing path request tests. `6527b6f`.
+
+**Final disposition:** Non-runtime.
+
 ## Remaining Work
 
-All fifteen commits have a final disposition and a mapping commit. Before a
+All twenty commits have a final disposition and a mapping commit. Before a
 versioned parity record can be created:
 
-- exact-target Python/Rust interoperability against `ca6451a0`: **passed on
-  2026-10-28** (`python_interop` 3/3 including the new stamped link request
-  case, `utility_interop` 6/6) with `PYTHONPATH` at a disposable worktree of
-  `ca6451a0`, imported version confirmed as 1.6.0. Must be rerun at whichever
-  commit becomes the promotion target;
-- inventory the five rgit commits that landed after `ca6451a0` on 2026-10-28
-  (`4867e889` Android stamp job runner, `134db17c` transport hop limiter,
-  `ba3c4245` slow interface linger factor and pool cull prioritization,
-  `025f6d60` cleanup, `5d38ce30` early-phase PR debug logging; rgit tip
-  `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`, 20 commits past the baseline).
-  They are outside this audit's target and have no mapping yet;
+- exact-target Python/Rust interoperability against the current target
+  `5d38ce30`: **passed on 2026-10-28** (`python_interop` 3/3 including the
+  stamped link request case, `utility_interop` 6/6) with `PYTHONPATH` at a
+  disposable worktree of `5d38ce30`, imported version confirmed as 1.6.0.
+  Must be rerun if the promotion target moves again;
 - record build, Docker, hardware, and manual gates honestly (the daily
   dual-VPS Backbone smoke is operational evidence, not promotion acceptance);
 - document the user-visible stamp knobs natively;
@@ -418,3 +510,23 @@ this file stays the active audit.
   completing in about 0.4 s in a debug build. rgit advanced to `5d38ce30`
   during the day; the five new commits are listed under Remaining Work and
   not audited here. Nothing was deployed to the VPS nodes.
+- `2026-10-28`: The five commits `4867e889` through `5d38ce30` were audited
+  and mapped (`aeb5241`, `13d0947`, `8f1eca8`, `ea4e6be`, `6527b6f`), bringing
+  all twenty commits past the baseline to a final disposition. Exact-target
+  Python/Rust interop at `5d38ce30` from a disposable worktree, imported
+  version confirmed as 1.6.0: `python_interop` 3/3 (Python destination stamp
+  at value 23, Rust stamped link request at cost 8 in about 3.8 s under a
+  concurrent build) and `utility_interop` 6/6. `cargo fmt --all --check`,
+  workspace `clippy --all-targets -D warnings`, `scripts/lint-host.sh`,
+  `cargo test --workspace --no-fail-fast` (2961 tests, none failed) and
+  `cargo test -p rns-net --features rns-hooks-native --lib` (1192 passed)
+  all passed. Two anomalies during the gate run, neither attributable to the
+  series: rustc 1.96.0 stalled for 69 minutes in one LLVM optimizer thread
+  while building the `rns-git` test target (killed; the same target rebuilt in
+  ten seconds), and on the next run `sync_client_identifies_before_first_python_request`
+  in `rns-git` timed out on its ten second wait for the spawned Python peer,
+  poisoning the shared test lock for `sync_client_reidentifies_after_not_identified_response`.
+  Both passed three times in isolation and in the full rerun; `rns-git` is
+  untouched by this series. `scripts/check_upstream_drift.py --no-fetch`
+  reports 20 commits ahead with the active audit present. Nothing was deployed
+  to the VPS nodes.
