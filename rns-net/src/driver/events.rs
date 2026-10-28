@@ -1241,11 +1241,13 @@ impl Driver {
                         .and_then(|iface_id| self.interfaces.get(&iface_id))
                         .map(|entry| entry.info.mtu)
                         .unwrap_or(rns_core::constants::MTU as u32);
-                    let (link_id, mut link_actions) = self.link_manager.create_link(
+                    let link_cost = self.recall_link_cost(&dest_hash);
+                    let (link_id, mut link_actions) = self.link_manager.create_link_with_cost(
                         &dest_hash,
                         &dest_sig_pub_bytes,
                         hops,
                         mtu,
+                        link_cost,
                         &mut self.rng,
                     );
                     if let Some(iface) = attached_interface {
