@@ -76,10 +76,10 @@ pub const STAMPS_ENFORCED: bool = false;
 pub const STAMP_COST_CAP: u8 = 100;
 
 /// Default required announce stamp cost.
-pub const DESTINATION_STAMP_COST: u8 = 20;
+pub const DESTINATION_STAMP_COST: u8 = 23;
 
 /// Default target stamp value for emitted announces.
-pub const DESTINATION_STAMP_VALUE: u8 = 20;
+pub const DESTINATION_STAMP_VALUE: u8 = 23;
 
 /// Default required path request stamp cost.
 pub const PATH_REQUEST_STAMP_COST: u8 = 19;
@@ -701,8 +701,8 @@ mod tests {
         assert_eq!(EXT_HEADER_LENGTH, 2);
         assert_eq!(EXT_PAYLOAD_LENGTH, 16);
         assert_eq!(EXT_PAYLOAD_MARKER, 0xC1);
-        assert_eq!(DESTINATION_STAMP_COST, 20);
-        assert_eq!(DESTINATION_STAMP_VALUE, 20);
+        assert_eq!(DESTINATION_STAMP_COST, 23);
+        assert_eq!(DESTINATION_STAMP_VALUE, 23);
         assert_eq!(PATH_REQUEST_STAMP_COST, 19);
         assert_eq!(PATH_REQUEST_STAMP_VALUE, 19);
         assert!(DESTINATION_STAMP_COST <= STAMP_COST_CAP);
