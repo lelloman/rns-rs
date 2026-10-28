@@ -49,7 +49,7 @@ COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 
 if $CLEAN_ONLY; then
   echo "Cleaning up..."
-  docker compose -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+  docker compose -f "$COMPOSE_FILE" down -v -t "${COMPOSE_STOP_TIMEOUT:-2}" 2>/dev/null || true
   echo "Done."
   exit 0
 fi
@@ -112,7 +112,7 @@ fi
 if ! $NO_TEARDOWN; then
   echo ""
   echo "=== Tearing down containers ==="
-  docker compose -f "$COMPOSE_FILE" down -v
+  docker compose -f "$COMPOSE_FILE" down -v -t "${COMPOSE_STOP_TIMEOUT:-2}"
 fi
 
 exit $TEST_EXIT

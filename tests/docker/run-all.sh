@@ -49,19 +49,20 @@ echo ""
 #
 # Each entry: TOPOLOGY SUITE_FILTER DESCRIPTION
 #
-# chain-3:  01-07, 09 run; 08 runs (chain>=3); 10-12 skip
-# chain-5:  03, 08 benefit from longer chain
-# star-5:   07, 09, 11 are star-specific
+# chain-3:  01-07, 09, 13-15, 18-19, 21 run; 08 runs (chain>=3); 10-12, 17 skip
+# chain-5:  03, 08 and 16 benefit from a longer chain, in one round
+# star-5:   07, 09, 11 and 17 are star-specific
 # star-30:  10 is the scale test
 # mesh-4:   12 is mesh-specific; 02, 04-06 also run on mesh
 
+# Suite filters are "all" or a comma-separated list of suite number prefixes.
+# One chain-5 round carries every suite that needs five nodes: starting and
+# tearing down a topology costs far more than the suites themselves.
 MATRIX=(
-  "chain-3  all   Core tests on 3-node chain"
-  "chain-5  03    Multi-hop announce on 5-node chain"
-  "chain-5  08    Path table on 5-node chain"
-  "star-5   all   Star topology tests"
-  "mesh-4   all   Mesh topology tests"
-  "chain-5  16    Multi-hop link on 5-node chain"
+  "chain-3  all       Core tests on 3-node chain"
+  "chain-5  03,08,16  Multi-hop announce, path table and multi-hop link on 5-node chain"
+  "star-5   all       Star topology tests"
+  "mesh-4   all       Mesh topology tests"
 )
 
 if ! $SKIP_SCALE; then
@@ -75,6 +76,10 @@ trap 'rm -f "$TEST_RESULTS_FILE"' EXIT
 source "${SCRIPT_DIR}/lib/summary.sh"
 source "${SCRIPT_DIR}/lib/readiness.sh"
 
+# Containers are disposable: give them two seconds to exit on SIGTERM instead
+# of compose's ten-second default, which dominated teardown time.
+export COMPOSE_STOP_TIMEOUT="${COMPOSE_STOP_TIMEOUT:-2}"
+
 TOTAL_RUNS=0
 TOTAL_FAILED=0
 RESULTS=()
@@ -84,10 +89,28 @@ if $NO_TEARDOWN; then
   teardown_flag="--no-teardown"
 fi
 
+# suite_matches_filter SUITE_NAME FILTER
+#   FILTER is "all" or a comma-separated list of suite prefixes ("03,08").
+suite_matches_filter() {
+  local name="$1" filter="$2"
+  if [[ "$filter" == "all" ]]; then
+    return 0
+  fi
+  local prefix
+  local IFS=,
+  for prefix in $filter; do
+    if [[ "$name" == "${prefix}"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 run_round() {
   local topology="$1" suite_filter="$2" description="$3"
 
   (( TOTAL_RUNS++ )) || true
+  local round_start=$SECONDS
   echo ""
   echo "============================================"
   echo "  [$TOTAL_RUNS] ${description}"
@@ -117,7 +140,7 @@ run_round() {
     echo "FAIL: Could not start containers for ${topology}"
     RESULTS+=("FAIL  ${description}")
     (( TOTAL_FAILED++ )) || true
-    docker compose -f "$compose_file" down -v 2>/dev/null || true
+    docker compose -f "$compose_file" down -v -t "$COMPOSE_STOP_TIMEOUT" 2>/dev/null || true
     return
   fi
 
@@ -137,69 +160,60 @@ run_round() {
     echo "FAIL: Topology readiness check failed for ${topology}"
     RESULTS+=("FAIL  ${description}")
     (( TOTAL_FAILED++ )) || true
-    docker compose -f "$compose_file" down -v 2>/dev/null || true
+    docker compose -f "$compose_file" down -v -t "$COMPOSE_STOP_TIMEOUT" 2>/dev/null || true
     return
   fi
 
   # Run suites
   local round_failed=false
-  if [[ "$suite_filter" == "all" ]]; then
-    for suite in "${SCRIPT_DIR}"/suites/*.sh; do
-      [[ -f "$suite" ]] || continue
-      local sname
-      sname="$(basename "$suite" .sh)"
-      echo ""
-      echo "--- ${sname} ---"
+  local needs_settle=false
+  for suite in "${SCRIPT_DIR}"/suites/*.sh; do
+    [[ -f "$suite" ]] || continue
+    local sname
+    sname="$(basename "$suite" .sh)"
+    suite_matches_filter "$sname" "$suite_filter" || continue
+    echo ""
+    echo "--- ${sname} ---"
+    # Let the previous suite's traffic die down, but only when one ran: a
+    # suite that skipped itself leaves nothing to settle.
+    if $needs_settle; then
       settle_topology_runtime 3
-      if ! clear_topology_runtime_state; then
-        round_failed=true
-        echo "FAIL: Could not clear runtime state before ${sname}"
-        continue
-      fi
-      local skip_chain3_suite03="0"
-      if [[ "$topology" == "chain-3" && "$sname" == "03_announce_multihop" ]]; then
-        skip_chain3_suite03="1"
-      fi
-      if ! RNS_E2E_SKIP_CHAIN3_REDUNDANT_SUITE03="$skip_chain3_suite03" bash "$suite"; then
-        round_failed=true
-        echo "--- Container logs (last 30 lines) ---"
-        docker compose -f "$compose_file" logs --tail=30 2>/dev/null || true
-        echo "--- End logs ---"
-      fi
-    done
-  else
-    for suite in "${SCRIPT_DIR}"/suites/*.sh; do
-      if [[ "$(basename "$suite")" == "${suite_filter}"* ]]; then
-        local sname
-        sname="$(basename "$suite" .sh)"
-        echo ""
-        echo "--- ${sname} ---"
-        settle_topology_runtime 3
-        if ! clear_topology_runtime_state; then
-          round_failed=true
-          echo "FAIL: Could not clear runtime state before ${sname}"
-          continue
-        fi
-        if ! bash "$suite"; then
-          round_failed=true
-          echo "--- Container logs (last 30 lines) ---"
-          docker compose -f "$compose_file" logs --tail=30 2>/dev/null || true
-          echo "--- End logs ---"
-        fi
-      fi
-    done
-  fi
+    fi
+    if ! clear_topology_runtime_state; then
+      round_failed=true
+      echo "FAIL: Could not clear runtime state before ${sname}"
+      continue
+    fi
+    local skip_chain3_suite03="0"
+    if [[ "$topology" == "chain-3" && "$suite_filter" == "all" && "$sname" == "03_announce_multihop" ]]; then
+      skip_chain3_suite03="1"
+    fi
+    local ran_before
+    ran_before=$(count_ran_results)
+    if ! RNS_E2E_SKIP_CHAIN3_REDUNDANT_SUITE03="$skip_chain3_suite03" bash "$suite"; then
+      round_failed=true
+      echo "--- Container logs (last 30 lines) ---"
+      docker compose -f "$compose_file" logs --tail=30 2>/dev/null || true
+      echo "--- End logs ---"
+    fi
+    if (( $(count_ran_results) > ran_before )); then
+      needs_settle=true
+    else
+      needs_settle=false
+    fi
+  done
 
   # Tear down
   if ! $NO_TEARDOWN; then
-    docker compose -f "$compose_file" down -v 2>/dev/null || true
+    docker compose -f "$compose_file" down -v -t "$COMPOSE_STOP_TIMEOUT" 2>/dev/null || true
   fi
 
+  local round_elapsed=$(( SECONDS - round_start ))
   if $round_failed; then
-    RESULTS+=("FAIL  ${description}")
+    RESULTS+=("FAIL  ${description} (${round_elapsed}s)")
     (( TOTAL_FAILED++ )) || true
   else
-    RESULTS+=("PASS  ${description}")
+    RESULTS+=("PASS  ${description} (${round_elapsed}s)")
   fi
 }
 
@@ -222,6 +236,7 @@ run_standalone() {
   local test_dir="$1" description="$2"
 
   (( TOTAL_RUNS++ )) || true
+  local round_start=$SECONDS
   echo ""
   echo "============================================"
   echo "  [$TOTAL_RUNS] ${description}"
@@ -233,10 +248,13 @@ run_standalone() {
     run_args+=("--no-teardown")
   fi
 
-  if SKIP_BUILD=true bash "${test_dir}/run.sh" "${run_args[@]+"${run_args[@]}"}"; then
-    RESULTS+=("PASS  ${description}")
+  local status=0
+  SKIP_BUILD=true bash "${test_dir}/run.sh" "${run_args[@]+"${run_args[@]}"}" || status=$?
+  local round_elapsed=$(( SECONDS - round_start ))
+  if (( status == 0 )); then
+    RESULTS+=("PASS  ${description} (${round_elapsed}s)")
   else
-    RESULTS+=("FAIL  ${description}")
+    RESULTS+=("FAIL  ${description} (${round_elapsed}s)")
     (( TOTAL_FAILED++ )) || true
   fi
 }

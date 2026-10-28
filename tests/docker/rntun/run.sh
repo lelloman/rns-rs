@@ -29,13 +29,13 @@ docker compose version >/dev/null || {
 
 cleanup() {
   if ! $NO_TEARDOWN; then
-    docker compose -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" down -v -t "${COMPOSE_STOP_TIMEOUT:-2}" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
 
 if $CLEAN_ONLY; then
-  docker compose -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+  docker compose -f "$COMPOSE_FILE" down -v -t "${COMPOSE_STOP_TIMEOUT:-2}" >/dev/null 2>&1 || true
   exit 0
 fi
 
