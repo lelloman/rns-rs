@@ -1104,6 +1104,7 @@ impl Driver {
                         app_data,
                         stamp,
                         stamp_value,
+                        lr_cost,
                         hops,
                         receiving_interface,
                         rx,
@@ -1231,7 +1232,12 @@ impl Driver {
                         snr: rx.snr,
                     };
                     self.upsert_known_destination(destination_hash, announced.clone());
-                    self.record_known_destination_stamp(destination_hash, stamp, stamp_value);
+                    self.record_known_destination_stamp(
+                        destination_hash,
+                        stamp,
+                        stamp_value,
+                        lr_cost,
+                    );
                     log::debug!(
                         "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
                         destination_hash[0],

@@ -108,9 +108,19 @@ pub fn destination_stamp_material(
     material
 }
 
-/// Build the announce extension payload: marker, flags, stamp.
-pub fn ext_payload(stamp: &[u8], flags: u8) -> Vec<u8> {
+/// Build the announce extension payload: marker, flags, stamp, link cost.
+pub fn announce_ext_payload(stamp: &[u8], flags: u8, lr_cost: u8) -> Vec<u8> {
     let mut payload = Vec::with_capacity(constants::EXT_PAYLOAD_LENGTH);
+    payload.push(constants::EXT_PAYLOAD_MARKER);
+    payload.push(flags);
+    payload.extend_from_slice(stamp);
+    payload.push(lr_cost & 0x7F);
+    payload
+}
+
+/// Build the path request extension payload: marker, flags, stamp.
+pub fn path_request_ext_payload(stamp: &[u8], flags: u8) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(constants::PR_EXT_PAYLOAD_LENGTH);
     payload.push(constants::EXT_PAYLOAD_MARKER);
     payload.push(flags);
     payload.extend_from_slice(stamp);
@@ -208,9 +218,22 @@ mod tests {
     }
 
     #[test]
-    fn ext_payload_has_marker_flags_and_stamp() {
-        let payload = ext_payload(&[0x55; constants::STAMP_LENGTH], 0);
+    fn announce_ext_payload_has_marker_flags_stamp_and_link_cost() {
+        let payload = announce_ext_payload(&[0x55; constants::STAMP_LENGTH], 0, 19);
         assert_eq!(payload.len(), constants::EXT_PAYLOAD_LENGTH);
+        assert_eq!(payload[0], constants::EXT_PAYLOAD_MARKER);
+        assert_eq!(payload[1], 0);
+        assert_eq!(
+            &payload[2..2 + constants::STAMP_LENGTH],
+            &[0x55; constants::STAMP_LENGTH]
+        );
+        assert_eq!(payload[constants::EXT_PAYLOAD_LENGTH - 1], 19);
+    }
+
+    #[test]
+    fn path_request_ext_payload_has_marker_flags_and_stamp() {
+        let payload = path_request_ext_payload(&[0x55; constants::STAMP_LENGTH], 0);
+        assert_eq!(payload.len(), constants::PR_EXT_PAYLOAD_LENGTH);
         assert_eq!(payload[0], constants::EXT_PAYLOAD_MARKER);
         assert_eq!(payload[1], 0);
         assert_eq!(&payload[2..], &[0x55; constants::STAMP_LENGTH]);

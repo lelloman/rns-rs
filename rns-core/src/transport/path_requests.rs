@@ -233,7 +233,7 @@ impl TransportEngine {
         // Stamped 1.6.0+ requests carry a 16-byte extension payload after the
         // destination hash, transport id and tag.
         let (request_len, ext_payload) = if data.len() == constants::PATH_REQUEST_STAMPED_LENGTH {
-            let mut ext = [0u8; constants::EXT_PAYLOAD_LENGTH];
+            let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
             ext.copy_from_slice(&data[constants::PATH_REQUEST_LENGTH..]);
             (constants::PATH_REQUEST_LENGTH, Some(ext))
         } else {
@@ -575,8 +575,8 @@ fn search_mode_filter(mode: u8, recursive_prs: bool) -> Option<Option<&'static [
 
 /// Transitional extension payload marking an unstamped request relayed by a
 /// stamp-aware node to its local clients.
-pub(crate) fn unstamped_relay_payload() -> [u8; constants::EXT_PAYLOAD_LENGTH] {
-    let mut ext = [0u8; constants::EXT_PAYLOAD_LENGTH];
+pub(crate) fn unstamped_relay_payload() -> [u8; constants::PR_EXT_PAYLOAD_LENGTH] {
+    let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
     ext[0] = constants::EXT_PAYLOAD_MARKER;
     ext[1] = 0xFF;
     ext
@@ -591,12 +591,12 @@ fn build_path_request_packet(
     destination_hash: &[u8; 16],
     transport_identity_hash: Option<&[u8; 16]>,
     tag: &[u8],
-    ext_payload: Option<&[u8; constants::EXT_PAYLOAD_LENGTH]>,
+    ext_payload: Option<&[u8; constants::PR_EXT_PAYLOAD_LENGTH]>,
 ) -> Option<(Vec<u8>, usize)> {
     let mut data = Vec::with_capacity(
         16 + transport_identity_hash.map_or(0, |_| 16)
             + tag.len()
-            + ext_payload.map_or(0, |_| constants::EXT_PAYLOAD_LENGTH),
+            + ext_payload.map_or(0, |_| constants::PR_EXT_PAYLOAD_LENGTH),
     );
     data.extend_from_slice(destination_hash);
     if let Some(identity_hash) = transport_identity_hash {

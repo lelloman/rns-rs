@@ -639,6 +639,7 @@ pub(crate) struct KnownDestinationState {
     retained: bool,
     stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
     stamp_value: u32,
+    lr_cost: Option<u8>,
 }
 
 struct KnownDestinationCleanup {

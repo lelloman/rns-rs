@@ -1150,6 +1150,7 @@ impl TransportEngine {
                 app_data: ctx.validated.app_data,
                 stamp: ctx.validated.stamp,
                 stamp_value: ctx.validated.stamp_value,
+                lr_cost: ctx.validated.lr_cost,
                 hops: ctx.packet.hops,
                 receiving_interface: ctx.iface,
                 rx: RxMetadata {

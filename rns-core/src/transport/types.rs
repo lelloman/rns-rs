@@ -194,6 +194,8 @@ pub struct ReceivedAnnounce {
     pub stamp: Option<[u8; crate::constants::STAMP_LENGTH]>,
     /// Stamp value, or `0` when absent or invalid.
     pub stamp_value: u32,
+    /// Announced link request stamp cost, if present.
+    pub lr_cost: Option<u8>,
     pub hops: u8,
     pub receiving_interface: InterfaceId,
     pub rx: RxMetadata,

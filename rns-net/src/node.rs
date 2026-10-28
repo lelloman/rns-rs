@@ -1494,6 +1494,7 @@ impl RnsNode {
                         .as_deref()
                         .and_then(|stamp| stamp.try_into().ok()),
                     stamp_value: known.stamp_value,
+                    lr_cost: known.lr_cost,
                 },
             ));
         }
@@ -3382,7 +3383,11 @@ impl RnsNode {
                 }
             };
             let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
-            wire.extend_from_slice(&crate::stamps::ext_payload(&stamp, 0));
+            wire.extend_from_slice(&crate::stamps::announce_ext_payload(
+                &stamp,
+                0,
+                rns_core::constants::LINK_REQUEST_STAMP_COST,
+            ));
             Some(wire)
         } else {
             app_data.map(|data| data.to_vec())
@@ -3691,6 +3696,7 @@ impl RnsNode {
                         retained: entry.retained,
                         stamp: entry.stamp.map(|stamp| stamp.to_vec()),
                         stamp_value: entry.stamp_value,
+                        lr_cost: entry.lr_cost,
                     },
                 )
             })
@@ -4768,6 +4774,7 @@ mod tests {
                     retained: true,
                     stamp: None,
                     stamp_value: 0,
+                    lr_cost: None,
                 }),
                 response_tx,
             ))
@@ -4924,6 +4931,7 @@ share_instance = False
                     retained: false,
                     stamp: None,
                     stamp_value: 0,
+                    lr_cost: None,
                 },
             ),
             (
@@ -4940,6 +4948,7 @@ share_instance = False
                     retained: false,
                     stamp: None,
                     stamp_value: 0,
+                    lr_cost: None,
                 },
             ),
             (
@@ -4956,6 +4965,7 @@ share_instance = False
                     retained: false,
                     stamp: None,
                     stamp_value: 0,
+                    lr_cost: None,
                 },
             ),
         ]);

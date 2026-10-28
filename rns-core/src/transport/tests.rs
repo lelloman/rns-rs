@@ -2879,7 +2879,7 @@ fn stamped_path_request_is_forwarded_without_treating_extension_as_tag() {
 
     let dest = [0xDA; 16];
     let tag = [0x0A; 16];
-    let mut ext = [0u8; constants::EXT_PAYLOAD_LENGTH];
+    let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
     ext[0] = constants::EXT_PAYLOAD_MARKER;
     ext[1] = 0;
     ext[2..].copy_from_slice(&[0xAA; constants::STAMP_LENGTH]);

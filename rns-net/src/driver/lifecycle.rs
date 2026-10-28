@@ -21,6 +21,7 @@ impl Driver {
                 retained: false,
                 stamp: None,
                 stamp_value: 0,
+                lr_cost: None,
             },
         );
     }
@@ -30,11 +31,20 @@ impl Driver {
         dest_hash: [u8; 16],
         stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
         stamp_value: u32,
+        lr_cost: Option<u8>,
     ) {
         if let Some(state) = self.known_destinations.get_mut(&dest_hash) {
             state.stamp = stamp;
             state.stamp_value = stamp_value;
+            state.lr_cost = lr_cost;
         }
+    }
+
+    /// Recall the link request stamp cost announced by a destination.
+    pub fn recall_link_cost(&self, dest_hash: &[u8; 16]) -> Option<u8> {
+        self.known_destinations
+            .get(dest_hash)
+            .and_then(|state| state.lr_cost)
     }
 
     pub(crate) fn recall_stamp_value(&self, dest_hash: &[u8; 16]) -> Option<u32> {
@@ -60,6 +70,7 @@ impl Driver {
             retained: state.retained,
             stamp: state.stamp,
             stamp_value: state.stamp_value,
+            lr_cost: state.lr_cost,
         }
     }
 

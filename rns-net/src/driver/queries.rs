@@ -488,6 +488,7 @@ impl Driver {
                         retained: entry.retained,
                         stamp: entry.stamp,
                         stamp_value: entry.stamp_value,
+                        lr_cost: entry.lr_cost,
                     },
                 );
                 Some(QueryResponse::RestoreKnownDestination(true))

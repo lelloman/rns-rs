@@ -43,6 +43,8 @@ pub struct KnownDestination {
     pub stamp: Option<Vec<u8>>,
     /// Last heard announce stamp value, or `0` when absent.
     pub stamp_value: u32,
+    /// Announced link request stamp cost, if present.
+    pub lr_cost: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -370,6 +372,10 @@ pub fn save_known_destinations(
                     None => Value::Nil,
                 },
                 Value::UInt(u64::from(dest.stamp_value)),
+                match dest.lr_cost {
+                    Some(cost) => Value::UInt(u64::from(cost)),
+                    None => Value::Nil,
+                },
             ]);
             (key, value)
         })
@@ -494,6 +500,11 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
             .and_then(|value| value.as_bin())
             .map(|b| b.to_vec());
         let stamp_value = arr.get(10).and_then(|value| value.as_uint()).unwrap_or(0) as u32;
+        let lr_cost = arr
+            .get(11)
+            .and_then(|value| value.as_uint())
+            .filter(|cost| *cost <= u64::from(rns_core::constants::STAMP_COST_CAP))
+            .map(|cost| cost as u8);
 
         result.insert(
             dest_hash,
@@ -509,6 +520,7 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
                 retained,
                 stamp,
                 stamp_value,
+                lr_cost,
             },
         );
     }
@@ -919,6 +931,7 @@ mod tests {
                 retained: true,
                 stamp: Some(vec![0xAA; 14]),
                 stamp_value: 21,
+                lr_cost: Some(19),
             },
         );
         dests.insert(
@@ -935,6 +948,7 @@ mod tests {
                 retained: false,
                 stamp: None,
                 stamp_value: 0,
+                lr_cost: None,
             },
         );
 
@@ -955,6 +969,7 @@ mod tests {
         assert!(d1.retained);
         assert_eq!(d1.stamp.as_deref(), Some(&[0xAA; 14][..]));
         assert_eq!(d1.stamp_value, 21);
+        assert_eq!(d1.lr_cost, Some(19));
 
         let d2 = &loaded[&[0x02u8; 16]];
         assert_eq!(d2.app_data, None);
@@ -963,6 +978,7 @@ mod tests {
         assert!(!d2.retained);
         assert_eq!(d2.stamp, None);
         assert_eq!(d2.stamp_value, 0);
+        assert_eq!(d2.lr_cost, None);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -988,6 +1004,7 @@ mod tests {
                 retained: false,
                 stamp: None,
                 stamp_value: 0,
+                lr_cost: None,
             },
         );
 
