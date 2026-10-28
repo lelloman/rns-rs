@@ -1256,8 +1256,8 @@ impl Driver {
                 } => {
                     let stamp_value = self.recall_stamp_value(&destination_hash);
                     let value_str = match stamp_value {
-                        Some(0) | None => String::from(" (unstamped)"),
-                        Some(value) => format!(" (value {value})"),
+                        Some(0) | None => String::from(" (v:n)"),
+                        Some(value) => format!(" (v:{value})"),
                     };
                     log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                         "Destination {:02x?}{} is now {} hops away via {:02x?} on interface {}",
