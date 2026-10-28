@@ -95,7 +95,7 @@ impl LinkEngine {
     ) -> (Self, Vec<u8>) {
         let prv = X25519PrivateKey::generate(rng);
         let sig_prv = Ed25519PrivateKey::generate(rng);
-        Self::from_initiator_keys(dest_hash, hops, mode, mtu, now, prv, sig_prv)
+        Self::new_initiator_with_keys(dest_hash, hops, mode, mtu, now, prv, sig_prv)
     }
 
     /// Create an initiator link whose X25519 public key carries a stamp of at
@@ -116,10 +116,15 @@ impl LinkEngine {
         material[16..].copy_from_slice(&sig_pub_bytes);
         let (prv, _public, _value) =
             rns_crypto::identity::generate_stamped_key(rng, &material, stamp_cost);
-        Self::from_initiator_keys(dest_hash, hops, mode, mtu, now, prv, sig_prv)
+        Self::new_initiator_with_keys(dest_hash, hops, mode, mtu, now, prv, sig_prv)
     }
 
-    fn from_initiator_keys(
+    /// Create an initiator link from pre-generated keys.
+    ///
+    /// Used when the X25519 key was stamped ahead of time, off the caller's
+    /// latency-sensitive thread; see `rns-net`'s link request stamping.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_initiator_with_keys(
         dest_hash: &[u8; 16],
         hops: u8,
         mode: LinkMode,
@@ -1672,5 +1677,32 @@ mod tests {
         );
         let value = handshake::link_request_stamp_value(&dest_hash, &data).unwrap();
         assert!(value >= 4);
+    }
+
+    #[test]
+    fn initiator_with_keys_uses_the_supplied_keys() {
+        let mut rng = rns_crypto::OsRng;
+        let dest_hash = [0xAC; 16];
+        let prv = X25519PrivateKey::generate(&mut rng);
+        let sig_prv = Ed25519PrivateKey::generate(&mut rng);
+        let expected_pub = prv.public_key().public_bytes();
+        let expected_sig_pub = sig_prv.public_key().public_bytes();
+
+        let (engine, data) = LinkEngine::new_initiator_with_keys(
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            None,
+            0.0,
+            prv,
+            sig_prv,
+        );
+        let (peer_pub, peer_sig_pub, mtu, mode) = handshake::parse_linkrequest_data(&data).unwrap();
+        assert_eq!(peer_pub, expected_pub);
+        assert_eq!(peer_sig_pub, expected_sig_pub);
+        assert_eq!(mtu, None);
+        assert_eq!(mode, LinkMode::Aes256Cbc);
+        assert!(engine.is_initiator());
+        assert_eq!(engine.state(), LinkState::Pending);
     }
 }

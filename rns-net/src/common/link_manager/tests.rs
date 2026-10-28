@@ -59,18 +59,21 @@ fn test_create_link() {
 }
 
 #[test]
-fn create_link_with_cost_stamps_the_link_request() {
+fn create_link_with_stamped_keys_emits_stamped_link_request() {
     let mut mgr = LinkManager::new();
     let mut rng = OsRng;
     let dest_hash = [0xDC; 16];
     let sig_pub_bytes = [0xAA; 32];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let (prv, sig_prv, _) =
+        crate::stamps::generate_stamped_link_keys(&dest_hash, 4, deadline).unwrap();
 
-    let (_, actions) = mgr.create_link_with_cost(
+    let (_, actions) = mgr.create_link_with_keys(
         &dest_hash,
         &sig_pub_bytes,
         1,
         constants::MTU as u32,
-        Some(4),
+        Some((prv, sig_prv)),
         &mut rng,
     );
     let raw = actions
@@ -4905,4 +4908,145 @@ fn memory_split_storage_reserves_the_advertised_size_up_to_the_limit() {
     // A peer's larger claim never reserves past the configured limit.
     assert_eq!(capacity(u64::MAX), 64 << 20);
     assert_eq!(capacity(0), 0);
+}
+
+#[test]
+fn stamped_link_request_completes_the_handshake_with_a_responder() {
+    let mut rng = OsRng;
+    let mut initiator = LinkManager::new();
+    let mut responder = LinkManager::new();
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    let dest_hash = [0xDE; 16];
+    responder.register_link_destination(
+        dest_hash,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptNone,
+    );
+
+    // Keys ground ahead of time, as the driver's stamp worker does.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let (prv, link_sig_prv, stamp_value) =
+        crate::stamps::generate_stamped_link_keys(&dest_hash, 4, deadline).unwrap();
+    let expected_pub = prv.public_key().public_bytes();
+
+    let (link_id, init_actions) = initiator.create_link_with_keys(
+        &dest_hash,
+        &sig_pub_bytes,
+        1,
+        constants::MTU as u32,
+        Some((prv, link_sig_prv)),
+        &mut rng,
+    );
+    assert_eq!(initiator.link_state(&link_id), Some(LinkState::Pending));
+
+    let linkrequest_raw = init_actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            _ => None,
+        })
+        .expect("LINKREQUEST send packet");
+    let linkrequest = RawPacket::unpack(&linkrequest_raw).unwrap();
+    let (peer_pub, _, _, _) =
+        rns_core::link::handshake::parse_linkrequest_data(linkrequest.data()).unwrap();
+    assert_eq!(peer_pub, expected_pub, "request carries the stamped key");
+    assert_eq!(
+        rns_core::link::handshake::link_request_stamp_value(&dest_hash, linkrequest.data()),
+        Some(stamp_value)
+    );
+    assert!(stamp_value >= 4);
+
+    // Responder accepts the stamped request and proves the link.
+    let resp_actions = responder.handle_local_delivery(
+        linkrequest.destination_hash,
+        &linkrequest_raw,
+        linkrequest.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    assert!(
+        !resp_actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::ProtocolViolation { .. })),
+        "stamped request must not be a protocol violation"
+    );
+    let lrproof_raw = resp_actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            _ => None,
+        })
+        .expect("LRPROOF send packet");
+    assert_eq!(responder.link_state(&link_id), Some(LinkState::Handshake));
+
+    let lrproof = RawPacket::unpack(&lrproof_raw).unwrap();
+    let init_actions = initiator.handle_local_delivery(
+        lrproof.destination_hash,
+        &lrproof_raw,
+        lrproof.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    assert!(init_actions
+        .iter()
+        .any(|action| matches!(action, LinkManagerAction::LinkEstablished { .. })));
+    let lrrtt_raw = init_actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            _ => None,
+        })
+        .expect("LRRTT send packet");
+
+    let lrrtt = RawPacket::unpack(&lrrtt_raw).unwrap();
+    let resp_actions = responder.handle_local_delivery(
+        lrrtt.destination_hash,
+        &lrrtt_raw,
+        lrrtt.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    assert!(resp_actions
+        .iter()
+        .any(|action| matches!(action, LinkManagerAction::LinkEstablished { .. })));
+
+    assert_eq!(initiator.link_state(&link_id), Some(LinkState::Active));
+    assert_eq!(responder.link_state(&link_id), Some(LinkState::Active));
+}
+
+#[test]
+fn create_link_with_keys_none_generates_fresh_unstamped_keys() {
+    let mut mgr = LinkManager::new();
+    let mut rng = OsRng;
+    let dest_hash = [0xDF; 16];
+    let (id_a, actions_a) = mgr.create_link_with_keys(
+        &dest_hash,
+        &[0xAA; 32],
+        1,
+        constants::MTU as u32,
+        None,
+        &mut rng,
+    );
+    let (id_b, actions_b) = mgr.create_link_with_keys(
+        &dest_hash,
+        &[0xAA; 32],
+        1,
+        constants::MTU as u32,
+        None,
+        &mut rng,
+    );
+    assert_ne!(id_a, id_b);
+    let request = |actions: &[LinkManagerAction]| {
+        actions
+            .iter()
+            .find_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                _ => None,
+            })
+            .map(|raw| RawPacket::unpack(&raw).unwrap().data().to_vec())
+            .expect("LINKREQUEST send packet")
+    };
+    assert_ne!(request(&actions_a), request(&actions_b));
+    assert_eq!(mgr.link_count(), 2);
 }

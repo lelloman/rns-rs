@@ -294,6 +294,10 @@ pub enum Event<W: Send> {
         dest_sig_pub_bytes: [u8; 32],
         response_tx: mpsc::Sender<[u8; 16]>,
     },
+    /// Finish a stamped outbound link whose keys were ground on a helper
+    /// thread. Internal to the driver; carries the link request keys and the
+    /// original `CreateLink` responder.
+    CompleteStampedLink(Box<StampedLinkKeys>),
     /// Send a request on an established link.
     SendRequest {
         link_id: [u8; 16],
@@ -1096,6 +1100,17 @@ pub struct BlackholeInfo {
     pub reason: Option<String>,
 }
 
+/// Keys for a stamped link request, ground off the driver thread, with the
+/// responder of the `CreateLink` that asked for them.
+pub struct StampedLinkKeys {
+    pub dest_hash: [u8; 16],
+    pub dest_sig_pub_bytes: [u8; 32],
+    pub prv_bytes: [u8; 32],
+    pub sig_prv_bytes: [u8; 32],
+    pub stamp_value: u32,
+    pub response_tx: mpsc::Sender<[u8; 16]>,
+}
+
 /// Next hop lookup result.
 #[derive(Debug, Clone)]
 pub struct NextHopResponse {
@@ -1226,6 +1241,11 @@ impl<W: Send> fmt::Debug for Event<W> {
             Event::CreateLink { dest_hash, .. } => f
                 .debug_struct("CreateLink")
                 .field("dest_hash", dest_hash)
+                .finish(),
+            Event::CompleteStampedLink(keys) => f
+                .debug_struct("CompleteStampedLink")
+                .field("dest_hash", &keys.dest_hash)
+                .field("stamp_value", &keys.stamp_value)
                 .finish(),
             Event::SendRequest { link_id, path, .. } => f
                 .debug_struct("SendRequest")
