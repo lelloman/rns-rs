@@ -83,11 +83,12 @@ pub use driver::BackbonePeerPoolSettings;
 pub use driver::{AnnounceRateDefaults, Callbacks};
 pub use event::{
     BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
-    BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse,
-    LinkDatagramError, LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry,
-    QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat, TrafficDetail,
+    BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo, Event, HookInfo,
+    InterfaceStatsResponse, LinkDatagramError, LinkInfoEntry, LocalDestinationEntry,
+    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
+    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    TrafficDetail,
 };
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]

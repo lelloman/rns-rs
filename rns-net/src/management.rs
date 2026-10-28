@@ -104,6 +104,7 @@ mod tests {
                     ifac_violations: 0,
                     packet_filter_hits: 0,
                     hop_limiter_hits: 0,
+                    stamped_path_requests: 0,
                     rx_packets: 10,
                     tx_packets: 20,
                     cpu_load: None,

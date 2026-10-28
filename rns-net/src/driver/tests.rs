@@ -5912,6 +5912,70 @@ fn runtime_config_list_contains_global_keys() {
     assert!(keys.contains(&"global.known_destinations_ttl_secs".to_string()));
     assert!(keys.contains(&"global.rate_limiter_ttl_secs".to_string()));
     assert!(keys.contains(&"global.direct_connect_policy".to_string()));
+    assert!(keys.contains(&"global.stamp_destinations".to_string()));
+    assert!(keys.contains(&"global.stamp_path_requests".to_string()));
+}
+
+#[test]
+fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() {
+    let mut driver = new_test_driver();
+    for key in ["global.stamp_destinations", "global.stamp_path_requests"] {
+        let QueryResponse::RuntimeConfigEntry(Some(entry)) =
+            driver.handle_query(QueryRequest::GetRuntimeConfig { key: key.into() })
+        else {
+            panic!("expected runtime config entry for {key}");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(false), "{key}");
+        assert_eq!(entry.source, RuntimeConfigSource::Startup, "{key}");
+    }
+    assert!(!driver.engine.stamp_prs());
+    assert!(!driver.stamp_destinations.load(Ordering::Relaxed));
+
+    // The node handle reads the same flag the driver flips.
+    let shared = Arc::new(AtomicBool::new(false));
+    driver.set_stamp_destinations_flag(Arc::clone(&shared));
+
+    for (key, read_back) in [
+        (
+            "global.stamp_destinations",
+            Box::new(|d: &Driver| d.stamp_destinations.load(Ordering::Relaxed))
+                as Box<dyn Fn(&Driver) -> bool>,
+        ),
+        (
+            "global.stamp_path_requests",
+            Box::new(|d: &Driver| d.engine.stamp_prs()),
+        ),
+    ] {
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: key.into(),
+            value: RuntimeConfigValue::Bool(true),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success for {key}");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
+        assert_eq!(entry.source, RuntimeConfigSource::RuntimeOverride);
+        assert!(read_back(&driver), "{key} not applied");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: key.into(),
+            value: RuntimeConfigValue::Int(1),
+        });
+        let QueryResponse::RuntimeConfigSet(Err(err)) = response else {
+            panic!("expected a type error for {key}");
+        };
+        assert_eq!(err.code, RuntimeConfigErrorCode::InvalidType);
+        assert!(read_back(&driver), "{key} changed by a rejected value");
+
+        let response =
+            driver.handle_query_mut(QueryRequest::ResetRuntimeConfig { key: key.into() });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success for {key}");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(false));
+        assert!(!read_back(&driver), "{key} not reset");
+    }
+    assert!(!shared.load(Ordering::Relaxed));
 }
 
 #[test]

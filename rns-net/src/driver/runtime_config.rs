@@ -1431,6 +1431,20 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Interval between management announces in seconds.",
             )),
+            "global.stamp_destinations" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Bool(self.stamp_destinations.load(Ordering::Relaxed)),
+                RuntimeConfigValue::Bool(defaults.stamp_destinations),
+                RuntimeConfigApplyMode::Immediate,
+                "Stamp announces emitted by this node (Transport.STAMP_DESTINATIONS); stamps are ground on the stamper worker.",
+            )),
+            "global.stamp_path_requests" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Bool(self.engine.stamp_prs()),
+                RuntimeConfigValue::Bool(defaults.stamp_path_requests),
+                RuntimeConfigApplyMode::Immediate,
+                "Stamp path requests emitted or forwarded for local clients by this node (Transport.STAMP_PRS).",
+            )),
             "global.direct_connect_policy" => Some(make_entry(
                 key,
                 RuntimeConfigValue::String(Self::holepunch_policy_name(
@@ -1487,6 +1501,8 @@ impl Driver {
             "global.announce_cache_cleanup_batch_size",
             "global.discovery_cleanup_interval_ticks",
             "global.management_announce_interval_secs",
+            "global.stamp_destinations",
+            "global.stamp_path_requests",
             "global.direct_connect_policy",
         ]
         .into_iter()

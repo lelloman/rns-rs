@@ -201,6 +201,23 @@ pub struct AcceptedPathRequest {
     /// Stamp extension payload carried by a 64-byte path request, preserved
     /// verbatim when the request is relayed.
     ext_payload: Option<[u8; constants::PR_EXT_PAYLOAD_LENGTH]>,
+    /// Value of the carried stamp over `destination_hash || tag`, when the
+    /// extension carries the stamp marker.
+    stamp_value: Option<u32>,
+    /// Whether the carried stamp meets `PATH_REQUEST_STAMP_COST`.
+    stamped: bool,
+}
+
+impl AcceptedPathRequest {
+    /// Value of the stamp this request carried, if any.
+    pub fn stamp_value(&self) -> Option<u32> {
+        self.stamp_value
+    }
+
+    /// Whether this request carried a stamp meeting the required cost.
+    pub fn stamped(&self) -> bool {
+        self.stamped
+    }
 }
 
 /// The core transport/routing engine.
@@ -232,6 +249,10 @@ pub struct TransportEngine {
     /// node are stamped (`Transport.STAMP_PRS`). Defaults to the compile-time
     /// constant; settable so the stamping path can be exercised.
     stamp_prs: bool,
+    /// `Transport.control_hashes`: the path request and tunnel synthesis
+    /// destinations, which are handled by the engine and never bridged as
+    /// plain broadcasts.
+    control_destinations: [[u8; 16]; 2],
     discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
     discovery_path_request_deadlines: BTreeMap<[u8; 16], f64>,
     /// Path requests for destinations behind a local client, by destination:

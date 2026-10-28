@@ -658,6 +658,9 @@ pub enum QueryRequest {
     HopsTo { dest_hash: [u8; 16] },
     /// Recall identity info for a destination.
     RecallIdentity { dest_hash: [u8; 16] },
+    /// Stamp value and announced link request cost recorded for a known
+    /// destination.
+    RecallDestinationStamp { dest_hash: [u8; 16] },
     /// List known-destination lifecycle state.
     KnownDestinations,
     /// Get locally registered destinations.
@@ -795,6 +798,7 @@ pub enum QueryResponse {
     HasPath(bool),
     HopsTo(Option<u8>),
     RecallIdentity(Option<crate::common::destination::AnnouncedIdentity>),
+    RecallDestinationStamp(Option<DestinationStampInfo>),
     KnownDestinations(Vec<KnownDestinationEntry>),
     LocalDestinations(Vec<LocalDestinationEntry>),
     Links(Vec<LinkInfoEntry>),
@@ -966,6 +970,8 @@ pub struct SingleInterfaceStat {
     pub ifac_violations: u64,
     pub packet_filter_hits: u64,
     pub hop_limiter_hits: u64,
+    /// Inbound path requests whose stamp met the required cost.
+    pub stamped_path_requests: u64,
     pub rx_packets: u64,
     pub tx_packets: u64,
     pub cpu_load: Option<f64>,
@@ -1113,6 +1119,15 @@ pub struct StampedLinkKeys {
     pub sig_prv_bytes: [u8; 32],
     pub stamp_value: u32,
     pub response_tx: mpsc::Sender<[u8; 16]>,
+}
+
+/// Stamp information recorded from a destination's last announce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DestinationStampInfo {
+    /// Value of the announce stamp, 0 when the announce carried none.
+    pub stamp_value: u32,
+    /// Link request cost the destination announced, if any.
+    pub lr_cost: Option<u8>,
 }
 
 /// Next hop lookup result.

@@ -291,6 +291,10 @@ pub fn handle_status_request(
             ("ifac_violations", Value::UInt(stats.ifac_violations)),
             ("packet_filter_hits", Value::UInt(stats.packet_filter_hits)),
             ("hop_limiter_hits", Value::UInt(stats.hop_limiter_hits)),
+            (
+                "stamped_path_requests",
+                Value::UInt(stats.stamped_path_requests),
+            ),
         ];
         if let Some(br) = info.bitrate {
             ifstats.push(("bitrate", Value::UInt(br)));

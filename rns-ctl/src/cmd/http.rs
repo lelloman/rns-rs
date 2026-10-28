@@ -340,7 +340,7 @@ fn start_shared_node_connector(
         .ok();
 }
 
-/// Set up a ctrl-c signal handler.
+/// Set up a shutdown signal handler for SIGINT and SIGTERM.
 fn ctrlc_handler<F: FnOnce() + Send + 'static>(handler: F) {
     let handler = Mutex::new(Some(handler));
     libc_signal(move || {
@@ -358,7 +358,9 @@ fn ctrlc_handler<F: FnOnce() + Send + 'static>(handler: F) {
     });
 }
 
-/// Register a SIGINT handler using libc, polling in a background thread.
+/// Register a SIGINT and SIGTERM handler using libc, polling in a background
+/// thread. SIGTERM is what `docker stop`, `systemctl stop` and `kill` send;
+/// without it the process ran until the supervisor's kill timeout.
 fn libc_signal<F: FnMut() + Send + 'static>(mut callback: F) {
     std::thread::Builder::new()
         .name("signal-handler".into())
@@ -373,6 +375,7 @@ fn libc_signal<F: FnMut() + Send + 'static>(mut callback: F) {
                 }
                 unsafe {
                     libc_ffi::signal(libc_ffi::SIGINT, sig_handler as *const () as usize);
+                    libc_ffi::signal(libc_ffi::SIGTERM, sig_handler as *const () as usize);
                 }
             }
 
@@ -393,6 +396,7 @@ mod libc_ffi {
         pub fn signal(sig: i32, handler: usize) -> usize;
     }
     pub const SIGINT: i32 = 2;
+    pub const SIGTERM: i32 = 15;
 }
 
 fn print_help() {

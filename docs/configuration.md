@@ -87,9 +87,11 @@ The values shown are the defaults. Each must be a positive integer.
 
 Reticulum 1.6.0 adds proof-of-work stamps to destination announces, path
 requests, and link requests. Neither Python Reticulum nor this implementation
-exposes a configuration key for them: the behaviour is fixed at build time by
-constants in `rns-core/src/constants.rs` that mirror the upstream `Transport`
-class attributes. The defaults match upstream at the current parity target.
+exposes a configuration file key for them: the behaviour is fixed at build
+time by constants in `rns-core/src/constants.rs` that mirror the upstream
+`Transport` class attributes. The defaults match upstream at the current
+parity target. The two emission flags can additionally be switched at runtime
+on a running node, see below.
 
 | Constant | Default | Effect |
 |----------|---------|--------|
@@ -122,6 +124,23 @@ requests forwarded on behalf of local clients, wait for the worker; generated
 path request stamps are cached by destination and tag (256 entries) so one
 grind serves a request relayed on several interfaces. None of this runs while
 both flags are off, which is the upstream default.
+
+The two emission flags are exposed as runtime config keys so a node can be
+switched to stamped emission without a rebuild, for interoperability testing
+or ahead of the network turning enforcement on:
+
+```bash
+rns-ctl config get global.stamp_destinations         # false by default
+rns-ctl config set global.stamp_path_requests true
+rns-ctl config reset global.stamp_path_requests
+```
+
+Both keys apply immediately and reset to the compile-time default. A valid
+inbound stamp is observable on the receiving side: `/api/identity/<hash>`
+(and the known-destinations RPC) report the recorded `stamp_value` and the
+announced `lr_cost`, and every interface counts validated inbound path request
+stamps as `stamped_path_requests` in `/api/interfaces`, the RPC interface
+stats, and the management export.
 
 ## Ingress control
 
