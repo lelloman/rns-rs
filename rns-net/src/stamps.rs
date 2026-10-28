@@ -194,6 +194,13 @@ pub fn generate_stamped_link_keys(
 
 /// Generate a detached stamp with the given cost using rayon workers.
 ///
+/// This is the native counterpart of every upstream `Stamps` job runner
+/// (`job_simple`, `job_linux`, `job_linux_managed`, `job_android` and the
+/// persistent Android runner added in `4867e889`): those pick a worker
+/// strategy per platform because of Python's process model, whereas the
+/// rayon pool covers all targets here. The stamp format and the value
+/// computation are identical.
+///
 /// Returns `(stamp, value)`, or `None` when the cost is above the protocol cap.
 pub fn generate_stamp(
     material: &[u8],
