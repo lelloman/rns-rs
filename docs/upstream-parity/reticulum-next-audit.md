@@ -291,7 +291,6 @@ All fifteen commits have a final disposition and a mapping commit. Before a
 versioned parity record can be created:
 
 - run exact-target Python/Rust interoperability against `ca6451a0`;
-- run the workspace-wide test, feature, formatting, and host lint gates;
 - record build, Docker, hardware, and manual gates honestly (the daily
   dual-VPS Backbone smoke is operational evidence, not promotion acceptance);
 - document the user-visible stamp knobs natively.
@@ -304,7 +303,11 @@ this file stays the active audit.
 - `2026-10-28`: Daily drift check found rgit `master` at `ca6451a0`, 15 commits
   past the accepted `9a01a20c` baseline. GitHub `master` at `e40191b3` was
   `behind` and fresh. All 15 mapping commits landed in upstream ancestry order
-  with `Upstream-Commit` trailers. `rns-crypto`, `rns-core`, and `rns-net`
-  tests passed, and formatting plus `clippy -D warnings` passed for those
-  crates. No deployment, restart, or reconfiguration of the VPS nodes was
-  performed.
+  with `Upstream-Commit` trailers. `cargo test --workspace`,
+  `cargo test -p rns-net --features rns-hooks-native`,
+  `cargo check --workspace --all-targets`, the release `rns-server`
+  `rns-hooks-native` build, `cargo fmt --all --check`, and workspace
+  `clippy --all-targets -D warnings` all passed. Two non-trailer build fixes
+  (`8e100d3`, `85e71f4`) carry the new known-destination and announce fields
+  into the `rnid` test and hook-injected announce conversion. No deployment,
+  restart, or reconfiguration of the VPS nodes was performed.
