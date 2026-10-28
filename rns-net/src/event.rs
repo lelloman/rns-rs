@@ -10,14 +10,15 @@ use rns_core::transport::types::InterfaceId;
 
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerPoolMemberStatus,
-    BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DrainStatus,
-    DynamicInterfaceRegistration, HolePunchPolicy, HookInfo, InterfaceManagementOperation,
-    InterfaceStatsResponse, InterfaceTelemetry, KnownDestinationEntry, LifecycleState,
-    LinkDatagramError, LinkDistributionEntry, LinkInfoEntry, LocalDestinationEntry,
-    NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats, ProviderBridgeStats,
-    QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SendProbeError, SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
+    BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo,
+    DrainStatus, DynamicInterfaceRegistration, HolePunchPolicy, HookInfo,
+    InterfaceManagementOperation, InterfaceStatsResponse, InterfaceTelemetry,
+    KnownDestinationEntry, LifecycleState, LinkDatagramError, LinkDistributionEntry, LinkInfoEntry,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats,
+    ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry,
+    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
+    RuntimeConfigSource, RuntimeConfigValue, SendProbeError, SingleInterfaceStat, TrafficDetail,
+    MAX_PROBE_PAYLOAD_SIZE,
 };
 
 /// Concrete Event type using boxed sync Writer.

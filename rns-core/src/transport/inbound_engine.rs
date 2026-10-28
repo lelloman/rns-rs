@@ -243,9 +243,18 @@ impl TransportEngine {
     }
 
     fn bridge_plain_broadcast(&self, ctx: &InboundPacketCtx, actions: &mut Vec<TransportAction>) {
+        // Transport.py:2227: control destinations (path requests and tunnel
+        // synthesis) are handled by the engine, which re-emits path requests
+        // itself, and are never bridged raw. Bridging them as well would send
+        // a local client's path request twice, once raw and once rebuilt
+        // (and stamped, when STAMP_PRS is on), with the rebuilt copy then
+        // dropped downstream as a duplicate tag.
         if ctx.packet.flags.destination_type != constants::DESTINATION_PLAIN
             || ctx.packet.flags.transport_type != constants::TRANSPORT_BROADCAST
             || !self.has_local_clients()
+            || self
+                .control_destinations
+                .contains(&ctx.packet.destination_hash)
         {
             return;
         }

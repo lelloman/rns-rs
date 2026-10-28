@@ -933,6 +933,9 @@ impl Driver {
                     return;
                 };
                 if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
+                    if request.stamped() {
+                        entry.stats.stamped_path_requests += 1;
+                    }
                     entry
                         .stats
                         .record_incoming_path_request_bytes(now, raw.len());

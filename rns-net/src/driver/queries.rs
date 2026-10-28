@@ -129,6 +129,7 @@ impl Driver {
                 ifac_violations: entry.stats.ifac_violations,
                 packet_filter_hits: entry.stats.packet_filter_hits,
                 hop_limiter_hits: entry.stats.hop_limiter_hits,
+                stamped_path_requests: entry.stats.stamped_path_requests,
                 rx_packets: entry.stats.rx_packets,
                 tx_packets: entry.stats.tx_packets,
                 cpu_load: entry.stats.cpu_load,
@@ -188,6 +189,7 @@ impl Driver {
             let mut ifac_violations = 0;
             let mut packet_filter_hits = 0;
             let mut hop_limiter_hits = 0;
+            let mut stamped_path_requests = 0;
             let mut tx_drops = 0;
             let mut tx_dropped_bytes = 0;
             let mut tx_stalled = false;
@@ -200,6 +202,7 @@ impl Driver {
                         ifac_violations += child.stats.ifac_violations;
                         packet_filter_hits += child.stats.packet_filter_hits;
                         hop_limiter_hits += child.stats.hop_limiter_hits;
+                        stamped_path_requests += child.stats.stamped_path_requests;
                         if let Some(metrics) = &child.async_writer_metrics {
                             tx_drops += metrics.tx_drops();
                             tx_dropped_bytes += metrics.tx_dropped_bytes();
@@ -227,6 +230,7 @@ impl Driver {
                 ifac_violations,
                 packet_filter_hits,
                 hop_limiter_hits,
+                stamped_path_requests,
                 rx_packets: 0,
                 tx_packets: 0,
                 cpu_load: None,
@@ -738,6 +742,9 @@ impl Driver {
                 QueryResponse::HopsTo(self.engine.hops_to(&dest_hash))
             }
             QueryRequest::RecallIdentity { .. } => QueryResponse::RecallIdentity(None),
+            QueryRequest::RecallDestinationStamp { .. } => {
+                QueryResponse::RecallDestinationStamp(None)
+            }
             QueryRequest::KnownDestinations => {
                 QueryResponse::KnownDestinations(self.known_destination_entries())
             }
@@ -827,6 +834,14 @@ impl Driver {
                     log::error!("mutation query branch unexpectedly returned no response");
                     fallback
                 })
+            }
+            QueryRequest::RecallDestinationStamp { dest_hash } => {
+                QueryResponse::RecallDestinationStamp(self.known_destinations.get(&dest_hash).map(
+                    |state| crate::event::DestinationStampInfo {
+                        stamp_value: state.stamp_value,
+                        lr_cost: state.lr_cost,
+                    },
+                ))
             }
             QueryRequest::RecallIdentity { dest_hash } => {
                 let recalled = self.known_destination_announced(&dest_hash);
@@ -1013,6 +1028,20 @@ impl Driver {
                             Err(err) => Err(err),
                         }
                     }
+                    "global.stamp_destinations" => match Self::expect_bool(value, &key) {
+                        Ok(value) => {
+                            self.stamp_destinations.store(value, Ordering::Relaxed);
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    },
+                    "global.stamp_path_requests" => match Self::expect_bool(value, &key) {
+                        Ok(value) => {
+                            self.engine.set_stamp_prs(value);
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    },
                     "global.direct_connect_policy" => {
                         let policy = match Self::parse_holepunch_policy(&value) {
                             Some(policy) => policy,
@@ -1115,6 +1144,15 @@ impl Driver {
                     "global.management_announce_interval_secs" => {
                         self.management_announce_interval_secs =
                             defaults.management_announce_interval_secs;
+                        Ok(())
+                    }
+                    "global.stamp_destinations" => {
+                        self.stamp_destinations
+                            .store(defaults.stamp_destinations, Ordering::Relaxed);
+                        Ok(())
+                    }
+                    "global.stamp_path_requests" => {
+                        self.engine.set_stamp_prs(defaults.stamp_path_requests);
                         Ok(())
                     }
                     "global.direct_connect_policy" => {

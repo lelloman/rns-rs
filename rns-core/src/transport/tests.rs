@@ -5758,6 +5758,84 @@ fn test_shared_instance_forwards_local_client_path_request() {
 }
 
 #[test]
+fn local_client_path_requests_are_not_bridged_as_plain_broadcasts() {
+    // Transport.py:2227 excludes control destinations from the plain
+    // broadcast bridge: the path request handler re-emits the request
+    // itself, so bridging the raw frame too would send it twice.
+    for transport_enabled in [false, true] {
+        let (mut engine, _) = make_issue183_daemon(transport_enabled);
+        let request = make_path_request_data(&[0xE8; 16], &[0x33; 16]);
+        let actions = engine.handle_path_request(&request, InterfaceId(2), 1003.0);
+        assert!(
+            !actions
+                .iter()
+                .any(|action| matches!(action, TransportAction::ForwardPlainBroadcast { .. })),
+            "path requests must not be bridged raw (transport_enabled={transport_enabled})"
+        );
+        // The handler's own re-emission is the only copy on the external interface.
+        assert_eq!(
+            issue183_path_requests_on(&actions, InterfaceId(3), &[0xE8; 16]).len(),
+            1
+        );
+
+        // Full inbound processing agrees: the raw frame is delivered to the
+        // engine's own handler and not bridged. The driver registers the
+        // path request destination as a local PLAIN destination at startup.
+        let (mut engine, _) = make_issue183_daemon(transport_enabled);
+        let path_request_dest =
+            crate::destination::destination_hash("rnstransport", &["path", "request"], None);
+        engine.register_destination(path_request_dest, constants::DESTINATION_PLAIN);
+        let raw = build_issue183_h1(
+            &path_request_dest,
+            constants::DESTINATION_PLAIN,
+            constants::PACKET_TYPE_DATA,
+            constants::CONTEXT_NONE,
+            &make_path_request_data(&[0xE9; 16], &[0x34; 16]),
+        );
+        let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&raw.raw, InterfaceId(2), 1004.0),
+            &mut rng,
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|action| matches!(action, TransportAction::ForwardPlainBroadcast { .. })),
+            "inbound control traffic from a local client must not be bridged"
+        );
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                TransportAction::DeliverLocal { destination_hash, .. } if *destination_hash == path_request_dest
+            )),
+            "the path request is still delivered to the engine's handler"
+        );
+
+        // Other plain broadcasts from local clients are still bridged.
+        let other_dest = crate::destination::destination_hash("e2e", &["plain", "chat"], None);
+        engine.register_destination(other_dest, constants::DESTINATION_PLAIN);
+        let raw = build_issue183_h1(
+            &other_dest,
+            constants::DESTINATION_PLAIN,
+            constants::PACKET_TYPE_DATA,
+            constants::CONTEXT_NONE,
+            b"hello",
+        );
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&raw.raw, InterfaceId(2), 1005.0),
+            &mut rng,
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TransportAction::ForwardPlainBroadcast {
+                to_local: false,
+                ..
+            }
+        )));
+    }
+}
+
+#[test]
 fn stamping_shared_instance_queues_stamps_for_unstamped_local_client_path_requests() {
     for transport_enabled in [false, true] {
         let unknown_dest = [0xE6; 16];

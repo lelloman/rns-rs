@@ -908,8 +908,10 @@ pub struct RnsNode {
     known_destinations_store: Option<Arc<crate::storage_sqlite::KnownDestinationsStore>>,
     stamp_store: Option<crate::stamps::DestinationStampStore>,
     /// `Transport.STAMP_DESTINATIONS`: whether announces from this node carry
-    /// a destination stamp. Defaults to the compile-time constant.
-    stamp_destinations: bool,
+    /// a destination stamp. Defaults to the compile-time constant; shared
+    /// with the driver, which applies the `global.stamp_destinations`
+    /// runtime config key.
+    stamp_destinations: Arc<AtomicBool>,
     stamp_targets: crate::stamper::StampTargets,
     /// Shared with the driver; grinds stamps off the calling thread.
     stamper: Option<Arc<crate::stamper::Stamper>>,
@@ -1531,13 +1533,14 @@ impl RnsNode {
         queue_config: NodeQueueConfig,
         interface_management: Option<InterfaceManagementConfig>,
     ) -> io::Result<Self> {
+        let storage_dir = config.cache_dir.as_ref().map(|cache_dir| {
+            cache_dir
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("storage")
+        });
         let transport_state_dir = if config.transport_enabled {
-            config.cache_dir.as_ref().map(|cache_dir| {
-                cache_dir
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .join("storage")
-            })
+            storage_dir.clone()
         } else {
             None
         };
@@ -1610,6 +1613,8 @@ impl RnsNode {
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         let stamper = Arc::new(crate::stamper::Stamper::new(tx.clone(), None));
         driver.set_stamper(Arc::clone(&stamper));
+        let stamp_destinations = Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS));
+        driver.set_stamp_destinations_flag(Arc::clone(&stamp_destinations));
         driver.underlay_mark = config.underlay_mark;
         driver
             .link_manager
@@ -2502,7 +2507,7 @@ impl RnsNode {
             (None, None)
         };
 
-        Ok(RnsNode {
+        let mut node = RnsNode {
             tx,
             driver_handle: Some(driver_handle),
             verify_handle: Some(verify_handle),
@@ -2518,13 +2523,20 @@ impl RnsNode {
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,
-            stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
+            stamp_destinations,
             stamp_targets: crate::stamper::StampTargets::default(),
             stamper: Some(stamper),
             transport_state_dir,
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
-        })
+        };
+        // Destination stamps live under `storage/stamps` next to the cache
+        // directory, the layout `from_config_dirs` uses; a node without a
+        // cache directory cannot stamp its announces.
+        if let Some(storage_dir) = storage_dir {
+            node.set_stamp_store(crate::stamps::DestinationStampStore::new(&storage_dir));
+        }
+        Ok(node)
     }
 
     /// Query the driver for state information.
@@ -3361,7 +3373,7 @@ impl RnsNode {
         build_announce_packet(
             &self.tx,
             self.stamp_store.as_ref(),
-            self.stamp_destinations,
+            self.stamp_destinations.load(Ordering::Relaxed),
             self.stamp_targets,
             dest,
             identity,
@@ -3377,7 +3389,7 @@ impl RnsNode {
         dest: &crate::destination::Destination,
         identity: &Identity,
     ) -> bool {
-        if !self.stamp_destinations || self.stamper.is_none() {
+        if !self.stamp_destinations.load(Ordering::Relaxed) || self.stamper.is_none() {
             return false;
         }
         let (Some(store), Some(public_key)) =
@@ -3440,7 +3452,7 @@ impl RnsNode {
         enabled: bool,
         targets: crate::stamper::StampTargets,
     ) {
-        self.stamp_destinations = enabled;
+        self.stamp_destinations.store(enabled, Ordering::Relaxed);
         self.stamp_targets = targets;
         if let Some(stamper) = self.stamper.as_ref() {
             stamper.set_targets(targets);
@@ -3615,6 +3627,20 @@ impl RnsNode {
             dest_hash: dest_hash.0,
         })? {
             QueryResponse::RecallIdentity(v) => Ok(v),
+            _ => Ok(None),
+        }
+    }
+
+    /// Stamp value and announced link request cost recorded from a known
+    /// destination's last announce.
+    pub fn recall_destination_stamp(
+        &self,
+        dest_hash: &rns_core::types::DestHash,
+    ) -> Result<Option<crate::event::DestinationStampInfo>, SendError> {
+        match self.query(QueryRequest::RecallDestinationStamp {
+            dest_hash: dest_hash.0,
+        })? {
+            QueryResponse::RecallDestinationStamp(v) => Ok(v),
             _ => Ok(None),
         }
     }
@@ -3952,7 +3978,7 @@ impl RnsNode {
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,
-            stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
+            stamp_destinations: Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS)),
             stamp_targets: crate::stamper::StampTargets::default(),
             stamper: None,
             transport_state_dir: None,
@@ -4691,7 +4717,7 @@ mod tests {
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,
-            stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
+            stamp_destinations: Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS)),
             stamp_targets: crate::stamper::StampTargets::default(),
             stamper: None,
             transport_state_dir: None,

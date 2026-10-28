@@ -471,6 +471,7 @@ fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
                         "txb": i.txb,
                         "rx_packets": i.rx_packets,
                         "tx_packets": i.tx_packets,
+                        "stamped_path_requests": i.stamped_path_requests,
                         "cpu_load": i.cpu_load,
                         "mem_load": i.mem_load,
                         "switch_id": i.switch_id.map(|value| to_hex(&value)),
@@ -718,14 +719,22 @@ fn handle_recall_identity(hash_str: &str, node: &NodeHandle) -> HttpResponse {
     };
 
     with_node(node, |n| match n.recall_identity(&DestHash(dest_hash)) {
-        Ok(Some(ai)) => HttpResponse::ok(json!({
-            "dest_hash": to_hex(&ai.dest_hash.0),
-            "identity_hash": to_hex(&ai.identity_hash.0),
-            "public_key": to_hex(&ai.public_key),
-            "app_data": ai.app_data.as_ref().map(|d| to_base64(d)),
-            "hops": ai.hops,
-            "received_at": ai.received_at,
-        })),
+        Ok(Some(ai)) => {
+            let stamp = n
+                .recall_destination_stamp(&DestHash(dest_hash))
+                .ok()
+                .flatten();
+            HttpResponse::ok(json!({
+                "dest_hash": to_hex(&ai.dest_hash.0),
+                "identity_hash": to_hex(&ai.identity_hash.0),
+                "public_key": to_hex(&ai.public_key),
+                "app_data": ai.app_data.as_ref().map(|d| to_base64(d)),
+                "hops": ai.hops,
+                "received_at": ai.received_at,
+                "stamp_value": stamp.map(|s| s.stamp_value).unwrap_or(0),
+                "lr_cost": stamp.and_then(|s| s.lr_cost),
+            }))
+        }
         Ok(None) => HttpResponse::not_found(),
         Err(_) => HttpResponse::internal_error("Query failed"),
     })

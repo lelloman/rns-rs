@@ -54,7 +54,9 @@ a terminal and never written to the log. Clients send it as
 Limits: request bodies above 4 MiB get `413`, the token is checked before any
 body is read, and at most 64 concurrent connections are served (`503` beyond
 that). The port can also be set with `RNSCTL_HTTP_PORT`. Build with
-`--features tls` for TLS.
+`--features tls` for TLS. The server shuts down cleanly on `SIGINT` or
+`SIGTERM`, so `docker stop` and `systemctl stop` do not have to wait for their
+kill timeout.
 
 Endpoints:
 

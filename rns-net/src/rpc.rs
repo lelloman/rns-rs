@@ -1797,6 +1797,10 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Int(s.hop_limiter_hits as i64),
         ),
         (
+            PickleValue::String("stamped_path_requests".into()),
+            PickleValue::Int(s.stamped_path_requests as i64),
+        ),
+        (
             PickleValue::String("rx_packets".into()),
             PickleValue::Int(s.rx_packets as i64),
         ),
@@ -3573,6 +3577,7 @@ mod tests {
                             ifac_violations: 0,
                             packet_filter_hits: 0,
                             hop_limiter_hits: 0,
+                            stamped_path_requests: 0,
                             rx_packets: 10,
                             tx_packets: 20,
                             cpu_load: None,
@@ -4021,6 +4026,7 @@ mod tests {
                 ifac_violations: 12,
                 packet_filter_hits: 13,
                 hop_limiter_hits: 14,
+                stamped_path_requests: 0,
                 rx_packets: 5,
                 tx_packets: 10,
                 cpu_load: Some(12.0),

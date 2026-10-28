@@ -260,6 +260,8 @@ impl TransportEngine {
 
         let tag_len = tag_bytes.len().min(16);
 
+        let mut carried_stamp_value = None;
+        let mut stamped = false;
         if constants::STAMPS_ENABLED {
             // Diagnostics follow upstream 5d38ce30: stamped requests log their
             // value, unstamped relays from stamp-aware nodes (0xFF sentinel)
@@ -285,6 +287,8 @@ impl TransportEngine {
                     let stamp = &ext[constants::EXT_HEADER_LENGTH..];
                     let value = crate::stamp::stamp_value(&workblock, stamp);
                     let valid = value >= u32::from(constants::PATH_REQUEST_STAMP_COST);
+                    carried_stamp_value = Some(value);
+                    stamped = valid;
                     if valid {
                         log::debug!(
                             "Stamped path request for {:02x?} with value {value}",
@@ -331,6 +335,8 @@ impl TransportEngine {
             destination_hash,
             already_in_flight,
             ext_payload,
+            stamp_value: carried_stamp_value,
+            stamped,
         })
     }
 

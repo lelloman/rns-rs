@@ -161,6 +161,10 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) discovery_cleanup_interval_ticks: u32,
     pub(crate) management_announce_interval_secs: f64,
     pub(crate) direct_connect_policy: crate::event::HolePunchPolicy,
+    /// `Transport.STAMP_DESTINATIONS` default.
+    pub(crate) stamp_destinations: bool,
+    /// `Transport.STAMP_PRS` default.
+    pub(crate) stamp_path_requests: bool,
     #[cfg(feature = "hooks")]
     pub(crate) provider_queue_max_events: usize,
     #[cfg(feature = "hooks")]
@@ -775,6 +779,9 @@ pub struct Driver {
     /// Grinds own path request and announce stamps off the driver thread.
     /// Replaced by the node's shared instance at startup.
     pub(crate) stamper: Arc<crate::stamper::Stamper>,
+    /// `Transport.STAMP_DESTINATIONS`, shared with the node handle whose
+    /// announce API reads it; settable as `global.stamp_destinations`.
+    pub(crate) stamp_destinations: Arc<AtomicBool>,
     /// Maximum queued outbound frames per interface writer worker.
     pub(crate) interface_writer_queue_capacity: usize,
     /// Linux mark inherited by dynamically created IP underlay sockets.
@@ -940,6 +947,8 @@ impl Driver {
             discovery_cleanup_interval_ticks: DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS,
             management_announce_interval_secs: DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS,
             direct_connect_policy: crate::event::HolePunchPolicy::default(),
+            stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
+            stamp_path_requests: rns_core::constants::STAMP_PRS,
             #[cfg(feature = "hooks")]
             provider_queue_max_events: crate::provider_bridge::ProviderBridgeConfig::default()
                 .queue_max_events,
@@ -995,6 +1004,7 @@ impl Driver {
                 None,
             ),
             stamper: Arc::new(crate::stamper::Stamper::new(tx.clone(), None)),
+            stamp_destinations: Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS)),
             event_tx: tx,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             underlay_mark: None,
@@ -1357,6 +1367,12 @@ impl Driver {
     /// same priority queues as upstream's single stamper thread.
     pub(crate) fn set_stamper(&mut self, stamper: Arc<crate::stamper::Stamper>) {
         self.stamper = stamper;
+    }
+
+    /// Share the node handle's `STAMP_DESTINATIONS` flag so runtime config
+    /// changes made here are seen by the announce API.
+    pub(crate) fn set_stamp_destinations_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.stamp_destinations = flag;
     }
 
     /// The flag the node handle reads to refuse new work once draining starts.

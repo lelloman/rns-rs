@@ -730,10 +730,30 @@ fn start_client_node_with_packet_hashlist(
     callbacks: Box<dyn Callbacks>,
     packet_hashlist_max_entries: usize,
 ) -> RnsNode {
+    start_client_node_with_options(
+        port,
+        identity,
+        callbacks,
+        packet_hashlist_max_entries,
+        None,
+        false,
+    )
+}
+
+/// A TCP client node with an optional cache directory (which also gives it a
+/// `storage/` directory for destination stamps) and optional transport.
+fn start_client_node_with_options(
+    port: u16,
+    identity: &Identity,
+    callbacks: Box<dyn Callbacks>,
+    packet_hashlist_max_entries: usize,
+    cache_dir: Option<std::path::PathBuf>,
+    transport_enabled: bool,
+) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: true,
-            transport_enabled: false,
+            transport_enabled,
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::from_private_key(
@@ -762,7 +782,7 @@ fn start_client_node_with_packet_hashlist(
             instance_name: "default".into(),
             shared_instance_port: 37428,
             rpc_port: 0,
-            cache_dir: None,
+            cache_dir,
             ratchet_store: None,
             ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
@@ -6015,4 +6035,315 @@ fn test_path_request_answered_for_destination_hosted_on_transport_node() {
 
     bob.shutdown();
     transport.shutdown();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Stamps: the asynchronous stamper queue end to end
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Upstream 1.6.0 stamps announces (`STAMP_DESTINATIONS`) and path requests
+// (`STAMP_PRS`) on a background stamper thread. Both flags default to off on
+// both sides; here they are switched on through the `global.stamp_*` runtime
+// config keys so the full path can be exercised: the API returns at once, the
+// worker grinds at the protocol cost, the peer validates and records the
+// stamp, and a shared instance stamps requests on behalf of unstamped local
+// clients.
+
+/// Grinding a 23-bit destination stamp in a debug build can take a while on
+/// a small CI runner.
+const STAMP_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn set_runtime_bool(node: &RnsNode, key: &str, value: bool) {
+    match node.query(QueryRequest::SetRuntimeConfig {
+        key: key.into(),
+        value: RuntimeConfigValue::Bool(value),
+    }) {
+        Ok(QueryResponse::RuntimeConfigSet(Ok(_))) => {}
+        other => panic!("setting {key} to {value} failed: {other:?}"),
+    }
+    assert_eq!(
+        runtime_config_value(node, key),
+        RuntimeConfigValue::Bool(value)
+    );
+}
+
+/// `(path requests received, of which stamped)` summed over the node's
+/// interfaces.
+fn path_request_counts(node: &RnsNode) -> (u64, u64) {
+    match node.query(QueryRequest::InterfaceStats) {
+        Ok(QueryResponse::InterfaceStats(stats)) => {
+            stats
+                .interfaces
+                .iter()
+                .fold((0, 0), |(received, stamped), iface| {
+                    (
+                        received + iface.traffic.prxc,
+                        stamped + iface.stamped_path_requests,
+                    )
+                })
+        }
+        other => panic!("unexpected interface stats response: {other:?}"),
+    }
+}
+
+/// Stamped path requests accepted on any of the node's interfaces.
+fn stamped_path_requests(node: &RnsNode) -> u64 {
+    path_request_counts(node).1
+}
+
+fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if condition() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
+    let state_dir = tempfile::tempdir().unwrap();
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let alice_identity = Identity::new(&mut OsRng);
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["stamp", "announce"],
+        IdentityHash(*alice_identity.hash()),
+    );
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice = start_client_node_with_options(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+        rns_core::constants::HASHLIST_MAXSIZE,
+        Some(state_dir.path().join("cache")),
+        false,
+    );
+    alice
+        .register_destination_with_proof(
+            &alice_dest,
+            Some(alice_identity.get_private_key().unwrap()),
+        )
+        .unwrap();
+
+    let bob_identity = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob = start_client_node(port, &bob_identity, Box::new(TestCallbacks::new(bob_tx)));
+
+    wait_for_event(&alice_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    // The upstream default is off and reads back as such.
+    assert_eq!(
+        runtime_config_value(&alice, "global.stamp_destinations"),
+        RuntimeConfigValue::Bool(false)
+    );
+    set_runtime_bool(&alice, "global.stamp_destinations", true);
+
+    // Destination.announce with STAMP_DESTINATIONS and no persisted stamp:
+    // the call returns at once and the worker grinds, persists and emits.
+    let started = Instant::now();
+    alice
+        .announce_queued(&alice_dest, &alice_identity, Some(b"stamped"))
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the announce API must not grind the stamp on the caller's thread"
+    );
+
+    let announced = wait_for_announce(&bob_rx, &alice_dest.hash, STAMP_TIMEOUT)
+        .expect("Bob never received Alice's stamped announce");
+    // A valid stamp extension is stripped from the app data on receipt and
+    // recorded separately, as upstream Identity.validate_announce does.
+    assert_eq!(announced.app_data.as_deref(), Some(b"stamped".as_slice()));
+    for (name, node) in [("Bob", &bob), ("the transport", &transport)] {
+        let recorded = node
+            .recall_destination_stamp(&alice_dest.hash)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{name} did not record Alice's announce"));
+        assert!(
+            recorded.stamp_value >= u32::from(rns_core::constants::DESTINATION_STAMP_COST),
+            "{name} recorded stamp value {} below the destination cost",
+            recorded.stamp_value
+        );
+        assert_eq!(
+            recorded.lr_cost,
+            Some(rns_core::constants::LINK_REQUEST_STAMP_COST),
+            "{name} must record the announced link request cost"
+        );
+    }
+
+    // The stamp was persisted where a restarted node reloads it.
+    let hex_hash: String = alice_dest
+        .hash
+        .0
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let stamp_file = state_dir
+        .path()
+        .join("storage")
+        .join("stamps")
+        .join(format!("{hex_hash}.dstamp"));
+    assert!(stamp_file.exists(), "missing {}", stamp_file.display());
+
+    // Later announces reuse the persisted stamp synchronously, including the
+    // confirmed-transmission API.
+    let before = Instant::now();
+    futures::executor::block_on(alice.announce(&alice_dest, &alice_identity, Some(b"again")))
+        .expect("synchronous stamped announce");
+    assert!(before.elapsed() < Duration::from_secs(5));
+    let again = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT)
+        .expect("Bob never received the second announce");
+    assert_eq!(again.app_data.as_deref(), Some(b"again".as_slice()));
+    assert_eq!(alice.stamper().unwrap().queued(), 0);
+
+    // Switching the flag off restores unstamped announces.
+    set_runtime_bool(&alice, "global.stamp_destinations", false);
+    alice
+        .announce_queued(&alice_dest, &alice_identity, Some(b"plain"))
+        .unwrap();
+    let plain = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT)
+        .expect("Bob never received the unstamped announce");
+    assert_eq!(plain.app_data.as_deref(), Some(b"plain".as_slice()));
+    let recorded = bob
+        .recall_destination_stamp(&alice_dest.hash)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        recorded.stamp_value, 0,
+        "an unstamped announce records no stamp"
+    );
+    assert_eq!(recorded.lr_cost, None);
+
+    alice.shutdown();
+    bob.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_stamped_path_request_is_counted_by_the_transport_and_answered() {
+    let (
+        transport,
+        alice,
+        alice_rx,
+        bob,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        bob_dest,
+        _alice_ann,
+        _bob_ann,
+    ) = setup_two_peers_announced();
+
+    // Control: with the upstream default an own path request is unstamped.
+    // The transport answers it from its path table with Bob's cached
+    // announce, which Alice already holds, so the counters are the
+    // observable here.
+    assert_eq!(
+        runtime_config_value(&alice, "global.stamp_path_requests"),
+        RuntimeConfigValue::Bool(false)
+    );
+    assert_eq!(path_request_counts(&transport), (0, 0));
+    alice.request_path(&bob_dest.hash).unwrap();
+    assert!(
+        wait_until(TIMEOUT, || path_request_counts(&transport).0 >= 1),
+        "transport never received the unstamped path request"
+    );
+    assert_eq!(path_request_counts(&transport), (1, 0));
+
+    // With STAMP_PRS the request waits for the stamper worker, then goes out
+    // with a stamp the transport validates and counts.
+    set_runtime_bool(&alice, "global.stamp_path_requests", true);
+    let started = Instant::now();
+    alice.request_path(&bob_dest.hash).unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "request_path must not grind the stamp on the caller's thread"
+    );
+    assert!(
+        wait_until(STAMP_TIMEOUT, || path_request_counts(&transport).1 >= 1),
+        "transport never counted a stamped path request"
+    );
+    assert_eq!(path_request_counts(&transport), (2, 1));
+    assert!(alice.has_path(&bob_dest.hash).unwrap());
+    let _ = &alice_rx;
+
+    alice.shutdown();
+    bob.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_shared_instance_stamps_path_requests_forwarded_for_local_clients() {
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("stamp-shared-{tcp_port}");
+    let daemon = start_shared_daemon(tcp_port, shared_port, &instance_name);
+
+    // A transport peer upstream of the daemon receives what it forwards.
+    let uplink_identity = Identity::new(&mut OsRng);
+    let (uplink_tx, uplink_rx) = mpsc::channel();
+    let uplink = start_client_node_with_options(
+        tcp_port,
+        &uplink_identity,
+        Box::new(TestCallbacks::new(uplink_tx)),
+        rns_core::constants::HASHLIST_MAXSIZE,
+        None,
+        true,
+    );
+
+    // A local client of the daemon, which never stamps its own requests.
+    let (client_tx, client_rx) = mpsc::channel();
+    let client = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(client_tx)),
+    );
+    wait_for_event(&uplink_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("uplink InterfaceUp timed out");
+    wait_for_event(&client_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("client InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    // Control: by default the client's unstamped request is forwarded as-is.
+    client.request_path(&DestHash([0x5A; 16])).unwrap();
+    assert!(
+        wait_until(TIMEOUT, || path_request_counts(&uplink).0 >= 1),
+        "the uplink never received the forwarded unstamped path request"
+    );
+    assert_eq!(path_request_counts(&uplink), (1, 0));
+
+    // Transport.request_path on a stamping shared instance finds no stamp for
+    // the client's tag, queues a stamper job per egress interface and sends
+    // the stamped request once it is ready.
+    set_runtime_bool(&daemon, "global.stamp_path_requests", true);
+    client.request_path(&DestHash([0x5B; 16])).unwrap();
+    assert!(
+        wait_until(STAMP_TIMEOUT, || stamped_path_requests(&uplink) >= 1),
+        "the uplink never received a stamped path request from the shared instance"
+    );
+    assert_eq!(path_request_counts(&uplink), (2, 1));
+
+    client.shutdown();
+    uplink.shutdown();
+    daemon.shutdown();
 }

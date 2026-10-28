@@ -572,3 +572,27 @@ link cost remains open and dormant behind `LR_STAMPS_ENFORCED`.
   without `STAMP_PRS`) and
   `announce_without_persisted_stamp_is_deferred_to_the_stamper` in `rns-net`.
   No wire format or default behaviour changed; the flags stay false.
+- `2026-10-28`: End-to-end coverage for the stamper queue, which found one
+  parity divergence. `TransportEngine::bridge_plain_broadcast` relayed every
+  PLAIN broadcast from a local client raw to the other interfaces, including
+  path requests, whereas `Transport.inbound` (Transport.py:2227) excludes the
+  control destinations; the engine then re-emitted the same request from its
+  path request handler, so a local client's request went out twice, the second
+  copy dropped downstream as a duplicate tag. With `STAMP_PRS` on, the raw
+  unstamped copy arrived first and the stamped one was the duplicate. The
+  bridge now skips the path request and tunnel synthesis destinations
+  (`local_client_path_requests_are_not_bridged_as_plain_broadcasts`). To make
+  stamped emission testable without a rebuild, the two flags became runtime
+  config keys `global.stamp_destinations` and `global.stamp_path_requests`
+  (defaults from the constants, reset restores them), inbound stamped path
+  requests are counted per interface as `stamped_path_requests` (RPC,
+  management export, `/api/interfaces`), and `/api/identity/<hash>` reports
+  the recorded `stamp_value` and `lr_cost` through the new
+  `RecallDestinationStamp` query. Tests: three in-process E2E cases in
+  `rns-net/tests/e2e.rs` (stamped announce ground off the API thread at cost
+  23 and recorded with link cost 11 by the transport and a peer, persisted and
+  reused synchronously; own stamped path request validated and counted by the
+  transport; a shared instance stamping an unstamped local client request)
+  and Docker suite `21_stamped_emission` on the chain topologies with real
+  binaries (13 checks). `rns-ctl http` also gained SIGTERM handling, found
+  because every container stop waited for compose's ten-second kill timeout.
