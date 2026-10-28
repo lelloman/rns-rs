@@ -2209,14 +2209,13 @@ impl Driver {
 
     /// Build and send a path request packet for a destination.
     pub(crate) fn handle_request_path(&mut self, dest_hash: [u8; 16]) {
-        // Build path request data: dest_hash(16) || [transport_id(16)] || random_tag(16)
+        // Build path request data: dest_hash(16) || transport_id(16) || random_tag(16).
+        // Since Reticulum 1.6.0 (upstream 156c7323) path requests always carry
+        // the transport identity, whether or not transport is enabled.
         let mut data = Vec::with_capacity(48);
         data.extend_from_slice(&dest_hash);
-
-        if self.engine.transport_enabled() {
-            if let Some(id_hash) = self.engine.identity_hash() {
-                data.extend_from_slice(id_hash);
-            }
+        if let Some(id_hash) = self.engine.identity_hash() {
+            data.extend_from_slice(id_hash);
         }
 
         // Random tag (16 bytes)
