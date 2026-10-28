@@ -96,3 +96,15 @@ settle_topology_runtime() {
   local seconds="${1:-3}"
   sleep "$seconds"
 }
+
+# count_ran_results
+#   Number of non-SKIP records in TEST_RESULTS_FILE. Comparing it before and
+#   after a suite tells whether the suite actually ran (and so left traffic
+#   worth settling before the next one) or skipped itself.
+count_ran_results() {
+  if [[ -n "${TEST_RESULTS_FILE:-}" && -f "$TEST_RESULTS_FILE" ]]; then
+    grep -cv $'^SKIP\t' "$TEST_RESULTS_FILE" || true
+  else
+    echo 0
+  fi
+}

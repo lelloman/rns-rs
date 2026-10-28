@@ -19,11 +19,16 @@ COPY tools/rns-bench tools/rns-bench
 RUN for feature in $RNS_SERVER_FEATURES; do \
       case "$feature" in rns-hooks-wasm) rustup target add wasm32-unknown-unknown; exit 0 ;; esac; \
     done
-RUN cargo build --release --bin rns-server --features "$RNS_SERVER_FEATURES"
+# Share the registry and target caches with tests/docker/Dockerfile so a
+# rerun only relinks rns-server instead of rebuilding every dependency.
+RUN --mount=type=cache,id=rns-docker-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=rns-docker-target,target=/build/target \
+    cargo build --release --bin rns-server --features "$RNS_SERVER_FEATURES" \
+    && mkdir -p /out && cp /build/target/release/rns-server /out/
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl sqlite3 && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /build/target/release/rns-server /usr/local/bin/rns-server
+COPY --from=builder /out/rns-server /usr/local/bin/rns-server
 RUN mkdir -p /etc/rns /data
 EXPOSE 8080
 HEALTHCHECK --interval=2s --timeout=2s --retries=30 \

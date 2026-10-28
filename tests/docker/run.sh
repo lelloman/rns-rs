@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
     --no-teardown) NO_TEARDOWN=true; shift ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--topology TOPO] [--suite NUM] [--clean] [--no-teardown]" >&2
+      echo "Usage: $0 [--topology TOPO] [--suite NUM[,NUM...]] [--clean] [--no-teardown]" >&2
       exit 1
       ;;
   esac
@@ -130,7 +130,11 @@ run_suite() {
   echo ""
   echo "=== Running suite: ${suite_name} ==="
 
-  settle_topology_runtime 3
+  # Settle only after a suite that actually ran; a skipped one leaves no
+  # traffic behind.
+  if $NEEDS_SETTLE; then
+    settle_topology_runtime 3
+  fi
   if ! clear_topology_runtime_state; then
     (( SUITES_RUN++ )) || true
     (( SUITES_FAILED++ )) || true
@@ -143,6 +147,8 @@ run_suite() {
     skip_chain3_suite03="1"
   fi
 
+  local ran_before
+  ran_before=$(count_ran_results)
   if RNS_E2E_SKIP_CHAIN3_REDUNDANT_SUITE03="$skip_chain3_suite03" bash "$suite_file"; then
     (( SUITES_RUN++ )) || true
   else
@@ -155,13 +161,33 @@ run_suite() {
     docker compose -f "$COMPOSE_FILE" logs --tail=50
     echo "--- End logs ---"
   fi
+  if (( $(count_ran_results) > ran_before )); then
+    NEEDS_SETTLE=true
+  else
+    NEEDS_SETTLE=false
+  fi
+}
+NEEDS_SETTLE=false
+
+# suite_matches_filter SUITE_FILE — FILTER is a comma-separated list of suite
+# number prefixes ("03,08"); any match selects the suite.
+suite_matches_filter() {
+  local name prefix
+  name="$(basename "$1")"
+  local IFS=,
+  for prefix in $SUITE_FILTER; do
+    if [[ "$name" == "${prefix}"* ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 if [[ -n "$SUITE_FILTER" ]]; then
-  # Run specific suite
+  # Run the selected suites in order
   matched=false
   for suite in "${SCRIPT_DIR}"/suites/*.sh; do
-    if [[ "$(basename "$suite")" == "${SUITE_FILTER}"* ]]; then
+    if suite_matches_filter "$suite"; then
       run_suite "$suite"
       matched=true
     fi
@@ -183,7 +209,7 @@ fi
 if ! $NO_TEARDOWN; then
   echo ""
   echo "=== Tearing down containers ==="
-  docker compose -f "$COMPOSE_FILE" down -v
+  docker compose -f "$COMPOSE_FILE" down -v -t "${COMPOSE_STOP_TIMEOUT:-2}"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

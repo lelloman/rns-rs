@@ -62,11 +62,13 @@ cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
 
 ### Docker end-to-end suites
 
-Twenty numbered suites under `tests/docker/suites/` exercise multi-node
+Twenty-one numbered suites under `tests/docker/suites/` exercise multi-node
 behaviour on generated chain, mesh, and star topologies: health, announces
 over one and many hops, packet delivery, proofs, identity recall, path tables,
 convergence, scale, link lifecycle, channels, resource transfer, concurrent
-links, node restart, burst traffic, and sentinel blacklisting. Separate
+links, node restart, burst traffic, sentinel blacklisting, and stamped
+announce and path request emission through the runtime `global.stamp_*`
+switches. Separate
 directories add shared-client reconnection, links between sibling clients of a
 shared instance and from a directly adjacent peer (issue #183, run with the
 daemon's transport both disabled and enabled), `rns-server`
@@ -75,9 +77,18 @@ suite with real TUN devices. The shared-instance-links test also builds a
 Python image with `rns==1.5.7` from PyPI (override with `RNS_VERSION`), so it
 needs network access on first run.
 
+The matrix runner prints the wall time of every round in its summary. Rounds
+are the expensive unit: starting a topology and tearing it down costs more than
+most suites, so every suite that needs five nodes shares one chain-5 round,
+suites that skip themselves do not trigger the inter-suite settle, and
+containers get a two-second stop timeout (`COMPOSE_STOP_TIMEOUT`). The
+`rns-server` image shares the cargo caches of the main test image, so only its
+first build compiles the dependencies.
+
 ```bash
 ./tests/docker/run-all.sh                                 # full matrix
 ./tests/docker/run.sh --topology chain-3 --suite 01       # one suite on one topology
+./tests/docker/run.sh --topology chain-5 --suite 03,08    # several suites, comma-separated
 ./tests/docker/nat-punch/run.sh
 ./tests/docker/rns-server/run.sh
 ./tests/docker/shared-client-reconnect/run.sh
