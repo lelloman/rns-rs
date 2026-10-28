@@ -167,42 +167,24 @@ impl TransportEngine {
         select: impl Fn(&InterfaceInfo) -> bool,
         relay_to_local_clients: bool,
     ) -> Vec<TransportAction> {
-        // A stamped request is relayed with its original tag and extension:
-        // the stamp covers the tag, so deriving a new one would invalidate it.
-        // During the transition, a stamping node marks an unstamped request
-        // relayed to local clients with the 0xFF sentinel flags byte.
+        // Since Reticulum 1.6.0 (upstream d3ec00cd, 156c7323) a relayed path
+        // request keeps the original tag: the stamp covers the tag, and the
+        // tag was recorded on acceptance so echoes are dropped. During the
+        // transition, a stamping node marks an unstamped request relayed to
+        // local clients with the 0xFF sentinel flags byte (upstream 7c1b6486).
+        // A request forwarded on behalf of a local client would instead be
+        // stamped by this node when STAMP_PRS is on; that stamper queue is
+        // deferred, so such requests are forwarded unstamped.
         let ext_payload = ctx.ext_payload.or_else(|| {
-            (relay_to_local_clients && constants::STAMP_PRS && !constants::STAMPS_ENFORCED)
-                .then(unstamped_relay_payload)
+            (relay_to_local_clients && constants::STAMP_PRS).then(unstamped_relay_payload)
         });
-        let tag: Vec<u8> = if ext_payload.is_some() {
-            ctx.tag[..ctx.tag_len].to_vec()
-        } else {
-            // Python uses a fresh random tag. The engine has no RNG here, so
-            // derive one from the request that was answered; it differs from
-            // the incoming tag and is recorded so echoes of it are dropped.
-            let mut seed = Vec::with_capacity(16 + 16 + 8 + 8);
-            seed.extend_from_slice(&ctx.destination_hash);
-            seed.extend_from_slice(&ctx.tag[..ctx.tag_len]);
-            seed.extend_from_slice(&ctx.interface_id.0.to_be_bytes());
-            seed.extend_from_slice(&ctx.now.to_bits().to_be_bytes());
-            let derived = hash::truncated_hash(&seed);
-            let mut unique_tag = [0u8; 32];
-            unique_tag[..16].copy_from_slice(&ctx.destination_hash);
-            unique_tag[16..].copy_from_slice(&derived);
-            self.insert_discovery_pr_tag(unique_tag);
-            derived.to_vec()
-        };
+        let tag = &ctx.tag[..ctx.tag_len];
 
-        let transport_identity_hash = if self.config.transport_enabled {
-            self.config.identity_hash.as_ref()
-        } else {
-            None
-        };
+        // Path requests always carry the transport identity since 1.6.0.
         let Some((raw, _)) = build_path_request_packet(
             &ctx.destination_hash,
-            transport_identity_hash,
-            &tag,
+            self.config.identity_hash.as_ref(),
+            tag,
             ext_payload.as_ref(),
         ) else {
             return Vec::new();
@@ -231,13 +213,17 @@ impl TransportEngine {
         destination_hash.copy_from_slice(&data[..16]);
 
         // Stamped 1.6.0+ requests carry a 16-byte extension payload after the
-        // destination hash, transport id and tag.
+        // destination hash, transport id and tag. Anything longer is an
+        // excessive request and is dropped. A 49..63 byte unstamped request
+        // has an oversized tag: as upstream `parse_path_request`, it is still
+        // processed with the tag truncated to 16 bytes (the caller counts the
+        // protocol violation).
         let (request_len, ext_payload) = if data.len() == constants::PATH_REQUEST_STAMPED_LENGTH {
             let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
             ext.copy_from_slice(&data[constants::PATH_REQUEST_LENGTH..]);
             (constants::PATH_REQUEST_LENGTH, Some(ext))
         } else {
-            if data.len() > constants::PATH_REQUEST_LENGTH {
+            if data.len() > constants::PATH_REQUEST_STAMPED_LENGTH {
                 return None;
             }
             (data.len(), None)
@@ -489,11 +475,17 @@ impl TransportEngine {
             })
             .collect();
 
+        // Upstream 7c1b6486: during the transition a stamping node marks an
+        // unstamped recursive request with the 0xFF sentinel instead of
+        // generating a stamp for a request it did not originate.
+        let ext_payload = ctx
+            .ext_payload
+            .or_else(|| constants::STAMP_PRS.then(unstamped_relay_payload));
         let Some((path_request_raw, path_request_len)) = build_path_request_packet(
             &ctx.destination_hash,
             self.config.identity_hash.as_ref(),
             &ctx.tag[..ctx.tag_len],
-            ctx.ext_payload.as_ref(),
+            ext_payload.as_ref(),
         ) else {
             return Vec::new();
         };

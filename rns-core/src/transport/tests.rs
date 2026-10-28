@@ -2908,7 +2908,9 @@ fn unstamped_relay_payload_has_marker_and_sentinel_flags() {
 }
 
 #[test]
-fn path_request_with_oversized_non_stamped_length_is_dropped() {
+fn path_request_with_oversized_tag_is_truncated_and_forwarded() {
+    // Transport.parse_path_request: 49..63 byte unstamped requests keep the
+    // first 16 tag bytes; the oversized tail is ignored.
     let mut engine = TransportEngine::new(make_config(true));
     engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
     engine.register_interface(make_interface(2, constants::MODE_FULL));
@@ -2917,6 +2919,28 @@ fn path_request_with_oversized_non_stamped_length_is_dropped() {
     let tag = [0x0B; 16];
     let mut data = make_transport_path_request_data(&dest, &[0x99; 16], &tag);
     data.push(0xFF);
+
+    let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+    assert_eq!(actions.len(), 1);
+    let TransportAction::SendOnInterface { raw, .. } = &actions[0] else {
+        panic!("Expected SendOnInterface for oversized-tag path request");
+    };
+    let packet = RawPacket::unpack(raw).expect("forwarded path request");
+    assert_eq!(packet.data().len(), constants::PATH_REQUEST_LENGTH);
+    assert_eq!(&packet.data()[32..], &tag);
+}
+
+#[test]
+fn path_request_longer_than_stamped_length_is_dropped() {
+    // Transport.inbound: "Excessive path request size".
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+    let dest = [0xDB; 16];
+    let tag = [0x0B; 16];
+    let mut data = make_transport_path_request_data(&dest, &[0x99; 16], &tag);
+    data.extend_from_slice(&[0xFF; constants::PR_EXT_PAYLOAD_LENGTH + 1]);
 
     let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
     assert!(actions.is_empty());
@@ -5653,9 +5677,11 @@ fn test_shared_instance_without_transport_relays_path_request_to_local_client() 
             1,
             "path request must be forwarded to local client {iface}"
         );
-        // Without transport: destination + fresh tag, no transport id.
-        assert_eq!(requests[0].len(), 32);
-        assert_ne!(&requests[0][16..], &tag[..]);
+        // Since 1.6.0 the relay carries the transport id even without
+        // transport, and keeps the original tag (the stamp covers it).
+        assert_eq!(requests[0].len(), 48);
+        assert_eq!(&requests[0][16..32], &[0x42; 16]);
+        assert_eq!(&requests[0][32..], &tag[..]);
     }
     assert!(issue183_path_requests_on(&actions, InterfaceId(3), &dest_hash).is_empty());
 
@@ -5722,17 +5748,11 @@ fn test_shared_instance_forwards_local_client_path_request() {
             "local client path request must be forwarded to the network \
              (transport_enabled={transport_enabled})"
         );
-        // As Transport.request_path: the transport id is included only with
-        // transport enabled, and the request carries a fresh tag.
-        let tag_start = if transport_enabled {
-            assert_eq!(requests[0].len(), 48);
-            assert_eq!(&requests[0][16..32], &[0x42; 16]);
-            32
-        } else {
-            assert_eq!(requests[0].len(), 32);
-            16
-        };
-        assert_ne!(&requests[0][tag_start..], &tag[..]);
+        // As Transport.request_path since 1.6.0: the transport id is always
+        // included, and the forwarded request keeps the client's tag.
+        assert_eq!(requests[0].len(), 48);
+        assert_eq!(&requests[0][16..32], &[0x42; 16]);
+        assert_eq!(&requests[0][32..], &tag[..]);
         assert!(issue183_path_requests_on(&actions, InterfaceId(2), &unknown_dest).is_empty());
     }
 }
