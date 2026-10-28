@@ -10,14 +10,33 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.6.0`
 - Version metadata commit: `af8d05819d363240c133e4bc644bfde0d4620a71`
-- Normative commit: `9a01a20ce66c4146dd8f8d31f18c19fe7600739d`
-- Commit date: `2026-10-25 02:11:47 +0200`
-- Subject: `Cleanup`
+- Normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
+- Commit date: `2026-10-28 15:09:18 +0100`
+- Subject: `Early-phase PR debug logging`
 
-The normative baseline is the canonical `rgit/master` tip `9a01a20c`, accepted
-on 2026-10-25 as Reticulum 1.6.0 from `ee82fa75`. No signed 1.6.0 tag is
-published and upstream marks the release pending, so the version is asserted
-from `RNS/_version.py` at the target. The range adds RNode phy-stat status
+The normative baseline is the canonical `rgit/master` tip `5d38ce30`, accepted
+on 2026-10-28 as a same-version Reticulum 1.6.0 advancement from `9a01a20c`.
+No signed 1.6.0 tag is published and upstream still marks the release pending,
+so the version is asserted from `RNS/_version.py` at the target. The
+twenty-commit range adds destination, path-request, and link-request stamps
+with the link establishment cost carried in announces, stamped identity keys, a
+transport hop limiter, slow-interface path linger with fast-first unused-pool
+culling, and path-request stamp diagnostics. Natively every stamp emission flag
+stays off and link request stamps are not enforced, matching the upstream
+defaults; inbound stamps are validated, announced link costs are recorded, and
+stamped link request keys are ground off the driver thread with the upstream
+timeout. The asynchronous stamper queue and per-destination link cost are
+deferred behind those flags. The target `RNS` tree is
+`8bd88056db225a1a6bd7b0e76a1b99f3e0c667df` and the root tree is
+`dd5fb64d2e3778f7f20f70db461148885ee20082`. The GitHub mirror remains at
+`e40191b3`, behind the canonical rgit tip, which is allowed. Acceptance
+evidence is in
+[`docs/upstream-parity/reticulum-1.6.0-rgit-parity.md`](docs/upstream-parity/reticulum-1.6.0-rgit-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.0-rgit-audit.md`](docs/upstream-parity/reticulum-1.6.0-rgit-audit.md).
+
+The original 1.6.0 acceptance on 2026-10-25 covered the canonical `rgit/master`
+tip `9a01a20c`, advanced from `ee82fa75`. That range added RNode phy-stat status
 fields, path usage tracking and unused-pool culling, SQLite known-destination,
 ratchet, and announce-cache stores with legacy import and file fallback,
 expanded status metrics and `link_distribution`, `rnpath --usage`, native
@@ -26,10 +45,10 @@ discovery stamps, and a discovery hop-count gate. The Python GC and
 keeps jemalloc defaults. The target `RNS` tree is
 `461df28e901e3dd8ed3877a375c28e11a9fd2a0e` and the root tree is
 `5c1bcc90971538c5df028fd9a40dc2e3cd1a5d94`. The GitHub mirror remains at
-`e40191b3`, behind the canonical rgit tip, which is allowed. Acceptance
-evidence is in
+`e40191b3`, behind the canonical rgit tip, which is allowed. That acceptance
+is recorded in
 [`docs/upstream-parity/reticulum-1.6.0-parity.md`](docs/upstream-parity/reticulum-1.6.0-parity.md)
-and the detailed audit is
+and
 [`docs/upstream-parity/reticulum-1.6.0-audit.md`](docs/upstream-parity/reticulum-1.6.0-audit.md).
 
 The previous 1.5.7 baseline was the canonical `rgit/master` tip `ee82fa75`, accepted
@@ -67,6 +86,21 @@ release baseline `3f95b472820ddfb27f736143fb0b4d0d3aa610f1` and landed the live
 interface management, discovery auto-connect criteria, IFAC sanitization,
 spawned announce-cap propagation, Backbone detach, `rnstatus` discovery filters,
 and the 1.5.6 discovery fixes, remains recorded in its own parity document.
+
+For the 2026-10-28 same-version advancement to `5d38ce30`, `cargo fmt --all
+--check`, workspace `clippy --all-targets -D warnings`,
+`bash scripts/lint-host.sh`, `cargo test --workspace --no-fail-fast` (2,961
+passed), `cargo test --workspace --features rns-hooks` (3,020 passed),
+`cargo test -p rns-net --features rns-hooks-native --lib` (1,192 passed),
+`cargo test -p rns-ctl --features tls` (134 passed), the built-in hook E2E and
+control API hook tests, the Python tool tests (19 passed), the `rns-ctl` web
+smoke (4 passed), native-hook `rns-server`/`rns-ctl` release builds
+(`0.6.1662-7e812d8` / `0.7.1662-7e812d8`), all five ARMv7 cross builds, the
+packaged tarball, exact-target Python/Rust interop at `5d38ce30` (3/3
+`python_interop` including the stamped link request case, 6/6
+`utility_interop`), `cargo audit` for both lockfiles after trimming Wasmtime's
+default features to drop the vulnerable zstd chain, the full Docker E2E matrix
+(12 runs, 102 checks, 0 failures, rerun on the promoted tree `7e812d8`), and the impaired dual-VPS `--daily` smoke (55 checks, 0 failures, on `0.6.1662-7e812d8` at 2026-10-28T17:23Z) all passed.
 
 For the 2026-10-25 1.6.0 promotion, `cargo test --workspace`,
 `cargo test --workspace --features rns-hooks` (rns-net 1,167 passed),
