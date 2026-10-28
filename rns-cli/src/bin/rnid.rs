@@ -1899,6 +1899,9 @@ mod tests {
             was_used: false,
             last_used_at: None,
             retained: false,
+            stamp: None,
+            stamp_value: 0,
+            lr_cost: None,
         };
         assert!(find_identity_entry(std::slice::from_ref(&entry), [0x22; 16]).is_some());
         assert!(find_identity_entry(std::slice::from_ref(&entry), [0x11; 16]).is_some());
