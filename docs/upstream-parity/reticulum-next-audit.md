@@ -6,13 +6,14 @@
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`
-- target normative commit: `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` (provisional; rgit may advance before promotion)
-- target root tree: `14ba7e4b639f2d8892f556d01ffd112e741fbdaf`
-- target `RNS` tree: `262a61b232145db5c97b95d59e5f3d2a99e6ad36`
+- target tag or ref: `rgit:master` tip `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`
+  (extended on 2026-10-29 from the earlier tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
+- target normative commit: `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` (provisional; rgit may advance before promotion)
+- target root tree: `fbe3e36e3e2f2efa06abd4d2d67ff0f523edfebc`
+- target `RNS` tree: `0ecaafa6adab1b5e0ba71fcca195df11faac7b52`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`
-- commits in range: `2`
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`
+- commits in range: `5` (2 inventoried at the first tip, 3 added when rgit advanced the same day)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`
@@ -24,6 +25,9 @@ baseline and is allowed mirror lag. The normative rgit `master` tip
 commits. No new tag or version bump exists, so there is no promotion target
 yet. The new example-config text announces the phased stamp rollout: 1.6.1
 enables generation and emission by default and 1.6.2 activates enforcement.
+By the evening refresh (2026-10-29T20:24Z) rgit had advanced to `a8cc6cb2`
+(committed 2026-10-29T20:01Z) with three further commits, inventoried as 3 to
+5 below; `RNS.__version__` is still `1.6.0`.
 
 ## Audit Vocabulary
 
@@ -49,6 +53,9 @@ Every commit in the audited range must appear exactly once.
 |---:|---|---|---|---|
 | 1 | `d7749b0b06008800601d18cd7be6e87b648d619b` | Stamp config wiring, path request stamp timeout, destination stamp handling | Integrated | `bf5112d`; `[stamps]` and `hop_limiter` parsing and startup wiring, runtime hop limiter, engine `StampRequirements`, `pr_stamp_timeout` cancellation, `Destination::set_value` target restamping, defaults `STAMP_LRS = false` / 25 / 15, `global.stamp_link_requests`, docs; `lr_cost` and `enforce_stamps` feed the shared per-destination link cost table of `290d6cc` |
 | 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | `0d125f2`; comment-only typo in the `PR_STAMP_TIMEOUT` declaration, recorded on the native constant |
+| 3 | `78fb90ea6f30baf7201a3fb79ec224bb5c1ca3c1` | Implemented fractional-value stamps | Integrated | `4d317ee`; `rns_crypto::stamp_value` with the verbatim `TAB` pinned by `TAB_DIGEST`/`PRM_DIGEST`, fixed-point `StampValue` replacing the integer value in validation, known destinations, path and link request stamps, discovery and the stamp store; floats on storage, RPC, API and `rnstatus`; integer values from earlier versions load as whole bits |
+| 4 | `5f46fc6b4846b71929de62dc18c9fa0f3e9d651a` | Updated changelog | Non-runtime | `Changelog.md` adds the `hop_limiter` option, integrated under commit 1. Mapping commit pending. |
+| 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Needs decision | Fractional default costs need fixed-point costs and targets; the new link request cost expression contradicts its own documentation; see analysis |
 
 ## Per-Commit Analysis
 
@@ -198,27 +205,142 @@ comment spelling; value and use are unchanged.
 
 **Final disposition:** Non-runtime.
 
+### 3. `78fb90ea` — Implemented fractional-value stamps
+
+**Upstream change:** `stamp_value` returns a fractional value. The integer
+part is the leading zero count of the stamp product (the former value, kept as
+`stamp_value_legacy`); the fraction comes from the next 33 bits, normalized
+and right-bisected into the authoritative 256-entry mantissa table `TAB`
+(`TAB[f] = floor(2^33 * 2^(f/256))`), which floors the value onto a 1/256 grid
+so a stamp is never over-valued. `stamp_valid` and every generator now compare
+against `target_from_fp(cost_to_fp(cost))`; `load_destination_stamp` checks
+the stored stamp with `stamp_valid` instead of comparing values. New
+fixed-point helpers (`cost_to_fp`, `cost_to_bytes`, `cost_from_bytes`,
+`cost_int`, `cost_str`) are added. `tests/stamps.py` is new.
+
+**Rust applicability:** Applicable where a value is computed, recorded or
+reported: announce validation (`Identity.validate_announce` records
+`stamp_value`, exposed by `recall_stamp_value` and the known-destinations
+store), link request validation (`Link.validate_request` sets
+`link.stamp_cost`), path request stamps, interface discovery (`Discovery.py`
+uses `RNS.Stamps`, and `rnstatus` prints `str(i["value"])`) and
+`Identity.get_value`. Decisions do not change: a value lies in
+`[lz, lz + 1)`, so comparing it with a whole-number cost gives the legacy
+result, and `target_from_fp(c * 256)` is `2^(256 - c)`, the legacy target
+(validity now includes a product exactly equal to the target, one point in
+`2^256`). No caller uses the cost/byte helpers yet; they are not ported until
+one does.
+
+**Local handling and evidence:** `4d317ee`. `rns-crypto/src/stamp_value.rs`
+adds `TAB` copied verbatim, `value_of_product`/`stamp_value`, and
+`StampValue`, an exact fixed-point value in 1/256 units with `whole()`
+(legacy value), `meets(cost)` (whole-number cost comparison), and `f64`
+conversions. It replaces the `u32` value in `rns-core` announce validation,
+path request stamps and the link request handshake, the `rns-crypto` stamped
+key generator and `Identity::get_value`, and in `rns-net` known destinations,
+announce events, stamped link keys, discovery, the destination stamp store and
+the backbone peer pool ordering. Values leave the process as floats: the
+known-destinations msgpack file, SQLite (`REAL` in the existing `INTEGER`
+affinity column, so no migration), the stamp store, discovery persistence, the
+RPC known-destination and discovered-interface entries, the `rns-ctl` identity
+API, and `rnstatus`, which prints them as Python `str()` does. Integer values
+written by earlier versions load as whole bits. The Docker
+`21_stamped_emission.sh` poll floors the JSON value before its integer
+comparison; `docs/configuration.md` describes fractional values. Evidence:
+`table_matches_upstream_digests`, `values_match_upstream_vectors` (30
+`(stamp, value)` pairs produced by upstream `78fb90ea` `stamp_value` over a
+fixed workblock, leading zero counts 0 to 16),
+`value_stays_within_its_legacy_integer_step`,
+`value_is_monotone_in_the_product`, `extreme_products`,
+`float_conversions_round_trip_on_the_grid`,
+`integer_stamp_values_from_earlier_versions_load_as_whole_bits`,
+`save_load_known_destinations_roundtrip` and the SQLite round trip with
+fractional values, the SQLite v1 migration loading an `INTEGER` value,
+`discovered_stamp_value_prints_like_python_str`, and
+`insufficient_stamp_diagnostic_includes_calculated_value`. Against `5f46fc6b`
+Python stamped its destination at value 25.78125 and `python_interop` matched
+it, and the link request key value, exactly; against the baseline the whole
+parts match.
+
+**Final disposition:** Integrated.
+
+### 4. `5f46fc6b` — Updated changelog
+
+**Upstream change:** `Changelog.md` gains "Added `hop_limiter` configuration
+option".
+
+**Rust applicability:** Documentation only; the option itself is commit 1.
+
+**Local handling and evidence:** Non-runtime. Mapping commit pending.
+
+**Final disposition:** Non-runtime.
+
+### 5. `a8cc6cb2` — Cleanup, logging and parameter tuning
+
+**Upstream change:**
+
+- Fractional default costs and targets: `DESTINATION_COST` 23 → 23.5,
+  `DESTINATION_VALUE` 25.0, `PR_COST` and `PR_VALUE` 19 → 19.8, `LR_COST`
+  11 → 19.2; `STAMP_COST_CAP` and `LINK_COST_CAP` become floats. The
+  `[stamps]` cost options are still parsed with `as_int`.
+- `STAMP_LRS` returns to `True`; new `ALWAYS_STAMP_LRS = False` with the
+  `[stamps] always_stamp_lrs` option, replacing `stamp_lrs`, which is no
+  longer parsed or documented.
+- `Link.__init__` sets `self.stamp_cost = RNS.Identity.recall_link_cost(h)
+  or RNS.Transport.LR_COST if RNS.Transport.ALWAYS_STAMP_LRS else None`.
+- A notice when link request stamp generation times out; `generate_stamp`
+  and `generate_stamped_key` return `None` for the value and log an abort
+  instead of a value of 0 when generation is cancelled.
+- The example config now says link requests are stamped from 1.6.0 when the
+  destination announced a cost.
+
+**Rust applicability:** Applicable, and wider than the subject suggests.
+`stamp_valid` turns the fractional costs into fixed-point targets, so an
+announce stamp of value 23.3 is no longer valid at the default cost (it is not
+stripped from the app data or recorded) even with enforcement off, and path
+request stamps below 19.8 are no longer counted as stamped. Generation
+targets (`DESTINATION_VALUE`, `PR_VALUE`, an `ALWAYS_STAMP_LRS` link cost of
+19.2) are fractional too. Rust costs and targets are `u8` throughout
+(`StampRequirements`, `StampTargets`, the generators), so this needs
+fixed-point costs and `target_from_fp` with a 257-bit target. The announced
+link cost stays an integer byte: `get_link_cost` applies `int()`, so the
+default announces 19.
+
+The new `Link.__init__` expression parses as
+`(recall_link_cost(h) or LR_COST) if ALWAYS_STAMP_LRS else None`, so as
+written a link request is never stamped unless `always_stamp_lrs` is set,
+whatever cost the destination announced, and `STAMP_LRS = True` has no effect
+by default. The example config added in the same commit states the opposite.
+Which behavior to port needs a decision.
+
+**Local handling and evidence:** None yet.
+
+**Final disposition:** Needs decision.
+
 ## Integration Plan
 
-1. Constant defaults: `STAMP_LRS = false`, `DESTINATION_STAMP_VALUE = 25`,
-   `PATH_REQUEST_STAMP_TIMEOUT = 15`, with the constants tests updated.
-2. Config: parse `[stamps]` and `[reticulum] hop_limiter` with upstream
-   clamping and enable-only boolean semantics; make the hop limiter a runtime
-   value instead of a constant; reconcile with the existing runtime config keys.
-3. Path request stamp timeout: bound stamper path-request grinding by
-   `pr_stamp_timeout` and cancel emission on expiry.
-4. Destination target value: per-destination target with the upstream clamp,
-   restamping when the held stamp is below target.
-5. Native documentation for the new config options.
+1. Decide the link request stamping behavior for commit 5: port the
+   expression as written (only `always_stamp_lrs` stamps), or the documented
+   intent (`recall_link_cost(h) or (LR_COST if ALWAYS_STAMP_LRS else None)`),
+   recording the divergence either way.
+2. Fixed-point costs and targets: `target_from_fp`, fractional
+   `DESTINATION_COST`, `PR_COST`, `LR_COST`, `DESTINATION_VALUE` and
+   `PR_VALUE` through `StampRequirements`, `StampTargets`, the stamper and
+   both generators, keeping the announced link cost an integer byte.
+3. `[stamps] always_stamp_lrs` replacing `stamp_lrs`, `STAMP_LRS = true`, the
+   runtime key, the link stamp timeout notice, and the documentation.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
-- [x] Focused regressions pass for every applicable behavior change.
+- [ ] Every upstream commit has a final disposition. Commit 5 needs a
+  decision.
+- [ ] Focused regressions pass for every applicable behavior change.
+  Commits 1 to 4 pass; commit 5 is not integrated.
 - [x] Fixture provenance and byte stability are checked where applicable
   (not applicable: no pinned fixture changed and the range changes no wire
   encoding).
-- [x] Exact-target live Python/Rust interop passes.
+- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`
+  and at `5f46fc6b`; not yet run at the current tip `a8cc6cb2`.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -284,3 +406,18 @@ requests by default); `428c48a` records both fixes.
 Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
 a2b603d..0d125f2` lists `d7749b0b…` for `bf5112d` and `c0fe08c0…` for
 `0d125f2`, one trailer each.
+
+### Fractional stamp values
+
+Run on 2026-10-29 at `4d317ee` (on `a0bbaf4`, tree-identical to `fb6bc90`), same host. Interop against
+`5f46fc6b` used a disposable worktree of that commit.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | `cargo test -p rns-crypto --lib stamp_value`; `cargo test -p rns-net --lib storage`; `cargo test -p rns-cli --bin rnstatus discovered` | 6/6; 29/29; 4/4 |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,030 passed, 0 failed, 11 ignored |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,089 passed, 0 failed |
+| Interop, baseline `5d38ce30` | `python_interop` | 4/4 (Python value 24, whole parts match) |
+| Interop, `5f46fc6b` | `python_interop`; `utility_interop -- --include-ignored` | 4/4 (Python value 25.78125, matched exactly); 9/9 |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
