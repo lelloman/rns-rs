@@ -14,7 +14,8 @@
 - audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`
 - commits in range: `2`
 - repositories checked: rgit (normative) and GitHub mirror
-- local branch and revision inspected: local `dev` at `cbcce2e`
+- local branch and revision inspected: local `dev` at `cbcce2e`; integrated
+  on `worktree-agent-a301172e8aa4682a6` from `a2b603d`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -46,8 +47,8 @@ Every commit in the audited range must appear exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `d7749b0b06008800601d18cd7be6e87b648d619b` | Stamp config wiring, path request stamp timeout, destination stamp handling | Needs coordinated port | Initial inventory only; see analysis |
-| 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | Comment-only typo in the `PR_STAMP_TIMEOUT` declaration |
+| 1 | `d7749b0b06008800601d18cd7be6e87b648d619b` | Stamp config wiring, path request stamp timeout, destination stamp handling | Integrated | `10bad64`; `[stamps]` and `hop_limiter` parsing and startup wiring, runtime hop limiter, engine `StampRequirements`, `pr_stamp_timeout` cancellation, `Destination::set_value` target restamping, defaults `STAMP_LRS = false` / 25 / 15, `global.stamp_link_requests`, docs; link request enforcement left to the concurrent `set_link_cost` port |
+| 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | `61d066a`; comment-only typo in the `PR_STAMP_TIMEOUT` declaration, recorded on the native constant |
 
 ## Per-Commit Analysis
 
@@ -84,9 +85,104 @@ that meets `destination_cost` and has no per-destination target value. The
 existing `global.stamp_destinations` / `global.stamp_path_requests` runtime
 keys need reconciling with the new file options.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `10bad64`, by integration plan step:
 
-**Final disposition:** Needs coordinated port.
+1. *Constants.* `rns-core/src/constants.rs`: `STAMP_LRS = false`,
+   `DESTINATION_STAMP_VALUE = 25`, new `PATH_REQUEST_STAMP_TIMEOUT = 15` and
+   `STAMP_TIMEOUT_MIN = 0.020`; `HOP_LIMITER` stays as the default of the
+   now runtime limiter. Evidence: `stamp_defaults_match_upstream_parameters`.
+2. *Config.* `rns-net/src/common/config.rs` parses a `[stamps]` section into
+   `StampsSection` and `[reticulum] hop_limiter`. The four switches are
+   enable-only (`no` keeps the default; an invalid boolean is an error, as
+   ConfigObj `as_bool` raises); `enforce_stamps` sets both
+   `stamps_enforced` and `lr_stamps_enforced`; costs and values clamp to
+   `0..=STAMP_COST_CAP`, `lr_cost` to `0..=LINK_COST_CAP`, integers outside
+   `i64` saturate before clamping, the timeouts are floored at 20 ms (NaN
+   floors too, as Python's `max(0.020, nan)`; `inf` means no deadline), and
+   `hop_limiter` clamps to `1..=PATHFINDER_M`. `RnsNode::from_config*`
+   applies the result at startup through `Driver::apply_stamp_config`:
+   the transport engine takes a runtime `StampRequirements`
+   (`STAMPS_ENFORCED`, `DESTINATION_COST`, `PR_COST`) used by announce stamp
+   validation and path request enforcement instead of the compile-time
+   constants; the stamper and the node's announce builder take
+   `destination_value`, `pr_value` and `lr_cost` (the announced default link
+   cost, upstream `get_link_cost`'s `LR_COST` fallback); `stamp_lrs` and
+   `lr_stamp_timeout` drive stamped link request creation in
+   `driver/link_stamps.rs`; and the driver keeps the whole section as
+   `stamp_settings`, where `lr_stamps_enforced` is available to the link
+   request enforcement port. Reconciliation with the runtime keys: the
+   existing `global.stamp_destinations` and `global.stamp_path_requests`
+   and a new `global.stamp_link_requests` start from, and reset to, the
+   configured values rather than the compile-time constants. The hop
+   limiter is a driver value checked right after decoding and before the
+   packet filter (Transport.py:2009). Review finding: the 1.6.0 rgit mapping
+   of `134db17c` counted decode failures for hop counts at or above
+   `PATHFINDER_M` as hop limiter hits, but upstream `Packet.unpack` rejects
+   those first (Packet.py:250) and `Transport.inbound` counts a protocol
+   violation (Transport.py:2008); the decoder check now uses `PATHFINDER_M`
+   and such frames count as protocol violations, so with the default limiter
+   `hop_limiter_hits` stays zero as upstream. Evidence:
+   `stamps_section_defaults_to_the_protocol_constants`,
+   `stamps_section_parses_every_option`,
+   `stamps_section_booleans_can_only_enable`,
+   `stamps_section_clamps_costs_and_timeouts`,
+   `stamps_options_outside_the_stamps_section_are_ignored`,
+   `hop_limiter_parses_and_clamps_to_pathfinder_range`,
+   `apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter`,
+   `from_config_applies_the_stamps_section_and_hop_limiter`,
+   `hop_limited_frame_counts_a_hop_limiter_hit_not_a_protocol_violation`
+   (rewritten for the configurable limiter and the malformed boundary),
+   `runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag`
+   (extended to the new key),
+   `stamp_requirements_default_to_the_protocol_constants`,
+   `enforced_announce_stamps_use_the_configured_destination_cost`,
+   `enforced_path_request_stamps_use_the_configured_cost`,
+   `create_link_is_not_stamped_unless_stamp_lrs_is_enabled`, and
+   `create_link_uses_the_configured_link_stamp_timeout`.
+3. *Path request stamp timeout.* `rns-net/src/stamps.rs` gains
+   `generate_stamp_until`, whose rayon workers check a deadline every 1024
+   nonces; `stamper::stamp_path_request` grinds under `PR_STAMP_TIMEOUT`
+   (`Stamper::set_path_request_timeout`) and on expiry logs the upstream
+   warning, emits nothing and caches nothing. The deadline is exact rather
+   than upstream's one-second watchdog polling. Evidence:
+   `stamp_generation_gives_up_at_the_deadline`,
+   `path_request_timeout_defaults_to_upstream_and_is_settable`, and
+   `path_request_stamp_timeout_cancels_emission`.
+4. *Destination target value.* `Destination` gains `target_value` and
+   `set_value` (capped at `STAMP_COST_CAP`); the effective target is
+   `min(STAMP_COST_CAP, max(value, destination_value))`
+   (`StampTargets::destination_target`). Rust keeps no in-memory stamp per
+   destination, so `announce_needs_stamp`, `ensure_destination_stamp` and
+   `build_announce_packet` load the persisted stamp at the target value and
+   grind at it, which regenerates a persisted stamp below the target as
+   Destination.py:319-323 does. `StampTargets.destination_cost` is removed:
+   emission no longer uses `DESTINATION_COST`, and the inbound requirement
+   lives in the engine. Evidence:
+   `destination_target_value_is_clamped_between_default_and_cap` and
+   `destination_stamp_below_target_value_is_regenerated`.
+5. *Documentation.* `docs/configuration.md` replaces the "no configuration
+   key" Stamps text with the `[stamps]` reference, the enable-only and clamp
+   semantics, the target-value restamping and the three runtime keys, and
+   lists `hop_limiter`; `docs/rnstatus.md` describes the configurable
+   limiter; the `rnsd --exampleconfig` text documents every new option
+   (evidence: `example_config_documents_and_parses_the_stamps_section`).
+   The upstream `using.rst` change is wording only.
+
+Interop consequences: `python_rns_stamped_link_request_interop` now enables
+`global.stamp_link_requests` before creating the stamped link, since link
+request stamping is opt-in; against `c0fe08c0` Python stamps its destination
+at value 25, the new default.
+
+Not done here, by agreement with the concurrent link request cost port:
+wiring `lr_stamps_enforced` into responder-side enforcement (the
+`LR_STAMPS_ENFORCED` check in `common/link_manager.rs` still reads the
+constant) and per-destination link costs (`Destination.set_link_cost`).
+Shared-instance clients (`connect_shared*`) parse only the instance keys and
+have no stamper, so they neither apply `[stamps]` nor stamp their own
+announces; this predates the range and is recorded as a caveat.
+
+**Final disposition:** Integrated (link request enforcement wiring belongs
+to the `set_link_cost` port, see above).
 
 ### 2. `c0fe08c0` — Fixed typo
 
@@ -94,7 +190,9 @@ keys need reconciling with the new file options.
 
 **Rust applicability:** None; comment text only.
 
-**Local handling and evidence:** No change required.
+**Local handling and evidence:** `61d066a` records on the
+`PATH_REQUEST_STAMP_TIMEOUT` documentation that upstream only corrected the
+comment spelling; value and use are unchanged.
 
 **Final disposition:** Non-runtime.
 
@@ -113,15 +211,45 @@ keys need reconciling with the new file options.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable
+  (not applicable: no pinned fixture changed and the range changes no wire
+  encoding).
+- [x] Exact-target live Python/Rust interop passes.
+- [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
+  the `rns-hooks` workspace suite, formatting and both lints passed; the
+  `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
+  suites listed in earlier parity records were not run.
 - [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+  Not run: release and cross builds, the Docker matrix (notably
+  `21_stamped_emission.sh`), the dual-VPS smoke and hardware validation.
+- [x] Native documentation is updated for user-visible behavior.
+- [ ] A final parity record is created from `PARITY-TEMPLATE.md`. Per the
+  README workflow the parity record is written at promotion, after the
+  target version is known and this file is renamed; rgit announces 1.6.1,
+  so the records may become `reticulum-1.6.1-{audit,parity}.md` rather than
+  `reticulum-1.6.0-rgit-2-{audit,parity}.md`.
 
 ## Acceptance Record
 
-No acceptance results yet.
+Integration run on 2026-10-29 at `61d066a` (on `a2b603d`), x86_64 host with
+32 cores. Exact-target interop used a disposable worktree of `c0fe08c0`
+(`import RNS` reports 1.6.0 from that tree); the accepted baseline
+`5d38ce30` was exercised from the configured checkout.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | `cargo test -p rns-core --lib stamp`; `cargo test -p rns-net --lib` filtered to `config::tests`, `stamps::tests`, `stamper::`, `hop_limited`, `create_link`, `runtime_config_stamp`, `apply_stamp_config`, `destination_stamp_below`, `from_config_applies`; `cargo test -p rns-cli example_config` | All passed |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,002 passed, 0 failed, 11 ignored (about 90 s wall) |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,061 passed, 0 failed, 11 ignored |
+| Formatting | `cargo fmt --all --check` | Clean |
+| Lint | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Interop, baseline `5d38ce30` | `PYTHONPATH=<checkout> cargo test -p rns-net --test python_interop`; `PYTHONPATH=<checkout> cargo test -p rns-cli --test utility_interop -- --include-ignored` | 3/3 (Python stamped at value 24); 9/9 |
+| Interop, target `c0fe08c0` | the same commands with `PYTHONPATH` at the `c0fe08c0` worktree | 3/3 (Python stamped at value 25; Rust cost-8 stamped link request in about 3 ms); 9/9 |
+| Drift | `python3 scripts/check_upstream_drift.py --no-fetch --upstream-dir <checkout>` | Drift from cached refs: GitHub `e40191b3` behind, rgit `c0fe08c0` ahead by the two audited commits (the worktree has no `.local/reticulum-upstream.path`, hence `--upstream-dir`) |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
+a2b603d..61d066a` lists `d7749b0b…` for `10bad64` and `c0fe08c0…` for
+`61d066a`, one trailer each.
