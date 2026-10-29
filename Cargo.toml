@@ -19,13 +19,34 @@ rns-net = { version = "0.11.0", path = "rns-net" }
 rns-hooks = { version = "0.2.0", path = "rns-hooks", default-features = false }
 rns-tun = { version = "0.1.0", path = "rns-tun", default-features = false }
 
-# Compile crypto crate with optimizations even in debug/test builds.
-# Helps curve25519-dalek performance in debug mode.
+# Compile the crypto crate and its curve arithmetic with optimizations even in
+# debug/test builds. A package override does not reach dependencies, so
+# curve25519-dalek is listed as well: unoptimized, its AVX2 field arithmetic
+# makes an Ed25519 signature or verification take ~8 ms, which turns the
+# per-packet link proofs in the test suites into a CPU bottleneck.
 [profile.dev.package.rns-crypto]
 opt-level = 2
 
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+
+[profile.dev.package.x25519-dalek]
+opt-level = 3
+
 [profile.test.package.rns-crypto]
 opt-level = 2
+
+[profile.test.package.curve25519-dalek]
+opt-level = 3
+
+[profile.test.package.ed25519-dalek]
+opt-level = 3
+
+[profile.test.package.x25519-dalek]
+opt-level = 3
 
 # Optimized benchmark executable with symbols for external CPU profilers.
 [profile.profiling]
