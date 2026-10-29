@@ -86,7 +86,7 @@ and the mapping-hash table.
   upstream.
 - Per-destination link request cost (`Destination.set_link_cost`) and
   responder enforcement against the announced cost were deferred at promotion
-  and implemented in a follow-up (`b26b8a2`). `RnsNode::set_link_cost` clamps
+  and implemented in a follow-up (`290d6cc`). `RnsNode::set_link_cost` clamps
   to `LINK_COST_CAP` like upstream, the stamped announce anchor carries the
   destination's cost (`get_link_cost`, default `LR_COST` 11), and with
   `LR_STAMPS_ENFORCED` (runtime key `global.lr_stamps_enforced`) the responder

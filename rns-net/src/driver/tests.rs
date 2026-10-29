@@ -12673,7 +12673,6 @@ fn stamping_path_request_driver(
         crate::stamper::StampTargets {
             destination_value: 6,
             path_request_value: 6,
-            ..Default::default()
         },
     )));
     driver.engine.register_interface(make_interface_info(1));

@@ -621,7 +621,6 @@ mod tests {
         StampTargets {
             destination_value: 6,
             path_request_value: 6,
-            ..Default::default()
         }
     }
 

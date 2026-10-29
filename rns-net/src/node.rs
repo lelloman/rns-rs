@@ -6247,7 +6247,6 @@ enable_transport = False
         let targets = crate::stamper::StampTargets {
             destination_value: 6,
             path_request_value: 6,
-            ..Default::default()
         };
         let mut node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
         node.set_stamp_store(store.clone());
@@ -7102,7 +7101,6 @@ enable_transport = False
         let targets = crate::stamper::StampTargets {
             destination_value: 4,
             path_request_value: 4,
-            ..Default::default()
         };
         let identity = Identity::from_private_key(&[0x52; 64]);
         let mut dest = crate::Destination::single_in(

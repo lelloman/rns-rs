@@ -6531,7 +6531,13 @@ fn test_stamped_path_request_is_counted_by_the_transport_and_answered() {
     assert_eq!(path_request_counts(&transport), (1, 0));
 
     // With STAMP_PRS the request waits for the stamper worker, then goes out
-    // with a stamp the transport validates and counts.
+    // with a stamp the transport validates and counts. Upstream cancels the
+    // emission when grinding exceeds PR_STAMP_TIMEOUT (15 s); that path has
+    // its own unit test, and a loaded CI host must not trip it here.
+    alice
+        .stamper()
+        .expect("node runs a stamper")
+        .set_path_request_timeout(STAMP_TIMEOUT);
     set_runtime_bool(&alice, "global.stamp_path_requests", true);
     let started = Instant::now();
     alice.request_path(&bob_dest.hash).unwrap();
