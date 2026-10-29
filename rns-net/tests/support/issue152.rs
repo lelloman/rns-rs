@@ -79,6 +79,43 @@ impl InterfaceFactory for PausedTcpFactory {
     }
 }
 
+/// Both ends' interface counters and link entries, printed with the outcome.
+/// Locally confirmed sends arriving short at the receiver has only ever been
+/// seen on CI, so the next failure there has to say where the packets went.
+fn describe_endpoints(alice: &RnsNode, bob: &RnsNode, link: [u8; 16]) -> String {
+    let interfaces = |node: &RnsNode| match node.query(QueryRequest::InterfaceStats) {
+        Ok(QueryResponse::InterfaceStats(stats)) => stats
+            .interfaces
+            .iter()
+            .map(|i| {
+                format!(
+                    "{} online={} rx_packets={} rxb={} tx_packets={} txb={} tx_drops={} \
+                     tx_stalled={} tx_buffered={} protocol_violations={}",
+                    i.name,
+                    i.status,
+                    i.rx_packets,
+                    i.rxb,
+                    i.tx_packets,
+                    i.txb,
+                    i.tx_drops,
+                    i.tx_stalled,
+                    i.tx_buffered,
+                    i.protocol_violations
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        other => format!("{other:?}"),
+    };
+    format!(
+        "alice interfaces: {}\nalice link: {:?}\nbob interfaces: {}\nbob link: {:?}",
+        interfaces(alice),
+        alice.query_link(link),
+        interfaces(bob),
+        bob.query_link(link)
+    )
+}
+
 #[test]
 fn link_burst_survives_writer_backpressure() {
     run_burst(false);
@@ -289,17 +326,18 @@ fn run_burst(async_api: bool) {
         assert!(payload[4..].iter().all(|byte| *byte == 0xAA));
         sequences.push(u32::from_be_bytes(payload[..4].try_into().unwrap()));
     }
-    eprintln!("issue152: queue capacity={queue_capacity}, {PACKETS} sends returned Ok, {} burst packets received, end marker received={marker_received}", sequences.len());
+    let endpoints = describe_endpoints(&alice, &bob, link);
+    eprintln!("issue152: queue capacity={queue_capacity}, {PACKETS} sends returned Ok, {} burst packets received, end marker received={marker_received}\n{endpoints}", sequences.len());
     alice.shutdown();
     bob.shutdown();
     assert!(
         marker_received,
-        "Link did not recover after releasing writer"
+        "Link did not recover after releasing writer\n{endpoints}"
     );
     assert_eq!(
         sequences.len(),
         PACKETS as usize,
-        "successful sends disappeared before TCP transmission"
+        "successful sends disappeared before TCP transmission\n{endpoints}"
     );
     assert_eq!(sequences, (0..PACKETS).collect::<Vec<_>>());
 }
