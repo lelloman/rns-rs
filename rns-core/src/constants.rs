@@ -132,7 +132,9 @@ pub const LINK_STAMP_TIMEOUT: u64 = 15;
 
 /// Timeout for path request stamp generation on the stamper worker
 /// (seconds, upstream `Transport.PR_STAMP_TIMEOUT`). Emission of the request
-/// is cancelled when no stamp is found in time.
+/// is cancelled when no stamp is found in time. Upstream c0fe08c0 only
+/// corrected the spelling in this attribute's comment; the value and its
+/// use are unchanged from d7749b0b.
 pub const PATH_REQUEST_STAMP_TIMEOUT: u64 = 15;
 
 /// Lower bound applied to the configurable stamp generation timeouts
