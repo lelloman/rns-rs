@@ -224,6 +224,9 @@ comment spelling; value and use are unchanged.
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
   suites listed in earlier parity records were not run.
 - [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
+  The rns-server Docker suite passed on the merged tree (see below); the
+  full docker-e2e matrix, release builds, VPS smoke and hardware gates were
+  not run.
   Not run: release and cross builds, the Docker matrix (notably
   `21_stamped_emission.sh`), the dual-VPS smoke and hardware validation.
 - [x] Native documentation is updated for user-visible behavior.
@@ -251,6 +254,32 @@ Integration run on 2026-10-29 at `0d125f2` (on `a2b603d`), x86_64 host with
 | Interop, target `c0fe08c0` | the same commands with `PYTHONPATH` at the `c0fe08c0` worktree | 3/3 (Python stamped at value 25; Rust cost-8 stamped link request in about 3 ms); 9/9 |
 | Drift | `python3 scripts/check_upstream_drift.py --no-fetch --upstream-dir <checkout>` | Drift from cached refs: GitHub `e40191b3` behind, rgit `c0fe08c0` ahead by the two audited commits (the worktree has no `.local/reticulum-upstream.path`, hence `--upstream-dir`) |
 | Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+### Merged tree
+
+Rerun on 2026-10-29 at `428c48a`, after the range landed on `dev` together
+with the LINKCLOSE-on-timeout fix (`0e443a5`), the state snapshot
+(`96be80f`), the per-destination link cost port (`290d6cc`) and the Docker
+build change (`dce6ab6`), on the same host. The link cost port and this
+range were reconciled in `bf5112d` and `428c48a` (see the per-commit
+analysis).
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting, lint | `cargo fmt --all --check`; both clippy commands; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,021 passed, 0 failed |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,080 passed, 0 failed |
+| rns-net e2e, hooks | `cargo test -p rns-net --features rns-hooks --test e2e`, twice | 66 passed each run (about 39 s) |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4; 9/9 |
+| Interop, target `c0fe08c0` | the same against the `c0fe08c0` worktree | 4/4; 9/9 |
+| Drift | `python3 scripts/check_upstream_drift.py --no-fetch` | rgit ahead by the two audited commits |
+| Docker | `tests/docker/rns-server/run.sh` | 84 passed, 0 failed |
+
+A first pass on the merged tree, taken while a Docker image build loaded
+the host, failed `test_stamped_path_request_is_counted_by_the_transport_and_answered`
+once (the new 15 s path request stamp timeout cancelled the grind) and the
+link cost interop test against `c0fe08c0` (Python no longer stamps link
+requests by default); `428c48a` records both fixes.
 
 Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
 a2b603d..0d125f2` lists `d7749b0b…` for `bf5112d` and `c0fe08c0…` for
