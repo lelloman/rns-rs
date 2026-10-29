@@ -54,7 +54,7 @@ Every commit in the audited range must appear exactly once.
 | 1 | `d7749b0b06008800601d18cd7be6e87b648d619b` | Stamp config wiring, path request stamp timeout, destination stamp handling | Integrated | `bf5112d`; `[stamps]` and `hop_limiter` parsing and startup wiring, runtime hop limiter, engine `StampRequirements`, `pr_stamp_timeout` cancellation, `Destination::set_value` target restamping, defaults `STAMP_LRS = false` / 25 / 15, `global.stamp_link_requests`, docs; `lr_cost` and `enforce_stamps` feed the shared per-destination link cost table of `290d6cc` |
 | 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | `0d125f2`; comment-only typo in the `PR_STAMP_TIMEOUT` declaration, recorded on the native constant |
 | 3 | `78fb90ea6f30baf7201a3fb79ec224bb5c1ca3c1` | Implemented fractional-value stamps | Integrated | `4d317ee`; `rns_crypto::stamp_value` with the verbatim `TAB` pinned by `TAB_DIGEST`/`PRM_DIGEST`, fixed-point `StampValue` replacing the integer value in validation, known destinations, path and link request stamps, discovery and the stamp store; floats on storage, RPC, API and `rnstatus`; integer values from earlier versions load as whole bits |
-| 4 | `5f46fc6b4846b71929de62dc18c9fa0f3e9d651a` | Updated changelog | Non-runtime | `Changelog.md` adds the `hop_limiter` option, integrated under commit 1. Mapping commit pending. |
+| 4 | `5f46fc6b4846b71929de62dc18c9fa0f3e9d651a` | Updated changelog | Non-runtime | `Changelog.md` adds the `hop_limiter` option, integrated under commit 1; not vendored and no runtime counterpart. Mapping landed. |
 | 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Needs decision | Fractional default costs need fixed-point costs and targets; the new link request cost expression contradicts its own documentation; see analysis |
 
 ## Per-Commit Analysis
@@ -271,7 +271,10 @@ option".
 
 **Rust applicability:** Documentation only; the option itself is commit 1.
 
-**Local handling and evidence:** Non-runtime. Mapping commit pending.
+**Local handling and evidence:** Non-runtime. The upstream `Changelog.md`
+release note is not vendored and carries no acceptance weight; the
+`hop_limiter` option it announces is dispositioned under commit 1 and
+documented in `docs/configuration.md`. Mapping landed.
 
 **Final disposition:** Non-runtime.
 
