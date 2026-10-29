@@ -267,7 +267,7 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
             ratchet: None,
             app_data: Some(app_data.clone()),
             stamp: None,
-            stamp_value: 0,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
             lr_cost: None,
             hops: 1,
             receiving_interface: InterfaceId(9),
@@ -359,7 +359,7 @@ fn dispatch_announce_received_persists_ratchet() {
                 ratchet: Some(ratchet),
                 app_data: None,
                 stamp: None,
-                stamp_value: 0,
+                stamp_value: rns_core::stamp::StampValue::ZERO,
                 lr_cost: None,
                 hops: 1,
                 receiving_interface: InterfaceId(1),
@@ -420,7 +420,7 @@ fn make_known_destination_state(
         last_used_at: None,
         retained: false,
         stamp: None,
-        stamp_value: 0,
+        stamp_value: rns_core::stamp::StampValue::ZERO,
         lr_cost: None,
     }
 }
@@ -570,6 +570,7 @@ fn make_discovered_backbone(
     stamp_value: u32,
     last_heard: f64,
 ) -> crate::discovery::DiscoveredInterface {
+    let stamp_value = rns_core::stamp::StampValue::from_whole(stamp_value);
     let mut transport_id = [transport_seed; 16];
     transport_id[15] = transport_seed;
     let discovery_hash = crate::discovery::compute_discovery_hash(&transport_id, name);
@@ -7754,7 +7755,7 @@ fn announce_stamp_is_stored_and_recalled() {
             ratchet: None,
             app_data: Some(b"payload".to_vec()),
             stamp: Some(stamp),
-            stamp_value: 19,
+            stamp_value: rns_core::stamp::StampValue::from_whole(19),
             lr_cost: Some(19),
             hops: 1,
             receiving_interface: InterfaceId(1),
@@ -7768,9 +7769,15 @@ fn announce_stamp_is_stored_and_recalled() {
         .find(|entry| entry.dest_hash == dest)
         .expect("announce stored");
     assert_eq!(entry.stamp, Some(stamp));
-    assert_eq!(entry.stamp_value, 19);
+    assert_eq!(
+        entry.stamp_value,
+        rns_core::stamp::StampValue::from_whole(19)
+    );
     assert_eq!(entry.lr_cost, Some(19));
-    assert_eq!(driver.recall_stamp_value(&dest), Some(19));
+    assert_eq!(
+        driver.recall_stamp_value(&dest),
+        Some(rns_core::stamp::StampValue::from_whole(19))
+    );
     assert_eq!(driver.recall_link_cost(&dest), Some(19));
 }
 
@@ -7893,7 +7900,7 @@ fn known_destinations_cleanup_respects_ttl() {
             last_used_at: None,
             retained: false,
             stamp: None,
-            stamp_value: 0,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
             lr_cost: None,
         },
     );
@@ -7915,7 +7922,7 @@ fn known_destinations_cleanup_respects_ttl() {
             last_used_at: None,
             retained: false,
             stamp: None,
-            stamp_value: 0,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
             lr_cost: None,
         },
     );
@@ -8354,7 +8361,7 @@ fn used_known_destination_cleanup_uses_last_used_time() {
             last_used_at: Some(time::now() - 5.0),
             retained: false,
             stamp: None,
-            stamp_value: 0,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
             lr_cost: None,
         },
     );
@@ -9981,7 +9988,7 @@ fn inbound_proof_with_valid_signature_fires_callback() {
             last_used_at: None,
             retained: false,
             stamp: None,
-            stamp_value: 0,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
             lr_cost: None,
         },
     );
@@ -10105,7 +10112,7 @@ fn inbound_proof_with_invalid_signature_rejected() {
             last_used_at: None,
             retained: false,
             stamp: None,
-            stamp_value: 0,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
             lr_cost: None,
         },
     );
@@ -12503,7 +12510,7 @@ fn create_link_with_announced_cost_defers_until_the_worker_reports() {
     let request = sent_link_request(&sent.lock().unwrap(), dest).expect("LINKREQUEST sent");
     let value = rns_core::link::handshake::link_request_stamp_value(&dest, request.data())
         .expect("link request parses");
-    assert!(value >= 4);
+    assert!(value.meets(4));
 }
 
 #[test]
@@ -12554,7 +12561,10 @@ fn create_link_with_announced_cost_stamps_off_thread_and_completes() {
         .expect("stamped LINKREQUEST sent on the recalled interface");
     let value = rns_core::link::handshake::link_request_stamp_value(&dest, request.data())
         .expect("link request parses");
-    assert!(value >= 4, "link request key must carry the announced cost");
+    assert!(
+        value.meets(4),
+        "link request key must carry the announced cost"
+    );
 }
 
 #[test]

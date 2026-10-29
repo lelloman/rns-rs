@@ -857,7 +857,7 @@ mod tests {
         let (stamp, value) = store
             .load(&dest.hash.0, &material, fast_targets().destination_value)
             .expect("stamp persisted");
-        assert!(value >= u32::from(fast_targets().destination_value));
+        assert!(value.meets(u32::from(fast_targets().destination_value)));
         let ext = &wire_app_data[1..];
         assert_eq!(ext[0], constants::EXT_PAYLOAD_MARKER);
         assert_eq!(

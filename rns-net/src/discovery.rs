@@ -19,7 +19,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use rns_core::msgpack::{self, Value};
-use rns_core::stamp::{stamp_valid, stamp_workblock};
+use rns_core::stamp::{stamp_valid, stamp_workblock, StampValue};
 use rns_crypto::sha256::sha256;
 
 use crate::time;
@@ -237,7 +237,7 @@ impl DiscoveredInterfaceStorage {
             (Value::Str("stamp".into()), Value::Bin(iface.stamp.clone())),
             (
                 Value::Str("value".into()),
-                Value::UInt(iface.stamp_value as u64),
+                Value::Float(iface.stamp_value.as_f64()),
             ),
             (
                 Value::Str("transport_id".into()),
@@ -416,7 +416,13 @@ impl DiscoveredInterfaceStorage {
             heard_count: get_uint(&value, "heard_count")? as u32,
             status,
             stamp: get_bytes(&value, "stamp")?,
-            stamp_value: get_uint(&value, "value")? as u32,
+            // Integer values from before fractional stamp values read as
+            // whole bits.
+            stamp_value: value
+                .map_get("value")
+                .and_then(|val| val.as_number())
+                .map(StampValue::from_f64)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "value not a number"))?,
             transport_id,
             network_id,
             hops: get_uint(&value, "hops")? as u8,
@@ -465,7 +471,10 @@ fn discovery_storage_guard() -> MutexGuard<'static, ()> {
 /// Generate a discovery stamp with the given cost using rayon parallel iterators.
 ///
 /// Returns `(stamp, value)` on success. This is a blocking, CPU-intensive operation.
-pub fn generate_discovery_stamp(packed_data: &[u8], stamp_cost: u8) -> ([u8; STAMP_SIZE], u32) {
+pub fn generate_discovery_stamp(
+    packed_data: &[u8],
+    stamp_cost: u8,
+) -> ([u8; STAMP_SIZE], StampValue) {
     use rns_crypto::{OsRng, Rng};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1368,7 +1377,7 @@ mod tests {
             heard_count: 0,
             status: DiscoveredStatus::Available,
             stamp: vec![],
-            stamp_value: 14,
+            stamp_value: rns_core::stamp::StampValue::from_whole(14),
             transport_id: [0u8; 16],
             network_id: [0u8; 16],
             hops: 0,
@@ -1414,7 +1423,7 @@ mod tests {
             heard_count: 5,
             status: DiscoveredStatus::Available,
             stamp: vec![0x42u8; 64],
-            stamp_value: 18,
+            stamp_value: rns_core::stamp::StampValue::from_whole(18),
             transport_id: [0x01u8; 16],
             network_id: [0x02u8; 16],
             hops: 2,
@@ -1721,7 +1730,7 @@ mod tests {
                 heard_count: 0,
                 status: DiscoveredStatus::Stale,
                 stamp: vec![],
-                stamp_value: 20,
+                stamp_value: rns_core::stamp::StampValue::from_whole(20),
                 transport_id: [0u8; 16],
                 network_id: [0u8; 16],
                 hops: 0,
@@ -1753,7 +1762,7 @@ mod tests {
                 heard_count: 0,
                 status: DiscoveredStatus::Available,
                 stamp: vec![],
-                stamp_value: 10,
+                stamp_value: rns_core::stamp::StampValue::from_whole(10),
                 transport_id: [0u8; 16],
                 network_id: [0u8; 16],
                 hops: 0,
@@ -1785,7 +1794,7 @@ mod tests {
                 heard_count: 0,
                 status: DiscoveredStatus::Available,
                 stamp: vec![],
-                stamp_value: 20,
+                stamp_value: rns_core::stamp::StampValue::from_whole(20),
                 transport_id: [0u8; 16],
                 network_id: [0u8; 16],
                 hops: 0,
@@ -1833,7 +1842,7 @@ mod tests {
         let packed = b"internal stamps module";
         let cost = 8;
         let (stamp, value) = generate_discovery_stamp(packed, cost);
-        assert!(value >= u32::from(cost));
+        assert!(value.meets(u32::from(cost)));
         let infohash = sha256(packed);
         let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
         assert!(stamp_valid(&stamp, cost, &workblock));

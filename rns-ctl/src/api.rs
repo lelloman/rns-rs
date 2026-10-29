@@ -731,7 +731,7 @@ fn handle_recall_identity(hash_str: &str, node: &NodeHandle) -> HttpResponse {
                 "app_data": ai.app_data.as_ref().map(|d| to_base64(d)),
                 "hops": ai.hops,
                 "received_at": ai.received_at,
-                "stamp_value": stamp.map(|s| s.stamp_value).unwrap_or(0),
+                "stamp_value": stamp.map(|s| s.stamp_value.as_f64()).unwrap_or(0.0),
                 "lr_cost": stamp.and_then(|s| s.lr_cost),
             }))
         }

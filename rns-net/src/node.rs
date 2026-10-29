@@ -5094,7 +5094,7 @@ mod tests {
                     last_used_at: Some(last_used_at),
                     retained: true,
                     stamp: None,
-                    stamp_value: 0,
+                    stamp_value: rns_core::stamp::StampValue::ZERO,
                     lr_cost: None,
                 }),
                 response_tx,
@@ -5251,7 +5251,7 @@ share_instance = False
                     last_used_at: None,
                     retained: false,
                     stamp: None,
-                    stamp_value: 0,
+                    stamp_value: rns_core::stamp::StampValue::ZERO,
                     lr_cost: None,
                 },
             ),
@@ -5268,7 +5268,7 @@ share_instance = False
                     last_used_at: None,
                     retained: false,
                     stamp: None,
-                    stamp_value: 0,
+                    stamp_value: rns_core::stamp::StampValue::ZERO,
                     lr_cost: None,
                 },
             ),
@@ -5285,7 +5285,7 @@ share_instance = False
                     last_used_at: None,
                     retained: false,
                     stamp: None,
-                    stamp_value: 0,
+                    stamp_value: rns_core::stamp::StampValue::ZERO,
                     lr_cost: None,
                 },
             ),
@@ -7119,21 +7119,21 @@ enable_transport = False
         let (first, first_value) = store
             .load(&dest.hash.0, &material, 0)
             .expect("stamp persisted at the default target");
-        assert!(first_value >= 4);
+        assert!(first_value.meets(4));
 
         // A target the held stamp already meets reuses it.
-        dest.set_value(first_value as u8);
+        dest.set_value(first_value.whole() as u8);
         ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
         assert_eq!(store.load(&dest.hash.0, &material, 0).unwrap().0, first);
 
         // A target above the held value regenerates and persists a stamp
         // that reaches it.
-        let raised = first_value as u8 + 1;
+        let raised = first_value.whole() as u8 + 1;
         dest.set_value(raised);
         ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
         let (second, second_value) = store.load(&dest.hash.0, &material, 0).unwrap();
         assert_ne!(second, first);
-        assert!(second_value >= u32::from(raised));
+        assert!(second_value.meets(u32::from(raised)));
 
         // The announce builder reloads at the same target and carries the
         // regenerated stamp and the configured default link cost.

@@ -148,6 +148,25 @@ fn decode_hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
+/// Rust and Python must agree on a stamp value. Python reports fractional
+/// values since rgit `78fb90ea` and whole bits before it, so a whole Python
+/// value is compared against the whole part only.
+fn assert_python_value(rust: rns_core::stamp::StampValue, python: f64) {
+    if python.fract() == 0.0 {
+        assert_eq!(
+            f64::from(rust.whole()),
+            python,
+            "Rust value {rust} and Python value {python} disagree on whole bits"
+        );
+    } else {
+        assert_eq!(
+            rust.as_f64(),
+            python,
+            "Rust and Python must agree on the fractional stamp value"
+        );
+    }
+}
+
 fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Vec<u8> {
     let packet = RawPacket::unpack(raw).expect("Rust delivery should be a valid packet");
     identity
@@ -837,9 +856,11 @@ fn python_rns_stamped_link_request_interop() {
         );
         return;
     }
-    let python_stamp_value = announced["stamp_value"].as_u64().unwrap();
+    // A float since rgit 78fb90ea made stamp values fractional; earlier
+    // releases report whole bits.
+    let python_stamp_value = announced["stamp_value"].as_f64().unwrap();
     assert!(
-        python_stamp_value >= u64::from(rns_core::constants::DESTINATION_STAMP_COST),
+        python_stamp_value >= f64::from(rns_core::constants::DESTINATION_STAMP_COST),
         "Python stamp value {python_stamp_value} must satisfy the Rust required cost"
     );
     assert_eq!(announced["link_cost"], u64::from(LINK_COST));
@@ -864,7 +885,7 @@ fn python_rns_stamped_link_request_interop() {
         .find(|entry| entry.dest_hash == python_dest_hash.0)
         .expect("Python destination should be a known destination");
     assert_eq!(known.lr_cost, Some(LINK_COST));
-    assert_eq!(u64::from(known.stamp_value), python_stamp_value);
+    assert_python_value(known.stamp_value, python_stamp_value);
     assert_eq!(
         known.stamp.map(|stamp| hex(&stamp)),
         announced["stamp_hex"].as_str().map(str::to_owned)
@@ -912,20 +933,20 @@ fn python_rns_stamped_link_request_interop() {
     );
     assert_eq!(python_link["stamp_status"], true);
     let python_lr_value = python_link["lr_stamp_value"]
-        .as_u64()
+        .as_f64()
         .expect("Python should compute the link request stamp value");
     assert!(
-        python_lr_value >= u64::from(LINK_COST),
+        python_lr_value >= f64::from(LINK_COST),
         "Python saw link request stamp value {python_lr_value}, announced cost {LINK_COST}"
     );
     let mut request = decode_hex(python_link["peer_pub_hex"].as_str().unwrap());
     request.extend(decode_hex(
         python_link["peer_sig_pub_hex"].as_str().unwrap(),
     ));
-    assert_eq!(
-        rns_core::link::handshake::link_request_stamp_value(&python_dest_hash.0, &request),
-        Some(python_lr_value as u32),
-        "Rust and Python must agree on the stamp value of the request keys"
+    assert_python_value(
+        rns_core::link::handshake::link_request_stamp_value(&python_dest_hash.0, &request)
+            .expect("Rust should compute the link request stamp value"),
+        python_lr_value,
     );
 
     // The stamped keys produce a working link in both directions.

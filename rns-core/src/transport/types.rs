@@ -192,8 +192,8 @@ pub struct ReceivedAnnounce {
     pub app_data: Option<Vec<u8>>,
     /// Detached destination stamp, when present on the announce.
     pub stamp: Option<[u8; crate::constants::STAMP_LENGTH]>,
-    /// Stamp value, or `0` when absent or invalid.
-    pub stamp_value: u32,
+    /// Fractional stamp value, or zero when absent or invalid.
+    pub stamp_value: crate::stamp::StampValue,
     /// Announced link request stamp cost, if present.
     pub lr_cost: Option<u8>,
     pub hops: u8,

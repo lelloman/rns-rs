@@ -204,14 +204,14 @@ pub struct AcceptedPathRequest {
     ext_payload: Option<[u8; constants::PR_EXT_PAYLOAD_LENGTH]>,
     /// Value of the carried stamp over `destination_hash || tag`, when the
     /// extension carries the stamp marker.
-    stamp_value: Option<u32>,
+    stamp_value: Option<crate::stamp::StampValue>,
     /// Whether the carried stamp meets `PATH_REQUEST_STAMP_COST`.
     stamped: bool,
 }
 
 impl AcceptedPathRequest {
     /// Value of the stamp this request carried, if any.
-    pub fn stamp_value(&self) -> Option<u32> {
+    pub fn stamp_value(&self) -> Option<crate::stamp::StampValue> {
         self.stamp_value
     }
 

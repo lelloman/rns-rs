@@ -13,7 +13,7 @@ type BackboneCandidateOrder = (
     u8,
     u8,
     u8,
-    std::cmp::Reverse<u32>,
+    std::cmp::Reverse<rns_core::stamp::StampValue>,
     std::cmp::Reverse<u64>,
     [u8; 32],
 );
@@ -332,7 +332,7 @@ pub(crate) struct BackbonePeerPoolDiscoveryCandidate {
     pub(crate) discovery_hash: [u8; 32],
     pub(crate) status: crate::discovery::DiscoveredStatus,
     pub(crate) hops: u8,
-    pub(crate) stamp_value: u32,
+    pub(crate) stamp_value: rns_core::stamp::StampValue,
     pub(crate) last_heard: f64,
 }
 
@@ -600,7 +600,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     ratchet: None,
                     app_data,
                     stamp: None,
-                    stamp_value: 0,
+                    stamp_value: rns_core::stamp::StampValue::ZERO,
                     lr_cost: None,
                     hops,
                     receiving_interface: InterfaceId(receiving_interface),
@@ -650,7 +650,7 @@ pub(crate) struct KnownDestinationState {
     last_used_at: Option<f64>,
     retained: bool,
     stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
-    stamp_value: u32,
+    stamp_value: rns_core::stamp::StampValue,
     lr_cost: Option<u8>,
 }
 

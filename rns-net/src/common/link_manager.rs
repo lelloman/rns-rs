@@ -756,7 +756,7 @@ impl LinkManager {
                 value
             );
             if self.link_request_costs.enforced()
-                && value < u32::from(self.link_request_costs.get(dest_hash))
+                && !value.meets(u32::from(self.link_request_costs.get(dest_hash)))
             {
                 log::debug!(
                     "Validating incoming link request failed: Insufficient link request stamp value {}",

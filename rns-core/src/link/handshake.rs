@@ -87,7 +87,10 @@ pub fn parse_linkrequest_data(
 /// The X25519 public key is the stamp and the destination hash followed by
 /// the Ed25519 public key is the material, matching upstream link request
 /// stamping.
-pub fn link_request_stamp_value(dest_hash: &[u8; 16], data: &[u8]) -> Option<u32> {
+pub fn link_request_stamp_value(
+    dest_hash: &[u8; 16],
+    data: &[u8],
+) -> Option<rns_crypto::stamp_value::StampValue> {
     let (peer_pub, peer_sig_pub, _, _) = parse_linkrequest_data(data).ok()?;
     let mut material = [0u8; 48];
     material[..16].copy_from_slice(dest_hash);

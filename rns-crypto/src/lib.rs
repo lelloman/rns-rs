@@ -11,6 +11,7 @@ pub mod pkcs7;
 pub mod ratchet;
 pub mod sha256;
 pub mod sha512;
+pub mod stamp_value;
 pub mod token;
 pub mod x25519;
 

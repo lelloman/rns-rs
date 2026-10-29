@@ -106,7 +106,9 @@ impl KnownDestinationsStore {
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
                     row.get::<_, Option<Vec<u8>>>(9)?,
-                    row.get::<_, i64>(10)?,
+                    // REAL since fractional stamp values; older rows hold
+                    // INTEGER whole bits, which read the same way.
+                    row.get::<_, f64>(10)?,
                     row.get::<_, Option<i64>>(11)?,
                 ))
             })
@@ -152,7 +154,7 @@ impl KnownDestinationsStore {
                     last_used_at: (used > 0.0).then_some(used),
                     retained: retained != 0,
                     stamp,
-                    stamp_value: stamp_value.clamp(0, u32::MAX as i64) as u32,
+                    stamp_value: rns_core::stamp::StampValue::from_f64(stamp_value),
                     lr_cost: lr_cost
                         .filter(|cost| {
                             (0..=i64::from(rns_core::constants::STAMP_COST_CAP)).contains(cost)
@@ -505,7 +507,7 @@ fn upsert_destination(
             destination.app_data.clone(),
             used,
             destination.stamp.clone(),
-            i64::from(destination.stamp_value),
+            destination.stamp_value.as_f64(),
             destination.lr_cost.map(i64::from),
             destination.identity_hash.to_vec(),
         ],
@@ -621,7 +623,8 @@ mod tests {
             last_used_at: used,
             retained,
             stamp: Some(vec![hash; 14]),
-            stamp_value: u32::from(hash),
+            // Fractional, so the REAL column round trip is exercised.
+            stamp_value: rns_core::stamp::StampValue::from_fp(u32::from(hash) * 256 + 77),
             lr_cost: Some(hash),
         }
     }
@@ -647,7 +650,10 @@ mod tests {
         assert_eq!(used.last_used_at, Some(2_000.0));
         assert!(used.retained);
         assert_eq!(used.stamp.as_deref(), Some(&[0x11; 14][..]));
-        assert_eq!(used.stamp_value, 0x11);
+        assert_eq!(
+            used.stamp_value,
+            rns_core::stamp::StampValue::from_fp(0x11 * 256 + 77)
+        );
         assert_eq!(used.lr_cost, Some(0x11));
         let never = &loaded[&[0x22; 16]];
         assert!(!never.was_used);
@@ -697,7 +703,10 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, [0x77; 16]);
         assert_eq!(loaded[0].1.stamp.as_deref(), Some(&[0x77; 14][..]));
-        assert_eq!(loaded[0].1.stamp_value, 20);
+        assert_eq!(
+            loaded[0].1.stamp_value,
+            rns_core::stamp::StampValue::from_whole(20)
+        );
         assert_eq!(loaded[0].1.lr_cost, None);
 
         let conn = Connection::open(&path).unwrap();

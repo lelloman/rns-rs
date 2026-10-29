@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use rns_core::constants;
 use rns_core::msgpack::{self, Value};
-use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock};
+use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampValue};
 use rns_crypto::sha256::sha256;
 
 use super::time;
@@ -169,8 +169,8 @@ pub struct DiscoveredInterface {
     pub status: DiscoveredStatus,
     /// Raw stamp bytes
     pub stamp: Vec<u8>,
-    /// Calculated stamp value (leading zeros)
-    pub stamp_value: u32,
+    /// Calculated fractional stamp value
+    pub stamp_value: StampValue,
     /// Transport identity hash (truncated)
     pub transport_id: [u8; 16],
     /// Network identity hash (announcer)
@@ -208,7 +208,7 @@ pub struct DiscoveredInterface {
     pub discovery_hash: [u8; 32],
 }
 
-fn insufficient_stamp_diagnostic(value: u32) -> String {
+fn insufficient_stamp_diagnostic(value: StampValue) -> String {
     format!("Ignored discovered interface with insufficient stamp value {value}")
 }
 
@@ -230,7 +230,7 @@ pub struct DiscoveryStampCache {
 struct ValidStampEntry {
     stamp: Vec<u8>,
     packed: Vec<u8>,
-    value: u32,
+    value: StampValue,
 }
 
 impl Default for DiscoveryStampCache {
@@ -398,7 +398,7 @@ pub fn parse_interface_announce_with_cache(
                 target: rns_core::logging::PATHING_LOG_TARGET,
                 "Discovery announce cache hit"
             );
-            if entry.value < required_stamp_value as u32 {
+            if !entry.value.meets(u32::from(required_stamp_value)) {
                 log::debug!("{}", insufficient_stamp_diagnostic(entry.value));
                 return None;
             }
@@ -969,8 +969,8 @@ mod tests {
     #[test]
     fn insufficient_stamp_diagnostic_includes_calculated_value() {
         assert_eq!(
-            insufficient_stamp_diagnostic(7),
-            "Ignored discovered interface with insufficient stamp value 7"
+            insufficient_stamp_diagnostic(StampValue::from_fp(7 * 256 + 64)),
+            "Ignored discovered interface with insufficient stamp value 7.25"
         );
     }
 

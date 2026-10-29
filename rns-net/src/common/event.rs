@@ -573,7 +573,7 @@ pub struct KnownDestinationEntry {
     pub last_used_at: Option<f64>,
     pub retained: bool,
     pub stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
-    pub stamp_value: u32,
+    pub stamp_value: rns_core::stamp::StampValue,
     pub lr_cost: Option<u8>,
 }
 
@@ -1117,15 +1117,15 @@ pub struct StampedLinkKeys {
     pub dest_sig_pub_bytes: [u8; 32],
     pub prv_bytes: [u8; 32],
     pub sig_prv_bytes: [u8; 32],
-    pub stamp_value: u32,
+    pub stamp_value: rns_core::stamp::StampValue,
     pub response_tx: mpsc::Sender<[u8; 16]>,
 }
 
 /// Stamp information recorded from a destination's last announce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DestinationStampInfo {
-    /// Value of the announce stamp, 0 when the announce carried none.
-    pub stamp_value: u32,
+    /// Value of the announce stamp, zero when the announce carried none.
+    pub stamp_value: rns_core::stamp::StampValue,
     /// Link request cost the destination announced, if any.
     pub lr_cost: Option<u8>,
 }

@@ -1900,7 +1900,7 @@ mod tests {
             last_used_at: None,
             retained: false,
             stamp: None,
-            stamp_value: 0,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
             lr_cost: None,
         };
         assert!(find_identity_entry(std::slice::from_ref(&entry), [0x22; 16]).is_some());

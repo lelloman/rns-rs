@@ -1568,11 +1568,7 @@ fn show_discovered_interfaces(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let hops = iface.get("hops").and_then(|v| v.as_int()).unwrap_or(0);
-            let value = iface
-                .get("value")
-                .or_else(|| iface.get("stamp_value"))
-                .and_then(|v| v.as_int())
-                .unwrap_or(0);
+            let value = discovered_stamp_value(iface);
             let last_heard = iface
                 .get("last_heard")
                 .and_then(|v| v.as_float())
@@ -1735,11 +1731,7 @@ fn show_discovered_interfaces(
                 "N/A".to_string()
             };
 
-            let value = iface
-                .get("value")
-                .or_else(|| iface.get("stamp_value"))
-                .and_then(|v| v.as_int())
-                .unwrap_or(0);
+            let value = discovered_stamp_value(iface);
             let stack = discovered_stack(iface);
             let stack = if stack.chars().count() > 16 {
                 format!("{}…", stack.chars().take(15).collect::<String>())
@@ -1763,6 +1755,18 @@ fn show_discovered_interfaces(
 }
 
 const DISCOVERY_DETAIL_SEPARATOR_WIDTH: usize = 47;
+
+/// A discovered interface's stamp value as upstream prints it with `str()`.
+/// Values are floats since rgit `78fb90ea` (`24.0`, `24.73046875`); older
+/// daemons send whole-bit integers. Rust's `{:?}` matches Python's float repr
+/// for these exactly representable values.
+fn discovered_stamp_value(iface: &PickleValue) -> String {
+    match iface.get("value").or_else(|| iface.get("stamp_value")) {
+        Some(PickleValue::Float(value)) => format!("{value:?}"),
+        Some(value) => value.as_int().unwrap_or(0).to_string(),
+        None => "0".to_string(),
+    }
+}
 
 fn discovered_stack(iface: &PickleValue) -> String {
     match (
@@ -2032,6 +2036,23 @@ mod tests {
             None
         );
         assert_eq!("=".repeat(DISCOVERY_DETAIL_SEPARATOR_WIDTH).len(), 47);
+    }
+
+    #[test]
+    fn discovered_stamp_value_prints_like_python_str() {
+        let iface = |value: PickleValue| {
+            PickleValue::Dict(vec![(PickleValue::String("value".into()), value)])
+        };
+        assert_eq!(
+            discovered_stamp_value(&iface(PickleValue::Float(24.73046875))),
+            "24.73046875"
+        );
+        assert_eq!(
+            discovered_stamp_value(&iface(PickleValue::Float(24.0))),
+            "24.0"
+        );
+        assert_eq!(discovered_stamp_value(&iface(PickleValue::Int(24))), "24");
+        assert_eq!(discovered_stamp_value(&PickleValue::Dict(Vec::new())), "0");
     }
 
     #[test]
