@@ -811,13 +811,15 @@ impl LinkManager {
         let mut preceding = Vec::new();
         if let Some(idx) = assemble_idx {
             let eligible = Self::receive_offload_eligible(link, &link.incoming_resources[idx]);
+            let resource_hash = link.incoming_resources[idx].resource_hash.clone();
             let _ = link;
             preceding = self.wait_receive_for(link_id, rng);
             if eligible {
                 self.ensure_receive_worker();
             }
-            // A preceding corrupt assembly may have torn down this link. Completion
-            // polling does not remove receivers, so indices remain stable otherwise.
+            // A preceding corrupt assembly may have torn down this link, and
+            // polling the worker prunes receivers that completed meanwhile, so
+            // the receiver is located again by hash: its index may have moved.
             let Some(link) = self
                 .links
                 .get_mut(link_id)
@@ -825,9 +827,13 @@ impl LinkManager {
             else {
                 return preceding;
             };
-            if idx >= link.incoming_resources.len() {
+            let Some(idx) = link
+                .incoming_resources
+                .iter()
+                .position(|r| r.resource_hash == resource_hash)
+            else {
                 return preceding;
-            }
+            };
             if eligible && self.receive_worker.is_some() {
                 let receiver = &mut link.incoming_resources[idx];
                 let actions = match receiver.prepare_assembly(&|parts, skip| {
