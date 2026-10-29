@@ -15,8 +15,11 @@ espidf = ["esp-idf-sys"]
 
 [dependencies]
 esp-idf-sys = { version = "0.37", optional = true }
-ed25519-dalek = { version = "3", default-features = false }
-x25519-dalek = { version = "3", default-features = false, features = ["static_secrets"] }
+# `fast` / `precomputed-tables` keep the basepoint tables, so signing and
+# public-key derivation are fixed-base multiplications instead of a full
+# variable-base scalar multiplication per operation.
+ed25519-dalek = { version = "3", default-features = false, features = ["fast"] }
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "precomputed-tables"] }
 sha2 = { version = "0.11", default-features = false }
 hmac = { version = "0.13", default-features = false }
 aes = { version = "0.9", default-features = false }
