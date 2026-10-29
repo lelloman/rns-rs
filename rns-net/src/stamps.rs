@@ -305,6 +305,9 @@ pub fn generate_stamp(
 /// How many candidate nonces a worker tries between deadline checks.
 const DEADLINE_CHECK_INTERVAL: u32 = 1024;
 
+/// How many nonces a worker draws from the OS per `fill_bytes` call.
+const NONCES_PER_FILL: usize = 256;
+
 /// As [`generate_stamp`], giving up once `deadline` passes.
 ///
 /// This is upstream's `cancel_work` on a stamp job (`RNS/Stamps.py`), which
@@ -340,6 +343,10 @@ pub fn generate_stamp_until(
             let workblock = &workblock;
             scope.spawn(move |_| {
                 let mut rng = OsRng;
+                // Draw OS randomness in batches: one getrandom(2) call per
+                // attempt dominated the grind, well ahead of the hash.
+                let mut pool = vec![0u8; size * NONCES_PER_FILL];
+                let mut next_nonce = pool.len();
                 let mut nonce = vec![0u8; size];
                 let mut until_check = DEADLINE_CHECK_INTERVAL;
                 loop {
@@ -357,7 +364,12 @@ pub fn generate_stamp_until(
                             }
                         }
                     }
-                    rng.fill_bytes(&mut nonce);
+                    if next_nonce + size > pool.len() {
+                        rng.fill_bytes(&mut pool);
+                        next_nonce = 0;
+                    }
+                    nonce.copy_from_slice(&pool[next_nonce..next_nonce + size]);
+                    next_nonce += size;
                     if stamp_valid(&nonce, stamp_cost, workblock) {
                         let mut slot = result
                             .lock()
