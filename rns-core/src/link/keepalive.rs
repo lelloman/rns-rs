@@ -52,11 +52,11 @@ pub fn should_send_keepalive(last_keepalive: f64, keepalive: f64, now: f64) -> b
     now >= last_keepalive + keepalive
 }
 
-/// Check if STALE link should close.
+/// How long a STALE link waits for inbound traffic before closing.
 ///
-/// Returns true when `now >= stale_entered_at + rtt * KEEPALIVE_TIMEOUT_FACTOR + STALE_GRACE`.
-/// In Python, STALE immediately sends a teardown packet and transitions to CLOSED on the next
-/// watchdog iteration. We model this simply: once STALE is entered, it closes.
+/// Python's watchdog sleeps `rtt * KEEPALIVE_TIMEOUT_FACTOR + STALE_GRACE`
+/// after marking a link stale; a packet received meanwhile reactivates it,
+/// otherwise the next iteration tears it down with `TIMEOUT`.
 pub fn stale_close_timeout(rtt: f64) -> f64 {
     rtt * LINK_KEEPALIVE_TIMEOUT_FACTOR + LINK_STALE_GRACE
 }
