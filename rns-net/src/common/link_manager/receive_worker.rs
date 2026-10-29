@@ -793,6 +793,75 @@ mod tests {
         }
     }
 
+    /// A part that completes one Resource while the worker has finished an
+    /// earlier Resource on the same link: polling the worker prunes the
+    /// finished receiver, so the completing receiver must be found again
+    /// rather than by its previous index.
+    #[test]
+    fn receive_worker_completion_pruned_during_part_handling_keeps_the_completing_receiver() {
+        for compressed in [false, true] {
+            let (mut sender, mut receiver, link) = super::super::tests::setup_active_link();
+            receiver.set_resource_strategy(&link, ResourceStrategy::AcceptAll);
+            let (wake, wake_rx) = crate::event::channel();
+            let (release, gate) = mpsc::channel();
+            let (entered, started) = mpsc::channel();
+            let count = std::sync::atomic::AtomicUsize::new(0);
+            receiver.receive_worker = Some(
+                Worker::start(wake, move |job| {
+                    if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                        entered.send(()).unwrap();
+                        gate.recv().unwrap();
+                    }
+                    job.run(&Bzip2Compressor)
+                })
+                .unwrap(),
+            );
+            // Resource 1 is complete and assembling on the worker, held at the gate.
+            let parts = resource_parts(&mut sender, &mut receiver, &link, 1, true);
+            let initial = deliver(&mut receiver, parts);
+            assert!(!initial
+                .iter()
+                .any(|a| matches!(a, LinkManagerAction::ResourceReceived { .. })));
+            started.recv_timeout(Duration::from_secs(2)).unwrap();
+            // Resource 2 receives everything but its last part.
+            let mut parts: Vec<_> =
+                resource_parts(&mut sender, &mut receiver, &link, 2, compressed)
+                    .into_iter()
+                    .filter(|a| matches!(a, LinkManagerAction::SendPacket { .. }))
+                    .collect();
+            let last = parts.pop().unwrap();
+            let before_last = deliver(&mut receiver, parts);
+            assert!(!before_last
+                .iter()
+                .any(|a| matches!(a, LinkManagerAction::ResourceReceived { .. })));
+            assert_eq!(receiver.links[&link].incoming_resources.len(), 2);
+            // Resource 1 finishes on the worker before the last part arrives.
+            release.send(()).unwrap();
+            loop {
+                match wake_rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+                    crate::event::Event::ResourceAssemblyReady => break,
+                    _ => continue,
+                }
+            }
+            let mut actions = deliver(&mut receiver, vec![last]);
+            actions.extend(receiver.wait_receive_for(&link, &mut rns_crypto::OsRng));
+            let data: Vec<_> = actions
+                .into_iter()
+                .filter_map(|a| match a {
+                    LinkManagerAction::ResourceReceived { data, .. } => Some(data[0]),
+                    LinkManagerAction::ResourceFailed { error, .. } => {
+                        panic!("transfer failed: {error}")
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(data, vec![1, 2], "compressed={compressed}");
+            assert!(receiver.links[&link]
+                .incoming_resources
+                .iter()
+                .all(|r| r.status >= ResourceStatus::Complete));
+        }
+    }
     fn deliver(
         manager: &mut LinkManager,
         actions: Vec<LinkManagerAction>,
