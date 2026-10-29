@@ -814,6 +814,56 @@ mod tests {
     }
 
     #[test]
+    fn stamped_announce_carries_the_destination_link_cost() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DestinationStampStore::new(dir.path());
+        let (tx, _rx) = event::channel();
+        let (job, identity) = announce_job(0x45);
+        let dest = job.dest.clone();
+
+        let announced_cost = |tx: &event::EventSender| {
+            let (packet, _) = crate::node::build_announce_packet(
+                tx,
+                Some(&store),
+                true,
+                fast_targets(),
+                &dest,
+                &identity,
+                Some(b"app"),
+            )
+            .unwrap();
+            let announce = rns_core::announce::AnnounceData::unpack(
+                packet.data(),
+                packet.flags.context_flag == constants::FLAG_SET,
+            )
+            .unwrap();
+            let mut validated = announce.validate(&dest.hash.0).unwrap();
+            assert_eq!(
+                validated.apply_stamp(&dest.hash.0, fast_targets().destination_cost),
+                rns_core::announce::AnnounceStampStatus::Valid
+            );
+            assert_eq!(validated.app_data.as_deref(), Some(b"app".as_slice()));
+            validated.lr_cost
+        };
+
+        // Without `set_link_cost` the default `LR_COST` is announced.
+        assert_eq!(
+            announced_cost(&tx),
+            Some(constants::LINK_REQUEST_STAMP_COST)
+        );
+        // `set_link_cost` clamps to `LINK_COST_CAP` and is announced as set.
+        assert_eq!(tx.link_request_costs().set(dest.hash.0, 17), 17);
+        assert_eq!(announced_cost(&tx), Some(17));
+        assert_eq!(
+            tx.link_request_costs().set(dest.hash.0, 1000),
+            constants::LINK_COST_CAP
+        );
+        assert_eq!(announced_cost(&tx), Some(constants::LINK_COST_CAP));
+        assert_eq!(tx.link_request_costs().set(dest.hash.0, 0), 0);
+        assert_eq!(announced_cost(&tx), Some(0));
+    }
+
+    #[test]
     fn dropping_the_stamper_stops_the_worker() {
         let (tx, _rx) = event::channel();
         let stamper = Stamper::with_targets(tx, None, fast_targets());

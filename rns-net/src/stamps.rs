@@ -95,6 +95,80 @@ impl DestinationStampStore {
     }
 }
 
+/// Per-destination link request costs and the responder enforcement flag.
+///
+/// Mirrors `Destination.link_cost` (set with `set_link_cost`, read with
+/// `get_link_cost`) and `Transport.LR_STAMPS_ENFORCED`. The handle is shared
+/// between the node API, the announce builder and the link manager, so the
+/// cost a destination announces is the cost its responder requires.
+#[derive(Debug, Clone, Default)]
+pub struct LinkRequestCosts {
+    inner: std::sync::Arc<LinkRequestCostsInner>,
+}
+
+#[derive(Debug)]
+struct LinkRequestCostsInner {
+    costs: std::sync::Mutex<std::collections::HashMap<[u8; 16], u8>>,
+    enforced: std::sync::atomic::AtomicBool,
+}
+
+impl Default for LinkRequestCostsInner {
+    fn default() -> Self {
+        Self {
+            costs: Default::default(),
+            enforced: std::sync::atomic::AtomicBool::new(constants::LR_STAMPS_ENFORCED),
+        }
+    }
+}
+
+impl LinkRequestCosts {
+    /// `Destination.set_link_cost`: store the clamped cost and return it.
+    pub fn set(&self, destination_hash: [u8; 16], cost: i64) -> u8 {
+        let cost = rns_core::stamp::clamp_link_cost(cost);
+        self.inner
+            .costs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(destination_hash, cost);
+        cost
+    }
+
+    /// `Destination.get_link_cost`: the announced and required cost.
+    pub fn get(&self, destination_hash: &[u8; 16]) -> u8 {
+        let configured = self
+            .inner
+            .costs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(destination_hash)
+            .copied();
+        rns_core::stamp::announced_link_cost(configured)
+    }
+
+    /// Forget the configured cost, reverting to the default.
+    pub fn remove(&self, destination_hash: &[u8; 16]) {
+        self.inner
+            .costs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(destination_hash);
+    }
+
+    /// `Transport.LR_STAMPS_ENFORCED`.
+    pub fn enforced(&self) -> bool {
+        self.inner
+            .enforced
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Override `Transport.LR_STAMPS_ENFORCED`.
+    pub fn set_enforced(&self, enforced: bool) {
+        self.inner
+            .enforced
+            .store(enforced, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Material covered by a destination announce stamp.
 pub fn destination_stamp_material(
     destination_hash: &[u8; 16],
@@ -367,6 +441,23 @@ mod tests {
             rns_core::link::handshake::link_request_stamp_value(&dest_hash, &request),
             Some(value)
         );
+    }
+
+    #[test]
+    fn link_request_costs_default_clamp_and_share() {
+        let costs = LinkRequestCosts::default();
+        let other = costs.clone();
+        let dest = [0x42; 16];
+        assert_eq!(costs.get(&dest), constants::LINK_REQUEST_STAMP_COST);
+        assert_eq!(costs.enforced(), constants::LR_STAMPS_ENFORCED);
+        assert_eq!(costs.set(dest, 99), constants::LINK_COST_CAP);
+        assert_eq!(other.get(&dest), constants::LINK_COST_CAP);
+        assert_eq!(costs.set(dest, -1), 0);
+        assert_eq!(other.get(&dest), 0);
+        costs.remove(&dest);
+        assert_eq!(other.get(&dest), constants::LINK_REQUEST_STAMP_COST);
+        other.set_enforced(true);
+        assert!(costs.enforced());
     }
 
     #[test]

@@ -249,6 +249,7 @@ impl QueueState {
 
 struct QueueShared {
     local_ratchets: crate::local_ratchet::Registry,
+    link_request_costs: crate::stamps::LinkRequestCosts,
     link_sends: Arc<crate::link_send::SendPool>,
     /// Link and interface statistics the driver publishes for readers that
     /// must not queue behind other events.
@@ -547,6 +548,12 @@ impl EventSender {
 
     pub(crate) fn local_ratchets(&self) -> &crate::local_ratchet::Registry {
         &self.shared.local_ratchets
+    }
+
+    /// Per-destination link request costs shared by the node, the announce
+    /// builder and the link manager.
+    pub(crate) fn link_request_costs(&self) -> &crate::stamps::LinkRequestCosts {
+        &self.shared.link_request_costs
     }
 
     pub(crate) fn link_send_pool(&self) -> &Arc<crate::link_send::SendPool> {
@@ -1220,6 +1227,7 @@ pub(crate) fn channel_with_queue_capacities(
     };
     let shared = Arc::new(QueueShared {
         local_ratchets: Default::default(),
+        link_request_costs: Default::default(),
         link_sends: crate::link_send::SendPool::new(control_capacity),
         state_snapshot: Default::default(),
         async_waiters: Mutex::new(Vec::new()),

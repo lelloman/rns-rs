@@ -5914,12 +5914,17 @@ fn runtime_config_list_contains_global_keys() {
     assert!(keys.contains(&"global.direct_connect_policy".to_string()));
     assert!(keys.contains(&"global.stamp_destinations".to_string()));
     assert!(keys.contains(&"global.stamp_path_requests".to_string()));
+    assert!(keys.contains(&"global.lr_stamps_enforced".to_string()));
 }
 
 #[test]
 fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() {
     let mut driver = new_test_driver();
-    for key in ["global.stamp_destinations", "global.stamp_path_requests"] {
+    for key in [
+        "global.stamp_destinations",
+        "global.stamp_path_requests",
+        "global.lr_stamps_enforced",
+    ] {
         let QueryResponse::RuntimeConfigEntry(Some(entry)) =
             driver.handle_query(QueryRequest::GetRuntimeConfig { key: key.into() })
         else {
@@ -5944,6 +5949,17 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
         (
             "global.stamp_path_requests",
             Box::new(|d: &Driver| d.engine.stamp_prs()),
+        ),
+        (
+            // The node API and the announce builder read the same handle.
+            "global.lr_stamps_enforced",
+            Box::new(|d: &Driver| {
+                assert_eq!(
+                    d.link_manager.link_request_costs().enforced(),
+                    d.event_tx.link_request_costs().enforced()
+                );
+                d.link_manager.link_request_costs().enforced()
+            }),
         ),
     ] {
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {

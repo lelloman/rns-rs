@@ -5256,3 +5256,130 @@ fn create_link_with_keys_none_generates_fresh_unstamped_keys() {
     assert_ne!(request(&actions_a), request(&actions_b));
     assert_eq!(mgr.link_count(), 2);
 }
+
+/// Build a LINKREQUEST to `dest_hash` whose stamp value satisfies `accept`.
+fn link_request_with_stamp_value(
+    dest_hash: &[u8; 16],
+    dest_sig_pub: &[u8; 32],
+    keys: Option<(rns_crypto::x25519::X25519PrivateKey, Ed25519PrivateKey)>,
+    accept: impl Fn(u32) -> bool,
+) -> (Vec<u8>, u32) {
+    let mut rng = OsRng;
+    let mut keys = keys;
+    for _ in 0..1000 {
+        let mut initiator = LinkManager::new();
+        let (_, actions) = initiator.create_link_with_keys(
+            dest_hash,
+            dest_sig_pub,
+            1,
+            constants::MTU as u32,
+            keys.take(),
+            &mut rng,
+        );
+        let raw = actions
+            .iter()
+            .find_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                _ => None,
+            })
+            .expect("LINKREQUEST send packet");
+        let packet = RawPacket::unpack(&raw).unwrap();
+        let value =
+            rns_core::link::handshake::link_request_stamp_value(dest_hash, packet.data()).unwrap();
+        if accept(value) {
+            return (raw, value);
+        }
+    }
+    panic!("no link request with an acceptable stamp value");
+}
+
+fn deliver_link_request(responder: &mut LinkManager, raw: &[u8]) -> Vec<LinkManagerAction> {
+    let packet = RawPacket::unpack(raw).unwrap();
+    responder.handle_local_delivery(
+        packet.destination_hash,
+        raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    )
+}
+
+fn proves_link(actions: &[LinkManagerAction]) -> bool {
+    actions
+        .iter()
+        .any(|action| matches!(action, LinkManagerAction::SendPacket { .. }))
+}
+
+#[test]
+fn enforced_link_cost_drops_requests_below_the_destination_cost() {
+    const COST: u8 = 6;
+    let mut rng = OsRng;
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    let dest_hash = [0xE1; 16];
+    let mut responder = LinkManager::new();
+    responder.register_link_destination(
+        dest_hash,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptNone,
+    );
+    let costs = responder.link_request_costs().clone();
+    assert_eq!(costs.set(dest_hash, i64::from(COST)), COST);
+    costs.set_enforced(true);
+
+    // Below the cost: dropped silently, no proof, no protocol violation.
+    let (low, low_value) =
+        link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| v < u32::from(COST));
+    let actions = deliver_link_request(&mut responder, &low);
+    assert!(
+        actions.is_empty(),
+        "value {low_value} below cost {COST} must be dropped, got {actions:?}"
+    );
+
+    // Ground to the cost: accepted and proven.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let (prv, link_sig_prv, _) =
+        crate::stamps::generate_stamped_link_keys(&dest_hash, COST, deadline).unwrap();
+    let (stamped, stamped_value) = link_request_with_stamp_value(
+        &dest_hash,
+        &sig_pub_bytes,
+        Some((prv, link_sig_prv)),
+        |_| true,
+    );
+    assert!(stamped_value >= u32::from(COST));
+    assert!(proves_link(&deliver_link_request(&mut responder, &stamped)));
+
+    // Enforcement off (the upstream default): the low request is accepted.
+    costs.set_enforced(false);
+    let (low, _) =
+        link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| v < u32::from(COST));
+    assert!(proves_link(&deliver_link_request(&mut responder, &low)));
+}
+
+#[test]
+fn enforced_link_cost_defaults_to_lr_cost_and_zero_disables() {
+    let mut rng = OsRng;
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    let dest_hash = [0xE2; 16];
+    let mut responder = LinkManager::new();
+    responder.register_link_destination(
+        dest_hash,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptNone,
+    );
+    let costs = responder.link_request_costs().clone();
+    costs.set_enforced(true);
+    let default_cost = u32::from(constants::LINK_REQUEST_STAMP_COST);
+
+    // No configured cost: `get_link_cost` falls back to `LR_COST`.
+    let (low, _) =
+        link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| v < default_cost);
+    assert!(deliver_link_request(&mut responder, &low).is_empty());
+
+    // A cost of 0 disables the requirement.
+    costs.set(dest_hash, 0);
+    let (low, _) =
+        link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| v < default_cost);
+    assert!(proves_link(&deliver_link_request(&mut responder, &low)));
+}

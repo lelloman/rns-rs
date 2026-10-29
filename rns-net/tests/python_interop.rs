@@ -325,6 +325,15 @@ fn start_rust_node_with_store(
     tx: Sender<RustEvent>,
     ratchet_store: Option<std::sync::Arc<dyn rns_net::storage::RatchetStore>>,
 ) -> RnsNode {
+    start_rust_node_with(port, tx, ratchet_store, None)
+}
+
+fn start_rust_node_with(
+    port: u16,
+    tx: Sender<RustEvent>,
+    ratchet_store: Option<std::sync::Arc<dyn rns_net::storage::RatchetStore>>,
+    cache_dir: Option<std::path::PathBuf>,
+) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
@@ -357,7 +366,7 @@ fn start_rust_node_with_store(
             instance_name: "default".into(),
             shared_instance_port: 37428,
             rpc_port: 0,
-            cache_dir: None,
+            cache_dir,
             ratchet_store,
             ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
@@ -478,7 +487,7 @@ def link_established(link):
     link.set_packet_callback(link_packet_callback)
     link.set_resource_strategy(RNS.Link.ACCEPT_ALL)
     link.set_resource_concluded_callback(resource_concluded)
-    emit("python_link_established", link_id=link.link_id.hex())
+    emit("python_link_established", link_id=link.link_id.hex(), stamp_cost=getattr(link, "stamp_cost", None))
     RNS.Packet(link, b"python-to-rust over link").send()
 
 def link_closed(link):
@@ -496,6 +505,7 @@ class RustAnnounceHandler:
             app_data_hex=app_data.hex() if app_data is not None else None,
             announce_packet_hash=announce_packet_hash.hex(),
             is_path_response=bool(is_path_response),
+            link_cost=RNS.Identity.recall_link_cost(destination_hash) if hasattr(RNS.Identity, "recall_link_cost") else None,
         )
         if not is_path_response:
             out = RNS.Destination(announced_identity, RNS.Destination.OUT, RNS.Destination.SINGLE, "interop", "rust")
@@ -526,7 +536,8 @@ def inbound_link_established(link):
 
 destination.set_link_established_callback(inbound_link_established)
 
-emit("ready", port=port, python_dest_hash=destination.hash.hex())
+emit("ready", port=port, python_dest_hash=destination.hash.hex(),
+     link_cost_supported=hasattr(RNS.Identity, "recall_link_cost") and hasattr(RNS.Destination, "set_link_cost"))
 
 signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
 try:
@@ -592,7 +603,7 @@ try:
                 rust_link = RNS.Link(rust_destination)
                 rust_link.set_link_established_callback(link_established)
                 rust_link.set_link_closed_callback(link_closed)
-                emit("python_link_requested", link_id=rust_link.link_id.hex())
+                emit("python_link_requested", link_id=rust_link.link_id.hex() if getattr(rust_link, "link_id", None) else None)
         elif command == "send_resource_rust":
             if rust_link is None:
                 emit("python_resource_error", reason="link is unavailable")
@@ -928,6 +939,97 @@ fn python_rns_stamped_link_request_interop() {
             && event["context"] == 0
             && event["data_hex"] == hex(b"rust-to-python over stamped link")
     });
+
+    node.shutdown();
+}
+
+/// Reverse direction of the stamped link interop: the Rust destination sets a
+/// per-destination link cost (`Destination.set_link_cost`), announces it in
+/// the stamp extension, Python recalls it and grinds its link request to it,
+/// and the Rust responder, enforcing link request stamps, accepts the link.
+#[test]
+fn python_rns_link_cost_announced_by_rust_interop() {
+    const LINK_COST: u8 = 9;
+    const STAMP_WAIT: Duration = Duration::from_secs(120);
+
+    if !rns_available() {
+        eprintln!("Skipping: Python RNS not available");
+        return;
+    }
+
+    let mut python = PythonRns::spawn();
+    let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
+    if ready["link_cost_supported"] != true {
+        eprintln!("Skipping: Python RNS has no per-destination link cost");
+        return;
+    }
+    let port = ready["port"].as_u64().unwrap() as u16;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (rust_tx, rust_rx) = mpsc::channel();
+    let mut node = start_rust_node_with(port, rust_tx, None, Some(cache_dir.path().into()));
+    node.set_destination_stamping(true, rns_net::stamper::StampTargets::default());
+    node.set_link_request_stamps_enforced(true);
+
+    let rust_identity = Identity::new(&mut OsRng);
+    let rust_dest = Destination::single_in(
+        APP_NAME,
+        &[RUST_ASPECT],
+        IdentityHash(*rust_identity.hash()),
+    );
+    node.register_destination(rust_dest.hash.0, rust_dest.dest_type.to_wire_constant())
+        .expect("Rust destination registration should succeed");
+    let rust_private = rust_identity.get_private_key().unwrap();
+    let rust_public = rust_identity.get_public_key().unwrap();
+    let mut rust_sig_private = [0u8; 32];
+    let mut rust_sig_public = [0u8; 32];
+    rust_sig_private.copy_from_slice(&rust_private[32..64]);
+    rust_sig_public.copy_from_slice(&rust_public[32..64]);
+    node.register_link_destination(rust_dest.hash.0, rust_sig_private, rust_sig_public, 1)
+        .expect("Rust link destination registration should succeed");
+    assert_eq!(
+        node.set_link_cost(rust_dest.hash.0, i64::from(LINK_COST)),
+        LINK_COST
+    );
+
+    // Wait for the TCP client to come up before announcing.
+    std::thread::sleep(Duration::from_secs(1));
+    node.announce_queued(&rust_dest, &rust_identity, Some(RUST_APP_DATA))
+        .expect("stamped Rust announce should be queued");
+    let rust_announce = python.wait_for_event(STAMP_WAIT, |event| {
+        event["event"] == "rust_announce"
+            && event["dest_hash"] == hex(&rust_dest.hash.0)
+            && event["is_path_response"] == false
+    });
+    // Python validated the stamp, stripped the extension and recorded the
+    // announced cost.
+    assert_eq!(
+        decode_hex(rust_announce["app_data_hex"].as_str().unwrap()),
+        RUST_APP_DATA
+    );
+    assert_eq!(rust_announce["link_cost"], u64::from(LINK_COST));
+
+    // Python initiates and grinds its link request to the announced cost;
+    // the enforcing Rust responder accepts it.
+    python.command("link_rust");
+    let requested = python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_link_requested" || event["event"] == "python_link_error"
+    });
+    assert_eq!(requested["event"], "python_link_requested");
+    let python_link = python.wait_for_event(STAMP_WAIT, |event| {
+        event["event"] == "python_link_established"
+    });
+    assert_eq!(python_link["stamp_cost"], u64::from(LINK_COST));
+    let link_id = parse_hex_16(python_link["link_id"].as_str().unwrap());
+    let rust_link = wait_for_rust_event(&rust_rx, STAMP_WAIT, |event| match event {
+        RustEvent::LinkEstablished {
+            link_id,
+            is_initiator,
+        } => Some((*link_id, *is_initiator)),
+        _ => None,
+    })
+    .expect("the enforcing Rust responder should accept the stamped request");
+    assert_eq!(rust_link, (link_id, false));
 
     node.shutdown();
 }

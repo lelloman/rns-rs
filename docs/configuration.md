@@ -142,6 +142,14 @@ announced `lr_cost`, and every interface counts validated inbound path request
 stamps as `stamped_path_requests` in `/api/interfaces`, the RPC interface
 stats, and the management export.
 
+A stamped announce carries the destination's link request cost: the value set
+with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to
+`0..=40`), or the default 11. Initiators that see a non-zero announced cost
+grind their link request key to it. Responders only check it when
+`global.lr_stamps_enforced` (upstream `Transport.LR_STAMPS_ENFORCED`, off by
+default) is on, dropping link requests whose stamp is below the destination's
+cost; the key applies immediately and resets to the compile-time default.
+
 ## Ingress control
 
 Any interface section accepts the Python-compatible ingress-control keys.

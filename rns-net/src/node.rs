@@ -2777,6 +2777,41 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Set the required link establishment stamp cost for a destination.
+    ///
+    /// Mirrors `Destination.set_link_cost`: the cost is clamped to
+    /// `0..=LINK_COST_CAP` and the clamped value is returned. Set it to 0 to
+    /// disable. The cost is carried in the destination's announce extension
+    /// (emitted when destination stamping is on) so initiators grind their
+    /// link request stamps to it, and, when link request stamps are enforced,
+    /// incoming link requests whose stamp value is below it are dropped.
+    pub fn set_link_cost(&self, dest_hash: [u8; 16], cost: i64) -> u8 {
+        self.tx.link_request_costs().set(dest_hash, cost)
+    }
+
+    /// The link request stamp cost announced and required for a destination.
+    ///
+    /// Mirrors `Destination.get_link_cost`: the configured cost, or the
+    /// default `LINK_REQUEST_STAMP_COST` (`Transport.LR_COST`) when none was
+    /// set.
+    pub fn link_cost(&self, dest_hash: &[u8; 16]) -> u8 {
+        self.tx.link_request_costs().get(dest_hash)
+    }
+
+    /// Override `Transport.LR_STAMPS_ENFORCED` for this node.
+    ///
+    /// When enabled, incoming link requests whose stamp value is below the
+    /// destination's [`link_cost`](Self::link_cost) are dropped. Defaults to
+    /// `rns_core::constants::LR_STAMPS_ENFORCED` (off, as upstream).
+    pub fn set_link_request_stamps_enforced(&self, enforced: bool) {
+        self.tx.link_request_costs().set_enforced(enforced);
+    }
+
+    /// Whether incoming link request stamps are enforced.
+    pub fn link_request_stamps_enforced(&self) -> bool {
+        self.tx.link_request_costs().enforced()
+    }
+
     /// Register a request handler for a given path on established links.
     pub fn register_request_handler<F>(
         &self,
@@ -4234,10 +4269,12 @@ pub(crate) fn build_announce_packet(
             }
         };
         let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
+        // `bytes([self.get_link_cost()])`: the destination's own cost, or
+        // the default `LR_COST` when none was set.
         wire.extend_from_slice(&crate::stamps::announce_ext_payload(
             &stamp,
             0,
-            rns_core::constants::LINK_REQUEST_STAMP_COST,
+            tx.link_request_costs().get(&dest.hash.0),
         ));
         Some(wire)
     } else {
