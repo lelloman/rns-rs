@@ -255,6 +255,9 @@ pub struct LinkManager {
     /// cannot desynchronise separate list and lookup-map representations.
     links: HashMap<LinkId, ManagedLink>,
     link_destinations: HashMap<[u8; 16], LinkDestination>,
+    /// Per-destination link request costs and `LR_STAMPS_ENFORCED`, shared
+    /// with the node API and the announce builder.
+    link_request_costs: crate::stamps::LinkRequestCosts,
     request_handlers: Vec<RequestHandlerEntry>,
     deferred_request_handlers: Vec<DeferredRequestHandlerEntry>,
     /// Path hashes that should be handled externally (by the driver) rather than
@@ -371,7 +374,18 @@ impl LinkManager {
             deferred_request_handlers: Vec::new(),
             management_paths: Vec::new(),
             link_mtu_discovery: true,
+            link_request_costs: Default::default(),
         }
+    }
+
+    /// Share the per-destination link request costs with the node.
+    pub(crate) fn set_link_request_costs(&mut self, costs: crate::stamps::LinkRequestCosts) {
+        self.link_request_costs = costs;
+    }
+
+    /// The per-destination link request costs this manager enforces.
+    pub fn link_request_costs(&self) -> &crate::stamps::LinkRequestCosts {
+        &self.link_request_costs
     }
 
     pub(crate) fn set_link_mtu_discovery(&mut self, enabled: bool) {
@@ -729,24 +743,27 @@ impl LinkManager {
         let hashable = packet.get_hashable_part();
         let now = time::now();
 
+        // `Link.validate_request`: the request's X25519 public key is its
+        // stamp over `destination_hash || peer_sig_pub`. With
+        // `LR_STAMPS_ENFORCED`, a value below the destination's
+        // `get_link_cost()` drops the request without a proof.
         let stamp_value =
             rns_core::link::handshake::link_request_stamp_value(dest_hash, packet.data());
         if let Some(value) = stamp_value {
-            if rns_core::constants::LR_STAMPS_ENFORCED
-                && value < u32::from(rns_core::constants::LINK_REQUEST_STAMP_COST)
-            {
-                log::debug!(
-                    "LINKREQUEST for {:02x?} has insufficient stamp value {}",
-                    &dest_hash[..4],
-                    value
-                );
-                return Vec::new();
-            }
             log::trace!(
                 "LINKREQUEST for {:02x?} carries stamp value {}",
                 &dest_hash[..4],
                 value
             );
+            if self.link_request_costs.enforced()
+                && value < u32::from(self.link_request_costs.get(dest_hash))
+            {
+                log::debug!(
+                    "Validating incoming link request failed: Insufficient link request stamp value {}",
+                    value
+                );
+                return Vec::new();
+            }
         }
 
         // Create responder engine

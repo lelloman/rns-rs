@@ -6369,6 +6369,132 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
     transport.shutdown();
 }
 
+/// `Destination.set_link_cost` end to end: the cost rides the stamped
+/// announce, the initiator grinds its link request to it, and a responder
+/// with `LR_STAMPS_ENFORCED` drops requests below its configured cost.
+#[test]
+fn test_stamped_link_cost_is_announced_ground_and_enforced() {
+    const LINK_COST: u8 = 8;
+    let state_dir = tempfile::tempdir().unwrap();
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let alice_identity = Identity::new(&mut OsRng);
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["stamp", "linkcost"],
+        IdentityHash(*alice_identity.hash()),
+    );
+    let (alice_tx, alice_rx) = mpsc::channel();
+    // Stamped announces need a stamp store, so Alice gets a storage dir.
+    let alice = start_client_node_with_options(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+        rns_core::constants::HASHLIST_MAXSIZE,
+        Some(state_dir.path().join("cache")),
+        false,
+    );
+    let bob_identity = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob = start_client_node(port, &bob_identity, Box::new(TestCallbacks::new(bob_tx)));
+    for (name, rx) in [("Alice", &alice_rx), ("Bob", &bob_rx)] {
+        wait_for_event(rx, TIMEOUT, |e| {
+            matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+        })
+        .unwrap_or_else(|| panic!("{name} InterfaceUp timed out"));
+    }
+    std::thread::sleep(SETTLE);
+
+    alice
+        .register_destination_with_proof(
+            &alice_dest,
+            Some(alice_identity.get_private_key().unwrap()),
+        )
+        .unwrap();
+    let (alice_sig_prv, alice_sig_pub) = extract_sig_keys(&alice_identity);
+    alice
+        .register_link_destination(alice_dest.hash.0, alice_sig_prv, alice_sig_pub, 0)
+        .unwrap();
+
+    // Destination.set_link_cost clamps to LINK_COST_CAP; get_link_cost falls
+    // back to LR_COST until a cost is set.
+    assert_eq!(
+        alice.link_cost(&alice_dest.hash.0),
+        rns_core::constants::LINK_REQUEST_STAMP_COST
+    );
+    assert_eq!(
+        alice.set_link_cost(alice_dest.hash.0, 1000),
+        rns_core::constants::LINK_COST_CAP
+    );
+    assert_eq!(
+        alice.set_link_cost(alice_dest.hash.0, i64::from(LINK_COST)),
+        LINK_COST
+    );
+    assert_eq!(alice.link_cost(&alice_dest.hash.0), LINK_COST);
+
+    set_runtime_bool(&alice, "global.stamp_destinations", true);
+    alice
+        .announce_queued(&alice_dest, &alice_identity, Some(b"linkcost"))
+        .unwrap();
+    let announced = wait_for_announce(&bob_rx, &alice_dest.hash, STAMP_TIMEOUT)
+        .expect("Bob never received Alice's stamped announce");
+    assert_eq!(announced.app_data.as_deref(), Some(b"linkcost".as_slice()));
+    let recorded = bob
+        .recall_destination_stamp(&alice_dest.hash)
+        .unwrap()
+        .expect("Bob did not record Alice's announce");
+    assert_eq!(
+        recorded.lr_cost,
+        Some(LINK_COST),
+        "the announce must carry the per-destination link cost"
+    );
+
+    // Enforcement is off by default, as upstream.
+    assert_eq!(
+        runtime_config_value(&alice, "global.lr_stamps_enforced"),
+        RuntimeConfigValue::Bool(false)
+    );
+    set_runtime_bool(&alice, "global.lr_stamps_enforced", true);
+    assert!(alice.link_request_stamps_enforced());
+
+    // Bob grinds to the announced cost, which meets Alice's requirement.
+    let link_id = bob.create_link(alice_dest.hash.0, alice_sig_pub).unwrap();
+    let (bob_link, _, bob_is_initiator) =
+        wait_for_link_established(&bob_rx, TIMEOUT).expect("stamped link not established");
+    assert_eq!(bob_link, link_id);
+    assert!(bob_is_initiator);
+    let (alice_link, _, _) =
+        wait_for_link_established(&alice_rx, TIMEOUT).expect("Alice did not accept the link");
+    assert_eq!(alice_link, link_id);
+
+    // Alice raises her cost to the cap without re-announcing: Bob still
+    // grinds to 8, and Alice drops the request without a proof.
+    alice.set_link_cost(alice_dest.hash.0, 1000);
+    let rejected = bob.create_link(alice_dest.hash.0, alice_sig_pub).unwrap();
+    let (closed, _) = wait_for_link_closed(&bob_rx, Duration::from_secs(60))
+        .expect("the unproven link request never timed out");
+    assert_eq!(closed, rejected);
+    assert!(
+        !alice_rx.try_iter().any(|event| matches!(
+            event,
+            TestEvent::LinkEstablished { link_id, .. } if link_id == rejected
+        )),
+        "Alice must not accept a request below her link cost"
+    );
+
+    // With enforcement off again the same cost no longer gates links.
+    set_runtime_bool(&alice, "global.lr_stamps_enforced", false);
+    let accepted = bob.create_link(alice_dest.hash.0, alice_sig_pub).unwrap();
+    let (bob_link, _, _) = wait_for_link_established(&bob_rx, TIMEOUT)
+        .expect("link not established with enforcement off");
+    assert_eq!(bob_link, accepted);
+
+    alice.shutdown();
+    bob.shutdown();
+    transport.shutdown();
+}
+
 #[test]
 fn test_stamped_path_request_is_counted_by_the_transport_and_answered() {
     let (

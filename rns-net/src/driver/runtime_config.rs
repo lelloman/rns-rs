@@ -1445,6 +1445,13 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Stamp path requests emitted or forwarded for local clients by this node (Transport.STAMP_PRS).",
             )),
+            "global.lr_stamps_enforced" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Bool(self.link_manager.link_request_costs().enforced()),
+                RuntimeConfigValue::Bool(defaults.lr_stamps_enforced),
+                RuntimeConfigApplyMode::Immediate,
+                "Drop incoming link requests whose stamp is below the destination's link cost (Transport.LR_STAMPS_ENFORCED).",
+            )),
             "global.direct_connect_policy" => Some(make_entry(
                 key,
                 RuntimeConfigValue::String(Self::holepunch_policy_name(
@@ -1503,6 +1510,7 @@ impl Driver {
             "global.management_announce_interval_secs",
             "global.stamp_destinations",
             "global.stamp_path_requests",
+            "global.lr_stamps_enforced",
             "global.direct_connect_policy",
         ]
         .into_iter()

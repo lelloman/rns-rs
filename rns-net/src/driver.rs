@@ -165,6 +165,8 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) stamp_destinations: bool,
     /// `Transport.STAMP_PRS` default.
     pub(crate) stamp_path_requests: bool,
+    /// `Transport.LR_STAMPS_ENFORCED` default.
+    pub(crate) lr_stamps_enforced: bool,
     #[cfg(feature = "hooks")]
     pub(crate) provider_queue_max_events: usize,
     #[cfg(feature = "hooks")]
@@ -951,6 +953,7 @@ impl Driver {
             direct_connect_policy: crate::event::HolePunchPolicy::default(),
             stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
             stamp_path_requests: rns_core::constants::STAMP_PRS,
+            lr_stamps_enforced: rns_core::constants::LR_STAMPS_ENFORCED,
             #[cfg(feature = "hooks")]
             provider_queue_max_events: crate::provider_bridge::ProviderBridgeConfig::default()
                 .queue_max_events,
@@ -982,7 +985,11 @@ impl Driver {
             announce_cache: None,
             tunnel_synth_dest,
             transport_identity: None,
-            link_manager: LinkManager::new(),
+            link_manager: {
+                let mut link_manager = LinkManager::new();
+                link_manager.set_link_request_costs(tx.link_request_costs().clone());
+                link_manager
+            },
             management_config: Default::default(),
             last_management_announce: 0.0,
             initial_announce_sent: false,

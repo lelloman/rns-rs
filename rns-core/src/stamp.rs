@@ -85,9 +85,51 @@ pub fn stamp_valid(stamp: &[u8], target_cost: u8, workblock: &[u8]) -> bool {
     leading_zeros(&result) >= target_cost as u32
 }
 
+/// Clamp a configured per-destination link request cost.
+///
+/// Mirrors `Destination.set_link_cost`:
+/// `max(0, min(int(cost), Transport.LINK_COST_CAP))`.
+pub fn clamp_link_cost(cost: i64) -> u8 {
+    cost.clamp(0, i64::from(crate::constants::LINK_COST_CAP)) as u8
+}
+
+/// The link request cost a destination announces and requires.
+///
+/// Mirrors `Destination.get_link_cost`: the configured cost, or the default
+/// `Transport.LR_COST` when none was set, clamped to `STAMP_COST_CAP`.
+pub fn announced_link_cost(configured: Option<u8>) -> u8 {
+    configured
+        .unwrap_or(crate::constants::LINK_REQUEST_STAMP_COST)
+        .min(crate::constants::STAMP_COST_CAP)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_cost_setter_clamps_like_upstream() {
+        assert_eq!(clamp_link_cost(-5), 0);
+        assert_eq!(clamp_link_cost(0), 0);
+        assert_eq!(clamp_link_cost(8), 8);
+        assert_eq!(clamp_link_cost(40), 40);
+        assert_eq!(clamp_link_cost(41), crate::constants::LINK_COST_CAP);
+        assert_eq!(clamp_link_cost(i64::MAX), crate::constants::LINK_COST_CAP);
+    }
+
+    #[test]
+    fn announced_link_cost_defaults_to_lr_cost() {
+        assert_eq!(
+            announced_link_cost(None),
+            crate::constants::LINK_REQUEST_STAMP_COST
+        );
+        assert_eq!(announced_link_cost(Some(0)), 0);
+        assert_eq!(announced_link_cost(Some(17)), 17);
+        assert_eq!(
+            announced_link_cost(Some(u8::MAX)),
+            crate::constants::STAMP_COST_CAP
+        );
+    }
 
     #[test]
     fn test_leading_zeros_all_zero() {
