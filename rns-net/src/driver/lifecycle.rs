@@ -20,7 +20,7 @@ impl Driver {
                 last_used_at: None,
                 retained: false,
                 stamp: None,
-                stamp_value: 0,
+                stamp_value: rns_core::stamp::StampValue::ZERO,
                 lr_cost: None,
             },
         );
@@ -30,7 +30,7 @@ impl Driver {
         &mut self,
         dest_hash: [u8; 16],
         stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
-        stamp_value: u32,
+        stamp_value: rns_core::stamp::StampValue,
         lr_cost: Option<u8>,
     ) {
         if let Some(state) = self.known_destinations.get_mut(&dest_hash) {
@@ -47,7 +47,10 @@ impl Driver {
             .and_then(|state| state.lr_cost)
     }
 
-    pub(crate) fn recall_stamp_value(&self, dest_hash: &[u8; 16]) -> Option<u32> {
+    pub(crate) fn recall_stamp_value(
+        &self,
+        dest_hash: &[u8; 16],
+    ) -> Option<rns_core::stamp::StampValue> {
         self.known_destinations
             .get(dest_hash)
             .map(|state| state.stamp_value)

@@ -1753,7 +1753,7 @@ mod tests {
             4,
         );
         let value = handshake::link_request_stamp_value(&dest_hash, &data).unwrap();
-        assert!(value >= 4);
+        assert!(value.meets(4));
     }
 
     #[test]

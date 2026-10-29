@@ -38,28 +38,7 @@ impl fmt::Display for CryptoError {
 #[cfg(feature = "std")]
 impl std::error::Error for CryptoError {}
 
-/// Count leading zero bits in a SHA-256 hash.
-fn leading_zeros(hash: &[u8; 32]) -> u32 {
-    let mut count = 0u32;
-    for &byte in hash {
-        if byte == 0 {
-            count += 8;
-        } else {
-            count += byte.leading_zeros();
-            break;
-        }
-    }
-    count
-}
-
-/// Stamp value of `stamp` over `material`: leading zero bits of
-/// `SHA-256(material || stamp)`.
-pub fn stamp_value(material: &[u8], stamp: &[u8]) -> u32 {
-    let mut input = Vec::with_capacity(material.len() + stamp.len());
-    input.extend_from_slice(material);
-    input.extend_from_slice(stamp);
-    leading_zeros(&sha256::sha256(&input))
-}
+pub use crate::stamp_value::{stamp_value, StampValue};
 
 /// Generate an X25519 keypair whose public key meets `stamp_cost` over
 /// `material`, mirroring upstream `generate_stamped_key`.
@@ -67,7 +46,7 @@ pub fn generate_stamped_key(
     rng: &mut dyn Rng,
     material: &[u8],
     stamp_cost: u8,
-) -> (X25519PrivateKey, X25519PublicKey, u32) {
+) -> (X25519PrivateKey, X25519PublicKey, StampValue) {
     generate_stamped_key_until(rng, material, stamp_cost, &mut || false)
         .expect("stamped key generation without a stop condition always completes")
 }
@@ -81,7 +60,7 @@ pub fn generate_stamped_key_until(
     material: &[u8],
     stamp_cost: u8,
     should_stop: &mut dyn FnMut() -> bool,
-) -> Option<(X25519PrivateKey, X25519PublicKey, u32)> {
+) -> Option<(X25519PrivateKey, X25519PublicKey, StampValue)> {
     loop {
         if should_stop() {
             return None;
@@ -89,7 +68,7 @@ pub fn generate_stamped_key_until(
         let prv = X25519PrivateKey::generate(rng);
         let public = prv.public_key();
         let value = stamp_value(material, &public.public_bytes());
-        if value >= u32::from(stamp_cost) {
+        if value.meets(u32::from(stamp_cost)) {
             return Some((prv, public, value));
         }
     }
@@ -149,7 +128,7 @@ impl Identity {
     }
 
     /// Stamp value carried by this identity's public key, if available.
-    pub fn get_value(&self) -> Option<u32> {
+    pub fn get_value(&self) -> Option<StampValue> {
         match (&self.sig_pub, &self.pub_key) {
             (Some(sig_pub), Some(pub_key)) => Some(stamp_value(
                 &sig_pub.public_bytes(),
@@ -554,7 +533,7 @@ mod tests {
         let material = b"link request material";
         let (prv, public, value) =
             generate_stamped_key_until(&mut rng, material, 4, &mut || false).unwrap();
-        assert!(value >= 4);
+        assert!(value.meets(4));
         assert_eq!(public.public_bytes(), prv.public_key().public_bytes());
         assert_eq!(stamp_value(material, &public.public_bytes()), value);
     }
@@ -576,7 +555,7 @@ mod tests {
         let mut rng = crate::OsRng;
         let id = Identity::new_stamped(&mut rng, 4);
         let value = id.get_value().unwrap();
-        assert!(value >= 4);
+        assert!(value.meets(4));
 
         let public = id.get_public_key().unwrap();
         assert_eq!(stamp_value(&public[32..], &public[..32]), value);

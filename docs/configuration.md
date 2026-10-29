@@ -174,6 +174,13 @@ A valid inbound stamp is observable on the receiving side:
 validated inbound path request stamps as `stamped_path_requests` in
 `/api/interfaces`, the RPC interface stats, and the management export.
 
+Stamp values are fractional, as in upstream since rgit `78fb90ea`: the whole
+part is the leading zero bit count of the stamp product and the fraction comes
+in 1/256 steps, so a recorded value reads like `24.73046875`. Required costs
+stay whole numbers, and a value meets a cost when its whole part does, so the
+fraction never changes which stamps are accepted. Values persisted by earlier
+versions as integers load unchanged.
+
 A stamped announce carries the destination's link request cost: the value set
 with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to
 `0..=40`), or the default 11. Initiators that see a non-zero announced cost

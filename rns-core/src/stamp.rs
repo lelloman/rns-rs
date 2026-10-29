@@ -43,28 +43,10 @@ pub fn stamp_workblock(material: &[u8], expand_rounds: u32) -> Vec<u8> {
     workblock
 }
 
-/// Count leading zero bits in a 32-byte hash.
-pub fn leading_zeros(hash: &[u8; 32]) -> u32 {
-    let mut count = 0u32;
-    for &byte in hash.iter() {
-        if byte == 0 {
-            count += 8;
-        } else {
-            count += byte.leading_zeros();
-            break;
-        }
-    }
-    count
-}
-
-/// Calculate the stamp value (number of leading zero bits in SHA256(workblock + stamp)).
-pub fn stamp_value(workblock: &[u8], stamp: &[u8]) -> u32 {
-    let mut material = Vec::with_capacity(workblock.len() + stamp.len());
-    material.extend_from_slice(workblock);
-    material.extend_from_slice(stamp);
-    let hash = sha256(&material);
-    leading_zeros(&hash)
-}
+/// Leading zero bits of a 256-bit stamp product (the legacy integer value),
+/// fractional stamp values and their fixed-point type. See
+/// [`rns_crypto::stamp_value`].
+pub use rns_crypto::stamp_value::{leading_zeros, stamp_value, StampValue};
 
 /// Check if a stamp meets the target cost.
 ///
@@ -197,7 +179,7 @@ mod tests {
         assert_eq!(&wb[..32], &expected_wb_prefix[..]);
 
         let value = stamp_value(&wb, &stamp);
-        assert_eq!(value, 8);
+        assert_eq!(value.whole(), 8);
         assert!(stamp_valid(&stamp, 8, &wb));
     }
 
@@ -237,11 +219,11 @@ mod tests {
         assert_eq!(material.len(), 16 + 64 + 10);
         let stamp = unhex("e42059a12ebbbc4dbb60c46fd539");
         let workblock = stamp_workblock(&material, 0);
-        assert_eq!(stamp_value(&workblock, &stamp), 8);
+        assert_eq!(stamp_value(&workblock, &stamp).whole(), 8);
         assert!(stamp_valid(&stamp, 8, &workblock));
         assert!(!stamp_valid(&stamp, 9, &workblock));
         // The former behaviour hashed the stamp alone, which does not reach
         // the value Python computed.
-        assert_ne!(stamp_value(&[], &stamp), 8);
+        assert_ne!(stamp_value(&[], &stamp).whole(), 8);
     }
 }

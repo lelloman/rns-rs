@@ -702,7 +702,7 @@ impl Driver {
     ) -> (
         u8,
         u8,
-        std::cmp::Reverse<u32>,
+        std::cmp::Reverse<rns_core::stamp::StampValue>,
         std::cmp::Reverse<u64>,
         [u8; 32],
     ) {
@@ -725,7 +725,7 @@ impl Driver {
     ) -> (
         u8,
         u8,
-        std::cmp::Reverse<u32>,
+        std::cmp::Reverse<rns_core::stamp::StampValue>,
         std::cmp::Reverse<u64>,
         [u8; 32],
     ) {
@@ -742,7 +742,13 @@ impl Driver {
                 discovery.discovery_hash,
             )
         } else {
-            (0, 0, std::cmp::Reverse(0), std::cmp::Reverse(0), [0; 32])
+            (
+                0,
+                0,
+                std::cmp::Reverse(rns_core::stamp::StampValue::ZERO),
+                std::cmp::Reverse(0),
+                [0; 32],
+            )
         }
     }
 

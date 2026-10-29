@@ -8,7 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rns_core::constants;
-use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock};
+use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampValue};
 
 /// Per-destination stamp files.
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ impl DestinationStampStore {
         destination_hash: &[u8; 16],
         material: &[u8],
         required_value: u8,
-    ) -> Option<(Vec<u8>, u32)> {
+    ) -> Option<(Vec<u8>, StampValue)> {
         use rns_core::msgpack;
 
         let data = std::fs::read(self.path_for(destination_hash)).ok()?;
@@ -70,7 +70,7 @@ impl DestinationStampStore {
         &self,
         destination_hash: &[u8; 16],
         stamp: &[u8],
-        stamp_value: u32,
+        stamp_value: StampValue,
     ) -> io::Result<()> {
         use rns_core::msgpack::{self, Value};
 
@@ -80,7 +80,7 @@ impl DestinationStampStore {
             (Value::Str("stamp".into()), Value::Bin(stamp.to_vec())),
             (
                 Value::Str("value".into()),
-                Value::UInt(u64::from(stamp_value)),
+                Value::Float(stamp_value.as_f64()),
             ),
             (
                 Value::Str("generated".into()),
@@ -222,7 +222,10 @@ pub fn path_request_ext_payload(stamp: &[u8], flags: u8) -> Vec<u8> {
 ///
 /// Returns `(private_key, public_key, value)`. The public key itself is the
 /// stamp, validated as `stamp_valid(public_key, cost, material)`.
-pub fn generate_stamped_key(material: &[u8], stamp_cost: u8) -> Option<(Vec<u8>, Vec<u8>, u32)> {
+pub fn generate_stamped_key(
+    material: &[u8],
+    stamp_cost: u8,
+) -> Option<(Vec<u8>, Vec<u8>, StampValue)> {
     use rns_crypto::OsRng;
 
     if stamp_cost > constants::STAMP_COST_CAP {
@@ -263,7 +266,7 @@ pub fn generate_stamped_link_keys(
 ) -> Option<(
     rns_crypto::x25519::X25519PrivateKey,
     rns_crypto::ed25519::Ed25519PrivateKey,
-    u32,
+    StampValue,
 )> {
     use rns_crypto::OsRng;
 
@@ -298,7 +301,7 @@ pub fn generate_stamp(
     stamp_cost: u8,
     size: usize,
     expand_rounds: u32,
-) -> Option<(Vec<u8>, u32)> {
+) -> Option<(Vec<u8>, StampValue)> {
     generate_stamp_until(material, stamp_cost, size, expand_rounds, None)
 }
 
@@ -320,7 +323,7 @@ pub fn generate_stamp_until(
     size: usize,
     expand_rounds: u32,
     deadline: Option<std::time::Instant>,
-) -> Option<(Vec<u8>, u32)> {
+) -> Option<(Vec<u8>, StampValue)> {
     use rns_crypto::{OsRng, Rng};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -428,7 +431,7 @@ mod tests {
             Some(Instant::now() + Duration::from_secs(60)),
         )
         .expect("cost 4 is found quickly");
-        assert!(value >= 4);
+        assert!(value.meets(4));
         assert!(stamp_valid(&stamp, 4, &stamp_workblock(b"material", 0)));
     }
 
@@ -448,10 +451,13 @@ mod tests {
         assert_eq!(stamp.len(), constants::STAMP_LENGTH);
         let workblock = stamp_workblock(material, 0);
         assert!(stamp_valid(&stamp, 8, &workblock));
-        assert!(value >= 8);
+        assert!(value.meets(8));
 
-        let dir =
-            std::env::temp_dir().join(format!("rns-dstamp-test-{}-{}", std::process::id(), value));
+        let dir = std::env::temp_dir().join(format!(
+            "rns-dstamp-test-{}-{}",
+            std::process::id(),
+            value.fp()
+        ));
         let store = DestinationStampStore::new(&dir);
         store.store(&[0x44; 16], &stamp, value).unwrap();
         let loaded = store.load(&[0x44; 16], material, 8).unwrap();
@@ -467,7 +473,7 @@ mod tests {
         let (private, public, value) = generate_stamped_key(material, 4).unwrap();
         assert_eq!(private.len(), 32);
         assert_eq!(public.len(), 32);
-        assert!(value >= 4);
+        assert!(value.meets(4));
         assert!(stamp_valid(&public, 4, material));
     }
 
@@ -481,7 +487,7 @@ mod tests {
         let recomputed =
             rns_crypto::identity::stamp_value(&material, &prv.public_key().public_bytes());
         assert_eq!(recomputed, value);
-        assert!(value >= 4);
+        assert!(value.meets(4));
     }
 
     #[test]

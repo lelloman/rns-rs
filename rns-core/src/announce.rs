@@ -6,7 +6,7 @@ use rns_crypto::sha256::Sha256;
 
 use crate::constants;
 use crate::hash;
-use crate::stamp::{stamp_valid, stamp_value, stamp_workblock};
+use crate::stamp::{stamp_valid, stamp_value, stamp_workblock, StampValue};
 
 #[derive(Debug)]
 pub enum AnnounceError {
@@ -59,8 +59,8 @@ pub struct ValidatedAnnounce {
     pub app_data: Option<Vec<u8>>,
     /// Detached destination stamp parsed from the announce, if present.
     pub stamp: Option<[u8; constants::STAMP_LENGTH]>,
-    /// Stamp value (leading zero bits), or `0` when absent or invalid.
-    pub stamp_value: u32,
+    /// Fractional stamp value, or zero when absent or invalid.
+    pub stamp_value: StampValue,
     /// Link request stamp cost announced in the extension anchor, if present.
     pub lr_cost: Option<u8>,
 }
@@ -137,7 +137,7 @@ impl ValidatedAnnounce {
             self.lr_cost = Some(lr_cost);
             AnnounceStampStatus::Valid
         } else {
-            self.stamp_value = 0;
+            self.stamp_value = StampValue::ZERO;
             AnnounceStampStatus::Invalid
         }
     }
@@ -319,7 +319,7 @@ impl AnnounceData {
             ratchet: self.ratchet,
             app_data: self.app_data.clone(),
             stamp: None,
-            stamp_value: 0,
+            stamp_value: StampValue::ZERO,
             lr_cost: None,
         }
     }
@@ -619,7 +619,12 @@ mod tests {
     fn stamped_announce(
         app_data: Option<&[u8]>,
         cost: u8,
-    ) -> (AnnounceData, [u8; 16], [u8; constants::STAMP_LENGTH], u32) {
+    ) -> (
+        AnnounceData,
+        [u8; 16],
+        [u8; constants::STAMP_LENGTH],
+        StampValue,
+    ) {
         use rns_crypto::{OsRng, Rng};
 
         let identity = Identity::from_private_key(&[0x42; 64]);
@@ -688,7 +693,7 @@ mod tests {
             AnnounceStampStatus::Invalid
         );
         assert_eq!(validated.stamp, Some(stamp));
-        assert_eq!(validated.stamp_value, 0);
+        assert_eq!(validated.stamp_value, StampValue::ZERO);
         assert_eq!(validated.lr_cost, None);
         assert_eq!(
             validated.app_data.as_ref().map(|data| data.len()),
@@ -705,7 +710,7 @@ mod tests {
             AnnounceStampStatus::NotStamped
         );
         assert_eq!(validated.stamp, None);
-        assert_eq!(validated.stamp_value, 0);
+        assert_eq!(validated.stamp_value, StampValue::ZERO);
         assert_eq!(validated.lr_cost, None);
         assert_eq!(validated.app_data.as_deref(), Some(b"app-data".as_slice()));
     }

@@ -4116,7 +4116,7 @@ fn discovery_announce_received_by_client() {
                 assert_eq!(iface.interface_type, "BackboneInterface");
                 assert_eq!(iface.reachable_on.as_deref(), Some("10.0.0.1"));
                 assert_eq!(iface.port, Some(port));
-                assert!(iface.stamp_value >= 8, "stamp should meet minimum cost");
+                assert!(iface.stamp_value.meets(8), "stamp should meet minimum cost");
                 found = true;
                 break;
             }
@@ -4372,7 +4372,7 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
         heard_count: 1,
         status: rns_net::discovery::DiscoveredStatus::Available,
         stamp: vec![0; rns_net::discovery::STAMP_SIZE],
-        stamp_value: 8,
+        stamp_value: rns_core::stamp::StampValue::from_whole(8),
         transport_id,
         network_id: [0x24; 16],
         hops: 1,
@@ -4507,7 +4507,7 @@ fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
         heard_count: 1,
         status: rns_net::discovery::DiscoveredStatus::Available,
         stamp: vec![0; rns_net::discovery::STAMP_SIZE],
-        stamp_value: 8,
+        stamp_value: rns_core::stamp::StampValue::from_whole(8),
         transport_id,
         network_id: [0x25; 16],
         hops: 1,
@@ -6308,7 +6308,9 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
             .unwrap()
             .unwrap_or_else(|| panic!("{name} did not record Alice's announce"));
         assert!(
-            recorded.stamp_value >= u32::from(rns_core::constants::DESTINATION_STAMP_COST),
+            recorded
+                .stamp_value
+                .meets(u32::from(rns_core::constants::DESTINATION_STAMP_COST)),
             "{name} recorded stamp value {} below the destination cost",
             recorded.stamp_value
         );
@@ -6359,7 +6361,8 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        recorded.stamp_value, 0,
+        recorded.stamp_value,
+        rns_core::stamp::StampValue::ZERO,
         "an unstamped announce records no stamp"
     );
     assert_eq!(recorded.lr_cost, None);

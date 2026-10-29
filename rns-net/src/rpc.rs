@@ -2194,7 +2194,7 @@ fn discovered_interfaces_to_pickle(
                 ),
                 (
                     PickleValue::String("value".into()),
-                    PickleValue::Int(iface.stamp_value as i64),
+                    PickleValue::Float(iface.stamp_value.as_f64()),
                 ),
                 (
                     PickleValue::String("transport_id".into()),
@@ -2743,7 +2743,7 @@ fn known_destination_entry_to_pickle(entry: &KnownDestinationEntry) -> PickleVal
         ),
         (
             PickleValue::String("stamp_value".into()),
-            PickleValue::Int(i64::from(entry.stamp_value)),
+            PickleValue::Float(entry.stamp_value.as_f64()),
         ),
         (
             PickleValue::String("lr_cost".into()),
@@ -2819,11 +2819,12 @@ fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestina
             stamp.copy_from_slice(bytes);
             stamp
         });
+    // Integer values from before fractional stamp values read as whole bits.
     let stamp_value = value
         .get("stamp_value")
-        .and_then(|v| v.as_int())
-        .unwrap_or(0)
-        .clamp(0, i64::from(u32::MAX)) as u32;
+        .and_then(|v| v.as_float().or_else(|| v.as_int().map(|n| n as f64)))
+        .map(rns_core::stamp::StampValue::from_f64)
+        .unwrap_or_default();
 
     Ok(KnownDestinationEntry {
         dest_hash,
@@ -3372,7 +3373,7 @@ mod tests {
             heard_count: 1,
             status: crate::discovery::DiscoveredStatus::Available,
             stamp: vec![0; crate::discovery::STAMP_SIZE],
-            stamp_value: 16,
+            stamp_value: rns_core::stamp::StampValue::from_whole(16),
             transport_id: [0x11; 16],
             network_id: [0x22; 16],
             hops: 1,

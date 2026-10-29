@@ -41,8 +41,8 @@ pub struct KnownDestination {
     pub retained: bool,
     /// Last heard announce stamp, if any.
     pub stamp: Option<Vec<u8>>,
-    /// Last heard announce stamp value, or `0` when absent.
-    pub stamp_value: u32,
+    /// Last heard announce stamp value, or zero when absent.
+    pub stamp_value: rns_core::stamp::StampValue,
     /// Announced link request stamp cost, if present.
     pub lr_cost: Option<u8>,
 }
@@ -371,7 +371,7 @@ pub fn save_known_destinations(
                     Some(stamp) => Value::Bin(stamp.clone()),
                     None => Value::Nil,
                 },
-                Value::UInt(u64::from(dest.stamp_value)),
+                Value::Float(dest.stamp_value.as_f64()),
                 match dest.lr_cost {
                     Some(cost) => Value::UInt(u64::from(cost)),
                     None => Value::Nil,
@@ -499,7 +499,13 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
             .get(9)
             .and_then(|value| value.as_bin())
             .map(|b| b.to_vec());
-        let stamp_value = arr.get(10).and_then(|value| value.as_uint()).unwrap_or(0) as u32;
+        // Integer values from before fractional stamp values read as whole
+        // bits.
+        let stamp_value = arr
+            .get(10)
+            .and_then(|value| value.as_number())
+            .map(rns_core::stamp::StampValue::from_f64)
+            .unwrap_or_default();
         let lr_cost = arr
             .get(11)
             .and_then(|value| value.as_uint())
@@ -930,7 +936,7 @@ mod tests {
                 last_used_at: Some(1700000010.0),
                 retained: true,
                 stamp: Some(vec![0xAA; 14]),
-                stamp_value: 21,
+                stamp_value: rns_core::stamp::StampValue::from_fp(21 * 256 + 187),
                 lr_cost: Some(19),
             },
         );
@@ -947,7 +953,7 @@ mod tests {
                 last_used_at: None,
                 retained: false,
                 stamp: None,
-                stamp_value: 0,
+                stamp_value: rns_core::stamp::StampValue::ZERO,
                 lr_cost: None,
             },
         );
@@ -968,7 +974,10 @@ mod tests {
         assert_eq!(d1.last_used_at, Some(1700000010.0));
         assert!(d1.retained);
         assert_eq!(d1.stamp.as_deref(), Some(&[0xAA; 14][..]));
-        assert_eq!(d1.stamp_value, 21);
+        assert_eq!(
+            d1.stamp_value,
+            rns_core::stamp::StampValue::from_fp(21 * 256 + 187)
+        );
         assert_eq!(d1.lr_cost, Some(19));
 
         let d2 = &loaded[&[0x02u8; 16]];
@@ -977,8 +986,54 @@ mod tests {
         assert_eq!(d2.last_used_at, None);
         assert!(!d2.retained);
         assert_eq!(d2.stamp, None);
-        assert_eq!(d2.stamp_value, 0);
+        assert_eq!(d2.stamp_value, rns_core::stamp::StampValue::ZERO);
         assert_eq!(d2.lr_cost, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn integer_stamp_values_from_earlier_versions_load_as_whole_bits() {
+        use rns_core::msgpack::{self, Value};
+
+        let dir = temp_dir();
+        let path = dir.join("known_destinations");
+        let mut dests = HashMap::new();
+        dests.insert(
+            [0x03u8; 16],
+            KnownDestination {
+                identity_hash: [0x33u8; 16],
+                public_key: [0xEFu8; 64],
+                app_data: None,
+                hops: 1,
+                received_at: 1700000002.0,
+                receiving_interface: 0,
+                was_used: false,
+                last_used_at: None,
+                retained: false,
+                stamp: Some(vec![0xBB; 14]),
+                stamp_value: rns_core::stamp::StampValue::ZERO,
+                lr_cost: None,
+            },
+        );
+        save_known_destinations(&dests, &path).unwrap();
+
+        // Rewrite the value field the way earlier versions stored it.
+        let (mut value, _) = msgpack::unpack(&fs::read(&path).unwrap()).unwrap();
+        let Value::Map(entries) = &mut value else {
+            panic!("known destinations must be a map");
+        };
+        let Value::Array(fields) = &mut entries[0].1 else {
+            panic!("a known destination must be an array");
+        };
+        fields[10] = Value::UInt(21);
+        fs::write(&path, msgpack::pack(&value)).unwrap();
+
+        let loaded = load_known_destinations(&path).unwrap();
+        assert_eq!(
+            loaded[&[0x03u8; 16]].stamp_value,
+            rns_core::stamp::StampValue::from_whole(21)
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1003,7 +1058,7 @@ mod tests {
                 last_used_at: None,
                 retained: false,
                 stamp: None,
-                stamp_value: 0,
+                stamp_value: rns_core::stamp::StampValue::ZERO,
                 lr_cost: None,
             },
         );

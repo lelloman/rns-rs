@@ -81,13 +81,14 @@ poll_stamped_path_requests() {
 }
 
 # poll_stamp_value PORT DEST_HASH MIN TIMEOUT — wait until the node recorded a
-# stamp of at least MIN for DEST_HASH.
+# stamp of at least MIN for DEST_HASH. Stamp values are fractional, so only the
+# whole bits are compared.
 poll_stamp_value() {
   local port="$1" dest_hash="$2" min="$3" timeout="${4:-90}"
   local deadline=$((SECONDS + timeout))
   local value=0
   while (( SECONDS < deadline )); do
-    value=$(get_identity "$port" "$dest_hash" 2>/dev/null | jq -r '.stamp_value // 0')
+    value=$(get_identity "$port" "$dest_hash" 2>/dev/null | jq -r '(.stamp_value // 0) | floor')
     if (( value >= min )); then
       return 0
     fi

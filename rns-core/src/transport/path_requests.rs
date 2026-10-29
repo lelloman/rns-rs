@@ -286,7 +286,7 @@ impl TransportEngine {
                     let workblock = crate::stamp::stamp_workblock(&material, 0);
                     let stamp = &ext[constants::EXT_HEADER_LENGTH..];
                     let value = crate::stamp::stamp_value(&workblock, stamp);
-                    let valid = value >= u32::from(self.stamp_requirements.path_request_cost);
+                    let valid = value.meets(u32::from(self.stamp_requirements.path_request_cost));
                     carried_stamp_value = Some(value);
                     stamped = valid;
                     if valid {
