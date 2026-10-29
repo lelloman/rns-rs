@@ -64,8 +64,11 @@ packet counts as well as byte totals, current rates, and frequencies. The
 `arxc`, `atxc`, `prxc`, and `ptxc` sort keys order interfaces by those announce
 and path-request counts. `vio`, `ifac`, and `flt` sort by protocol, IFAC, and
 duplicate-filter violations respectively. A `Hop Limit` line counts frames
-dropped because their hop count exceeded the transport hop limiter; these are
-reported separately from protocol violations and appear only when nonzero.
+dropped because their hop count reached the transport hop limiter configured
+with `[reticulum] hop_limiter`; these are reported separately from protocol
+violations and appear only when nonzero. With the default limiter of 128 the
+line stays empty: hop counts of 128 and above are malformed and counted as
+protocol violations, as upstream.
 
 For remote status, `-R HASH` requires the management identity selected with
 `-i PATH`, and the remote transport must authorize that identity.

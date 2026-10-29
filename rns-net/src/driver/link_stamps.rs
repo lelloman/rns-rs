@@ -32,13 +32,13 @@ impl Driver {
     ) {
         let stamp_cost = self
             .recall_link_cost(&dest_hash)
-            .filter(|cost| *cost > 0 && rns_core::constants::STAMP_LRS);
+            .filter(|cost| *cost > 0 && self.stamp_settings.stamp_lrs);
         match stamp_cost {
             Some(cost) => self.spawn_stamped_link_keys(
                 dest_hash,
                 dest_sig_pub_bytes,
                 cost,
-                Duration::from_secs(rns_core::constants::LINK_STAMP_TIMEOUT),
+                self.stamp_settings.link_stamp_timeout(),
                 response_tx,
             ),
             None => self.complete_create_link(dest_hash, dest_sig_pub_bytes, None, response_tx),

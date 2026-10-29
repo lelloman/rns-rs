@@ -1452,6 +1452,13 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Drop incoming link requests whose stamp is below the destination's link cost (Transport.LR_STAMPS_ENFORCED).",
             )),
+            "global.stamp_link_requests" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Bool(self.stamp_settings.stamp_lrs),
+                RuntimeConfigValue::Bool(defaults.stamp_link_requests),
+                RuntimeConfigApplyMode::Immediate,
+                "Stamp link requests to destinations that announce a link request cost (Transport.STAMP_LRS); keys are ground off the driver thread.",
+            )),
             "global.direct_connect_policy" => Some(make_entry(
                 key,
                 RuntimeConfigValue::String(Self::holepunch_policy_name(
@@ -1511,6 +1518,7 @@ impl Driver {
             "global.stamp_destinations",
             "global.stamp_path_requests",
             "global.lr_stamps_enforced",
+            "global.stamp_link_requests",
             "global.direct_connect_policy",
         ]
         .into_iter()

@@ -4249,10 +4249,12 @@ fn hop_limited_frame_counts_a_hop_limiter_hit_not_a_protocol_violation() {
     .raw;
     // Upstream drops packets whose hop count is not below HOP_LIMITER and
     // counts them on the interface as hop_limiter_hits, separately from
-    // protocol violations.
-    limited[1] = constants::HOP_LIMITER;
+    // protocol violations (Transport.py:2009). The limiter is configurable
+    // (`[reticulum] hop_limiter`, d7749b0b).
+    driver.hop_limiter = 16;
+    limited[1] = 16;
     driver.handle_frame_event(InterfaceId(1), limited.clone(), None, None);
-    limited[1] = u8::MAX;
+    limited[1] = 100;
     driver.handle_frame_event(InterfaceId(1), limited.clone(), None, None);
 
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
@@ -4260,9 +4262,27 @@ fn hop_limited_frame_counts_a_hop_limiter_hit_not_a_protocol_violation() {
     assert_eq!(stats.protocol_violations, 0);
     assert_eq!(stats.packet_filter_hits, 0);
 
-    // One hop below the limit passes the decoder; whatever the packet filter
-    // then decides, it is no longer a hop limiter hit.
-    limited[1] = constants::HOP_LIMITER - 1;
+    // One hop below the limit passes; whatever the packet filter then
+    // decides, it is no longer a hop limiter hit.
+    limited[1] = 15;
+    driver.handle_frame_event(InterfaceId(1), limited.clone(), None, None);
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.hop_limiter_hits, 2);
+
+    // Hop counts at or above PATHFINDER_M fail `Packet.unpack` before the
+    // limiter is consulted, so upstream counts them as malformed packets
+    // (Packet.py:250, Transport.py:2008), also with the default limiter.
+    driver.hop_limiter = constants::HOP_LIMITER;
+    let violations_before = driver.interfaces[&InterfaceId(1)].stats.protocol_violations;
+    limited[1] = constants::PATHFINDER_M;
+    driver.handle_frame_event(InterfaceId(1), limited.clone(), None, None);
+    limited[1] = u8::MAX;
+    driver.handle_frame_event(InterfaceId(1), limited.clone(), None, None);
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(stats.hop_limiter_hits, 2);
+    assert_eq!(stats.protocol_violations, violations_before + 2);
+
+    // With the default limiter every decodable hop count passes it.
+    limited[1] = constants::PATHFINDER_M - 1;
     driver.handle_frame_event(InterfaceId(1), limited, None, None);
     assert_eq!(driver.interfaces[&InterfaceId(1)].stats.hop_limiter_hits, 2);
 }
@@ -5915,6 +5935,7 @@ fn runtime_config_list_contains_global_keys() {
     assert!(keys.contains(&"global.stamp_destinations".to_string()));
     assert!(keys.contains(&"global.stamp_path_requests".to_string()));
     assert!(keys.contains(&"global.lr_stamps_enforced".to_string()));
+    assert!(keys.contains(&"global.stamp_link_requests".to_string()));
 }
 
 #[test]
@@ -5924,6 +5945,7 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
         "global.stamp_destinations",
         "global.stamp_path_requests",
         "global.lr_stamps_enforced",
+        "global.stamp_link_requests",
     ] {
         let QueryResponse::RuntimeConfigEntry(Some(entry)) =
             driver.handle_query(QueryRequest::GetRuntimeConfig { key: key.into() })
@@ -5960,6 +5982,10 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
                 );
                 d.link_manager.link_request_costs().enforced()
             }),
+        ),
+        (
+            "global.stamp_link_requests",
+            Box::new(|d: &Driver| d.stamp_settings.stamp_lrs),
         ),
     ] {
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
@@ -12358,7 +12384,52 @@ fn stamped_link_driver(
     let mut state = make_known_destination_state(dest, time::now(), InterfaceId(1));
     state.lr_cost = lr_cost;
     driver.known_destinations.insert(dest, state);
+    // STAMP_LRS is opt-in since upstream d7749b0b (`[stamps] stamp_lrs`).
+    driver.stamp_settings.stamp_lrs = true;
     (driver, sent)
+}
+
+#[test]
+fn create_link_is_not_stamped_unless_stamp_lrs_is_enabled() {
+    // Link.__init__ defers to a stamped key only `if self.stamp_cost and
+    // RNS.Transport.STAMP_LRS` (Link.py:313); STAMP_LRS defaults to off.
+    let (tx, rx) = event::channel();
+    let dest = [0x69; 16];
+    let (mut driver, sent) = stamped_link_driver(tx, rx, dest, Some(4));
+    driver.stamp_settings.stamp_lrs = rns_core::constants::STAMP_LRS;
+    assert!(!driver.stamp_settings.stamp_lrs);
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    driver.handle_create_link(dest, [0xAA; 32], resp_tx);
+    let link_id = resp_rx
+        .try_recv()
+        .expect("an unstamped link is answered synchronously");
+    assert_ne!(link_id, [0u8; 16]);
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+    assert!(sent_link_request(&sent.lock().unwrap(), dest).is_some());
+}
+
+#[test]
+fn create_link_uses_the_configured_link_stamp_timeout() {
+    // `[stamps] lr_stamp_timeout` bounds the stamped key grind
+    // (Transport.LINK_STAMP_TIMEOUT); an unattainable cost then fails the
+    // link with the all-zero id instead of grinding for the default 15 s.
+    let (tx, rx) = event::channel();
+    let dest = [0x68; 16];
+    let (mut driver, _sent) =
+        stamped_link_driver(tx, rx, dest, Some(rns_core::constants::LINK_COST_CAP));
+    driver.stamp_settings.lr_stamp_timeout = rns_core::constants::STAMP_TIMEOUT_MIN;
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    let started = Instant::now();
+    driver.handle_create_link(dest, [0xAA; 32], resp_tx);
+    assert_eq!(
+        resp_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        [0u8; 16]
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(driver.link_manager.link_count(), 0);
 }
 
 fn sent_link_request(sent: &[Vec<u8>], dest: [u8; 16]) -> Option<RawPacket> {
@@ -12600,9 +12671,9 @@ fn stamping_path_request_driver(
         tx,
         None,
         crate::stamper::StampTargets {
-            destination_cost: 6,
             destination_value: 6,
             path_request_value: 6,
+            ..Default::default()
         },
     )));
     driver.engine.register_interface(make_interface_info(1));
@@ -12867,4 +12938,87 @@ fn state_snapshot_read_does_not_wait_on_a_full_queue() {
     assert!(started.elapsed() < Duration::from_secs(1));
     assert_eq!(snapshot.sequence, 1);
     assert_eq!(snapshot.links.len(), 1);
+}
+
+#[test]
+fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
+    let mut driver = new_test_driver();
+    let shared = Arc::new(AtomicBool::new(false));
+    driver.set_stamp_destinations_flag(Arc::clone(&shared));
+    let stamps = crate::config::parse(
+        "[stamps]\n\
+         enforce_stamps = yes\n\
+         stamp_destinations = yes\n\
+         stamp_prs = yes\n\
+         stamp_lrs = yes\n\
+         destination_cost = 18\n\
+         destination_value = 27\n\
+         pr_cost = 11\n\
+         pr_value = 13\n\
+         lr_cost = 9\n\
+         lr_stamp_timeout = 4\n\
+         pr_stamp_timeout = 3\n",
+    )
+    .unwrap()
+    .stamps;
+    driver.apply_stamp_config(&stamps, 12);
+
+    assert_eq!(driver.hop_limiter, 12);
+    assert_eq!(
+        driver.engine.stamp_requirements(),
+        rns_core::transport::types::StampRequirements {
+            enforced: true,
+            destination_cost: 18,
+            path_request_cost: 11,
+        }
+    );
+    assert!(driver.engine.stamp_prs());
+    assert!(shared.load(Ordering::Relaxed));
+    assert!(driver.stamp_settings.stamp_lrs);
+    assert!(driver.stamp_settings.lr_stamps_enforced);
+    assert_eq!(driver.stamp_settings.lr_cost, 9);
+    assert_eq!(
+        driver.stamp_settings.link_stamp_timeout(),
+        Duration::from_secs(4)
+    );
+    assert_eq!(
+        driver.stamper.targets(),
+        crate::stamper::StampTargets {
+            destination_value: 27,
+            path_request_value: 13,
+        }
+    );
+    assert_eq!(driver.link_manager.link_request_costs().get(&[0u8; 16]), 9);
+    assert!(driver.link_manager.link_request_costs().enforced());
+    assert_eq!(
+        driver.stamper.path_request_timeout(),
+        Duration::from_secs(3)
+    );
+
+    // The configured values are the startup defaults of the runtime keys:
+    // an override followed by a reset returns to the config file.
+    for key in [
+        "global.stamp_destinations",
+        "global.stamp_path_requests",
+        "global.stamp_link_requests",
+    ] {
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: key.into(),
+            value: RuntimeConfigValue::Bool(false),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success for {key}");
+        };
+        assert_eq!(entry.source, RuntimeConfigSource::RuntimeOverride, "{key}");
+        let response =
+            driver.handle_query_mut(QueryRequest::ResetRuntimeConfig { key: key.into() });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success for {key}");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(true), "{key}");
+        assert_eq!(entry.source, RuntimeConfigSource::Startup, "{key}");
+    }
+    assert!(driver.engine.stamp_prs());
+    assert!(shared.load(Ordering::Relaxed));
+    assert!(driver.stamp_settings.stamp_lrs);
 }

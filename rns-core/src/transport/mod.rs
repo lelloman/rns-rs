@@ -46,7 +46,8 @@ use self::rate_limit::AnnounceRateLimiter;
 use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, PathSet};
 use self::tunnel::TunnelTable;
 use self::types::{
-    BlackholeEntry, InterfaceId, InterfaceInfo, PacketBytes, TransportAction, TransportConfig,
+    BlackholeEntry, InterfaceId, InterfaceInfo, PacketBytes, StampRequirements, TransportAction,
+    TransportConfig,
 };
 
 pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, f64, String);
@@ -249,6 +250,9 @@ pub struct TransportEngine {
     /// node are stamped (`Transport.STAMP_PRS`). Defaults to the compile-time
     /// constant; settable so the stamping path can be exercised.
     stamp_prs: bool,
+    /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
+    /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
+    stamp_requirements: StampRequirements,
     /// `Transport.control_hashes`: the path request and tunnel synthesis
     /// destinations, which are handled by the engine and never bridged as
     /// plain broadcasts.

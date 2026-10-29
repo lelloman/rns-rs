@@ -14,6 +14,7 @@ use std::path::Path;
 pub struct RnsConfig {
     pub reticulum: ReticulumSection,
     pub logging: LoggingSection,
+    pub stamps: StampsSection,
     pub interfaces: Vec<ParsedInterface>,
     pub hooks: Vec<ParsedHook>,
 }
@@ -34,6 +35,10 @@ pub struct ParsedHook {
 #[derive(Debug, Clone)]
 pub struct ReticulumSection {
     pub enable_transport: bool,
+    /// Inbound packets whose hop count reaches this limit are dropped and
+    /// counted as `hop_limiter_hits` (upstream `hop_limiter`, clamped to
+    /// `1..=PATHFINDER_M`).
+    pub hop_limiter: u8,
     pub static_transport_identity: bool,
     pub local_hops_delta: bool,
     pub share_instance: bool,
@@ -180,6 +185,7 @@ impl Default for ReticulumSection {
     fn default() -> Self {
         ReticulumSection {
             enable_transport: false,
+            hop_limiter: rns_core::constants::HOP_LIMITER,
             static_transport_identity: false,
             local_hops_delta: false,
             share_instance: true,
@@ -263,6 +269,87 @@ impl Default for ReticulumSection {
     }
 }
 
+/// The `[stamps]` section (upstream d7749b0b, Reticulum.py `__apply_config`).
+///
+/// The boolean options can only enable a feature: upstream applies them as
+/// `if value == True: Transport.X = True`, so `no` leaves the built-in
+/// default in place. Costs and values are clamped to `0..=STAMP_COST_CAP`
+/// (`lr_cost` to `0..=LINK_COST_CAP`) and the timeouts are floored at
+/// 20 ms.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StampsSection {
+    /// `Transport.STAMPS_ENFORCED`, set by `enforce_stamps`.
+    pub stamps_enforced: bool,
+    /// `Transport.LR_STAMPS_ENFORCED`, also set by `enforce_stamps`.
+    pub lr_stamps_enforced: bool,
+    /// `Transport.STAMP_DESTINATIONS` (`stamp_destinations`).
+    pub stamp_destinations: bool,
+    /// `Transport.STAMP_PRS` (`stamp_prs`).
+    pub stamp_prs: bool,
+    /// `Transport.STAMP_LRS` (`stamp_lrs`).
+    pub stamp_lrs: bool,
+    /// `Transport.DESTINATION_COST` (`destination_cost`).
+    pub destination_cost: u8,
+    /// `Transport.DESTINATION_VALUE` (`destination_value`).
+    pub destination_value: u8,
+    /// `Transport.PR_COST` (`pr_cost`).
+    pub pr_cost: u8,
+    /// `Transport.PR_VALUE` (`pr_value`).
+    pub pr_value: u8,
+    /// `Transport.LR_COST` (`lr_cost`).
+    pub lr_cost: u8,
+    /// `Transport.LINK_STAMP_TIMEOUT` in seconds (`lr_stamp_timeout`).
+    pub lr_stamp_timeout: f64,
+    /// `Transport.PR_STAMP_TIMEOUT` in seconds (`pr_stamp_timeout`).
+    pub pr_stamp_timeout: f64,
+}
+
+impl Default for StampsSection {
+    fn default() -> Self {
+        use rns_core::constants;
+        StampsSection {
+            stamps_enforced: constants::STAMPS_ENFORCED,
+            lr_stamps_enforced: constants::LR_STAMPS_ENFORCED,
+            stamp_destinations: constants::STAMP_DESTINATIONS,
+            stamp_prs: constants::STAMP_PRS,
+            stamp_lrs: constants::STAMP_LRS,
+            destination_cost: constants::DESTINATION_STAMP_COST,
+            destination_value: constants::DESTINATION_STAMP_VALUE,
+            pr_cost: constants::PATH_REQUEST_STAMP_COST,
+            pr_value: constants::PATH_REQUEST_STAMP_VALUE,
+            lr_cost: constants::LINK_REQUEST_STAMP_COST,
+            lr_stamp_timeout: constants::LINK_STAMP_TIMEOUT as f64,
+            pr_stamp_timeout: constants::PATH_REQUEST_STAMP_TIMEOUT as f64,
+        }
+    }
+}
+
+impl StampsSection {
+    /// The announce and path request requirements for the transport engine.
+    pub fn requirements(&self) -> rns_core::transport::types::StampRequirements {
+        rns_core::transport::types::StampRequirements {
+            enforced: self.stamps_enforced,
+            destination_cost: self.destination_cost,
+            path_request_cost: self.pr_cost,
+        }
+    }
+
+    /// The link request stamp timeout as a duration.
+    pub fn link_stamp_timeout(&self) -> std::time::Duration {
+        stamp_timeout_duration(self.lr_stamp_timeout)
+    }
+
+    /// The path request stamp timeout as a duration.
+    pub fn path_request_stamp_timeout(&self) -> std::time::Duration {
+        stamp_timeout_duration(self.pr_stamp_timeout)
+    }
+}
+
+/// An infinite timeout means no deadline in practice.
+fn stamp_timeout_duration(seconds: f64) -> std::time::Duration {
+    std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX)
+}
+
 /// The `[logging]` section.
 #[derive(Debug, Clone)]
 pub struct LoggingSection {
@@ -330,6 +417,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
 
     let mut reticulum_kvs: HashMap<String, String> = HashMap::new();
     let mut logging_kvs: HashMap<String, String> = HashMap::new();
+    let mut stamps_kvs: HashMap<String, String> = HashMap::new();
     let mut interfaces: Vec<ParsedInterface> = Vec::new();
     let mut current_iface_kvs: Option<HashMap<String, String>> = None;
     let mut current_iface_name: Option<String> = None;
@@ -459,6 +547,9 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
                     "logging" => {
                         logging_kvs.insert(key, value);
                     }
+                    "stamps" => {
+                        stamps_kvs.insert(key, value);
+                    }
                     _ => {} // ignore unknown sections
                 }
             }
@@ -484,10 +575,12 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     // Build typed sections
     let reticulum = build_reticulum_section(&reticulum_kvs)?;
     let logging = build_logging_section(&logging_kvs)?;
+    let stamps = build_stamps_section(&stamps_kvs)?;
 
     Ok(RnsConfig {
         reticulum,
         logging,
+        stamps,
         interfaces,
         hooks,
     })
@@ -886,6 +979,14 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 key: "required_discovery_value".into(),
                 value: v.clone(),
             })?);
+    }
+    if let Some(v) = kvs.get("hop_limiter") {
+        // Reticulum.py: `max(1, min(as_int(v), PATHFINDER_M))`.
+        let n = parse_config_int(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "hop_limiter".into(),
+            value: v.clone(),
+        })?;
+        section.hop_limiter = n.clamp(1, i64::from(rns_core::constants::PATHFINDER_M)) as u8;
     }
     if let Some(v) = kvs.get("prefer_shorter_path") {
         section.prefer_shorter_path = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -1292,6 +1393,104 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         section.provider_overflow_policy = normalized;
     }
 
+    Ok(section)
+}
+
+/// Parse an integer as ConfigObj's `as_int` does, saturating values beyond
+/// the `i64` range instead of rejecting them, since every caller clamps.
+fn parse_config_int(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if let Ok(n) = value.parse::<i64>() {
+        return Some(n);
+    }
+    let digits = value.strip_prefix(['+', '-']).unwrap_or(value);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(if value.starts_with('-') {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
+}
+
+fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, ConfigError> {
+    use rns_core::constants::{LINK_COST_CAP, STAMP_COST_CAP, STAMP_TIMEOUT_MIN};
+
+    let mut section = StampsSection::default();
+    let flag = |key: &str| -> Result<bool, ConfigError> {
+        match kvs.get(key) {
+            None => Ok(false),
+            Some(v) => parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: key.into(),
+                value: v.clone(),
+            }),
+        }
+    };
+    let cost = |key: &str, cap: u8| -> Result<Option<u8>, ConfigError> {
+        let Some(v) = kvs.get(key) else {
+            return Ok(None);
+        };
+        let n = parse_config_int(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: key.into(),
+            value: v.clone(),
+        })?;
+        Ok(Some(n.clamp(0, i64::from(cap)) as u8))
+    };
+    let timeout = |key: &str| -> Result<Option<f64>, ConfigError> {
+        let Some(v) = kvs.get(key) else {
+            return Ok(None);
+        };
+        let n = v
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| ConfigError::InvalidValue {
+                key: key.into(),
+                value: v.clone(),
+            })?;
+        // `max(0.020, v)`; Python's `max` also keeps 0.020 for NaN.
+        Ok(Some(if n.is_nan() {
+            STAMP_TIMEOUT_MIN
+        } else {
+            n.max(STAMP_TIMEOUT_MIN)
+        }))
+    };
+
+    // Enable-only booleans (Reticulum.py: `if value == True: ... = True`).
+    if flag("enforce_stamps")? {
+        section.stamps_enforced = true;
+        section.lr_stamps_enforced = true;
+    }
+    if flag("stamp_destinations")? {
+        section.stamp_destinations = true;
+    }
+    if flag("stamp_prs")? {
+        section.stamp_prs = true;
+    }
+    if flag("stamp_lrs")? {
+        section.stamp_lrs = true;
+    }
+    if let Some(v) = cost("destination_cost", STAMP_COST_CAP)? {
+        section.destination_cost = v;
+    }
+    if let Some(v) = cost("destination_value", STAMP_COST_CAP)? {
+        section.destination_value = v;
+    }
+    if let Some(v) = cost("pr_cost", STAMP_COST_CAP)? {
+        section.pr_cost = v;
+    }
+    if let Some(v) = cost("pr_value", STAMP_COST_CAP)? {
+        section.pr_value = v;
+    }
+    if let Some(v) = cost("lr_cost", LINK_COST_CAP)? {
+        section.lr_cost = v;
+    }
+    if let Some(v) = timeout("lr_stamp_timeout")? {
+        section.lr_stamp_timeout = v;
+    }
+    if let Some(v) = timeout("pr_stamp_timeout")? {
+        section.pr_stamp_timeout = v;
+    }
     Ok(section)
 }
 
@@ -2469,5 +2668,161 @@ direct_connect_policy = identified_only
         assert!(!parse_link_mtu_discovery("[reticulum]\nlink_mtu_discovery = False\n").unwrap());
         assert!(parse_link_mtu_discovery("[logging]\nlink_mtu_discovery = No\n").unwrap());
         assert!(parse_link_mtu_discovery("[reticulum]\nlink_mtu_discovery = maybe\n").is_err());
+    }
+
+    #[test]
+    fn stamps_section_defaults_to_the_protocol_constants() {
+        use rns_core::constants;
+        let config = parse("").unwrap();
+        assert_eq!(config.stamps, StampsSection::default());
+        let stamps = config.stamps;
+        let flags = [
+            stamps.stamps_enforced,
+            stamps.lr_stamps_enforced,
+            stamps.stamp_destinations,
+            stamps.stamp_prs,
+            stamps.stamp_lrs,
+        ];
+        assert_eq!(flags, [false; 5]);
+        assert_eq!(stamps.destination_cost, constants::DESTINATION_STAMP_COST);
+        assert_eq!(stamps.destination_value, 25);
+        assert_eq!(stamps.pr_cost, constants::PATH_REQUEST_STAMP_COST);
+        assert_eq!(stamps.pr_value, constants::PATH_REQUEST_STAMP_VALUE);
+        assert_eq!(stamps.lr_cost, constants::LINK_REQUEST_STAMP_COST);
+        assert_eq!(
+            stamps.link_stamp_timeout(),
+            std::time::Duration::from_secs(15)
+        );
+        assert_eq!(
+            stamps.path_request_stamp_timeout(),
+            std::time::Duration::from_secs(15)
+        );
+        assert_eq!(config.reticulum.hop_limiter, constants::PATHFINDER_M);
+    }
+
+    #[test]
+    fn stamps_section_parses_every_option() {
+        let config = parse(
+            "[stamps]\n\
+             enforce_stamps = yes\n\
+             stamp_destinations = Yes\n\
+             stamp_prs = true\n\
+             stamp_lrs = on\n\
+             destination_cost = 20\n\
+             destination_value = 30\n\
+             pr_cost = 12\n\
+             pr_value = 14\n\
+             lr_cost = 9\n\
+             lr_stamp_timeout = 2.5\n\
+             pr_stamp_timeout = 7\n",
+        )
+        .unwrap();
+        let stamps = config.stamps;
+        // `enforce_stamps` sets both STAMPS_ENFORCED and LR_STAMPS_ENFORCED.
+        assert!(stamps.stamps_enforced);
+        assert!(stamps.lr_stamps_enforced);
+        assert!(stamps.stamp_destinations);
+        assert!(stamps.stamp_prs);
+        assert!(stamps.stamp_lrs);
+        assert_eq!(stamps.destination_cost, 20);
+        assert_eq!(stamps.destination_value, 30);
+        assert_eq!(stamps.pr_cost, 12);
+        assert_eq!(stamps.pr_value, 14);
+        assert_eq!(stamps.lr_cost, 9);
+        assert_eq!(
+            stamps.link_stamp_timeout(),
+            std::time::Duration::from_millis(2500)
+        );
+        assert_eq!(
+            stamps.path_request_stamp_timeout(),
+            std::time::Duration::from_secs(7)
+        );
+    }
+
+    #[test]
+    fn stamps_section_booleans_can_only_enable() {
+        // Reticulum.py applies each option as `if value == True: X = True`,
+        // so `no` keeps the built-in default instead of forcing it off.
+        let config = parse(
+            "[stamps]\n\
+             enforce_stamps = no\n\
+             stamp_destinations = False\n\
+             stamp_prs = off\n\
+             stamp_lrs = 0\n",
+        )
+        .unwrap();
+        assert_eq!(config.stamps, StampsSection::default());
+        assert!(parse("[stamps]\nstamp_prs = maybe\n").is_err());
+        assert!(parse("[stamps]\nenforce_stamps = 2\n").is_err());
+    }
+
+    #[test]
+    fn stamps_section_clamps_costs_and_timeouts() {
+        use rns_core::constants;
+        let config = parse(
+            "[stamps]\n\
+             destination_cost = 500\n\
+             destination_value = -3\n\
+             pr_cost = 101\n\
+             pr_value = 99999999999999999999999\n\
+             lr_cost = 41\n\
+             lr_stamp_timeout = 0\n\
+             pr_stamp_timeout = -10\n",
+        )
+        .unwrap();
+        let stamps = config.stamps;
+        assert_eq!(stamps.destination_cost, constants::STAMP_COST_CAP);
+        assert_eq!(stamps.destination_value, 0);
+        assert_eq!(stamps.pr_cost, constants::STAMP_COST_CAP);
+        assert_eq!(stamps.pr_value, constants::STAMP_COST_CAP);
+        // `lr_cost` has its own, lower cap.
+        assert_eq!(stamps.lr_cost, constants::LINK_COST_CAP);
+        assert_eq!(
+            stamps.link_stamp_timeout(),
+            std::time::Duration::from_millis(20)
+        );
+        assert_eq!(
+            stamps.path_request_stamp_timeout(),
+            std::time::Duration::from_millis(20)
+        );
+
+        let config = parse("[stamps]\nlr_cost = -1\npr_stamp_timeout = nan\n").unwrap();
+        assert_eq!(config.stamps.lr_cost, 0);
+        assert_eq!(
+            config.stamps.path_request_stamp_timeout(),
+            std::time::Duration::from_millis(20)
+        );
+        let config = parse("[stamps]\nlr_stamp_timeout = inf\n").unwrap();
+        assert_eq!(config.stamps.link_stamp_timeout(), std::time::Duration::MAX);
+
+        // `as_int` rejects non-integers; `as_float` rejects non-numbers.
+        assert!(parse("[stamps]\ndestination_cost = 2.5\n").is_err());
+        assert!(parse("[stamps]\npr_cost = lots\n").is_err());
+        assert!(parse("[stamps]\npr_stamp_timeout = soon\n").is_err());
+    }
+
+    #[test]
+    fn stamps_options_outside_the_stamps_section_are_ignored() {
+        let config = parse("[reticulum]\nstamp_prs = yes\ndestination_cost = 5\n").unwrap();
+        assert_eq!(config.stamps, StampsSection::default());
+    }
+
+    #[test]
+    fn hop_limiter_parses_and_clamps_to_pathfinder_range() {
+        use rns_core::constants::PATHFINDER_M;
+        let limiter = |value: &str| {
+            parse(&format!("[reticulum]\nhop_limiter = {value}\n"))
+                .unwrap()
+                .reticulum
+                .hop_limiter
+        };
+        assert_eq!(limiter("16"), 16);
+        assert_eq!(limiter("1"), 1);
+        assert_eq!(limiter("0"), 1);
+        assert_eq!(limiter("-5"), 1);
+        assert_eq!(limiter("128"), PATHFINDER_M);
+        assert_eq!(limiter("1000"), PATHFINDER_M);
+        assert!(parse("[reticulum]\nhop_limiter = many\n").is_err());
+        assert!(parse("[reticulum]\nhop_limiter = 4.5\n").is_err());
     }
 }

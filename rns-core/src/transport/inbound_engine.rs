@@ -935,9 +935,10 @@ impl TransportEngine {
 
         let stamp_status = ctx.validated.apply_stamp(
             &ctx.packet.destination_hash,
-            constants::DESTINATION_STAMP_COST,
+            self.stamp_requirements.destination_cost,
         );
-        if constants::STAMPS_ENFORCED && stamp_status != crate::announce::AnnounceStampStatus::Valid
+        if self.stamp_requirements.enforced
+            && stamp_status != crate::announce::AnnounceStampStatus::Valid
         {
             return;
         }

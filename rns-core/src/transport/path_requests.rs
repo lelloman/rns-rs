@@ -286,7 +286,7 @@ impl TransportEngine {
                     let workblock = crate::stamp::stamp_workblock(&material, 0);
                     let stamp = &ext[constants::EXT_HEADER_LENGTH..];
                     let value = crate::stamp::stamp_value(&workblock, stamp);
-                    let valid = value >= u32::from(constants::PATH_REQUEST_STAMP_COST);
+                    let valid = value >= u32::from(self.stamp_requirements.path_request_cost);
                     carried_stamp_value = Some(value);
                     stamped = valid;
                     if valid {
@@ -308,7 +308,7 @@ impl TransportEngine {
                     valid
                 }
             };
-            if constants::STAMPS_ENFORCED && !valid {
+            if self.stamp_requirements.enforced && !valid {
                 return None;
             }
         }
@@ -393,6 +393,17 @@ impl TransportEngine {
     #[doc(hidden)]
     pub fn set_stamp_prs(&mut self, enabled: bool) {
         self.stamp_prs = enabled;
+    }
+
+    /// Stamp requirements applied to received announces and path requests.
+    pub fn stamp_requirements(&self) -> StampRequirements {
+        self.stamp_requirements
+    }
+
+    /// Override the compile-time `STAMPS_ENFORCED`, `DESTINATION_COST` and
+    /// `PR_COST` defaults, as the `[stamps]` config section does upstream.
+    pub fn set_stamp_requirements(&mut self, requirements: StampRequirements) {
+        self.stamp_requirements = requirements;
     }
 
     /// Build a path request frame for `destination_hash` as this node emits

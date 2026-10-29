@@ -36,6 +36,7 @@ impl TransportEngine {
             discovery_pr_tag_set: BTreeSet::new(),
             path_requests: BTreeMap::new(),
             stamp_prs: constants::STAMP_PRS,
+            stamp_requirements: StampRequirements::default(),
             control_destinations: [
                 crate::destination::destination_hash("rnstransport", &["path", "request"], None),
                 crate::destination::destination_hash(
