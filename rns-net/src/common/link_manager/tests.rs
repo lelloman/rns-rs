@@ -836,6 +836,153 @@ fn active_teardown_sends_linkclose_and_remote_closed_teardown_is_noop() {
     assert!(responder.teardown_link(&link_id).is_empty());
 }
 
+fn linkclose_packets(actions: &[LinkManagerAction]) -> Vec<RawPacket> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                .ok()
+                .filter(|packet| packet.context == constants::CONTEXT_LINKCLOSE),
+            _ => None,
+        })
+        .collect()
+}
+
+fn closed_reason(actions: &[LinkManagerAction], link_id: &LinkId) -> Option<TeardownReason> {
+    actions.iter().find_map(|action| match action {
+        LinkManagerAction::LinkClosed {
+            link_id: id,
+            reason,
+        } if id == link_id => *reason,
+        _ => None,
+    })
+}
+
+/// Deliver a LINKCLOSE packet to `peer` and return the reason it closed with.
+fn deliver_linkclose(peer: &mut LinkManager, packet: &RawPacket) -> Option<TeardownReason> {
+    let actions = peer.handle_local_delivery(
+        packet.destination_hash,
+        &packet.raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+    assert_eq!(
+        peer.link_state(&packet.destination_hash),
+        Some(LinkState::Closed)
+    );
+    closed_reason(&actions, &packet.destination_hash)
+}
+
+/// Python's watchdog closes a stale link with `__teardown_packet()` before
+/// setting CLOSED/TIMEOUT, and it does so for both roles.
+fn assert_stale_timeout_sends_linkclose(close_from_initiator: bool) {
+    let (initiator, responder, link_id) = setup_active_link();
+    let (mut closer, mut peer) = if close_from_initiator {
+        (initiator, responder)
+    } else {
+        (responder, initiator)
+    };
+    let mut rng = OsRng;
+    let stale_at = time::now() + 100_000.0;
+
+    let actions = closer.tick_at(stale_at, &mut rng);
+    assert_eq!(closer.link_state(&link_id), Some(LinkState::Stale));
+    assert!(linkclose_packets(&actions).is_empty());
+    assert_eq!(closed_reason(&actions, &link_id), None);
+
+    let actions = closer.tick_at(stale_at + 1_000.0, &mut rng);
+    assert_eq!(
+        closed_reason(&actions, &link_id),
+        Some(TeardownReason::Timeout)
+    );
+    let close_packets = linkclose_packets(&actions);
+    assert_eq!(close_packets.len(), 1, "stale timeout must emit LINKCLOSE");
+    assert_eq!(close_packets[0].destination_hash, link_id);
+
+    let expected_peer_reason = if close_from_initiator {
+        TeardownReason::InitiatorClosed
+    } else {
+        TeardownReason::DestinationClosed
+    };
+    assert_eq!(
+        deliver_linkclose(&mut peer, &close_packets[0]),
+        Some(expected_peer_reason)
+    );
+}
+
+#[test]
+fn initiator_stale_timeout_sends_linkclose_that_closes_the_peer() {
+    assert_stale_timeout_sends_linkclose(true);
+}
+
+#[test]
+fn responder_stale_timeout_sends_linkclose_that_closes_the_peer() {
+    assert_stale_timeout_sends_linkclose(false);
+}
+
+#[test]
+fn establishment_timeout_closes_without_linkclose() {
+    let mut rng = OsRng;
+    let mut mgr = LinkManager::new();
+    let (link_id, _) =
+        mgr.create_link(&[0xDD; 16], &[0xAA; 32], 1, constants::MTU as u32, &mut rng);
+
+    let actions = mgr.tick_at(time::now() + 100_000.0, &mut rng);
+    assert_eq!(
+        closed_reason(&actions, &link_id),
+        Some(TeardownReason::Timeout)
+    );
+    assert!(linkclose_packets(&actions).is_empty());
+}
+
+/// Python `LinkChannelOutlet.timed_out` calls `Link.teardown()`, which sends
+/// LINKCLOSE and closes the local link.
+#[test]
+fn channel_retry_exhaustion_tears_down_link_with_linkclose() {
+    let (mut initiator, mut responder, link_id) = setup_active_link();
+    let actions = initiator.process_channel_actions(
+        &link_id,
+        vec![rns_core::channel::ChannelAction::TeardownLink],
+        &mut OsRng,
+    );
+
+    assert_eq!(initiator.link_state(&link_id), Some(LinkState::Closed));
+    assert_eq!(
+        closed_reason(&actions, &link_id),
+        Some(TeardownReason::InitiatorClosed)
+    );
+    let close_packets = linkclose_packets(&actions);
+    assert_eq!(close_packets.len(), 1);
+    assert_eq!(
+        deliver_linkclose(&mut responder, &close_packets[0]),
+        Some(TeardownReason::InitiatorClosed)
+    );
+}
+
+/// Python `Resource.cancel` on a CORRUPT resource calls `Link.teardown()`.
+#[test]
+fn corrupt_resource_teardown_sends_linkclose() {
+    let (mut initiator, mut responder, link_id) = setup_active_link();
+    let actions = responder.process_resource_actions(
+        &link_id,
+        vec![ResourceAction::TeardownLink],
+        &mut OsRng,
+    );
+
+    assert_eq!(responder.link_state(&link_id), Some(LinkState::Closed));
+    assert_eq!(
+        closed_reason(&actions, &link_id),
+        Some(TeardownReason::DestinationClosed)
+    );
+    let close_packets = linkclose_packets(&actions);
+    assert_eq!(close_packets.len(), 1);
+    assert_eq!(
+        deliver_linkclose(&mut initiator, &close_packets[0]),
+        Some(TeardownReason::DestinationClosed)
+    );
+}
+
 #[test]
 fn forged_or_empty_linkclose_does_not_close_an_active_link() {
     let (_initiator, mut responder, link_id) = setup_active_link();

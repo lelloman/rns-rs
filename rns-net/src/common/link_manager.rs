@@ -1714,11 +1714,12 @@ impl LinkManager {
             return Vec::new();
         }
 
-        let encrypted_close = if previous_state == LinkState::Pending {
+        // Pending links have not established link encryption and are closed
+        // locally without transmitting LINKCLOSE.
+        let close_packet = if previous_state == LinkState::Pending {
             None
         } else {
-            let mut rng = OsRng;
-            link.engine.encrypt(link_id, &mut rng).ok()
+            Self::linkclose_packet(&link.engine, link_id)
         };
         let teardown_actions = link.engine.teardown();
         if let Some(ref mut channel) = link.channel {
@@ -1726,14 +1727,17 @@ impl LinkManager {
         }
 
         let mut actions = self.process_link_actions(link_id, &teardown_actions);
+        actions.extend(close_packet);
+        actions
+    }
 
-        // Pending links have not established link encryption and are closed
-        // locally without transmitting LINKCLOSE.
-        if previous_state == LinkState::Pending {
-            return actions;
-        }
-
-        // Send LINKCLOSE packet
+    /// Build the LINKCLOSE packet announcing this link's teardown to the peer.
+    ///
+    /// Mirrors Python `Link.__teardown_packet`: a link DATA packet with
+    /// context LINKCLOSE whose payload is the link id encrypted with the link
+    /// key. Returns `None` when the link has no session key yet.
+    fn linkclose_packet(engine: &LinkEngine, link_id: &LinkId) -> Option<LinkManagerAction> {
+        let encrypted_close = engine.encrypt(link_id, &mut OsRng).ok()?;
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
             context_flag: constants::FLAG_UNSET,
@@ -1741,24 +1745,20 @@ impl LinkManager {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        if let Some(encrypted_close) = encrypted_close {
-            if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
-                flags,
-                0,
-                link_id,
-                None,
-                constants::CONTEXT_LINKCLOSE,
-                &encrypted_close,
-            ) {
-                actions.push(LinkManagerAction::SendPacket {
-                    raw,
-                    dest_type: constants::DESTINATION_LINK,
-                    attached_interface: None,
-                });
-            }
-        }
-
-        actions
+        let (raw, _packet_hash) = RawPacket::pack_raw_with_hash(
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_LINKCLOSE,
+            &encrypted_close,
+        )
+        .ok()?;
+        Some(LinkManagerAction::SendPacket {
+            raw,
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: None,
+        })
     }
 
     /// Tear down all managed links.
@@ -1773,7 +1773,11 @@ impl LinkManager {
 
     /// Periodic tick: check keepalive, stale, timeouts for all links.
     pub fn tick(&mut self, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
-        let now = time::now();
+        self.tick_at(time::now(), rng)
+    }
+
+    /// [`Self::tick`] at an explicit time.
+    pub(crate) fn tick_at(&mut self, now: f64, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
         let mut all_actions = Vec::new();
 
         // Collect link_ids to avoid borrow issues
@@ -1786,7 +1790,18 @@ impl LinkManager {
             };
 
             // Tick the engine
+            let previous_state = link.engine.state();
             let tick_actions = link.engine.tick(now);
+            // Python's watchdog sends LINKCLOSE (from either role) right
+            // before closing a stale link with reason TIMEOUT, so the peer
+            // tears the link down too. Establishment timeouts (PENDING /
+            // HANDSHAKE) close silently, as upstream does.
+            if previous_state == LinkState::Stale && link.engine.state() == LinkState::Closed {
+                if let Some(channel) = link.channel.as_mut() {
+                    channel.shutdown();
+                }
+                all_actions.extend(Self::linkclose_packet(&link.engine, link_id));
+            }
             all_actions.extend(self.process_link_actions(link_id, &tick_actions));
 
             // Check if keepalive is needed
