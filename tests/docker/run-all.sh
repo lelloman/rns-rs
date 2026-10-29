@@ -42,7 +42,7 @@ fi
 echo "============================================"
 echo "  Building rns-test Docker image"
 echo "============================================"
-docker build -t rns-test -f "${SCRIPT_DIR}/Dockerfile" "$REPO_ROOT"
+docker build --build-arg CARGO_BUILD_JOBS --build-arg CARGO_PROFILE_RELEASE_CODEGEN_UNITS -t rns-test -f "${SCRIPT_DIR}/Dockerfile" "$REPO_ROOT"
 echo ""
 
 # ── Test matrix ───────────────────────────────────────────────────────────────

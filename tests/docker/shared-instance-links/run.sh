@@ -53,7 +53,7 @@ fi
 
 if [[ "${SKIP_BUILD:-}" != "true" ]]; then
   echo "=== Building rns-test Docker image ==="
-  docker build -t rns-test -f "${REPO_ROOT}/tests/docker/Dockerfile" "$REPO_ROOT"
+  docker build --build-arg CARGO_BUILD_JOBS --build-arg CARGO_PROFILE_RELEASE_CODEGEN_UNITS -t rns-test -f "${REPO_ROOT}/tests/docker/Dockerfile" "$REPO_ROOT"
 fi
 
 # The Python Reticulum image is always built: SKIP_BUILD only refers to

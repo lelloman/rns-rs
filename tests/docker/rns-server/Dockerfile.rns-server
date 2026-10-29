@@ -1,6 +1,19 @@
 FROM rust:1.96.0-bookworm AS builder
 WORKDIR /build
 ARG RNS_SERVER_FEATURES=rns-hooks-wasm
+# Must match tests/docker/Dockerfile so the shared target cache reuses the
+# dependencies that image already compiled (see the comments there).
+ARG CARGO_BUILD_JOBS=default
+ARG CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=$CARGO_PROFILE_RELEASE_CODEGEN_UNITS \
+    RUST_MIN_STACK=67108864
+RUN for feature in $RNS_SERVER_FEATURES; do \
+      case "$feature" in rns-hooks-wasm) rustup target add wasm32-unknown-unknown; exit 0 ;; esac; \
+    done
+# Without a .git the build scripts' rerun-if-changed inputs are missing and
+# every workspace crate recompiles on each build; see tests/docker/Dockerfile.
+RUN mkdir -p .git/refs && touch -d @0 .git/HEAD .git/refs
 COPY Cargo.toml Cargo.lock ./
 COPY build build
 COPY rns-crypto rns-crypto
@@ -16,9 +29,6 @@ COPY rns-server rns-server
 COPY rns-tun rns-tun
 COPY rns-tun-android rns-tun-android
 COPY tools/rns-bench tools/rns-bench
-RUN for feature in $RNS_SERVER_FEATURES; do \
-      case "$feature" in rns-hooks-wasm) rustup target add wasm32-unknown-unknown; exit 0 ;; esac; \
-    done
 # Share the registry and target caches with tests/docker/Dockerfile so a
 # rerun only relinks rns-server instead of rebuilding every dependency.
 RUN --mount=type=cache,id=rns-docker-cargo-registry,target=/usr/local/cargo/registry \
