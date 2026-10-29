@@ -440,6 +440,12 @@ with open(config_path, "w") as f:
   enable_transport = false
   share_instance = no
 
+# Upstream d7749b0b turned Transport.STAMP_LRS off by default and made it a
+# config switch; the stamped link request tests need Python to grind one.
+# Releases before the switch have no [stamps] section and ignore it.
+[stamps]
+  stamp_lrs = yes
+
 [interfaces]
   [[TCP Server Interface]]
     type = TCPServerInterface

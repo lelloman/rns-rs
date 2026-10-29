@@ -47,8 +47,8 @@ Every commit in the audited range must appear exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `d7749b0b06008800601d18cd7be6e87b648d619b` | Stamp config wiring, path request stamp timeout, destination stamp handling | Integrated | `10bad64`; `[stamps]` and `hop_limiter` parsing and startup wiring, runtime hop limiter, engine `StampRequirements`, `pr_stamp_timeout` cancellation, `Destination::set_value` target restamping, defaults `STAMP_LRS = false` / 25 / 15, `global.stamp_link_requests`, docs; link request enforcement left to the concurrent `set_link_cost` port |
-| 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | `61d066a`; comment-only typo in the `PR_STAMP_TIMEOUT` declaration, recorded on the native constant |
+| 1 | `d7749b0b06008800601d18cd7be6e87b648d619b` | Stamp config wiring, path request stamp timeout, destination stamp handling | Integrated | `bf5112d`; `[stamps]` and `hop_limiter` parsing and startup wiring, runtime hop limiter, engine `StampRequirements`, `pr_stamp_timeout` cancellation, `Destination::set_value` target restamping, defaults `STAMP_LRS = false` / 25 / 15, `global.stamp_link_requests`, docs; `lr_cost` and `enforce_stamps` feed the shared per-destination link cost table of `290d6cc` |
+| 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | `0d125f2`; comment-only typo in the `PR_STAMP_TIMEOUT` declaration, recorded on the native constant |
 
 ## Per-Commit Analysis
 
@@ -85,7 +85,7 @@ that meets `destination_cost` and has no per-destination target value. The
 existing `global.stamp_destinations` / `global.stamp_path_requests` runtime
 keys need reconciling with the new file options.
 
-**Local handling and evidence:** `10bad64`, by integration plan step:
+**Local handling and evidence:** `bf5112d`, by integration plan step:
 
 1. *Constants.* `rns-core/src/constants.rs`: `STAMP_LRS = false`,
    `DESTINATION_STAMP_VALUE = 25`, new `PATH_REQUEST_STAMP_TIMEOUT = 15` and
@@ -105,15 +105,18 @@ keys need reconciling with the new file options.
    (`STAMPS_ENFORCED`, `DESTINATION_COST`, `PR_COST`) used by announce stamp
    validation and path request enforcement instead of the compile-time
    constants; the stamper and the node's announce builder take
-   `destination_value`, `pr_value` and `lr_cost` (the announced default link
-   cost, upstream `get_link_cost`'s `LR_COST` fallback); `stamp_lrs` and
+   `destination_value` and `pr_value`; `lr_cost` becomes the default of the
+   per-destination link cost table (`rns_net::stamps::LinkRequestCosts`,
+   from `290d6cc`) that the announce builder and the responder share, which
+   is upstream `get_link_cost`'s `LR_COST` fallback, and `enforce_stamps`
+   turns on that table's `LR_STAMPS_ENFORCED` check; `stamp_lrs` and
    `lr_stamp_timeout` drive stamped link request creation in
    `driver/link_stamps.rs`; and the driver keeps the whole section as
-   `stamp_settings`, where `lr_stamps_enforced` is available to the link
-   request enforcement port. Reconciliation with the runtime keys: the
-   existing `global.stamp_destinations` and `global.stamp_path_requests`
-   and a new `global.stamp_link_requests` start from, and reset to, the
-   configured values rather than the compile-time constants. The hop
+   `stamp_settings`. Reconciliation with the runtime keys: the existing
+   `global.stamp_destinations` and `global.stamp_path_requests`, the new
+   `global.stamp_link_requests` and `global.lr_stamps_enforced` (from
+   `290d6cc`) start from, and reset to, the configured values rather than
+   the compile-time constants. The hop
    limiter is a driver value checked right after decoding and before the
    packet filter (Transport.py:2009). Review finding: the 1.6.0 rgit mapping
    of `134db17c` counted decode failures for hop counts at or above
@@ -173,16 +176,15 @@ Interop consequences: `python_rns_stamped_link_request_interop` now enables
 request stamping is opt-in; against `c0fe08c0` Python stamps its destination
 at value 25, the new default.
 
-Not done here, by agreement with the concurrent link request cost port:
-wiring `lr_stamps_enforced` into responder-side enforcement (the
-`LR_STAMPS_ENFORCED` check in `common/link_manager.rs` still reads the
-constant) and per-destination link costs (`Destination.set_link_cost`).
+Responder-side enforcement against the per-destination cost
+(`Destination.set_link_cost`, `LR_STAMPS_ENFORCED`) landed alongside in
+`290d6cc` and is recorded in the 1.6.0 rgit parity record; `bf5112d` wires
+`[stamps] lr_cost` and `enforce_stamps` into it.
 Shared-instance clients (`connect_shared*`) parse only the instance keys and
 have no stamper, so they neither apply `[stamps]` nor stamp their own
 announces; this predates the range and is recorded as a caveat.
 
-**Final disposition:** Integrated (link request enforcement wiring belongs
-to the `set_link_cost` port, see above).
+**Final disposition:** Integrated.
 
 ### 2. `c0fe08c0` — Fixed typo
 
@@ -190,7 +192,7 @@ to the `set_link_cost` port, see above).
 
 **Rust applicability:** None; comment text only.
 
-**Local handling and evidence:** `61d066a` records on the
+**Local handling and evidence:** `0d125f2` records on the
 `PATH_REQUEST_STAMP_TIMEOUT` documentation that upstream only corrected the
 comment spelling; value and use are unchanged.
 
@@ -233,7 +235,7 @@ comment spelling; value and use are unchanged.
 
 ## Acceptance Record
 
-Integration run on 2026-10-29 at `61d066a` (on `a2b603d`), x86_64 host with
+Integration run on 2026-10-29 at `0d125f2` (on `a2b603d`), x86_64 host with
 32 cores. Exact-target interop used a disposable worktree of `c0fe08c0`
 (`import RNS` reports 1.6.0 from that tree); the accepted baseline
 `5d38ce30` was exercised from the configured checkout.
@@ -251,5 +253,5 @@ Integration run on 2026-10-29 at `61d066a` (on `a2b603d`), x86_64 host with
 | Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
 
 Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
-a2b603d..61d066a` lists `d7749b0b…` for `10bad64` and `c0fe08c0…` for
-`61d066a`, one trailer each.
+a2b603d..0d125f2` lists `d7749b0b…` for `bf5112d` and `c0fe08c0…` for
+`0d125f2`, one trailer each.
