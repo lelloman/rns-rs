@@ -6104,6 +6104,25 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     }
 }
 
+/// An announce carries its emission time in whole seconds, and a transport
+/// that already holds a path to the destination only re-adds, and so only
+/// re-forwards, an announce emitted strictly later than the recorded one
+/// (Transport.py: `announce_emitted > path_timebase`). A test that announces
+/// the same destination again waits for the clock to move on, or the second
+/// announce is a same-second duplicate that never reaches the peers.
+fn wait_for_next_announce_second() {
+    let secs = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let start = secs();
+    while secs() == start {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
     let state_dir = tempfile::tempdir().unwrap();
@@ -6202,6 +6221,7 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
 
     // Later announces reuse the persisted stamp synchronously, including the
     // confirmed-transmission API.
+    wait_for_next_announce_second();
     let before = Instant::now();
     futures::executor::block_on(alice.announce(&alice_dest, &alice_identity, Some(b"again")))
         .expect("synchronous stamped announce");
@@ -6213,6 +6233,7 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
 
     // Switching the flag off restores unstamped announces.
     set_runtime_bool(&alice, "global.stamp_destinations", false);
+    wait_for_next_announce_second();
     alice
         .announce_queued(&alice_dest, &alice_identity, Some(b"plain"))
         .unwrap();
