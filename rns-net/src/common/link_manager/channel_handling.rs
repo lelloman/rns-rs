@@ -129,10 +129,11 @@ impl LinkManager {
                     });
                 }
                 rns_core::channel::ChannelAction::TeardownLink => {
-                    result.push(LinkManagerAction::LinkClosed {
-                        link_id: *link_id,
-                        reason: Some(TeardownReason::Timeout),
-                    });
+                    // Python `LinkChannelOutlet.timed_out` calls
+                    // `Link.teardown()`: the link is closed, LINKCLOSE is sent
+                    // to the peer and the reason is INITIATOR_CLOSED or
+                    // DESTINATION_CLOSED depending on our role.
+                    result.extend(self.teardown_link(link_id));
                 }
             }
         }

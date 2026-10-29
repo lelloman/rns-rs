@@ -1529,11 +1529,9 @@ impl LinkManager {
                     });
                 }
                 ResourceAction::TeardownLink => {
-                    let teardown_actions = match self.links.get_mut(link_id) {
-                        Some(link) => link.engine.handle_teardown(),
-                        None => Vec::new(),
-                    };
-                    result.extend(self.process_link_actions(link_id, &teardown_actions));
+                    // Python `Resource.cancel` on a CORRUPT resource calls
+                    // `Link.teardown()`, which sends LINKCLOSE to the peer.
+                    result.extend(self.teardown_link(link_id));
                 }
                 ResourceAction::ProgressUpdate { received, total } => {
                     result.push(LinkManagerAction::ResourceProgress {
