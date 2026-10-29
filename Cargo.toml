@@ -19,11 +19,13 @@ rns-net = { version = "0.11.0", path = "rns-net" }
 rns-hooks = { version = "0.2.0", path = "rns-hooks", default-features = false }
 rns-tun = { version = "0.1.0", path = "rns-tun", default-features = false }
 
-# Compile the crypto crate and its curve arithmetic with optimizations even in
-# debug/test builds. A package override does not reach dependencies, so
-# curve25519-dalek is listed as well: unoptimized, its AVX2 field arithmetic
-# makes an Ed25519 signature or verification take ~8 ms, which turns the
-# per-packet link proofs in the test suites into a CPU bottleneck.
+# Compile the crypto crate, its curve arithmetic and its hashing stack with
+# optimizations even in debug/test builds. A package override does not reach
+# dependencies, so they are listed as well: unoptimized, curve25519-dalek's
+# AVX2 field arithmetic makes an Ed25519 signature or verification take ~8 ms,
+# which turns the per-packet link proofs in the test suites into a CPU
+# bottleneck, and an unoptimized sha2 makes a stamp grind at the production
+# target (2^25 hashes) take minutes on a four-core CI runner.
 [profile.dev.package.rns-crypto]
 opt-level = 2
 
@@ -36,6 +38,24 @@ opt-level = 3
 [profile.dev.package.x25519-dalek]
 opt-level = 3
 
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.dev.package.hmac]
+opt-level = 3
+
+[profile.dev.package.block-buffer]
+opt-level = 3
+
+[profile.dev.package.crypto-common]
+opt-level = 3
+
+[profile.dev.package.generic-array]
+opt-level = 3
+
 [profile.test.package.rns-crypto]
 opt-level = 2
 
@@ -46,6 +66,24 @@ opt-level = 3
 opt-level = 3
 
 [profile.test.package.x25519-dalek]
+opt-level = 3
+
+[profile.test.package.sha2]
+opt-level = 3
+
+[profile.test.package.digest]
+opt-level = 3
+
+[profile.test.package.hmac]
+opt-level = 3
+
+[profile.test.package.block-buffer]
+opt-level = 3
+
+[profile.test.package.crypto-common]
+opt-level = 3
+
+[profile.test.package.generic-array]
 opt-level = 3
 
 # Optimized benchmark executable with symbols for external CPU profilers.
