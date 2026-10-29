@@ -25,7 +25,7 @@ use handshake::{
 };
 use keepalive::{
     compute_establishment_timeout, compute_keepalive, compute_stale_time, is_establishment_timeout,
-    should_go_stale, should_send_keepalive,
+    should_go_stale, should_send_keepalive, stale_close_timeout,
 };
 
 /// The Link Engine manages a single link's lifecycle.
@@ -60,6 +60,9 @@ pub struct LinkEngine {
     rtt: Option<f64>,
     keepalive_interval: f64,
     stale_time: f64,
+    /// When the link went stale; it closes `stale_close_timeout` later
+    /// unless inbound traffic recovers it first.
+    stale_since: Option<f64>,
     establishment_timeout: f64,
     expected_hops: u8,
     /// Time of the first authenticated terminus hop rebalance.
@@ -160,6 +163,7 @@ impl LinkEngine {
             rtt: None,
             keepalive_interval: LINK_KEEPALIVE_MAX,
             stale_time: LINK_KEEPALIVE_MAX * 2.0,
+            stale_since: None,
             establishment_timeout: compute_establishment_timeout(
                 LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
                 hops,
@@ -253,6 +257,7 @@ impl LinkEngine {
             rtt: None,
             keepalive_interval: LINK_KEEPALIVE_MAX,
             stale_time: LINK_KEEPALIVE_MAX * 2.0,
+            stale_since: None,
             establishment_timeout: compute_establishment_timeout(
                 LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
                 hops,
@@ -491,6 +496,7 @@ impl LinkEngine {
         self.last_inbound = now;
         if self.state == LinkState::Stale {
             self.state = LinkState::Active;
+            self.stale_since = None;
             return alloc::vec![LinkAction::StateChanged {
                 link_id: self.link_id,
                 new_state: LinkState::Active,
@@ -500,7 +506,13 @@ impl LinkEngine {
         Vec::new()
     }
 
-    /// Record that a proof was received (updates timing for stale detection).
+    /// Record that a proof signed by the peer was received.
+    ///
+    /// Python's `PacketReceipt.validate_link_proof` sets `link.last_proof`,
+    /// and the watchdog's stale check takes the latest of `last_inbound` and
+    /// `last_proof`: an initiator that only ever hears proofs back for its
+    /// own confirmed traffic stays active. Proofs do not reactivate a link
+    /// that already went stale, matching upstream.
     pub fn record_proof(&mut self, now: f64) {
         self.last_proof = now;
     }
@@ -549,6 +561,7 @@ impl LinkEngine {
 
                 if should_go_stale(last_inbound, self.stale_time, now) {
                     self.state = LinkState::Stale;
+                    self.stale_since = Some(now);
                     actions.push(LinkAction::StateChanged {
                         link_id: self.link_id,
                         new_state: LinkState::Stale,
@@ -557,13 +570,20 @@ impl LinkEngine {
                 }
             }
             LinkState::Stale => {
-                // In Python, STALE immediately sends teardown and closes
-                self.state = LinkState::Closed;
-                actions.push(LinkAction::StateChanged {
-                    link_id: self.link_id,
-                    new_state: LinkState::Closed,
-                    reason: Some(TeardownReason::Timeout),
-                });
+                // Python's watchdog sleeps `rtt * KEEPALIVE_TIMEOUT_FACTOR +
+                // STALE_GRACE` after marking the link stale and only closes
+                // it if no inbound packet reactivated it meanwhile.
+                let rtt = self.rtt.filter(|rtt| rtt.is_finite()).unwrap_or(0.0);
+                let stale_since = self.stale_since.unwrap_or(now);
+                if now >= stale_since + stale_close_timeout(rtt) {
+                    self.state = LinkState::Closed;
+                    self.stale_since = None;
+                    actions.push(LinkAction::StateChanged {
+                        link_id: self.link_id,
+                        new_state: LinkState::Closed,
+                        reason: Some(TeardownReason::Timeout),
+                    });
+                }
             }
             LinkState::Closed => {}
         }
@@ -712,6 +732,11 @@ impl LinkEngine {
         self.keepalive_interval
     }
 
+    /// When the peer's latest valid packet proof arrived (0 before the first).
+    pub fn last_proof(&self) -> f64 {
+        self.last_proof
+    }
+
     /// Update the measured RTT (e.g., after path redirect to a direct link).
     /// Also recalculates keepalive and stale timers.
     pub fn set_rtt(&mut self, rtt: f64) {
@@ -766,7 +791,7 @@ use alloc::vec;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::LINK_MDU;
+    use crate::constants::{LINK_MDU, LINK_STALE_GRACE};
     use rns_crypto::FixedRng;
 
     fn make_rng(seed: u8) -> FixedRng {
@@ -1122,14 +1147,66 @@ mod tests {
 
         // Advance time past stale_time
         let stale_time = initiator.stale_time;
-        let actions = initiator.tick(100.8 + stale_time + 1.0);
+        let went_stale = 100.8 + stale_time + 1.0;
+        let actions = initiator.tick(went_stale);
         assert_eq!(initiator.state(), LinkState::Stale);
         assert_eq!(actions.len(), 1);
 
-        // Next tick: STALE → CLOSED
-        let actions = initiator.tick(100.8 + stale_time + 2.0);
+        // STALE holds for `rtt * KEEPALIVE_TIMEOUT_FACTOR + STALE_GRACE`
+        // before closing, like the Python watchdog's stale sleep.
+        let grace = stale_close_timeout(initiator.rtt().unwrap());
+        assert!(grace >= LINK_STALE_GRACE);
+        let actions = initiator.tick(went_stale + grace - 0.1);
+        assert_eq!(initiator.state(), LinkState::Stale);
+        assert!(actions.is_empty());
+
+        let actions = initiator.tick(went_stale + grace);
         assert_eq!(initiator.state(), LinkState::Closed);
         assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            LinkAction::StateChanged {
+                new_state: LinkState::Closed,
+                reason: Some(TeardownReason::Timeout),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn inbound_during_stale_grace_reactivates_the_link() {
+        let (mut initiator, _, _) = active_link_pair();
+        let stale_time = initiator.stale_time;
+        let went_stale = 101.0 + stale_time + 1.0;
+        initiator.tick(went_stale);
+        assert_eq!(initiator.state(), LinkState::Stale);
+
+        let actions = initiator.record_inbound(went_stale + 1.0);
+        assert_eq!(initiator.state(), LinkState::Active);
+        assert_eq!(actions.len(), 1);
+
+        // The recovered link only goes stale again after a full quiet period.
+        let grace = stale_close_timeout(initiator.rtt().unwrap());
+        assert!(initiator.tick(went_stale + grace + 1.0).is_empty());
+        assert_eq!(initiator.state(), LinkState::Active);
+        initiator.tick(went_stale + 1.0 + stale_time);
+        assert_eq!(initiator.state(), LinkState::Stale);
+    }
+
+    #[test]
+    fn received_proofs_keep_an_initiator_from_going_stale() {
+        let (mut initiator, _, _) = active_link_pair();
+        let stale_time = initiator.stale_time;
+        // Only proofs come back for a long stream of confirmed sends.
+        initiator.record_proof(101.0 + stale_time - 1.0);
+        assert!(initiator.tick(101.0 + stale_time + 1.0).is_empty());
+        assert_eq!(initiator.state(), LinkState::Active);
+
+        // A stale link is not reactivated by a proof alone.
+        initiator.tick(101.0 + 2.0 * stale_time);
+        assert_eq!(initiator.state(), LinkState::Stale);
+        initiator.record_proof(101.0 + 2.0 * stale_time + 1.0);
+        assert_eq!(initiator.state(), LinkState::Stale);
     }
 
     #[test]

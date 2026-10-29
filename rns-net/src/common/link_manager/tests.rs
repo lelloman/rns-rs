@@ -1198,6 +1198,65 @@ fn recent_responder_traffic_suppresses_keepalive_ack() {
     assert!(keepalive_packets(&actions).is_empty());
 }
 
+fn packed_link_proof(link_id: &LinkId, packet_hash: &[u8; 32], signature: &[u8; 64]) -> Vec<u8> {
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_LINK,
+        packet_type: constants::PACKET_TYPE_PROOF,
+    };
+    let mut proof = Vec::with_capacity(96);
+    proof.extend_from_slice(packet_hash);
+    proof.extend_from_slice(signature);
+    RawPacket::pack_raw_with_hash(flags, 0, link_id, None, constants::CONTEXT_NONE, &proof)
+        .unwrap()
+        .0
+}
+
+/// A long run of confirmed sends only ever brings proofs back to the
+/// initiator; Python counts those as inbound for the stale check, so the
+/// manager has to record them on the engine.
+#[test]
+fn validated_link_proof_is_recorded_on_the_initiator() {
+    let (mut initiator, responder, link_id) = setup_active_link();
+    assert_eq!(initiator.links[&link_id].engine.last_proof(), 0.0);
+    let before = time::now();
+
+    let packet_hash = [0x5A; 32];
+    let signature = responder.links[&link_id]
+        .engine
+        .sign_packet_hash(&packet_hash);
+    let raw = packed_link_proof(&link_id, &packet_hash, &signature);
+    let packet = RawPacket::unpack(&raw).unwrap();
+    initiator.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+
+    assert!(initiator.links[&link_id].engine.last_proof() >= before);
+}
+
+#[test]
+fn forged_link_proof_is_not_recorded() {
+    let (mut initiator, _, link_id) = setup_active_link();
+
+    let raw = packed_link_proof(&link_id, &[0x5A; 32], &[0x11; 64]);
+    let packet = RawPacket::unpack(&raw).unwrap();
+    initiator.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+
+    assert_eq!(initiator.links[&link_id].engine.last_proof(), 0.0);
+}
+
 #[test]
 fn keepalive_ack_does_not_create_ping_pong_reply() {
     let (mut initiator, _, link_id) = setup_active_link();

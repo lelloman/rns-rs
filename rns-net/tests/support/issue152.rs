@@ -305,7 +305,12 @@ fn run_burst(async_api: bool) {
     marker_receipt.wait().unwrap();
     // Check local completion before waiting for the receiver to drain its
     // callback backlog; remote processing is not part of the send contract.
-    let status = alice.query_link(link).unwrap().unwrap();
+    let status = alice.query_link(link).unwrap().unwrap_or_else(|| {
+        panic!(
+            "Alice's link vanished before the burst was drained\n{}",
+            describe_endpoints(&alice, &bob, link)
+        )
+    });
     assert_eq!(
         (status.pending_send_packets, status.waiting_send_packets),
         (0, 0)

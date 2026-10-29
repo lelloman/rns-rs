@@ -880,6 +880,10 @@ impl LinkManager {
         if !link.engine.validate_packet_proof(&tracked_hash, &signature) {
             return Vec::new();
         }
+        // A proof the peer signed is evidence the link is alive, whether or
+        // not it answers a tracked channel packet: plain confirmed sends
+        // complete on transmission and leave nothing to match here.
+        link.engine.record_proof(time::now());
         let Some(sequence) = link.pending_channel_packets.remove(&tracked_hash) else {
             return Vec::new();
         };
