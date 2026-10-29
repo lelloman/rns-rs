@@ -85,8 +85,21 @@ and the mapping-hash table.
   It is dormant while `STAMP_PRS` and `STAMP_DESTINATIONS` are false, as
   upstream.
 - Per-destination link request cost (`Destination.set_link_cost`) and
-  responder enforcement against the announced cost are deferred. Dormant while
-  `LR_STAMPS_ENFORCED` is false, as upstream.
+  responder enforcement against the announced cost were deferred at promotion
+  and implemented in a follow-up (`b26b8a2`). `RnsNode::set_link_cost` clamps
+  to `LINK_COST_CAP` like upstream, the stamped announce anchor carries the
+  destination's cost (`get_link_cost`, default `LR_COST` 11), and with
+  `LR_STAMPS_ENFORCED` (runtime key `global.lr_stamps_enforced`) the responder
+  drops requests whose stamp value is below that cost. Evidence:
+  `enforced_link_cost_drops_requests_below_the_destination_cost`,
+  `enforced_link_cost_defaults_to_lr_cost_and_zero_disables`,
+  `stamped_announce_carries_the_destination_link_cost`,
+  `link_request_costs_default_clamp_and_share`, the rns-core clamp tests,
+  e2e `test_stamped_link_cost_is_announced_ground_and_enforced`, and
+  `python_rns_link_cost_announced_by_rust_interop` against Python 1.6.0 at
+  `5d38ce30` (Python recalls the Rust-announced cost, grinds its request to
+  it, and the enforcing Rust responder accepts the link). Enforcement stays
+  off by default, as upstream.
 - The 1.6.0 target cannot join the pinned CI interop matrix until the GitHub
   mirror carries it; exact-target interop remains a manual gate from a local
   rgit checkout.

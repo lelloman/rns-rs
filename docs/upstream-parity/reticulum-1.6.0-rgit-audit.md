@@ -346,9 +346,12 @@ driver thread without a timeout; measured at 0.09 s for cost 11 and 0.8 s for
 cost 16 in release mode, a destination announcing the cap would have stalled
 every client that tried to link to it.
 
-**Caveat:** the responder enforces against the global `LINK_REQUEST_STAMP_COST`
-and there is no per-destination `set_link_cost`; both matter only once
-`STAMP_DESTINATIONS` or `LR_STAMPS_ENFORCED` is enabled.
+**Caveat (resolved in `b26b8a2`):** the responder first enforced against the
+global `LINK_REQUEST_STAMP_COST` with no per-destination `set_link_cost`. The
+follow-up adds `RnsNode::set_link_cost` (`Destination.set_link_cost`, clamped
+to `LINK_COST_CAP`), announces the destination's `get_link_cost()` in the
+extension anchor, and enforces that cost in the link manager when
+`LR_STAMPS_ENFORCED` (runtime key `global.lr_stamps_enforced`) is on.
 
 **Final disposition:** Integrated.
 
@@ -489,15 +492,16 @@ versioned parity record can be created:
   `announce_queued`) defers an announce whose destination has no persisted
   stamp and otherwise stays synchronous. Both emission flags remain false, so
   the worker never starts in a default node;
-- **Deferred:** per-destination link request cost (`Destination.set_link_cost`)
-  and responder enforcement against the announced cost rather than the global
-  default. Dormant while `LR_STAMPS_ENFORCED` is false.
+- **Implemented in a follow-up (`b26b8a2`):** per-destination link request
+  cost (`Destination.set_link_cost`) and responder enforcement against the
+  destination's announced cost rather than the global default. Dormant while
+  `LR_STAMPS_ENFORCED` is false.
 
 No version bump exists upstream. The tip was promoted on 2026-10-28 as a
 same-version rgit advancement; `UPSTREAM.md` now records `5d38ce30` and the
-parity record carries the acceptance gates. Of the two items that were deferred
-at promotion, the stamper queue has since been implemented and per-destination
-link cost remains open and dormant behind `LR_STAMPS_ENFORCED`.
+parity record carries the acceptance gates. Both items that were deferred at
+promotion, the stamper queue and per-destination link cost, have since been
+implemented; link cost enforcement stays dormant behind `LR_STAMPS_ENFORCED`.
 
 ## Acceptance Record
 
