@@ -98,9 +98,10 @@ impl DestinationStampStore {
 /// Per-destination link request costs and the responder enforcement flag.
 ///
 /// Mirrors `Destination.link_cost` (set with `set_link_cost`, read with
-/// `get_link_cost`) and `Transport.LR_STAMPS_ENFORCED`. The handle is shared
-/// between the node API, the announce builder and the link manager, so the
-/// cost a destination announces is the cost its responder requires.
+/// `get_link_cost`), the `Transport.LR_COST` default behind it (`[stamps]
+/// lr_cost`) and `Transport.LR_STAMPS_ENFORCED`. The handle is shared between
+/// the node API, the announce builder and the link manager, so the cost a
+/// destination announces is the cost its responder requires.
 #[derive(Debug, Clone, Default)]
 pub struct LinkRequestCosts {
     inner: std::sync::Arc<LinkRequestCostsInner>,
@@ -109,6 +110,7 @@ pub struct LinkRequestCosts {
 #[derive(Debug)]
 struct LinkRequestCostsInner {
     costs: std::sync::Mutex<std::collections::HashMap<[u8; 16], u8>>,
+    default_cost: std::sync::atomic::AtomicU8,
     enforced: std::sync::atomic::AtomicBool,
 }
 
@@ -116,6 +118,7 @@ impl Default for LinkRequestCostsInner {
     fn default() -> Self {
         Self {
             costs: Default::default(),
+            default_cost: std::sync::atomic::AtomicU8::new(constants::LINK_REQUEST_STAMP_COST),
             enforced: std::sync::atomic::AtomicBool::new(constants::LR_STAMPS_ENFORCED),
         }
     }
@@ -142,7 +145,21 @@ impl LinkRequestCosts {
             .unwrap_or_else(|poison| poison.into_inner())
             .get(destination_hash)
             .copied();
-        rns_core::stamp::announced_link_cost(configured)
+        rns_core::stamp::announced_link_cost(configured, self.default_cost())
+    }
+
+    /// `Transport.LR_COST`: the cost of destinations that set none.
+    pub fn default_cost(&self) -> u8 {
+        self.inner
+            .default_cost
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Apply `[stamps] lr_cost`, already clamped by the config parser.
+    pub fn set_default_cost(&self, cost: u8) {
+        self.inner
+            .default_cost
+            .store(cost, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Forget the configured cost, reverting to the default.
@@ -282,11 +299,33 @@ pub fn generate_stamp(
     size: usize,
     expand_rounds: u32,
 ) -> Option<(Vec<u8>, u32)> {
+    generate_stamp_until(material, stamp_cost, size, expand_rounds, None)
+}
+
+/// How many candidate nonces a worker tries between deadline checks.
+const DEADLINE_CHECK_INTERVAL: u32 = 1024;
+
+/// As [`generate_stamp`], giving up once `deadline` passes.
+///
+/// This is upstream's `cancel_work` on a stamp job (`RNS/Stamps.py`), which
+/// the path request watchdog in `Transport.stamp_path_request` calls after
+/// `PR_STAMP_TIMEOUT` (Transport.py:3977-3986, d7749b0b). Returns `None`
+/// when cancelled, as the cancelled upstream job yields no stamp.
+pub fn generate_stamp_until(
+    material: &[u8],
+    stamp_cost: u8,
+    size: usize,
+    expand_rounds: u32,
+    deadline: Option<std::time::Instant>,
+) -> Option<(Vec<u8>, u32)> {
     use rns_crypto::{OsRng, Rng};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     if stamp_cost > constants::STAMP_COST_CAP || size == 0 {
+        return None;
+    }
+    if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
         return None;
     }
 
@@ -302,9 +341,21 @@ pub fn generate_stamp(
             scope.spawn(move |_| {
                 let mut rng = OsRng;
                 let mut nonce = vec![0u8; size];
+                let mut until_check = DEADLINE_CHECK_INTERVAL;
                 loop {
                     if found.load(Ordering::Relaxed) {
                         return;
+                    }
+                    if let Some(deadline) = deadline {
+                        until_check -= 1;
+                        if until_check == 0 {
+                            until_check = DEADLINE_CHECK_INTERVAL;
+                            if std::time::Instant::now() >= deadline {
+                                // Stop the other workers too; no stamp was found.
+                                found.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                        }
                     }
                     rng.fill_bytes(&mut nonce);
                     if stamp_valid(&nonce, stamp_cost, workblock) {
@@ -333,6 +384,41 @@ pub fn generate_stamp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stamp_generation_gives_up_at_the_deadline() {
+        use std::time::{Duration, Instant};
+        // A cost at the protocol cap is never found in time.
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(50);
+        assert_eq!(
+            generate_stamp_until(
+                b"material",
+                constants::STAMP_COST_CAP,
+                14,
+                0,
+                Some(deadline)
+            ),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // An expired deadline does no work at all.
+        assert_eq!(
+            generate_stamp_until(b"material", 0, 14, 0, Some(Instant::now())),
+            None
+        );
+        // A reachable cost before the deadline yields a valid stamp.
+        let (stamp, value) = generate_stamp_until(
+            b"material",
+            4,
+            14,
+            0,
+            Some(Instant::now() + Duration::from_secs(60)),
+        )
+        .expect("cost 4 is found quickly");
+        assert!(value >= 4);
+        assert!(stamp_valid(&stamp, 4, &stamp_workblock(b"material", 0)));
+    }
 
     #[test]
     fn destination_stamp_material_matches_upstream_layout() {

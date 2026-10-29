@@ -356,6 +356,62 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # implementations. Dangerous; leave disabled unless you understand the risk.
   # autoconnect_unverified_implementations = no
 
+  # You can enable a hop limiter, that will drop all packets
+  # exceeding the specified maximum hop count (1 to 128).
+  # hop_limiter = 16
+
+[stamps]
+  # This section configures stamping behaviour and defaults.
+  # In most cases, you do not need to change this, but on
+  # constrained systems especially, tuning these parameters
+  # can be very beneficial.
+
+  # During the 1.6.x phased transition to network stamp usage,
+  # it is possible to enable early opt-in on stamp generation
+  # and enforcement. Stamps are validated, while generation,
+  # emission and enforcement are disabled by default. Upstream
+  # 1.6.1 will enable generation and emission by default, and
+  # 1.6.2 will activate enforcement. Any option can be enabled
+  # early by configuration; setting one to "no" keeps the
+  # default rather than forcing it off.
+  # stamp_destinations = yes
+  # stamp_prs = yes
+  # stamp_lrs = yes
+  # enforce_stamps = yes
+
+  # The default required stamp cost for an announce, and its
+  # destination to be considered valid. This applies both to
+  # announces received directly, and transported by this node,
+  # if transport is enabled. Any announced destination not
+  # meeting the cost will be ignored once stamps are enforced.
+  # destination_cost = 23
+
+  # The default value this instance will target when generating
+  # new destination stamps. An application may set a higher
+  # target, but applications requesting a lower value than the
+  # default will always generate at least the default value.
+  # Destination stamps are cached and reused, so a one-time
+  # high-value generation is usually a good idea.
+  # destination_value = 25
+
+  # The default required path request stamp cost. Path requests
+  # that do not meet the requirement are ignored once stamps
+  # are enforced.
+  # pr_cost = 19
+
+  # The default target value of path request stamps generated
+  # by this instance.
+  # pr_value = 19
+
+  # The default link request stamp cost to announce for local
+  # destinations that do not set their own (0 to 40).
+  # lr_cost = 11
+
+  # The maximum amount of time to spend attempting to generate
+  # link request and path request stamps, in seconds.
+  # lr_stamp_timeout = 15
+  # pr_stamp_timeout = 15
+
 [logging]
   # Valid log levels are 0 through 8:
   #   0: Critical information only
@@ -487,6 +543,36 @@ mod tests {
         assert_eq!(effective_log_level(4, 3, 0, false), 7);
         assert_eq!(effective_log_level(4, 0, 3, false), 1);
         assert_eq!(effective_log_level(4, 2, 1, false), 5);
+    }
+
+    #[test]
+    fn example_config_documents_and_parses_the_stamps_section() {
+        for key in [
+            "hop_limiter",
+            "stamp_destinations",
+            "stamp_prs",
+            "stamp_lrs",
+            "enforce_stamps",
+            "destination_cost",
+            "destination_value",
+            "pr_cost",
+            "pr_value",
+            "lr_cost",
+            "lr_stamp_timeout",
+            "pr_stamp_timeout",
+        ] {
+            assert!(
+                EXAMPLE_CONFIG.contains(&format!("# {key} = ")),
+                "{key} is not documented"
+            );
+        }
+        // Every option is commented out, so the example keeps the defaults.
+        let config = rns_net::config::parse(EXAMPLE_CONFIG).unwrap();
+        assert_eq!(config.stamps, rns_net::config::StampsSection::default());
+        assert_eq!(
+            config.reticulum.hop_limiter,
+            rns_core::constants::HOP_LIMITER
+        );
     }
 
     #[test]

@@ -59,6 +59,10 @@ impl core::fmt::Display for GroupKeyError {
 pub struct Destination {
     /// Computed destination hash.
     pub hash: DestHash,
+    /// Target value for this destination's announce stamp, set with
+    /// [`Destination::set_value`] (upstream `Destination._target_value`).
+    /// `None` targets the node's `destination_value`.
+    pub target_value: Option<u8>,
     /// Type: Single, Group, or Plain.
     pub dest_type: DestinationType,
     /// Direction: In (receiving) or Out (sending).
@@ -87,6 +91,7 @@ impl Destination {
         let dh = destination_hash(app_name, aspects, Some(&identity_hash.0));
         Destination {
             hash: DestHash(dh),
+            target_value: None,
             dest_type: DestinationType::Single,
             direction: Direction::In,
             app_name: app_name.into(),
@@ -106,6 +111,7 @@ impl Destination {
         let dh = destination_hash(app_name, aspects, Some(&recalled.identity_hash.0));
         Destination {
             hash: DestHash(dh),
+            target_value: None,
             dest_type: DestinationType::Single,
             direction: Direction::Out,
             app_name: app_name.into(),
@@ -123,6 +129,7 @@ impl Destination {
         let dh = destination_hash(app_name, aspects, None);
         Destination {
             hash: DestHash(dh),
+            target_value: None,
             dest_type: DestinationType::Plain,
             direction: Direction::In,
             app_name: app_name.into(),
@@ -143,6 +150,7 @@ impl Destination {
         let dh = destination_hash(app_name, aspects, None);
         Destination {
             hash: DestHash(dh),
+            target_value: None,
             dest_type: DestinationType::Group,
             direction: Direction::In,
             app_name: app_name.into(),
@@ -176,6 +184,29 @@ impl Destination {
     /// Retrieve the symmetric key bytes, if set.
     pub fn get_private_key(&self) -> Option<&[u8]> {
         self.group_key.as_deref()
+    }
+
+    /// Set the target stamp value for this destination's announces
+    /// (upstream `Destination.set_value`, d7749b0b).
+    ///
+    /// The value is capped at `STAMP_COST_CAP`. A target below the node's
+    /// `destination_value` still generates at least that default, as the
+    /// effective target is `min(STAMP_COST_CAP, max(value,
+    /// destination_value))` (Destination.py `target_value`). When stamping
+    /// is enabled and the persisted stamp is below the target, the next
+    /// announce regenerates it.
+    pub fn set_value(&mut self, value: u8) {
+        self.target_value = Some(value.min(rns_core::constants::STAMP_COST_CAP));
+    }
+
+    /// The effective announce stamp target for a node whose default target
+    /// is `default_value` (upstream `Destination.target_value`).
+    pub fn effective_target_value(&self, default_value: u8) -> u8 {
+        let cap = rns_core::constants::STAMP_COST_CAP;
+        self.target_value
+            .unwrap_or(default_value)
+            .max(default_value)
+            .min(cap)
     }
 
     /// Encrypt plaintext using this destination's GROUP key.

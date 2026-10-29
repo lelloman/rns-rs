@@ -659,6 +659,10 @@ struct NodeQueueConfig {
     announce_overflow_policy: AnnounceQueueOverflowPolicy,
     inbound_capacities: crate::event::InboundQueueCapacities,
     link_mtu_discovery: bool,
+    /// The `[stamps]` config section.
+    stamps: config::StampsSection,
+    /// `[reticulum] hop_limiter`.
+    hop_limiter: u8,
 }
 
 impl Default for NodeQueueConfig {
@@ -672,6 +676,8 @@ impl Default for NodeQueueConfig {
             announce_overflow_policy: AnnounceQueueOverflowPolicy::DropWorst,
             inbound_capacities: crate::event::InboundQueueCapacities::default(),
             link_mtu_discovery: true,
+            stamps: config::StampsSection::default(),
+            hop_limiter: rns_core::constants::HOP_LIMITER,
         }
     }
 }
@@ -1475,6 +1481,8 @@ impl RnsNode {
                 },
                 inbound_capacities: rns_config.reticulum.inbound_queue_capacities,
                 link_mtu_discovery,
+                stamps: rns_config.stamps.clone(),
+                hop_limiter: rns_config.reticulum.hop_limiter,
             },
             interface_management,
         )?;
@@ -1615,6 +1623,8 @@ impl RnsNode {
         driver.set_stamper(Arc::clone(&stamper));
         let stamp_destinations = Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS));
         driver.set_stamp_destinations_flag(Arc::clone(&stamp_destinations));
+        driver.apply_stamp_config(&queue_config.stamps, queue_config.hop_limiter);
+        let stamp_targets = crate::stamper::StampTargets::from(&queue_config.stamps);
         driver.underlay_mark = config.underlay_mark;
         driver
             .link_manager
@@ -2524,7 +2534,7 @@ impl RnsNode {
             known_destinations_store: None,
             stamp_store: None,
             stamp_destinations,
-            stamp_targets: crate::stamper::StampTargets::default(),
+            stamp_targets,
             stamper: Some(stamper),
             transport_state_dir,
             ratchet_store: config.ratchet_store,
@@ -3462,8 +3472,8 @@ impl RnsNode {
     }
 
     /// Whether `Destination.announce` would hand this announce to the
-    /// stamper: destination stamping is on and no persisted stamp meets the
-    /// required cost.
+    /// stamper: destination stamping is on and no persisted stamp reaches
+    /// the destination's target value (Destination.py `_announce`).
     fn announce_needs_stamp(
         &self,
         dest: &crate::destination::Destination,
@@ -3484,7 +3494,11 @@ impl RnsNode {
         let material =
             crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
         store
-            .load(&dest.hash.0, &material, self.stamp_targets.destination_cost)
+            .load(
+                &dest.hash.0,
+                &material,
+                self.stamp_targets.destination_target(dest),
+            )
             .is_none()
     }
 
@@ -4147,10 +4161,16 @@ impl RnsNode {
     }
 }
 
-/// Make sure a destination stamp meeting `targets.destination_cost` is
-/// persisted for `dest`, grinding one at `targets.destination_value` when
-/// none is. This is the stamp half of `Destination._announce`, run by the
-/// stamper off the calling thread.
+/// Make sure a destination stamp reaching the destination's target value is
+/// persisted for `dest`, grinding one at that target when none is. This is
+/// the stamp half of `Destination._announce`, run by the stamper off the
+/// calling thread.
+///
+/// Since d7749b0b upstream reloads or regenerates the held stamp whenever
+/// its value is below `target_value`, and both the store lookup and the
+/// grind use `target_value` rather than `DESTINATION_COST` /
+/// `DESTINATION_VALUE` (Destination.py:319-323). A persisted stamp that
+/// still meets the announce cost but not the target is therefore replaced.
 pub(crate) fn ensure_destination_stamp(
     store: &crate::stamps::DestinationStampStore,
     targets: crate::stamper::StampTargets,
@@ -4165,20 +4185,14 @@ pub(crate) fn ensure_destination_stamp(
         &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
     );
     let material = crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
-    if store
-        .load(&dest.hash.0, &material, targets.destination_cost)
-        .is_some()
-    {
+    let target = targets.destination_target(dest);
+    if store.load(&dest.hash.0, &material, target).is_some() {
         return Ok(());
     }
     let started = std::time::Instant::now();
-    let (stamp, value) = crate::stamps::generate_stamp(
-        &material,
-        targets.destination_value,
-        rns_core::constants::STAMP_LENGTH,
-        0,
-    )
-    .ok_or_else(|| "stamp cost is above the protocol cap".to_string())?;
+    let (stamp, value) =
+        crate::stamps::generate_stamp(&material, target, rns_core::constants::STAMP_LENGTH, 0)
+            .ok_or_else(|| "stamp cost is above the protocol cap".to_string())?;
     if let Err(error) = store.store(&dest.hash.0, &stamp, value) {
         log::warn!("failed to persist destination stamp: {error}");
     }
@@ -4252,12 +4266,13 @@ pub(crate) fn build_announce_packet(
         let material =
             crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
         let store = stamp_store.ok_or(SendError)?;
-        let (stamp, _value) = match store.load(&dest.hash.0, &material, targets.destination_cost) {
+        let target = targets.destination_target(dest);
+        let (stamp, _value) = match store.load(&dest.hash.0, &material, target) {
             Some(entry) => entry,
             None => {
                 let (stamp, value) = crate::stamps::generate_stamp(
                     &material,
-                    targets.destination_value,
+                    target,
                     rns_core::constants::STAMP_LENGTH,
                     0,
                 )
@@ -6230,9 +6245,9 @@ enable_transport = False
         let dir = tempdir().unwrap();
         let store = crate::stamps::DestinationStampStore::new(dir.path());
         let targets = crate::stamper::StampTargets {
-            destination_cost: 6,
             destination_value: 6,
             path_request_value: 6,
+            ..Default::default()
         };
         let mut node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
         node.set_stamp_store(store.clone());
@@ -6269,7 +6284,7 @@ enable_transport = False
         );
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while store
-            .load(&dest.hash.0, &material, targets.destination_cost)
+            .load(&dest.hash.0, &material, targets.destination_value)
             .is_none()
         {
             assert!(
@@ -7074,6 +7089,139 @@ enable_transport = False
         assert!(result.is_ok());
 
         thread::sleep(Duration::from_millis(50));
+        node.shutdown();
+    }
+
+    #[test]
+    fn destination_stamp_below_target_value_is_regenerated() {
+        // Destination._announce (d7749b0b): the held stamp is reloaded or
+        // regenerated when its value is below `target_value`, and both the
+        // lookup and the grind use the target (Destination.py:319-323).
+        let dir = tempdir().unwrap();
+        let store = crate::stamps::DestinationStampStore::new(dir.path());
+        let targets = crate::stamper::StampTargets {
+            destination_value: 4,
+            path_request_value: 4,
+            ..Default::default()
+        };
+        let identity = Identity::from_private_key(&[0x52; 64]);
+        let mut dest = crate::Destination::single_in(
+            "stamper",
+            &["target"],
+            rns_core::types::IdentityHash(*identity.hash()),
+        );
+        let name_hash = rns_core::destination::name_hash("stamper", &["target"]);
+        let material = crate::stamps::destination_stamp_material(
+            &dest.hash.0,
+            &identity.get_public_key().unwrap(),
+            &name_hash,
+        );
+
+        ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
+        let (first, first_value) = store
+            .load(&dest.hash.0, &material, 0)
+            .expect("stamp persisted at the default target");
+        assert!(first_value >= 4);
+
+        // A target the held stamp already meets reuses it.
+        dest.set_value(first_value as u8);
+        ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
+        assert_eq!(store.load(&dest.hash.0, &material, 0).unwrap().0, first);
+
+        // A target above the held value regenerates and persists a stamp
+        // that reaches it.
+        let raised = first_value as u8 + 1;
+        dest.set_value(raised);
+        ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
+        let (second, second_value) = store.load(&dest.hash.0, &material, 0).unwrap();
+        assert_ne!(second, first);
+        assert!(second_value >= u32::from(raised));
+
+        // The announce builder reloads at the same target and carries the
+        // regenerated stamp and the configured default link cost.
+        let (tx, _rx) = crate::event::channel();
+        tx.link_request_costs().set_default_cost(7);
+        let (packet, _) =
+            build_announce_packet(&tx, Some(&store), true, targets, &dest, &identity, None)
+                .unwrap();
+        let announce = rns_core::announce::AnnounceData::unpack(packet.data(), false).unwrap();
+        let app_data = announce
+            .app_data
+            .expect("stamped announce carries app data");
+        let ext = &app_data[app_data.len() - rns_core::constants::EXT_PAYLOAD_LENGTH..];
+        assert_eq!(ext[0], rns_core::constants::EXT_PAYLOAD_MARKER);
+        assert_eq!(
+            &ext[rns_core::constants::EXT_HEADER_LENGTH
+                ..rns_core::constants::EXT_HEADER_LENGTH + rns_core::constants::STAMP_LENGTH],
+            &second[..]
+        );
+        assert_eq!(ext[rns_core::constants::EXT_PAYLOAD_LENGTH - 1], 7);
+    }
+
+    #[test]
+    fn from_config_applies_the_stamps_section_and_hop_limiter() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config"),
+            "[reticulum]\n\
+             hop_limiter = 12\n\
+             [stamps]\n\
+             enforce_stamps = yes\n\
+             stamp_destinations = yes\n\
+             stamp_prs = yes\n\
+             stamp_lrs = yes\n\
+             destination_cost = 18\n\
+             destination_value = 27\n\
+             pr_cost = 11\n\
+             pr_value = 13\n\
+             lr_cost = 9\n\
+             pr_stamp_timeout = 3\n",
+        )
+        .unwrap();
+        let node =
+            RnsNode::from_private_config(dir.path(), dir.path(), None, Box::new(NoopCallbacks))
+                .unwrap();
+
+        assert!(node.stamp_destinations.load(Ordering::Relaxed));
+        assert_eq!(
+            node.stamp_targets,
+            crate::stamper::StampTargets {
+                destination_value: 27,
+                path_request_value: 13,
+            }
+        );
+        // `lr_cost` and `enforce_stamps` reach the shared link cost table.
+        assert_eq!(node.link_cost(&[0u8; 16]), 9);
+        assert!(node.link_request_stamps_enforced());
+        let stamper = node.stamper().unwrap();
+        assert_eq!(stamper.targets(), node.stamp_targets);
+        assert_eq!(stamper.path_request_timeout(), Duration::from_secs(3));
+
+        // The runtime keys report the configured values as their startup
+        // defaults, so a reset returns to the config file and not to the
+        // compile-time constants.
+        for key in [
+            "global.stamp_destinations",
+            "global.stamp_path_requests",
+            "global.stamp_link_requests",
+        ] {
+            let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
+                .query(QueryRequest::GetRuntimeConfig { key: key.into() })
+                .unwrap()
+            else {
+                panic!("expected runtime config entry for {key}");
+            };
+            assert_eq!(
+                entry.value,
+                crate::event::RuntimeConfigValue::Bool(true),
+                "{key}"
+            );
+            assert_eq!(
+                entry.default,
+                crate::event::RuntimeConfigValue::Bool(true),
+                "{key}"
+            );
+        }
         node.shutdown();
     }
 }

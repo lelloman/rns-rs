@@ -44,6 +44,7 @@ error; see [Building](building.md#selecting-interfaces).
 | `packet_hashlist_max_entries` | `250000` | Size of the bounded dedup table |
 | `packet_hashlist_allocation` | `eager` | `eager` prefaults the table at startup; `lazy` grows it |
 | `link_mtu_discovery` | `yes` | Set to `no` to omit MTU signalling from outbound link requests |
+| `hop_limiter` | `128` | Drop inbound packets whose hop count reaches this limit, counted per interface as `hop_limiter_hits` (`rnstatus` "Hop Limit"); clamped to 1-128 |
 | `underlay_mark` | unset | Linux `SO_MARK` for owned IP sockets, see below |
 | `probe_port`, `probe_addr`, `direct_connect_policy`, `direct_connect_allow_private_endpoints` | | [Direct Link](direct-link.md) |
 | `default_gravity`, `autoconnect_interface_mode`, `autoconnect_interface_gravity`, `autoconnect_announces_to_internal`, `autoconnect_unverified_implementations` | | [Interface Discovery](interface-discovery.md) |
@@ -86,61 +87,92 @@ The values shown are the defaults. Each must be a positive integer.
 ## Stamps
 
 Reticulum 1.6.0 adds proof-of-work stamps to destination announces, path
-requests, and link requests. Neither Python Reticulum nor this implementation
-exposes a configuration file key for them: the behaviour is fixed at build
-time by constants in `rns-core/src/constants.rs` that mirror the upstream
-`Transport` class attributes. The defaults match upstream at the current
-parity target. The two emission flags can additionally be switched at runtime
-on a running node, see below.
+requests, and link requests. The `[stamps]` section configures them with the
+same keys and semantics as Python Reticulum:
 
-| Constant | Default | Effect |
-|----------|---------|--------|
-| `STAMP_DESTINATIONS` | `false` | Stamp announces emitted by this instance (target value `DESTINATION_STAMP_VALUE`, 23) |
-| `STAMP_PRS` | `false` | Stamp path requests emitted by this instance (target value `PATH_REQUEST_STAMP_VALUE`, 19) |
-| `STAMP_LRS` | `true` | Stamp outbound link requests to destinations that announced a non-zero link cost |
-| `LR_STAMPS_ENFORCED` | `false` | Reject inbound link requests whose stamp is missing or below the required cost |
-| `LINK_REQUEST_STAMP_COST` | `11` | Required link request cost when a destination announces none |
-| `LINK_COST_CAP` | `40` | Hard cap on an announced link request cost |
-| `LINK_STAMP_TIMEOUT` | `15` | Seconds allowed for grinding a stamped link request key before the link fails |
+```ini
+[stamps]
+  # Opt in early to generation, emission and enforcement.
+  # stamp_destinations = yes
+  # stamp_prs = yes
+  # stamp_lrs = yes
+  # enforce_stamps = yes
 
-With these defaults a node validates inbound announce and path request stamps,
-records announced link costs, and grinds a stamped link request key when a peer
-asks for one, but emits no stamped announces or path requests and refuses
-nothing for lack of a stamp. Stamped link request keys are ground on a worker
-thread so the driver stays responsive. The only runtime stamp setting is the
-per-interface `discovery_stamp_value` for discovery announces, described in
+  # destination_cost = 23
+  # destination_value = 25
+  # pr_cost = 19
+  # pr_value = 19
+  # lr_cost = 11
+  # lr_stamp_timeout = 15
+  # pr_stamp_timeout = 15
+```
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `stamp_destinations` | `no` | Stamp announces emitted by this instance |
+| `stamp_prs` | `no` | Stamp path requests emitted by this instance, and unstamped ones forwarded for local clients |
+| `stamp_lrs` | `no` | Stamp outbound link requests to destinations that announced a non-zero link cost |
+| `enforce_stamps` | `no` | Drop announces and path requests whose stamp is missing or below the required cost, and enforce link request stamps |
+| `destination_cost` | `23` | Required stamp value of received and transported announces |
+| `destination_value` | `25` | Default target value of generated destination stamps |
+| `pr_cost` | `19` | Required stamp value of received path requests |
+| `pr_value` | `19` | Target value of generated path request stamps |
+| `lr_cost` | `11` | Link request cost announced for local destinations that set none |
+| `lr_stamp_timeout` | `15` | Seconds allowed for grinding a stamped link request key before the link fails |
+| `pr_stamp_timeout` | `15` | Seconds allowed for grinding a path request stamp before the request is dropped |
+
+The four switches can only enable a feature: `no` keeps the built-in default
+rather than forcing it off, as upstream applies them. During the 1.6.x
+transition all four default to off; upstream plans to turn generation and
+emission on by default in 1.6.1 and enforcement in 1.6.2. Costs and values are
+clamped to 0-100 (`lr_cost` to 0-40), and the timeouts are floored at 20 ms.
+An invalid boolean or number is a configuration error. The defaults are the
+constants in `rns-core/src/constants.rs`, which mirror the upstream
+`Transport` class attributes at the current parity target.
+
+With these defaults a node validates inbound announce and path request stamps
+and records announced link costs, but emits no stamps and refuses nothing for
+lack of a stamp. Stamped link request keys are ground on a worker thread so the
+driver stays responsive. Discovery announces have their own per-interface
+`discovery_stamp_value`, described in
 [Interface Discovery](interface-discovery.md#advertised-locations).
 
 Stamps for emitted announces and path requests follow the upstream stamper
 queue. A single lazily started worker thread drains two bounded queues, path
 requests before announces, each holding at most 32 jobs; a newer job for the
 same destination (and interface, for path requests) replaces the queued one,
-and a full queue drops the job with a debug log. With `STAMP_DESTINATIONS` an
+and a full queue drops the job with a debug log. With `stamp_destinations` an
 announce for a destination without a persisted stamp returns at once and the
 worker grinds the stamp, persists it under `storage/stamps/`, and emits the
 announce; later announces for that destination reuse the stored stamp
-synchronously. With `STAMP_PRS` the node's own path requests, and unstamped
-requests forwarded on behalf of local clients, wait for the worker; generated
-path request stamps are cached by destination and tag (256 entries) so one
-grind serves a request relayed on several interfaces. None of this runs while
-both flags are off, which is the upstream default.
+synchronously. A persisted stamp is reused only while its value reaches the
+destination's target: `destination_value`, or the higher value an application
+requests with `Destination::set_value` (capped at 100). Raising either target
+regenerates the stamp on the next announce. With `stamp_prs` the node's own
+path requests, and unstamped requests forwarded on behalf of local clients,
+wait for the worker; generated path request stamps are cached by destination
+and tag (256 entries) so one grind serves a request relayed on several
+interfaces. A path request whose stamp is not found within `pr_stamp_timeout`
+is not sent. None of this runs while the switches are off, which is the
+upstream default.
 
-The two emission flags are exposed as runtime config keys so a node can be
-switched to stamped emission without a rebuild, for interoperability testing
-or ahead of the network turning enforcement on:
+The three emission switches are also runtime config keys, so a running node
+can be switched to stamped emission without a restart:
 
 ```bash
 rns-ctl config get global.stamp_destinations         # false by default
 rns-ctl config set global.stamp_path_requests true
+rns-ctl config set global.stamp_link_requests true
 rns-ctl config reset global.stamp_path_requests
 ```
 
-Both keys apply immediately and reset to the compile-time default. A valid
-inbound stamp is observable on the receiving side: `/api/identity/<hash>`
-(and the known-destinations RPC) report the recorded `stamp_value` and the
-announced `lr_cost`, and every interface counts validated inbound path request
-stamps as `stamped_path_requests` in `/api/interfaces`, the RPC interface
-stats, and the management export.
+The keys apply immediately and reset to the value from the `[stamps]`
+section, or to the built-in default when the section does not enable them.
+A valid inbound stamp is observable on the receiving side:
+`/api/identity/<hash>` (and the known-destinations RPC) report the recorded
+`stamp_value` and the announced `lr_cost`, and every interface counts
+validated inbound path request stamps as `stamped_path_requests` in
+`/api/interfaces`, the RPC interface stats, and the management export.
 
 A stamped announce carries the destination's link request cost: the value set
 with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to

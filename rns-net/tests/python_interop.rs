@@ -865,7 +865,15 @@ fn python_rns_stamped_link_request_interop() {
     );
 
     // Rust initiates: the link request key is ground off the driver thread
-    // and must carry at least the announced cost.
+    // and must carry at least the announced cost. Link request stamping is
+    // opt-in since upstream d7749b0b (`[stamps] stamp_lrs`).
+    match node.query(rns_net::event::QueryRequest::SetRuntimeConfig {
+        key: "global.stamp_link_requests".into(),
+        value: rns_net::event::RuntimeConfigValue::Bool(true),
+    }) {
+        Ok(rns_net::event::QueryResponse::RuntimeConfigSet(Ok(_))) => {}
+        other => panic!("enabling link request stamps failed: {other:?}"),
+    }
     let mut python_sig_pub = [0u8; 32];
     python_sig_pub.copy_from_slice(&announce.public_key[32..64]);
     let started = Instant::now();

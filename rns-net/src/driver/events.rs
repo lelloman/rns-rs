@@ -129,18 +129,26 @@ impl Driver {
         let decoded_packet = match self.engine.decode_inbound(packet) {
             Ok(packet) => packet,
             Err(error) => {
+                // A malformed packet, including a hop count at or above
+                // PATHFINDER_M, which upstream `Packet.unpack` rejects
+                // before the hop limiter is consulted (Packet.py:250,
+                // Transport.py:2008).
+                log::trace!("[{}] malformed packet: {error}", interface_id.0);
                 if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                    // Upstream checks the hop count right after unpacking and
-                    // counts the drop separately from protocol violations.
-                    if matches!(error, rns_core::packet::PacketError::InvalidHopCount(_)) {
-                        entry.stats.hop_limiter_hits += 1;
-                    } else {
-                        entry.stats.protocol_violations += 1;
-                    }
+                    entry.stats.protocol_violations += 1;
                 }
                 return;
             }
         };
+        // `if not packet.hops < Transport.HOP_LIMITER: return
+        // interface.hop_limiter_hit()` (Transport.py:2009), before the packet
+        // filter.
+        if decoded_packet.packet().hops >= self.hop_limiter {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.hop_limiter_hits += 1;
+            }
+            return;
+        }
         if let Some(packet_hash) = decoded_packet.packet_hash() {
             self.engine.prefetch_packet_hash(packet_hash);
         }

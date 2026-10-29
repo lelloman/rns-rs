@@ -6458,7 +6458,10 @@ fn test_stamped_link_cost_is_announced_ground_and_enforced() {
     set_runtime_bool(&alice, "global.lr_stamps_enforced", true);
     assert!(alice.link_request_stamps_enforced());
 
-    // Bob grinds to the announced cost, which meets Alice's requirement.
+    // Link request stamping is opt-in (Transport.STAMP_LRS defaults to off);
+    // once on, Bob grinds to the announced cost, which meets Alice's
+    // requirement.
+    set_runtime_bool(&bob, "global.stamp_link_requests", true);
     let link_id = bob.create_link(alice_dest.hash.0, alice_sig_pub).unwrap();
     let (bob_link, _, bob_is_initiator) =
         wait_for_link_established(&bob_rx, TIMEOUT).expect("stamped link not established");

@@ -323,6 +323,33 @@ pub struct BlackholeEntry {
     pub reason: Option<String>,
 }
 
+/// Stamp requirements applied to received announces and path requests.
+///
+/// Upstream keeps these as `Transport` class attributes that the `[stamps]`
+/// config section can override (Reticulum.py, d7749b0b): `enforce_stamps`
+/// sets `STAMPS_ENFORCED`, and `destination_cost` / `pr_cost` set
+/// `DESTINATION_COST` / `PR_COST`, clamped to `0..=STAMP_COST_CAP`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StampRequirements {
+    /// Drop announces and path requests without a sufficient stamp
+    /// (`Transport.STAMPS_ENFORCED`).
+    pub enforced: bool,
+    /// Required announce stamp value (`Transport.DESTINATION_COST`).
+    pub destination_cost: u8,
+    /// Required path request stamp value (`Transport.PR_COST`).
+    pub path_request_cost: u8,
+}
+
+impl Default for StampRequirements {
+    fn default() -> Self {
+        Self {
+            enforced: crate::constants::STAMPS_ENFORCED,
+            destination_cost: crate::constants::DESTINATION_STAMP_COST,
+            path_request_cost: crate::constants::PATH_REQUEST_STAMP_COST,
+        }
+    }
+}
+
 /// Configuration for TransportEngine.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PacketHashlistAllocation {

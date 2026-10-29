@@ -51,16 +51,14 @@ const QUEUE_LENGTHS: [usize; 2] = [PATH_REQUEST_QUEUE_LENGTH, ANNOUNCE_QUEUE_LEN
 /// as `stamp_queues.get(block=True, timeout=1)`.
 const WORKER_WAIT: Duration = Duration::from_secs(1);
 
-/// Stamp costs and target values used by the stamper and the announce
-/// builder. The defaults are the protocol constants; tests lower them so a
-/// grind finishes quickly.
+/// Stamp target values used by the stamper and the announce builder. The
+/// defaults are the protocol constants, overridden by the `[stamps]` config
+/// section; tests lower them so a grind finishes quickly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StampTargets {
-    /// Value a persisted destination stamp must still reach to be reused
-    /// (`Transport.DESTINATION_COST`).
-    pub destination_cost: u8,
-    /// Target value for a freshly ground destination stamp
-    /// (`Transport.DESTINATION_VALUE`).
+    /// Default target value for destination stamps
+    /// (`Transport.DESTINATION_VALUE`). A destination may target more with
+    /// [`Destination::set_value`], never less.
     pub destination_value: u8,
     /// Target value for a path request stamp (`Transport.PR_VALUE`).
     pub path_request_value: u8,
@@ -69,10 +67,27 @@ pub struct StampTargets {
 impl Default for StampTargets {
     fn default() -> Self {
         Self {
-            destination_cost: constants::DESTINATION_STAMP_COST,
             destination_value: constants::DESTINATION_STAMP_VALUE,
             path_request_value: constants::PATH_REQUEST_STAMP_VALUE,
         }
+    }
+}
+
+impl From<&crate::config::StampsSection> for StampTargets {
+    fn from(stamps: &crate::config::StampsSection) -> Self {
+        Self {
+            destination_value: stamps.destination_value,
+            path_request_value: stamps.pr_value,
+        }
+    }
+}
+
+impl StampTargets {
+    /// The stamp value `dest` must hold, and is ground at, when announced
+    /// (Destination.py `target_value`): a persisted stamp below it is
+    /// regenerated.
+    pub fn destination_target(&self, dest: &Destination) -> u8 {
+        dest.effective_target_value(self.destination_value)
     }
 }
 
@@ -180,6 +195,8 @@ struct Inner {
     event_tx: EventSender,
     stamp_store: Mutex<Option<DestinationStampStore>>,
     targets: Mutex<StampTargets>,
+    /// `Transport.PR_STAMP_TIMEOUT`.
+    path_request_timeout: Mutex<Duration>,
     pr_stamp_cache: Mutex<PathRequestStampCache>,
 }
 
@@ -200,6 +217,13 @@ impl Inner {
     fn targets(&self) -> StampTargets {
         *self
             .targets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn path_request_timeout(&self) -> Duration {
+        *self
+            .path_request_timeout
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -253,6 +277,9 @@ impl Stamper {
                 event_tx,
                 stamp_store: Mutex::new(stamp_store),
                 targets: Mutex::new(targets),
+                path_request_timeout: Mutex::new(Duration::from_secs(
+                    constants::PATH_REQUEST_STAMP_TIMEOUT,
+                )),
                 pr_stamp_cache: Mutex::new(PathRequestStampCache::new(
                     PATH_REQUEST_STAMP_CACHE_MAX,
                 )),
@@ -280,6 +307,21 @@ impl Stamper {
             .targets
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = targets;
+    }
+
+    /// How long a path request stamp may take before the request is dropped
+    /// (`Transport.PR_STAMP_TIMEOUT`, `[stamps] pr_stamp_timeout`).
+    pub fn path_request_timeout(&self) -> Duration {
+        self.inner.path_request_timeout()
+    }
+
+    /// Set the path request stamp timeout.
+    pub fn set_path_request_timeout(&self, timeout: Duration) {
+        *self
+            .inner
+            .path_request_timeout
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = timeout;
     }
 
     /// `Transport.pr_stamp_material`.
@@ -435,6 +477,11 @@ fn worker_main(inner: Arc<Inner>) {
 }
 
 /// `Transport.stamp_path_request`, posting the result to the driver.
+///
+/// Grinding is bounded by `PR_STAMP_TIMEOUT`: upstream runs the job under a
+/// watchdog that calls `cancel_work` past the deadline, and cancels the
+/// emission when no stamp results (Transport.py:3977-3993, d7749b0b). A
+/// cancelled grind is not cached.
 fn stamp_path_request(inner: &Inner, job: PathRequestStampJob) {
     let material = Stamper::path_request_stamp_material(&job.destination_hash, &job.tag);
     let stamp = match inner.cached_path_request_stamp(&material) {
@@ -442,7 +489,14 @@ fn stamp_path_request(inner: &Inner, job: PathRequestStampJob) {
         None => {
             let target = inner.targets().path_request_value;
             let started = std::time::Instant::now();
-            match crate::stamps::generate_stamp(&material, target, constants::STAMP_LENGTH, 0) {
+            let deadline = started.checked_add(inner.path_request_timeout());
+            match crate::stamps::generate_stamp_until(
+                &material,
+                target,
+                constants::STAMP_LENGTH,
+                0,
+                deadline,
+            ) {
                 Some((stamp, value)) => {
                     log::debug!(
                         "Generated path request stamp with value {value} for {:02x?} in {:?}",
@@ -565,9 +619,9 @@ mod tests {
 
     fn fast_targets() -> StampTargets {
         StampTargets {
-            destination_cost: 6,
             destination_value: 6,
             path_request_value: 6,
+            ..Default::default()
         }
     }
 
@@ -802,9 +856,9 @@ mod tests {
             &name_hash,
         );
         let (stamp, value) = store
-            .load(&dest.hash.0, &material, fast_targets().destination_cost)
+            .load(&dest.hash.0, &material, fast_targets().destination_value)
             .expect("stamp persisted");
-        assert!(value >= u32::from(fast_targets().destination_cost));
+        assert!(value >= u32::from(fast_targets().destination_value));
         let ext = &wire_app_data[1..];
         assert_eq!(ext[0], constants::EXT_PAYLOAD_MARKER);
         assert_eq!(
@@ -839,7 +893,7 @@ mod tests {
             .unwrap();
             let mut validated = announce.validate(&dest.hash.0).unwrap();
             assert_eq!(
-                validated.apply_stamp(&dest.hash.0, fast_targets().destination_cost),
+                validated.apply_stamp(&dest.hash.0, fast_targets().destination_value),
                 rns_core::announce::AnnounceStampStatus::Valid
             );
             assert_eq!(validated.app_data.as_deref(), Some(b"app".as_slice()));
@@ -877,5 +931,84 @@ mod tests {
             assert!(Instant::now() < deadline, "worker did not stop");
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn path_request_timeout_defaults_to_upstream_and_is_settable() {
+        let (tx, _rx) = event::channel();
+        let stamper = Stamper::new(tx, None);
+        assert_eq!(
+            stamper.path_request_timeout(),
+            Duration::from_secs(constants::PATH_REQUEST_STAMP_TIMEOUT)
+        );
+        stamper.set_path_request_timeout(Duration::from_millis(20));
+        assert_eq!(stamper.path_request_timeout(), Duration::from_millis(20));
+    }
+
+    #[test]
+    fn path_request_stamp_timeout_cancels_emission() {
+        // Transport.stamp_path_request (d7749b0b): a watchdog cancels the
+        // grind after PR_STAMP_TIMEOUT and the request is not emitted.
+        let (tx, rx) = event::channel();
+        let stamper = Stamper::with_targets(
+            tx,
+            None,
+            StampTargets {
+                path_request_value: constants::STAMP_COST_CAP,
+                ..fast_targets()
+            },
+        );
+        stamper.set_path_request_timeout(Duration::from_millis(50));
+        let started = Instant::now();
+        stamp_path_request(&stamper.inner, pr_job(0xEE, 0x03, Some(2)));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the grind must stop at the timeout"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no stamped path request is emitted after a timeout"
+        );
+        assert_eq!(
+            stamper.cached_path_request_stamps(),
+            0,
+            "a cancelled grind is not cached"
+        );
+
+        // The same job at a reachable value within the timeout is emitted.
+        stamper.set_targets(fast_targets());
+        stamper.set_path_request_timeout(Duration::from_secs(60));
+        stamp_path_request(&stamper.inner, pr_job(0xEE, 0x03, Some(2)));
+        let event = rx.recv_timeout(RECV_TIMEOUT).unwrap();
+        assert!(matches!(event, Event::SendStampedPathRequest(_)));
+    }
+
+    #[test]
+    fn destination_target_value_is_clamped_between_default_and_cap() {
+        // Destination.target_value = min(STAMP_COST_CAP,
+        // max(_target_value, DESTINATION_VALUE)).
+        let (job, _) = announce_job(0x55);
+        let mut dest = job.dest;
+        let targets = StampTargets::default();
+        assert_eq!(targets.destination_value, 25);
+        assert_eq!(targets.destination_target(&dest), 25);
+        dest.set_value(10);
+        assert_eq!(
+            targets.destination_target(&dest),
+            25,
+            "a lower target still generates at least the default"
+        );
+        dest.set_value(40);
+        assert_eq!(targets.destination_target(&dest), 40);
+        dest.set_value(u8::MAX);
+        assert_eq!(dest.target_value, Some(constants::STAMP_COST_CAP));
+        assert_eq!(targets.destination_target(&dest), constants::STAMP_COST_CAP);
+        // A configured default above the destination's own target wins.
+        dest.set_value(30);
+        let raised = StampTargets {
+            destination_value: 35,
+            ..targets
+        };
+        assert_eq!(raised.destination_target(&dest), 35);
     }
 }

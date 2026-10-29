@@ -96,8 +96,9 @@ pub const STAMP_COST_CAP: u8 = 100;
 /// Default required announce stamp cost.
 pub const DESTINATION_STAMP_COST: u8 = 23;
 
-/// Default target stamp value for emitted announces.
-pub const DESTINATION_STAMP_VALUE: u8 = 23;
+/// Default target stamp value for emitted announces (upstream
+/// `Transport.DESTINATION_VALUE`, raised from 23 to 25 in d7749b0b).
+pub const DESTINATION_STAMP_VALUE: u8 = 25;
 
 /// Default required path request stamp cost.
 pub const PATH_REQUEST_STAMP_COST: u8 = 19;
@@ -116,8 +117,9 @@ pub const STAMP_DESTINATIONS: bool = false;
 pub const STAMP_PRS: bool = false;
 
 /// Whether link requests emitted by this instance are stamped when the
-/// destination announces a cost.
-pub const STAMP_LRS: bool = true;
+/// destination announces a cost. Off by default since upstream d7749b0b;
+/// `[stamps] stamp_lrs` enables it.
+pub const STAMP_LRS: bool = false;
 
 /// Whether link request stamp requirements are enforced.
 pub const LR_STAMPS_ENFORCED: bool = false;
@@ -127,6 +129,15 @@ pub const LINK_COST_CAP: u8 = 40;
 
 /// Timeout for deferred link request stamp generation (seconds).
 pub const LINK_STAMP_TIMEOUT: u64 = 15;
+
+/// Timeout for path request stamp generation on the stamper worker
+/// (seconds, upstream `Transport.PR_STAMP_TIMEOUT`). Emission of the request
+/// is cancelled when no stamp is found in time.
+pub const PATH_REQUEST_STAMP_TIMEOUT: u64 = 15;
+
+/// Lower bound applied to the configurable stamp generation timeouts
+/// (`lr_stamp_timeout`, `pr_stamp_timeout`), in seconds.
+pub const STAMP_TIMEOUT_MIN: f64 = 0.020;
 
 const _: () = assert!(DESTINATION_STAMP_COST <= STAMP_COST_CAP);
 const _: () = assert!(PATH_REQUEST_STAMP_COST <= STAMP_COST_CAP);
@@ -216,10 +227,12 @@ pub const TRANSPORT_TUNNEL: u8 = 0x03;
 /// Maximum hops
 pub const PATHFINDER_M: u8 = 128;
 
-/// Inbound packets whose hop count has reached this limit are dropped before
-/// the packet filter and counted per interface as `hop_limiter_hits`
-/// (upstream `Transport.HOP_LIMITER`, which upstream notes should become
-/// locally configurable).
+/// Default transport hop limiter (upstream `Transport.HOP_LIMITER`).
+/// Inbound packets whose hop count has reached the node's hop limiter are
+/// dropped before the packet filter and counted per interface as
+/// `hop_limiter_hits`. The limiter is a runtime value configured with
+/// `[reticulum] hop_limiter`, clamped to `1..=PATHFINDER_M`; packets with a
+/// hop count at or above `PATHFINDER_M` already fail to decode.
 pub const HOP_LIMITER: u8 = PATHFINDER_M;
 
 // --- PATHFINDER algorithm ---
@@ -761,11 +774,23 @@ mod tests {
         assert_eq!(PATH_REQUEST_STAMPED_LENGTH, 64);
         assert_eq!(EXT_PAYLOAD_MARKER, 0xC1);
         assert_eq!(DESTINATION_STAMP_COST, 23);
-        assert_eq!(DESTINATION_STAMP_VALUE, 23);
+        assert_eq!(DESTINATION_STAMP_VALUE, 25);
         assert_eq!(PATH_REQUEST_STAMP_COST, 19);
         assert_eq!(PATH_REQUEST_STAMP_VALUE, 19);
         assert_eq!(LINK_REQUEST_STAMP_COST, 11);
         assert_eq!(LINK_COST_CAP, 40);
         assert_eq!(LINK_STAMP_TIMEOUT, 15);
+        assert_eq!(PATH_REQUEST_STAMP_TIMEOUT, 15);
+        assert_eq!(HOP_LIMITER, PATHFINDER_M);
+        // Generation, emission and enforcement all stay opt-in in 1.6.0
+        // (upstream d7749b0b turned STAMP_LRS off as well).
+        let opt_in = [
+            STAMPS_ENFORCED,
+            LR_STAMPS_ENFORCED,
+            STAMP_DESTINATIONS,
+            STAMP_PRS,
+            STAMP_LRS,
+        ];
+        assert_eq!(opt_in, [false; 5]);
     }
 }

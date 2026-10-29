@@ -6199,3 +6199,114 @@ fn test_pr190_one_hop_via_shared_instance_still_injects_h2() {
     assert_eq!(&raw[2..18], &daemon_id);
     assert_eq!(&raw[18..], &packet.raw[2..]);
 }
+
+// --- Configurable stamp requirements (upstream d7749b0b `[stamps]`) ---
+
+fn stamp_ext_payload(stamp_byte: u8) -> Vec<u8> {
+    let mut ext = vec![constants::EXT_PAYLOAD_MARKER, 0x00];
+    ext.extend_from_slice(&[stamp_byte; constants::STAMP_LENGTH]);
+    ext.push(constants::LINK_REQUEST_STAMP_COST);
+    ext
+}
+
+#[test]
+fn stamp_requirements_default_to_the_protocol_constants() {
+    let engine = TransportEngine::new(make_config(true));
+    assert_eq!(
+        engine.stamp_requirements(),
+        StampRequirements {
+            enforced: constants::STAMPS_ENFORCED,
+            destination_cost: constants::DESTINATION_STAMP_COST,
+            path_request_cost: constants::PATH_REQUEST_STAMP_COST,
+        }
+    );
+}
+
+#[test]
+fn enforced_announce_stamps_use_the_configured_destination_cost() {
+    // Transport.inbound with STAMPS_ENFORCED drops announces whose stamp does
+    // not reach DESTINATION_COST (Identity.py:766, Transport.py:2105); both
+    // are set from `[stamps] enforce_stamps` / `destination_cost`.
+    let mut engine = TransportEngine::new(make_config(false));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+    // Not enforced: an unstamped announce installs a path.
+    let (unstamped, _) = signed_announce_packet(0x31, None);
+    feed_announce(&mut engine, &unstamped, 1000.0);
+    assert!(engine.has_path(&unstamped.destination_hash));
+
+    let mut requirements = StampRequirements {
+        enforced: true,
+        destination_cost: 0,
+        path_request_cost: constants::PATH_REQUEST_STAMP_COST,
+    };
+    engine.set_stamp_requirements(requirements);
+
+    let (unstamped, _) = signed_announce_packet(0x32, None);
+    feed_announce(&mut engine, &unstamped, 1000.0);
+    assert!(
+        !engine.has_path(&unstamped.destination_hash),
+        "enforced stamps drop unstamped announces"
+    );
+
+    // Any stamp meets a configured cost of zero.
+    let ext = stamp_ext_payload(0xA5);
+    let (stamped, _) = signed_announce_packet(0x33, Some(&ext));
+    feed_announce(&mut engine, &stamped, 1000.0);
+    assert!(engine.has_path(&stamped.destination_hash));
+
+    // The same stamp falls short of a cost at the protocol cap.
+    requirements.destination_cost = constants::STAMP_COST_CAP;
+    engine.set_stamp_requirements(requirements);
+    let (stamped, _) = signed_announce_packet(0x34, Some(&ext));
+    feed_announce(&mut engine, &stamped, 1000.0);
+    assert!(!engine.has_path(&stamped.destination_hash));
+}
+
+#[test]
+fn enforced_path_request_stamps_use_the_configured_cost() {
+    // Transport.path_request_handler with STAMPS_ENFORCED ignores requests
+    // whose stamp does not reach PR_COST (Transport.py:3847, 3964).
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+    let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
+    ext[0] = constants::EXT_PAYLOAD_MARKER;
+    ext[2..].copy_from_slice(&[0xAA; constants::STAMP_LENGTH]);
+
+    let unstamped = make_transport_path_request_data(&[0xE1; 16], &[0x99; 16], &[0x01; 16]);
+    assert_eq!(
+        engine
+            .handle_path_request(&unstamped, InterfaceId(1), 1000.0)
+            .len(),
+        1,
+        "not enforced by default"
+    );
+
+    let mut requirements = StampRequirements {
+        enforced: true,
+        destination_cost: constants::DESTINATION_STAMP_COST,
+        path_request_cost: 0,
+    };
+    engine.set_stamp_requirements(requirements);
+    let unstamped = make_transport_path_request_data(&[0xE2; 16], &[0x99; 16], &[0x02; 16]);
+    assert!(engine
+        .handle_path_request(&unstamped, InterfaceId(1), 1000.0)
+        .is_empty());
+    let stamped = make_stamped_path_request_data(&[0xE3; 16], &[0x99; 16], &[0x03; 16], &ext);
+    assert_eq!(
+        engine
+            .handle_path_request(&stamped, InterfaceId(1), 1000.0)
+            .len(),
+        1,
+        "any stamp meets a configured cost of zero"
+    );
+
+    requirements.path_request_cost = constants::STAMP_COST_CAP;
+    engine.set_stamp_requirements(requirements);
+    let stamped = make_stamped_path_request_data(&[0xE4; 16], &[0x99; 16], &[0x04; 16], &ext);
+    assert!(engine
+        .handle_path_request(&stamped, InterfaceId(1), 1000.0)
+        .is_empty());
+}

@@ -167,6 +167,8 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) stamp_path_requests: bool,
     /// `Transport.LR_STAMPS_ENFORCED` default.
     pub(crate) lr_stamps_enforced: bool,
+    /// `Transport.STAMP_LRS` default.
+    pub(crate) stamp_link_requests: bool,
     #[cfg(feature = "hooks")]
     pub(crate) provider_queue_max_events: usize,
     #[cfg(feature = "hooks")]
@@ -784,6 +786,15 @@ pub struct Driver {
     /// `Transport.STAMP_DESTINATIONS`, shared with the node handle whose
     /// announce API reads it; settable as `global.stamp_destinations`.
     pub(crate) stamp_destinations: Arc<AtomicBool>,
+    /// The `[stamps]` config section this node started with. Link request
+    /// stamping reads `stamp_lrs` and `lr_stamp_timeout` from it; the other
+    /// options are applied to the engine, the stamper and the node handle at
+    /// startup.
+    pub(crate) stamp_settings: crate::config::StampsSection,
+    /// Inbound packets whose hop count reaches this limit are dropped and
+    /// counted as `hop_limiter_hits` (`Transport.HOP_LIMITER`, set from
+    /// `[reticulum] hop_limiter`).
+    pub(crate) hop_limiter: u8,
     /// Maximum queued outbound frames per interface writer worker.
     pub(crate) interface_writer_queue_capacity: usize,
     /// Linux mark inherited by dynamically created IP underlay sockets.
@@ -954,6 +965,7 @@ impl Driver {
             stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
             stamp_path_requests: rns_core::constants::STAMP_PRS,
             lr_stamps_enforced: rns_core::constants::LR_STAMPS_ENFORCED,
+            stamp_link_requests: rns_core::constants::STAMP_LRS,
             #[cfg(feature = "hooks")]
             provider_queue_max_events: crate::provider_bridge::ProviderBridgeConfig::default()
                 .queue_max_events,
@@ -1014,6 +1026,8 @@ impl Driver {
             ),
             stamper: Arc::new(crate::stamper::Stamper::new(tx.clone(), None)),
             stamp_destinations: Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS)),
+            stamp_settings: crate::config::StampsSection::default(),
+            hop_limiter: rns_core::constants::HOP_LIMITER,
             event_tx: tx,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             underlay_mark: None,
@@ -1377,6 +1391,44 @@ impl Driver {
     /// same priority queues as upstream's single stamper thread.
     pub(crate) fn set_stamper(&mut self, stamper: Arc<crate::stamper::Stamper>) {
         self.stamper = stamper;
+    }
+
+    /// Apply the `[stamps]` config section and `[reticulum] hop_limiter`,
+    /// as `Reticulum.__apply_config` sets the `Transport` attributes before
+    /// transport starts (Reticulum.py, d7749b0b). The configured flags also
+    /// become the defaults the `global.stamp_*` runtime keys reset to.
+    ///
+    /// Call after [`Self::set_stamper`] and
+    /// [`Self::set_stamp_destinations_flag`], which this updates in place.
+    pub(crate) fn apply_stamp_config(
+        &mut self,
+        stamps: &crate::config::StampsSection,
+        hop_limiter: u8,
+    ) {
+        self.engine.set_stamp_requirements(stamps.requirements());
+        self.engine.set_stamp_prs(stamps.stamp_prs);
+        self.stamp_destinations
+            .store(stamps.stamp_destinations, Ordering::Relaxed);
+        self.stamper
+            .set_targets(crate::stamper::StampTargets::from(stamps));
+        self.stamper
+            .set_path_request_timeout(stamps.path_request_stamp_timeout());
+        self.runtime_config_defaults.stamp_destinations = stamps.stamp_destinations;
+        self.runtime_config_defaults.stamp_path_requests = stamps.stamp_prs;
+        self.runtime_config_defaults.stamp_link_requests = stamps.stamp_lrs;
+        self.runtime_config_defaults.lr_stamps_enforced = stamps.lr_stamps_enforced;
+        // The per-destination cost table shared with the node API and the
+        // announce builder: `lr_cost` is `Transport.LR_COST`, the cost of
+        // destinations that call no `set_link_cost`.
+        let link_request_costs = self.link_manager.link_request_costs();
+        link_request_costs.set_default_cost(stamps.lr_cost);
+        link_request_costs.set_enforced(stamps.lr_stamps_enforced);
+        self.stamp_settings = stamps.clone();
+        self.hop_limiter = hop_limiter;
+        // Transport.start (Transport.py:521).
+        if hop_limiter != rns_core::constants::PATHFINDER_M {
+            log::debug!("Transport hop limit set to {hop_limiter}");
+        }
     }
 
     /// Share the node handle's `STAMP_DESTINATIONS` flag so runtime config

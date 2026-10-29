@@ -1072,6 +1072,13 @@ impl Driver {
                         }
                         Err(err) => Err(err),
                     },
+                    "global.stamp_link_requests" => match Self::expect_bool(value, &key) {
+                        Ok(value) => {
+                            self.stamp_settings.stamp_lrs = value;
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    },
                     "global.direct_connect_policy" => {
                         let policy = match Self::parse_holepunch_policy(&value) {
                             Some(policy) => policy,
@@ -1189,6 +1196,10 @@ impl Driver {
                         self.link_manager
                             .link_request_costs()
                             .set_enforced(defaults.lr_stamps_enforced);
+                        Ok(())
+                    }
+                    "global.stamp_link_requests" => {
+                        self.stamp_settings.stamp_lrs = defaults.stamp_link_requests;
                         Ok(())
                     }
                     "global.direct_connect_policy" => {

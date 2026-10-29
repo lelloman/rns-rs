@@ -95,11 +95,12 @@ pub fn clamp_link_cost(cost: i64) -> u8 {
 
 /// The link request cost a destination announces and requires.
 ///
-/// Mirrors `Destination.get_link_cost`: the configured cost, or the default
-/// `Transport.LR_COST` when none was set, clamped to `STAMP_COST_CAP`.
-pub fn announced_link_cost(configured: Option<u8>) -> u8 {
+/// Mirrors `Destination.get_link_cost`: the configured cost, or `default`
+/// (`Transport.LR_COST`, settable through `[stamps] lr_cost`) when none was
+/// set, clamped to `STAMP_COST_CAP`.
+pub fn announced_link_cost(configured: Option<u8>, default: u8) -> u8 {
     configured
-        .unwrap_or(crate::constants::LINK_REQUEST_STAMP_COST)
+        .unwrap_or(default)
         .min(crate::constants::STAMP_COST_CAP)
 }
 
@@ -119,14 +120,13 @@ mod tests {
 
     #[test]
     fn announced_link_cost_defaults_to_lr_cost() {
+        let lr_cost = crate::constants::LINK_REQUEST_STAMP_COST;
+        assert_eq!(announced_link_cost(None, lr_cost), lr_cost);
+        assert_eq!(announced_link_cost(None, 9), 9);
+        assert_eq!(announced_link_cost(Some(0), lr_cost), 0);
+        assert_eq!(announced_link_cost(Some(17), 9), 17);
         assert_eq!(
-            announced_link_cost(None),
-            crate::constants::LINK_REQUEST_STAMP_COST
-        );
-        assert_eq!(announced_link_cost(Some(0)), 0);
-        assert_eq!(announced_link_cost(Some(17)), 17);
-        assert_eq!(
-            announced_link_cost(Some(u8::MAX)),
+            announced_link_cost(Some(u8::MAX), lr_cost),
             crate::constants::STAMP_COST_CAP
         );
     }
