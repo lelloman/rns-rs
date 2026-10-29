@@ -250,6 +250,9 @@ impl QueueState {
 struct QueueShared {
     local_ratchets: crate::local_ratchet::Registry,
     link_sends: Arc<crate::link_send::SendPool>,
+    /// Link and interface statistics the driver publishes for readers that
+    /// must not queue behind other events.
+    state_snapshot: crate::state_snapshot::SnapshotCell,
     async_waiters: Mutex<Vec<std::sync::Weak<crate::link_send::Waiter>>>,
     /// Length of `async_waiters` as of its last update, read without the lock
     /// on every receive. Registration stores it before the sender's queue
@@ -548,6 +551,10 @@ impl EventSender {
 
     pub(crate) fn link_send_pool(&self) -> &Arc<crate::link_send::SendPool> {
         &self.shared.link_sends
+    }
+
+    pub(crate) fn state_snapshot(&self) -> &crate::state_snapshot::SnapshotCell {
+        &self.shared.state_snapshot
     }
 
     pub(crate) async fn send_async(
@@ -1214,6 +1221,7 @@ pub(crate) fn channel_with_queue_capacities(
     let shared = Arc::new(QueueShared {
         local_ratchets: Default::default(),
         link_sends: crate::link_send::SendPool::new(control_capacity),
+        state_snapshot: Default::default(),
         async_waiters: Mutex::new(Vec::new()),
         async_waiter_count: AtomicUsize::new(0),
         state: Mutex::new(QueueState::new()),

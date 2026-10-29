@@ -872,6 +872,8 @@ pub struct Driver {
     pub(crate) discovery_cleanup_interval_ticks: u32,
     /// Tick counter for periodic MEMSTATS logging (every 300 ticks = ~5 min).
     pub(crate) memory_stats_counter: u32,
+    /// When to republish the link/interface statistics snapshot.
+    pub(crate) state_snapshot_schedule: crate::state_snapshot::PublishSchedule,
     /// Tick counter for periodic memory/cache cleanup (every ~3600 ticks = ~1 hour).
     pub(crate) cache_cleanup_counter: u32,
     /// Tick counter for incremental announce-cache cleanup scheduling.
@@ -1062,6 +1064,7 @@ impl Driver {
             discovery_cleanup_interval_ticks: runtime_config_defaults
                 .discovery_cleanup_interval_ticks,
             memory_stats_counter: 0,
+            state_snapshot_schedule: Default::default(),
             cache_cleanup_counter: 0,
             announce_cache_cleanup_counter: 0,
             known_destinations_cleanup_interval_ticks: runtime_config_defaults
