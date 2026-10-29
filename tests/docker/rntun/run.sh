@@ -41,7 +41,7 @@ fi
 
 if [[ "${SKIP_BUILD:-false}" != "true" ]]; then
   echo "=== Building rns-test image with rntun ==="
-  docker build -t rns-test -f "${REPO_ROOT}/tests/docker/Dockerfile" "$REPO_ROOT"
+  docker build --build-arg CARGO_BUILD_JOBS --build-arg CARGO_PROFILE_RELEASE_CODEGEN_UNITS -t rns-test -f "${REPO_ROOT}/tests/docker/Dockerfile" "$REPO_ROOT"
 fi
 
 echo "=== Starting rntun Linux acceptance topology ==="

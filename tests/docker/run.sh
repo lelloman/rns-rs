@@ -81,7 +81,7 @@ PORTS_FILE="${SCRIPT_DIR}/configs/${TOPOLOGY}/ports.env"
 # ── Build Docker image ────────────────────────────────────────────────────────
 
 echo "=== Building rns-test Docker image ==="
-docker build -t rns-test -f "${SCRIPT_DIR}/Dockerfile" "$REPO_ROOT"
+docker build --build-arg CARGO_BUILD_JOBS --build-arg CARGO_PROFILE_RELEASE_CODEGEN_UNITS -t rns-test -f "${SCRIPT_DIR}/Dockerfile" "$REPO_ROOT"
 
 # ── Generate topology ─────────────────────────────────────────────────────────
 

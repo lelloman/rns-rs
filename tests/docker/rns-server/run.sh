@@ -60,6 +60,8 @@ fi
 
 echo "=== Building rns-server-test Docker image (${RNS_SERVER_FEATURES}) ==="
 docker build \
+  --build-arg CARGO_BUILD_JOBS \
+  --build-arg CARGO_PROFILE_RELEASE_CODEGEN_UNITS \
   --build-arg "RNS_SERVER_FEATURES=${RNS_SERVER_FEATURES}" \
   -t rns-server-test \
   -f "${SCRIPT_DIR}/Dockerfile.rns-server" \

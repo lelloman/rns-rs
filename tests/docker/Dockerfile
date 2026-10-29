@@ -1,9 +1,23 @@
 FROM rust:1.96.0-bookworm AS builder
 WORKDIR /build
-# Keep release compilation reliable on memory-constrained Docker hosts.
-ENV CARGO_BUILD_JOBS=1 \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+# Build settings shared with rns-server/Dockerfile.rns-server: both images
+# use the same rns-docker-target cache, and cargo only reuses a dependency
+# when the profile matches, so these must stay identical in both files.
+# On a memory-constrained Docker host, export CARGO_BUILD_JOBS=1 and
+# CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 before running the suite; the run
+# scripts pass them through as build args.
+ARG CARGO_BUILD_JOBS=default
+ARG CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=$CARGO_PROFILE_RELEASE_CODEGEN_UNITS \
     RUST_MIN_STACK=67108864
+RUN rustup target add wasm32-unknown-unknown
+# The workspace build scripts declare rerun-if-changed on ../.git/HEAD and
+# ../.git/refs. The build context has no .git, and cargo treats a missing
+# rerun-if-changed path as always stale, so every build reran every build
+# script and recompiled every workspace crate. Stand in old, unchanging
+# paths so a source edit only rebuilds the crates that depend on it.
+RUN mkdir -p .git/refs && touch -d @0 .git/HEAD .git/refs
 COPY Cargo.toml Cargo.lock ./
 COPY build build
 COPY rns-crypto rns-crypto
@@ -19,7 +33,6 @@ COPY rns-server rns-server
 COPY rns-tun rns-tun
 COPY rns-tun-android rns-tun-android
 COPY tools/rns-bench tools/rns-bench
-RUN rustup target add wasm32-unknown-unknown
 RUN --mount=type=cache,id=rns-docker-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=rns-docker-target,target=/build/target \
     cargo build --release --bin rns-ctl --bin rns-sentineld --features rns-hooks-wasm \
