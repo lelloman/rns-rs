@@ -82,9 +82,16 @@ impl InterfaceFactory for PausedTcpFactory {
 /// Both ends' interface counters and link entries, printed with the outcome.
 /// Locally confirmed sends arriving short at the receiver has only ever been
 /// seen on CI, so the next failure there has to say where the packets went.
+///
+/// Reads the published state snapshots rather than querying: a query waits
+/// behind every queued event, which on a backlogged driver both delays the
+/// report and perturbs the run being reported. The counters may lag by up to
+/// one driver tick, so each side's snapshot age is printed with them.
 fn describe_endpoints(alice: &RnsNode, bob: &RnsNode, link: [u8; 16]) -> String {
-    let interfaces = |node: &RnsNode| match node.query(QueryRequest::InterfaceStats) {
-        Ok(QueryResponse::InterfaceStats(stats)) => stats
+    let describe = |node: &RnsNode| {
+        let snapshot = node.state_snapshot();
+        let interfaces = snapshot
+            .interfaces
             .interfaces
             .iter()
             .map(|i| {
@@ -104,16 +111,16 @@ fn describe_endpoints(alice: &RnsNode, bob: &RnsNode, link: [u8; 16]) -> String 
                 )
             })
             .collect::<Vec<_>>()
-            .join("; "),
-        other => format!("{other:?}"),
+            .join("; ");
+        format!(
+            "snapshot #{} ({:.3}s old)\n  interfaces: {}\n  link: {:?}",
+            snapshot.sequence,
+            rns_net::time::now() - snapshot.published_at,
+            interfaces,
+            snapshot.link(&link)
+        )
     };
-    format!(
-        "alice interfaces: {}\nalice link: {:?}\nbob interfaces: {}\nbob link: {:?}",
-        interfaces(alice),
-        alice.query_link(link),
-        interfaces(bob),
-        bob.query_link(link)
-    )
+    format!("alice {}\nbob {}", describe(alice), describe(bob))
 }
 
 #[test]

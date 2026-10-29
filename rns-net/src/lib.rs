@@ -62,6 +62,7 @@ pub mod rpc;
 pub mod serial;
 pub mod stamper;
 pub mod stamps;
+pub mod state_snapshot;
 pub mod storage;
 pub mod storage_sqlite;
 pub use common::compressor;
@@ -153,6 +154,7 @@ pub use rpc::{RpcAddr, RpcClient, RpcServer};
 pub use serial::Parity;
 #[cfg(feature = "iface-local")]
 pub use shared_client::SharedClientConfig;
+pub use state_snapshot::StateSnapshot;
 pub use storage::{
     FsRatchetStore, KnownDestination, RatchetCleanupStats, RatchetEntry, RatchetStore, StoragePaths,
 };

@@ -510,6 +510,7 @@ impl Driver {
                 }
             }
         }
+        self.publish_state_snapshot();
     }
 
     pub(super) fn sample_interface_traffic(&mut self, now: f64) {
@@ -639,6 +640,7 @@ impl Driver {
         new_writer: Option<Box<dyn crate::interface::Writer>>,
         info: Option<rns_core::transport::types::InterfaceInfo>,
     ) {
+        self.state_snapshot_schedule.mark_dirty();
         let wants_tunnel;
         let mut replay_shared_announces = false;
         if let Some(mut info) = info {
@@ -763,6 +765,7 @@ impl Driver {
         writer: Box<dyn crate::interface::Writer>,
         mut registration: crate::event::DynamicInterfaceRegistration,
     ) {
+        self.state_snapshot_schedule.mark_dirty();
         let parent_id = registration.parent_id;
         if self.retired_interface_parents.contains(&parent_id) {
             return;
@@ -847,6 +850,7 @@ impl Driver {
     }
 
     pub(crate) fn handle_interface_down_event(&mut self, id: InterfaceId) {
+        self.state_snapshot_schedule.mark_dirty();
         self.event_tx.remove_interface(id);
         if let Some(entry) = self.interfaces.get(&id) {
             if let Some(tunnel_id) = entry.info.tunnel_id {
@@ -1018,6 +1022,12 @@ impl Driver {
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
             self.dispatch_link_actions(actions);
             self.flush_pending_link_frames();
+            if self
+                .state_snapshot_schedule
+                .needs_publish(self.link_manager.link_count())
+            {
+                self.publish_state_snapshot();
+            }
             if !self.rx.has_prefetched() {
                 self.wake_writers();
             }
@@ -1040,6 +1050,13 @@ impl Driver {
             // Bound output latency, and keep serving sockets, while other
             // threads keep the queue from emptying.
             unflushed += 1;
+            // A tick queued behind a long backlog would leave the snapshot
+            // stale for as long as the backlog takes to drain.
+            let tick_interval =
+                Duration::from_millis(self.tick_interval_ms.load(Ordering::Relaxed));
+            if self.state_snapshot_schedule.event_handled(tick_interval) {
+                self.publish_state_snapshot();
+            }
             if unflushed >= WRITER_FLUSH_EVENTS {
                 self.flush_writers();
                 unflushed = 0;

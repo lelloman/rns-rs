@@ -12744,3 +12744,111 @@ fn driver_stays_responsive_while_a_stamp_is_being_ground() {
     );
     assert!(started.elapsed() >= Duration::from_secs(3));
 }
+
+#[test]
+fn state_snapshot_publishes_links_and_interfaces_on_tick() {
+    let mut driver = new_test_driver();
+    let info = make_interface_info(1);
+    driver.engine.register_interface(info);
+    let (writer, _sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let (link_id, _) = driver.link_manager.create_link(
+        &[0xDD; 16],
+        &[0xAA; 32],
+        1,
+        constants::MTU as u32,
+        &mut OsRng,
+    );
+    let tx = driver.event_tx.clone();
+
+    let before = tx.state_snapshot().load();
+    assert_eq!(before.sequence, 0);
+    assert!(before.links.is_empty());
+
+    driver.handle_tick_event();
+
+    let snapshot = tx.state_snapshot().load();
+    assert_eq!(snapshot.sequence, 1);
+    assert!(snapshot.published_at > 0.0);
+    let QueryResponse::Links(links) = driver.handle_query(QueryRequest::Links) else {
+        panic!("expected links");
+    };
+    let exact = links.iter().find(|link| link.link_id == link_id).unwrap();
+    let published = snapshot.link(&link_id).expect("link in the snapshot");
+    assert_eq!(published.state, exact.state);
+    assert_eq!(published.dest_hash, [0xDD; 16]);
+    assert_eq!(published.tx_packets, exact.tx_packets);
+    assert_eq!(published.tx_bytes, exact.tx_bytes);
+    assert_eq!(snapshot.interfaces.interfaces.len(), 1);
+    assert_eq!(snapshot.interfaces.total_links, 1);
+    // A reader keeps the copy it loaded; the next tick publishes a new one.
+    driver.handle_tick_event();
+    assert_eq!(tx.state_snapshot().load().sequence, 2);
+    assert_eq!(snapshot.sequence, 1);
+}
+
+#[test]
+fn state_snapshot_publishes_new_link_without_waiting_for_a_tick() {
+    let mut driver = new_test_driver();
+    // No timer thread runs in this test, so only a state change publishes.
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(3_600_000)));
+    let tx = driver.event_tx.clone();
+    let handle = thread::spawn(move || driver.run());
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(Event::CreateLink {
+        dest_hash: [0xDD; 16],
+        dest_sig_pub_bytes: [0xAA; 32],
+        response_tx: resp_tx,
+    })
+    .unwrap();
+    let link_id = resp_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // The driver publishes before taking the next event, so after this
+    // ordered query the snapshot holds the link.
+    let (query_tx, query_rx) = mpsc::channel();
+    tx.send(Event::query(QueryRequest::LinkCount, query_tx))
+        .unwrap();
+    query_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let snapshot = tx.state_snapshot().load();
+    assert!(snapshot.sequence >= 1);
+    assert!(snapshot.link(&link_id).is_some());
+
+    tx.send(Event::Shutdown).unwrap();
+    handle.join().unwrap();
+}
+
+#[test]
+fn state_snapshot_read_does_not_wait_on_a_full_queue() {
+    let (tx, rx) = event::channel_with_capacity(4);
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(
+        make_transport_config(false),
+        rx,
+        tx.clone(),
+        Box::new(callbacks),
+    );
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+    driver.link_manager.create_link(
+        &[0xDD; 16],
+        &[0xAA; 32],
+        1,
+        constants::MTU as u32,
+        &mut OsRng,
+    );
+    driver.handle_tick_event();
+
+    // Nothing consumes the queue: a query would wait behind these forever.
+    while tx.try_send(Event::Tick).is_ok() {}
+    assert!(matches!(
+        tx.try_send(Event::Tick),
+        Err(mpsc::TrySendError::Full(_))
+    ));
+
+    let started = Instant::now();
+    let snapshot = tx.state_snapshot().load();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(snapshot.sequence, 1);
+    assert_eq!(snapshot.links.len(), 1);
+}

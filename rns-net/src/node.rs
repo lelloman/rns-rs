@@ -2596,6 +2596,51 @@ impl RnsNode {
             .find(|link| link.link_id == link_id))
     }
 
+    /// The link and interface statistics the driver last published, read
+    /// without a driver round trip.
+    ///
+    /// Unlike [`query`](Self::query), [`links`](Self::links) and
+    /// [`query_link`](Self::query_link), which queue behind every earlier
+    /// control event and answer exactly at that point, this returns at once
+    /// even while the driver works through a long backlog or is blocked, for
+    /// example in a callback. The price is freshness and ordering: the driver
+    /// republishes on every tick (`global.tick_interval_ms`, 1 s by default)
+    /// and as soon as a link or interface changes state, so the snapshot may
+    /// lag by up to one tick, plus however long the driver has been blocked,
+    /// and it is not a barrier: events sent before the call, sends included,
+    /// may not be reflected yet. Before the first publish the snapshot is
+    /// empty with `sequence == 0`.
+    pub fn state_snapshot(&self) -> Arc<crate::state_snapshot::StateSnapshot> {
+        self.tx.state_snapshot().load()
+    }
+
+    /// Links as of the last published [`state_snapshot`](Self::state_snapshot).
+    ///
+    /// May lag by up to one tick and is not ordered after earlier events; use
+    /// [`links`](Self::links) for an exact, ordered answer.
+    pub fn snapshot_links(&self) -> Vec<crate::event::LinkInfoEntry> {
+        self.state_snapshot().links.clone()
+    }
+
+    /// One link as of the last published
+    /// [`state_snapshot`](Self::state_snapshot), or None if it was not known
+    /// then.
+    ///
+    /// May lag by up to one tick and is not ordered after earlier events; use
+    /// [`query_link`](Self::query_link) for an exact, ordered answer.
+    pub fn snapshot_link(&self, link_id: [u8; 16]) -> Option<crate::event::LinkInfoEntry> {
+        self.state_snapshot().link(&link_id).cloned()
+    }
+
+    /// Interface statistics as of the last published
+    /// [`state_snapshot`](Self::state_snapshot).
+    ///
+    /// May lag by up to one tick and is not ordered after earlier events; use
+    /// `query(QueryRequest::InterfaceStats)` for an exact, ordered answer.
+    pub fn snapshot_interfaces(&self) -> crate::event::InterfaceStatsResponse {
+        self.state_snapshot().interfaces.clone()
+    }
+
     /// Return the slowest positive bitrate among currently registered interfaces.
     ///
     /// Returns `Ok(None)` when no registered interface advertises a usable

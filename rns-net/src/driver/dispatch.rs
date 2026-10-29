@@ -1646,6 +1646,14 @@ impl Driver {
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
         for action in actions {
+            if matches!(
+                action,
+                LinkManagerAction::LinkEstablished { .. }
+                    | LinkManagerAction::LinkClosed { .. }
+                    | LinkManagerAction::RemoteIdentified { .. }
+            ) {
+                self.state_snapshot_schedule.mark_dirty();
+            }
             match action {
                 LinkManagerAction::SendPacket {
                     raw,

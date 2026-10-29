@@ -3275,6 +3275,120 @@ fn test_resource_accept_app() {
     transport.shutdown();
 }
 
+#[test]
+fn test_state_snapshot_answers_while_driver_is_blocked() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let alice_id = Identity::new(&mut OsRng);
+    let bob_id = Identity::new(&mut OsRng);
+    let bob_dest =
+        Destination::single_in(APP_NAME, &["snap", "wedge"], IdentityHash(*bob_id.hash()));
+
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice_node = start_client_node(port, &alice_id, Box::new(TestCallbacks::new(alice_tx)));
+
+    // Bob's resource-accept callback locks this flag on the driver thread,
+    // so holding it blocks Bob's driver.
+    let resource_flag = Arc::new(Mutex::new(true));
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_callbacks =
+        TestCallbacks::with_flags(bob_tx, Arc::new(Mutex::new(true)), resource_flag.clone());
+    let bob_node = Arc::new(start_client_node(port, &bob_id, Box::new(bob_callbacks)));
+    bob_node
+        .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
+        .unwrap();
+
+    std::thread::sleep(SETTLE);
+    announce_with_retry(&bob_node, &bob_dest, &bob_id, None, &alice_rx).unwrap();
+    let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
+    bob_node
+        .register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0)
+        .unwrap();
+    let link_id = alice_node
+        .create_link(bob_dest.hash.0, bob_sig_pub)
+        .unwrap();
+    wait_for_link_established(&alice_rx, TIMEOUT).unwrap();
+    wait_for_link_established(&bob_rx, TIMEOUT).unwrap();
+    bob_node.set_resource_strategy(link_id, 2).unwrap();
+
+    // The snapshot reflects the established link and its counters.
+    let deadline = Instant::now() + TIMEOUT;
+    let published = loop {
+        if let Some(entry) = bob_node
+            .snapshot_link(link_id)
+            .filter(|entry| entry.state == "active" && entry.rx_packets > 0)
+        {
+            break entry;
+        }
+        assert!(Instant::now() < deadline, "link never published as active");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let exact = bob_node.query_link(link_id).unwrap().unwrap();
+    assert_eq!(published.dest_hash, exact.dest_hash);
+    assert!(!published.is_initiator);
+    assert!(published.rx_packets <= exact.rx_packets);
+    let interfaces = bob_node.snapshot_interfaces();
+    assert!(!interfaces.interfaces.is_empty());
+    assert!(interfaces.interfaces.iter().any(|i| i.rx_packets > 0));
+
+    // Wedge Bob's driver in the resource-accept callback.
+    let held = resource_flag.lock().unwrap();
+    alice_node
+        .send_resource(link_id, vec![0x42; 50], None)
+        .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let blocked_query = loop {
+        let node = Arc::clone(&bob_node);
+        let (answered_tx, answered_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = answered_tx.send(node.query(QueryRequest::LinkCount).is_ok());
+        });
+        match answered_rx.recv_timeout(Duration::from_millis(300)) {
+            Ok(_) => {
+                assert!(Instant::now() < deadline, "Bob's driver never blocked");
+            }
+            Err(_) => break answered_rx,
+        }
+    };
+
+    // The query waits on the blocked driver; the snapshot does not.
+    let started = Instant::now();
+    let snapshot = bob_node.state_snapshot();
+    let link = bob_node.snapshot_link(link_id);
+    let interfaces = bob_node.snapshot_interfaces();
+    assert!(started.elapsed() < Duration::from_millis(250));
+    assert!(snapshot.sequence > 0);
+    assert_eq!(link.map(|entry| entry.state), Some("active".to_string()));
+    assert!(!interfaces.interfaces.is_empty());
+    assert!(bob_node
+        .snapshot_links()
+        .iter()
+        .any(|entry| entry.link_id == link_id));
+    assert!(blocked_query
+        .recv_timeout(Duration::from_millis(200))
+        .is_err());
+
+    drop(held);
+    assert_eq!(blocked_query.recv_timeout(TIMEOUT), Ok(true));
+    wait_for_resource_received(&bob_rx, TIMEOUT).expect("resource after the driver resumed");
+
+    alice_node.teardown_link(link_id).unwrap();
+    alice_node.shutdown();
+    // The probing threads have answered; wait for them to drop their handles.
+    let mut bob_node = bob_node;
+    loop {
+        match Arc::try_unwrap(bob_node) {
+            Ok(node) => break node.shutdown(),
+            Err(shared) => {
+                bob_node = shared;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    transport.shutdown();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // 11. Channel Messages
 // ═══════════════════════════════════════════════════════════════════════════════

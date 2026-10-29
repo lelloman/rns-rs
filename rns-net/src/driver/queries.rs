@@ -67,6 +67,10 @@ impl Driver {
     }
 
     pub(crate) fn handle_interface_stats_query(&self) -> QueryResponse {
+        QueryResponse::InterfaceStats(self.interface_stats())
+    }
+
+    pub(crate) fn interface_stats(&self) -> InterfaceStatsResponse {
         let now = time::now();
         let mut interfaces = Vec::new();
         let mut total_rxb: u64 = 0;
@@ -275,7 +279,7 @@ impl Driver {
         let (path_pool_total, path_pool_unused) = self.engine.path_pool_counts();
         let total_links = self.engine.link_table_count() + self.link_manager.link_count();
         let active_links = self.engine.active_link_count() + self.link_manager.active_link_count();
-        QueryResponse::InterfaceStats(InterfaceStatsResponse {
+        InterfaceStatsResponse {
             interfaces,
             transport_id: self.engine.identity_hash().copied(),
             transport_enabled: self.engine.transport_enabled(),
@@ -302,7 +306,36 @@ impl Driver {
             backbone_peer_pool: self.backbone_peer_pool_status(),
             #[cfg(not(feature = "iface-backbone"))]
             backbone_peer_pool: None,
-        })
+        }
+    }
+
+    /// Managed links with their local send backlog.
+    pub(crate) fn link_info_entries(&self) -> Vec<crate::event::LinkInfoEntry> {
+        let counts = self.event_tx.link_send_pool().snapshot();
+        let mut links = self.link_manager.link_entries();
+        for link in &mut links {
+            if let Some(counts) = counts.get(&link.link_id) {
+                link.pending_send_packets = counts.pending;
+                link.waiting_send_packets = counts.waiting;
+            }
+        }
+        links
+    }
+
+    /// Replace the shared link and interface statistics snapshot that
+    /// `RnsNode::state_snapshot` reads without a driver round trip.
+    pub(crate) fn publish_state_snapshot(&mut self) {
+        let links = self.link_info_entries();
+        let interfaces = self.interface_stats();
+        let sequence = self.state_snapshot_schedule.published(links.len());
+        self.event_tx
+            .state_snapshot()
+            .store(crate::state_snapshot::StateSnapshot {
+                sequence,
+                published_at: time::now(),
+                links,
+                interfaces,
+            });
     }
 
     pub(crate) fn handle_path_table_query(&self, max_hops: Option<u8>) -> QueryResponse {
@@ -759,17 +792,7 @@ impl Driver {
                     .collect();
                 QueryResponse::LocalDestinations(entries)
             }
-            QueryRequest::Links => {
-                let counts = self.event_tx.link_send_pool().snapshot();
-                let mut links = self.link_manager.link_entries();
-                for link in &mut links {
-                    if let Some(counts) = counts.get(&link.link_id) {
-                        link.pending_send_packets = counts.pending;
-                        link.waiting_send_packets = counts.waiting;
-                    }
-                }
-                QueryResponse::Links(links)
-            }
+            QueryRequest::Links => QueryResponse::Links(self.link_info_entries()),
             QueryRequest::Resources => {
                 QueryResponse::Resources(self.link_manager.resource_entries())
             }
