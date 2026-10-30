@@ -2,18 +2,21 @@
 
 ## Scope and Baseline
 
-- audit date: `2026-10-29` (commit 5 integrated `2026-10-30`)
+- audit date: `2026-10-29` (commit 5 integrated `2026-10-30`; extended to
+  commit 15 on `2026-10-30`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`
-  (extended on 2026-10-29 from the earlier tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` (provisional; rgit may advance before promotion)
-- target root tree: `fbe3e36e3e2f2efa06abd4d2d67ff0f523edfebc`
-- target `RNS` tree: `0ecaafa6adab1b5e0ba71fcca195df11faac7b52`
+- target tag or ref: `rgit:master` tip `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`
+  (extended on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
+  and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
+- target normative commit: `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` (provisional; rgit may advance before promotion)
+- target root tree: `53c78882e8623cb930a27f44f7f73454da81e846`
+- target `RNS` tree: `62151b00a54326194fd91d94157bfe37bf0dfbfb`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`
-- commits in range: `5` (2 inventoried at the first tip, 3 added when rgit advanced the same day)
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`
+- commits in range: `15` (2 inventoried at the first tip, 3 added when rgit
+  advanced the same day, 10 added on 2026-10-30)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`
@@ -28,6 +31,13 @@ enables generation and emission by default and 1.6.2 activates enforcement.
 By the evening refresh (2026-10-29T20:24Z) rgit had advanced to `a8cc6cb2`
 (committed 2026-10-29T20:01Z) with three further commits, inventoried as 3 to
 5 below; `RNS.__version__` is still `1.6.0`.
+
+The 2026-10-30 refresh found rgit at `5b2b8afb` (committed
+2026-10-30T12:41Z), ten commits past `a8cc6cb2`, inventoried as 6 to 15. The
+GitHub mirror is still at `e40191b3`, behind the baseline. The new range
+announces the 1.6.0 release in the changelog, still without a version bump or
+tag, and changes the announce wire format: the link request cost in the stamp
+extension grows from one byte to two to carry a fraction (commit 9).
 
 ## Audit Vocabulary
 
@@ -56,6 +66,16 @@ Every commit in the audited range must appear exactly once.
 | 3 | `78fb90ea6f30baf7201a3fb79ec224bb5c1ca3c1` | Implemented fractional-value stamps | Integrated | `4d317ee`; `rns_crypto::stamp_value` with the verbatim `TAB` pinned by `TAB_DIGEST`/`PRM_DIGEST`, fixed-point `StampValue` replacing the integer value in validation, known destinations, path and link request stamps, discovery and the stamp store; floats on storage, RPC, API and `rnstatus`; integer values from earlier versions load as whole bits |
 | 4 | `5f46fc6b4846b71929de62dc18c9fa0f3e9d651a` | Updated changelog | Non-runtime | `Changelog.md` adds the `hop_limiter` option, integrated under commit 1; not vendored and no runtime counterpart. Mapping landed. |
 | 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Integrated | `7993f1e`; fixed-point `StampCost` and `target_from_fp` behind `stamp_valid` and the key grinder, defaults 23.5 / 25 / 19.8 / 19.8 / 19.2, `STAMP_LRS = true`, `[stamps] always_stamp_lrs` and `global.always_stamp_link_requests`, docs; the link request cost fallback implements the documented intent rather than the expression as written (deliberate divergence, see analysis); stamped link keys ground on a thread per core |
+| 6 | `2c142973bfb9b0ce6f46fa781d7ade4b81c796f0` | Cleanup (path request stamp diagnostics) | Integrated | Path request stamp diagnostics on the pathing target, with the new lenient-relay message |
+| 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Needs port | |
+| 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Needs port | |
+| 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Needs coordinated port | |
+| 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Needs port | |
+| 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Needs port | |
+| 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Needs port | |
+| 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Needs coordinated port | |
+| 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Needs port | |
+| 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Needs port | |
 
 ## Per-Commit Analysis
 
@@ -391,6 +411,26 @@ upstream.
 
 **Final disposition:** Integrated, with the documented link request
 divergence.
+
+### 6. `2c142973` — Cleanup (path request stamp diagnostics)
+
+**Upstream change:** the transitional path request stamp diagnostics in
+`Transport.inbound` move from `LOG_DEBUG` to `LOG_PATHING`. Every request
+whose extension carries the marker now logs its value, as "Stamped path
+request" or, when the flags byte is the `0xFF` sentinel of a stamp-aware
+relay, as "Lenient-relayed path request", before the existing invalid or
+unstamped-relay messages. "Unrecognized stamp payload" moves to
+`LOG_PATHING` too.
+
+**Rust applicability:** Applicable, logging only. The Rust messages were at
+debug level and the value was only logged for valid stamps.
+
+**Local handling and evidence:** `parse_path_request` logs on the pathing
+target (Reticulum level 7) in upstream's order: the value as stamped or
+lenient-relayed, then the reason the stamp fails. Unstamped requests stay at
+trace. Covered by the existing path request tests; no behavior changed.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 

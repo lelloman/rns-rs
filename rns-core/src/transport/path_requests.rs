@@ -263,17 +263,19 @@ impl TransportEngine {
         let mut carried_stamp_value = None;
         let mut stamped = false;
         if constants::STAMPS_ENABLED {
-            // Diagnostics follow upstream 5d38ce30: stamped requests log their
-            // value, unstamped relays from stamp-aware nodes (0xFF sentinel)
-            // are noted on the pathing target, and plain unstamped requests
-            // stay at trace until enforcement makes them a drop.
+            // Diagnostics follow upstream 2c142973: every request carrying a
+            // stamp extension logs its value on the pathing target, as stamped
+            // or, for the 0xFF sentinel of a stamp-aware relay, as
+            // lenient-relayed, followed by why it fails when it does. Plain
+            // unstamped requests stay at trace until enforcement makes them a
+            // drop.
             let valid = match ext_payload {
                 None => {
                     log::trace!("Unstamped path request for {:02x?}", &destination_hash[..4]);
                     false
                 }
                 Some(ext) if ext[0] != constants::EXT_PAYLOAD_MARKER => {
-                    log::debug!(
+                    log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                         "Unrecognized stamp payload in path request for {:02x?}",
                         &destination_hash[..4]
                     );
@@ -293,18 +295,25 @@ impl TransportEngine {
                     );
                     carried_stamp_value = Some(value);
                     stamped = valid;
-                    if valid {
-                        log::debug!(
+                    let relayed = ext[1] == constants::PR_FLAG_UNSTAMPED_RELAY;
+                    if relayed {
+                        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                            "Lenient-relayed path request for {:02x?} with value {value}",
+                            &destination_hash[..4]
+                        );
+                    } else {
+                        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                             "Stamped path request for {:02x?} with value {value}",
                             &destination_hash[..4]
                         );
-                    } else if ext[1] == constants::PR_FLAG_UNSTAMPED_RELAY {
+                    }
+                    if !valid && relayed {
                         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                             "Unstamped relayed path request from stamp-aware node for {:02x?}",
                             &destination_hash[..4]
                         );
-                    } else {
-                        log::debug!(
+                    } else if !valid {
+                        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                             "Invalid or insufficient (v:{value}) path request stamp for {:02x?}",
                             &destination_hash[..4]
                         );
