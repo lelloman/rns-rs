@@ -19,7 +19,8 @@
   advanced the same day, 10 added on 2026-10-30)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
-  on `worktree-agent-a301172e8aa4682a6` from `a2b603d`
+  on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
+  integrated on `dev` from `7911858`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -66,16 +67,16 @@ Every commit in the audited range must appear exactly once.
 | 3 | `78fb90ea6f30baf7201a3fb79ec224bb5c1ca3c1` | Implemented fractional-value stamps | Integrated | `4d317ee`; `rns_crypto::stamp_value` with the verbatim `TAB` pinned by `TAB_DIGEST`/`PRM_DIGEST`, fixed-point `StampValue` replacing the integer value in validation, known destinations, path and link request stamps, discovery and the stamp store; floats on storage, RPC, API and `rnstatus`; integer values from earlier versions load as whole bits |
 | 4 | `5f46fc6b4846b71929de62dc18c9fa0f3e9d651a` | Updated changelog | Non-runtime | `Changelog.md` adds the `hop_limiter` option, integrated under commit 1; not vendored and no runtime counterpart. Mapping landed. |
 | 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Integrated | `7993f1e`; fixed-point `StampCost` and `target_from_fp` behind `stamp_valid` and the key grinder, defaults 23.5 / 25 / 19.8 / 19.8 / 19.2, `STAMP_LRS = true`, `[stamps] always_stamp_lrs` and `global.always_stamp_link_requests`, docs; the link request cost fallback implemented the documented intent rather than the expression as written (a divergence until upstream fixed the line in commit 7); stamped link keys ground on a thread per core |
-| 6 | `2c142973bfb9b0ce6f46fa781d7ade4b81c796f0` | Cleanup (path request stamp diagnostics) | Integrated | Path request stamp diagnostics on the pathing target, with the new lenient-relay message |
-| 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Integrated | `outbound_link_stamp_cost` follows the corrected fallback, `LR_COST` only for a missing announced cost; ends the commit 5 divergence |
-| 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Structurally covered | `STAMP_COST_CAP` and `LINK_COST_CAP` were never floats in Rust (`u8` 100 and 40, `u32` 100 for `StampCost`) |
-| 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Integrated | Two-byte fractional link cost in the announce extension (`EXT_PAYLOAD_LENGTH` 18), fractional link costs through the API, cost table, known destinations, storage (`REAL` columns), RPC and API, `as_float` for `[stamps]`, `required_discovery_value` and `discovery_stamp_value`, fractional `Destination::set_value`; the responder check implements the intent of an inverted upstream test (divergence, see analysis) |
-| 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Integrated | Defaults `PR_COST`/`PR_VALUE` 15.8 and `LR_COST` 12.5, the `rnsd --exampleconfig` values, docs and the Docker suite; the default config's commented `[stamps]` section has no generated counterpart (rns-rs writes no default config) and is pinned by the config parse test |
-| 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Structurally covered | A Rust link exists only once its keys do (`complete_create_link` after the stamped grind), with a fixed `[u8; 16]` id, so there is no id-less link to format |
-| 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Non-runtime | `Changelog.md` 1.6.0 release notes (phased stamp rollout, storage, sharding) and "cost-aware interface discovery and auto-connects", integrated under commit 13; not vendored |
-| 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
-| 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | Trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
-| 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | Spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
+| 6 | `2c142973bfb9b0ce6f46fa781d7ade4b81c796f0` | Cleanup (path request stamp diagnostics) | Integrated | `c615075`; path request stamp diagnostics on the pathing target, with the new lenient-relay message |
+| 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Integrated | `2d5540b`; `outbound_link_stamp_cost` follows the corrected fallback, `LR_COST` only for a missing announced cost; ends the commit 5 divergence |
+| 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Structurally covered | `62e5f68`; `STAMP_COST_CAP` and `LINK_COST_CAP` were never floats in Rust (`u8` 100 and 40, `u32` 100 for `StampCost`) |
+| 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Integrated | `2ee3d65`; two-byte fractional link cost in the announce extension (`EXT_PAYLOAD_LENGTH` 18), fractional link costs through the API, cost table, known destinations, storage (`REAL` columns), RPC and API, `as_float` for `[stamps]`, `required_discovery_value` and `discovery_stamp_value`, fractional `Destination::set_value`; the responder check implements the intent of an inverted upstream test (divergence, see analysis) |
+| 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Integrated | `8cfb5f7`; defaults `PR_COST`/`PR_VALUE` 15.8 and `LR_COST` 12.5, the `rnsd --exampleconfig` values, docs and the Docker suite; the default config's commented `[stamps]` section has no generated counterpart (rns-rs writes no default config) and is pinned by the config parse test |
+| 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Structurally covered | `8d6d562`; a Rust link exists only once its keys do (`complete_create_link` after the stamped grind), with a fixed `[u8; 16]` id, so there is no id-less link to format |
+| 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Non-runtime | `8177ac8`; `Changelog.md` 1.6.0 release notes (phased stamp rollout, storage, sharding) and "cost-aware interface discovery and auto-connects", integrated under commit 13; not vendored |
+| 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `d9207a4`; `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
+| 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | `4c97527`; trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
+| 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | `2bf64fa`; spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
 
 ## Per-Commit Analysis
 
@@ -749,19 +750,25 @@ behavior from the earlier, already audited range.
 
 ## Integration Plan
 
-All five commits are integrated. Remaining before promotion: the gates below,
-and reporting the `Link.py:311` precedence to upstream. If upstream confirms
-the expression as written, `outbound_link_stamp_cost` must follow it.
+All fifteen commits have a final disposition. The `Link.py:311` precedence of
+commit 5 was corrected upstream in commit 7 before it was reported. Remaining
+before promotion: the gates below, and reporting the inverted
+`Link.validate_request` stamp check of commit 9 to upstream. If upstream
+confirms that expression as written, the `LinkManager` responder check must
+follow it.
 
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
-- [x] Fixture provenance and byte stability are checked where applicable
-  (not applicable: no pinned fixture changed and the range changes no wire
-  encoding).
+- [x] Fixture provenance and byte stability are checked where applicable.
+  No pinned fixture changed. Commit 9 changes the announce stamp extension;
+  its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
+  14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
+  covers both formats.
 - [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
-  `5f46fc6b` and the current tip `a8cc6cb2`; rerun if rgit advances.
+  `5f46fc6b`, `a8cc6cb2`, `796ef2d4` and the current tip `5b2b8afb`; rerun if
+  rgit advances.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -771,7 +778,8 @@ the expression as written, `outbound_link_stamp_cost` must follow it.
   full docker-e2e matrix, release builds, VPS smoke and hardware gates were
   not run.
   Not run: release and cross builds, the Docker matrix (notably
-  `21_stamped_emission.sh`), the dual-VPS smoke and hardware validation.
+  `21_stamped_emission.sh`, which now expects an `lr_cost` of 12.5), the
+  dual-VPS smoke and hardware validation.
 - [x] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`. Per the
   README workflow the parity record is written at promotion, after the
@@ -867,3 +875,25 @@ The first full run after moving the link key grind onto the rayon pool failed
 `discovery_announcer_emits_local_synthetic_announce`. Concurrent tests that
 grind unattainable link costs to a deadline were holding every pool thread.
 Dedicated threads fixed it; both suites then passed twice.
+
+### Commits 6 to 15 (rgit tip `5b2b8afb`)
+
+Run on 2026-10-30 at `2bf64fa` (on `7911858`), same host. Interop against
+`796ef2d4` and `5b2b8afb` used the disposable worktree checked out at each
+commit.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | `cargo test -p rns-core`; `cargo test -p rns-net --lib`; `cargo test -p rns-net --test e2e` | All passed (rns-net lib 1,230; e2e 66) |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,046 passed, 0 failed, 11 ignored |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,105 passed, 0 failed, 11 ignored |
+| Feature checks | `cargo check -p rns-cli -p rns-ctl --bins --no-default-features`, and with `--features iface-tcp,rns-hooks-native` | Clean |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4 (one-byte extension: the Python-stamped announce reads as unstamped with its 17 extension bytes in the app data, and the Rust-announced link cost test skips); 9/9 |
+| Interop, `796ef2d4` | `python_interop` | 4/4 (two-byte extension, Rust cost-8.5 stamped link request, Python cost-9.25 request accepted by the enforcing Rust responder) |
+| Interop, target `5b2b8afb` | `python_interop`; `utility_interop -- --include-ignored` | 4/4 (Python value 25.03515625); 9/9 |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+The first workspace run failed two e2e peer pool tests whose cached
+discovered peers announced `RNS 1.5.5`, below the new auto-connect minimum
+of 1.5.7; the commit 13 port updates them. The second run passed.
