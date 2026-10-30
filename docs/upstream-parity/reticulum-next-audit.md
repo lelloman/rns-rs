@@ -2,7 +2,7 @@
 
 ## Scope and Baseline
 
-- audit date: `2026-10-29`
+- audit date: `2026-10-29` (commit 5 integrated `2026-10-30`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
@@ -55,7 +55,7 @@ Every commit in the audited range must appear exactly once.
 | 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | `0d125f2`; comment-only typo in the `PR_STAMP_TIMEOUT` declaration, recorded on the native constant |
 | 3 | `78fb90ea6f30baf7201a3fb79ec224bb5c1ca3c1` | Implemented fractional-value stamps | Integrated | `4d317ee`; `rns_crypto::stamp_value` with the verbatim `TAB` pinned by `TAB_DIGEST`/`PRM_DIGEST`, fixed-point `StampValue` replacing the integer value in validation, known destinations, path and link request stamps, discovery and the stamp store; floats on storage, RPC, API and `rnstatus`; integer values from earlier versions load as whole bits |
 | 4 | `5f46fc6b4846b71929de62dc18c9fa0f3e9d651a` | Updated changelog | Non-runtime | `Changelog.md` adds the `hop_limiter` option, integrated under commit 1; not vendored and no runtime counterpart. Mapping landed. |
-| 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Needs decision | Fractional default costs need fixed-point costs and targets; the new link request cost expression contradicts its own documentation; see analysis |
+| 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Integrated | `7993f1e`; fixed-point `StampCost` and `target_from_fp` behind `stamp_valid` and the key grinder, defaults 23.5 / 25 / 19.8 / 19.8 / 19.2, `STAMP_LRS = true`, `[stamps] always_stamp_lrs` and `global.always_stamp_link_requests`, docs; the link request cost fallback implements the documented intent rather than the expression as written (deliberate divergence, see analysis); stamped link keys ground on a thread per core |
 
 ## Per-Commit Analysis
 
@@ -303,47 +303,110 @@ announce stamp of value 23.3 is no longer valid at the default cost (it is not
 stripped from the app data or recorded) even with enforcement off, and path
 request stamps below 19.8 are no longer counted as stamped. Generation
 targets (`DESTINATION_VALUE`, `PR_VALUE`, an `ALWAYS_STAMP_LRS` link cost of
-19.2) are fractional too. Rust costs and targets are `u8` throughout
-(`StampRequirements`, `StampTargets`, the generators), so this needs
-fixed-point costs and `target_from_fp` with a 257-bit target. The announced
-link cost stays an integer byte: `get_link_cost` applies `int()`, so the
-default announces 19.
+19.2) are fractional too. Rust costs and targets were `u8` throughout
+(`StampRequirements`, `StampTargets`, the generators), so this needed
+fixed-point costs and `target_from_fp`. The announced link cost stays an
+integer byte: `get_link_cost` applies `int()`, so the default announces 19.
+
+Interop consequence, as upstream: releases before this commit grind
+destination stamps at their old `DESTINATION_VALUE` of 23 (the 1.6.0 release)
+or 25 (`d7749b0b`). A value-23 grind lands below 23.5 about half the time,
+and such an announce from a 1.6.0 node that opted into `stamp_destinations`
+is accepted while stamps are not enforced, but keeps its stamp extension in
+the app data and records no link cost.
 
 The new `Link.__init__` expression parses as
-`(recall_link_cost(h) or LR_COST) if ALWAYS_STAMP_LRS else None`, so as
-written a link request is never stamped unless `always_stamp_lrs` is set,
-whatever cost the destination announced, and `STAMP_LRS = True` has no effect
-by default. The example config added in the same commit states the opposite.
-Which behavior to port needs a decision.
+`(recall_link_cost(h) or LR_COST) if ALWAYS_STAMP_LRS else None` (confirmed
+with `ast`: an `IfExp` whose test is `ALWAYS_STAMP_LRS`). As written, a link
+request is never stamped unless `always_stamp_lrs` is set, whatever cost the
+destination announced, and `STAMP_LRS = True` has no effect by default. The
+option's own comment ("stamp link requests even when no link cost is
+announced") and the example config of the same commit ("Link requests will
+be stamped already from 1.6.0 if a cost has been announced by the
+destination") both describe
+`recall_link_cost(h) or (LR_COST if ALWAYS_STAMP_LRS else None)`.
 
-**Local handling and evidence:** None yet.
+**Decision (2026-10-30):** port the documented intent, not the expression as
+written. This is a deliberate divergence until upstream corrects or confirms
+the line. On the wire it only changes who stamps: an rns-rs initiator stamps
+its request to a destination that announced a cost, where an `a8cc6cb2`
+Python initiator without `always_stamp_lrs` sends it unstamped. Both are
+accepted while `LR_STAMPS_ENFORCED` is off, and an enforcing Python responder
+validates the rns-rs stamp normally. The divergence should be reported
+upstream.
 
-**Final disposition:** Needs decision.
+**Local handling and evidence:** `7993f1e`.
+
+- `rns_crypto::stamp_value::StampCost` is a fixed-point cost in 1/256
+  steps. `from_f64` rounds like `cost_to_fp` (19.8 → 5069/256) and clamps to
+  `STAMP_COST_CAP`. `target()` is `target_from_fp` as a 256-bit big-endian
+  number (only a zero cost has the 2^256 target, represented as "admits
+  everything"), and `admits(product)` is the `stamp_valid` comparison. Unit
+  tests pin nine costs and six fixed-point targets to values printed by
+  upstream `a8cc6cb2`, check that whole costs reduce to the leading-zero
+  check, and check that target and value agree off the exact-target boundary.
+- `rns_core::stamp::stamp_valid`, `StampRequirements`, `StampTargets`,
+  `Destination::effective_target_value`, the `[stamps]` section, the stamp
+  store and every generator take `StampCost`; `StampValue::meets` compares
+  fixed-point values (`value < get_link_cost()`). Path request stamps are
+  validated against the target, as `path_request_stamp_valid` does, rather
+  than through the value.
+- Constants `DESTINATION_STAMP_COST` 23.5, `DESTINATION_STAMP_VALUE` 25,
+  `PATH_REQUEST_STAMP_COST`/`_VALUE` 19.8, `LINK_REQUEST_STAMP_COST` 19.2,
+  `STAMP_LRS = true`, `ALWAYS_STAMP_LRS = false`. Configured costs remain
+  whole numbers (`as_int`); a leftover `stamp_lrs` line is ignored as
+  upstream ignores it. `announced_link_cost` truncates the default to 19.
+- `Driver::outbound_link_stamp_cost` implements the decision, including
+  Python's falsy zero: an announced 0 falls back to `LR_COST` with
+  `always_stamp_lrs`. `global.always_stamp_link_requests` switches it at
+  runtime, and `global.stamp_link_requests` now defaults to true.
+- Stamped link keys are ground on one thread per core
+  (`available_parallelism`), as upstream grinds stamped keys in a process
+  per core. The grind was single-threaded, which was harmless at the old
+  default cost of 11 but averages 8.4 s at 19.2 on one core of the
+  integration host (72k attempts/s), against a 15 s timeout. Attempts scale
+  linearly (554k/s on 8 threads). The threads are dedicated rather than taken
+  from the rayon pool: a first version on the pool let a grind running to its
+  deadline stall path request and discovery stamps, which three driver tests
+  caught.
+- The aborted-generation logs of `generate_stamp`/`generate_stamped_key` have
+  no counterpart: the Rust generators return `None` with no value, and the
+  link stamp timeout was already logged (as a warning).
+- Tests: `outbound_link_stamp_cost_prefers_the_announced_cost` (six cases
+  plus the configured fallback),
+  `create_link_is_stamped_without_an_announced_cost_when_always_stamp_lrs_is_set`,
+  `create_link_is_not_stamped_when_stamp_lrs_is_off`,
+  `runtime_config_stamp_link_requests_defaults_on_and_can_be_turned_off`,
+  `stamps_section_ignores_the_removed_stamp_lrs_option`,
+  `stamps_section_costs_are_whole_numbers`, the `StampCost` vectors above,
+  and the updated config, runtime-config, stamper, e2e and Docker
+  (`21_stamped_emission.sh`, now comparing fractional values with `jq`)
+  expectations.
+- `python_interop`: the Python helper grinds its destination stamp to at
+  least the Rust cost rounded up (24), so the baseline's value-23 grind cannot
+  fall below 23.5. The Python-initiated stamped link test sets
+  `Transport.ALWAYS_STAMP_LRS` where it exists, because an `a8cc6cb2` Python
+  initiator only stamps with it. Enabling it in the shared config instead made
+  Python stamp every link at 19.2 and timed out the bidirectional test.
+
+**Final disposition:** Integrated, with the documented link request
+divergence.
 
 ## Integration Plan
 
-1. Decide the link request stamping behavior for commit 5: port the
-   expression as written (only `always_stamp_lrs` stamps), or the documented
-   intent (`recall_link_cost(h) or (LR_COST if ALWAYS_STAMP_LRS else None)`),
-   recording the divergence either way.
-2. Fixed-point costs and targets: `target_from_fp`, fractional
-   `DESTINATION_COST`, `PR_COST`, `LR_COST`, `DESTINATION_VALUE` and
-   `PR_VALUE` through `StampRequirements`, `StampTargets`, the stamper and
-   both generators, keeping the announced link cost an integer byte.
-3. `[stamps] always_stamp_lrs` replacing `stamp_lrs`, `STAMP_LRS = true`, the
-   runtime key, the link stamp timeout notice, and the documentation.
+All five commits are integrated. Remaining before promotion: the gates below,
+and reporting the `Link.py:311` precedence to upstream. If upstream confirms
+the expression as written, `outbound_link_stamp_cost` must follow it.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition. Commit 5 needs a
-  decision.
-- [ ] Focused regressions pass for every applicable behavior change.
-  Commits 1 to 4 pass; commit 5 is not integrated.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable
   (not applicable: no pinned fixture changed and the range changes no wire
   encoding).
-- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`
-  and at `5f46fc6b`; not yet run at the current tip `a8cc6cb2`.
+- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+  `5f46fc6b` and the current tip `a8cc6cb2`; rerun if rgit advances.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -424,3 +487,28 @@ Run on 2026-10-29 at `4d317ee` (on `a0bbaf4`, tree-identical to `fb6bc90`), same
 | Interop, baseline `5d38ce30` | `python_interop` | 4/4 (Python value 24, whole parts match) |
 | Interop, `5f46fc6b` | `python_interop`; `utility_interop -- --include-ignored` | 4/4 (Python value 25.78125, matched exactly); 9/9 |
 | Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+### Cleanup and parameter tuning
+
+Run on 2026-10-30 at `7993f1e` (on `ea0727b`), same host. Interop against
+`a8cc6cb2` used the disposable worktree of that commit.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | `cargo test -p rns-crypto --lib stamp_value`; `cargo test -p rns-core`; `cargo test -p rns-net --features rns-hooks --lib` | All passed (rns-net lib 1,241) |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace`, twice | 3,037 passed, 0 failed, 11 ignored each run |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks`, twice | 3,096 passed, 0 failed, 11 ignored each run |
+| Feature checks | `cargo check -p rns-cli -p rns-ctl --bins --no-default-features`, and with `--features iface-tcp,rns-hooks-native` | Clean |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4 (Python value 24); 9/9 |
+| Interop, target `a8cc6cb2` | the same against the `a8cc6cb2` worktree | 4/4 (Python value 25.46875; Rust cost-8 stamped link request in about 1 ms); 9/9 |
+| Upstream parse | `ast.parse` of `Link.py:311` | `IfExp` with test `ALWAYS_STAMP_LRS`, body `recall_link_cost(...) or LR_COST`, else `None` |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion; `21_stamped_emission.sh` changed and is unexercised |
+
+The first full run after moving the link key grind onto the rayon pool failed
+`own_path_request_with_stamp_prs_is_stamped_off_thread_then_broadcast`,
+`stamp_path_request_action_sends_the_stamped_request_on_that_interface_only`,
+`stamped_link_keys_give_up_at_deadline` and, in the hooks suite,
+`discovery_announcer_emits_local_synthetic_announce`. Concurrent tests that
+grind unattainable link costs to a deadline were holding every pool thread.
+Dedicated threads fixed it; both suites then passed twice.
