@@ -49,26 +49,20 @@ impl Driver {
     }
 
     /// The cost to stamp an outbound link request to `dest_hash` at, before
-    /// `STAMP_LRS` is applied: the announced cost, else `LR_COST` when
-    /// `ALWAYS_STAMP_LRS` is set.
+    /// `STAMP_LRS` and the non-zero check are applied: the announced cost,
+    /// else `LR_COST` when `ALWAYS_STAMP_LRS` is set.
     ///
-    /// Upstream a8cc6cb2 writes this as
-    /// `recall_link_cost(h) or LR_COST if ALWAYS_STAMP_LRS else None`
-    /// (Link.py:311). Python parses that as
-    /// `(recall_link_cost(h) or LR_COST) if ALWAYS_STAMP_LRS else None`, which
-    /// ignores announced costs unless `always_stamp_lrs` is set. That
-    /// contradicts both the option's description ("even when no link cost is
-    /// announced") and the example config of the same commit (link requests
-    /// are stamped "if a cost has been announced by the destination"), so this
-    /// implements the documented intent,
-    /// `recall_link_cost(h) or (LR_COST if ALWAYS_STAMP_LRS else None)`.
+    /// Upstream `Link.__init__` since 34bb4ac8: `stamp_cost =
+    /// recall_link_cost(h)`, then `LR_COST` only when that is `None` and
+    /// `ALWAYS_STAMP_LRS` is set. An announced cost of 0 is kept, so the
+    /// request goes unstamped.
     pub(crate) fn outbound_link_stamp_cost(&self, dest_hash: &[u8; 16]) -> Option<StampCost> {
         match self.recall_link_cost(dest_hash) {
-            Some(cost) if cost > 0 => Some(StampCost::from_whole(u32::from(cost))),
-            _ if self.stamp_settings.always_stamp_lrs => {
+            Some(cost) => Some(StampCost::from_whole(u32::from(cost))),
+            None if self.stamp_settings.always_stamp_lrs => {
                 Some(self.link_manager.link_request_costs().default_cost())
             }
-            _ => None,
+            None => None,
         }
     }
 

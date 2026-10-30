@@ -65,9 +65,9 @@ Every commit in the audited range must appear exactly once.
 | 2 | `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738` | Fixed typo | Non-runtime | `0d125f2`; comment-only typo in the `PR_STAMP_TIMEOUT` declaration, recorded on the native constant |
 | 3 | `78fb90ea6f30baf7201a3fb79ec224bb5c1ca3c1` | Implemented fractional-value stamps | Integrated | `4d317ee`; `rns_crypto::stamp_value` with the verbatim `TAB` pinned by `TAB_DIGEST`/`PRM_DIGEST`, fixed-point `StampValue` replacing the integer value in validation, known destinations, path and link request stamps, discovery and the stamp store; floats on storage, RPC, API and `rnstatus`; integer values from earlier versions load as whole bits |
 | 4 | `5f46fc6b4846b71929de62dc18c9fa0f3e9d651a` | Updated changelog | Non-runtime | `Changelog.md` adds the `hop_limiter` option, integrated under commit 1; not vendored and no runtime counterpart. Mapping landed. |
-| 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Integrated | `7993f1e`; fixed-point `StampCost` and `target_from_fp` behind `stamp_valid` and the key grinder, defaults 23.5 / 25 / 19.8 / 19.8 / 19.2, `STAMP_LRS = true`, `[stamps] always_stamp_lrs` and `global.always_stamp_link_requests`, docs; the link request cost fallback implements the documented intent rather than the expression as written (deliberate divergence, see analysis); stamped link keys ground on a thread per core |
+| 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Integrated | `7993f1e`; fixed-point `StampCost` and `target_from_fp` behind `stamp_valid` and the key grinder, defaults 23.5 / 25 / 19.8 / 19.8 / 19.2, `STAMP_LRS = true`, `[stamps] always_stamp_lrs` and `global.always_stamp_link_requests`, docs; the link request cost fallback implemented the documented intent rather than the expression as written (a divergence until upstream fixed the line in commit 7); stamped link keys ground on a thread per core |
 | 6 | `2c142973bfb9b0ce6f46fa781d7ade4b81c796f0` | Cleanup (path request stamp diagnostics) | Integrated | Path request stamp diagnostics on the pathing target, with the new lenient-relay message |
-| 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Needs port | |
+| 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Integrated | `outbound_link_stamp_cost` follows the corrected fallback, `LR_COST` only for a missing announced cost; ends the commit 5 divergence |
 | 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Needs port | |
 | 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Needs coordinated port | |
 | 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Needs port | |
@@ -352,8 +352,9 @@ the line. On the wire it only changes who stamps: an rns-rs initiator stamps
 its request to a destination that announced a cost, where an `a8cc6cb2`
 Python initiator without `always_stamp_lrs` sends it unstamped. Both are
 accepted while `LR_STAMPS_ENFORCED` is off, and an enforcing Python responder
-validates the rns-rs stamp normally. The divergence should be reported
-upstream.
+validates the rns-rs stamp normally. Upstream corrected the line the same
+day (commit 7, `34bb4ac8`), before it was reported, which ends the
+divergence.
 
 **Local handling and evidence:** `7993f1e`.
 
@@ -409,8 +410,8 @@ upstream.
   initiator only stamps with it. Enabling it in the shared config instead made
   Python stamp every link at 19.2 and timed out the bidirectional test.
 
-**Final disposition:** Integrated, with the documented link request
-divergence.
+**Final disposition:** Integrated. The link request divergence ended with
+commit 7.
 
 ### 6. `2c142973` — Cleanup (path request stamp diagnostics)
 
@@ -429,6 +430,30 @@ debug level and the value was only logged for valid stamps.
 target (Reticulum level 7) in upstream's order: the value as stamped or
 lenient-relayed, then the reason the stamp fails. Unstamped requests stay at
 trace. Covered by the existing path request tests; no behavior changed.
+
+**Final disposition:** Integrated.
+
+### 7. `34bb4ac8` — Cleanup (link request cost fallback)
+
+**Upstream change:** `Link.__init__` replaces the `a8cc6cb2` expression with
+`self.stamp_cost = recall_link_cost(h)` followed by
+`if self.stamp_cost == None and ALWAYS_STAMP_LRS: self.stamp_cost = LR_COST`.
+
+**Rust applicability:** Applicable. This is the documented intent that
+commit 5 already implemented, with one difference: the fallback now tests
+`== None` instead of Python truthiness, so a destination that announces cost
+0 is not stamped even with `always_stamp_lrs`. rns-rs fell back to `LR_COST`
+for an announced 0.
+
+**Local handling and evidence:** `Driver::outbound_link_stamp_cost` returns
+the announced cost whenever one was recalled, 0 included, and `LR_COST` only
+when none was. `handle_create_link` still requires a non-zero cost and
+`STAMP_LRS` before grinding. Tests:
+`outbound_link_stamp_cost_prefers_the_announced_cost` (the zero cases now
+expect cost 0) and
+`create_link_is_not_stamped_when_zero_is_announced_even_with_always_stamp_lrs`.
+The Python interop command that sets `ALWAYS_STAMP_LRS` stays, because an
+`a8cc6cb2` Python initiator still needs it.
 
 **Final disposition:** Integrated.
 

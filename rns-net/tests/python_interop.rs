@@ -626,9 +626,10 @@ try:
                      stamp_hex=stamp.hex(), link_cost=destination.get_link_cost(),
                      seconds=round(time.time() - started, 2), version=RNS.__version__)
         elif command == "always_stamp_lrs":
-            # a8cc6cb2's Link.py fallback, as written, stamps link requests
-            # only with ALWAYS_STAMP_LRS, even to destinations that announce
-            # a cost. Earlier releases have no such attribute and need none.
+            # a8cc6cb2's Link.py fallback stamps link requests only with
+            # ALWAYS_STAMP_LRS, even to destinations that announce a cost
+            # (fixed in 34bb4ac8, where it is harmless). Earlier releases
+            # have no such attribute and need none.
             if hasattr(RNS.Transport, "ALWAYS_STAMP_LRS"): RNS.Transport.ALWAYS_STAMP_LRS = True
             emit("python_always_stamp_lrs", supported=hasattr(RNS.Transport, "ALWAYS_STAMP_LRS"))
         elif command == "link_rust":
