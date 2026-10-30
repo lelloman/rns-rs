@@ -72,7 +72,7 @@ Every commit in the audited range must appear exactly once.
 | 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Integrated | Two-byte fractional link cost in the announce extension (`EXT_PAYLOAD_LENGTH` 18), fractional link costs through the API, cost table, known destinations, storage (`REAL` columns), RPC and API, `as_float` for `[stamps]`, `required_discovery_value` and `discovery_stamp_value`, fractional `Destination::set_value`; the responder check implements the intent of an inverted upstream test (divergence, see analysis) |
 | 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Integrated | Defaults `PR_COST`/`PR_VALUE` 15.8 and `LR_COST` 12.5, the `rnsd --exampleconfig` values, docs and the Docker suite; the default config's commented `[stamps]` section has no generated counterpart (rns-rs writes no default config) and is pinned by the config parse test |
 | 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Structurally covered | A Rust link exists only once its keys do (`complete_create_link` after the stamped grind), with a fixed `[u8; 16]` id, so there is no id-less link to format |
-| 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Needs port | |
+| 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Non-runtime | `Changelog.md` 1.6.0 release notes (phased stamp rollout, storage, sharding) and "cost-aware interface discovery and auto-connects", integrated under commit 13; not vendored |
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Needs coordinated port | |
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Needs port | |
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Needs port | |
@@ -619,6 +619,22 @@ builds the link and its id together; ids are fixed `[u8; 16]` arrays and
 never optional.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 12. `2e6963c3` — Updated changelog
+
+**Upstream change:** `Changelog.md` gets the 1.6.0 release notes: the SQLite
+storage backend, the memory rework, path table sharding, and the phased
+network stamp rollout (1.6.0 verifies without enforcing and stamps link
+requests to destinations that announce a cost, 1.6.1 enables emission,
+1.6.2 enforcement). It adds "cost-aware interface discovery and
+auto-connects" and moves the 1.5.7 entry below the verification
+instructions. Still no version bump or tag.
+
+**Rust applicability:** Non-runtime. The changelog is not vendored. The
+rollout matches the defaults already integrated, and the cost-aware
+discovery entry is the code of commit 13.
+
+**Final disposition:** Non-runtime; mapping only.
 
 ## Integration Plan
 
