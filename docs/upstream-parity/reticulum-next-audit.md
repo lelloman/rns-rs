@@ -70,7 +70,7 @@ Every commit in the audited range must appear exactly once.
 | 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Integrated | `outbound_link_stamp_cost` follows the corrected fallback, `LR_COST` only for a missing announced cost; ends the commit 5 divergence |
 | 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Structurally covered | `STAMP_COST_CAP` and `LINK_COST_CAP` were never floats in Rust (`u8` 100 and 40, `u32` 100 for `StampCost`) |
 | 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Integrated | Two-byte fractional link cost in the announce extension (`EXT_PAYLOAD_LENGTH` 18), fractional link costs through the API, cost table, known destinations, storage (`REAL` columns), RPC and API, `as_float` for `[stamps]`, `required_discovery_value` and `discovery_stamp_value`, fractional `Destination::set_value`; the responder check implements the intent of an inverted upstream test (divergence, see analysis) |
-| 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Needs port | |
+| 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Integrated | Defaults `PR_COST`/`PR_VALUE` 15.8 and `LR_COST` 12.5, the `rnsd --exampleconfig` values, docs and the Docker suite; the default config's commented `[stamps]` section has no generated counterpart (rns-rs writes no default config) and is pinned by the config parse test |
 | 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Needs port | |
 | 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Needs port | |
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Needs coordinated port | |
@@ -576,6 +576,35 @@ opposite.
 
 **Final disposition:** Integrated, with the documented responder check
 divergence.
+
+### 10. `f57fa265` — Cleanup (defaults, default config, changelog)
+
+**Upstream change:** `PR_COST` and `PR_VALUE` 19.8 → 15.8 and `LR_COST`
+19.2 → 12.5. The default config gains a commented-out `[stamps]` section
+listing the defaults (23.5, 25.0, 15.8, 15.8, 12.5, 15, 15) and `#####`
+section separators; the `rnsd` example config shows the fractional
+defaults. The changelog lists the stamp work, the stamper optimizations and
+"various minor bugs".
+
+**Rust applicability:** Applicable for the defaults and the example config.
+The lower costs also shorten every grind: a stamped link request to a
+destination that sets no cost now averages about 2^12.5 attempts, well below
+the 15 s timeout even single-threaded. rns-rs generates no default config
+file, so the new default config section has no counterpart; the changelog
+is not vendored.
+
+**Local handling and evidence:** `PATH_REQUEST_STAMP_COST` and
+`PATH_REQUEST_STAMP_VALUE` are `cost_to_fp(15.8)` (4045/256) and
+`LINK_REQUEST_STAMP_COST` is `cost_to_fp(12.5)` (3200/256), pinned in
+`stamp_defaults_match_upstream_parameters`. `rnsd --exampleconfig` and
+`docs/configuration.md` show the upstream defaults as fractional values, and
+`parse_default_config` now includes the upstream default config's commented
+`[stamps]` section and checks it leaves the defaults in place.
+`21_stamped_emission.sh` expects the announced `lr_cost` of 12.5. The
+dedicated link stamp threads of commit 5 stay: they cost nothing at the new
+default and keep high per-destination costs fast.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 
