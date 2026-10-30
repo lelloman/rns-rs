@@ -385,6 +385,7 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                 });
 
                 let info = InterfaceInfo {
+                    stamp_costs: Default::default(),
                     id: client_id,
                     name: format!("I2PInterface/{}", peer_addr),
                     mode: constants::MODE_FULL,
@@ -511,6 +512,7 @@ fn acceptor_loop(context: AcceptorContext) {
                 });
 
                 let info = InterfaceInfo {
+                    stamp_costs: Default::default(),
                     id: client_id,
                     name: format!("I2PInterface/{}", remote_b32),
                     mode: constants::MODE_FULL,
@@ -715,6 +717,7 @@ impl InterfaceFactory for I2pFactory {
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
+                stamp_costs: ctx.stamp_costs,
             }),
         )?;
         Ok(StartResult::Listener { control: None })

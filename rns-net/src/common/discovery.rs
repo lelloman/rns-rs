@@ -23,6 +23,10 @@ pub const NAME: u8 = 0xFF;
 pub const TRANSPORT_ID: u8 = 0xFE;
 pub const TRANSPORT_IMPL: u8 = 0xFD;
 pub const TRANSPORT_VERS: u8 = 0xFC;
+/// Announce stamp cost required on the announced interface (9b464382).
+pub const DST_COST: u8 = 0xFB;
+/// Path request stamp cost required on the announced interface (9b464382).
+pub const PR_COST: u8 = 0xFA;
 pub const INTERFACE_TYPE: u8 = 0x00;
 pub const TRANSPORT: u8 = 0x01;
 pub const REACHABLE_ON: u8 = 0x02;
@@ -114,6 +118,9 @@ pub struct DiscoveryConfig {
     pub height: Option<f64>,
     /// Optional 16-byte LXMF destination hash for the interface operator.
     pub operator_lxmf_address: Option<[u8; 16]>,
+    /// The interface's own `destination_cost` / `pr_cost`, announced as
+    /// `DST_COST` / `PR_COST` (9b464382).
+    pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
 }
 
 // ============================================================================
@@ -207,6 +214,11 @@ pub struct DiscoveredInterface {
 
     /// Hash for storage key (SHA256 of transport_id + name)
     pub discovery_hash: [u8; 32],
+
+    /// Announce and path request stamp costs the interface requires, when
+    /// announced (upstream 9b464382 `dst_cost` / `pr_cost`, quantized).
+    pub dst_cost: Option<StampCost>,
+    pub pr_cost: Option<StampCost>,
 }
 
 fn insufficient_stamp_diagnostic(value: StampValue) -> String {
@@ -463,6 +475,26 @@ pub fn parse_interface_announce_with_cache(
     let impl_name = get_u8_val(TRANSPORT_IMPL).and_then(|value| value.as_str().map(str::to_owned));
     let impl_version =
         get_u8_val(TRANSPORT_VERS).and_then(|value| value.as_str().map(str::to_owned));
+    // `quantize_cost(unpacked[DST_COST])` when present (9b464382). Upstream
+    // fails to decode an announce whose cost is not a finite number.
+    let announced_cost = |key: u8| -> Result<Option<StampCost>, ()> {
+        match get_u8_val(key) {
+            None => Ok(None),
+            Some(value) => value
+                .as_number()
+                .filter(|cost| cost.is_finite())
+                .map(|cost| Some(StampCost::from_f64(cost)))
+                .ok_or(()),
+        }
+    };
+    let Ok(dst_cost) = announced_cost(DST_COST) else {
+        log::debug!("Ignoring discovered interface with an invalid destination cost");
+        return None;
+    };
+    let Ok(pr_cost) = announced_cost(PR_COST) else {
+        log::debug!("Ignoring discovered interface with an invalid path request cost");
+        return None;
+    };
     let raw_name = match get_u8_val(NAME) {
         Some(Value::Str(value)) => value,
         Some(_) | None => String::new(),
@@ -570,6 +602,8 @@ pub fn parse_interface_announce_with_cache(
         ifac_netkey,
         config_entry,
         discovery_hash,
+        dst_cost,
+        pr_cost,
     })
 }
 
@@ -1243,6 +1277,43 @@ mod tests {
         .unwrap();
         assert_eq!(legacy.impl_name, None);
         assert_eq!(legacy.impl_version, None);
+    }
+
+    #[test]
+    fn parse_reads_announced_stamp_costs() {
+        // 9b464382: `quantize_cost(unpacked[DST_COST])` when present.
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.push((Value::UInt(DST_COST as u64), Value::Float(23.5)));
+        entries.push((Value::UInt(PR_COST as u64), Value::UInt(15)));
+        let parsed = parse_interface_announce(
+            &pack_discovery_entries(entries),
+            &[0x11; 16],
+            1,
+            StampCost::ZERO,
+        )
+        .unwrap();
+        assert_eq!(parsed.dst_cost, Some(StampCost::from_f64(23.5)));
+        assert_eq!(parsed.pr_cost, Some(StampCost::from_whole(15)));
+
+        let legacy = parse_interface_announce(
+            &build_discovery_app_data("BackboneInterface", Some("example.com")),
+            &[0x11; 16],
+            1,
+            StampCost::ZERO,
+        )
+        .unwrap();
+        assert_eq!((legacy.dst_cost, legacy.pr_cost), (None, None));
+
+        // Upstream's quantize_cost raises on a non-number, failing the decode.
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.push((Value::UInt(PR_COST as u64), Value::Str("cheap".into())));
+        assert!(parse_interface_announce(
+            &pack_discovery_entries(entries),
+            &[0x11; 16],
+            1,
+            StampCost::ZERO,
+        )
+        .is_none());
     }
 
     #[test]

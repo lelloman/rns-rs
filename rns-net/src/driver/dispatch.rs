@@ -2270,6 +2270,7 @@ mod hook_injection_tests {
 
     fn interface_info(id: u64) -> InterfaceInfo {
         InterfaceInfo {
+            stamp_costs: Default::default(),
             id: InterfaceId(id),
             name: format!("test-{}", id),
             mode: rns_core::constants::MODE_FULL,

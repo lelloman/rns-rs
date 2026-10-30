@@ -108,6 +108,7 @@ impl RnsNode {
 
         let id = local_config.interface_id;
         let info = rns_core::transport::types::InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name: "LocalInterface".into(),
             mode: rns_core::constants::MODE_FULL,
@@ -376,6 +377,7 @@ pub fn bench_shared_client_replay_once(
 
     let id = local_config.interface_id;
     let info = rns_core::transport::types::InterfaceInfo {
+        stamp_costs: Default::default(),
         id,
         name: "LocalInterface".into(),
         mode: rns_core::constants::MODE_FULL,

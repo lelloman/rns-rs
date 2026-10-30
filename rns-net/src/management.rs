@@ -51,6 +51,7 @@ mod tests {
         let mut map = HashMap::new();
         let id = InterfaceId(1);
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name: "TestInterface".into(),
             mode: constants::MODE_FULL,

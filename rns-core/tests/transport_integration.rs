@@ -184,6 +184,7 @@ impl TestHarness {
 
     fn add_interface(&mut self, id: u64, mode: u8) {
         self.engine.register_interface(InterfaceInfo {
+            stamp_costs: Default::default(),
             id: InterfaceId(id),
             name: format!("test-{}", id),
             mode,
@@ -392,6 +393,7 @@ fn test_transport_routing_interop() {
 
                 // Manually insert a path entry
                 harness.engine.register_interface(InterfaceInfo {
+                    stamp_costs: Default::default(),
                     id: InterfaceId(1),
                     name: String::from("test-1"),
                     mode: constants::MODE_FULL,
@@ -1668,6 +1670,7 @@ fn test_issue4_shared_client_outbound_data_to_1hop_dest() {
 
     // Register the shared-instance interface used by the client.
     harness.engine.register_interface(InterfaceInfo {
+        stamp_costs: Default::default(),
         id: InterfaceId(1),
         name: "local_client".into(),
         mode: constants::MODE_FULL,
@@ -1751,6 +1754,7 @@ fn test_issue4_shared_client_outbound_linkrequest_to_1hop_dest() {
     let mut harness = TestHarness::new(false);
 
     harness.engine.register_interface(InterfaceInfo {
+        stamp_costs: Default::default(),
         id: InterfaceId(1),
         name: "local_client".into(),
         mode: constants::MODE_FULL,

@@ -623,6 +623,7 @@ impl InterfaceFactory for KissFactory {
         let interface_type_name = kiss_config.interface_type_name.clone();
 
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name,
             mode: ctx.mode,

@@ -548,6 +548,7 @@ fn make_pool_candidate_with_priority(
         announces_from_internal: true,
         announces_to_internal: None,
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+        stamp_costs: Default::default(),
         ifac_runtime: IfacRuntimeConfig {
             netname: None,
             netkey: None,
@@ -576,9 +577,11 @@ fn make_discovered_backbone(
     transport_id[15] = transport_seed;
     let discovery_hash = crate::discovery::compute_discovery_hash(&transport_id, name);
     crate::discovery::DiscoveredInterface {
+        dst_cost: None,
+        pr_cost: None,
         interface_type: "BackboneInterface".to_string(),
         impl_name: Some("RNS".to_string()),
-        impl_version: Some("1.5.5".to_string()),
+        impl_version: Some("1.5.7".to_string()),
         transport: true,
         name: name.to_string(),
         discovered: last_heard,
@@ -755,11 +758,12 @@ fn discovered_peer_pool_requires_verified_implementation_unless_overridden() {
     iface.impl_version = Some("9.9.9".into());
     assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(iface.clone()));
 
+    // AUTOCONNECT_MIN_V is 1.5.7 since upstream 9b464382.
     iface.impl_name = Some("RNS".into());
-    iface.impl_version = Some("1.5.1".into());
+    iface.impl_version = Some("1.5.6".into());
     assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(iface.clone()));
 
-    iface.impl_version = Some("1.5.2".into());
+    iface.impl_version = Some("1.5.7".into());
     assert!(driver.upsert_discovered_backbone_peer_pool_candidate(iface));
 
     // Native discoverers are trusted even though their version tracks the
@@ -790,6 +794,56 @@ fn discovered_peer_pool_requires_verified_implementation_unless_overridden() {
     override_iface.impl_version = None;
     driver.autoconnect_unverified_implementations = true;
     assert!(driver.upsert_discovered_backbone_peer_pool_candidate(override_iface));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn discovered_peer_pool_requires_affordable_stamp_costs() {
+    // 9b464382: auto-connect only when the announced costs are within this
+    // node's DESTINATION_VALUE and PR_VALUE.
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    let port = 41_000;
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 3,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![],
+    );
+    let targets = driver.stamper.targets();
+    let discovered = |name: &str, offset: u16, id: u8| {
+        let mut iface = make_discovered_backbone(
+            name,
+            "127.0.0.1",
+            Some(port + offset),
+            id,
+            1,
+            20,
+            time::now(),
+        );
+        iface.impl_name = Some("RNS".into());
+        iface.impl_version = Some("1.6.0".into());
+        iface
+    };
+
+    let mut costly = discovered("costly-dst", 0, 0x81);
+    costly.dst_cost = Some(StampCost::from_fp(targets.destination_value.fp() + 1));
+    assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(costly));
+
+    let mut costly = discovered("costly-pr", 1, 0x82);
+    costly.pr_cost = Some(StampCost::from_fp(targets.path_request_value.fp() + 1));
+    assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(costly));
+
+    let mut affordable = discovered("affordable", 2, 0x83);
+    affordable.dst_cost = Some(targets.destination_value);
+    affordable.pr_cost = Some(targets.path_request_value);
+    assert!(driver.upsert_discovered_backbone_peer_pool_candidate(affordable));
+
+    // An interface that announced no costs requires none.
+    assert!(driver.upsert_discovered_backbone_peer_pool_candidate(discovered("legacy", 3, 0x84)));
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -1591,6 +1645,7 @@ fn register_test_backbone_discovery(driver: &mut Driver, name: &str, discoverabl
     let startup = BackboneDiscoveryRuntime {
         discoverable,
         config: crate::discovery::DiscoveryConfig {
+            stamp_costs: Default::default(),
             discovery_name: name.to_string(),
             announce_interval: 3600,
             stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
@@ -1631,6 +1686,7 @@ fn register_test_tcp_server_discovery(driver: &mut Driver, name: &str, discovera
     let startup = TcpServerDiscoveryRuntime {
         discoverable,
         config: crate::discovery::DiscoveryConfig {
+            stamp_costs: Default::default(),
             discovery_name: name.to_string(),
             announce_interval: 3600,
             stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
@@ -1954,6 +2010,7 @@ impl Callbacks for DirectConnectCallbacks {
 
 fn make_interface_info(id: u64) -> InterfaceInfo {
     InterfaceInfo {
+        stamp_costs: Default::default(),
         id: InterfaceId(id),
         name: format!("test-{}", id),
         mode: constants::MODE_FULL,
@@ -3562,6 +3619,10 @@ fn dynamic_interface_inherits_parent_announce_cap() {
     let (writer, _) = MockWriter::new();
     let mut parent = make_entry(10, Box::new(writer), true);
     parent.info.announce_cap = 0.5;
+    // Upstream 9b464382 copies `_destination_cost` / `_pr_cost` to spawned
+    // interfaces too.
+    parent.info.stamp_costs.destination_cost = Some(StampCost::from_f64(17.5));
+    parent.info.stamp_costs.pr_cost = Some(StampCost::ZERO);
     driver.interfaces.insert(InterfaceId(10), parent);
 
     let mut info = make_interface_info(11);
@@ -3581,6 +3642,11 @@ fn dynamic_interface_inherits_parent_announce_cap() {
 
     let registered = driver.engine.interface_info(&InterfaceId(11)).unwrap();
     assert_eq!(registered.announce_cap, 0.5);
+    assert_eq!(
+        registered.stamp_costs.destination_cost,
+        Some(StampCost::from_f64(17.5))
+    );
+    assert_eq!(registered.stamp_costs.pr_cost, Some(StampCost::ZERO));
 }
 
 #[test]
@@ -5885,6 +5951,7 @@ fn discovery_announcer_emits_local_synthetic_announce() {
         vec![crate::discovery::DiscoverableInterface {
             interface_name: "public".into(),
             config: crate::discovery::DiscoveryConfig {
+                stamp_costs: Default::default(),
                 discovery_name: "Public Test".into(),
                 announce_interval: 1,
                 stamp_value: rns_core::stamp::StampCost::ZERO,

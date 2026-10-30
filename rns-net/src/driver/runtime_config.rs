@@ -446,6 +446,10 @@ impl Driver {
             return false;
         }
 
+        if !self.discovered_costs_affordable(&iface) {
+            return false;
+        }
+
         if self.backbone_peer_pool.as_ref().is_some_and(|pool| {
             pool.candidates.iter().any(|candidate| {
                 candidate.config.source == BackbonePeerPoolCandidateSource::Configured
@@ -540,6 +544,7 @@ impl Driver {
                 announces_from_internal: true,
                 announces_to_internal: self.autoconnect_announces_to_internal,
                 ingress_control: self.ingress_control_defaults,
+                stamp_costs: Default::default(),
                 ifac_runtime,
                 ifac_enabled,
                 interface_type_name: "BackboneInterface".to_string(),
@@ -614,7 +619,8 @@ impl Driver {
         // are trusted. Upstream only lists its own name because it does not know
         // about native discoverers.
         const AUTOCONNECT_IMPLS: [&str; 2] = ["RNS", TRANSPORT_IMPLEMENTATION_NAME];
-        const AUTOCONNECT_MIN_VERSION: [u32; 3] = [1, 5, 2];
+        // Raised from 1.5.2 in upstream 9b464382.
+        const AUTOCONNECT_MIN_VERSION: [u32; 3] = [1, 5, 7];
 
         let Some(impl_name) = iface.impl_name.as_deref() else {
             return false;
@@ -631,6 +637,38 @@ impl Driver {
             return false;
         };
         version.as_slice() >= AUTOCONNECT_MIN_VERSION.as_slice()
+    }
+
+    /// Upstream 9b464382: a discovered interface is only auto-connected when
+    /// the announce and path request costs it requires are within the stamp
+    /// values this node generates (`DESTINATION_VALUE`, `PR_VALUE`). An
+    /// interface that announced no cost requires none.
+    #[cfg(feature = "iface-backbone")]
+    fn discovered_costs_affordable(&self, iface: &crate::discovery::DiscoveredInterface) -> bool {
+        let targets = self.stamper.targets();
+        let dst_cost = iface.dst_cost.unwrap_or_default();
+        let pr_cost = iface.pr_cost.unwrap_or_default();
+        let dst_cost_ok = dst_cost <= targets.destination_value;
+        let pr_cost_ok = pr_cost <= targets.path_request_value;
+        if !dst_cost_ok {
+            log::debug!(
+                "Destination cost {} higher than configured value {} for {} \"{}\", not auto-connecting",
+                dst_cost,
+                targets.destination_value,
+                iface.interface_type,
+                iface.name,
+            );
+        }
+        if !pr_cost_ok {
+            log::debug!(
+                "Path request cost {} higher than configured value {} for {} \"{}\", not auto-connecting",
+                pr_cost,
+                targets.path_request_value,
+                iface.interface_type,
+                iface.name,
+            );
+        }
+        dst_cost_ok && pr_cost_ok
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -934,6 +972,7 @@ impl Driver {
         let announces_from_internal = candidate.config.announces_from_internal;
         let announces_to_internal = candidate.config.announces_to_internal;
         let ingress_control = candidate.config.ingress_control;
+        let stamp_costs = candidate.config.stamp_costs;
         let ifac_runtime = candidate.config.ifac_runtime.clone();
         let ifac_enabled = candidate.config.ifac_enabled;
         let interface_type_name = candidate.config.interface_type_name.clone();
@@ -948,6 +987,7 @@ impl Driver {
             control.clone(),
         )?;
         let info = rns_core::transport::types::InterfaceInfo {
+            stamp_costs,
             id,
             name: name.clone(),
             mode,

@@ -1410,6 +1410,7 @@ fn add_peer(context: AddPeerContext<'_>) {
     });
 
     let peer_info = rns_core::transport::types::InterfaceInfo {
+        stamp_costs: Default::default(),
         id: peer_id,
         name: format!(
             "{}:{}%{}",
@@ -1770,6 +1771,7 @@ impl InterfaceFactory for AutoFactory {
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
+                stamp_costs: ctx.stamp_costs,
             }),
             ctx.underlay_mark,
         )?;

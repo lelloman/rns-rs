@@ -174,6 +174,7 @@ impl Driver {
             announces_from_internal: config.announces_from_internal,
             announces_to_internal: config.announces_to_internal,
             ingress_control: config.ingress_control,
+            stamp_costs: config.stamp_costs,
             ifac: ifac_state.clone(),
             underlay_mark,
         };
@@ -203,6 +204,7 @@ impl Driver {
                     interface_type_name,
                     ifac_state,
                     ifac_runtime: &ifac_runtime,
+                    stamp_costs: config.stamp_costs,
                 });
                 (control, vec![id])
             }
@@ -229,6 +231,7 @@ impl Driver {
                         interface_type_name: sub.interface_type_name,
                         ifac_state: sub_ifac,
                         ifac_runtime: &ifac_runtime,
+                        stamp_costs: config.stamp_costs,
                     });
                 }
                 (control, ids)

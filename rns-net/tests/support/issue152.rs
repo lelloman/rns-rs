@@ -151,6 +151,7 @@ fn run_burst(async_api: bool) {
                 &bob_id.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: "Bob TCP".into(),
                 type_name: "TCPServerInterface".into(),
                 config_data: Box::new(TcpServerConfig {
@@ -198,6 +199,7 @@ fn run_burst(async_api: bool) {
             identity: Some(Identity::new(&mut OsRng)),
             registry: Some(registry),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: "Alice paused TCP".into(),
                 type_name: "TCPClientInterface".into(),
                 config_data: Box::new(TcpClientConfig {

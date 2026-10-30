@@ -42,6 +42,7 @@ fn make_config(transport_enabled: bool) -> TransportConfig {
 
 fn make_interface(id: u64, mode: u8, is_local_client: bool) -> InterfaceInfo {
     InterfaceInfo {
+        stamp_costs: Default::default(),
         id: InterfaceId(id),
         name: format!("bench-{id}"),
         mode,

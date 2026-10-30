@@ -384,6 +384,7 @@ mod tests {
 
     fn make_interface_info(id: u64, bitrate: Option<u64>) -> super::super::types::InterfaceInfo {
         super::super::types::InterfaceInfo {
+            stamp_costs: Default::default(),
             id: InterfaceId(id),
             name: String::from("test"),
             mode: crate::constants::MODE_FULL,

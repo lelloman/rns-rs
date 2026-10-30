@@ -288,11 +288,13 @@ impl TransportEngine {
                     let workblock = crate::stamp::stamp_workblock(&material, 0);
                     let stamp = &ext[constants::EXT_HEADER_LENGTH..];
                     let value = crate::stamp::stamp_value(&workblock, stamp);
-                    let valid = crate::stamp::stamp_valid(
-                        stamp,
-                        self.stamp_requirements.path_request_cost,
-                        &workblock,
-                    );
+                    // The receiving interface's `pr_cost` (9b464382).
+                    let required_value = self
+                        .interfaces
+                        .get(&interface_id)
+                        .map(|info| info.stamp_costs.pr_cost(&self.stamp_requirements))
+                        .unwrap_or(self.stamp_requirements.path_request_cost);
+                    let valid = crate::stamp::stamp_valid(stamp, required_value, &workblock);
                     carried_stamp_value = Some(value);
                     stamped = valid;
                     let relayed = ext[1] == constants::PR_FLAG_UNSTAMPED_RELAY;

@@ -143,6 +143,7 @@ pub fn run(role: &str, port: u16, c: Case) -> Result<()> {
     let node = RnsNode::start(
         NodeConfig {
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: role.into(),
                 type_name: if listener {
                     "TCPServerInterface"

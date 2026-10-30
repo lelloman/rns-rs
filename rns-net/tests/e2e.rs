@@ -628,6 +628,7 @@ fn start_transport_node_with_limits(
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -760,6 +761,7 @@ fn start_client_node_with_options(
                 &identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -1270,6 +1272,7 @@ fn test_direct_link_no_transport() {
                 &bob_id.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -1890,6 +1893,7 @@ fn test_plain_message_delivery() {
                 &bob_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -2153,6 +2157,7 @@ fn test_group_message_delivery() {
                 &bob_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -2284,6 +2289,7 @@ fn test_group_wrong_key_fails() {
                 &bob_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -3646,6 +3652,7 @@ fn test_udp_announce_and_message() {
                 &alice_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
@@ -3732,6 +3739,7 @@ fn test_udp_announce_and_message() {
                 &bob_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
@@ -3915,6 +3923,7 @@ fn discovery_announce_received_by_client() {
                 &transport_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -3933,6 +3942,7 @@ fn discovery_announce_received_by_client() {
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    stamp_costs: Default::default(),
                     discovery_name: "TestBackbone".into(),
                     announce_interval: 300, // minimum
                     stamp_value: rns_core::stamp::StampCost::from_whole(8), // low for fast test
@@ -4019,6 +4029,7 @@ fn discovery_announce_received_by_client() {
                 &client_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -4158,6 +4169,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                 &transport_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -4176,6 +4188,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    stamp_costs: Default::default(),
                     discovery_name: "PoolTargetLive".into(),
                     announce_interval: 300,
                     stamp_value: rns_core::stamp::StampCost::from_whole(8),
@@ -4255,6 +4268,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -4367,9 +4381,11 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
     let discovery_hash = rns_net::discovery::compute_discovery_hash(&transport_id, "CachedTarget");
     let now = rns_net::time::now();
     let cached = rns_net::discovery::DiscoveredInterface {
+        dst_cost: None,
+        pr_cost: None,
         interface_type: "TCPServerInterface".into(),
         impl_name: Some("RNS".into()),
-        impl_version: Some("1.5.5".into()),
+        impl_version: Some("1.5.7".into()),
         transport: true,
         name: "CachedTarget".into(),
         discovered: now,
@@ -4502,9 +4518,11 @@ fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
         rns_net::discovery::compute_discovery_hash(&transport_id, "CachedPriorityTarget");
     let now = rns_net::time::now();
     let cached = rns_net::discovery::DiscoveredInterface {
+        dst_cost: None,
+        pr_cost: None,
         interface_type: "TCPServerInterface".into(),
         impl_name: Some("RNS".into()),
-        impl_version: Some("1.5.5".into()),
+        impl_version: Some("1.5.7".into()),
         transport: true,
         name: "CachedPriorityTarget".into(),
         discovered: now,
@@ -4604,6 +4622,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
                 &transport_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -4622,6 +4641,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    stamp_costs: Default::default(),
                     discovery_name: "PriorityNoPreempt".into(),
                     announce_interval: 300,
                     stamp_value: rns_core::stamp::StampCost::from_whole(8),
@@ -4771,6 +4791,7 @@ fn discovery_announce_through_relay() {
                 &transport_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -4789,6 +4810,7 @@ fn discovery_announce_through_relay() {
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    stamp_costs: Default::default(),
                     discovery_name: "RelayedBackbone".into(),
                     announce_interval: 300,
                     stamp_value: rns_core::stamp::StampCost::from_whole(8),
@@ -4869,6 +4891,7 @@ fn discovery_announce_through_relay() {
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![
                 InterfaceConfig {
+                    stamp_costs: Default::default(),
                     name: String::new(),
                     type_name: "TCPClientInterface".to_string(),
                     config_data: Box::new(TcpClientConfig {
@@ -4888,6 +4911,7 @@ fn discovery_announce_through_relay() {
                     discovery: None,
                 },
                 InterfaceConfig {
+                    stamp_costs: Default::default(),
                     name: String::new(),
                     type_name: "TCPServerInterface".to_string(),
                     config_data: Box::new(TcpServerConfig {
@@ -4979,6 +5003,7 @@ fn discovery_announce_through_relay() {
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -5109,6 +5134,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -5245,6 +5271,7 @@ fn start_managed_transport_client(
                 &identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -5861,6 +5888,7 @@ fn local_ratchets_survive_shared_daemon_restart() {
     let bob = RnsNode::start(
         NodeConfig {
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: "ratchet-remote".into(),
                 type_name: "TCPClientInterface".into(),
                 config_data: Box::new(TcpClientConfig {

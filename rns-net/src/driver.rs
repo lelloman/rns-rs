@@ -303,6 +303,7 @@ pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) announces_from_internal: bool,
     pub(crate) announces_to_internal: Option<bool>,
     pub(crate) ingress_control: rns_core::transport::types::IngressControlConfig,
+    pub(crate) stamp_costs: rns_core::transport::types::InterfaceStampCosts,
     pub(crate) ifac_runtime: IfacRuntimeConfig,
     pub(crate) ifac_enabled: bool,
     pub(crate) interface_type_name: String,

@@ -1090,6 +1090,7 @@ impl InterfaceFactory for RNodeFactory {
             let sub_name = rnode_config.subinterfaces[index].name.clone();
 
             let info = InterfaceInfo {
+                stamp_costs: Default::default(),
                 id: sub_id,
                 name: sub_name,
                 mode: ctx.mode,

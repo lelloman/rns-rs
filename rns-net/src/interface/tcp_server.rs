@@ -328,6 +328,7 @@ impl ListenerSource {
         });
 
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id: client_id,
             name: format!("TCPServerInterface/Client-{}", client_id.0),
             mode: constants::MODE_FULL,
@@ -517,6 +518,7 @@ impl InterfaceFactory for TcpServerFactory {
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
+                stamp_costs: ctx.stamp_costs,
             }),
             ctx.underlay_mark,
         )?;
@@ -737,6 +739,7 @@ mod tests {
             recursive_prs: true,
             announces_from_internal: false,
             announces_to_internal: None,
+            stamp_costs: Default::default(),
         };
         start_with_template(
             make_server_config(port, 77, None),

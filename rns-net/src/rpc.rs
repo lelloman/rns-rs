@@ -2164,6 +2164,21 @@ fn discovered_interfaces_to_pickle(
                         .map(PickleValue::String)
                         .unwrap_or(PickleValue::None),
                 ),
+                // Upstream 9b464382 info keys.
+                (
+                    PickleValue::String("dst_cost".into()),
+                    iface
+                        .dst_cost
+                        .map(|cost| PickleValue::Float(cost.as_f64()))
+                        .unwrap_or(PickleValue::None),
+                ),
+                (
+                    PickleValue::String("pr_cost".into()),
+                    iface
+                        .pr_cost
+                        .map(|cost| PickleValue::Float(cost.as_f64()))
+                        .unwrap_or(PickleValue::None),
+                ),
                 (
                     PickleValue::String("transport".into()),
                     PickleValue::Bool(iface.transport),
@@ -3362,6 +3377,8 @@ mod tests {
     #[test]
     fn discovered_interface_rpc_includes_operator_lxmf_address() {
         let interface = crate::discovery::DiscoveredInterface {
+            dst_cost: None,
+            pr_cost: None,
             interface_type: "BackboneInterface".into(),
             impl_name: Some("Reticulum".into()),
             impl_version: Some("1.5.5".into()),

@@ -313,6 +313,7 @@ mod tests {
 
     fn interface(id: u64, name: &str) -> InterfaceInfo {
         InterfaceInfo {
+            stamp_costs: Default::default(),
             id: InterfaceId(id),
             name: String::from(name),
             mode: constants::MODE_FULL,
