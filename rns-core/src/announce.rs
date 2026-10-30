@@ -6,7 +6,7 @@ use rns_crypto::sha256::Sha256;
 
 use crate::constants;
 use crate::hash;
-use crate::stamp::{stamp_valid, stamp_value, stamp_workblock, StampValue};
+use crate::stamp::{stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue};
 
 #[derive(Debug)]
 pub enum AnnounceError {
@@ -86,7 +86,7 @@ impl ValidatedAnnounce {
     pub fn apply_stamp(
         &mut self,
         destination_hash: &[u8; 16],
-        required_value: u8,
+        required_value: StampCost,
     ) -> AnnounceStampStatus {
         if !constants::STAMPS_ENABLED {
             return AnnounceStampStatus::NotStamped;
@@ -616,9 +616,12 @@ mod tests {
         assert_eq!(parsed.signature_cache_key(&dh), hash::full_hash(&material));
     }
 
+    /// Link request cost carried in the test announces' extension anchor.
+    const LINK_COST: u8 = 11;
+
     fn stamped_announce(
         app_data: Option<&[u8]>,
-        cost: u8,
+        cost: StampCost,
     ) -> (
         AnnounceData,
         [u8; 16],
@@ -653,7 +656,7 @@ mod tests {
         wire.push(constants::EXT_PAYLOAD_MARKER);
         wire.push(0);
         wire.extend_from_slice(&stamp);
-        wire.push(constants::LINK_REQUEST_STAMP_COST);
+        wire.push(LINK_COST);
 
         let (data, _) =
             AnnounceData::pack(&identity, &dh, &nh, &[0x31; 10], None, Some(&wire)).unwrap();
@@ -667,29 +670,36 @@ mod tests {
 
     #[test]
     fn test_announce_stamp_valid_is_stripped_and_valued() {
-        let (parsed, dh, stamp, value) = stamped_announce(Some(b"app-data"), 4);
+        let (parsed, dh, stamp, value) =
+            stamped_announce(Some(b"app-data"), StampCost::from_whole(4));
         let mut validated = parsed.validate(&dh).unwrap();
-        assert_eq!(validated.apply_stamp(&dh, 4), AnnounceStampStatus::Valid);
+        assert_eq!(
+            validated.apply_stamp(&dh, StampCost::from_whole(4)),
+            AnnounceStampStatus::Valid
+        );
         assert_eq!(validated.stamp, Some(stamp));
         assert_eq!(validated.stamp_value, value);
-        assert_eq!(validated.lr_cost, Some(constants::LINK_REQUEST_STAMP_COST));
+        assert_eq!(validated.lr_cost, Some(LINK_COST));
         assert_eq!(validated.app_data.as_deref(), Some(b"app-data".as_slice()));
     }
 
     #[test]
     fn test_announce_stamp_valid_without_app_data_strips_to_none() {
-        let (parsed, dh, _, _) = stamped_announce(None, 4);
+        let (parsed, dh, _, _) = stamped_announce(None, StampCost::from_whole(4));
         let mut validated = parsed.validate(&dh).unwrap();
-        assert_eq!(validated.apply_stamp(&dh, 4), AnnounceStampStatus::Valid);
+        assert_eq!(
+            validated.apply_stamp(&dh, StampCost::from_whole(4)),
+            AnnounceStampStatus::Valid
+        );
         assert_eq!(validated.app_data, None);
     }
 
     #[test]
     fn test_announce_stamp_below_required_value_is_kept_and_invalid() {
-        let (parsed, dh, stamp, _) = stamped_announce(Some(b"app-data"), 4);
+        let (parsed, dh, stamp, _) = stamped_announce(Some(b"app-data"), StampCost::from_whole(4));
         let mut validated = parsed.validate(&dh).unwrap();
         assert_eq!(
-            validated.apply_stamp(&dh, 200),
+            validated.apply_stamp(&dh, StampCost::from_whole(200)),
             AnnounceStampStatus::Invalid
         );
         assert_eq!(validated.stamp, Some(stamp));
@@ -706,7 +716,7 @@ mod tests {
         let (parsed, dh) = signed_announce(Some(b"app-data"), None);
         let mut validated = parsed.validate(&dh).unwrap();
         assert_eq!(
-            validated.apply_stamp(&dh, 4),
+            validated.apply_stamp(&dh, StampCost::from_whole(4)),
             AnnounceStampStatus::NotStamped
         );
         assert_eq!(validated.stamp, None);
@@ -717,7 +727,7 @@ mod tests {
 
     #[test]
     fn test_announce_stamp_extended_format_is_not_interpreted() {
-        let (parsed, dh, _, _) = stamped_announce(Some(b"app-data"), 4);
+        let (parsed, dh, _, _) = stamped_announce(Some(b"app-data"), StampCost::from_whole(4));
         let mut announce = parsed.clone();
         // Flip the anchor's high bit: this marks a newer, longer extension.
         let app_data = announce.app_data.as_mut().unwrap();
@@ -738,7 +748,7 @@ mod tests {
         let reparsed = AnnounceData::unpack(&data, false).unwrap();
         let mut validated = reparsed.validate(&dh).unwrap();
         assert_eq!(
-            validated.apply_stamp(&dh, 4),
+            validated.apply_stamp(&dh, StampCost::from_whole(4)),
             AnnounceStampStatus::NotStamped
         );
         assert_eq!(validated.stamp, None);

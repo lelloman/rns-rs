@@ -46,25 +46,18 @@ pub fn stamp_workblock(material: &[u8], expand_rounds: u32) -> Vec<u8> {
 /// Leading zero bits of a 256-bit stamp product (the legacy integer value),
 /// fractional stamp values and their fixed-point type. See
 /// [`rns_crypto::stamp_value`].
-pub use rns_crypto::stamp_value::{leading_zeros, stamp_value, StampValue};
+pub use rns_crypto::stamp_value::{leading_zeros, stamp_value, StampCost, StampValue};
 
 /// Check if a stamp meets the target cost.
 ///
-/// Returns true if SHA256(workblock + stamp) has >= target_cost leading zero bits.
-pub fn stamp_valid(stamp: &[u8], target_cost: u8, workblock: &[u8]) -> bool {
+/// Valid when `SHA256(workblock + stamp)`, read as a big-endian integer, is
+/// at most `target_from_fp(cost_to_fp(target_cost))`. For a whole cost the
+/// target is `2^(256 - cost)`, the legacy leading-zero check.
+pub fn stamp_valid(stamp: &[u8], target_cost: StampCost, workblock: &[u8]) -> bool {
     let mut material = Vec::with_capacity(workblock.len() + stamp.len());
     material.extend_from_slice(workblock);
     material.extend_from_slice(stamp);
-    let result = sha256(&material);
-
-    // Check: int.from_bytes(result, "big") <= (1 << (256 - target_cost))
-    // Equivalent to: leading_zeros(result) >= target_cost
-    // But Python uses `>` not `>=` for the comparison with target:
-    //   target = 1 << (256 - target_cost)
-    //   int.from_bytes(result) > target -> invalid
-    // So valid means: int.from_bytes(result) <= target
-    // Which is: leading_zeros >= target_cost
-    leading_zeros(&result) >= target_cost as u32
+    target_cost.admits(&sha256(&material))
 }
 
 /// Clamp a configured per-destination link request cost.
@@ -79,10 +72,10 @@ pub fn clamp_link_cost(cost: i64) -> u8 {
 ///
 /// Mirrors `Destination.get_link_cost`: the configured cost, or `default`
 /// (`Transport.LR_COST`, settable through `[stamps] lr_cost`) when none was
-/// set, clamped to `STAMP_COST_CAP`.
-pub fn announced_link_cost(configured: Option<u8>, default: u8) -> u8 {
+/// set, truncated to whole bits and clamped to `STAMP_COST_CAP`.
+pub fn announced_link_cost(configured: Option<u8>, default: StampCost) -> u8 {
     configured
-        .unwrap_or(default)
+        .unwrap_or_else(|| default.whole().min(u32::from(u8::MAX)) as u8)
         .min(crate::constants::STAMP_COST_CAP)
 }
 
@@ -102,11 +95,12 @@ mod tests {
 
     #[test]
     fn announced_link_cost_defaults_to_lr_cost() {
+        // int(19.2): the fractional default is announced as 19.
         let lr_cost = crate::constants::LINK_REQUEST_STAMP_COST;
-        assert_eq!(announced_link_cost(None, lr_cost), lr_cost);
-        assert_eq!(announced_link_cost(None, 9), 9);
+        assert_eq!(announced_link_cost(None, lr_cost), 19);
+        assert_eq!(announced_link_cost(None, StampCost::from_whole(9)), 9);
         assert_eq!(announced_link_cost(Some(0), lr_cost), 0);
-        assert_eq!(announced_link_cost(Some(17), 9), 17);
+        assert_eq!(announced_link_cost(Some(17), StampCost::from_whole(9)), 17);
         assert_eq!(
             announced_link_cost(Some(u8::MAX), lr_cost),
             crate::constants::STAMP_COST_CAP
@@ -180,7 +174,7 @@ mod tests {
 
         let value = stamp_value(&wb, &stamp);
         assert_eq!(value.whole(), 8);
-        assert!(stamp_valid(&stamp, 8, &wb));
+        assert!(stamp_valid(&stamp, StampCost::from_whole(8), &wb));
     }
 
     fn hex_to_bytes(s: &str) -> Vec<u8> {
@@ -220,8 +214,8 @@ mod tests {
         let stamp = unhex("e42059a12ebbbc4dbb60c46fd539");
         let workblock = stamp_workblock(&material, 0);
         assert_eq!(stamp_value(&workblock, &stamp).whole(), 8);
-        assert!(stamp_valid(&stamp, 8, &workblock));
-        assert!(!stamp_valid(&stamp, 9, &workblock));
+        assert!(stamp_valid(&stamp, StampCost::from_whole(8), &workblock));
+        assert!(!stamp_valid(&stamp, StampCost::from_whole(9), &workblock));
         // The former behaviour hashed the stamp alone, which does not reach
         // the value Python computed.
         assert_ne!(stamp_value(&[], &stamp).whole(), 8);

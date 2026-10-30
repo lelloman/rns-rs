@@ -28,6 +28,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 use rns_core::constants;
+use rns_core::stamp::StampCost;
 use rns_core::transport::types::InterfaceId;
 use rns_crypto::identity::Identity;
 
@@ -59,9 +60,9 @@ pub struct StampTargets {
     /// Default target value for destination stamps
     /// (`Transport.DESTINATION_VALUE`). A destination may target more with
     /// [`Destination::set_value`], never less.
-    pub destination_value: u8,
+    pub destination_value: StampCost,
     /// Target value for a path request stamp (`Transport.PR_VALUE`).
-    pub path_request_value: u8,
+    pub path_request_value: StampCost,
 }
 
 impl Default for StampTargets {
@@ -86,7 +87,7 @@ impl StampTargets {
     /// The stamp value `dest` must hold, and is ground at, when announced
     /// (Destination.py `target_value`): a persisted stamp below it is
     /// regenerated.
-    pub fn destination_target(&self, dest: &Destination) -> u8 {
+    pub fn destination_target(&self, dest: &Destination) -> StampCost {
         dest.effective_target_value(self.destination_value)
     }
 }
@@ -619,8 +620,8 @@ mod tests {
 
     fn fast_targets() -> StampTargets {
         StampTargets {
-            destination_value: 6,
-            path_request_value: 6,
+            destination_value: StampCost::from_whole(6),
+            path_request_value: StampCost::from_whole(6),
         }
     }
 
@@ -857,7 +858,7 @@ mod tests {
         let (stamp, value) = store
             .load(&dest.hash.0, &material, fast_targets().destination_value)
             .expect("stamp persisted");
-        assert!(value.meets(u32::from(fast_targets().destination_value)));
+        assert!(value.meets(fast_targets().destination_value));
         let ext = &wire_app_data[1..];
         assert_eq!(ext[0], constants::EXT_PAYLOAD_MARKER);
         assert_eq!(
@@ -899,11 +900,9 @@ mod tests {
             validated.lr_cost
         };
 
-        // Without `set_link_cost` the default `LR_COST` is announced.
-        assert_eq!(
-            announced_cost(&tx),
-            Some(constants::LINK_REQUEST_STAMP_COST)
-        );
+        // Without `set_link_cost` the default `LR_COST` is announced,
+        // truncated to whole bits (`int(19.2)`).
+        assert_eq!(announced_cost(&tx), Some(19));
         // `set_link_cost` clamps to `LINK_COST_CAP` and is announced as set.
         assert_eq!(tx.link_request_costs().set(dest.hash.0, 17), 17);
         assert_eq!(announced_cost(&tx), Some(17));
@@ -953,7 +952,7 @@ mod tests {
             tx,
             None,
             StampTargets {
-                path_request_value: constants::STAMP_COST_CAP,
+                path_request_value: StampCost::from_whole(u32::from(constants::STAMP_COST_CAP)),
                 ..fast_targets()
             },
         );
@@ -989,25 +988,28 @@ mod tests {
         let (job, _) = announce_job(0x55);
         let mut dest = job.dest;
         let targets = StampTargets::default();
-        assert_eq!(targets.destination_value, 25);
-        assert_eq!(targets.destination_target(&dest), 25);
+        assert_eq!(targets.destination_value, StampCost::from_whole(25));
+        assert_eq!(targets.destination_target(&dest), StampCost::from_whole(25));
         dest.set_value(10);
         assert_eq!(
             targets.destination_target(&dest),
-            25,
+            StampCost::from_whole(25),
             "a lower target still generates at least the default"
         );
         dest.set_value(40);
-        assert_eq!(targets.destination_target(&dest), 40);
+        assert_eq!(targets.destination_target(&dest), StampCost::from_whole(40));
         dest.set_value(u8::MAX);
         assert_eq!(dest.target_value, Some(constants::STAMP_COST_CAP));
-        assert_eq!(targets.destination_target(&dest), constants::STAMP_COST_CAP);
+        assert_eq!(
+            targets.destination_target(&dest),
+            StampCost::from_whole(u32::from(constants::STAMP_COST_CAP))
+        );
         // A configured default above the destination's own target wins.
         dest.set_value(30);
         let raised = StampTargets {
-            destination_value: 35,
+            destination_value: StampCost::from_whole(35),
             ..targets
         };
-        assert_eq!(raised.destination_target(&dest), 35);
+        assert_eq!(raised.destination_target(&dest), StampCost::from_whole(35));
     }
 }

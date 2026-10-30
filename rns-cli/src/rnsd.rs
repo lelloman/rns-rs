@@ -369,22 +369,30 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # During the 1.6.x phased transition to network stamp usage,
   # it is possible to enable early opt-in on stamp generation
   # and enforcement. Stamps are validated, while generation,
-  # emission and enforcement are disabled by default. Upstream
-  # 1.6.1 will enable generation and emission by default, and
-  # 1.6.2 will activate enforcement. Any option can be enabled
-  # early by configuration; setting one to "no" keeps the
-  # default rather than forcing it off.
+  # emission and enforcement are disabled by default for
+  # destinations and path requests. Link requests are already
+  # stamped if the destination announced a cost. Upstream 1.6.1
+  # will enable generation and emission by default, and 1.6.2
+  # will activate enforcement. Any option can be enabled early
+  # by configuration; setting one to "no" keeps the default
+  # rather than forcing it off.
   # stamp_destinations = yes
   # stamp_prs = yes
-  # stamp_lrs = yes
   # enforce_stamps = yes
+
+  # Also stamp link requests to destinations that announced no
+  # link request cost, at the default link request cost below.
+  # always_stamp_lrs = yes
+
+  # The built-in costs below are fractional (23.5, 19.8 and
+  # 19.2); configured costs and values are whole numbers.
 
   # The default required stamp cost for an announce, and its
   # destination to be considered valid. This applies both to
   # announces received directly, and transported by this node,
   # if transport is enabled. Any announced destination not
   # meeting the cost will be ignored once stamps are enforced.
-  # destination_cost = 23
+  # destination_cost = 24
 
   # The default value this instance will target when generating
   # new destination stamps. An application may set a higher
@@ -397,15 +405,16 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # The default required path request stamp cost. Path requests
   # that do not meet the requirement are ignored once stamps
   # are enforced.
-  # pr_cost = 19
+  # pr_cost = 20
 
   # The default target value of path request stamps generated
   # by this instance.
-  # pr_value = 19
+  # pr_value = 20
 
   # The default link request stamp cost to announce for local
-  # destinations that do not set their own (0 to 40).
-  # lr_cost = 11
+  # destinations that do not set their own (0 to 40), and to
+  # stamp with when always_stamp_lrs is set.
+  # lr_cost = 19
 
   # The maximum amount of time to spend attempting to generate
   # link request and path request stamps, in seconds.
@@ -551,7 +560,7 @@ mod tests {
             "hop_limiter",
             "stamp_destinations",
             "stamp_prs",
-            "stamp_lrs",
+            "always_stamp_lrs",
             "enforce_stamps",
             "destination_cost",
             "destination_value",

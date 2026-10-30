@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use rns_core::constants;
 use rns_core::msgpack::{self, Value};
-use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampValue};
+use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue};
 use rns_crypto::sha256::sha256;
 
 use super::time;
@@ -398,7 +398,10 @@ pub fn parse_interface_announce_with_cache(
                 target: rns_core::logging::PATHING_LOG_TARGET,
                 "Discovery announce cache hit"
             );
-            if !entry.value.meets(u32::from(required_stamp_value)) {
+            if !entry
+                .value
+                .meets(StampCost::from_whole(u32::from(required_stamp_value)))
+            {
                 log::debug!("{}", insufficient_stamp_diagnostic(entry.value));
                 return None;
             }
@@ -412,7 +415,11 @@ pub fn parse_interface_announce_with_cache(
             let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
             let value = stamp_value(&workblock, &stamp);
 
-            if !stamp_valid(&stamp, required_stamp_value, &workblock) {
+            if !stamp_valid(
+                &stamp,
+                StampCost::from_whole(u32::from(required_stamp_value)),
+                &workblock,
+            ) {
                 log::debug!("{}", insufficient_stamp_diagnostic(value));
                 cache.insert_invalid_hash(payload_hash);
                 return None;

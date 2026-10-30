@@ -66,7 +66,8 @@ fn create_link_with_stamped_keys_emits_stamped_link_request() {
     let sig_pub_bytes = [0xAA; 32];
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let (prv, sig_prv, _) =
-        crate::stamps::generate_stamped_link_keys(&dest_hash, 4, deadline).unwrap();
+        crate::stamps::generate_stamped_link_keys(&dest_hash, StampCost::from_whole(4), deadline)
+            .unwrap();
 
     let (_, actions) = mgr.create_link_with_keys(
         &dest_hash,
@@ -86,7 +87,7 @@ fn create_link_with_stamped_keys_emits_stamped_link_request() {
     let packet = RawPacket::unpack(&raw).unwrap();
     let value = rns_core::link::handshake::link_request_stamp_value(&dest_hash, packet.data())
         .expect("stamped link request value");
-    assert!(value.meets(4));
+    assert!(value.meets(StampCost::from_whole(4)));
 }
 
 #[test]
@@ -5133,7 +5134,8 @@ fn stamped_link_request_completes_the_handshake_with_a_responder() {
     // Keys ground ahead of time, as the driver's stamp worker does.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let (prv, link_sig_prv, stamp_value) =
-        crate::stamps::generate_stamped_link_keys(&dest_hash, 4, deadline).unwrap();
+        crate::stamps::generate_stamped_link_keys(&dest_hash, StampCost::from_whole(4), deadline)
+            .unwrap();
     let expected_pub = prv.public_key().public_bytes();
 
     let (link_id, init_actions) = initiator.create_link_with_keys(
@@ -5161,7 +5163,7 @@ fn stamped_link_request_completes_the_handshake_with_a_responder() {
         rns_core::link::handshake::link_request_stamp_value(&dest_hash, linkrequest.data()),
         Some(stamp_value)
     );
-    assert!(stamp_value.meets(4));
+    assert!(stamp_value.meets(StampCost::from_whole(4)));
 
     // Responder accepts the stamped request and proves the link.
     let resp_actions = responder.handle_local_delivery(
@@ -5329,7 +5331,7 @@ fn enforced_link_cost_drops_requests_below_the_destination_cost() {
 
     // Below the cost: dropped silently, no proof, no protocol violation.
     let (low, low_value) = link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| {
-        !v.meets(u32::from(COST))
+        !v.meets(StampCost::from_whole(u32::from(COST)))
     });
     let actions = deliver_link_request(&mut responder, &low);
     assert!(
@@ -5339,21 +5341,25 @@ fn enforced_link_cost_drops_requests_below_the_destination_cost() {
 
     // Ground to the cost: accepted and proven.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let (prv, link_sig_prv, _) =
-        crate::stamps::generate_stamped_link_keys(&dest_hash, COST, deadline).unwrap();
+    let (prv, link_sig_prv, _) = crate::stamps::generate_stamped_link_keys(
+        &dest_hash,
+        StampCost::from_whole(u32::from(COST)),
+        deadline,
+    )
+    .unwrap();
     let (stamped, stamped_value) = link_request_with_stamp_value(
         &dest_hash,
         &sig_pub_bytes,
         Some((prv, link_sig_prv)),
         |_| true,
     );
-    assert!(stamped_value.meets(u32::from(COST)));
+    assert!(stamped_value.meets(StampCost::from_whole(u32::from(COST))));
     assert!(proves_link(&deliver_link_request(&mut responder, &stamped)));
 
     // Enforcement off (the upstream default): the low request is accepted.
     costs.set_enforced(false);
     let (low, _) = link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| {
-        !v.meets(u32::from(COST))
+        !v.meets(StampCost::from_whole(u32::from(COST)))
     });
     assert!(proves_link(&deliver_link_request(&mut responder, &low)));
 }
@@ -5372,7 +5378,8 @@ fn enforced_link_cost_defaults_to_lr_cost_and_zero_disables() {
     );
     let costs = responder.link_request_costs().clone();
     costs.set_enforced(true);
-    let default_cost = u32::from(constants::LINK_REQUEST_STAMP_COST);
+    // The fractional `LR_COST` is announced and required as its whole part.
+    let default_cost = StampCost::from_whole(constants::LINK_REQUEST_STAMP_COST.whole());
 
     // No configured cost: `get_link_cost` falls back to `LR_COST`.
     let (low, _) =

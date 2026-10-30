@@ -335,9 +335,9 @@ pub struct StampRequirements {
     /// (`Transport.STAMPS_ENFORCED`).
     pub enforced: bool,
     /// Required announce stamp value (`Transport.DESTINATION_COST`).
-    pub destination_cost: u8,
+    pub destination_cost: crate::stamp::StampCost,
     /// Required path request stamp value (`Transport.PR_COST`).
-    pub path_request_cost: u8,
+    pub path_request_cost: crate::stamp::StampCost,
 }
 
 impl Default for StampRequirements {

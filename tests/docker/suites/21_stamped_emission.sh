@@ -38,8 +38,9 @@ PORT_B="${NODE_B_PORT:?Need NODE_B_PORT}"
 PORT_C="${NODE_C_PORT:?Need NODE_C_PORT}"
 
 # Protocol constants (docs/configuration.md, Stamps).
-DESTINATION_STAMP_COST=23
-LINK_REQUEST_STAMP_COST=11
+DESTINATION_STAMP_COST=23.5
+# LR_COST is 19.2; destinations announce its whole part.
+LINK_REQUEST_STAMP_COST=19
 
 # ── Runtime config through the daemon's RPC port inside node-a ──────────────
 
@@ -81,15 +82,15 @@ poll_stamped_path_requests() {
 }
 
 # poll_stamp_value PORT DEST_HASH MIN TIMEOUT — wait until the node recorded a
-# stamp of at least MIN for DEST_HASH. Stamp values are fractional, so only the
-# whole bits are compared.
+# stamp of at least MIN for DEST_HASH. Values and costs are fractional, so jq
+# compares them.
 poll_stamp_value() {
   local port="$1" dest_hash="$2" min="$3" timeout="${4:-90}"
   local deadline=$((SECONDS + timeout))
   local value=0
   while (( SECONDS < deadline )); do
-    value=$(get_identity "$port" "$dest_hash" 2>/dev/null | jq -r '(.stamp_value // 0) | floor')
-    if (( value >= min )); then
+    value=$(get_identity "$port" "$dest_hash" 2>/dev/null | jq -r '.stamp_value // 0')
+    if jq -en --argjson value "$value" --argjson min "$min" '$value >= $min' >/dev/null; then
       return 0
     fi
     sleep 1

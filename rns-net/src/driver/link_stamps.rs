@@ -12,6 +12,7 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use rns_core::stamp::StampCost;
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::x25519::X25519PrivateKey;
 
@@ -21,9 +22,11 @@ use crate::common::event::StampedLinkKeys;
 impl Driver {
     /// Handle `Event::CreateLink`.
     ///
-    /// Unstamped links are created immediately. When the destination announced
-    /// a non-zero link request cost and `STAMP_LRS` is enabled, the keys are
-    /// generated on a helper thread and the link is completed later.
+    /// Unstamped links are created immediately. When `STAMP_LRS` is enabled
+    /// and the destination announced a non-zero link request cost, or
+    /// `ALWAYS_STAMP_LRS` supplies the local `LR_COST` for one that announced
+    /// none, the keys are generated on a helper thread and the link is
+    /// completed later.
     pub(crate) fn handle_create_link(
         &mut self,
         dest_hash: [u8; 16],
@@ -31,8 +34,8 @@ impl Driver {
         response_tx: mpsc::Sender<[u8; 16]>,
     ) {
         let stamp_cost = self
-            .recall_link_cost(&dest_hash)
-            .filter(|cost| *cost > 0 && self.stamp_settings.stamp_lrs);
+            .outbound_link_stamp_cost(&dest_hash)
+            .filter(|cost| *cost > StampCost::ZERO && self.stamp_settings.stamp_lrs);
         match stamp_cost {
             Some(cost) => self.spawn_stamped_link_keys(
                 dest_hash,
@@ -45,6 +48,30 @@ impl Driver {
         }
     }
 
+    /// The cost to stamp an outbound link request to `dest_hash` at, before
+    /// `STAMP_LRS` is applied: the announced cost, else `LR_COST` when
+    /// `ALWAYS_STAMP_LRS` is set.
+    ///
+    /// Upstream a8cc6cb2 writes this as
+    /// `recall_link_cost(h) or LR_COST if ALWAYS_STAMP_LRS else None`
+    /// (Link.py:311). Python parses that as
+    /// `(recall_link_cost(h) or LR_COST) if ALWAYS_STAMP_LRS else None`, which
+    /// ignores announced costs unless `always_stamp_lrs` is set. That
+    /// contradicts both the option's description ("even when no link cost is
+    /// announced") and the example config of the same commit (link requests
+    /// are stamped "if a cost has been announced by the destination"), so this
+    /// implements the documented intent,
+    /// `recall_link_cost(h) or (LR_COST if ALWAYS_STAMP_LRS else None)`.
+    pub(crate) fn outbound_link_stamp_cost(&self, dest_hash: &[u8; 16]) -> Option<StampCost> {
+        match self.recall_link_cost(dest_hash) {
+            Some(cost) if cost > 0 => Some(StampCost::from_whole(u32::from(cost))),
+            _ if self.stamp_settings.always_stamp_lrs => {
+                Some(self.link_manager.link_request_costs().default_cost())
+            }
+            _ => None,
+        }
+    }
+
     /// Grind stamped link request keys off the driver thread.
     ///
     /// On success the keys are posted back as `Event::CompleteStampedLink`.
@@ -54,7 +81,7 @@ impl Driver {
         &mut self,
         dest_hash: [u8; 16],
         dest_sig_pub_bytes: [u8; 32],
-        stamp_cost: u8,
+        stamp_cost: StampCost,
         timeout: Duration,
         response_tx: mpsc::Sender<[u8; 16]>,
     ) {

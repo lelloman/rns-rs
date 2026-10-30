@@ -341,15 +341,118 @@ impl StampValue {
         f64::from(self.0) / f64::from(COST_FP)
     }
 
-    /// Whether the value reaches a whole-number cost. Because a value never
-    /// exceeds its leading zero count by a full step, this agrees with the
-    /// legacy integer comparison.
-    pub const fn meets(self, cost: u32) -> bool {
-        self.whole() >= cost
+    /// Whether the value reaches `cost`, as upstream compares a reported
+    /// value with a required cost (`value < get_link_cost()`). Validity of
+    /// a stamp itself is decided against the target, see
+    /// [`StampCost::admits`].
+    pub const fn meets(self, cost: StampCost) -> bool {
+        self.0 >= cost.0
     }
 }
 
 impl fmt::Display for StampValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.as_f64(), f)
+    }
+}
+
+/// Global hard cap on stamp costs (`Transport.STAMP_COST_CAP`).
+pub const STAMP_COST_CAP: u32 = 100;
+
+const MAX_COST_FP: u32 = STAMP_COST_CAP * COST_FP;
+
+const _: () = assert!((MAX_FP - MAX_COST_FP) >> COST_FP_BITS >= MANTISSA_BITS);
+
+/// A stamp cost in fixed point, in 1/256 steps, clamped to
+/// [`STAMP_COST_CAP`]. Since rgit `a8cc6cb2` the default costs are
+/// fractional; a cost becomes a target through [`TAB`] exactly as a value is
+/// read through it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StampCost(u32);
+
+impl StampCost {
+    pub const ZERO: StampCost = StampCost(0);
+
+    /// Cost from its fixed-point representation, clamped to the cap.
+    pub const fn from_fp(fp: u32) -> Self {
+        StampCost(if fp > MAX_COST_FP { MAX_COST_FP } else { fp })
+    }
+
+    /// Cost of a whole number of bits, such as a configured integer cost.
+    pub const fn from_whole(cost: u32) -> Self {
+        StampCost::from_fp(cost.saturating_mul(COST_FP))
+    }
+
+    /// Cost read from a float, rounded to the nearest grid point and clamped
+    /// (`cost_to_fp`). Non-finite or negative input reads as zero.
+    pub fn from_f64(cost: f64) -> Self {
+        if !cost.is_finite() || cost <= 0.0 {
+            return StampCost::ZERO;
+        }
+        // floor(cost * COST_FP + 0.5); truncation floors positive input.
+        let fp = cost * COST_FP as f64 + 0.5;
+        if fp >= MAX_COST_FP as f64 {
+            StampCost(MAX_COST_FP)
+        } else {
+            StampCost(fp as u32)
+        }
+    }
+
+    /// Fixed-point representation.
+    pub const fn fp(self) -> u32 {
+        self.0
+    }
+
+    /// Whole bits of the cost (`cost_int`), as announced in the one-byte
+    /// link request cost.
+    pub const fn whole(self) -> u32 {
+        self.0 >> COST_FP_BITS
+    }
+
+    /// The cost as upstream reports it (`cost_from_fp`).
+    pub fn as_f64(self) -> f64 {
+        f64::from(self.0) / f64::from(COST_FP)
+    }
+
+    /// The stamp target for this cost (`target_from_fp`) as a big-endian
+    /// 256-bit number, or `None` for a zero cost, whose target is `2^256`
+    /// and admits every product.
+    pub fn target(self) -> Option<[u8; 32]> {
+        if self.0 == 0 {
+            return None;
+        }
+        // i, f = divmod(256*COST_FP - fp, COST_FP);
+        // target = (TAB[f] << i) >> MANTISSA_BITS. With fp >= 1, i <= 255
+        // and TAB[f] < 2^34, so the target fits in 256 bits.
+        let rest = MAX_FP - self.0;
+        let exponent = rest >> COST_FP_BITS;
+        let mantissa = TAB[(rest & (COST_FP - 1)) as usize];
+        // The cap keeps the exponent at 156 or more, so the shift is left.
+        let shift = exponent - MANTISSA_BITS;
+        let (limb, offset) = ((shift / 64) as usize, shift % 64);
+        let mut limbs = [0u64; 4];
+        limbs[limb] = mantissa << offset;
+        if offset > 0 && limb + 1 < limbs.len() {
+            limbs[limb + 1] = mantissa >> (64 - offset);
+        }
+        let mut target = [0u8; 32];
+        for (i, limb) in limbs.iter().rev().enumerate() {
+            target[i * 8..i * 8 + 8].copy_from_slice(&limb.to_be_bytes());
+        }
+        Some(target)
+    }
+
+    /// Whether a stamp product meets this cost: the product, read as a
+    /// big-endian integer, is at most the target (`stamp_valid`).
+    pub fn admits(self, product: &[u8; 32]) -> bool {
+        match self.target() {
+            None => true,
+            Some(target) => product[..] <= target[..],
+        }
+    }
+}
+
+impl fmt::Display for StampCost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.as_f64(), f)
     }
@@ -484,8 +587,8 @@ mod tests {
             assert_eq!(value.whole(), legacy);
             assert!(value.fp() >= legacy * COST_FP);
             assert!(value.fp() < (legacy + 1) * COST_FP);
-            assert!(value.meets(legacy));
-            assert!(!value.meets(legacy + 1));
+            assert!(value.meets(StampCost::from_whole(legacy)));
+            assert!(!value.meets(StampCost::from_whole(legacy + 1)));
         }
     }
 
@@ -513,6 +616,137 @@ mod tests {
         // so the mantissa is exactly TAB[0]. An exact grid match floors one
         // step below the ceiling, as in upstream.
         assert_eq!(value_of_product(&one).fp(), 256 * COST_FP - 1);
+    }
+
+    /// `(cost, cost_to_fp(cost), target_from_fp(fp))` from upstream rgit
+    /// `a8cc6cb2`, including its fractional default costs.
+    const UPSTREAM_TARGETS: &[(f64, u32, &str)] = &[
+        (
+            23.5,
+            6016,
+            "0000016a09e66780000000000000000000000000000000000000000000000000",
+        ),
+        (
+            25.0,
+            6400,
+            "0000008000000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            19.8,
+            5069,
+            "0000125e85711800000000000000000000000000000000000000000000000000",
+        ),
+        (
+            19.2,
+            4915,
+            "00001bdf69c3f000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            0.01,
+            3,
+            "fdedd1b480000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            1.0,
+            256,
+            "8000000000000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            8.0,
+            2048,
+            "0100000000000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            99.99,
+            25597,
+            "0000000000000000000000001021681438000000000000000000000000000000",
+        ),
+        (
+            100.0,
+            25600,
+            "0000000000000000000000001000000000000000000000000000000000000000",
+        ),
+    ];
+
+    /// `(fp, target_from_fp(fp))` from upstream, around step boundaries.
+    const UPSTREAM_FP_TARGETS: &[(u32, &str)] = &[
+        (
+            1,
+            "ff4ecb5940000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            255,
+            "8058d7d2c0000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            257,
+            "7fa765aca0000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            8447,
+            "000000008058d7d2c00000000000000000000000000000000000000000000000",
+        ),
+        (
+            8448,
+            "0000000080000000000000000000000000000000000000000000000000000000",
+        ),
+        (
+            8455,
+            "000000007d98c9e6200000000000000000000000000000000000000000000000",
+        ),
+    ];
+
+    #[test]
+    fn costs_and_targets_match_upstream() {
+        for &(cost, fp, target) in UPSTREAM_TARGETS {
+            let cost = StampCost::from_f64(cost);
+            assert_eq!(cost.fp(), fp);
+            assert_eq!(hex(&cost.target().unwrap()), target);
+        }
+        for &(fp, target) in UPSTREAM_FP_TARGETS {
+            assert_eq!(hex(&StampCost::from_fp(fp).target().unwrap()), target);
+        }
+        assert_eq!(StampCost::ZERO.target(), None);
+        assert!(StampCost::ZERO.admits(&[0xff; 32]));
+        assert_eq!(
+            StampCost::from_f64(1000.0),
+            StampCost::from_whole(STAMP_COST_CAP)
+        );
+        assert_eq!(StampCost::from_f64(-1.0), StampCost::ZERO);
+        assert_eq!(StampCost::from_f64(f64::NAN), StampCost::ZERO);
+        // Rounded to nearest, not floored like a value.
+        assert_eq!(StampCost::from_f64(19.8).fp(), 5069);
+        assert_eq!(StampValue::from_f64(19.8).fp(), 5068);
+    }
+
+    #[test]
+    fn whole_cost_targets_are_leading_zero_counts() {
+        for i in 0u32..4096 {
+            let product = sha256::sha256(&i.to_be_bytes());
+            let lz = leading_zeros(&product);
+            for cost in [0, 1, lz.saturating_sub(1), lz, lz + 1, 8, 100] {
+                let cost = StampCost::from_whole(cost);
+                assert_eq!(cost.admits(&product), lz >= cost.whole(), "{i} {cost}");
+            }
+        }
+    }
+
+    #[test]
+    fn target_agrees_with_the_value_off_the_boundary() {
+        // A product meets a cost exactly when its value does, except for a
+        // product equal to the target itself, which the target admits.
+        for i in 0u32..4096 {
+            let product = sha256::sha256(&i.to_le_bytes());
+            let value = value_of_product(&product);
+            for fp in [1, 37, 255, 256, 300, value.fp(), value.fp() + 1, 6016] {
+                let cost = StampCost::from_fp(fp);
+                assert_eq!(cost.admits(&product), value.meets(cost), "{i} {fp}");
+            }
+        }
+        let cost = StampCost::from_fp(6016);
+        let target = cost.target().unwrap();
+        assert!(cost.admits(&target));
+        assert!(!value_of_product(&target).meets(cost));
     }
 
     #[test]

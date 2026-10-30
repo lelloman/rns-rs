@@ -4,6 +4,7 @@ use crate::interface::Writer;
 use rns_core::announce::AnnounceData;
 use rns_core::constants;
 use rns_core::packet::{PacketFlags, RawPacket};
+use rns_core::stamp::StampCost;
 use rns_core::transport::announce_verify_queue::{AnnounceVerifyKey, PendingAnnounce};
 use rns_core::transport::types::InterfaceInfo;
 use rns_crypto::identity::Identity;
@@ -5937,6 +5938,7 @@ fn runtime_config_list_contains_global_keys() {
     assert!(keys.contains(&"global.stamp_path_requests".to_string()));
     assert!(keys.contains(&"global.lr_stamps_enforced".to_string()));
     assert!(keys.contains(&"global.stamp_link_requests".to_string()));
+    assert!(keys.contains(&"global.always_stamp_link_requests".to_string()));
 }
 
 #[test]
@@ -5946,7 +5948,7 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
         "global.stamp_destinations",
         "global.stamp_path_requests",
         "global.lr_stamps_enforced",
-        "global.stamp_link_requests",
+        "global.always_stamp_link_requests",
     ] {
         let QueryResponse::RuntimeConfigEntry(Some(entry)) =
             driver.handle_query(QueryRequest::GetRuntimeConfig { key: key.into() })
@@ -5985,8 +5987,8 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
             }),
         ),
         (
-            "global.stamp_link_requests",
-            Box::new(|d: &Driver| d.stamp_settings.stamp_lrs),
+            "global.always_stamp_link_requests",
+            Box::new(|d: &Driver| d.stamp_settings.always_stamp_lrs),
         ),
     ] {
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
@@ -6019,6 +6021,32 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
         assert!(!read_back(&driver), "{key} not reset");
     }
     assert!(!shared.load(Ordering::Relaxed));
+}
+
+#[test]
+fn runtime_config_stamp_link_requests_defaults_on_and_can_be_turned_off() {
+    // Upstream a8cc6cb2 turned STAMP_LRS back on and removed its config
+    // option; the runtime key still switches it.
+    let mut driver = new_test_driver();
+    let key = "global.stamp_link_requests";
+    let QueryResponse::RuntimeConfigEntry(Some(entry)) =
+        driver.handle_query(QueryRequest::GetRuntimeConfig { key: key.into() })
+    else {
+        panic!("expected runtime config entry for {key}");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
+    assert_eq!(entry.default, RuntimeConfigValue::Bool(true));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: key.into(),
+        value: RuntimeConfigValue::Bool(false),
+    });
+    assert!(matches!(response, QueryResponse::RuntimeConfigSet(Ok(_))));
+    assert!(!driver.stamp_settings.stamp_lrs);
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig { key: key.into() });
+    assert!(matches!(response, QueryResponse::RuntimeConfigReset(Ok(_))));
+    assert!(driver.stamp_settings.stamp_lrs);
 }
 
 #[test]
@@ -12391,20 +12419,18 @@ fn stamped_link_driver(
     let mut state = make_known_destination_state(dest, time::now(), InterfaceId(1));
     state.lr_cost = lr_cost;
     driver.known_destinations.insert(dest, state);
-    // STAMP_LRS is opt-in since upstream d7749b0b (`[stamps] stamp_lrs`).
-    driver.stamp_settings.stamp_lrs = true;
     (driver, sent)
 }
 
 #[test]
-fn create_link_is_not_stamped_unless_stamp_lrs_is_enabled() {
+fn create_link_is_not_stamped_when_stamp_lrs_is_off() {
     // Link.__init__ defers to a stamped key only `if self.stamp_cost and
-    // RNS.Transport.STAMP_LRS` (Link.py:313); STAMP_LRS defaults to off.
+    // RNS.Transport.STAMP_LRS` (Link.py:313).
     let (tx, rx) = event::channel();
     let dest = [0x69; 16];
     let (mut driver, sent) = stamped_link_driver(tx, rx, dest, Some(4));
-    driver.stamp_settings.stamp_lrs = rns_core::constants::STAMP_LRS;
-    assert!(!driver.stamp_settings.stamp_lrs);
+    assert!(driver.stamp_settings.stamp_lrs);
+    driver.stamp_settings.stamp_lrs = false;
 
     let (resp_tx, resp_rx) = mpsc::channel();
     driver.handle_create_link(dest, [0xAA; 32], resp_tx);
@@ -12415,6 +12441,77 @@ fn create_link_is_not_stamped_unless_stamp_lrs_is_enabled() {
     driver.flush_pending_link_frames();
     driver.flush_writers();
     assert!(sent_link_request(&sent.lock().unwrap(), dest).is_some());
+}
+
+#[test]
+fn outbound_link_stamp_cost_prefers_the_announced_cost() {
+    // The documented intent of Link.py:311 (a8cc6cb2):
+    // `recall_link_cost(h) or (LR_COST if ALWAYS_STAMP_LRS else None)`.
+    // Python parses the line as written as
+    // `(recall_link_cost(h) or LR_COST) if ALWAYS_STAMP_LRS else None`,
+    // which would leave the first case unstamped.
+    let dest = [0x6A; 16];
+    let lr_cost = rns_core::constants::LINK_REQUEST_STAMP_COST;
+    let cases = [
+        (Some(4), false, Some(StampCost::from_whole(4))),
+        (Some(4), true, Some(StampCost::from_whole(4))),
+        (None, false, None),
+        (None, true, Some(lr_cost)),
+        // A zero cost is falsy, as in Python's `or`.
+        (Some(0), false, None),
+        (Some(0), true, Some(lr_cost)),
+    ];
+    for (announced, always, expected) in cases {
+        let (tx, rx) = event::channel();
+        let (mut driver, _sent) = stamped_link_driver(tx, rx, dest, announced);
+        driver.stamp_settings.always_stamp_lrs = always;
+        assert_eq!(
+            driver.outbound_link_stamp_cost(&dest),
+            expected,
+            "announced {announced:?}, always_stamp_lrs {always}"
+        );
+    }
+
+    // The fallback is the local, configurable LR_COST, fraction included.
+    let (tx, rx) = event::channel();
+    let (mut driver, _sent) = stamped_link_driver(tx, rx, dest, None);
+    driver.stamp_settings.always_stamp_lrs = true;
+    driver
+        .link_manager
+        .link_request_costs()
+        .set_default_cost(StampCost::from_whole(3));
+    assert_eq!(
+        driver.outbound_link_stamp_cost(&dest),
+        Some(StampCost::from_whole(3))
+    );
+}
+
+#[test]
+fn create_link_is_stamped_without_an_announced_cost_when_always_stamp_lrs_is_set() {
+    let (tx, rx) = event::channel();
+    let dest = [0x6B; 16];
+    let (mut driver, sent) = stamped_link_driver(tx.clone(), rx, dest, None);
+    driver.stamp_settings.always_stamp_lrs = true;
+    driver
+        .link_manager
+        .link_request_costs()
+        .set_default_cost(StampCost::from_whole(4));
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    driver.handle_create_link(dest, [0xAA; 32], resp_tx);
+    // The stamped key is ground off the driver thread.
+    assert!(matches!(resp_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+    let link_id = resp_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_ne!(link_id, [0u8; 16]);
+    let request = sent_link_request(&sent.lock().unwrap(), dest).expect("LINKREQUEST sent");
+    let value = rns_core::link::handshake::link_request_stamp_value(&dest, request.data())
+        .expect("link request parses");
+    assert!(value.meets(StampCost::from_whole(4)));
 }
 
 #[test]
@@ -12510,7 +12607,7 @@ fn create_link_with_announced_cost_defers_until_the_worker_reports() {
     let request = sent_link_request(&sent.lock().unwrap(), dest).expect("LINKREQUEST sent");
     let value = rns_core::link::handshake::link_request_stamp_value(&dest, request.data())
         .expect("link request parses");
-    assert!(value.meets(4));
+    assert!(value.meets(StampCost::from_whole(4)));
 }
 
 #[test]
@@ -12520,7 +12617,13 @@ fn stamped_link_request_timeout_fails_the_link_without_blocking_the_driver() {
     let started = Instant::now();
     // Cost 100 is unattainable; an already-expired deadline must make the
     // worker give up and answer with the all-zero link id (STAMP_FAILURE).
-    driver.spawn_stamped_link_keys([0x6D; 16], [0xAA; 32], 100, Duration::ZERO, resp_tx);
+    driver.spawn_stamped_link_keys(
+        [0x6D; 16],
+        [0xAA; 32],
+        StampCost::from_whole(100),
+        Duration::ZERO,
+        resp_tx,
+    );
     assert!(
         started.elapsed() < Duration::from_secs(1),
         "stamp work must not run on the driver thread"
@@ -12562,7 +12665,7 @@ fn create_link_with_announced_cost_stamps_off_thread_and_completes() {
     let value = rns_core::link::handshake::link_request_stamp_value(&dest, request.data())
         .expect("link request parses");
     assert!(
-        value.meets(4),
+        value.meets(StampCost::from_whole(4)),
         "link request key must carry the announced cost"
     );
 }
@@ -12575,7 +12678,8 @@ fn complete_stamped_link_event_rebuilds_the_worker_keys_exactly() {
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let (prv, sig_prv, stamp_value) =
-        crate::stamps::generate_stamped_link_keys(&dest, 4, deadline).unwrap();
+        crate::stamps::generate_stamped_link_keys(&dest, StampCost::from_whole(4), deadline)
+            .unwrap();
     let expected_pub = prv.public_key().public_bytes();
     let expected_sig_pub = sig_prv.public_key().public_bytes();
 
@@ -12623,7 +12727,8 @@ fn complete_stamped_link_while_draining_is_rejected() {
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let (prv, sig_prv, stamp_value) =
-        crate::stamps::generate_stamped_link_keys(&dest, 1, deadline).unwrap();
+        crate::stamps::generate_stamped_link_keys(&dest, StampCost::from_whole(1), deadline)
+            .unwrap();
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(Event::CompleteStampedLink(Box::new(
         crate::common::event::StampedLinkKeys {
@@ -12654,7 +12759,13 @@ fn complete_stamped_link_while_draining_is_rejected() {
 fn stamped_link_caller_is_not_left_waiting_when_the_driver_is_gone() {
     let mut driver = new_test_driver();
     let (resp_tx, resp_rx) = mpsc::channel();
-    driver.spawn_stamped_link_keys([0x70; 16], [0xAA; 32], 4, Duration::from_secs(30), resp_tx);
+    driver.spawn_stamped_link_keys(
+        [0x70; 16],
+        [0xAA; 32],
+        StampCost::from_whole(4),
+        Duration::from_secs(30),
+        resp_tx,
+    );
     // The driver goes away before (or while) the worker finishes. Either the
     // worker's post fails and it answers with the zero id, or the completion
     // event is dropped with the queue and the channel closes. The caller must
@@ -12681,8 +12792,8 @@ fn stamping_path_request_driver(
         tx,
         None,
         crate::stamper::StampTargets {
-            destination_value: 6,
-            path_request_value: 6,
+            destination_value: StampCost::from_whole(6),
+            path_request_value: StampCost::from_whole(6),
         },
     )));
     driver.engine.register_interface(make_interface_info(1));
@@ -12716,7 +12827,11 @@ fn assert_valid_path_request_stamp(data: &[u8], dest: &[u8; 16], tag: &[u8]) {
     );
     let material = crate::stamper::Stamper::path_request_stamp_material(dest, tag);
     let workblock = rns_core::stamp::stamp_workblock(&material, 0);
-    assert!(rns_core::stamp::stamp_valid(&data[50..], 6, &workblock));
+    assert!(rns_core::stamp::stamp_valid(
+        &data[50..],
+        StampCost::from_whole(6),
+        &workblock
+    ));
 }
 
 #[test]
@@ -12805,7 +12920,7 @@ fn driver_stays_responsive_while_a_stamp_is_being_ground() {
     driver.spawn_stamped_link_keys(
         stamped_dest,
         [0xAA; 32],
-        100,
+        StampCost::from_whole(100),
         Duration::from_secs(3),
         stamped_tx,
     );
@@ -12959,7 +13074,7 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
          enforce_stamps = yes\n\
          stamp_destinations = yes\n\
          stamp_prs = yes\n\
-         stamp_lrs = yes\n\
+         always_stamp_lrs = yes\n\
          destination_cost = 18\n\
          destination_value = 27\n\
          pr_cost = 11\n\
@@ -12977,15 +13092,16 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
         driver.engine.stamp_requirements(),
         rns_core::transport::types::StampRequirements {
             enforced: true,
-            destination_cost: 18,
-            path_request_cost: 11,
+            destination_cost: StampCost::from_whole(18),
+            path_request_cost: StampCost::from_whole(11),
         }
     );
     assert!(driver.engine.stamp_prs());
     assert!(shared.load(Ordering::Relaxed));
     assert!(driver.stamp_settings.stamp_lrs);
+    assert!(driver.stamp_settings.always_stamp_lrs);
     assert!(driver.stamp_settings.lr_stamps_enforced);
-    assert_eq!(driver.stamp_settings.lr_cost, 9);
+    assert_eq!(driver.stamp_settings.lr_cost, StampCost::from_whole(9));
     assert_eq!(
         driver.stamp_settings.link_stamp_timeout(),
         Duration::from_secs(4)
@@ -12993,8 +13109,8 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
     assert_eq!(
         driver.stamper.targets(),
         crate::stamper::StampTargets {
-            destination_value: 27,
-            path_request_value: 13,
+            destination_value: StampCost::from_whole(27),
+            path_request_value: StampCost::from_whole(13),
         }
     );
     assert_eq!(driver.link_manager.link_request_costs().get(&[0u8; 16]), 9);
@@ -13010,6 +13126,7 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
         "global.stamp_destinations",
         "global.stamp_path_requests",
         "global.stamp_link_requests",
+        "global.always_stamp_link_requests",
     ] {
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: key.into(),

@@ -201,12 +201,15 @@ impl Destination {
 
     /// The effective announce stamp target for a node whose default target
     /// is `default_value` (upstream `Destination.target_value`).
-    pub fn effective_target_value(&self, default_value: u8) -> u8 {
-        let cap = rns_core::constants::STAMP_COST_CAP;
+    pub fn effective_target_value(
+        &self,
+        default_value: rns_core::stamp::StampCost,
+    ) -> rns_core::stamp::StampCost {
+        // StampCost is already clamped to STAMP_COST_CAP.
         self.target_value
+            .map(|value| rns_core::stamp::StampCost::from_whole(u32::from(value)))
             .unwrap_or(default_value)
             .max(default_value)
-            .min(cap)
     }
 
     /// Encrypt plaintext using this destination's GROUP key.

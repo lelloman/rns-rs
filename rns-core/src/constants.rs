@@ -3,6 +3,8 @@
 // Ported from Python RNS source
 // =============================================================================
 
+use rns_crypto::stamp_value::StampCost;
+
 // --- From Reticulum.py ---
 
 /// Maximum transmission unit in bytes
@@ -93,22 +95,28 @@ pub const STAMPS_ENFORCED: bool = false;
 /// Hard cap on stamp cost.
 pub const STAMP_COST_CAP: u8 = 100;
 
-/// Default required announce stamp cost.
-pub const DESTINATION_STAMP_COST: u8 = 23;
+/// Default required announce stamp cost (`Transport.DESTINATION_COST`,
+/// 23.5 since rgit a8cc6cb2; `cost_to_fp(23.5)`).
+pub const DESTINATION_STAMP_COST: StampCost = StampCost::from_fp(6016);
 
 /// Default target stamp value for emitted announces (upstream
 /// `Transport.DESTINATION_VALUE`, raised from 23 to 25 in d7749b0b).
-pub const DESTINATION_STAMP_VALUE: u8 = 25;
+pub const DESTINATION_STAMP_VALUE: StampCost = StampCost::from_whole(25);
 
-/// Default required path request stamp cost.
-pub const PATH_REQUEST_STAMP_COST: u8 = 19;
+/// Default required path request stamp cost (`Transport.PR_COST`, 19.8
+/// since a8cc6cb2; `cost_to_fp(19.8)`).
+pub const PATH_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(5069);
 
-/// Default target stamp value for emitted path requests.
-pub const PATH_REQUEST_STAMP_VALUE: u8 = 19;
+/// Default target stamp value for emitted path requests (`Transport.PR_VALUE`,
+/// 19.8 since a8cc6cb2).
+pub const PATH_REQUEST_STAMP_VALUE: StampCost = StampCost::from_fp(5069);
 
-/// Default required link request stamp cost when a destination does not
-/// announce its own.
-pub const LINK_REQUEST_STAMP_COST: u8 = 11;
+/// Default link request stamp cost (`Transport.LR_COST`, 19.2 since
+/// a8cc6cb2; `cost_to_fp(19.2)`). A destination that sets no cost of its own
+/// announces and requires the whole part (`get_link_cost` truncates); the
+/// fraction only applies when `ALWAYS_STAMP_LRS` stamps a request to a
+/// destination that announced no cost.
+pub const LINK_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(4915);
 
 /// Whether destination announces emitted by this instance are stamped.
 pub const STAMP_DESTINATIONS: bool = false;
@@ -117,9 +125,14 @@ pub const STAMP_DESTINATIONS: bool = false;
 pub const STAMP_PRS: bool = false;
 
 /// Whether link requests emitted by this instance are stamped when the
-/// destination announces a cost. Off by default since upstream d7749b0b;
-/// `[stamps] stamp_lrs` enables it.
-pub const STAMP_LRS: bool = false;
+/// destination announces a cost. On again since upstream a8cc6cb2, which
+/// also dropped the `[stamps] stamp_lrs` option.
+pub const STAMP_LRS: bool = true;
+
+/// Whether link requests are stamped at `LINK_REQUEST_STAMP_COST` even when
+/// the destination announced no cost (`Transport.ALWAYS_STAMP_LRS`,
+/// `[stamps] always_stamp_lrs`, a8cc6cb2).
+pub const ALWAYS_STAMP_LRS: bool = false;
 
 /// Whether link request stamp requirements are enforced.
 pub const LR_STAMPS_ENFORCED: bool = false;
@@ -141,10 +154,8 @@ pub const PATH_REQUEST_STAMP_TIMEOUT: u64 = 15;
 /// (`lr_stamp_timeout`, `pr_stamp_timeout`), in seconds.
 pub const STAMP_TIMEOUT_MIN: f64 = 0.020;
 
-const _: () = assert!(DESTINATION_STAMP_COST <= STAMP_COST_CAP);
-const _: () = assert!(PATH_REQUEST_STAMP_COST <= STAMP_COST_CAP);
-const _: () = assert!(LINK_REQUEST_STAMP_COST <= STAMP_COST_CAP);
-const _: () = assert!(LINK_REQUEST_STAMP_COST <= LINK_COST_CAP);
+const _: () = assert!(STAMP_COST_CAP as u32 == rns_crypto::stamp_value::STAMP_COST_CAP);
+const _: () = assert!(LINK_REQUEST_STAMP_COST.whole() <= LINK_COST_CAP as u32);
 
 // --- From Packet.py ---
 
@@ -775,24 +786,25 @@ mod tests {
         assert_eq!(PR_EXT_PAYLOAD_LENGTH, 16);
         assert_eq!(PATH_REQUEST_STAMPED_LENGTH, 64);
         assert_eq!(EXT_PAYLOAD_MARKER, 0xC1);
-        assert_eq!(DESTINATION_STAMP_COST, 23);
-        assert_eq!(DESTINATION_STAMP_VALUE, 25);
-        assert_eq!(PATH_REQUEST_STAMP_COST, 19);
-        assert_eq!(PATH_REQUEST_STAMP_VALUE, 19);
-        assert_eq!(LINK_REQUEST_STAMP_COST, 11);
+        assert_eq!(DESTINATION_STAMP_COST, StampCost::from_f64(23.5));
+        assert_eq!(DESTINATION_STAMP_VALUE, StampCost::from_f64(25.0));
+        assert_eq!(PATH_REQUEST_STAMP_COST, StampCost::from_f64(19.8));
+        assert_eq!(PATH_REQUEST_STAMP_VALUE, StampCost::from_f64(19.8));
+        assert_eq!(LINK_REQUEST_STAMP_COST, StampCost::from_f64(19.2));
         assert_eq!(LINK_COST_CAP, 40);
         assert_eq!(LINK_STAMP_TIMEOUT, 15);
         assert_eq!(PATH_REQUEST_STAMP_TIMEOUT, 15);
         assert_eq!(HOP_LIMITER, PATHFINDER_M);
-        // Generation, emission and enforcement all stay opt-in in 1.6.0
-        // (upstream d7749b0b turned STAMP_LRS off as well).
+        // Generation, emission and enforcement stay opt-in in 1.6.0, except
+        // that link requests are stamped when the destination announced a
+        // cost (a8cc6cb2 turned STAMP_LRS back on).
         let opt_in = [
             STAMPS_ENFORCED,
             LR_STAMPS_ENFORCED,
             STAMP_DESTINATIONS,
             STAMP_PRS,
-            STAMP_LRS,
+            ALWAYS_STAMP_LRS,
         ];
-        assert_eq!(opt_in, [false; 5]);
+        assert_eq!((opt_in, STAMP_LRS), ([false; 5], true));
     }
 }

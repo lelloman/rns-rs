@@ -4116,7 +4116,12 @@ fn discovery_announce_received_by_client() {
                 assert_eq!(iface.interface_type, "BackboneInterface");
                 assert_eq!(iface.reachable_on.as_deref(), Some("10.0.0.1"));
                 assert_eq!(iface.port, Some(port));
-                assert!(iface.stamp_value.meets(8), "stamp should meet minimum cost");
+                assert!(
+                    iface
+                        .stamp_value
+                        .meets(rns_core::stamp::StampCost::from_whole(8)),
+                    "stamp should meet minimum cost"
+                );
                 found = true;
                 break;
             }
@@ -6310,13 +6315,13 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
         assert!(
             recorded
                 .stamp_value
-                .meets(u32::from(rns_core::constants::DESTINATION_STAMP_COST)),
+                .meets(rns_core::constants::DESTINATION_STAMP_COST),
             "{name} recorded stamp value {} below the destination cost",
             recorded.stamp_value
         );
         assert_eq!(
             recorded.lr_cost,
-            Some(rns_core::constants::LINK_REQUEST_STAMP_COST),
+            Some(rns_core::constants::LINK_REQUEST_STAMP_COST.whole() as u8),
             "{name} must record the announced link request cost"
         );
     }
@@ -6421,10 +6426,10 @@ fn test_stamped_link_cost_is_announced_ground_and_enforced() {
         .unwrap();
 
     // Destination.set_link_cost clamps to LINK_COST_CAP; get_link_cost falls
-    // back to LR_COST until a cost is set.
+    // back to LR_COST, truncated to whole bits, until a cost is set.
     assert_eq!(
         alice.link_cost(&alice_dest.hash.0),
-        rns_core::constants::LINK_REQUEST_STAMP_COST
+        rns_core::constants::LINK_REQUEST_STAMP_COST.whole() as u8
     );
     assert_eq!(
         alice.set_link_cost(alice_dest.hash.0, 1000),
@@ -6461,10 +6466,8 @@ fn test_stamped_link_cost_is_announced_ground_and_enforced() {
     set_runtime_bool(&alice, "global.lr_stamps_enforced", true);
     assert!(alice.link_request_stamps_enforced());
 
-    // Link request stamping is opt-in (Transport.STAMP_LRS defaults to off);
-    // once on, Bob grinds to the announced cost, which meets Alice's
-    // requirement.
-    set_runtime_bool(&bob, "global.stamp_link_requests", true);
+    // Link request stamping is on by default (Transport.STAMP_LRS, a8cc6cb2):
+    // Bob grinds to the announced cost, which meets Alice's requirement.
     let link_id = bob.create_link(alice_dest.hash.0, alice_sig_pub).unwrap();
     let (bob_link, _, bob_is_initiator) =
         wait_for_link_established(&bob_rx, TIMEOUT).expect("stamped link not established");

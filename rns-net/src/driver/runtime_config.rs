@@ -1465,6 +1465,13 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Stamp link requests to destinations that announce a link request cost (Transport.STAMP_LRS); keys are ground off the driver thread.",
             )),
+            "global.always_stamp_link_requests" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Bool(self.stamp_settings.always_stamp_lrs),
+                RuntimeConfigValue::Bool(defaults.always_stamp_link_requests),
+                RuntimeConfigApplyMode::Immediate,
+                "Also stamp link requests to destinations that announce no link request cost, at the local lr_cost (Transport.ALWAYS_STAMP_LRS).",
+            )),
             "global.direct_connect_policy" => Some(make_entry(
                 key,
                 RuntimeConfigValue::String(Self::holepunch_policy_name(
@@ -1525,6 +1532,7 @@ impl Driver {
             "global.stamp_path_requests",
             "global.lr_stamps_enforced",
             "global.stamp_link_requests",
+            "global.always_stamp_link_requests",
             "global.direct_connect_policy",
         ]
         .into_iter()

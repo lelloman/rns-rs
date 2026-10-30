@@ -95,14 +95,14 @@ same keys and semantics as Python Reticulum:
   # Opt in early to generation, emission and enforcement.
   # stamp_destinations = yes
   # stamp_prs = yes
-  # stamp_lrs = yes
+  # always_stamp_lrs = yes
   # enforce_stamps = yes
 
-  # destination_cost = 23
+  # destination_cost = 24
   # destination_value = 25
-  # pr_cost = 19
-  # pr_value = 19
-  # lr_cost = 11
+  # pr_cost = 20
+  # pr_value = 20
+  # lr_cost = 19
   # lr_stamp_timeout = 15
   # pr_stamp_timeout = 15
 ```
@@ -111,21 +111,26 @@ same keys and semantics as Python Reticulum:
 |-----|---------|--------|
 | `stamp_destinations` | `no` | Stamp announces emitted by this instance |
 | `stamp_prs` | `no` | Stamp path requests emitted by this instance, and unstamped ones forwarded for local clients |
-| `stamp_lrs` | `no` | Stamp outbound link requests to destinations that announced a non-zero link cost |
+| `always_stamp_lrs` | `no` | Also stamp outbound link requests to destinations that announced no link cost, at `lr_cost` |
 | `enforce_stamps` | `no` | Drop announces and path requests whose stamp is missing or below the required cost, and enforce link request stamps |
-| `destination_cost` | `23` | Required stamp value of received and transported announces |
+| `destination_cost` | `23.5` | Required stamp value of received and transported announces |
 | `destination_value` | `25` | Default target value of generated destination stamps |
-| `pr_cost` | `19` | Required stamp value of received path requests |
-| `pr_value` | `19` | Target value of generated path request stamps |
-| `lr_cost` | `11` | Link request cost announced for local destinations that set none |
+| `pr_cost` | `19.8` | Required stamp value of received path requests |
+| `pr_value` | `19.8` | Target value of generated path request stamps |
+| `lr_cost` | `19.2` | Link request cost for local destinations that set none (announced as its whole part, 19), and the cost `always_stamp_lrs` stamps at |
 | `lr_stamp_timeout` | `15` | Seconds allowed for grinding a stamped link request key before the link fails |
 | `pr_stamp_timeout` | `15` | Seconds allowed for grinding a path request stamp before the request is dropped |
 
 The four switches can only enable a feature: `no` keeps the built-in default
 rather than forcing it off, as upstream applies them. During the 1.6.x
 transition all four default to off; upstream plans to turn generation and
-emission on by default in 1.6.1 and enforcement in 1.6.2. Costs and values are
-clamped to 0-100 (`lr_cost` to 0-40), and the timeouts are floored at 20 ms.
+emission on by default in 1.6.1 and enforcement in 1.6.2. Link requests are
+already stamped whenever the destination announced a non-zero cost
+(`Transport.STAMP_LRS`, on again since upstream `a8cc6cb2`, which removed the
+`stamp_lrs` option; a leftover `stamp_lrs` line is ignored). The built-in costs
+are fractional, as upstream since `a8cc6cb2`, but configured costs and values
+are whole numbers, as upstream reads them with `as_int`. They are clamped to
+0-100 (`lr_cost` to 0-40), and the timeouts are floored at 20 ms.
 An invalid boolean or number is a configuration error. The defaults are the
 constants in `rns-core/src/constants.rs`, which mirror the upstream
 `Transport` class attributes at the current parity target.
@@ -156,13 +161,16 @@ interfaces. A path request whose stamp is not found within `pr_stamp_timeout`
 is not sent. None of this runs while the switches are off, which is the
 upstream default.
 
-The three emission switches are also runtime config keys, so a running node
-can be switched to stamped emission without a restart:
+The emission switches are also runtime config keys, so a running node can be
+switched to stamped emission without a restart. `global.stamp_link_requests`
+(`Transport.STAMP_LRS`, on by default) has no config option and can only be
+changed at runtime:
 
 ```bash
 rns-ctl config get global.stamp_destinations         # false by default
 rns-ctl config set global.stamp_path_requests true
-rns-ctl config set global.stamp_link_requests true
+rns-ctl config set global.always_stamp_link_requests true
+rns-ctl config set global.stamp_link_requests false
 rns-ctl config reset global.stamp_path_requests
 ```
 
@@ -176,15 +184,26 @@ validated inbound path request stamps as `stamped_path_requests` in
 
 Stamp values are fractional, as in upstream since rgit `78fb90ea`: the whole
 part is the leading zero bit count of the stamp product and the fraction comes
-in 1/256 steps, so a recorded value reads like `24.73046875`. Required costs
-stay whole numbers, and a value meets a cost when its whole part does, so the
-fraction never changes which stamps are accepted. Values persisted by earlier
-versions as integers load unchanged.
+in 1/256 steps, so a recorded value reads like `24.73046875`. Costs use the same
+1/256 grid (upstream `cost_to_fp` rounds 19.8 to 19.80078125), and a stamp is
+valid when its product is at most the target the mantissa table gives for the
+cost. For a whole cost that is the legacy leading-zero check. With the default
+announce cost of 23.5, roughly half the stamps that releases before `a8cc6cb2`
+grind at their old target of 23 fall short. Such an announce is still accepted
+while stamps are not enforced, but, as upstream, its stamp extension is left in
+the app data and its link request cost is not recorded. Values persisted by
+earlier versions as integers load unchanged.
 
 A stamped announce carries the destination's link request cost: the value set
 with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to
-`0..=40`), or the default 11. Initiators that see a non-zero announced cost
-grind their link request key to it. Responders only check it when
+`0..=40`), or `lr_cost` truncated to whole bits (19 by default). Initiators that
+see a non-zero announced cost grind their link request key to it. With
+`always_stamp_lrs`, requests to destinations that announced no cost (or 0) are
+ground to the local `lr_cost`, fraction included. Upstream's `Link.py` line for
+this fallback, as written, only stamps any request when `always_stamp_lrs` is
+set, contradicting its own documentation; rns-rs implements the documented
+behaviour. See the
+[audit](upstream-parity/reticulum-next-audit.md) for details. Responders only check it when
 `global.lr_stamps_enforced` (upstream `Transport.LR_STAMPS_ENFORCED`, off by
 default) is on, dropping link requests whose stamp is below the destination's
 cost; the key applies immediately and resets to the compile-time default.
