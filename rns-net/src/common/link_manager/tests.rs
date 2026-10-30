@@ -5360,6 +5360,63 @@ fn enforced_link_cost_drops_requests_below_the_destination_cost() {
     assert!(proves_link(&deliver_link_request(&mut responder, &low)));
 }
 
+/// Upstream 796ef2d4 writes the responder check as
+/// `LR_STAMPS_ENFORCED and stamp_valid(...)`, dropping the request when the
+/// stamp *is* valid. This evaluates that expression next to the responder on
+/// the same requests: it would drop sufficient stamps, accept insufficient
+/// ones, and drop every request to a destination without a link cost. See the
+/// note on the check in `LinkManager::handle_linkrequest`.
+#[test]
+fn upstream_inverted_link_request_check_drops_valid_stamps() {
+    const COST: StampCost = StampCost::from_fp(6 * 256);
+    let mut rng = OsRng;
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    let dest_hash = [0xE3; 16];
+    let mut responder = LinkManager::new();
+    responder.register_link_destination(
+        dest_hash,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptNone,
+    );
+    let costs = responder.link_request_costs().clone();
+    costs.set(dest_hash, COST.as_f64());
+    costs.set_enforced(true);
+
+    let upstream_drops = |raw: &[u8], cost: StampCost| {
+        let packet = RawPacket::unpack(raw).unwrap();
+        costs.enforced()
+            && rns_core::link::handshake::link_request_stamp_valid(&dest_hash, packet.data(), cost)
+                .unwrap()
+    };
+
+    // A stamp that meets the cost: upstream drops it, we prove the link.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let (prv, link_sig_prv, _) =
+        crate::stamps::generate_stamped_link_keys(&dest_hash, COST, deadline).unwrap();
+    let (stamped, _) = link_request_with_stamp_value(
+        &dest_hash,
+        &sig_pub_bytes,
+        Some((prv, link_sig_prv)),
+        |_| true,
+    );
+    assert!(upstream_drops(&stamped, COST));
+    assert!(proves_link(&deliver_link_request(&mut responder, &stamped)));
+
+    // A stamp below the cost: upstream accepts it, we drop it.
+    let (low, _) =
+        link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| !v.meets(COST));
+    assert!(!upstream_drops(&low, COST));
+    assert!(deliver_link_request(&mut responder, &low).is_empty());
+
+    // No link cost: every stamp is valid at 0, so upstream drops every
+    // request; we accept them.
+    costs.set(dest_hash, 0.0);
+    let (any, _) = link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |_| true);
+    assert!(upstream_drops(&any, StampCost::from_fp(0)));
+    assert!(proves_link(&deliver_link_request(&mut responder, &any)));
+}
+
 #[test]
 fn enforced_link_cost_defaults_to_lr_cost_and_zero_disables() {
     let mut rng = OsRng;
