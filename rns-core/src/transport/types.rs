@@ -195,7 +195,7 @@ pub struct ReceivedAnnounce {
     /// Fractional stamp value, or zero when absent or invalid.
     pub stamp_value: crate::stamp::StampValue,
     /// Announced link request stamp cost, if present.
-    pub lr_cost: Option<u8>,
+    pub lr_cost: Option<crate::stamp::StampCost>,
     pub hops: u8,
     pub receiving_interface: InterfaceId,
     pub rx: RxMetadata,

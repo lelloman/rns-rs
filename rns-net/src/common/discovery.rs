@@ -50,7 +50,7 @@ pub const TRANSPORT_IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_NAME: &str = "rnstransport";
 
 /// Default stamp value for interface discovery
-pub const DEFAULT_STAMP_VALUE: u8 = 16;
+pub const DEFAULT_STAMP_VALUE: StampCost = StampCost::from_whole(16);
 
 /// Workblock expand rounds for interface discovery
 pub const WORKBLOCK_EXPAND_ROUNDS: u32 = 20;
@@ -95,8 +95,9 @@ pub struct DiscoveryConfig {
     pub discovery_name: String,
     /// Announce interval in seconds (default 21600 = 6h, min 300 = 5min).
     pub announce_interval: u64,
-    /// Stamp cost for discovery PoW (default 16).
-    pub stamp_value: u8,
+    /// Stamp cost for discovery PoW (default 16), fractional since upstream
+    /// 796ef2d4 (`discovery_stamp_value`, read with `as_float`).
+    pub stamp_value: StampCost,
     /// IP/hostname this interface is reachable on.
     pub reachable_on: Option<String>,
     /// Interface type string (e.g. "BackboneInterface").
@@ -338,7 +339,7 @@ pub fn parse_interface_announce(
     app_data: &[u8],
     announced_identity_hash: &[u8; 16],
     hops: u8,
-    required_stamp_value: u8,
+    required_stamp_value: StampCost,
 ) -> Option<DiscoveredInterface> {
     let mut cache = DiscoveryStampCache::with_capacity(0);
     parse_interface_announce_with_cache(
@@ -356,7 +357,7 @@ pub fn parse_interface_announce_with_cache(
     app_data: &[u8],
     announced_identity_hash: &[u8; 16],
     hops: u8,
-    required_stamp_value: u8,
+    required_stamp_value: StampCost,
     cache: &mut DiscoveryStampCache,
 ) -> Option<DiscoveredInterface> {
     // Need at least: 1 byte flags + some data + STAMP_SIZE
@@ -398,10 +399,7 @@ pub fn parse_interface_announce_with_cache(
                 target: rns_core::logging::PATHING_LOG_TARGET,
                 "Discovery announce cache hit"
             );
-            if !entry
-                .value
-                .meets(StampCost::from_whole(u32::from(required_stamp_value)))
-            {
+            if !entry.value.meets(required_stamp_value) {
                 log::debug!("{}", insufficient_stamp_diagnostic(entry.value));
                 return None;
             }
@@ -415,11 +413,7 @@ pub fn parse_interface_announce_with_cache(
             let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
             let value = stamp_value(&workblock, &stamp);
 
-            if !stamp_valid(
-                &stamp,
-                StampCost::from_whole(u32::from(required_stamp_value)),
-                &workblock,
-            ) {
+            if !stamp_valid(&stamp, required_stamp_value, &workblock) {
                 log::debug!("{}", insufficient_stamp_diagnostic(value));
                 cache.insert_invalid_hash(payload_hash);
                 return None;
@@ -964,13 +958,20 @@ mod tests {
     #[test]
     fn discovery_rejects_hop_count_at_pathfinder_limit() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
-        assert!(
-            parse_interface_announce(&app_data, &[0x11; 16], constants::PATHFINDER_M - 1, 0)
-                .is_some()
-        );
-        assert!(
-            parse_interface_announce(&app_data, &[0x11; 16], constants::PATHFINDER_M, 0).is_none()
-        );
+        assert!(parse_interface_announce(
+            &app_data,
+            &[0x11; 16],
+            constants::PATHFINDER_M - 1,
+            rns_core::stamp::StampCost::ZERO
+        )
+        .is_some());
+        assert!(parse_interface_announce(
+            &app_data,
+            &[0x11; 16],
+            constants::PATHFINDER_M,
+            rns_core::stamp::StampCost::ZERO
+        )
+        .is_none());
     }
 
     #[test]
@@ -983,7 +984,7 @@ mod tests {
 
     #[test]
     fn default_discovery_stamp_value_matches_upstream_1_4_0() {
-        assert_eq!(DEFAULT_STAMP_VALUE, 16);
+        assert_eq!(DEFAULT_STAMP_VALUE, StampCost::from_whole(16));
     }
 
     #[test]
@@ -995,7 +996,7 @@ mod tests {
             &app_data,
             &[0x11; 16],
             1,
-            u8::MAX,
+            rns_core::stamp::StampCost::from_whole(100),
             &mut cache,
         )
         .is_none());
@@ -1003,11 +1004,21 @@ mod tests {
 
         // A zero requirement would accept this stamp if validation ran again.
         // The cached invalid payload must be rejected before that work occurs.
-        assert!(
-            parse_interface_announce_with_cache(&app_data, &[0x11; 16], 1, 0, &mut cache,)
-                .is_none()
-        );
-        assert!(parse_interface_announce(&app_data, &[0x11; 16], 1, 0).is_some());
+        assert!(parse_interface_announce_with_cache(
+            &app_data,
+            &[0x11; 16],
+            1,
+            rns_core::stamp::StampCost::ZERO,
+            &mut cache,
+        )
+        .is_none());
+        assert!(parse_interface_announce(
+            &app_data,
+            &[0x11; 16],
+            1,
+            rns_core::stamp::StampCost::ZERO
+        )
+        .is_some());
         assert_eq!(
             cache.invalid_len(),
             1,
@@ -1027,7 +1038,7 @@ mod tests {
                 app_data,
                 &[0x11; 16],
                 1,
-                u8::MAX,
+                rns_core::stamp::StampCost::from_whole(100),
                 &mut cache,
             )
             .is_none());
@@ -1043,12 +1054,24 @@ mod tests {
     fn valid_stamp_cache_short_circuits_repeat_work_and_preserves_dynamic_metadata() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
         let mut cache = DiscoveryStampCache::with_capacity(8);
-        let first =
-            parse_interface_announce_with_cache(&app_data, &[0x11; 16], 1, 0, &mut cache).unwrap();
+        let first = parse_interface_announce_with_cache(
+            &app_data,
+            &[0x11; 16],
+            1,
+            rns_core::stamp::StampCost::ZERO,
+            &mut cache,
+        )
+        .unwrap();
         assert_eq!(cache.valid_len(), 1);
 
-        let second =
-            parse_interface_announce_with_cache(&app_data, &[0x22; 16], 7, 0, &mut cache).unwrap();
+        let second = parse_interface_announce_with_cache(
+            &app_data,
+            &[0x22; 16],
+            7,
+            rns_core::stamp::StampCost::ZERO,
+            &mut cache,
+        )
+        .unwrap();
         assert_eq!(cache.valid_len(), 1);
         assert_eq!(second.stamp, first.stamp);
         assert_eq!(second.stamp_value, first.stamp_value);
@@ -1064,10 +1087,14 @@ mod tests {
         let mut cache = DiscoveryStampCache::with_capacity(2);
 
         for app_data in [&first, &second, &third] {
-            assert!(
-                parse_interface_announce_with_cache(app_data, &[0x11; 16], 1, 0, &mut cache,)
-                    .is_some()
-            );
+            assert!(parse_interface_announce_with_cache(
+                app_data,
+                &[0x11; 16],
+                1,
+                rns_core::stamp::StampCost::ZERO,
+                &mut cache,
+            )
+            .is_some());
         }
         assert_eq!(cache.valid_len(), 2);
         assert!(!cache.contains_valid_app_data(&first));
@@ -1086,15 +1113,19 @@ mod tests {
     fn cached_stamp_value_is_rechecked_if_requirement_increases() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
         let mut cache = DiscoveryStampCache::with_capacity(8);
-        assert!(
-            parse_interface_announce_with_cache(&app_data, &[0x11; 16], 1, 0, &mut cache,)
-                .is_some()
-        );
         assert!(parse_interface_announce_with_cache(
             &app_data,
             &[0x11; 16],
             1,
-            u8::MAX,
+            rns_core::stamp::StampCost::ZERO,
+            &mut cache,
+        )
+        .is_some());
+        assert!(parse_interface_announce_with_cache(
+            &app_data,
+            &[0x11; 16],
+            1,
+            rns_core::stamp::StampCost::from_whole(100),
             &mut cache,
         )
         .is_none());
@@ -1110,7 +1141,7 @@ mod tests {
             &original,
             &[0x11; 16],
             1,
-            u8::MAX,
+            rns_core::stamp::StampCost::from_whole(100),
             &mut cache,
         )
         .is_none());
@@ -1131,7 +1162,7 @@ mod tests {
             &[0x00, 0x01, 0x02],
             &[0x11; 16],
             1,
-            u8::MAX,
+            rns_core::stamp::StampCost::from_whole(100),
             &mut cache,
         )
         .is_none());
@@ -1142,7 +1173,8 @@ mod tests {
     fn parse_rejects_unsupported_discovered_interface_type() {
         let app_data = build_discovery_app_data("BogusInterface", None);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO);
 
         assert!(
             parsed.is_none(),
@@ -1154,7 +1186,8 @@ mod tests {
     fn parse_rejects_invalid_reachable_on_address() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("-not a host-"));
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO);
 
         assert!(
             parsed.is_none(),
@@ -1172,7 +1205,9 @@ mod tests {
         ));
         let app_data = pack_discovery_entries(entries);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.name, "Alpha Beta");
         assert!(parsed.config_entry.unwrap().starts_with("[[Alpha Beta]]"));
@@ -1189,8 +1224,13 @@ mod tests {
             Value::UInt(TRANSPORT_VERS as u64),
             Value::Str("1.5.5".into()),
         ));
-        let parsed =
-            parse_interface_announce(&pack_discovery_entries(entries), &[0x11; 16], 1, 0).unwrap();
+        let parsed = parse_interface_announce(
+            &pack_discovery_entries(entries),
+            &[0x11; 16],
+            1,
+            rns_core::stamp::StampCost::ZERO,
+        )
+        .unwrap();
         assert_eq!(parsed.impl_name.as_deref(), Some("Reticulum"));
         assert_eq!(parsed.impl_version.as_deref(), Some("1.5.5"));
 
@@ -1198,7 +1238,7 @@ mod tests {
             &build_discovery_app_data("BackboneInterface", Some("example.com")),
             &[0x11; 16],
             1,
-            0,
+            rns_core::stamp::StampCost::ZERO,
         )
         .unwrap();
         assert_eq!(legacy.impl_name, None);
@@ -1212,7 +1252,9 @@ mod tests {
         entries.push((Value::UInt(NAME as u64), Value::Str("!!!".to_string())));
         let app_data = pack_discovery_entries(entries);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.name, "Discovered BackboneInterface");
     }
@@ -1224,7 +1266,9 @@ mod tests {
         entries.push((Value::UInt(NAME as u64), Value::Nil));
         let app_data = pack_discovery_entries(entries);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.name, "Discovered BackboneInterface");
     }
@@ -1244,7 +1288,12 @@ mod tests {
             entries.push((Value::UInt(field as u64), replacement));
             let app_data = pack_discovery_entries(entries);
 
-            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+            let parsed = parse_interface_announce(
+                &app_data,
+                &[0x11; 16],
+                1,
+                rns_core::stamp::StampCost::ZERO,
+            );
 
             assert!(parsed.is_none(), "field {field} should reject invalid type");
         }
@@ -1257,7 +1306,8 @@ mod tests {
         entries.push((Value::UInt(TRANSPORT_ID as u64), Value::Bin(vec![0x42; 15])));
         let app_data = pack_discovery_entries(entries);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO);
 
         assert!(parsed.is_none());
     }
@@ -1269,7 +1319,9 @@ mod tests {
         entries.push((Value::UInt(IFAC_NETKEY as u64), Value::Str("secret".into())));
         let app_data = pack_discovery_entries(entries);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.ifac_netname.as_deref(), Some("mynet"));
         assert_eq!(parsed.ifac_netkey.as_deref(), Some("secret"));
@@ -1289,7 +1341,13 @@ mod tests {
             entries.push((Value::UInt(IFAC_NETKEY as u64), value));
             let app_data = pack_discovery_entries(entries);
 
-            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+            let parsed = parse_interface_announce(
+                &app_data,
+                &[0x11; 16],
+                1,
+                rns_core::stamp::StampCost::ZERO,
+            )
+            .unwrap();
 
             assert_eq!(parsed.ifac_netname, None);
             assert_eq!(parsed.ifac_netkey, None);
@@ -1313,7 +1371,9 @@ mod tests {
         entries.push((Value::UInt(OP_ADDR as u64), Value::Bin(vec![0x5a; 16])));
         let app_data = pack_discovery_entries(entries);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.operator_lxmf_address, Some([0x5a; 16]));
     }
@@ -1324,7 +1384,13 @@ mod tests {
         entries.push((Value::UInt(OP_ADDR as u64), Value::Str("5a".repeat(16))));
         let app_data = pack_discovery_entries(entries);
 
-        assert!(parse_interface_announce(&app_data, &[0x11; 16], 1, 0).is_none());
+        assert!(parse_interface_announce(
+            &app_data,
+            &[0x11; 16],
+            1,
+            rns_core::stamp::StampCost::ZERO
+        )
+        .is_none());
     }
 
     #[test]
@@ -1333,7 +1399,9 @@ mod tests {
         entries.push((Value::UInt(OP_ADDR as u64), Value::Bin(vec![0x5a; 15])));
         let app_data = pack_discovery_entries(entries);
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.operator_lxmf_address, None);
     }
@@ -1342,7 +1410,13 @@ mod tests {
     fn unsafe_discovery_endpoints_are_retained_without_autoconnect_config() {
         for address in ["example.onion", "127.0.0.1", "0.0.0.0"] {
             let app_data = build_discovery_app_data("BackboneInterface", Some(address));
-            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+            let parsed = parse_interface_announce(
+                &app_data,
+                &[0x11; 16],
+                1,
+                rns_core::stamp::StampCost::ZERO,
+            )
+            .unwrap();
 
             assert_eq!(parsed.reachable_on.as_deref(), Some(address));
             assert_eq!(parsed.config_entry, None, "{address} must not autoconnect");
@@ -1352,7 +1426,9 @@ mod tests {
     #[test]
     fn transport_autoconnect_mode_marks_transport_discovery_config_as_gateway() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
-        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let mut parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         apply_transport_autoconnect_mode(&mut parsed, true, None);
 
@@ -1363,7 +1439,9 @@ mod tests {
     #[test]
     fn configured_autoconnect_mode_overrides_transport_fallback() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
-        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let mut parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         apply_transport_autoconnect_mode(
             &mut parsed,
@@ -1378,7 +1456,9 @@ mod tests {
     #[test]
     fn transport_autoconnect_mode_does_not_modify_non_transport_contexts() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
-        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let mut parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
         let original = parsed.config_entry.clone();
 
         apply_transport_autoconnect_mode(&mut parsed, false, None);
@@ -1392,7 +1472,9 @@ mod tests {
         entries.retain(|(key, _)| key.as_uint() != Some(TRANSPORT as u64));
         entries.push((Value::UInt(TRANSPORT as u64), Value::Bool(false)));
         let app_data = pack_discovery_entries(entries);
-        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let mut parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
         let original = parsed.config_entry.clone();
 
         apply_transport_autoconnect_mode(&mut parsed, true, None);
@@ -1403,7 +1485,9 @@ mod tests {
     #[test]
     fn transport_autoconnect_mode_preserves_existing_interface_mode() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
-        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let mut parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
         let config_entry = parsed.config_entry.as_mut().unwrap();
         config_entry.push_str("\n  interface_mode = access_point");
         let original = parsed.config_entry.clone();
@@ -1417,7 +1501,9 @@ mod tests {
     fn parse_yggdrasil_reachable_on_keeps_record_without_config_entry() {
         let app_data = build_discovery_app_data("BackboneInterface", Some("200:1234::1"));
 
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.reachable_on.as_deref(), Some("200:1234::1"));
         assert!(parsed.config_entry.is_none());
@@ -1435,7 +1521,12 @@ mod tests {
         ] {
             let app_data = build_discovery_app_data(interface_type, Some("example.com"));
 
-            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+            let parsed = parse_interface_announce(
+                &app_data,
+                &[0x11; 16],
+                1,
+                rns_core::stamp::StampCost::ZERO,
+            );
 
             assert!(
                 parsed.is_some(),
@@ -1447,7 +1538,9 @@ mod tests {
     #[test]
     fn i2p_discovery_config_entry_uses_b32_hostname() {
         let app_data = build_discovery_app_data("I2PInterface", Some("example"));
-        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let parsed =
+            parse_interface_announce(&app_data, &[0x11; 16], 1, rns_core::stamp::StampCost::ZERO)
+                .unwrap();
 
         assert_eq!(parsed.reachable_on.as_deref(), Some("example"));
         assert!(parsed

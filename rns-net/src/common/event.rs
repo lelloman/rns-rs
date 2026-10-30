@@ -574,7 +574,7 @@ pub struct KnownDestinationEntry {
     pub retained: bool,
     pub stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
     pub stamp_value: rns_core::stamp::StampValue,
-    pub lr_cost: Option<u8>,
+    pub lr_cost: Option<rns_core::stamp::StampCost>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1127,7 +1127,7 @@ pub struct DestinationStampInfo {
     /// Value of the announce stamp, zero when the announce carried none.
     pub stamp_value: rns_core::stamp::StampValue,
     /// Link request cost the destination announced, if any.
-    pub lr_cost: Option<u8>,
+    pub lr_cost: Option<rns_core::stamp::StampCost>,
 }
 
 /// Next hop lookup result.

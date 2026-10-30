@@ -2749,7 +2749,7 @@ fn known_destination_entry_to_pickle(entry: &KnownDestinationEntry) -> PickleVal
             PickleValue::String("lr_cost".into()),
             entry
                 .lr_cost
-                .map(|cost| PickleValue::Int(i64::from(cost)))
+                .map(|cost| PickleValue::Float(cost.as_f64()))
                 .unwrap_or(PickleValue::None),
         ),
     ])
@@ -2843,9 +2843,8 @@ fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestina
         stamp_value,
         lr_cost: value
             .get("lr_cost")
-            .and_then(|v| v.as_int())
-            .filter(|cost| (0..=i64::from(rns_core::constants::STAMP_COST_CAP)).contains(cost))
-            .map(|cost| cost as u8),
+            .and_then(|v| v.as_float().or_else(|| v.as_int().map(|n| n as f64)))
+            .and_then(crate::storage::stored_link_cost),
     })
 }
 

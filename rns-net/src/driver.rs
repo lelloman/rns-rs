@@ -653,7 +653,7 @@ pub(crate) struct KnownDestinationState {
     retained: bool,
     stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
     stamp_value: rns_core::stamp::StampValue,
-    lr_cost: Option<u8>,
+    lr_cost: Option<rns_core::stamp::StampCost>,
 }
 
 struct KnownDestinationCleanup {
@@ -859,7 +859,7 @@ pub struct Driver {
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
-    pub(crate) discovery_required_value: u8,
+    pub(crate) discovery_required_value: rns_core::stamp::StampCost,
     /// Bounded cache of discovery payloads with previously rejected stamps.
     pub(crate) discovery_stamp_cache: crate::discovery::DiscoveryStampCache,
     /// Name hash for interface discovery announces ("rnstransport.discovery.interface").

@@ -60,23 +60,52 @@ pub fn stamp_valid(stamp: &[u8], target_cost: StampCost, workblock: &[u8]) -> bo
     target_cost.admits(&sha256(&material))
 }
 
+/// A float cost clamped as upstream clamps configured and API costs,
+/// `max(0, min(cost, cap))`, on the 1/256 grid every use of the cost reads
+/// it through. NaN reads as 0, as Python's `max(0, min(nan, cap))` does, and
+/// infinity as the cap.
+pub fn clamp_cost(cost: f64, cap: u8) -> StampCost {
+    if cost.is_nan() {
+        return StampCost::ZERO;
+    }
+    StampCost::from_f64(cost.min(f64::from(cap)))
+}
+
 /// Clamp a configured per-destination link request cost.
 ///
-/// Mirrors `Destination.set_link_cost`:
-/// `max(0, min(int(cost), Transport.LINK_COST_CAP))`.
-pub fn clamp_link_cost(cost: i64) -> u8 {
-    cost.clamp(0, i64::from(crate::constants::LINK_COST_CAP)) as u8
+/// Mirrors `Destination.set_link_cost` since upstream 796ef2d4:
+/// `max(0, min(float(cost), Transport.LINK_COST_CAP))`.
+pub fn clamp_link_cost(cost: f64) -> StampCost {
+    clamp_cost(cost, crate::constants::LINK_COST_CAP)
 }
 
 /// The link request cost a destination announces and requires.
 ///
 /// Mirrors `Destination.get_link_cost`: the configured cost, or `default`
 /// (`Transport.LR_COST`, settable through `[stamps] lr_cost`) when none was
-/// set, truncated to whole bits and clamped to `STAMP_COST_CAP`.
-pub fn announced_link_cost(configured: Option<u8>, default: StampCost) -> u8 {
-    configured
-        .unwrap_or_else(|| default.whole().min(u32::from(u8::MAX)) as u8)
-        .min(crate::constants::STAMP_COST_CAP)
+/// set. Since upstream 796ef2d4 the fraction is kept and announced.
+pub fn announced_link_cost(configured: Option<StampCost>, default: StampCost) -> StampCost {
+    configured.unwrap_or(default)
+}
+
+/// The two trailing bytes of an announce extension carrying `cost`
+/// (upstream `bytes([cost_bytes[1], cost_bytes[0]])`): the 1/256 fraction,
+/// then the whole part as the anchor byte. Costs are capped at
+/// `STAMP_COST_CAP`, so the anchor's high bit stays clear.
+pub fn link_cost_ext_bytes(cost: StampCost) -> [u8; 2] {
+    let fp = cost.fp();
+    [(fp & 0xFF) as u8, (fp >> 8) as u8]
+}
+
+/// Read the link request cost from the last two bytes of an announce
+/// extension (`Identity.validate_announce`). `None` when the anchor's high
+/// bit marks a newer extension format, or the cost exceeds `STAMP_COST_CAP`;
+/// either way the extension must not be interpreted.
+pub fn link_cost_from_ext_bytes(fraction: u8, anchor: u8) -> Option<StampCost> {
+    if anchor & 0x80 != 0 {
+        return None;
+    }
+    StampCost::from_fp_checked((u32::from(anchor) << 8) | u32::from(fraction))
 }
 
 #[cfg(test)]
@@ -85,26 +114,49 @@ mod tests {
 
     #[test]
     fn link_cost_setter_clamps_like_upstream() {
-        assert_eq!(clamp_link_cost(-5), 0);
-        assert_eq!(clamp_link_cost(0), 0);
-        assert_eq!(clamp_link_cost(8), 8);
-        assert_eq!(clamp_link_cost(40), 40);
-        assert_eq!(clamp_link_cost(41), crate::constants::LINK_COST_CAP);
-        assert_eq!(clamp_link_cost(i64::MAX), crate::constants::LINK_COST_CAP);
+        let cap = StampCost::from_whole(u32::from(crate::constants::LINK_COST_CAP));
+        assert_eq!(clamp_link_cost(-5.0), StampCost::ZERO);
+        assert_eq!(clamp_link_cost(0.0), StampCost::ZERO);
+        assert_eq!(clamp_link_cost(8.0), StampCost::from_whole(8));
+        // Examples/Link.py: 14.2 is kept fractional, rounded to the grid.
+        assert_eq!(clamp_link_cost(14.2), StampCost::from_fp(3635));
+        assert_eq!(clamp_link_cost(40.0), cap);
+        assert_eq!(clamp_link_cost(40.5), cap);
+        assert_eq!(clamp_link_cost(f64::INFINITY), cap);
+        assert_eq!(clamp_link_cost(f64::NEG_INFINITY), StampCost::ZERO);
+        assert_eq!(clamp_link_cost(f64::NAN), StampCost::ZERO);
     }
 
     #[test]
     fn announced_link_cost_defaults_to_lr_cost() {
-        // int(19.2): the fractional default is announced as 19.
         let lr_cost = crate::constants::LINK_REQUEST_STAMP_COST;
-        assert_eq!(announced_link_cost(None, lr_cost), 19);
-        assert_eq!(announced_link_cost(None, StampCost::from_whole(9)), 9);
-        assert_eq!(announced_link_cost(Some(0), lr_cost), 0);
-        assert_eq!(announced_link_cost(Some(17), StampCost::from_whole(9)), 17);
+        assert_eq!(announced_link_cost(None, lr_cost), lr_cost);
+        let nine = StampCost::from_whole(9);
+        assert_eq!(announced_link_cost(None, nine), nine);
         assert_eq!(
-            announced_link_cost(Some(u8::MAX), lr_cost),
-            crate::constants::STAMP_COST_CAP
+            announced_link_cost(Some(StampCost::ZERO), lr_cost),
+            StampCost::ZERO
         );
+        let configured = StampCost::from_f64(17.5);
+        assert_eq!(announced_link_cost(Some(configured), nine), configured);
+    }
+
+    #[test]
+    fn link_cost_ext_bytes_round_trip_like_upstream() {
+        // bytes([cost_bytes[1], cost_bytes[0]]) for cost_to_bytes(12.5) and
+        // cost_to_bytes(14.2) in upstream 796ef2d4.
+        assert_eq!(link_cost_ext_bytes(StampCost::from_f64(12.5)), [0x80, 12]);
+        assert_eq!(link_cost_ext_bytes(StampCost::from_f64(14.2)), [0x33, 14]);
+        assert_eq!(link_cost_ext_bytes(StampCost::from_whole(100)), [0, 100]);
+        for fp in [0, 1, 255, 256, 3200, 3635, 25_599, 25_600] {
+            let cost = StampCost::from_fp(fp);
+            let [fraction, anchor] = link_cost_ext_bytes(cost);
+            assert_eq!(link_cost_from_ext_bytes(fraction, anchor), Some(cost));
+        }
+        // Above the cap or with the extension bit set: not interpreted.
+        assert_eq!(link_cost_from_ext_bytes(1, 100), None);
+        assert_eq!(link_cost_from_ext_bytes(0, 101), None);
+        assert_eq!(link_cost_from_ext_bytes(0, 0x80 | 12), None);
     }
 
     #[test]

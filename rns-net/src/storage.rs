@@ -44,7 +44,7 @@ pub struct KnownDestination {
     /// Last heard announce stamp value, or zero when absent.
     pub stamp_value: rns_core::stamp::StampValue,
     /// Announced link request stamp cost, if present.
-    pub lr_cost: Option<u8>,
+    pub lr_cost: Option<rns_core::stamp::StampCost>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -297,6 +297,16 @@ fn parse_dest_hash_hex(s: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
+/// A persisted link request cost: fractional since upstream 796ef2d4, with
+/// integers from earlier versions reading as whole bits. Costs outside
+/// `0..=STAMP_COST_CAP` are dropped, as an announce carrying one is not
+/// interpreted.
+pub fn stored_link_cost(cost: f64) -> Option<rns_core::stamp::StampCost> {
+    (0.0..=f64::from(rns_core::constants::STAMP_COST_CAP))
+        .contains(&cost)
+        .then(|| rns_core::stamp::StampCost::from_f64(cost))
+}
+
 /// First 16 bytes of the full SHA-256 hash of a public key.
 pub fn full_hash_prefix(public_key: &[u8; 64]) -> [u8; 16] {
     let full = rns_core::hash::full_hash(public_key);
@@ -373,7 +383,7 @@ pub fn save_known_destinations(
                 },
                 Value::Float(dest.stamp_value.as_f64()),
                 match dest.lr_cost {
-                    Some(cost) => Value::UInt(u64::from(cost)),
+                    Some(cost) => Value::Float(cost.as_f64()),
                     None => Value::Nil,
                 },
             ]);
@@ -506,11 +516,12 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
             .and_then(|value| value.as_number())
             .map(rns_core::stamp::StampValue::from_f64)
             .unwrap_or_default();
+        // Fractional since upstream 796ef2d4; integer costs from earlier
+        // versions read as whole bits.
         let lr_cost = arr
             .get(11)
-            .and_then(|value| value.as_uint())
-            .filter(|cost| *cost <= u64::from(rns_core::constants::STAMP_COST_CAP))
-            .map(|cost| cost as u8);
+            .and_then(|value| value.as_number())
+            .and_then(crate::storage::stored_link_cost);
 
         result.insert(
             dest_hash,
@@ -937,7 +948,7 @@ mod tests {
                 retained: true,
                 stamp: Some(vec![0xAA; 14]),
                 stamp_value: rns_core::stamp::StampValue::from_fp(21 * 256 + 187),
-                lr_cost: Some(19),
+                lr_cost: Some(rns_core::stamp::StampCost::from_f64(12.5)),
             },
         );
         dests.insert(
@@ -978,7 +989,7 @@ mod tests {
             d1.stamp_value,
             rns_core::stamp::StampValue::from_fp(21 * 256 + 187)
         );
-        assert_eq!(d1.lr_cost, Some(19));
+        assert_eq!(d1.lr_cost, Some(rns_core::stamp::StampCost::from_f64(12.5)));
 
         let d2 = &loaded[&[0x02u8; 16]];
         assert_eq!(d2.app_data, None);

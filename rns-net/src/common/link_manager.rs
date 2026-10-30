@@ -18,7 +18,6 @@ use rns_core::link::types::{LinkId, LinkState, TeardownReason};
 use rns_core::link::{LinkAction, LinkEngine, LinkMode};
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::resource::{ResourceAction, ResourceReceiver, ResourceSender};
-use rns_core::stamp::StampCost;
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::{OsRng, Rng};
@@ -746,8 +745,12 @@ impl LinkManager {
 
         // `Link.validate_request`: the request's X25519 public key is its
         // stamp over `destination_hash || peer_sig_pub`. With
-        // `LR_STAMPS_ENFORCED`, a value below the destination's
-        // `get_link_cost()` drops the request without a proof.
+        // `LR_STAMPS_ENFORCED`, a stamp that is not valid for the
+        // destination's `get_link_cost()` drops the request without a proof.
+        // Upstream 796ef2d4 writes the test as `LR_STAMPS_ENFORCED and
+        // stamp_valid(...)`, which would drop the valid requests instead; this
+        // drops the invalid ones, as the error it raises ("Insufficient link
+        // request stamp value") describes.
         let stamp_value =
             rns_core::link::handshake::link_request_stamp_value(dest_hash, packet.data());
         if let Some(value) = stamp_value {
@@ -757,9 +760,11 @@ impl LinkManager {
                 value
             );
             if self.link_request_costs.enforced()
-                && !value.meets(StampCost::from_whole(u32::from(
+                && rns_core::link::handshake::link_request_stamp_valid(
+                    dest_hash,
+                    packet.data(),
                     self.link_request_costs.get(dest_hash),
-                )))
+                ) == Some(false)
             {
                 log::debug!(
                     "Validating incoming link request failed: Insufficient link request stamp value {}",

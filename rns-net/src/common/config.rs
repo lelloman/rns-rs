@@ -82,8 +82,9 @@ pub struct ReticulumSection {
     pub autoconnect_announces_to_internal: bool,
     /// Allow auto-connecting discovered interfaces from unverified implementations.
     pub autoconnect_unverified_implementations: bool,
-    /// Minimum stamp value for accepting discovered interfaces.
-    pub required_discovery_value: Option<u8>,
+    /// Minimum stamp value for accepting discovered interfaces, fractional
+    /// since upstream 796ef2d4. A value of 0 or less leaves the default.
+    pub required_discovery_value: Option<StampCost>,
     /// Accept an announce with strictly fewer hops even when the random_blob
     /// is a duplicate of the existing path entry.
     pub prefer_shorter_path: bool,
@@ -275,10 +276,9 @@ impl Default for ReticulumSection {
 ///
 /// The boolean options can only enable a feature: upstream applies them as
 /// `if value == True: Transport.X = True`, so `no` leaves the built-in
-/// default in place. Costs and values are read as integers (`as_int`) and
-/// clamped to `0..=STAMP_COST_CAP` (`lr_cost` to `0..=LINK_COST_CAP`); only
-/// the built-in defaults are fractional (a8cc6cb2). The timeouts are floored
-/// at 20 ms.
+/// default in place. Costs and values are read as floats (`as_float`, since
+/// upstream 796ef2d4) and clamped to `0..=STAMP_COST_CAP` (`lr_cost` to
+/// `0..=LINK_COST_CAP`). The timeouts are floored at 20 ms.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StampsSection {
     /// `Transport.STAMPS_ENFORCED`, set by `enforce_stamps`.
@@ -982,11 +982,13 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             })?;
     }
     if let Some(v) = kvs.get("required_discovery_value") {
+        // Reticulum.py: `v = as_float(option)`, used only when `v > 0`.
+        let v = parse_config_float(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "required_discovery_value".into(),
+            value: v.clone(),
+        })?;
         section.required_discovery_value =
-            Some(v.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
-                key: "required_discovery_value".into(),
-                value: v.clone(),
-            })?);
+            (v > 0.0).then(|| rns_core::stamp::clamp_cost(v, rns_core::constants::STAMP_COST_CAP));
     }
     if let Some(v) = kvs.get("hop_limiter") {
         // Reticulum.py: `max(1, min(as_int(v), PATHFINDER_M))`.
@@ -1422,6 +1424,12 @@ fn parse_config_int(value: &str) -> Option<i64> {
     })
 }
 
+/// Parse a float as ConfigObj's `as_float` (Python `float()`) does,
+/// including `inf` and `nan`, which callers clamp.
+pub(crate) fn parse_config_float(value: &str) -> Option<f64> {
+    value.trim().parse::<f64>().ok()
+}
+
 fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, ConfigError> {
     use rns_core::constants::{LINK_COST_CAP, STAMP_COST_CAP, STAMP_TIMEOUT_MIN};
 
@@ -1439,13 +1447,11 @@ fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, 
         let Some(v) = kvs.get(key) else {
             return Ok(None);
         };
-        let n = parse_config_int(v).ok_or_else(|| ConfigError::InvalidValue {
+        let n = parse_config_float(v).ok_or_else(|| ConfigError::InvalidValue {
             key: key.into(),
             value: v.clone(),
         })?;
-        Ok(Some(StampCost::from_whole(
-            n.clamp(0, i64::from(cap)) as u32
-        )))
+        Ok(Some(rns_core::stamp::clamp_cost(n, cap)))
     };
     let timeout = |key: &str| -> Result<Option<f64>, ConfigError> {
         let Some(v) = kvs.get(key) else {
@@ -2779,10 +2785,25 @@ direct_connect_policy = identified_only
     }
 
     #[test]
-    fn stamps_section_costs_are_whole_numbers() {
-        // Reticulum.py reads them with `as_int`; only the defaults are
-        // fractional.
-        assert!(parse("[stamps]\ndestination_cost = 23.5\n").is_err());
+    fn stamps_section_costs_are_fractional() {
+        // Reticulum.py reads them with `as_float` since 796ef2d4.
+        let config = parse(
+            "[stamps]\n\
+             destination_cost = 23.5\n\
+             pr_value = 15.8\n\
+             lr_cost = 12\n\
+             pr_cost = inf\n\
+             destination_value = nan\n",
+        )
+        .unwrap();
+        let stamps = config.stamps;
+        assert_eq!(stamps.destination_cost, StampCost::from_fp(6016));
+        assert_eq!(stamps.pr_value, StampCost::from_f64(15.8));
+        assert_eq!(stamps.lr_cost, StampCost::from_whole(12));
+        // `max(0, min(v, cap))` in Python: infinity clamps to the cap, NaN to 0.
+        assert_eq!(stamps.pr_cost, StampCost::from_whole(100));
+        assert_eq!(stamps.destination_value, StampCost::ZERO);
+        assert!(parse("[stamps]\npr_cost = high\n").is_err());
     }
 
     #[test]
@@ -2828,8 +2849,7 @@ direct_connect_policy = identified_only
         let config = parse("[stamps]\nlr_stamp_timeout = inf\n").unwrap();
         assert_eq!(config.stamps.link_stamp_timeout(), std::time::Duration::MAX);
 
-        // `as_int` rejects non-integers; `as_float` rejects non-numbers.
-        assert!(parse("[stamps]\ndestination_cost = 2.5\n").is_err());
+        // `as_float` rejects non-numbers.
         assert!(parse("[stamps]\npr_cost = lots\n").is_err());
         assert!(parse("[stamps]\npr_stamp_timeout = soon\n").is_err());
     }

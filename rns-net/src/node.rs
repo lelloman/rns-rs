@@ -286,9 +286,11 @@ fn extract_discovery_config(
         .map(|secs| secs.max(300))
         .unwrap_or(21600);
 
+    // `as_float` since upstream 796ef2d4.
     let stamp_value = params
         .get("discovery_stamp_value")
-        .and_then(|v| v.parse::<u8>().ok())
+        .and_then(|v| config::parse_config_float(v))
+        .map(|v| rns_core::stamp::clamp_cost(v, rns_core::constants::STAMP_COST_CAP))
         .unwrap_or(crate::discovery::DEFAULT_STAMP_VALUE);
 
     let reachable_on = params.get("reachable_on").cloned();
@@ -595,7 +597,7 @@ pub struct NodeConfig {
     /// Allow auto-connecting discovered interfaces from unverified implementations.
     pub autoconnect_unverified_implementations: bool,
     /// Minimum stamp value for accepting discovered interfaces (default: 16).
-    pub discovery_required_value: Option<u8>,
+    pub discovery_required_value: Option<rns_core::stamp::StampCost>,
     /// Respond to probe packets with automatic proof (like Python's respond_to_probes).
     pub respond_to_probes: bool,
     /// Accept an announce with strictly fewer hops even when the random_blob
@@ -2795,17 +2797,19 @@ impl RnsNode {
     /// (emitted when destination stamping is on) so initiators grind their
     /// link request stamps to it, and, when link request stamps are enforced,
     /// incoming link requests whose stamp value is below it are dropped.
-    pub fn set_link_cost(&self, dest_hash: [u8; 16], cost: i64) -> u8 {
-        self.tx.link_request_costs().set(dest_hash, cost)
+    pub fn set_link_cost(&self, dest_hash: [u8; 16], cost: f64) -> f64 {
+        self.tx.link_request_costs().set(dest_hash, cost).as_f64()
     }
 
     /// The link request stamp cost announced and required for a destination.
     ///
     /// Mirrors `Destination.get_link_cost`: the configured cost, or the
     /// default `LINK_REQUEST_STAMP_COST` (`Transport.LR_COST`) when none was
-    /// set.
-    pub fn link_cost(&self, dest_hash: &[u8; 16]) -> u8 {
-        self.tx.link_request_costs().get(dest_hash)
+    /// set. Costs are fractional since upstream 796ef2d4 and held on the
+    /// 1/256 grid they are announced and checked on, so 14.2 reads back as
+    /// 14.19921875.
+    pub fn link_cost(&self, dest_hash: &[u8; 16]) -> f64 {
+        self.tx.link_request_costs().get(dest_hash).as_f64()
     }
 
     /// Override `Transport.LR_STAMPS_ENFORCED` for this node.
@@ -4284,8 +4288,8 @@ pub(crate) fn build_announce_packet(
             }
         };
         let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
-        // `bytes([self.get_link_cost()])`: the destination's own cost, or
-        // the default `LR_COST` when none was set.
+        // `cost_to_bytes(self.get_link_cost())`: the destination's own cost,
+        // or the default `LR_COST` when none was set, fraction included.
         wire.extend_from_slice(&crate::stamps::announce_ext_payload(
             &stamp,
             0,
@@ -4992,13 +4996,19 @@ mod tests {
         let defaults =
             super::extract_discovery_config("Discovery Test", "BackboneInterface", &params)
                 .unwrap();
-        assert_eq!(defaults.stamp_value, 16);
+        assert_eq!(
+            defaults.stamp_value,
+            rns_core::stamp::StampCost::from_whole(16)
+        );
 
         params.insert("discovery_stamp_value".to_string(), "14".to_string());
         let overridden =
             super::extract_discovery_config("Discovery Test", "BackboneInterface", &params)
                 .unwrap();
-        assert_eq!(overridden.stamp_value, 14);
+        assert_eq!(
+            overridden.stamp_value,
+            rns_core::stamp::StampCost::from_whole(14)
+        );
     }
 
     #[test]
@@ -7123,7 +7133,7 @@ enable_transport = False
         assert!(first_value.meets(StampCost::from_whole(4)));
 
         // A target the held stamp already meets reuses it.
-        dest.set_value(first_value.whole() as u8);
+        dest.set_value(f64::from(first_value.whole()));
         ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
         assert_eq!(
             store
@@ -7136,7 +7146,7 @@ enable_transport = False
         // A target above the held value regenerates and persists a stamp
         // that reaches it.
         let raised = first_value.whole() as u8 + 1;
-        dest.set_value(raised);
+        dest.set_value(f64::from(raised));
         ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
         let (second, second_value) = store
             .load(&dest.hash.0, &material, StampCost::ZERO)
@@ -7199,7 +7209,7 @@ enable_transport = False
             }
         );
         // `lr_cost` and `enforce_stamps` reach the shared link cost table.
-        assert_eq!(node.link_cost(&[0u8; 16]), 9);
+        assert_eq!(node.link_cost(&[0u8; 16]), 9.0);
         assert!(node.link_request_stamps_enforced());
         let stamper = node.stamper().unwrap();
         assert_eq!(stamper.targets(), node.stamp_targets);

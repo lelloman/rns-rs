@@ -62,8 +62,9 @@ pub const STAMP_LENGTH: usize = 14;
 /// Extension payload header length in bytes (marker + flags)
 pub const EXT_HEADER_LENGTH: usize = 2;
 
-/// Announced link request cost length in bytes (trailing anchor)
-pub const LR_COST_LENGTH: usize = 1;
+/// Announced link request cost length in bytes: the 1/256 fraction, then the
+/// whole part in the trailing anchor (two bytes since upstream 796ef2d4).
+pub const LR_COST_LENGTH: usize = 2;
 
 /// Announce extension payload length in bytes (header + stamp + link cost)
 pub const EXT_PAYLOAD_LENGTH: usize = EXT_HEADER_LENGTH + STAMP_LENGTH + LR_COST_LENGTH;
@@ -782,7 +783,7 @@ mod tests {
     fn stamp_defaults_match_upstream_parameters() {
         assert_eq!(STAMP_LENGTH, 14);
         assert_eq!(EXT_HEADER_LENGTH, 2);
-        assert_eq!(EXT_PAYLOAD_LENGTH, 17);
+        assert_eq!(EXT_PAYLOAD_LENGTH, 18);
         assert_eq!(PR_EXT_PAYLOAD_LENGTH, 16);
         assert_eq!(PATH_REQUEST_STAMPED_LENGTH, 64);
         assert_eq!(EXT_PAYLOAD_MARKER, 0xC1);

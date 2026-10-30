@@ -124,8 +124,8 @@ impl Driver {
                 ),
             )),
             "stamp_value" => Some(make_entry(
-                RuntimeConfigValue::Int(current_config.stamp_value as i64),
-                RuntimeConfigValue::Int(startup_config.stamp_value as i64),
+                RuntimeConfigValue::Float(current_config.stamp_value.as_f64()),
+                RuntimeConfigValue::Float(startup_config.stamp_value.as_f64()),
                 format!(
                     "Discovery proof-of-work stamp cost for this {} interface.",
                     interface_label
@@ -1613,6 +1613,23 @@ impl Driver {
         }
     }
 
+    /// A discovery stamp cost, fractional since upstream 796ef2d4 and at most
+    /// `STAMP_COST_CAP`.
+    pub(crate) fn expect_discovery_stamp_value(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<rns_core::stamp::StampCost, RuntimeConfigError> {
+        let cap = rns_core::constants::STAMP_COST_CAP;
+        let raw = Self::expect_f64(value, key)?;
+        if raw > f64::from(cap) {
+            return Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidValue,
+                message: format!("{} must be <= {}", key, cap),
+            });
+        }
+        Ok(rns_core::stamp::StampCost::from_f64(raw))
+    }
+
     pub(crate) fn expect_f64(
         value: RuntimeConfigValue,
         key: &str,
@@ -1861,14 +1878,7 @@ impl Driver {
                 handle.current.config.location_cmd = Self::expect_optional_string(value, key)?;
             }
             "stamp_value" => {
-                let raw = Self::expect_u64(value, key)?;
-                if raw > u8::MAX as u64 {
-                    return Err(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::InvalidValue,
-                        message: format!("{} must be <= {}", key, u8::MAX),
-                    });
-                }
-                handle.current.config.stamp_value = raw as u8;
+                handle.current.config.stamp_value = Self::expect_discovery_stamp_value(value, key)?;
             }
             "latitude" => {
                 handle.current.config.latitude = Self::expect_optional_f64(value, key)?;
@@ -3895,14 +3905,7 @@ impl Driver {
                 handle.current.config.location_cmd = Self::expect_optional_string(value, key)?
             }
             "stamp_value" => {
-                let raw = Self::expect_u64(value, key)?;
-                if raw > u8::MAX as u64 {
-                    return Err(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::InvalidValue,
-                        message: format!("{} must be <= {}", key, u8::MAX),
-                    });
-                }
-                handle.current.config.stamp_value = raw as u8;
+                handle.current.config.stamp_value = Self::expect_discovery_stamp_value(value, key)?;
             }
             "latitude" => handle.current.config.latitude = Self::expect_optional_f64(value, key)?,
             "longitude" => handle.current.config.longitude = Self::expect_optional_f64(value, key)?,

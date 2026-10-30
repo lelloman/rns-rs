@@ -50,7 +50,9 @@ announce:
 ```
 
 `discovery_stamp_value` sets the proof-of-work target for the stamp carried
-by each discovery announce. The default is 16, matching upstream; higher values
+by each discovery announce. It may be fractional, as upstream reads it with
+`as_float` since `796ef2d4`, and so may `required_discovery_value` in
+`[reticulum]`. The default is 16, matching upstream; higher values
 make announces costlier to forge and costlier to generate. Each due announce
 grinds a fresh stamp on a worker thread, so a high value costs CPU at every
 announce interval. Received discovery announces must carry a stamp of at

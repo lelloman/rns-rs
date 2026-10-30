@@ -98,6 +98,22 @@ pub fn link_request_stamp_value(
     Some(rns_crypto::identity::stamp_value(&material, &peer_pub))
 }
 
+/// Whether a LINKREQUEST's X25519 key meets `cost` as a stamp over
+/// `dest_hash || peer_sig_pub` (`stamp_valid(peer_pub_bytes, cost,
+/// stamp_material)`, `Link.validate_request` since upstream 796ef2d4), or
+/// `None` when the request does not parse.
+pub fn link_request_stamp_valid(
+    dest_hash: &[u8; 16],
+    data: &[u8],
+    cost: crate::stamp::StampCost,
+) -> Option<bool> {
+    let (peer_pub, peer_sig_pub, _, _) = parse_linkrequest_data(data).ok()?;
+    let mut material = [0u8; 48];
+    material[..16].copy_from_slice(dest_hash);
+    material[16..].copy_from_slice(&peer_sig_pub);
+    Some(crate::stamp::stamp_valid(&peer_pub, cost, &material))
+}
+
 /// Build LRPROOF data: `[signature:64][x25519_pub:32][signalling:0-3]`.
 ///
 /// Signs: `link_id + pub_bytes + sig_pub_bytes + signalling_bytes`.

@@ -109,7 +109,7 @@ pub struct LinkRequestCosts {
 
 #[derive(Debug)]
 struct LinkRequestCostsInner {
-    costs: std::sync::Mutex<std::collections::HashMap<[u8; 16], u8>>,
+    costs: std::sync::Mutex<std::collections::HashMap<[u8; 16], StampCost>>,
     /// Fixed-point `LR_COST`, fractional by default since a8cc6cb2.
     default_cost: std::sync::atomic::AtomicU32,
     enforced: std::sync::atomic::AtomicBool,
@@ -129,7 +129,7 @@ impl Default for LinkRequestCostsInner {
 
 impl LinkRequestCosts {
     /// `Destination.set_link_cost`: store the clamped cost and return it.
-    pub fn set(&self, destination_hash: [u8; 16], cost: i64) -> u8 {
+    pub fn set(&self, destination_hash: [u8; 16], cost: f64) -> StampCost {
         let cost = rns_core::stamp::clamp_link_cost(cost);
         self.inner
             .costs
@@ -140,7 +140,7 @@ impl LinkRequestCosts {
     }
 
     /// `Destination.get_link_cost`: the announced and required cost.
-    pub fn get(&self, destination_hash: &[u8; 16]) -> u8 {
+    pub fn get(&self, destination_hash: &[u8; 16]) -> StampCost {
         let configured = self
             .inner
             .costs
@@ -151,10 +151,9 @@ impl LinkRequestCosts {
         rns_core::stamp::announced_link_cost(configured, self.default_cost())
     }
 
-    /// `Transport.LR_COST`: the cost of destinations that set none, which
-    /// they announce truncated to whole bits, and the cost at which
-    /// `ALWAYS_STAMP_LRS` stamps requests to destinations that announced
-    /// none.
+    /// `Transport.LR_COST`: the cost of destinations that set none, and the
+    /// cost at which `ALWAYS_STAMP_LRS` stamps requests to destinations that
+    /// announced none.
     pub fn default_cost(&self) -> StampCost {
         StampCost::from_fp(
             self.inner
@@ -207,13 +206,14 @@ pub fn destination_stamp_material(
     material
 }
 
-/// Build the announce extension payload: marker, flags, stamp, link cost.
-pub fn announce_ext_payload(stamp: &[u8], flags: u8, lr_cost: u8) -> Vec<u8> {
+/// Build the announce extension payload: marker, flags, stamp, and the link
+/// cost as its fraction and whole part.
+pub fn announce_ext_payload(stamp: &[u8], flags: u8, lr_cost: StampCost) -> Vec<u8> {
     let mut payload = Vec::with_capacity(constants::EXT_PAYLOAD_LENGTH);
     payload.push(constants::EXT_PAYLOAD_MARKER);
     payload.push(flags);
     payload.extend_from_slice(stamp);
-    payload.push(lr_cost & 0x7F);
+    payload.extend_from_slice(&rns_core::stamp::link_cost_ext_bytes(lr_cost));
     payload
 }
 
@@ -595,23 +595,28 @@ mod tests {
         let costs = LinkRequestCosts::default();
         let other = costs.clone();
         let dest = [0x42; 16];
-        // The fractional `LR_COST` is announced truncated (`int(19.2)`).
-        assert_eq!(costs.get(&dest), 19);
-        assert_eq!(costs.default_cost(), constants::LINK_REQUEST_STAMP_COST);
+        let lr_cost = constants::LINK_REQUEST_STAMP_COST;
+        let cap = StampCost::from_whole(u32::from(constants::LINK_COST_CAP));
+        // The fractional `LR_COST` is announced as is since 796ef2d4.
+        assert_eq!(costs.get(&dest), lr_cost);
+        assert_eq!(costs.default_cost(), lr_cost);
         assert_eq!(costs.enforced(), constants::LR_STAMPS_ENFORCED);
-        assert_eq!(costs.set(dest, 99), constants::LINK_COST_CAP);
-        assert_eq!(other.get(&dest), constants::LINK_COST_CAP);
-        assert_eq!(costs.set(dest, -1), 0);
-        assert_eq!(other.get(&dest), 0);
+        assert_eq!(costs.set(dest, 99.0), cap);
+        assert_eq!(other.get(&dest), cap);
+        assert_eq!(costs.set(dest, 14.2), StampCost::from_f64(14.2));
+        assert_eq!(other.get(&dest), StampCost::from_f64(14.2));
+        assert_eq!(costs.set(dest, -1.0), StampCost::ZERO);
+        assert_eq!(other.get(&dest), StampCost::ZERO);
         costs.remove(&dest);
-        assert_eq!(other.get(&dest), 19);
+        assert_eq!(other.get(&dest), lr_cost);
         other.set_enforced(true);
         assert!(costs.enforced());
     }
 
     #[test]
     fn announce_ext_payload_has_marker_flags_stamp_and_link_cost() {
-        let payload = announce_ext_payload(&[0x55; constants::STAMP_LENGTH], 0, 19);
+        let cost = StampCost::from_f64(12.5);
+        let payload = announce_ext_payload(&[0x55; constants::STAMP_LENGTH], 0, cost);
         assert_eq!(payload.len(), constants::EXT_PAYLOAD_LENGTH);
         assert_eq!(payload[0], constants::EXT_PAYLOAD_MARKER);
         assert_eq!(payload[1], 0);
@@ -619,7 +624,7 @@ mod tests {
             &payload[2..2 + constants::STAMP_LENGTH],
             &[0x55; constants::STAMP_LENGTH]
         );
-        assert_eq!(payload[constants::EXT_PAYLOAD_LENGTH - 1], 19);
+        assert_eq!(&payload[constants::EXT_PAYLOAD_LENGTH - 2..], &[0x80, 12]);
     }
 
     #[test]
