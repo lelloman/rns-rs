@@ -68,7 +68,7 @@ Every commit in the audited range must appear exactly once.
 | 5 | `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b` | Cleanup, logging and parameter tuning | Integrated | `7993f1e`; fixed-point `StampCost` and `target_from_fp` behind `stamp_valid` and the key grinder, defaults 23.5 / 25 / 19.8 / 19.8 / 19.2, `STAMP_LRS = true`, `[stamps] always_stamp_lrs` and `global.always_stamp_link_requests`, docs; the link request cost fallback implemented the documented intent rather than the expression as written (a divergence until upstream fixed the line in commit 7); stamped link keys ground on a thread per core |
 | 6 | `2c142973bfb9b0ce6f46fa781d7ade4b81c796f0` | Cleanup (path request stamp diagnostics) | Integrated | Path request stamp diagnostics on the pathing target, with the new lenient-relay message |
 | 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Integrated | `outbound_link_stamp_cost` follows the corrected fallback, `LR_COST` only for a missing announced cost; ends the commit 5 divergence |
-| 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Needs port | |
+| 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Structurally covered | `STAMP_COST_CAP` and `LINK_COST_CAP` were never floats in Rust (`u8` 100 and 40, `u32` 100 for `StampCost`) |
 | 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Needs coordinated port | |
 | 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Needs port | |
 | 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Needs port | |
@@ -456,6 +456,20 @@ The Python interop command that sets `ALWAYS_STAMP_LRS` stays, because an
 `a8cc6cb2` Python initiator still needs it.
 
 **Final disposition:** Integrated.
+
+### 8. `75465efa` — Fixed cap types
+
+**Upstream change:** `STAMP_COST_CAP` and `LINK_COST_CAP` return from the
+floats `100.0` and `40.0` of `a8cc6cb2` to the integers 100 and 40.
+`target_from_fp` asserts `fp <= STAMP_COST_CAP * COST_FP`, which an integer
+cap keeps exact.
+
+**Rust applicability:** Structurally covered. The Rust caps were never
+floats: `constants::STAMP_COST_CAP` and `LINK_COST_CAP` are `u8` 100 and 40,
+`rns_crypto::stamp_value::STAMP_COST_CAP` is `u32` 100, and a const assert
+keeps the two cost caps equal.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
