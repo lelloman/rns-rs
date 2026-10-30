@@ -74,7 +74,7 @@ Every commit in the audited range must appear exactly once.
 | 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Structurally covered | A Rust link exists only once its keys do (`complete_create_link` after the stamped grind), with a fixed `[u8; 16]` id, so there is no id-less link to format |
 | 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Non-runtime | `Changelog.md` 1.6.0 release notes (phased stamp rollout, storage, sharding) and "cost-aware interface discovery and auto-connects", integrated under commit 13; not vendored |
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
-| 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Needs port | |
+| 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | Trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Needs port | |
 
 ## Per-Commit Analysis
@@ -705,6 +705,15 @@ discovery fields are an additive wire change that older parsers ignore.
   the auto-connect gate in `docs/interface-discovery.md`.
 
 **Final disposition:** Integrated.
+
+### 14. `1a6e26ac` — Cleanup (whitespace)
+
+**Upstream change:** removes trailing whitespace from a blank line after the
+`ifac_size` option parsing in `Reticulum.py`.
+
+**Rust applicability:** Non-runtime.
+
+**Final disposition:** Non-runtime; mapping only.
 
 ## Integration Plan
 
