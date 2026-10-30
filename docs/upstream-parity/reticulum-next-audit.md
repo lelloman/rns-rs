@@ -525,8 +525,12 @@ default behavior is unaffected.
 
 **Decision (2026-10-30):** as for the commit 5 fallback, port the intent:
 drop requests whose stamp is not valid for the destination's cost. This is a
-deliberate divergence until upstream corrects or confirms the line, and it
-should be reported upstream. On the wire it only matters to an enforcing
+deliberate divergence until upstream corrects or confirms the line. It is
+not reported upstream: the maintainer has stated they do not want
+LLM-assisted reports or contributions, so each audit rechecks the line
+instead. `upstream_inverted_link_request_check_drops_valid_stamps`
+(`rns-net/src/common/link_manager/tests.rs`) evaluates the upstream
+expression on the same requests as the responder. On the wire it only matters to an enforcing
 responder: an enforcing rns-rs node accepts sufficient stamps and drops
 insufficient ones, where an enforcing `796ef2d4` Python node would do the
 opposite.
@@ -752,10 +756,10 @@ behavior from the earlier, already audited range.
 
 All fifteen commits have a final disposition. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
-before promotion: the gates below, and reporting the inverted
-`Link.validate_request` stamp check of commit 9 to upstream. If upstream
-confirms that expression as written, the `LinkManager` responder check must
-follow it.
+before promotion: the gates below. The inverted `Link.validate_request`
+stamp check of commit 9 is not reported upstream (see its analysis); each
+audit rechecks it. If upstream confirms that expression as written, the
+`LinkManager` responder check must follow it.
 
 ## Promotion Gates
 

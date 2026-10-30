@@ -751,6 +751,14 @@ impl LinkManager {
         // stamp_valid(...)`, which would drop the valid requests instead; this
         // drops the invalid ones, as the error it raises ("Insufficient link
         // request stamp value") describes.
+        //
+        // UPSTREAM BUG, NOT REPORTED: we decided not to report this upstream,
+        // because the maintainer has stated they do not want LLM-assisted
+        // reports or contributions. Check `Link.validate_request` at every
+        // audit: if upstream adds the missing `not`, this divergence ends; if
+        // upstream keeps the expression on purpose, follow it here.
+        // `upstream_inverted_link_request_check_drops_valid_stamps` shows what
+        // the upstream expression would do.
         let stamp_value =
             rns_core::link::handshake::link_request_stamp_value(dest_hash, packet.data());
         if let Some(value) = stamp_value {
