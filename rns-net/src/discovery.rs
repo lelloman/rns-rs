@@ -19,7 +19,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use rns_core::msgpack::{self, Value};
-use rns_core::stamp::{stamp_valid, stamp_workblock, StampValue};
+use rns_core::stamp::{stamp_valid, stamp_workblock, StampCost, StampValue};
 use rns_crypto::sha256::sha256;
 
 use crate::time;
@@ -479,6 +479,8 @@ pub fn generate_discovery_stamp(
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
+    // Discovery costs are configured as whole numbers.
+    let stamp_cost = StampCost::from_whole(u32::from(stamp_cost));
     let infohash = sha256(packed_data);
     let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
 
@@ -1842,10 +1844,14 @@ mod tests {
         let packed = b"internal stamps module";
         let cost = 8;
         let (stamp, value) = generate_discovery_stamp(packed, cost);
-        assert!(value.meets(u32::from(cost)));
+        assert!(value.meets(StampCost::from_whole(u32::from(cost))));
         let infohash = sha256(packed);
         let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
-        assert!(stamp_valid(&stamp, cost, &workblock));
+        assert!(stamp_valid(
+            &stamp,
+            StampCost::from_whole(u32::from(cost)),
+            &workblock
+        ));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rns_core::constants;
-use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampValue};
+use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue};
 
 /// Per-destination stamp files.
 #[derive(Debug, Clone)]
@@ -38,7 +38,7 @@ impl DestinationStampStore {
         &self,
         destination_hash: &[u8; 16],
         material: &[u8],
-        required_value: u8,
+        required_value: StampCost,
     ) -> Option<(Vec<u8>, StampValue)> {
         use rns_core::msgpack;
 
@@ -110,7 +110,8 @@ pub struct LinkRequestCosts {
 #[derive(Debug)]
 struct LinkRequestCostsInner {
     costs: std::sync::Mutex<std::collections::HashMap<[u8; 16], u8>>,
-    default_cost: std::sync::atomic::AtomicU8,
+    /// Fixed-point `LR_COST`, fractional by default since a8cc6cb2.
+    default_cost: std::sync::atomic::AtomicU32,
     enforced: std::sync::atomic::AtomicBool,
 }
 
@@ -118,7 +119,9 @@ impl Default for LinkRequestCostsInner {
     fn default() -> Self {
         Self {
             costs: Default::default(),
-            default_cost: std::sync::atomic::AtomicU8::new(constants::LINK_REQUEST_STAMP_COST),
+            default_cost: std::sync::atomic::AtomicU32::new(
+                constants::LINK_REQUEST_STAMP_COST.fp(),
+            ),
             enforced: std::sync::atomic::AtomicBool::new(constants::LR_STAMPS_ENFORCED),
         }
     }
@@ -148,18 +151,23 @@ impl LinkRequestCosts {
         rns_core::stamp::announced_link_cost(configured, self.default_cost())
     }
 
-    /// `Transport.LR_COST`: the cost of destinations that set none.
-    pub fn default_cost(&self) -> u8 {
-        self.inner
-            .default_cost
-            .load(std::sync::atomic::Ordering::Relaxed)
+    /// `Transport.LR_COST`: the cost of destinations that set none, which
+    /// they announce truncated to whole bits, and the cost at which
+    /// `ALWAYS_STAMP_LRS` stamps requests to destinations that announced
+    /// none.
+    pub fn default_cost(&self) -> StampCost {
+        StampCost::from_fp(
+            self.inner
+                .default_cost
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Apply `[stamps] lr_cost`, already clamped by the config parser.
-    pub fn set_default_cost(&self, cost: u8) {
+    pub fn set_default_cost(&self, cost: StampCost) {
         self.inner
             .default_cost
-            .store(cost, std::sync::atomic::Ordering::Relaxed);
+            .store(cost.fp(), std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Forget the configured cost, reverting to the default.
@@ -224,13 +232,10 @@ pub fn path_request_ext_payload(stamp: &[u8], flags: u8) -> Vec<u8> {
 /// stamp, validated as `stamp_valid(public_key, cost, material)`.
 pub fn generate_stamped_key(
     material: &[u8],
-    stamp_cost: u8,
+    stamp_cost: StampCost,
 ) -> Option<(Vec<u8>, Vec<u8>, StampValue)> {
     use rns_crypto::OsRng;
 
-    if stamp_cost > constants::STAMP_COST_CAP {
-        return None;
-    }
     let mut rng = OsRng;
     let (private, public, value) =
         rns_crypto::identity::generate_stamped_key(&mut rng, material, stamp_cost);
@@ -255,13 +260,16 @@ pub fn link_request_stamp_material(
 /// Generate the keys for a stamped link request to `destination_hash`.
 ///
 /// The Ed25519 signing key is generated first because it is part of the stamp
-/// material; the X25519 key is then ground until its public half carries at
-/// least `stamp_cost`. Gives up and returns `None` once `deadline` passes,
-/// mirroring upstream's `LINK_STAMP_TIMEOUT` watchdog. This is unbounded
-/// work and must not run on the driver thread.
+/// material; the X25519 key is then ground on one thread per core until its
+/// public half carries at least `stamp_cost`, as upstream grinds stamped keys
+/// in a process per core. The threads are dedicated rather than taken from
+/// the rayon pool, so a grind that runs until its deadline cannot hold up
+/// the stamper's announce and path request stamps. Gives up and returns
+/// `None` once `deadline` passes, mirroring upstream's `LINK_STAMP_TIMEOUT`
+/// watchdog. This is unbounded work and must not run on the driver thread.
 pub fn generate_stamped_link_keys(
     destination_hash: &[u8; 16],
-    stamp_cost: u8,
+    stamp_cost: StampCost,
     deadline: std::time::Instant,
 ) -> Option<(
     rns_crypto::x25519::X25519PrivateKey,
@@ -269,20 +277,44 @@ pub fn generate_stamped_link_keys(
     StampValue,
 )> {
     use rns_crypto::OsRng;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
 
-    if stamp_cost > constants::STAMP_COST_CAP {
-        return None;
-    }
-    let mut rng = OsRng;
-    let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
+    let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut OsRng);
     let material =
         link_request_stamp_material(destination_hash, &sig_prv.public_key().public_bytes());
-    let (prv, _public, value) = rns_crypto::identity::generate_stamped_key_until(
-        &mut rng,
-        &material,
-        stamp_cost,
-        &mut || std::time::Instant::now() >= deadline,
-    )?;
+    let found = AtomicBool::new(false);
+    let result = Mutex::new(None);
+
+    let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let (found, result, material) = (&found, &result, &material);
+            scope.spawn(move || {
+                let keys = rns_crypto::identity::generate_stamped_key_until(
+                    &mut OsRng,
+                    material,
+                    stamp_cost,
+                    &mut || found.load(Ordering::Relaxed) || std::time::Instant::now() >= deadline,
+                );
+                // Stop the other workers either way: a key was found, or the
+                // deadline passed for all of them.
+                found.store(true, Ordering::Relaxed);
+                if let Some(keys) = keys {
+                    let mut slot = result
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if slot.is_none() {
+                        *slot = Some(keys);
+                    }
+                }
+            });
+        }
+    });
+
+    let (prv, _public, value) = result
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())?;
     Some((prv, sig_prv, value))
 }
 
@@ -295,10 +327,10 @@ pub fn generate_stamped_link_keys(
 /// rayon pool covers all targets here. The stamp format and the value
 /// computation are identical.
 ///
-/// Returns `(stamp, value)`, or `None` when the cost is above the protocol cap.
+/// Returns `(stamp, value)`, or `None` for a zero stamp size.
 pub fn generate_stamp(
     material: &[u8],
-    stamp_cost: u8,
+    stamp_cost: StampCost,
     size: usize,
     expand_rounds: u32,
 ) -> Option<(Vec<u8>, StampValue)> {
@@ -319,7 +351,7 @@ const NONCES_PER_FILL: usize = 256;
 /// when cancelled, as the cancelled upstream job yields no stamp.
 pub fn generate_stamp_until(
     material: &[u8],
-    stamp_cost: u8,
+    stamp_cost: StampCost,
     size: usize,
     expand_rounds: u32,
     deadline: Option<std::time::Instant>,
@@ -328,7 +360,7 @@ pub fn generate_stamp_until(
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    if stamp_cost > constants::STAMP_COST_CAP || size == 0 {
+    if size == 0 {
         return None;
     }
     if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
@@ -409,7 +441,7 @@ mod tests {
         assert_eq!(
             generate_stamp_until(
                 b"material",
-                constants::STAMP_COST_CAP,
+                StampCost::from_whole(u32::from(constants::STAMP_COST_CAP)),
                 14,
                 0,
                 Some(deadline)
@@ -419,20 +451,24 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         // An expired deadline does no work at all.
         assert_eq!(
-            generate_stamp_until(b"material", 0, 14, 0, Some(Instant::now())),
+            generate_stamp_until(b"material", StampCost::ZERO, 14, 0, Some(Instant::now())),
             None
         );
         // A reachable cost before the deadline yields a valid stamp.
         let (stamp, value) = generate_stamp_until(
             b"material",
-            4,
+            StampCost::from_whole(4),
             14,
             0,
             Some(Instant::now() + Duration::from_secs(60)),
         )
         .expect("cost 4 is found quickly");
-        assert!(value.meets(4));
-        assert!(stamp_valid(&stamp, 4, &stamp_workblock(b"material", 0)));
+        assert!(value.meets(StampCost::from_whole(4)));
+        assert!(stamp_valid(
+            &stamp,
+            StampCost::from_whole(4),
+            &stamp_workblock(b"material", 0)
+        ));
     }
 
     #[test]
@@ -447,11 +483,17 @@ mod tests {
     #[test]
     fn generated_destination_stamp_validates_and_roundtrips() {
         let material = b"destination stamp test material";
-        let (stamp, value) = generate_stamp(material, 8, constants::STAMP_LENGTH, 0).unwrap();
+        let (stamp, value) = generate_stamp(
+            material,
+            StampCost::from_whole(8),
+            constants::STAMP_LENGTH,
+            0,
+        )
+        .unwrap();
         assert_eq!(stamp.len(), constants::STAMP_LENGTH);
         let workblock = stamp_workblock(material, 0);
-        assert!(stamp_valid(&stamp, 8, &workblock));
-        assert!(value.meets(8));
+        assert!(stamp_valid(&stamp, StampCost::from_whole(8), &workblock));
+        assert!(value.meets(StampCost::from_whole(8)));
 
         let dir = std::env::temp_dir().join(format!(
             "rns-dstamp-test-{}-{}",
@@ -460,41 +502,49 @@ mod tests {
         ));
         let store = DestinationStampStore::new(&dir);
         store.store(&[0x44; 16], &stamp, value).unwrap();
-        let loaded = store.load(&[0x44; 16], material, 8).unwrap();
+        let loaded = store
+            .load(&[0x44; 16], material, StampCost::from_whole(8))
+            .unwrap();
         assert_eq!(loaded.0, stamp);
         assert_eq!(loaded.1, value);
-        assert!(store.load(&[0x44; 16], material, 200).is_none());
+        assert!(store
+            .load(&[0x44; 16], material, StampCost::from_whole(200))
+            .is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn stamped_key_public_half_validates_against_material() {
         let material = b"identity stamp material";
-        let (private, public, value) = generate_stamped_key(material, 4).unwrap();
+        let (private, public, value) =
+            generate_stamped_key(material, StampCost::from_whole(4)).unwrap();
         assert_eq!(private.len(), 32);
         assert_eq!(public.len(), 32);
-        assert!(value.meets(4));
-        assert!(stamp_valid(&public, 4, material));
+        assert!(value.meets(StampCost::from_whole(4)));
+        assert!(stamp_valid(&public, StampCost::from_whole(4), material));
     }
 
     #[test]
     fn stamped_link_keys_meet_cost_and_bind_destination() {
         let dest_hash = [0x5A; 16];
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let (prv, sig_prv, value) = generate_stamped_link_keys(&dest_hash, 4, deadline).unwrap();
+        let (prv, sig_prv, value) =
+            generate_stamped_link_keys(&dest_hash, StampCost::from_whole(4), deadline).unwrap();
         let material =
             link_request_stamp_material(&dest_hash, &sig_prv.public_key().public_bytes());
         let recomputed =
             rns_crypto::identity::stamp_value(&material, &prv.public_key().public_bytes());
         assert_eq!(recomputed, value);
-        assert!(value.meets(4));
+        assert!(value.meets(StampCost::from_whole(4)));
     }
 
     #[test]
     fn stamped_link_keys_give_up_at_deadline() {
         let deadline = std::time::Instant::now();
         let started = std::time::Instant::now();
-        assert!(generate_stamped_link_keys(&[0x5B; 16], 100, deadline).is_none());
+        assert!(
+            generate_stamped_link_keys(&[0x5B; 16], StampCost::from_whole(100), deadline).is_none()
+        );
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
@@ -503,28 +553,20 @@ mod tests {
         // Cost 100 is unattainable, so the only way out is the deadline.
         let timeout = std::time::Duration::from_millis(200);
         let started = std::time::Instant::now();
-        let result = generate_stamped_link_keys(&[0x5B; 16], 100, started + timeout);
+        let result =
+            generate_stamped_link_keys(&[0x5B; 16], StampCost::from_whole(100), started + timeout);
         assert!(result.is_none());
         assert!(started.elapsed() >= timeout);
         assert!(started.elapsed() < timeout + std::time::Duration::from_secs(2));
     }
 
     #[test]
-    fn stamped_link_keys_reject_cost_above_protocol_cap() {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let started = std::time::Instant::now();
-        assert!(
-            generate_stamped_link_keys(&[0x5C; 16], constants::STAMP_COST_CAP + 1, deadline)
-                .is_none()
-        );
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
-    }
-
-    #[test]
     fn stamped_link_keys_are_fresh_per_call() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let (prv_a, sig_a, _) = generate_stamped_link_keys(&[0x5D; 16], 1, deadline).unwrap();
-        let (prv_b, sig_b, _) = generate_stamped_link_keys(&[0x5D; 16], 1, deadline).unwrap();
+        let (prv_a, sig_a, _) =
+            generate_stamped_link_keys(&[0x5D; 16], StampCost::from_whole(1), deadline).unwrap();
+        let (prv_b, sig_b, _) =
+            generate_stamped_link_keys(&[0x5D; 16], StampCost::from_whole(1), deadline).unwrap();
         assert_ne!(prv_a.private_bytes(), prv_b.private_bytes());
         assert_ne!(sig_a.private_bytes(), sig_b.private_bytes());
     }
@@ -537,7 +579,8 @@ mod tests {
         // Must agree with the responder-side parser in rns-core.
         let dest_hash = [0x5E; 16];
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let (prv, sig_prv, value) = generate_stamped_link_keys(&dest_hash, 3, deadline).unwrap();
+        let (prv, sig_prv, value) =
+            generate_stamped_link_keys(&dest_hash, StampCost::from_whole(3), deadline).unwrap();
         let mut request = Vec::with_capacity(64);
         request.extend_from_slice(&prv.public_key().public_bytes());
         request.extend_from_slice(&sig_prv.public_key().public_bytes());
@@ -552,14 +595,16 @@ mod tests {
         let costs = LinkRequestCosts::default();
         let other = costs.clone();
         let dest = [0x42; 16];
-        assert_eq!(costs.get(&dest), constants::LINK_REQUEST_STAMP_COST);
+        // The fractional `LR_COST` is announced truncated (`int(19.2)`).
+        assert_eq!(costs.get(&dest), 19);
+        assert_eq!(costs.default_cost(), constants::LINK_REQUEST_STAMP_COST);
         assert_eq!(costs.enforced(), constants::LR_STAMPS_ENFORCED);
         assert_eq!(costs.set(dest, 99), constants::LINK_COST_CAP);
         assert_eq!(other.get(&dest), constants::LINK_COST_CAP);
         assert_eq!(costs.set(dest, -1), 0);
         assert_eq!(other.get(&dest), 0);
         costs.remove(&dest);
-        assert_eq!(other.get(&dest), constants::LINK_REQUEST_STAMP_COST);
+        assert_eq!(other.get(&dest), 19);
         other.set_enforced(true);
         assert!(costs.enforced());
     }

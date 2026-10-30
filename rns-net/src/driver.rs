@@ -169,6 +169,8 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) lr_stamps_enforced: bool,
     /// `Transport.STAMP_LRS` default.
     pub(crate) stamp_link_requests: bool,
+    /// `Transport.ALWAYS_STAMP_LRS` default.
+    pub(crate) always_stamp_link_requests: bool,
     #[cfg(feature = "hooks")]
     pub(crate) provider_queue_max_events: usize,
     #[cfg(feature = "hooks")]
@@ -787,7 +789,8 @@ pub struct Driver {
     /// announce API reads it; settable as `global.stamp_destinations`.
     pub(crate) stamp_destinations: Arc<AtomicBool>,
     /// The `[stamps]` config section this node started with. Link request
-    /// stamping reads `stamp_lrs` and `lr_stamp_timeout` from it; the other
+    /// stamping reads `stamp_lrs`, `always_stamp_lrs` and `lr_stamp_timeout`
+    /// from it; the other
     /// options are applied to the engine, the stamper and the node handle at
     /// startup.
     pub(crate) stamp_settings: crate::config::StampsSection,
@@ -966,6 +969,7 @@ impl Driver {
             stamp_path_requests: rns_core::constants::STAMP_PRS,
             lr_stamps_enforced: rns_core::constants::LR_STAMPS_ENFORCED,
             stamp_link_requests: rns_core::constants::STAMP_LRS,
+            always_stamp_link_requests: rns_core::constants::ALWAYS_STAMP_LRS,
             #[cfg(feature = "hooks")]
             provider_queue_max_events: crate::provider_bridge::ProviderBridgeConfig::default()
                 .queue_max_events,
@@ -1416,6 +1420,7 @@ impl Driver {
         self.runtime_config_defaults.stamp_destinations = stamps.stamp_destinations;
         self.runtime_config_defaults.stamp_path_requests = stamps.stamp_prs;
         self.runtime_config_defaults.stamp_link_requests = stamps.stamp_lrs;
+        self.runtime_config_defaults.always_stamp_link_requests = stamps.always_stamp_lrs;
         self.runtime_config_defaults.lr_stamps_enforced = stamps.lr_stamps_enforced;
         // The per-destination cost table shared with the node API and the
         // announce builder: `lr_cost` is `Transport.LR_COST`, the cost of

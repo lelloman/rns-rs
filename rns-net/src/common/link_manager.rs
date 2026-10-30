@@ -18,6 +18,7 @@ use rns_core::link::types::{LinkId, LinkState, TeardownReason};
 use rns_core::link::{LinkAction, LinkEngine, LinkMode};
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::resource::{ResourceAction, ResourceReceiver, ResourceSender};
+use rns_core::stamp::StampCost;
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::{OsRng, Rng};
@@ -756,7 +757,9 @@ impl LinkManager {
                 value
             );
             if self.link_request_costs.enforced()
-                && !value.meets(u32::from(self.link_request_costs.get(dest_hash)))
+                && !value.meets(StampCost::from_whole(u32::from(
+                    self.link_request_costs.get(dest_hash),
+                )))
             {
                 log::debug!(
                     "Validating incoming link request failed: Insufficient link request stamp value {}",

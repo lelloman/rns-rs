@@ -6205,7 +6205,7 @@ fn test_pr190_one_hop_via_shared_instance_still_injects_h2() {
 fn stamp_ext_payload(stamp_byte: u8) -> Vec<u8> {
     let mut ext = vec![constants::EXT_PAYLOAD_MARKER, 0x00];
     ext.extend_from_slice(&[stamp_byte; constants::STAMP_LENGTH]);
-    ext.push(constants::LINK_REQUEST_STAMP_COST);
+    ext.push(11);
     ext
 }
 
@@ -6237,7 +6237,7 @@ fn enforced_announce_stamps_use_the_configured_destination_cost() {
 
     let mut requirements = StampRequirements {
         enforced: true,
-        destination_cost: 0,
+        destination_cost: crate::stamp::StampCost::ZERO,
         path_request_cost: constants::PATH_REQUEST_STAMP_COST,
     };
     engine.set_stamp_requirements(requirements);
@@ -6256,7 +6256,8 @@ fn enforced_announce_stamps_use_the_configured_destination_cost() {
     assert!(engine.has_path(&stamped.destination_hash));
 
     // The same stamp falls short of a cost at the protocol cap.
-    requirements.destination_cost = constants::STAMP_COST_CAP;
+    requirements.destination_cost =
+        crate::stamp::StampCost::from_whole(u32::from(constants::STAMP_COST_CAP));
     engine.set_stamp_requirements(requirements);
     let (stamped, _) = signed_announce_packet(0x34, Some(&ext));
     feed_announce(&mut engine, &stamped, 1000.0);
@@ -6287,7 +6288,7 @@ fn enforced_path_request_stamps_use_the_configured_cost() {
     let mut requirements = StampRequirements {
         enforced: true,
         destination_cost: constants::DESTINATION_STAMP_COST,
-        path_request_cost: 0,
+        path_request_cost: crate::stamp::StampCost::ZERO,
     };
     engine.set_stamp_requirements(requirements);
     let unstamped = make_transport_path_request_data(&[0xE2; 16], &[0x99; 16], &[0x02; 16]);
@@ -6303,7 +6304,8 @@ fn enforced_path_request_stamps_use_the_configured_cost() {
         "any stamp meets a configured cost of zero"
     );
 
-    requirements.path_request_cost = constants::STAMP_COST_CAP;
+    requirements.path_request_cost =
+        crate::stamp::StampCost::from_whole(u32::from(constants::STAMP_COST_CAP));
     engine.set_stamp_requirements(requirements);
     let stamped = make_stamped_path_request_data(&[0xE4; 16], &[0x99; 16], &[0x04; 16], &ext);
     assert!(engine

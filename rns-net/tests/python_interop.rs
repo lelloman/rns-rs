@@ -461,7 +461,8 @@ with open(config_path, "w") as f:
 
 # Upstream d7749b0b turned Transport.STAMP_LRS off by default and made it a
 # config switch; the stamped link request tests need Python to grind one.
-# Releases before the switch have no [stamps] section and ignore it.
+# a8cc6cb2 turned it back on and dropped the option, which it then ignores.
+# Releases before d7749b0b have no [stamps] section at all.
 [stamps]
   stamp_lrs = yes
 
@@ -611,16 +612,25 @@ try:
                 import time
                 from RNS.Stamps import generate_stamp
                 link_cost = int(command.split()[1])
+                # Grind to at least the value the Rust node requires: releases
+                # before a8cc6cb2 target 23, below its 23.5 announce cost.
+                stamp_target = max(RNS.Transport.DESTINATION_VALUE, int(command.split()[2]))
                 RNS.Transport.STAMP_DESTINATIONS = True
                 destination.set_link_cost(link_cost)
                 started = time.time()
-                stamp, value = generate_stamp(destination.stamp_material(), stamp_cost=RNS.Transport.DESTINATION_VALUE,
+                stamp, value = generate_stamp(destination.stamp_material(), stamp_cost=stamp_target,
                                               expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
                 destination.stamp, destination.stamp_value = stamp, value
                 destination.announce()
                 emit("python_stamped_announce", dest_hash=destination.hash.hex(), stamp_value=value,
                      stamp_hex=stamp.hex(), link_cost=destination.get_link_cost(),
                      seconds=round(time.time() - started, 2), version=RNS.__version__)
+        elif command == "always_stamp_lrs":
+            # a8cc6cb2's Link.py fallback, as written, stamps link requests
+            # only with ALWAYS_STAMP_LRS, even to destinations that announce
+            # a cost. Earlier releases have no such attribute and need none.
+            if hasattr(RNS.Transport, "ALWAYS_STAMP_LRS"): RNS.Transport.ALWAYS_STAMP_LRS = True
+            emit("python_always_stamp_lrs", supported=hasattr(RNS.Transport, "ALWAYS_STAMP_LRS"))
         elif command == "link_rust":
             if rust_destination is None:
                 emit("python_link_error", reason="rust destination is unknown")
@@ -844,7 +854,11 @@ fn python_rns_stamped_link_request_interop() {
     let node = start_rust_node(port, rust_tx);
 
     // Python stamps its destination and announces a link request cost.
-    python.command(&format!("stamped_announce_py {LINK_COST}"));
+    let required = rns_core::constants::DESTINATION_STAMP_COST;
+    python.command(&format!(
+        "stamped_announce_py {LINK_COST} {}",
+        required.as_f64().ceil()
+    ));
     let announced = python.wait_for_event(STAMP_WAIT, |event| {
         event["event"] == "python_stamped_announce"
             || event["event"] == "python_stamped_announce_unsupported"
@@ -860,7 +874,7 @@ fn python_rns_stamped_link_request_interop() {
     // releases report whole bits.
     let python_stamp_value = announced["stamp_value"].as_f64().unwrap();
     assert!(
-        python_stamp_value >= f64::from(rns_core::constants::DESTINATION_STAMP_COST),
+        python_stamp_value >= required.as_f64(),
         "Python stamp value {python_stamp_value} must satisfy the Rust required cost"
     );
     assert_eq!(announced["link_cost"], u64::from(LINK_COST));
@@ -893,7 +907,8 @@ fn python_rns_stamped_link_request_interop() {
 
     // Rust initiates: the link request key is ground off the driver thread
     // and must carry at least the announced cost. Link request stamping is
-    // opt-in since upstream d7749b0b (`[stamps] stamp_lrs`).
+    // on by default again since upstream a8cc6cb2; enable it explicitly so
+    // the test does not depend on that default.
     match node.query(rns_net::event::QueryRequest::SetRuntimeConfig {
         key: "global.stamp_link_requests".into(),
         value: rns_net::event::RuntimeConfigValue::Bool(true),
@@ -1046,6 +1061,8 @@ fn python_rns_link_cost_announced_by_rust_interop() {
 
     // Python initiates and grinds its link request to the announced cost;
     // the enforcing Rust responder accepts it.
+    python.command("always_stamp_lrs");
+    python.wait_for_event(TIMEOUT, |event| event["event"] == "python_always_stamp_lrs");
     python.command("link_rust");
     let requested = python.wait_for_event(TIMEOUT, |event| {
         event["event"] == "python_link_requested" || event["event"] == "python_link_error"

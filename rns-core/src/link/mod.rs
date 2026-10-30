@@ -110,7 +110,7 @@ impl LinkEngine {
         mtu: Option<u32>,
         now: f64,
         rng: &mut dyn Rng,
-        stamp_cost: u8,
+        stamp_cost: crate::stamp::StampCost,
     ) -> (Self, Vec<u8>) {
         let sig_prv = Ed25519PrivateKey::generate(rng);
         let sig_pub_bytes = sig_prv.public_key().public_bytes();
@@ -1750,10 +1750,10 @@ mod tests {
             None,
             0.0,
             &mut rng,
-            4,
+            crate::stamp::StampCost::from_whole(4),
         );
         let value = handshake::link_request_stamp_value(&dest_hash, &data).unwrap();
-        assert!(value.meets(4));
+        assert!(value.meets(crate::stamp::StampCost::from_whole(4)));
     }
 
     #[test]

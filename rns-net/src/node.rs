@@ -4356,6 +4356,7 @@ mod tests {
     use super::*;
     use crate::driver::IfacRuntimeConfig;
     use crate::storage::RatchetStore;
+    use rns_core::stamp::StampCost;
     use std::fs;
     use tempfile::tempdir;
 
@@ -6245,8 +6246,8 @@ enable_transport = False
         let dir = tempdir().unwrap();
         let store = crate::stamps::DestinationStampStore::new(dir.path());
         let targets = crate::stamper::StampTargets {
-            destination_value: 6,
-            path_request_value: 6,
+            destination_value: StampCost::from_whole(6),
+            path_request_value: StampCost::from_whole(6),
         };
         let mut node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
         node.set_stamp_store(store.clone());
@@ -7099,8 +7100,8 @@ enable_transport = False
         let dir = tempdir().unwrap();
         let store = crate::stamps::DestinationStampStore::new(dir.path());
         let targets = crate::stamper::StampTargets {
-            destination_value: 4,
-            path_request_value: 4,
+            destination_value: StampCost::from_whole(4),
+            path_request_value: StampCost::from_whole(4),
         };
         let identity = Identity::from_private_key(&[0x52; 64]);
         let mut dest = crate::Destination::single_in(
@@ -7117,28 +7118,37 @@ enable_transport = False
 
         ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
         let (first, first_value) = store
-            .load(&dest.hash.0, &material, 0)
+            .load(&dest.hash.0, &material, StampCost::ZERO)
             .expect("stamp persisted at the default target");
-        assert!(first_value.meets(4));
+        assert!(first_value.meets(StampCost::from_whole(4)));
 
         // A target the held stamp already meets reuses it.
         dest.set_value(first_value.whole() as u8);
         ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
-        assert_eq!(store.load(&dest.hash.0, &material, 0).unwrap().0, first);
+        assert_eq!(
+            store
+                .load(&dest.hash.0, &material, StampCost::ZERO)
+                .unwrap()
+                .0,
+            first
+        );
 
         // A target above the held value regenerates and persists a stamp
         // that reaches it.
         let raised = first_value.whole() as u8 + 1;
         dest.set_value(raised);
         ensure_destination_stamp(&store, targets, &dest, &identity).unwrap();
-        let (second, second_value) = store.load(&dest.hash.0, &material, 0).unwrap();
+        let (second, second_value) = store
+            .load(&dest.hash.0, &material, StampCost::ZERO)
+            .unwrap();
         assert_ne!(second, first);
-        assert!(second_value.meets(u32::from(raised)));
+        assert!(second_value.meets(StampCost::from_whole(u32::from(raised))));
 
         // The announce builder reloads at the same target and carries the
         // regenerated stamp and the configured default link cost.
         let (tx, _rx) = crate::event::channel();
-        tx.link_request_costs().set_default_cost(7);
+        tx.link_request_costs()
+            .set_default_cost(StampCost::from_whole(7));
         let (packet, _) =
             build_announce_packet(&tx, Some(&store), true, targets, &dest, &identity, None)
                 .unwrap();
@@ -7167,7 +7177,7 @@ enable_transport = False
              enforce_stamps = yes\n\
              stamp_destinations = yes\n\
              stamp_prs = yes\n\
-             stamp_lrs = yes\n\
+             always_stamp_lrs = yes\n\
              destination_cost = 18\n\
              destination_value = 27\n\
              pr_cost = 11\n\
@@ -7184,8 +7194,8 @@ enable_transport = False
         assert_eq!(
             node.stamp_targets,
             crate::stamper::StampTargets {
-                destination_value: 27,
-                path_request_value: 13,
+                destination_value: StampCost::from_whole(27),
+                path_request_value: StampCost::from_whole(13),
             }
         );
         // `lr_cost` and `enforce_stamps` reach the shared link cost table.
@@ -7202,6 +7212,7 @@ enable_transport = False
             "global.stamp_destinations",
             "global.stamp_path_requests",
             "global.stamp_link_requests",
+            "global.always_stamp_link_requests",
         ] {
             let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
                 .query(QueryRequest::GetRuntimeConfig { key: key.into() })

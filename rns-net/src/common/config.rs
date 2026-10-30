@@ -9,6 +9,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
+use rns_core::stamp::StampCost;
+
 /// Parsed RNS configuration.
 #[derive(Debug, Clone)]
 pub struct RnsConfig {
@@ -273,9 +275,10 @@ impl Default for ReticulumSection {
 ///
 /// The boolean options can only enable a feature: upstream applies them as
 /// `if value == True: Transport.X = True`, so `no` leaves the built-in
-/// default in place. Costs and values are clamped to `0..=STAMP_COST_CAP`
-/// (`lr_cost` to `0..=LINK_COST_CAP`) and the timeouts are floored at
-/// 20 ms.
+/// default in place. Costs and values are read as integers (`as_int`) and
+/// clamped to `0..=STAMP_COST_CAP` (`lr_cost` to `0..=LINK_COST_CAP`); only
+/// the built-in defaults are fractional (a8cc6cb2). The timeouts are floored
+/// at 20 ms.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StampsSection {
     /// `Transport.STAMPS_ENFORCED`, set by `enforce_stamps`.
@@ -286,18 +289,22 @@ pub struct StampsSection {
     pub stamp_destinations: bool,
     /// `Transport.STAMP_PRS` (`stamp_prs`).
     pub stamp_prs: bool,
-    /// `Transport.STAMP_LRS` (`stamp_lrs`).
+    /// `Transport.STAMP_LRS`. Upstream a8cc6cb2 turned it back on and
+    /// removed its `stamp_lrs` option; it stays switchable at runtime through
+    /// `global.stamp_link_requests`.
     pub stamp_lrs: bool,
+    /// `Transport.ALWAYS_STAMP_LRS` (`always_stamp_lrs`).
+    pub always_stamp_lrs: bool,
     /// `Transport.DESTINATION_COST` (`destination_cost`).
-    pub destination_cost: u8,
+    pub destination_cost: StampCost,
     /// `Transport.DESTINATION_VALUE` (`destination_value`).
-    pub destination_value: u8,
+    pub destination_value: StampCost,
     /// `Transport.PR_COST` (`pr_cost`).
-    pub pr_cost: u8,
+    pub pr_cost: StampCost,
     /// `Transport.PR_VALUE` (`pr_value`).
-    pub pr_value: u8,
+    pub pr_value: StampCost,
     /// `Transport.LR_COST` (`lr_cost`).
-    pub lr_cost: u8,
+    pub lr_cost: StampCost,
     /// `Transport.LINK_STAMP_TIMEOUT` in seconds (`lr_stamp_timeout`).
     pub lr_stamp_timeout: f64,
     /// `Transport.PR_STAMP_TIMEOUT` in seconds (`pr_stamp_timeout`).
@@ -313,6 +320,7 @@ impl Default for StampsSection {
             stamp_destinations: constants::STAMP_DESTINATIONS,
             stamp_prs: constants::STAMP_PRS,
             stamp_lrs: constants::STAMP_LRS,
+            always_stamp_lrs: constants::ALWAYS_STAMP_LRS,
             destination_cost: constants::DESTINATION_STAMP_COST,
             destination_value: constants::DESTINATION_STAMP_VALUE,
             pr_cost: constants::PATH_REQUEST_STAMP_COST,
@@ -1427,7 +1435,7 @@ fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, 
             }),
         }
     };
-    let cost = |key: &str, cap: u8| -> Result<Option<u8>, ConfigError> {
+    let cost = |key: &str, cap: u8| -> Result<Option<StampCost>, ConfigError> {
         let Some(v) = kvs.get(key) else {
             return Ok(None);
         };
@@ -1435,7 +1443,9 @@ fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, 
             key: key.into(),
             value: v.clone(),
         })?;
-        Ok(Some(n.clamp(0, i64::from(cap)) as u8))
+        Ok(Some(StampCost::from_whole(
+            n.clamp(0, i64::from(cap)) as u32
+        )))
     };
     let timeout = |key: &str| -> Result<Option<f64>, ConfigError> {
         let Some(v) = kvs.get(key) else {
@@ -1467,8 +1477,10 @@ fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, 
     if flag("stamp_prs")? {
         section.stamp_prs = true;
     }
-    if flag("stamp_lrs")? {
-        section.stamp_lrs = true;
+    // a8cc6cb2 replaced `stamp_lrs` with `always_stamp_lrs`; like other
+    // unknown options, a leftover `stamp_lrs` is ignored.
+    if flag("always_stamp_lrs")? {
+        section.always_stamp_lrs = true;
     }
     if let Some(v) = cost("destination_cost", STAMP_COST_CAP)? {
         section.destination_cost = v;
@@ -2681,11 +2693,13 @@ direct_connect_policy = identified_only
             stamps.lr_stamps_enforced,
             stamps.stamp_destinations,
             stamps.stamp_prs,
-            stamps.stamp_lrs,
+            stamps.always_stamp_lrs,
         ];
         assert_eq!(flags, [false; 5]);
+        // a8cc6cb2: link requests are stamped when a cost is announced.
+        assert!(stamps.stamp_lrs);
         assert_eq!(stamps.destination_cost, constants::DESTINATION_STAMP_COST);
-        assert_eq!(stamps.destination_value, 25);
+        assert_eq!(stamps.destination_value, StampCost::from_whole(25));
         assert_eq!(stamps.pr_cost, constants::PATH_REQUEST_STAMP_COST);
         assert_eq!(stamps.pr_value, constants::PATH_REQUEST_STAMP_VALUE);
         assert_eq!(stamps.lr_cost, constants::LINK_REQUEST_STAMP_COST);
@@ -2707,7 +2721,7 @@ direct_connect_policy = identified_only
              enforce_stamps = yes\n\
              stamp_destinations = Yes\n\
              stamp_prs = true\n\
-             stamp_lrs = on\n\
+             always_stamp_lrs = on\n\
              destination_cost = 20\n\
              destination_value = 30\n\
              pr_cost = 12\n\
@@ -2723,12 +2737,12 @@ direct_connect_policy = identified_only
         assert!(stamps.lr_stamps_enforced);
         assert!(stamps.stamp_destinations);
         assert!(stamps.stamp_prs);
-        assert!(stamps.stamp_lrs);
-        assert_eq!(stamps.destination_cost, 20);
-        assert_eq!(stamps.destination_value, 30);
-        assert_eq!(stamps.pr_cost, 12);
-        assert_eq!(stamps.pr_value, 14);
-        assert_eq!(stamps.lr_cost, 9);
+        assert!(stamps.always_stamp_lrs);
+        assert_eq!(stamps.destination_cost, StampCost::from_whole(20));
+        assert_eq!(stamps.destination_value, StampCost::from_whole(30));
+        assert_eq!(stamps.pr_cost, StampCost::from_whole(12));
+        assert_eq!(stamps.pr_value, StampCost::from_whole(14));
+        assert_eq!(stamps.lr_cost, StampCost::from_whole(9));
         assert_eq!(
             stamps.link_stamp_timeout(),
             std::time::Duration::from_millis(2500)
@@ -2748,12 +2762,27 @@ direct_connect_policy = identified_only
              enforce_stamps = no\n\
              stamp_destinations = False\n\
              stamp_prs = off\n\
-             stamp_lrs = 0\n",
+             always_stamp_lrs = 0\n",
         )
         .unwrap();
         assert_eq!(config.stamps, StampsSection::default());
         assert!(parse("[stamps]\nstamp_prs = maybe\n").is_err());
         assert!(parse("[stamps]\nenforce_stamps = 2\n").is_err());
+    }
+
+    #[test]
+    fn stamps_section_ignores_the_removed_stamp_lrs_option() {
+        // a8cc6cb2 dropped `stamp_lrs`; `no` no longer turns stamping off.
+        let config = parse("[stamps]\nstamp_lrs = no\n").unwrap();
+        assert_eq!(config.stamps, StampsSection::default());
+        assert!(config.stamps.stamp_lrs);
+    }
+
+    #[test]
+    fn stamps_section_costs_are_whole_numbers() {
+        // Reticulum.py reads them with `as_int`; only the defaults are
+        // fractional.
+        assert!(parse("[stamps]\ndestination_cost = 23.5\n").is_err());
     }
 
     #[test]
@@ -2771,12 +2800,16 @@ direct_connect_policy = identified_only
         )
         .unwrap();
         let stamps = config.stamps;
-        assert_eq!(stamps.destination_cost, constants::STAMP_COST_CAP);
-        assert_eq!(stamps.destination_value, 0);
-        assert_eq!(stamps.pr_cost, constants::STAMP_COST_CAP);
-        assert_eq!(stamps.pr_value, constants::STAMP_COST_CAP);
+        let cap = StampCost::from_whole(u32::from(constants::STAMP_COST_CAP));
+        assert_eq!(stamps.destination_cost, cap);
+        assert_eq!(stamps.destination_value, StampCost::ZERO);
+        assert_eq!(stamps.pr_cost, cap);
+        assert_eq!(stamps.pr_value, cap);
         // `lr_cost` has its own, lower cap.
-        assert_eq!(stamps.lr_cost, constants::LINK_COST_CAP);
+        assert_eq!(
+            stamps.lr_cost,
+            StampCost::from_whole(u32::from(constants::LINK_COST_CAP))
+        );
         assert_eq!(
             stamps.link_stamp_timeout(),
             std::time::Duration::from_millis(20)
@@ -2787,7 +2820,7 @@ direct_connect_policy = identified_only
         );
 
         let config = parse("[stamps]\nlr_cost = -1\npr_stamp_timeout = nan\n").unwrap();
-        assert_eq!(config.stamps.lr_cost, 0);
+        assert_eq!(config.stamps.lr_cost, StampCost::ZERO);
         assert_eq!(
             config.stamps.path_request_stamp_timeout(),
             std::time::Duration::from_millis(20)
