@@ -75,7 +75,7 @@ Every commit in the audited range must appear exactly once.
 | 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Non-runtime | `Changelog.md` 1.6.0 release notes (phased stamp rollout, storage, sharding) and "cost-aware interface discovery and auto-connects", integrated under commit 13; not vendored |
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | Trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
-| 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Needs port | |
+| 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | Spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
 
 ## Per-Commit Analysis
 
@@ -714,6 +714,38 @@ discovery fields are an additive wire change that older parsers ignore.
 **Rust applicability:** Non-runtime.
 
 **Final disposition:** Non-runtime; mapping only.
+
+### 15. `5b2b8afb` — Fixed missing interface parameter inheritances
+
+**Upstream change:** configured I2P peers are spawned on a thread 1.5 s after
+the parent starts, so they see the attributes `Reticulum.py` applies to the
+parent after construction, and they now inherit `IN`/`OUT`, mode, bitrate,
+`recursive_prs`, gravity, `HW_MTU`, `announces_to_internal` /
+`announces_from_internal`, `announce_cap`, the ingress and egress control
+parameters, the announce rate parameters and the stamp costs; a failing peer
+is logged instead of aborting the others. Accepted I2P peers also take `IN`/
+`OUT`, `announces_*`, `announce_cap` and `recursive_prs` from the parent,
+and Weave peers `announces_*`, `announce_cap`, `recursive_prs` and the egress
+control parameters. The changelog adds "path retainment prioritization for
+slow interfaces" and this fix.
+
+**Rust applicability:** Structurally covered. rns-rs does not copy fields
+per interface class. Children of listener interfaces (I2P, TCP and Backbone
+servers, Auto, local) are registered through `DynamicInterfaceTemplate`,
+which applies mode, gravity, `recursive_prs`, `announces_*`, the stamp costs
+and IFAC, while the factory hands them the parent's ingress control (which
+includes the egress parameters). Children of registered parents (Weave
+peers) also pass through `handle_dynamic_interface_up_event`, which copies
+the same set plus `announce_cap` and the announce rate parameters. The
+remaining fields have no per-interface configuration in rns-rs: I2P bitrate
+and hardware MTU are fixed, `announce_cap` and the announce rate parameters
+come from node-wide defaults or runtime keys, and I2P peers are always in and
+out capable, as the upstream parent is once configured. The configured I2P
+peers start with the interface, after its settings are known, so the 1.5 s
+delay has no counterpart. The changelog's path retainment entry describes
+behavior from the earlier, already audited range.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
