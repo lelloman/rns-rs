@@ -264,6 +264,7 @@ impl InterfaceFactory for UdpFactory {
         let in_capable = udp_config.listen_ip.is_some();
 
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name,
             mode: ctx.mode,

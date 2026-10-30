@@ -590,6 +590,7 @@ impl InterfaceFactory for TcpClientFactory {
         let id = tcp_config.interface_id;
         let name = tcp_config.name.clone();
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name,
             mode: ctx.mode,

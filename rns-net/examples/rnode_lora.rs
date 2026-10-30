@@ -110,6 +110,7 @@ fn main() {
             local_hops_delta: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "RNodeInterface".to_string(),
                 config_data: Box::new(rnode),

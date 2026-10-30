@@ -163,6 +163,7 @@ fn main() {
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -269,6 +270,7 @@ fn main() {
                 &alice_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -372,6 +374,7 @@ fn main() {
                 &bob_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {

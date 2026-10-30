@@ -27,6 +27,15 @@ In rns-rs these settings apply to discovery-origin members of the bounded
 Backbone peer pool. They do not modify statically configured interfaces or
 configured peer-pool members.
 
+Discovery announces carry the announce and path request stamp costs the
+interface requires (its `destination_cost` and `pr_cost`, or the `[stamps]`
+defaults), as upstream does since `9b464382`. A discovered interface is only
+auto-connected when those costs are within this node's own `destination_value`
+and `pr_value`, so that the node can produce stamps the remote accepts; an
+interface that announces no costs requires none. Like upstream, auto-connect
+requires Reticulum 1.5.7 or later for `RNS` announcers; rns-rs announcers are
+trusted whatever their version.
+
 ## Advertised locations
 
 Discoverable Backbone and TCP server interfaces can advertise a static

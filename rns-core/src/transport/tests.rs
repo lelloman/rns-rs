@@ -30,6 +30,7 @@ fn make_config(transport_enabled: bool) -> TransportConfig {
 
 fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
     InterfaceInfo {
+        stamp_costs: Default::default(),
         id: InterfaceId(id),
         name: String::from("test"),
         mode,
@@ -1779,6 +1780,7 @@ fn test_tick_culls_expired_path() {
 
 fn make_local_client_interface(id: u64) -> InterfaceInfo {
     InterfaceInfo {
+        stamp_costs: Default::default(),
         id: InterfaceId(id),
         name: String::from("local_client"),
         mode: constants::MODE_FULL,
@@ -2373,6 +2375,7 @@ fn test_local_client_exclude_from_forward() {
 
 fn make_tunnel_interface(id: u64) -> InterfaceInfo {
     InterfaceInfo {
+        stamp_costs: Default::default(),
         id: InterfaceId(id),
         name: String::from("tunnel_iface"),
         mode: constants::MODE_FULL,
@@ -6262,6 +6265,70 @@ fn enforced_announce_stamps_use_the_configured_destination_cost() {
     let (stamped, _) = signed_announce_packet(0x34, Some(&ext));
     feed_announce(&mut engine, &stamped, 1000.0);
     assert!(!engine.has_path(&stamped.destination_hash));
+}
+
+#[test]
+fn enforced_announce_stamps_use_the_receiving_interface_cost() {
+    // Identity.validate_announce since 9b464382: the receiving interface's
+    // `destination_cost` overrides Transport.DESTINATION_COST.
+    let ext = stamp_ext_payload(0xA5);
+    let cap = crate::stamp::StampCost::from_whole(u32::from(constants::STAMP_COST_CAP));
+    for (node_cost, interface_cost, accepted) in [
+        (cap, Some(crate::stamp::StampCost::ZERO), true),
+        (crate::stamp::StampCost::ZERO, Some(cap), false),
+        (crate::stamp::StampCost::ZERO, None, true),
+    ] {
+        let mut engine = TransportEngine::new(make_config(false));
+        let mut interface = make_interface(1, constants::MODE_FULL);
+        interface.stamp_costs.destination_cost = interface_cost;
+        engine.register_interface(interface);
+        engine.set_stamp_requirements(StampRequirements {
+            enforced: true,
+            destination_cost: node_cost,
+            path_request_cost: constants::PATH_REQUEST_STAMP_COST,
+        });
+        let (stamped, _) = signed_announce_packet(0x35, Some(&ext));
+        feed_announce(&mut engine, &stamped, 1000.0);
+        assert_eq!(
+            engine.has_path(&stamped.destination_hash),
+            accepted,
+            "node cost {node_cost}, interface cost {interface_cost:?}"
+        );
+    }
+}
+
+#[test]
+fn enforced_path_request_stamps_use_the_receiving_interface_cost() {
+    // Transport.inbound since 9b464382 validates path request stamps against
+    // `packet.receiving_interface.pr_cost`.
+    let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
+    ext[0] = constants::EXT_PAYLOAD_MARKER;
+    ext[2..].copy_from_slice(&[0xAA; constants::STAMP_LENGTH]);
+    let cap = crate::stamp::StampCost::from_whole(u32::from(constants::STAMP_COST_CAP));
+    for (tag, node_cost, interface_cost, accepted) in [
+        (0x05, cap, Some(crate::stamp::StampCost::ZERO), true),
+        (0x06, crate::stamp::StampCost::ZERO, Some(cap), false),
+        (0x07, crate::stamp::StampCost::ZERO, None, true),
+    ] {
+        let mut engine = TransportEngine::new(make_config(true));
+        let mut interface = make_interface(1, constants::MODE_ACCESS_POINT);
+        interface.stamp_costs.pr_cost = interface_cost;
+        engine.register_interface(interface);
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        engine.set_stamp_requirements(StampRequirements {
+            enforced: true,
+            destination_cost: constants::DESTINATION_STAMP_COST,
+            path_request_cost: node_cost,
+        });
+        let stamped = make_stamped_path_request_data(&[0xE5; 16], &[0x99; 16], &[tag; 16], &ext);
+        assert_eq!(
+            !engine
+                .handle_path_request(&stamped, InterfaceId(1), 1000.0)
+                .is_empty(),
+            accepted,
+            "node cost {node_cost}, interface cost {interface_cost:?}"
+        );
+    }
 }
 
 #[test]

@@ -124,6 +124,7 @@ fn main() {
                 &server_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -218,6 +219,7 @@ fn main() {
             local_hops_delta: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
+                stamp_costs: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {

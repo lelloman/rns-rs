@@ -933,10 +933,16 @@ impl TransportEngine {
             return;
         }
 
-        let stamp_status = ctx.validated.apply_stamp(
-            &ctx.packet.destination_hash,
-            self.stamp_requirements.destination_cost,
-        );
+        // Identity.validate_announce since 9b464382: the receiving
+        // interface's `destination_cost`, else `Transport.DESTINATION_COST`.
+        let required_value = self
+            .interfaces
+            .get(&ctx.iface)
+            .map(|info| info.stamp_costs.destination_cost(&self.stamp_requirements))
+            .unwrap_or(self.stamp_requirements.destination_cost);
+        let stamp_status = ctx
+            .validated
+            .apply_stamp(&ctx.packet.destination_hash, required_value);
         if self.stamp_requirements.enforced
             && stamp_status != crate::announce::AnnounceStampStatus::Valid
         {

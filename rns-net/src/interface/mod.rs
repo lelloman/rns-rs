@@ -1324,6 +1324,8 @@ pub struct StartContext {
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
+    /// Per-interface stamp costs, inherited by spawned interfaces.
+    pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
     pub ifac: Option<IfacState>,
     /// Linux `SO_MARK` value applied to IP underlay sockets before connect.
     pub underlay_mark: Option<u32>,
@@ -1351,6 +1353,7 @@ pub struct DynamicInterfaceTemplate {
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
+    pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
 }
 
 impl DynamicInterfaceTemplate {
@@ -1363,6 +1366,7 @@ impl DynamicInterfaceTemplate {
         info.recursive_prs = self.recursive_prs;
         info.announces_from_internal = self.announces_from_internal;
         info.announces_to_internal = self.announces_to_internal;
+        info.stamp_costs = self.stamp_costs;
         crate::event::DynamicInterfaceRegistration {
             info,
             interface_type: self.interface_type.clone(),
@@ -1569,6 +1573,7 @@ mod tests {
         let entry = InterfaceEntry {
             id: InterfaceId(1),
             info: InterfaceInfo {
+                stamp_costs: Default::default(),
                 id: InterfaceId(1),
                 name: String::new(),
                 mode: constants::MODE_FULL,
@@ -1622,8 +1627,13 @@ mod tests {
             recursive_prs: true,
             announces_from_internal: false,
             announces_to_internal: Some(true),
+            stamp_costs: rns_core::transport::types::InterfaceStampCosts {
+                destination_cost: Some(rns_core::stamp::StampCost::from_whole(30)),
+                pr_cost: None,
+            },
         };
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id: InterfaceId(8),
             name: "child".into(),
             mode: constants::MODE_FULL,
@@ -1658,6 +1668,10 @@ mod tests {
         assert!(registration.info.recursive_prs);
         assert!(!registration.info.announces_from_internal);
         assert_eq!(registration.info.announces_to_internal, Some(true));
+        assert_eq!(
+            registration.info.stamp_costs.destination_cost,
+            Some(rns_core::stamp::StampCost::from_whole(30))
+        );
     }
 
     #[test]

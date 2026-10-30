@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let interface_id = InterfaceId(1);
     let mut config = NodeConfig::default();
     config.interfaces.push(InterfaceConfig {
+        stamp_costs: Default::default(),
         name: "Weave HIL".into(),
         type_name: "WeaveInterface".into(),
         config_data: Box::new(WeaveConfig {

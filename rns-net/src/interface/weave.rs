@@ -540,6 +540,7 @@ impl WeaveSession {
             .and_then(|peer| peer.via_switch_id);
         let name = format!("WeaveInterfacePeer[{}]", hex(&endpoint));
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name,
             mode: self.mode,
@@ -727,6 +728,7 @@ impl InterfaceFactory for WeaveFactory {
         let session = WeaveSession::new(config.clone(), &ctx);
         session.spawn()?;
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id: config.interface_id,
             name: config.name.clone(),
             mode: ctx.mode,
@@ -852,6 +854,7 @@ mod tests {
             announces_from_internal: false,
             announces_to_internal: None,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+            stamp_costs: Default::default(),
             ifac: None,
             underlay_mark: None,
         };

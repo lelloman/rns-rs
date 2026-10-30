@@ -76,6 +76,7 @@ pub fn start_direct_interface(
     );
 
     let info = InterfaceInfo {
+        stamp_costs: Default::default(),
         id: interface_id,
         name: name.clone(),
         mode: rns_core::constants::MODE_FULL,

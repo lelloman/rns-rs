@@ -73,7 +73,7 @@ Every commit in the audited range must appear exactly once.
 | 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Integrated | Defaults `PR_COST`/`PR_VALUE` 15.8 and `LR_COST` 12.5, the `rnsd --exampleconfig` values, docs and the Docker suite; the default config's commented `[stamps]` section has no generated counterpart (rns-rs writes no default config) and is pinned by the config parse test |
 | 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Structurally covered | A Rust link exists only once its keys do (`complete_create_link` after the stamped grind), with a fixed `[u8; 16]` id, so there is no id-less link to format |
 | 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Non-runtime | `Changelog.md` 1.6.0 release notes (phased stamp rollout, storage, sharding) and "cost-aware interface discovery and auto-connects", integrated under commit 13; not vendored |
-| 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Needs coordinated port | |
+| 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Needs port | |
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Needs port | |
 
@@ -635,6 +635,76 @@ rollout matches the defaults already integrated, and the cost-aware
 discovery entry is the code of commit 13.
 
 **Final disposition:** Non-runtime; mapping only.
+
+### 13. `9b464382` — Added per-interface destination and PR cost configuration
+
+**Upstream change:**
+
+- Interface options `destination_cost` and `pr_cost` (`as_float`, clamped to
+  `0..=STAMP_COST_CAP`) set `Interface._destination_cost` / `_pr_cost`. The
+  `destination_cost` and `pr_cost` properties fall back to
+  `Transport.DESTINATION_COST` / `PR_COST`. Spawned Auto, Backbone, I2P, TCP
+  server and Weave interfaces copy them from their parent.
+- `Identity.validate_announce` defaults `required_value` to
+  `packet.receiving_interface.destination_cost` (else `DESTINATION_COST`), and
+  `Transport.inbound` validates path request stamps at
+  `packet.receiving_interface.pr_cost`.
+- Discovery announces carry `DST_COST` (0xFB) and `PR_COST` (0xFA), the
+  quantized costs of the announced interface. The handler parses them with
+  `quantize_cost` into the `dst_cost` / `pr_cost` info keys. Auto-connect
+  skips an interface whose `dst_cost` exceeds the local
+  `quantize_cost(DESTINATION_VALUE)` or whose `pr_cost` exceeds
+  `quantize_cost(PR_VALUE)`, a missing cost counting as 0.
+  `AUTOCONNECT_MIN_V` rises from 1.5.2 to 1.5.7.
+- Decode failures log "Could not decode discovered interface".
+
+**Rust applicability:** Applicable. The costs are new configuration, the
+validation sites move from node-wide to per-interface costs, and the
+discovery fields are an additive wire change that older parsers ignore.
+
+**Local handling and evidence:**
+
+- `rns_core::transport::types::InterfaceStampCosts` (two optional
+  `StampCost`s with fallback accessors) is a new `InterfaceInfo` field. The
+  engine validates announce stamps at the receiving interface's
+  `destination_cost` and path request stamps at its `pr_cost`, falling back to
+  `StampRequirements`.
+- `node::parse_interface_stamp_costs` reads the options (`as_float`,
+  `clamp_cost`; a non-number is an interface configuration error, as
+  ConfigObj raises). `InterfaceConfig`, `StartContext`, `StartedInterface`
+  and `DynamicInterfaceTemplate` carry the costs, and backbone peer pool
+  candidates keep them. Spawned interfaces inherit them through the
+  template and through `handle_dynamic_interface_up_event`, the central
+  parent-to-child copy that also serves Weave peers. `DiscoveryConfig` keeps
+  the interface's costs for its announces.
+- `InterfaceAnnouncer::pack_interface_info` adds `DST_COST` and `PR_COST` as
+  floats, resolving costs the interface does not set against the node's
+  current `StampRequirements` (set before each announce).
+  `parse_interface_announce` reads them, and rejects an announce whose cost
+  is not a finite number, as upstream's `quantize_cost` raises.
+  `DiscoveredInterface::dst_cost` / `pr_cost` are persisted in the discovery
+  store and reported over RPC (`dst_cost`, `pr_cost`).
+- `discovered_costs_affordable` gates discovery-origin backbone peer pool
+  candidates against the stamper's `destination_value` and
+  `path_request_value`, with missing costs as 0.
+  `AUTOCONNECT_MIN_VERSION` is 1.5.7 for `RNS`; rns-rs announcers remain
+  exempt from the version check.
+- The decode-failure wording has no Rust counterpart; the parser's
+  rejections log their own reasons.
+- Tests: `enforced_announce_stamps_use_the_receiving_interface_cost`,
+  `enforced_path_request_stamps_use_the_receiving_interface_cost`,
+  `interface_stamp_costs_are_fractional_and_clamped`, the static registration
+  and dynamic inheritance tests (both now check the costs),
+  `announcer_packs_the_interface_stamp_costs`,
+  `parse_reads_announced_stamp_costs`, the discovery storage round trip,
+  `discovered_peer_pool_requires_affordable_stamp_costs`, and the version
+  bounds in `discovered_peer_pool_requires_verified_implementation_unless_overridden`.
+  The cached discovered peers of two e2e peer pool tests announce 1.5.7
+  instead of 1.5.5, which no longer qualifies.
+- Docs: per-interface costs in `docs/configuration.md`, announced costs and
+  the auto-connect gate in `docs/interface-discovery.md`.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 

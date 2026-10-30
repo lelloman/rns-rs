@@ -335,6 +335,8 @@ fn extract_discovery_config(
         longitude,
         height,
         operator_lxmf_address,
+        // Invalid values were already rejected with the interface itself.
+        stamp_costs: parse_interface_stamp_costs(params).unwrap_or_default(),
     })
 }
 
@@ -344,6 +346,7 @@ fn default_discovery_runtime_config(
     listen_port: Option<u16>,
 ) -> crate::discovery::DiscoveryConfig {
     crate::discovery::DiscoveryConfig {
+        stamp_costs: Default::default(),
         discovery_name: interface_name.to_string(),
         announce_interval: 21600,
         stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
@@ -492,6 +495,7 @@ pub(crate) struct StartedInterface<'a> {
     pub(crate) interface_type_name: String,
     pub(crate) ifac_state: Option<crate::ifac::IfacState>,
     pub(crate) ifac_runtime: &'a crate::driver::IfacRuntimeConfig,
+    pub(crate) stamp_costs: rns_core::transport::types::InterfaceStampCosts,
 }
 
 pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
@@ -505,7 +509,9 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
         interface_type_name,
         ifac_state,
         ifac_runtime,
+        stamp_costs,
     } = params;
+    info.stamp_costs = stamp_costs;
     driver.apply_announce_rate_defaults(&mut info);
     driver.apply_ingress_control_defaults(&mut info);
     let (writer, async_writer_metrics) =
@@ -763,8 +769,32 @@ pub struct InterfaceConfig {
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
+    /// Per-interface `destination_cost` and `pr_cost` (upstream 9b464382).
+    pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
     pub ifac: Option<IfacConfig>,
     pub discovery: Option<crate::discovery::DiscoveryConfig>,
+}
+
+/// Parse the per-interface `destination_cost` and `pr_cost` options
+/// (upstream 9b464382): `as_float`, clamped to `0..=STAMP_COST_CAP`.
+pub(crate) fn parse_interface_stamp_costs(
+    params: &HashMap<String, String>,
+) -> Result<rns_core::transport::types::InterfaceStampCosts, String> {
+    let cost = |key: &str| -> Result<Option<rns_core::stamp::StampCost>, String> {
+        let Some(value) = params.get(key) else {
+            return Ok(None);
+        };
+        let value = config::parse_config_float(value)
+            .ok_or_else(|| format!("{key} must be a number, got '{value}'"))?;
+        Ok(Some(rns_core::stamp::clamp_cost(
+            value,
+            rns_core::constants::STAMP_COST_CAP,
+        )))
+    };
+    Ok(rns_core::transport::types::InterfaceStampCosts {
+        destination_cost: cost("destination_cost")?,
+        pr_cost: cost("pr_cost")?,
+    })
 }
 
 pub(crate) fn parse_managed_interface(
@@ -799,6 +829,8 @@ pub(crate) fn parse_managed_interface(
     let ifac = extract_ifac_config(&iface.params, factory.default_ifac_size());
     let discovery = extract_discovery_config(&iface.name, &iface.interface_type, &iface.params);
     let ingress_control = parse_ingress_control_config(&iface.interface_type, &iface.params)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let stamp_costs = parse_interface_stamp_costs(&iface.params)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let recursive_prs = iface
         .params
@@ -847,6 +879,7 @@ pub(crate) fn parse_managed_interface(
         announces_from_internal,
         announces_to_internal,
         ingress_control,
+        stamp_costs,
         ifac,
         discovery,
     })
@@ -1101,6 +1134,19 @@ impl RnsNode {
                         continue;
                     }
                 };
+            let stamp_costs = match parse_interface_stamp_costs(&iface.params) {
+                Ok(costs) => costs,
+                Err(e) => {
+                    if private {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid stamp cost for '{}': {e}", iface.name),
+                        ));
+                    }
+                    log::warn!("Failed to parse stamp costs for '{}': {}", iface.name, e);
+                    continue;
+                }
+            };
             let recursive_prs = iface
                 .params
                 .get("recursive_prs")
@@ -1166,6 +1212,7 @@ impl RnsNode {
                 announces_from_internal,
                 announces_to_internal,
                 ingress_control,
+                stamp_costs,
                 ifac: ifac_config,
                 discovery: discovery_config,
             });
@@ -1974,6 +2021,7 @@ impl RnsNode {
                             announces_from_internal: iface_config.announces_from_internal,
                             announces_to_internal: iface_config.announces_to_internal,
                             ingress_control: iface_config.ingress_control,
+                            stamp_costs: iface_config.stamp_costs,
                             ifac_runtime: ifac_runtime.clone(),
                             ifac_enabled: ifac_state.is_some(),
                             interface_type_name: iface_config.type_name.clone(),
@@ -2003,6 +2051,7 @@ impl RnsNode {
                 announces_from_internal: iface_config.announces_from_internal,
                 announces_to_internal: iface_config.announces_to_internal,
                 ingress_control: iface_config.ingress_control,
+                stamp_costs: iface_config.stamp_costs,
                 ifac: ifac_state.clone(),
                 underlay_mark: config.underlay_mark,
             };
@@ -2065,6 +2114,7 @@ impl RnsNode {
                         interface_type_name,
                         ifac_state,
                         ifac_runtime: &ifac_runtime,
+                        stamp_costs: iface_config.stamp_costs,
                     });
                 }
                 crate::interface::StartResult::Listener { control } => {
@@ -2125,6 +2175,7 @@ impl RnsNode {
                             interface_type_name: sub.interface_type_name,
                             ifac_state: sub_ifac,
                             ifac_runtime: &ifac_runtime,
+                            stamp_costs: iface_config.stamp_costs,
                         });
                     }
                 }
@@ -4610,6 +4661,7 @@ mod tests {
 
     fn test_interface_info(id: u64) -> rns_core::transport::types::InterfaceInfo {
         rns_core::transport::types::InterfaceInfo {
+            stamp_costs: Default::default(),
             id: rns_core::transport::types::InterfaceId(id),
             name: format!("test-{id}"),
             mode: rns_core::constants::MODE_FULL,
@@ -4668,6 +4720,7 @@ mod tests {
                 netkey: None,
                 size: 16,
             },
+            stamp_costs: Default::default(),
         });
 
         let info = &driver.interfaces[&id].info;
@@ -4707,6 +4760,10 @@ mod tests {
                 netkey: None,
                 size: 16,
             },
+            stamp_costs: rns_core::transport::types::InterfaceStampCosts {
+                destination_cost: None,
+                pr_cost: Some(rns_core::stamp::StampCost::from_f64(12.25)),
+            },
         });
 
         let ic = driver.interfaces[&id].info.ingress_control;
@@ -4714,6 +4771,16 @@ mod tests {
         assert_eq!(ic.pr_burst_freq, 5.5);
         assert!(ic.egress_enabled);
         assert_eq!(ic.egress_pr_freq, 9.5);
+        // The configured per-interface costs reach the engine (9b464382).
+        assert_eq!(
+            driver
+                .engine
+                .interface_info(&id)
+                .unwrap()
+                .stamp_costs
+                .pr_cost,
+            Some(rns_core::stamp::StampCost::from_f64(12.25))
+        );
     }
 
     struct TestNodeRatchetStore {
@@ -4987,6 +5054,29 @@ mod tests {
         let err = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap_err();
 
         assert!(err.contains("ic_burst_hold"));
+    }
+
+    #[test]
+    fn interface_stamp_costs_are_fractional_and_clamped() {
+        // Reticulum.py since 9b464382: `as_float`, `max(0, min(v, cap))`.
+        use rns_core::stamp::StampCost;
+        let mut params = std::collections::HashMap::new();
+        let none = super::parse_interface_stamp_costs(&params).unwrap();
+        assert_eq!(none, Default::default());
+
+        params.insert("destination_cost".to_string(), "17.5".to_string());
+        params.insert("pr_cost".to_string(), "250".to_string());
+        let costs = super::parse_interface_stamp_costs(&params).unwrap();
+        assert_eq!(costs.destination_cost, Some(StampCost::from_f64(17.5)));
+        assert_eq!(costs.pr_cost, Some(StampCost::from_whole(100)));
+
+        params.insert("pr_cost".to_string(), "-3".to_string());
+        let costs = super::parse_interface_stamp_costs(&params).unwrap();
+        assert_eq!(costs.pr_cost, Some(StampCost::ZERO));
+
+        params.insert("destination_cost".to_string(), "steep".to_string());
+        let err = super::parse_interface_stamp_costs(&params).unwrap_err();
+        assert!(err.contains("destination_cost"));
     }
 
     #[test]

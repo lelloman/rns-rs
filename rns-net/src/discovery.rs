@@ -259,6 +259,12 @@ impl DiscoveredInterfaceStorage {
         if let Some(ref value) = iface.impl_version {
             entries.push((Value::Str("version".into()), Value::Str(value.clone())));
         }
+        if let Some(cost) = iface.dst_cost {
+            entries.push((Value::Str("dst_cost".into()), Value::Float(cost.as_f64())));
+        }
+        if let Some(cost) = iface.pr_cost {
+            entries.push((Value::Str("pr_cost".into()), Value::Float(cost.as_f64())));
+        }
         if let Some(v) = iface.longitude {
             entries.push((Value::Str("longitude".into()), Value::Float(v)));
         }
@@ -409,6 +415,14 @@ impl DiscoveredInterfaceStorage {
             interface_type,
             impl_name: get_opt_str(&value, "impl_name"),
             impl_version: get_opt_str(&value, "version"),
+            dst_cost: value
+                .map_get("dst_cost")
+                .and_then(|cost| cost.as_number())
+                .map(StampCost::from_f64),
+            pr_cost: value
+                .map_get("pr_cost")
+                .and_then(|cost| cost.as_number())
+                .map(StampCost::from_f64),
             transport: get_bool(&value, "transport")?,
             name,
             discovered: get_float(&value, "discovered")?,
@@ -588,6 +602,9 @@ pub struct InterfaceAnnouncer {
     stamp_tx: std::sync::mpsc::Sender<AnnounceResult>,
     /// Whether a background stamp job is currently running.
     stamp_pending: bool,
+    /// Node-wide stamp costs, behind the per-interface costs announced as
+    /// `DST_COST` / `PR_COST`.
+    stamp_requirements: rns_core::transport::types::StampRequirements,
 }
 
 const LOCATION_CMD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -728,6 +745,7 @@ fn resolve_location(_command: &str) -> Result<(f64, f64, f64), String> {
 fn prepare_interface_info(
     transport_id: &[u8; 16],
     iface: &DiscoverableInterface,
+    requirements: &rns_core::transport::types::StampRequirements,
 ) -> Result<Vec<u8>, String> {
     let mut resolved = iface.clone();
     if let Some(command) = &resolved.config.location_cmd {
@@ -736,7 +754,7 @@ fn prepare_interface_info(
         resolved.config.longitude = Some(longitude);
         resolved.config.height = Some(height);
     }
-    InterfaceAnnouncer::pack_interface_info(transport_id, &resolved)
+    InterfaceAnnouncer::pack_interface_info(transport_id, &resolved, requirements)
 }
 
 impl InterfaceAnnouncer {
@@ -751,7 +769,17 @@ impl InterfaceAnnouncer {
             stamp_rx,
             stamp_tx,
             stamp_pending: false,
+            stamp_requirements: Default::default(),
         }
+    }
+
+    /// Track the node-wide stamp costs (`[stamps] destination_cost` and
+    /// `pr_cost`) that interfaces without their own announce.
+    pub fn set_stamp_requirements(
+        &mut self,
+        requirements: rns_core::transport::types::StampRequirements,
+    ) {
+        self.stamp_requirements = requirements;
     }
 
     /// If any interface is due for an announce and no stamp job is already
@@ -780,6 +808,7 @@ impl InterfaceAnnouncer {
             let name = iface.config.discovery_name.clone();
             let interface_name = iface.interface_name.clone();
             let tx = self.stamp_tx.clone();
+            let requirements = self.stamp_requirements;
 
             log::info!(
                 "Spawning discovery stamp generation (cost={}) for '{}'...",
@@ -791,7 +820,7 @@ impl InterfaceAnnouncer {
             self.last_announced[idx] = now;
 
             std::thread::spawn(move || {
-                let packed = match prepare_interface_info(&transport_id, &iface) {
+                let packed = match prepare_interface_info(&transport_id, &iface, &requirements) {
                     Ok(packed) => packed,
                     Err(error) => {
                         let _ = tx.send(AnnounceResult {
@@ -875,6 +904,7 @@ impl InterfaceAnnouncer {
     fn pack_interface_info(
         transport_id: &[u8; 16],
         iface: &DiscoverableInterface,
+        requirements: &rns_core::transport::types::StampRequirements,
     ) -> Result<Vec<u8>, String> {
         if matches!(
             iface.config.interface_type.as_str(),
@@ -910,6 +940,21 @@ impl InterfaceAnnouncer {
             (
                 msgpack::Value::UInt(TRANSPORT_VERS as u64),
                 msgpack::Value::Str(TRANSPORT_IMPLEMENTATION_VERSION.into()),
+            ),
+            // The interface's required costs, quantized (9b464382).
+            (
+                msgpack::Value::UInt(DST_COST as u64),
+                msgpack::Value::Float(
+                    iface
+                        .config
+                        .stamp_costs
+                        .destination_cost(requirements)
+                        .as_f64(),
+                ),
+            ),
+            (
+                msgpack::Value::UInt(PR_COST as u64),
+                msgpack::Value::Float(iface.config.stamp_costs.pr_cost(requirements).as_f64()),
             ),
         ];
         if let Some(ref reachable) = iface.config.reachable_on {
@@ -995,6 +1040,7 @@ mod tests {
         DiscoverableInterface {
             interface_name: name.to_string(),
             config: DiscoveryConfig {
+                stamp_costs: Default::default(),
                 discovery_name: format!("Discovery {name}"),
                 announce_interval: interval,
                 stamp_value: rns_core::stamp::StampCost::ZERO,
@@ -1095,7 +1141,7 @@ mod tests {
 
         let mut iface = test_announce_interface("dynamic", 1);
         iface.config.location_cmd = Some(success.to_string_lossy().into_owned());
-        let packed = prepare_interface_info(&[0x55; 16], &iface).unwrap();
+        let packed = prepare_interface_info(&[0x55; 16], &iface, &Default::default()).unwrap();
         let (value, consumed) = msgpack::unpack(&packed).unwrap();
         assert_eq!(consumed, packed.len());
         let Value::Map(entries) = value else {
@@ -1263,7 +1309,9 @@ mod tests {
     #[test]
     fn background_packing_preserves_static_metadata_bytes() {
         let iface = test_announce_interface("static", 1);
-        let expected = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface).unwrap();
+        let expected =
+            InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface, &Default::default())
+                .unwrap();
         let mut announcer = InterfaceAnnouncer::new([0x24; 16], vec![iface]);
 
         announcer.maybe_start(1.0);
@@ -1276,7 +1324,9 @@ mod tests {
         let mut iface = test_announce_interface("operator", 1);
         iface.config.operator_lxmf_address = Some([0xa5; 16]);
 
-        let packed = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface).unwrap();
+        let packed =
+            InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface, &Default::default())
+                .unwrap();
         let (Value::Map(entries), consumed) = msgpack::unpack(&packed).unwrap() else {
             panic!("discovery metadata was not a map")
         };
@@ -1288,7 +1338,9 @@ mod tests {
     #[test]
     fn announcer_identifies_native_transport_implementation_and_version() {
         let iface = test_announce_interface("implementation", 1);
-        let packed = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface).unwrap();
+        let packed =
+            InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface, &Default::default())
+                .unwrap();
         let (Value::Map(entries), consumed) = msgpack::unpack(&packed).unwrap() else {
             panic!("discovery metadata was not a map")
         };
@@ -1305,6 +1357,39 @@ mod tests {
     }
 
     #[test]
+    fn announcer_packs_the_interface_stamp_costs() {
+        // 9b464382: DST_COST / PR_COST carry the quantized interface costs,
+        // the node-wide ones where the interface sets none.
+        let requirements = rns_core::transport::types::StampRequirements {
+            enforced: false,
+            destination_cost: StampCost::from_f64(23.5),
+            path_request_cost: StampCost::from_f64(15.8),
+        };
+        let mut iface = test_announce_interface("costs", 1);
+        let cost_of = |iface: &DiscoverableInterface, key: u8| {
+            let packed =
+                InterfaceAnnouncer::pack_interface_info(&[0x24; 16], iface, &requirements).unwrap();
+            let (Value::Map(entries), _) = msgpack::unpack(&packed).unwrap() else {
+                panic!("discovery metadata was not a map")
+            };
+            entries
+                .into_iter()
+                .find(|(k, _)| *k == Value::UInt(key as u64))
+                .map(|(_, v)| v)
+        };
+        assert_eq!(cost_of(&iface, DST_COST), Some(Value::Float(23.5)));
+        // quantize_cost(15.8)
+        assert_eq!(cost_of(&iface, PR_COST), Some(Value::Float(15.80078125)));
+
+        iface.config.stamp_costs.destination_cost = Some(StampCost::from_f64(12.2));
+        assert_eq!(
+            cost_of(&iface, DST_COST),
+            Some(Value::Float(StampCost::from_f64(12.2).as_f64()))
+        );
+        assert_eq!(cost_of(&iface, PR_COST), Some(Value::Float(15.80078125)));
+    }
+
+    #[test]
     fn announcer_suppresses_network_discovery_without_reachable_address() {
         for interface_type in ["BackboneInterface", "TCPServerInterface"] {
             let mut iface = test_announce_interface("missing-address", 1);
@@ -1312,7 +1397,7 @@ mod tests {
             iface.config.reachable_on = None;
 
             assert_eq!(
-                InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface),
+                InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface, &Default::default()),
                 Err(format!(
                     "{interface_type} discovery requires a reachable_on address"
                 ))
@@ -1367,6 +1452,8 @@ mod tests {
         let now = time::now();
 
         let mut iface = DiscoveredInterface {
+            dst_cost: None,
+            pr_cost: None,
             interface_type: "TestInterface".into(),
             impl_name: None,
             impl_version: None,
@@ -1413,6 +1500,8 @@ mod tests {
 
     fn test_discovered_interface(name: &str) -> DiscoveredInterface {
         DiscoveredInterface {
+            dst_cost: None,
+            pr_cost: None,
             interface_type: "BackboneInterface".into(),
             impl_name: None,
             impl_version: None,
@@ -1462,6 +1551,8 @@ mod tests {
         let mut iface = test_discovered_interface("TestNode");
         iface.impl_name = Some("Reticulum".into());
         iface.impl_version = Some("1.5.5".into());
+        iface.dst_cost = Some(StampCost::from_f64(23.5));
+        iface.pr_cost = Some(StampCost::from_f64(15.8));
 
         // Store
         storage.store(&iface).unwrap();
@@ -1472,6 +1563,8 @@ mod tests {
         assert_eq!(loaded.interface_type, iface.interface_type);
         assert_eq!(loaded.impl_name, iface.impl_name);
         assert_eq!(loaded.impl_version, iface.impl_version);
+        assert_eq!(loaded.dst_cost, iface.dst_cost);
+        assert_eq!(loaded.pr_cost, iface.pr_cost);
         assert_eq!(loaded.name, iface.name);
         assert_eq!(loaded.stamp_value, iface.stamp_value);
         assert_eq!(loaded.transport_id, iface.transport_id);
@@ -1720,6 +1813,8 @@ mod tests {
 
         let ifaces = vec![
             DiscoveredInterface {
+                dst_cost: None,
+                pr_cost: None,
                 interface_type: "BackboneInterface".into(),
                 impl_name: None,
                 impl_version: None,
@@ -1752,6 +1847,8 @@ mod tests {
                 discovery_hash: [0u8; 32],
             },
             DiscoveredInterface {
+                dst_cost: None,
+                pr_cost: None,
                 interface_type: "TCPServerInterface".into(),
                 impl_name: None,
                 impl_version: None,
@@ -1784,6 +1881,8 @@ mod tests {
                 discovery_hash: [1u8; 32],
             },
             DiscoveredInterface {
+                dst_cost: None,
+                pr_cost: None,
                 interface_type: "I2PInterface".into(),
                 impl_name: None,
                 impl_version: None,

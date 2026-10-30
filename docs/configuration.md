@@ -214,6 +214,26 @@ Upstream `796ef2d4` writes this check as `LR_STAMPS_ENFORCED and
 stamp_valid(...)`, which would drop the valid requests instead; rns-rs drops
 the invalid ones, as the error upstream raises describes.
 
+### Per-interface costs
+
+Any interface section can override the announce and path request costs
+required of traffic received on it (upstream `9b464382`):
+
+```ini
+[interfaces]
+  [[Constrained Radio]]
+    type = RNodeInterface
+    destination_cost = 26.5
+    pr_cost = 18
+```
+
+Both are fractional, clamped to 0-100, and fall back to `[stamps]
+destination_cost` and `pr_cost` when absent. Interfaces spawned by a listener
+(TCP and Backbone server clients, I2P, Auto and Weave peers) inherit them.
+Discoverable interfaces announce their effective costs, and other nodes only
+auto-connect to them when the costs are within their own `destination_value`
+and `pr_value` (see [Interface Discovery](interface-discovery.md)).
+
 ## Ingress control
 
 Any interface section accepts the Python-compatible ingress-control keys.

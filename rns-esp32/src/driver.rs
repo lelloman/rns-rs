@@ -167,6 +167,7 @@ impl Driver {
             tunnel_id: None,
             mtu: crate::config::LORA_MTU,
             ingress_control: Default::default(),
+            stamp_costs: Default::default(),
             ia_freq: 0.0,
             ip_freq: 0.0,
             op_freq: 0.0,

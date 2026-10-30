@@ -621,6 +621,7 @@ fn tcp_reader_loop(
 
 fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
     InterfaceInfo {
+        stamp_costs: Default::default(),
         id,
         name: String::from("LocalInterface"),
         mode: constants::MODE_FULL,
@@ -886,6 +887,7 @@ impl InterfaceFactory for LocalServerFactory {
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
+                stamp_costs: ctx.stamp_costs,
             }),
         )?;
         Ok(StartResult::Listener {
@@ -940,6 +942,7 @@ impl InterfaceFactory for LocalClientFactory {
         let id = client_config.interface_id;
         let name = client_config.name.clone();
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name,
             mode: ctx.mode,

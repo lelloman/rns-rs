@@ -309,6 +309,7 @@ mod tests {
 
     fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         InterfaceInfo {
+            stamp_costs: Default::default(),
             id: InterfaceId(id),
             name: String::from("test"),
             mode,

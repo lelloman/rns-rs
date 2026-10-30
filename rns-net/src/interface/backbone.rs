@@ -879,6 +879,7 @@ impl Server {
         lock_or_recover(&self.peer_state, "backbone peer state").upsert_snapshot(&state.peers);
 
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id: client_id,
             name: format!("BackboneInterface/{}", client_id.0),
             mode: self.accepted_peer_mode,
@@ -2052,6 +2053,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 let id = cfg.interface_id;
                 let name = cfg.name.clone();
                 let info = InterfaceInfo {
+                    stamp_costs: Default::default(),
                     id,
                     name,
                     mode: ctx.mode,
@@ -2116,6 +2118,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                         recursive_prs: ctx.recursive_prs,
                         announces_from_internal: ctx.announces_from_internal,
                         announces_to_internal: ctx.announces_to_internal,
+                        stamp_costs: ctx.stamp_costs,
                     }),
                     ctx.underlay_mark,
                 )?;

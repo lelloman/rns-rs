@@ -134,6 +134,30 @@ impl Default for IngressControlConfig {
     }
 }
 
+/// Per-interface stamp cost overrides (upstream 9b464382, the interface
+/// options `destination_cost` and `pr_cost`, read with `as_float` and
+/// clamped to `0..=STAMP_COST_CAP`). `None` uses the node-wide
+/// `Transport.DESTINATION_COST` / `PR_COST`, as the upstream
+/// `Interface.destination_cost` and `pr_cost` properties do.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceStampCosts {
+    pub destination_cost: Option<crate::stamp::StampCost>,
+    pub pr_cost: Option<crate::stamp::StampCost>,
+}
+
+impl InterfaceStampCosts {
+    /// The announce cost required on this interface.
+    pub fn destination_cost(&self, requirements: &StampRequirements) -> crate::stamp::StampCost {
+        self.destination_cost
+            .unwrap_or(requirements.destination_cost)
+    }
+
+    /// The path request cost required on this interface.
+    pub fn pr_cost(&self, requirements: &StampRequirements) -> crate::stamp::StampCost {
+        self.pr_cost.unwrap_or(requirements.path_request_cost)
+    }
+}
+
 /// Metadata about a network interface.
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
@@ -168,6 +192,8 @@ pub struct InterfaceInfo {
     pub mtu: u32,
     /// Ingress control behavior for this interface.
     pub ingress_control: IngressControlConfig,
+    /// Stamp costs required of announces and path requests received here.
+    pub stamp_costs: InterfaceStampCosts,
     /// Current incoming announce frequency (announces/sec), synced from driver.
     pub ia_freq: f64,
     /// Current incoming path request frequency (requests/sec), synced from driver.

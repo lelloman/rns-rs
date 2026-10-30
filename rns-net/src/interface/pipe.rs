@@ -292,6 +292,7 @@ impl InterfaceFactory for PipeFactory {
 
         let id = pipe_config.interface_id;
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name: pipe_config.name.clone(),
             mode: ctx.mode,

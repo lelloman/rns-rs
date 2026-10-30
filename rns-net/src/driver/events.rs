@@ -789,6 +789,7 @@ impl Driver {
             registration.info.announce_rate_penalty = parent.info.announce_rate_penalty;
             registration.info.announce_cap = parent.info.announce_cap;
             registration.info.ingress_control = parent.info.ingress_control;
+            registration.info.stamp_costs = parent.info.stamp_costs;
             parent.ifac.clone()
         });
         let inherited_ifac = registration.ifac.take().or(parent_ifac);
@@ -2359,6 +2360,7 @@ impl Driver {
             None => return,
         };
 
+        announcer.set_stamp_requirements(self.engine.stamp_requirements());
         announcer.maybe_start(now);
 
         let stamp_result = match announcer.poll_ready() {

@@ -348,6 +348,7 @@ impl InterfaceFactory for SerialFactory {
         let bitrate = Some(serial_config.speed as u64);
 
         let info = InterfaceInfo {
+            stamp_costs: Default::default(),
             id,
             name,
             mode: ctx.mode,
