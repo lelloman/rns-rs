@@ -12444,12 +12444,29 @@ fn create_link_is_not_stamped_when_stamp_lrs_is_off() {
 }
 
 #[test]
+fn create_link_is_not_stamped_when_zero_is_announced_even_with_always_stamp_lrs() {
+    // 34bb4ac8: only a missing cost falls back to LR_COST, so an announced 0
+    // leaves `stamp_cost` falsy and the request unstamped.
+    let (tx, rx) = event::channel();
+    let dest = [0x6C; 16];
+    let (mut driver, sent) = stamped_link_driver(tx, rx, dest, Some(0));
+    driver.stamp_settings.always_stamp_lrs = true;
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    driver.handle_create_link(dest, [0xAA; 32], resp_tx);
+    let link_id = resp_rx
+        .try_recv()
+        .expect("an unstamped link is answered synchronously");
+    assert_ne!(link_id, [0u8; 16]);
+    driver.flush_pending_link_frames();
+    driver.flush_writers();
+    assert!(sent_link_request(&sent.lock().unwrap(), dest).is_some());
+}
+
+#[test]
 fn outbound_link_stamp_cost_prefers_the_announced_cost() {
-    // The documented intent of Link.py:311 (a8cc6cb2):
-    // `recall_link_cost(h) or (LR_COST if ALWAYS_STAMP_LRS else None)`.
-    // Python parses the line as written as
-    // `(recall_link_cost(h) or LR_COST) if ALWAYS_STAMP_LRS else None`,
-    // which would leave the first case unstamped.
+    // Link.__init__ since 34bb4ac8: the announced cost, else LR_COST when
+    // ALWAYS_STAMP_LRS is set and nothing was announced.
     let dest = [0x6A; 16];
     let lr_cost = rns_core::constants::LINK_REQUEST_STAMP_COST;
     let cases = [
@@ -12457,9 +12474,10 @@ fn outbound_link_stamp_cost_prefers_the_announced_cost() {
         (Some(4), true, Some(StampCost::from_whole(4))),
         (None, false, None),
         (None, true, Some(lr_cost)),
-        // A zero cost is falsy, as in Python's `or`.
-        (Some(0), false, None),
-        (Some(0), true, Some(lr_cost)),
+        // An announced zero is kept (`== None`, not falsy), and
+        // `handle_create_link` then sends the request unstamped.
+        (Some(0), false, Some(StampCost::ZERO)),
+        (Some(0), true, Some(StampCost::ZERO)),
     ];
     for (announced, always, expected) in cases {
         let (tx, rx) = event::channel();

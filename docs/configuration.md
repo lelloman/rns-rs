@@ -198,12 +198,9 @@ A stamped announce carries the destination's link request cost: the value set
 with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to
 `0..=40`), or `lr_cost` truncated to whole bits (19 by default). Initiators that
 see a non-zero announced cost grind their link request key to it. With
-`always_stamp_lrs`, requests to destinations that announced no cost (or 0) are
-ground to the local `lr_cost`, fraction included. Upstream's `Link.py` line for
-this fallback, as written, only stamps any request when `always_stamp_lrs` is
-set, contradicting its own documentation; rns-rs implements the documented
-behaviour. See the
-[audit](upstream-parity/reticulum-next-audit.md) for details. Responders only check it when
+`always_stamp_lrs`, requests to destinations that announced no cost are ground
+to the local `lr_cost`, fraction included; an announced cost of 0 still means
+unstamped. Responders only check it when
 `global.lr_stamps_enforced` (upstream `Transport.LR_STAMPS_ENFORCED`, off by
 default) is on, dropping link requests whose stamp is below the destination's
 cost; the key applies immediately and resets to the compile-time default.
