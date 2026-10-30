@@ -6205,7 +6205,7 @@ fn test_pr190_one_hop_via_shared_instance_still_injects_h2() {
 fn stamp_ext_payload(stamp_byte: u8) -> Vec<u8> {
     let mut ext = vec![constants::EXT_PAYLOAD_MARKER, 0x00];
     ext.extend_from_slice(&[stamp_byte; constants::STAMP_LENGTH]);
-    ext.push(11);
+    ext.extend_from_slice(&[0, 11]);
     ext
 }
 

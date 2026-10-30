@@ -229,7 +229,7 @@ fn new_test_driver() -> Driver {
 fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
     let mut driver = new_test_driver();
     driver.discover_interfaces = true;
-    driver.discovery_required_value = u8::MAX;
+    driver.discovery_required_value = StampCost::from_whole(100);
 
     let packed = rns_core::msgpack::pack(&rns_core::msgpack::Value::Map(vec![
         (
@@ -283,7 +283,7 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
 
     // Even if the requirement changes, the repeated payload is rejected from
     // the driver's persistent cache before proof-of-work validation is retried.
-    driver.discovery_required_value = 0;
+    driver.discovery_required_value = StampCost::ZERO;
     driver.dispatch_all(vec![announce]);
     assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
 }
@@ -5887,7 +5887,7 @@ fn discovery_announcer_emits_local_synthetic_announce() {
             config: crate::discovery::DiscoveryConfig {
                 discovery_name: "Public Test".into(),
                 announce_interval: 1,
-                stamp_value: 0,
+                stamp_value: rns_core::stamp::StampCost::ZERO,
                 reachable_on: Some("127.0.0.1".into()),
                 interface_type: "TCPServerInterface".into(),
                 listen_port: Some(4242),
@@ -7784,7 +7784,7 @@ fn announce_stamp_is_stored_and_recalled() {
             app_data: Some(b"payload".to_vec()),
             stamp: Some(stamp),
             stamp_value: rns_core::stamp::StampValue::from_whole(19),
-            lr_cost: Some(19),
+            lr_cost: Some(StampCost::from_f64(12.5)),
             hops: 1,
             receiving_interface: InterfaceId(1),
             rx: rns_core::transport::RxMetadata::default(),
@@ -7801,12 +7801,15 @@ fn announce_stamp_is_stored_and_recalled() {
         entry.stamp_value,
         rns_core::stamp::StampValue::from_whole(19)
     );
-    assert_eq!(entry.lr_cost, Some(19));
+    assert_eq!(entry.lr_cost, Some(StampCost::from_f64(12.5)));
     assert_eq!(
         driver.recall_stamp_value(&dest),
         Some(rns_core::stamp::StampValue::from_whole(19))
     );
-    assert_eq!(driver.recall_link_cost(&dest), Some(19));
+    assert_eq!(
+        driver.recall_link_cost(&dest),
+        Some(StampCost::from_f64(12.5))
+    );
 }
 
 #[test]
@@ -12417,7 +12420,7 @@ fn stamped_link_driver(
         .interfaces
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
     let mut state = make_known_destination_state(dest, time::now(), InterfaceId(1));
-    state.lr_cost = lr_cost;
+    state.lr_cost = lr_cost.map(|cost| StampCost::from_whole(u32::from(cost)));
     driver.known_destinations.insert(dest, state);
     (driver, sent)
 }
@@ -13131,7 +13134,10 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
             path_request_value: StampCost::from_whole(13),
         }
     );
-    assert_eq!(driver.link_manager.link_request_costs().get(&[0u8; 16]), 9);
+    assert_eq!(
+        driver.link_manager.link_request_costs().get(&[0u8; 16]),
+        StampCost::from_whole(9)
+    );
     assert!(driver.link_manager.link_request_costs().enforced());
     assert_eq!(
         driver.stamper.path_request_timeout(),

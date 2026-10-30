@@ -378,6 +378,16 @@ impl StampCost {
         StampCost(if fp > MAX_COST_FP { MAX_COST_FP } else { fp })
     }
 
+    /// Cost from its fixed-point representation, or `None` above the cap,
+    /// for costs read off the wire.
+    pub const fn from_fp_checked(fp: u32) -> Option<Self> {
+        if fp > MAX_COST_FP {
+            None
+        } else {
+            Some(StampCost(fp))
+        }
+    }
+
     /// Cost of a whole number of bits, such as a configured integer cost.
     pub const fn from_whole(cost: u32) -> Self {
         StampCost::from_fp(cost.saturating_mul(COST_FP))
@@ -403,8 +413,7 @@ impl StampCost {
         self.0
     }
 
-    /// Whole bits of the cost (`cost_int`), as announced in the one-byte
-    /// link request cost.
+    /// Whole bits of the cost (`cost_int`).
     pub const fn whole(self) -> u32 {
         self.0 >> COST_FP_BITS
     }

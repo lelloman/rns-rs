@@ -1,4 +1,5 @@
 use super::*;
+use rns_core::stamp::StampCost;
 use rns_crypto::identity::Identity;
 use rns_crypto::{FixedRng, OsRng};
 
@@ -5314,7 +5315,8 @@ fn proves_link(actions: &[LinkManagerAction]) -> bool {
 
 #[test]
 fn enforced_link_cost_drops_requests_below_the_destination_cost() {
-    const COST: u8 = 6;
+    // Fractional since upstream 796ef2d4.
+    const COST: StampCost = StampCost::from_fp(6 * 256 + 128);
     let mut rng = OsRng;
     let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
     let dest_hash = [0xE1; 16];
@@ -5326,13 +5328,12 @@ fn enforced_link_cost_drops_requests_below_the_destination_cost() {
         ResourceStrategy::AcceptNone,
     );
     let costs = responder.link_request_costs().clone();
-    assert_eq!(costs.set(dest_hash, i64::from(COST)), COST);
+    assert_eq!(costs.set(dest_hash, COST.as_f64()), COST);
     costs.set_enforced(true);
 
     // Below the cost: dropped silently, no proof, no protocol violation.
-    let (low, low_value) = link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| {
-        !v.meets(StampCost::from_whole(u32::from(COST)))
-    });
+    let (low, low_value) =
+        link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| !v.meets(COST));
     let actions = deliver_link_request(&mut responder, &low);
     assert!(
         actions.is_empty(),
@@ -5341,26 +5342,21 @@ fn enforced_link_cost_drops_requests_below_the_destination_cost() {
 
     // Ground to the cost: accepted and proven.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let (prv, link_sig_prv, _) = crate::stamps::generate_stamped_link_keys(
-        &dest_hash,
-        StampCost::from_whole(u32::from(COST)),
-        deadline,
-    )
-    .unwrap();
+    let (prv, link_sig_prv, _) =
+        crate::stamps::generate_stamped_link_keys(&dest_hash, COST, deadline).unwrap();
     let (stamped, stamped_value) = link_request_with_stamp_value(
         &dest_hash,
         &sig_pub_bytes,
         Some((prv, link_sig_prv)),
         |_| true,
     );
-    assert!(stamped_value.meets(StampCost::from_whole(u32::from(COST))));
+    assert!(stamped_value.meets(COST));
     assert!(proves_link(&deliver_link_request(&mut responder, &stamped)));
 
     // Enforcement off (the upstream default): the low request is accepted.
     costs.set_enforced(false);
-    let (low, _) = link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| {
-        !v.meets(StampCost::from_whole(u32::from(COST)))
-    });
+    let (low, _) =
+        link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| !v.meets(COST));
     assert!(proves_link(&deliver_link_request(&mut responder, &low)));
 }
 
@@ -5378,8 +5374,8 @@ fn enforced_link_cost_defaults_to_lr_cost_and_zero_disables() {
     );
     let costs = responder.link_request_costs().clone();
     costs.set_enforced(true);
-    // The fractional `LR_COST` is announced and required as its whole part.
-    let default_cost = StampCost::from_whole(constants::LINK_REQUEST_STAMP_COST.whole());
+    // The fractional `LR_COST` is announced and required as is.
+    let default_cost = constants::LINK_REQUEST_STAMP_COST;
 
     // No configured cost: `get_link_cost` falls back to `LR_COST`.
     let (low, _) =
@@ -5387,7 +5383,7 @@ fn enforced_link_cost_defaults_to_lr_cost_and_zero_disables() {
     assert!(deliver_link_request(&mut responder, &low).is_empty());
 
     // A cost of 0 disables the requirement.
-    costs.set(dest_hash, 0);
+    costs.set(dest_hash, 0.0);
     let (low, _) =
         link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| !v.meets(default_cost));
     assert!(proves_link(&deliver_link_request(&mut responder, &low)));

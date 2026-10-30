@@ -61,8 +61,9 @@ pub struct Destination {
     pub hash: DestHash,
     /// Target value for this destination's announce stamp, set with
     /// [`Destination::set_value`] (upstream `Destination._target_value`).
-    /// `None` targets the node's `destination_value`.
-    pub target_value: Option<u8>,
+    /// `None` targets the node's `destination_value`. Fractional since
+    /// upstream 796ef2d4.
+    pub target_value: Option<rns_core::stamp::StampCost>,
     /// Type: Single, Group, or Plain.
     pub dest_type: DestinationType,
     /// Direction: In (receiving) or Out (sending).
@@ -189,14 +190,18 @@ impl Destination {
     /// Set the target stamp value for this destination's announces
     /// (upstream `Destination.set_value`, d7749b0b).
     ///
-    /// The value is capped at `STAMP_COST_CAP`. A target below the node's
+    /// The value is a float since upstream 796ef2d4, held on the 1/256 grid
+    /// and capped at `STAMP_COST_CAP`. A target below the node's
     /// `destination_value` still generates at least that default, as the
     /// effective target is `min(STAMP_COST_CAP, max(value,
     /// destination_value))` (Destination.py `target_value`). When stamping
     /// is enabled and the persisted stamp is below the target, the next
     /// announce regenerates it.
-    pub fn set_value(&mut self, value: u8) {
-        self.target_value = Some(value.min(rns_core::constants::STAMP_COST_CAP));
+    pub fn set_value(&mut self, value: f64) {
+        self.target_value = Some(rns_core::stamp::clamp_cost(
+            value,
+            rns_core::constants::STAMP_COST_CAP,
+        ));
     }
 
     /// The effective announce stamp target for a node whose default target
@@ -207,7 +212,6 @@ impl Destination {
     ) -> rns_core::stamp::StampCost {
         // StampCost is already clamped to STAMP_COST_CAP.
         self.target_value
-            .map(|value| rns_core::stamp::StampCost::from_whole(u32::from(value)))
             .unwrap_or(default_value)
             .max(default_value)
     }

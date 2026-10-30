@@ -900,19 +900,24 @@ mod tests {
             validated.lr_cost
         };
 
-        // Without `set_link_cost` the default `LR_COST` is announced,
-        // truncated to whole bits (`int(19.2)`).
-        assert_eq!(announced_cost(&tx), Some(19));
-        // `set_link_cost` clamps to `LINK_COST_CAP` and is announced as set.
-        assert_eq!(tx.link_request_costs().set(dest.hash.0, 17), 17);
-        assert_eq!(announced_cost(&tx), Some(17));
+        // Without `set_link_cost` the default `LR_COST` is announced, with
+        // its fraction since upstream 796ef2d4.
         assert_eq!(
-            tx.link_request_costs().set(dest.hash.0, 1000),
-            constants::LINK_COST_CAP
+            announced_cost(&tx),
+            Some(constants::LINK_REQUEST_STAMP_COST)
         );
-        assert_eq!(announced_cost(&tx), Some(constants::LINK_COST_CAP));
-        assert_eq!(tx.link_request_costs().set(dest.hash.0, 0), 0);
-        assert_eq!(announced_cost(&tx), Some(0));
+        // `set_link_cost` clamps to `LINK_COST_CAP` and is announced as set.
+        let cost = StampCost::from_f64(14.2);
+        assert_eq!(tx.link_request_costs().set(dest.hash.0, 14.2), cost);
+        assert_eq!(announced_cost(&tx), Some(cost));
+        let cap = StampCost::from_whole(u32::from(constants::LINK_COST_CAP));
+        assert_eq!(tx.link_request_costs().set(dest.hash.0, 1000.0), cap);
+        assert_eq!(announced_cost(&tx), Some(cap));
+        assert_eq!(
+            tx.link_request_costs().set(dest.hash.0, 0.0),
+            StampCost::ZERO
+        );
+        assert_eq!(announced_cost(&tx), Some(StampCost::ZERO));
     }
 
     #[test]
@@ -990,22 +995,26 @@ mod tests {
         let targets = StampTargets::default();
         assert_eq!(targets.destination_value, StampCost::from_whole(25));
         assert_eq!(targets.destination_target(&dest), StampCost::from_whole(25));
-        dest.set_value(10);
+        dest.set_value(10.0);
         assert_eq!(
             targets.destination_target(&dest),
             StampCost::from_whole(25),
             "a lower target still generates at least the default"
         );
-        dest.set_value(40);
-        assert_eq!(targets.destination_target(&dest), StampCost::from_whole(40));
-        dest.set_value(u8::MAX);
-        assert_eq!(dest.target_value, Some(constants::STAMP_COST_CAP));
+        dest.set_value(40.75);
+        assert_eq!(
+            targets.destination_target(&dest),
+            StampCost::from_f64(40.75)
+        );
+        dest.set_value(255.0);
+        let cap = StampCost::from_whole(u32::from(constants::STAMP_COST_CAP));
+        assert_eq!(dest.target_value, Some(cap));
         assert_eq!(
             targets.destination_target(&dest),
             StampCost::from_whole(u32::from(constants::STAMP_COST_CAP))
         );
         // A configured default above the destination's own target wins.
-        dest.set_value(30);
+        dest.set_value(30.0);
         let raised = StampTargets {
             destination_value: StampCost::from_whole(35),
             ..targets

@@ -732,7 +732,7 @@ fn handle_recall_identity(hash_str: &str, node: &NodeHandle) -> HttpResponse {
                 "hops": ai.hops,
                 "received_at": ai.received_at,
                 "stamp_value": stamp.map(|s| s.stamp_value.as_f64()).unwrap_or(0.0),
-                "lr_cost": stamp.and_then(|s| s.lr_cost),
+                "lr_cost": stamp.and_then(|s| s.lr_cost).map(|cost| cost.as_f64()),
             }))
         }
         Ok(None) => HttpResponse::not_found(),

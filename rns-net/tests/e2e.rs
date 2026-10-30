@@ -3935,7 +3935,7 @@ fn discovery_announce_received_by_client() {
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
                     discovery_name: "TestBackbone".into(),
                     announce_interval: 300, // minimum
-                    stamp_value: 8,         // low for fast test
+                    stamp_value: rns_core::stamp::StampCost::from_whole(8), // low for fast test
                     reachable_on: Some("10.0.0.1".into()),
                     interface_type: "BackboneInterface".into(),
                     listen_port: Some(port),
@@ -4058,7 +4058,7 @@ fn discovery_announce_received_by_client() {
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             autoconnect_unverified_implementations: false,
-            discovery_required_value: Some(8),
+            discovery_required_value: Some(rns_core::stamp::StampCost::from_whole(8)),
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -4178,7 +4178,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
                     discovery_name: "PoolTargetLive".into(),
                     announce_interval: 300,
-                    stamp_value: 8,
+                    stamp_value: rns_core::stamp::StampCost::from_whole(8),
                     reachable_on: Some("127.0.0.1".into()),
                     interface_type: "TCPServerInterface".into(),
                     listen_port: Some(port),
@@ -4210,7 +4210,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             autoconnect_unverified_implementations: false,
-            discovery_required_value: Some(8),
+            discovery_required_value: Some(rns_core::stamp::StampCost::from_whole(8)),
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -4294,7 +4294,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             autoconnect_unverified_implementations: false,
-            discovery_required_value: Some(8),
+            discovery_required_value: Some(rns_core::stamp::StampCost::from_whole(8)),
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -4431,7 +4431,7 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             autoconnect_unverified_implementations: false,
-            discovery_required_value: Some(8),
+            discovery_required_value: Some(rns_core::stamp::StampCost::from_whole(8)),
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -4624,7 +4624,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
                     discovery_name: "PriorityNoPreempt".into(),
                     announce_interval: 300,
-                    stamp_value: 8,
+                    stamp_value: rns_core::stamp::StampCost::from_whole(8),
                     reachable_on: Some("127.0.0.1".into()),
                     interface_type: "TCPServerInterface".into(),
                     listen_port: Some(discovered_port),
@@ -4656,7 +4656,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             autoconnect_unverified_implementations: false,
-            discovery_required_value: Some(8),
+            discovery_required_value: Some(rns_core::stamp::StampCost::from_whole(8)),
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -4791,7 +4791,7 @@ fn discovery_announce_through_relay() {
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
                     discovery_name: "RelayedBackbone".into(),
                     announce_interval: 300,
-                    stamp_value: 8,
+                    stamp_value: rns_core::stamp::StampCost::from_whole(8),
                     reachable_on: Some("10.0.0.1".into()),
                     interface_type: "BackboneInterface".into(),
                     listen_port: Some(port_a),
@@ -5018,7 +5018,7 @@ fn discovery_announce_through_relay() {
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             autoconnect_unverified_implementations: false,
-            discovery_required_value: Some(8),
+            discovery_required_value: Some(rns_core::stamp::StampCost::from_whole(8)),
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -6321,7 +6321,7 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
         );
         assert_eq!(
             recorded.lr_cost,
-            Some(rns_core::constants::LINK_REQUEST_STAMP_COST.whole() as u8),
+            Some(rns_core::constants::LINK_REQUEST_STAMP_COST),
             "{name} must record the announced link request cost"
         );
     }
@@ -6382,7 +6382,8 @@ fn test_stamped_announce_is_ground_by_the_stamper_and_recorded_by_peers() {
 /// with `LR_STAMPS_ENFORCED` drops requests below its configured cost.
 #[test]
 fn test_stamped_link_cost_is_announced_ground_and_enforced() {
-    const LINK_COST: u8 = 8;
+    // Fractional since upstream 796ef2d4, and on the 1/256 grid.
+    const LINK_COST: f64 = 8.5;
     let state_dir = tempfile::tempdir().unwrap();
     let port = find_free_port();
     let transport = start_transport_node(port);
@@ -6426,19 +6427,16 @@ fn test_stamped_link_cost_is_announced_ground_and_enforced() {
         .unwrap();
 
     // Destination.set_link_cost clamps to LINK_COST_CAP; get_link_cost falls
-    // back to LR_COST, truncated to whole bits, until a cost is set.
+    // back to LR_COST until a cost is set.
     assert_eq!(
         alice.link_cost(&alice_dest.hash.0),
-        rns_core::constants::LINK_REQUEST_STAMP_COST.whole() as u8
+        rns_core::constants::LINK_REQUEST_STAMP_COST.as_f64()
     );
     assert_eq!(
-        alice.set_link_cost(alice_dest.hash.0, 1000),
-        rns_core::constants::LINK_COST_CAP
+        alice.set_link_cost(alice_dest.hash.0, 1000.0),
+        f64::from(rns_core::constants::LINK_COST_CAP)
     );
-    assert_eq!(
-        alice.set_link_cost(alice_dest.hash.0, i64::from(LINK_COST)),
-        LINK_COST
-    );
+    assert_eq!(alice.set_link_cost(alice_dest.hash.0, LINK_COST), LINK_COST);
     assert_eq!(alice.link_cost(&alice_dest.hash.0), LINK_COST);
 
     set_runtime_bool(&alice, "global.stamp_destinations", true);
@@ -6454,7 +6452,7 @@ fn test_stamped_link_cost_is_announced_ground_and_enforced() {
         .expect("Bob did not record Alice's announce");
     assert_eq!(
         recorded.lr_cost,
-        Some(LINK_COST),
+        Some(rns_core::stamp::StampCost::from_f64(LINK_COST)),
         "the announce must carry the per-destination link cost"
     );
 
@@ -6478,8 +6476,8 @@ fn test_stamped_link_cost_is_announced_ground_and_enforced() {
     assert_eq!(alice_link, link_id);
 
     // Alice raises her cost to the cap without re-announcing: Bob still
-    // grinds to 8, and Alice drops the request without a proof.
-    alice.set_link_cost(alice_dest.hash.0, 1000);
+    // grinds to 8.5, and Alice drops the request without a proof.
+    alice.set_link_cost(alice_dest.hash.0, 1000.0);
     let rejected = bob.create_link(alice_dest.hash.0, alice_sig_pub).unwrap();
     let (closed, _) = wait_for_link_closed(&bob_rx, Duration::from_secs(60))
         .expect("the unproven link request never timed out");

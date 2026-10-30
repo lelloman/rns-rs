@@ -61,8 +61,9 @@ pub struct ValidatedAnnounce {
     pub stamp: Option<[u8; constants::STAMP_LENGTH]>,
     /// Fractional stamp value, or zero when absent or invalid.
     pub stamp_value: StampValue,
-    /// Link request stamp cost announced in the extension anchor, if present.
-    pub lr_cost: Option<u8>,
+    /// Link request stamp cost announced in the extension's last two bytes,
+    /// if present.
+    pub lr_cost: Option<StampCost>,
 }
 
 /// Outcome of checking an announce's optional stamp extension.
@@ -103,15 +104,16 @@ impl ValidatedAnnounce {
             return AnnounceStampStatus::NotStamped;
         }
 
-        // The trailing anchor carries the announced link request cost in its
-        // low 7 bits. A set high bit marks a newer, longer extension format
-        // that this version must not interpret.
-        let anchor = ext[constants::EXT_PAYLOAD_LENGTH - 1];
-        let extended = (anchor & 0x80) != 0;
-        let lr_cost = anchor & 0x7F;
-        if extended || lr_cost > constants::STAMP_COST_CAP {
+        // The trailing anchor carries the whole part of the announced link
+        // request cost and the byte before it the 1/256 fraction (796ef2d4).
+        // A set anchor high bit marks a newer, longer extension format that
+        // this version must not interpret.
+        let Some(lr_cost) = crate::stamp::link_cost_from_ext_bytes(
+            ext[constants::EXT_PAYLOAD_LENGTH - 2],
+            ext[constants::EXT_PAYLOAD_LENGTH - 1],
+        ) else {
             return AnnounceStampStatus::NotStamped;
-        }
+        };
 
         let mut stamp = [0u8; constants::STAMP_LENGTH];
         stamp.copy_from_slice(
@@ -617,7 +619,7 @@ mod tests {
     }
 
     /// Link request cost carried in the test announces' extension anchor.
-    const LINK_COST: u8 = 11;
+    const LINK_COST: StampCost = StampCost::from_fp(11 * 256 + 64);
 
     fn stamped_announce(
         app_data: Option<&[u8]>,
@@ -656,7 +658,7 @@ mod tests {
         wire.push(constants::EXT_PAYLOAD_MARKER);
         wire.push(0);
         wire.extend_from_slice(&stamp);
-        wire.push(LINK_COST);
+        wire.extend_from_slice(&crate::stamp::link_cost_ext_bytes(LINK_COST));
 
         let (data, _) =
             AnnounceData::pack(&identity, &dh, &nh, &[0x31; 10], None, Some(&wire)).unwrap();
@@ -723,6 +725,37 @@ mod tests {
         assert_eq!(validated.stamp_value, StampValue::ZERO);
         assert_eq!(validated.lr_cost, None);
         assert_eq!(validated.app_data.as_deref(), Some(b"app-data".as_slice()));
+    }
+
+    #[test]
+    fn test_announce_stamp_with_one_byte_link_cost_is_not_stamped() {
+        // Releases before upstream 796ef2d4 end the extension with a single
+        // cost byte. Read as the two-byte format, its 18 trailing bytes start
+        // inside the application data, so it is left there unparsed.
+        let (parsed, dh, _, _) = stamped_announce(Some(b"app-data"), StampCost::from_whole(4));
+        let mut app_data = parsed.app_data.clone().unwrap();
+        let fraction = app_data.len() - 2;
+        app_data.remove(fraction);
+        let identity = Identity::from_private_key(&[0x42; 64]);
+        let (data, _) = AnnounceData::pack(
+            &identity,
+            &dh,
+            &parsed.name_hash,
+            &parsed.random_hash,
+            None,
+            Some(&app_data),
+        )
+        .unwrap();
+        let mut validated = AnnounceData::unpack(&data, false)
+            .unwrap()
+            .validate(&dh)
+            .unwrap();
+        assert_eq!(
+            validated.apply_stamp(&dh, StampCost::from_whole(4)),
+            AnnounceStampStatus::NotStamped
+        );
+        assert_eq!(validated.lr_cost, None);
+        assert_eq!(validated.app_data, Some(app_data));
     }
 
     #[test]

@@ -117,7 +117,7 @@ same keys and semantics as Python Reticulum:
 | `destination_value` | `25` | Default target value of generated destination stamps |
 | `pr_cost` | `19.8` | Required stamp value of received path requests |
 | `pr_value` | `19.8` | Target value of generated path request stamps |
-| `lr_cost` | `19.2` | Link request cost for local destinations that set none (announced as its whole part, 19), and the cost `always_stamp_lrs` stamps at |
+| `lr_cost` | `19.2` | Link request cost for local destinations that set none, and the cost `always_stamp_lrs` stamps at |
 | `lr_stamp_timeout` | `15` | Seconds allowed for grinding a stamped link request key before the link fails |
 | `pr_stamp_timeout` | `15` | Seconds allowed for grinding a path request stamp before the request is dropped |
 
@@ -127,10 +127,10 @@ transition all four default to off; upstream plans to turn generation and
 emission on by default in 1.6.1 and enforcement in 1.6.2. Link requests are
 already stamped whenever the destination announced a non-zero cost
 (`Transport.STAMP_LRS`, on again since upstream `a8cc6cb2`, which removed the
-`stamp_lrs` option; a leftover `stamp_lrs` line is ignored). The built-in costs
-are fractional, as upstream since `a8cc6cb2`, but configured costs and values
-are whole numbers, as upstream reads them with `as_int`. They are clamped to
-0-100 (`lr_cost` to 0-40), and the timeouts are floored at 20 ms.
+`stamp_lrs` option; a leftover `stamp_lrs` line is ignored). Costs and values
+are fractional, as upstream reads them with `as_float` since `796ef2d4`. They
+are clamped to 0-100 (`lr_cost` to 0-40), and the timeouts are floored at
+20 ms.
 An invalid boolean or number is a configuration error. The defaults are the
 constants in `rns-core/src/constants.rs`, which mirror the upstream
 `Transport` class attributes at the current parity target.
@@ -196,14 +196,23 @@ earlier versions as integers load unchanged.
 
 A stamped announce carries the destination's link request cost: the value set
 with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to
-`0..=40`), or `lr_cost` truncated to whole bits (19 by default). Initiators that
-see a non-zero announced cost grind their link request key to it. With
+`0..=40`), or `lr_cost`. The cost is fractional and travels in the last two
+bytes of the stamp extension, the 1/256 fraction followed by the whole part,
+so 14.2 is announced and recalled as 14.19921875. Releases before upstream
+`796ef2d4` (including the 1.6.0 development tips up to `a8cc6cb2`) use a
+one-byte cost; the two formats do not read each other, so a stamped announce
+from such a node is accepted as unstamped with the extension left in its app
+data, and the reverse holds on the older node. Initiators that see a non-zero
+announced cost grind their link request key to it. With
 `always_stamp_lrs`, requests to destinations that announced no cost are ground
 to the local `lr_cost`, fraction included; an announced cost of 0 still means
 unstamped. Responders only check it when
 `global.lr_stamps_enforced` (upstream `Transport.LR_STAMPS_ENFORCED`, off by
 default) is on, dropping link requests whose stamp is below the destination's
 cost; the key applies immediately and resets to the compile-time default.
+Upstream `796ef2d4` writes this check as `LR_STAMPS_ENFORCED and
+stamp_valid(...)`, which would drop the valid requests instead; rns-rs drops
+the invalid ones, as the error upstream raises describes.
 
 ## Ingress control
 

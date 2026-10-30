@@ -473,14 +473,12 @@ fn discovery_storage_guard() -> MutexGuard<'static, ()> {
 /// Returns `(stamp, value)` on success. This is a blocking, CPU-intensive operation.
 pub fn generate_discovery_stamp(
     packed_data: &[u8],
-    stamp_cost: u8,
+    stamp_cost: StampCost,
 ) -> ([u8; STAMP_SIZE], StampValue) {
     use rns_crypto::{OsRng, Rng};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    // Discovery costs are configured as whole numbers.
-    let stamp_cost = StampCost::from_whole(u32::from(stamp_cost));
     let infohash = sha256(packed_data);
     let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
 
@@ -999,7 +997,7 @@ mod tests {
             config: DiscoveryConfig {
                 discovery_name: format!("Discovery {name}"),
                 announce_interval: interval,
-                stamp_value: 0,
+                stamp_value: rns_core::stamp::StampCost::ZERO,
                 reachable_on: Some("example.test".into()),
                 interface_type: "BackboneInterface".into(),
                 listen_port: Some(4242),
@@ -1842,16 +1840,13 @@ mod tests {
     #[test]
     fn generated_discovery_stamp_is_accepted_without_external_stamper() {
         let packed = b"internal stamps module";
-        let cost = 8;
+        // Fractional since upstream 796ef2d4.
+        let cost = StampCost::from_f64(8.5);
         let (stamp, value) = generate_discovery_stamp(packed, cost);
-        assert!(value.meets(StampCost::from_whole(u32::from(cost))));
+        assert!(value.meets(cost));
         let infohash = sha256(packed);
         let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
-        assert!(stamp_valid(
-            &stamp,
-            StampCost::from_whole(u32::from(cost)),
-            &workblock
-        ));
+        assert!(stamp_valid(&stamp, cost, &workblock));
     }
 
     #[test]

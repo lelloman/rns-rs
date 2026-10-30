@@ -563,7 +563,8 @@ def inbound_link_established(link):
 destination.set_link_established_callback(inbound_link_established)
 
 emit("ready", port=port, python_dest_hash=destination.hash.hex(),
-     link_cost_supported=hasattr(RNS.Identity, "recall_link_cost") and hasattr(RNS.Destination, "set_link_cost"))
+     link_cost_supported=hasattr(RNS.Identity, "recall_link_cost") and hasattr(RNS.Destination, "set_link_cost"),
+     lr_cost_length=getattr(RNS.Identity, "LRCOSTLENGTH", None))
 
 signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
 try:
@@ -611,7 +612,8 @@ try:
             else:
                 import time
                 from RNS.Stamps import generate_stamp
-                link_cost = int(command.split()[1])
+                # Fractional since 796ef2d4; earlier releases apply int().
+                link_cost = float(command.split()[1])
                 # Grind to at least the value the Rust node requires: releases
                 # before a8cc6cb2 target 23, below its 23.5 announce cost.
                 stamp_target = max(RNS.Transport.DESTINATION_VALUE, int(command.split()[2]))
@@ -838,7 +840,8 @@ fn python_rns_bidirectional_tcp_interop() {
 /// at the exact target recorded in the active audit.
 #[test]
 fn python_rns_stamped_link_request_interop() {
-    const LINK_COST: u8 = 8;
+    // Fractional since upstream 796ef2d4, on the 1/256 grid.
+    const LINK_COST: f64 = 8.5;
     const STAMP_WAIT: Duration = Duration::from_secs(120);
 
     if !rns_available() {
@@ -848,6 +851,9 @@ fn python_rns_stamped_link_request_interop() {
 
     let mut python = PythonRns::spawn();
     let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
+    // Releases before upstream 796ef2d4 end the stamp extension with a single
+    // link cost byte, which neither side reads in the other's format.
+    let legacy_extension = ready["lr_cost_length"] == 1;
     let port = ready["port"].as_u64().unwrap() as u16;
     let python_dest_hash = DestHash(parse_hex_16(ready["python_dest_hash"].as_str().unwrap()));
 
@@ -878,11 +884,42 @@ fn python_rns_stamped_link_request_interop() {
         python_stamp_value >= required.as_f64(),
         "Python stamp value {python_stamp_value} must satisfy the Rust required cost"
     );
-    assert_eq!(announced["link_cost"], u64::from(LINK_COST));
     eprintln!(
         "Python RNS {} stamped its destination with value {} in {} s",
         announced["version"], python_stamp_value, announced["seconds"]
     );
+
+    if legacy_extension {
+        // The one-byte extension is not recognised: the announce is accepted
+        // as unstamped, with the 17 extension bytes left in the app data and
+        // no link cost recorded.
+        assert_eq!(announced["link_cost"], LINK_COST.trunc());
+        let announce = wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+            RustEvent::Announce(a) if a.dest_hash == python_dest_hash => Some(a.clone()),
+            _ => None,
+        })
+        .expect("Rust should receive the stamped Python announce");
+        let app_data = announce
+            .app_data
+            .expect("the extension stays in the app data");
+        assert_eq!(app_data.len(), PYTHON_APP_DATA.len() + 17);
+        assert!(app_data.starts_with(PYTHON_APP_DATA));
+        assert_eq!(app_data[PYTHON_APP_DATA.len()], 0xC1);
+        let known = node
+            .known_destinations()
+            .expect("known destinations query")
+            .into_iter()
+            .find(|entry| entry.dest_hash == python_dest_hash.0)
+            .expect("Python destination should be a known destination");
+        assert_eq!(known.lr_cost, None);
+        eprintln!(
+            "Python RNS {} uses the one-byte link cost extension; it reads as unstamped",
+            announced["version"]
+        );
+        node.shutdown();
+        return;
+    }
+    assert_eq!(announced["link_cost"], LINK_COST);
 
     // The Rust node validates the stamp, strips the extension payload from
     // the app data, and recalls the announced link request cost.
@@ -899,7 +936,10 @@ fn python_rns_stamped_link_request_interop() {
         .into_iter()
         .find(|entry| entry.dest_hash == python_dest_hash.0)
         .expect("Python destination should be a known destination");
-    assert_eq!(known.lr_cost, Some(LINK_COST));
+    assert_eq!(
+        known.lr_cost,
+        Some(rns_core::stamp::StampCost::from_f64(LINK_COST))
+    );
     assert_python_value(known.stamp_value, python_stamp_value);
     assert_eq!(
         known.stamp.map(|stamp| hex(&stamp)),
@@ -952,7 +992,7 @@ fn python_rns_stamped_link_request_interop() {
         .as_f64()
         .expect("Python should compute the link request stamp value");
     assert!(
-        python_lr_value >= f64::from(LINK_COST),
+        python_lr_value >= LINK_COST,
         "Python saw link request stamp value {python_lr_value}, announced cost {LINK_COST}"
     );
     let mut request = decode_hex(python_link["peer_pub_hex"].as_str().unwrap());
@@ -1000,7 +1040,8 @@ fn python_rns_stamped_link_request_interop() {
 /// and the Rust responder, enforcing link request stamps, accepts the link.
 #[test]
 fn python_rns_link_cost_announced_by_rust_interop() {
-    const LINK_COST: u8 = 9;
+    // Fractional since upstream 796ef2d4, on the 1/256 grid.
+    const LINK_COST: f64 = 9.25;
     const STAMP_WAIT: Duration = Duration::from_secs(120);
 
     if !rns_available() {
@@ -1012,6 +1053,12 @@ fn python_rns_link_cost_announced_by_rust_interop() {
     let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
     if ready["link_cost_supported"] != true {
         eprintln!("Skipping: Python RNS has no per-destination link cost");
+        return;
+    }
+    if ready["lr_cost_length"] == 1 {
+        // Before upstream 796ef2d4 Python reads a one-byte link cost, so it
+        // sees neither the stamp nor the cost of a two-byte extension.
+        eprintln!("Skipping: Python RNS uses the one-byte link cost extension");
         return;
     }
     let port = ready["port"].as_u64().unwrap() as u16;
@@ -1038,10 +1085,7 @@ fn python_rns_link_cost_announced_by_rust_interop() {
     rust_sig_public.copy_from_slice(&rust_public[32..64]);
     node.register_link_destination(rust_dest.hash.0, rust_sig_private, rust_sig_public, 1)
         .expect("Rust link destination registration should succeed");
-    assert_eq!(
-        node.set_link_cost(rust_dest.hash.0, i64::from(LINK_COST)),
-        LINK_COST
-    );
+    assert_eq!(node.set_link_cost(rust_dest.hash.0, LINK_COST), LINK_COST);
 
     // Wait for the TCP client to come up before announcing.
     std::thread::sleep(Duration::from_secs(1));
@@ -1058,7 +1102,7 @@ fn python_rns_link_cost_announced_by_rust_interop() {
         decode_hex(rust_announce["app_data_hex"].as_str().unwrap()),
         RUST_APP_DATA
     );
-    assert_eq!(rust_announce["link_cost"], u64::from(LINK_COST));
+    assert_eq!(rust_announce["link_cost"], LINK_COST);
 
     // Python initiates and grinds its link request to the announced cost;
     // the enforcing Rust responder accepts it.
@@ -1072,7 +1116,7 @@ fn python_rns_link_cost_announced_by_rust_interop() {
     let python_link = python.wait_for_event(STAMP_WAIT, |event| {
         event["event"] == "python_link_established"
     });
-    assert_eq!(python_link["stamp_cost"], u64::from(LINK_COST));
+    assert_eq!(python_link["stamp_cost"], LINK_COST);
     let link_id = parse_hex_16(python_link["link_id"].as_str().unwrap());
     let rust_link = wait_for_rust_event(&rust_rx, STAMP_WAIT, |event| match event {
         RustEvent::LinkEstablished {

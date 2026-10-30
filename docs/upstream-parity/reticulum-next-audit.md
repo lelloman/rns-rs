@@ -69,7 +69,7 @@ Every commit in the audited range must appear exactly once.
 | 6 | `2c142973bfb9b0ce6f46fa781d7ade4b81c796f0` | Cleanup (path request stamp diagnostics) | Integrated | Path request stamp diagnostics on the pathing target, with the new lenient-relay message |
 | 7 | `34bb4ac88c8cf3a7b9ab2edc039213b878427eb8` | Cleanup (link request cost fallback) | Integrated | `outbound_link_stamp_cost` follows the corrected fallback, `LR_COST` only for a missing announced cost; ends the commit 5 divergence |
 | 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Structurally covered | `STAMP_COST_CAP` and `LINK_COST_CAP` were never floats in Rust (`u8` 100 and 40, `u32` 100 for `StampCost`) |
-| 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Needs coordinated port | |
+| 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Integrated | Two-byte fractional link cost in the announce extension (`EXT_PAYLOAD_LENGTH` 18), fractional link costs through the API, cost table, known destinations, storage (`REAL` columns), RPC and API, `as_float` for `[stamps]`, `required_discovery_value` and `discovery_stamp_value`, fractional `Destination::set_value`; the responder check implements the intent of an inverted upstream test (divergence, see analysis) |
 | 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Needs port | |
 | 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Needs port | |
 | 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Needs port | |
@@ -470,6 +470,112 @@ floats: `constants::STAMP_COST_CAP` and `LINK_COST_CAP` are `u8` 100 and 40,
 keeps the two cost caps equal.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 9. `796ef2d4` — Refactoring for fractional-value stamp support
+
+**Upstream change:**
+
+- **Wire format.** `Identity.LRCOSTLENGTH` 1 → 2, so `EXTPAYLOADLENGTH`
+  17 → 18. `Destination.announce` ends the extension with
+  `bytes([cost_bytes[1], cost_bytes[0]])` for `cost_to_bytes(get_link_cost())`:
+  the 1/256 fraction, then the whole part as the trailing anchor.
+  `validate_announce` reads the anchor's low seven bits and the byte before it
+  as `cost_from_bytes`; a set anchor high bit or a cost above
+  `STAMP_COST_CAP` still marks an unknown format.
+- **Fractional link costs.** `Destination.set_link_cost` keeps
+  `max(0, min(float(cost), LINK_COST_CAP))`, `get_link_cost` returns a float
+  clamped to `STAMP_COST_CAP` instead of `int()`, `recall_link_cost` and
+  `recall_value` document floats, and the SQLite `stamp_value` and `lr_cost`
+  columns become `REAL` (also in the version 2 migration). `Examples/Link.py`
+  sets 14.2.
+- **Fractional targets and options.** `Destination.target_value` and
+  `set_value` use `float()`, and the restamp check compares against
+  `quantize_cost(target_value)` (new `Stamps.quantize_cost`). The `[stamps]`
+  costs, `required_discovery_value` and `discovery_stamp_value` are read with
+  `as_float`.
+- **Responder check.** `Link.validate_request` becomes
+  `if LR_STAMPS_ENFORCED and stamp_valid(peer_pub_bytes, owner.get_link_cost(),
+  stamp_material): raise ValueError("Insufficient link request stamp value")`,
+  replacing `value < owner.get_link_cost()`.
+- **Discovery.** The redundant `value < required_value` line after the
+  `stamp_valid` check is removed.
+- **Logging.** Debug lines for incoming link request values and deferred key
+  generation are removed; the link MTU signalling line moves to
+  `LOG_PATHING`.
+
+**Rust applicability:** Applicable, and the most invasive commit of the
+range: the extension length is a wire format change, and every link cost was
+a `u8`.
+
+Interop consequence: the one-byte and two-byte extensions do not read each
+other. A new parser takes the last 18 bytes of an old 17-byte extension, so
+its marker check fails on the preceding app data byte (or the app data is
+too short), and the announce is accepted as unstamped with the extension
+left in its app data. The reverse holds on an old node. Stamped announces
+therefore only interoperate between nodes at or after this commit. Releases
+without destination stamping (1.5.x and earlier) are unaffected, and the
+1.6.0 release does not emit destination stamps by default.
+
+The new responder check is inverted as written: with `LR_STAMPS_ENFORCED`
+it raises, and drops the request, exactly when the stamp *is* valid, and
+accepts an insufficient one. The error message and the previous expression
+both describe `not stamp_valid(...)`. Enforcement is off by default, so the
+default behavior is unaffected.
+
+**Decision (2026-10-30):** as for the commit 5 fallback, port the intent:
+drop requests whose stamp is not valid for the destination's cost. This is a
+deliberate divergence until upstream corrects or confirms the line, and it
+should be reported upstream. On the wire it only matters to an enforcing
+responder: an enforcing rns-rs node accepts sufficient stamps and drops
+insufficient ones, where an enforcing `796ef2d4` Python node would do the
+opposite.
+
+**Local handling and evidence:**
+
+- `constants::LR_COST_LENGTH = 2` (`EXT_PAYLOAD_LENGTH` 18).
+  `rns_core::stamp::link_cost_ext_bytes` and `link_cost_from_ext_bytes`
+  encode and decode the two bytes, and `ValidatedAnnounce::apply_stamp` reads
+  `lr_cost` through the latter. `StampCost::from_fp_checked` rejects costs
+  above the cap read off the wire.
+- `lr_cost` is `Option<StampCost>` on `ValidatedAnnounce`, `ReceivedAnnounce`,
+  the known destination state, events, `KnownDestination` and RPC entries.
+  The file store writes a float, the SQLite columns are created (and added by
+  the migration) as `REAL`, and both read integer costs of earlier versions
+  as whole bits through `storage::stored_link_cost`. The RPC and the
+  `/api/identity` JSON report a float.
+- `LinkRequestCosts` holds `StampCost`; `RnsNode::set_link_cost` takes and
+  returns `f64`, and `link_cost` returns `f64`. `rns_core::stamp::clamp_cost`
+  mirrors `max(0, min(cost, cap))`, NaN to 0 and infinity to the cap, and is
+  shared by `clamp_link_cost`, the `[stamps]` parser, `discovery_stamp_value`
+  and `required_discovery_value`. `announced_link_cost` no longer truncates.
+- `Destination::set_value` takes `f64`. The persisted stamp is reloaded only
+  when `stamp_valid` at the effective target, which is the quantized target
+  comparison.
+- The responder check (`LinkManager`) drops a request when
+  `link_request_stamp_valid` (new, `stamp_valid` over the request keys) is
+  false, implementing the decision above.
+- Discovery: `DiscoveryConfig::stamp_value`, the driver's required value,
+  `generate_discovery_stamp` and `parse_interface_announce` take `StampCost`.
+  The discovery runtime key `stamp_value` is a float (at most
+  `STAMP_COST_CAP`). The removed `value < required_value` line had no Rust
+  counterpart: validation was already `stamp_valid` only.
+- The removed link debug lines have no Rust counterpart; Rust does not log
+  the link MTU signalling.
+- Tests: `link_cost_ext_bytes_round_trip_like_upstream` (bytes for 12.5 and
+  14.2 as upstream builds them, the grid round trip, and the rejected
+  encodings), `test_announce_stamp_with_one_byte_link_cost_is_not_stamped`,
+  `link_cost_setter_clamps_like_upstream`, `stamps_section_costs_are_fractional`,
+  the SQLite migration test (integer and out-of-range costs), and fractional
+  costs in the existing link cost, stamper, storage, driver, e2e and Docker
+  (`21_stamped_emission.sh` expects `lr_cost` 19.19921875) tests.
+- `python_interop` reports Python's `Identity.LRCOSTLENGTH`. Against a
+  one-byte release the Python-stamped test asserts the mixed-format behavior
+  (accepted as unstamped, 17 extension bytes left in the app data, no link
+  cost recorded) and the Rust-announced test skips. Both run in full against
+  `796ef2d4` with fractional costs, 8.5 and 9.25.
+
+**Final disposition:** Integrated, with the documented responder check
+divergence.
 
 ## Integration Plan
 

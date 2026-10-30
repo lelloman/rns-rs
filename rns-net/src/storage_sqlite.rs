@@ -109,7 +109,8 @@ impl KnownDestinationsStore {
                     // REAL since fractional stamp values; older rows hold
                     // INTEGER whole bits, which read the same way.
                     row.get::<_, f64>(10)?,
-                    row.get::<_, Option<i64>>(11)?,
+                    // REAL since fractional link costs (upstream 796ef2d4).
+                    row.get::<_, Option<f64>>(11)?,
                 ))
             })
             .map_err(sql_error)?;
@@ -155,11 +156,7 @@ impl KnownDestinationsStore {
                     retained: retained != 0,
                     stamp,
                     stamp_value: rns_core::stamp::StampValue::from_f64(stamp_value),
-                    lr_cost: lr_cost
-                        .filter(|cost| {
-                            (0..=i64::from(rns_core::constants::STAMP_COST_CAP)).contains(cost)
-                        })
-                        .map(|cost| cost as u8),
+                    lr_cost: lr_cost.and_then(crate::storage::stored_link_cost),
                 },
             ));
         }
@@ -444,8 +441,8 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
             app_data         BLOB,
             used             REAL NOT NULL DEFAULT 0,
             stamp            BLOB,
-            stamp_value      INTEGER,
-            lr_cost          INTEGER,
+            stamp_value      REAL,
+            lr_cost          REAL,
             identity_hash    BLOB NOT NULL);
          CREATE TABLE IF NOT EXISTS ratchets (
             destination_hash BLOB PRIMARY KEY,
@@ -463,11 +460,8 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
     // single idempotent step; on migrated databases the column trails
     // identity_hash, so writes name their target columns.
     if db_version > 0 && db_version < 2 {
-        conn.execute(
-            "ALTER TABLE known_destinations ADD COLUMN lr_cost INTEGER",
-            [],
-        )
-        .map_err(sql_error)?;
+        conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost REAL", [])
+            .map_err(sql_error)?;
     }
 
     conn.execute_batch("PRAGMA user_version = 2;")
@@ -508,7 +502,7 @@ fn upsert_destination(
             used,
             destination.stamp.clone(),
             destination.stamp_value.as_f64(),
-            destination.lr_cost.map(i64::from),
+            destination.lr_cost.map(|cost| cost.as_f64()),
             destination.identity_hash.to_vec(),
         ],
     )
@@ -625,7 +619,10 @@ mod tests {
             stamp: Some(vec![hash; 14]),
             // Fractional, so the REAL column round trip is exercised.
             stamp_value: rns_core::stamp::StampValue::from_fp(u32::from(hash) * 256 + 77),
-            lr_cost: Some(hash),
+            // Fractional too (upstream 796ef2d4).
+            lr_cost: Some(rns_core::stamp::StampCost::from_fp(
+                u32::from(hash) * 64 + 3,
+            )),
         }
     }
 
@@ -654,7 +651,10 @@ mod tests {
             used.stamp_value,
             rns_core::stamp::StampValue::from_fp(0x11 * 256 + 77)
         );
-        assert_eq!(used.lr_cost, Some(0x11));
+        assert_eq!(
+            used.lr_cost,
+            Some(rns_core::stamp::StampCost::from_fp(0x11 * 64 + 3))
+        );
         let never = &loaded[&[0x22; 16]];
         assert!(!never.was_used);
         assert_eq!(never.last_used_at, None);
@@ -714,6 +714,19 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 2);
+
+        // An integer cost written before fractional link costs reads as whole
+        // bits; one above STAMP_COST_CAP is dropped.
+        conn.execute("UPDATE known_destinations SET lr_cost = 19", [])
+            .unwrap();
+        let loaded = store.load_all().unwrap();
+        assert_eq!(
+            loaded[0].1.lr_cost,
+            Some(rns_core::stamp::StampCost::from_whole(19))
+        );
+        conn.execute("UPDATE known_destinations SET lr_cost = 101", [])
+            .unwrap();
+        assert_eq!(store.load_all().unwrap()[0].1.lr_cost, None);
     }
 
     #[test]

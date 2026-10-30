@@ -58,7 +58,7 @@ impl Driver {
     /// request goes unstamped.
     pub(crate) fn outbound_link_stamp_cost(&self, dest_hash: &[u8; 16]) -> Option<StampCost> {
         match self.recall_link_cost(dest_hash) {
-            Some(cost) => Some(StampCost::from_whole(u32::from(cost))),
+            Some(cost) => Some(cost),
             None if self.stamp_settings.always_stamp_lrs => {
                 Some(self.link_manager.link_request_costs().default_cost())
             }
