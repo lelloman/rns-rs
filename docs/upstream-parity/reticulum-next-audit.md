@@ -71,7 +71,7 @@ Every commit in the audited range must appear exactly once.
 | 8 | `75465efad8aca353a622d934c2b54f001f72c164` | Fixed cap types | Structurally covered | `STAMP_COST_CAP` and `LINK_COST_CAP` were never floats in Rust (`u8` 100 and 40, `u32` 100 for `StampCost`) |
 | 9 | `796ef2d44b4aec30eb74a1d9210a432ebb1b9440` | Refactoring for fractional-value stamp support | Integrated | Two-byte fractional link cost in the announce extension (`EXT_PAYLOAD_LENGTH` 18), fractional link costs through the API, cost table, known destinations, storage (`REAL` columns), RPC and API, `as_float` for `[stamps]`, `required_discovery_value` and `discovery_stamp_value`, fractional `Destination::set_value`; the responder check implements the intent of an inverted upstream test (divergence, see analysis) |
 | 10 | `f57fa2655cabf928f2d7500b519442b6737b5e07` | Cleanup (defaults, default config, changelog) | Integrated | Defaults `PR_COST`/`PR_VALUE` 15.8 and `LR_COST` 12.5, the `rnsd --exampleconfig` values, docs and the Docker suite; the default config's commented `[stamps]` section has no generated counterpart (rns-rs writes no default config) and is pinned by the config parse test |
-| 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Needs port | |
+| 11 | `da027e9c0f68f5980d6425ab78e80ef13632bbbf` | Fixed pre-init link_id access | Structurally covered | A Rust link exists only once its keys do (`complete_create_link` after the stamped grind), with a fixed `[u8; 16]` id, so there is no id-less link to format |
 | 12 | `2e6963c388ee99a5f9a93dab95a0514ed927e96c` | Updated changelog | Needs port | |
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Needs coordinated port | |
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Needs port | |
@@ -605,6 +605,20 @@ dedicated link stamp threads of commit 5 stay: they cost nothing at the new
 default and keep high per-destination costs fast.
 
 **Final disposition:** Integrated.
+
+### 11. `da027e9c` — Fixed pre-init link_id access
+
+**Upstream change:** `Link.__str__` returns `"<pending link>"` while
+`link_id` is still `None`. A stamped initiator link has no id until its
+deferred keys are ground (commit 5's `STAMP_LRS` default), and logging such a
+link raised.
+
+**Rust applicability:** Structurally covered. The driver grinds stamped keys
+before any link exists and only then calls `complete_create_link`, which
+builds the link and its id together; ids are fixed `[u8; 16]` arrays and
+never optional.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
