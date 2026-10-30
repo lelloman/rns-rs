@@ -39,8 +39,8 @@ PORT_C="${NODE_C_PORT:?Need NODE_C_PORT}"
 
 # Protocol constants (docs/configuration.md, Stamps).
 DESTINATION_STAMP_COST=23.5
-# LR_COST is 19.2, announced on the 1/256 grid with its fraction (796ef2d4).
-LINK_REQUEST_STAMP_COST=19.19921875
+# LR_COST is 12.5 (f57fa265), announced with its fraction (796ef2d4).
+LINK_REQUEST_STAMP_COST=12.5
 
 # ── Runtime config through the daemon's RPC port inside node-a ──────────────
 

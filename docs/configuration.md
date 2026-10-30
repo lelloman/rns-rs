@@ -98,11 +98,11 @@ same keys and semantics as Python Reticulum:
   # always_stamp_lrs = yes
   # enforce_stamps = yes
 
-  # destination_cost = 24
-  # destination_value = 25
-  # pr_cost = 20
-  # pr_value = 20
-  # lr_cost = 19
+  # destination_cost = 23.5
+  # destination_value = 25.0
+  # pr_cost = 15.8
+  # pr_value = 15.8
+  # lr_cost = 12.5
   # lr_stamp_timeout = 15
   # pr_stamp_timeout = 15
 ```
@@ -115,9 +115,9 @@ same keys and semantics as Python Reticulum:
 | `enforce_stamps` | `no` | Drop announces and path requests whose stamp is missing or below the required cost, and enforce link request stamps |
 | `destination_cost` | `23.5` | Required stamp value of received and transported announces |
 | `destination_value` | `25` | Default target value of generated destination stamps |
-| `pr_cost` | `19.8` | Required stamp value of received path requests |
-| `pr_value` | `19.8` | Target value of generated path request stamps |
-| `lr_cost` | `19.2` | Link request cost for local destinations that set none, and the cost `always_stamp_lrs` stamps at |
+| `pr_cost` | `15.8` | Required stamp value of received path requests |
+| `pr_value` | `15.8` | Target value of generated path request stamps |
+| `lr_cost` | `12.5` | Link request cost for local destinations that set none, and the cost `always_stamp_lrs` stamps at |
 | `lr_stamp_timeout` | `15` | Seconds allowed for grinding a stamped link request key before the link fails |
 | `pr_stamp_timeout` | `15` | Seconds allowed for grinding a path request stamp before the request is dropped |
 
@@ -185,7 +185,7 @@ validated inbound path request stamps as `stamped_path_requests` in
 Stamp values are fractional, as in upstream since rgit `78fb90ea`: the whole
 part is the leading zero bit count of the stamp product and the fraction comes
 in 1/256 steps, so a recorded value reads like `24.73046875`. Costs use the same
-1/256 grid (upstream `cost_to_fp` rounds 19.8 to 19.80078125), and a stamp is
+1/256 grid (upstream `cost_to_fp` rounds 15.8 to 15.80078125), and a stamp is
 valid when its product is at most the target the mantissa table gives for the
 cost. For a whole cost that is the legacy leading-zero check. With the default
 announce cost of 23.5, roughly half the stamps that releases before `a8cc6cb2`
@@ -196,7 +196,7 @@ earlier versions as integers load unchanged.
 
 A stamped announce carries the destination's link request cost: the value set
 with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to
-`0..=40`), or `lr_cost`. The cost is fractional and travels in the last two
+`0..=40`), or `lr_cost` (12.5 by default). The cost is fractional and travels in the last two
 bytes of the stamp extension, the 1/256 fraction followed by the whole part,
 so 14.2 is announced and recalled as 14.19921875. Releases before upstream
 `796ef2d4` (including the 1.6.0 development tips up to `a8cc6cb2`) use a

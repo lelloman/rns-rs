@@ -105,19 +105,19 @@ pub const DESTINATION_STAMP_COST: StampCost = StampCost::from_fp(6016);
 pub const DESTINATION_STAMP_VALUE: StampCost = StampCost::from_whole(25);
 
 /// Default required path request stamp cost (`Transport.PR_COST`, 19.8
-/// since a8cc6cb2; `cost_to_fp(19.8)`).
-pub const PATH_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(5069);
+/// in a8cc6cb2 and 15.8 since f57fa265; `cost_to_fp(15.8)`).
+pub const PATH_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(4045);
 
 /// Default target stamp value for emitted path requests (`Transport.PR_VALUE`,
-/// 19.8 since a8cc6cb2).
-pub const PATH_REQUEST_STAMP_VALUE: StampCost = StampCost::from_fp(5069);
+/// 19.8 in a8cc6cb2 and 15.8 since f57fa265).
+pub const PATH_REQUEST_STAMP_VALUE: StampCost = StampCost::from_fp(4045);
 
-/// Default link request stamp cost (`Transport.LR_COST`, 19.2 since
-/// a8cc6cb2; `cost_to_fp(19.2)`). A destination that sets no cost of its own
-/// announces and requires the whole part (`get_link_cost` truncates); the
-/// fraction only applies when `ALWAYS_STAMP_LRS` stamps a request to a
-/// destination that announced no cost.
-pub const LINK_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(4915);
+/// Default link request stamp cost (`Transport.LR_COST`, 19.2 in a8cc6cb2
+/// and 12.5 since f57fa265; `cost_to_fp(12.5)`). A destination that sets no
+/// cost of its own announces and requires it, fraction included since
+/// 796ef2d4, and `ALWAYS_STAMP_LRS` stamps requests to destinations that
+/// announced no cost at it.
+pub const LINK_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(3200);
 
 /// Whether destination announces emitted by this instance are stamped.
 pub const STAMP_DESTINATIONS: bool = false;
@@ -789,9 +789,9 @@ mod tests {
         assert_eq!(EXT_PAYLOAD_MARKER, 0xC1);
         assert_eq!(DESTINATION_STAMP_COST, StampCost::from_f64(23.5));
         assert_eq!(DESTINATION_STAMP_VALUE, StampCost::from_f64(25.0));
-        assert_eq!(PATH_REQUEST_STAMP_COST, StampCost::from_f64(19.8));
-        assert_eq!(PATH_REQUEST_STAMP_VALUE, StampCost::from_f64(19.8));
-        assert_eq!(LINK_REQUEST_STAMP_COST, StampCost::from_f64(19.2));
+        assert_eq!(PATH_REQUEST_STAMP_COST, StampCost::from_f64(15.8));
+        assert_eq!(PATH_REQUEST_STAMP_VALUE, StampCost::from_f64(15.8));
+        assert_eq!(LINK_REQUEST_STAMP_COST, StampCost::from_f64(12.5));
         assert_eq!(LINK_COST_CAP, 40);
         assert_eq!(LINK_STAMP_TIMEOUT, 15);
         assert_eq!(PATH_REQUEST_STAMP_TIMEOUT, 15);

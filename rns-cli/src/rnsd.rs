@@ -384,15 +384,13 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # link request cost, at the default link request cost below.
   # always_stamp_lrs = yes
 
-  # The built-in costs below are fractional (23.5, 19.8 and
-  # 19.2); configured costs and values are whole numbers.
 
   # The default required stamp cost for an announce, and its
   # destination to be considered valid. This applies both to
   # announces received directly, and transported by this node,
   # if transport is enabled. Any announced destination not
   # meeting the cost will be ignored once stamps are enforced.
-  # destination_cost = 24
+  # destination_cost = 23.5
 
   # The default value this instance will target when generating
   # new destination stamps. An application may set a higher
@@ -400,21 +398,21 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # default will always generate at least the default value.
   # Destination stamps are cached and reused, so a one-time
   # high-value generation is usually a good idea.
-  # destination_value = 25
+  # destination_value = 25.0
 
   # The default required path request stamp cost. Path requests
   # that do not meet the requirement are ignored once stamps
   # are enforced.
-  # pr_cost = 20
+  # pr_cost = 15.8
 
   # The default target value of path request stamps generated
   # by this instance.
-  # pr_value = 20
+  # pr_value = 15.8
 
   # The default link request stamp cost to announce for local
   # destinations that do not set their own (0 to 40), and to
   # stamp with when always_stamp_lrs is set.
-  # lr_cost = 19
+  # lr_cost = 12.5
 
   # The maximum amount of time to spend attempting to generate
   # link request and path request stamps, in seconds.

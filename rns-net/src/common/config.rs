@@ -1662,12 +1662,23 @@ provider_overflow_policy = drop_oldest
 
     #[test]
     fn parse_default_config() {
-        // The default config from Python's __default_rns_config__
+        // The default config from Python's __default_rns_config__, with the
+        // commented-out [stamps] section added in upstream f57fa265.
         let input = r#"
 [reticulum]
 enable_transport = False
 share_instance = Yes
 instance_name = default
+
+[stamps]
+
+# destination_cost = 23.5
+# destination_value = 25.0
+# pr_cost = 15.8
+# pr_value = 15.8
+# lr_cost = 12.5
+# lr_stamp_timeout = 15
+# pr_stamp_timeout = 15
 
 [logging]
 loglevel = 4
@@ -1687,6 +1698,7 @@ loglevel = 4
         assert_eq!(config.interfaces[0].name, "Default Interface");
         assert_eq!(config.interfaces[0].interface_type, "AutoInterface");
         assert!(config.interfaces[0].enabled);
+        assert_eq!(config.stamps, StampsSection::default());
     }
 
     #[test]
