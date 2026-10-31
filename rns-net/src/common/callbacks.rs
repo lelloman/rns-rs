@@ -115,6 +115,21 @@ pub trait Callbacks: Send {
         false
     }
 
+    /// Called to ask whether to accept an incoming resource (for AcceptApp
+    /// strategy), with the application flag set in its advertisement
+    /// (Python `ResourceAdvertisement.app_flag_set()`). The default ignores
+    /// the flag and forwards to [`Callbacks::on_resource_accept_query`].
+    fn on_resource_accept_query_with_app_flag(
+        &mut self,
+        link_id: LinkId,
+        resource_hash: Vec<u8>,
+        transfer_size: u64,
+        has_metadata: bool,
+        _app_flag: bool,
+    ) -> bool {
+        self.on_resource_accept_query(link_id, resource_hash, transfer_size, has_metadata)
+    }
+
     /// Called when a channel message is received on a link.
     fn on_channel_message(&mut self, _link_id: LinkId, _msgtype: u16, _payload: Vec<u8>) {}
 

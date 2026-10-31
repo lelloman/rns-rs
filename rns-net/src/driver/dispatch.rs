@@ -1940,12 +1940,14 @@ impl Driver {
                     resource_hash,
                     transfer_size,
                     has_metadata,
+                    app_flag,
                 } => {
-                    let accept = self.callbacks.on_resource_accept_query(
+                    let accept = self.callbacks.on_resource_accept_query_with_app_flag(
                         rns_core::types::LinkId(link_id),
                         resource_hash.clone(),
                         transfer_size,
                         has_metadata,
+                        app_flag,
                     );
                     let accept_actions = self.link_manager.accept_resource(
                         &link_id,
