@@ -93,7 +93,7 @@ Every commit in the audited range must appear exactly once.
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | `2bf64fa`; spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
 | 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Integrated | Advertisement flag bit 6 (`AdvFlags::app_flag`) on every segment, delivered with the data (`DataReceived`, `ResourceReceived`, `ReceivedResourceFile`, `Callbacks::on_resource_received_with_app_flag`) and sent through `ResourceSendOptions`; advertisements over the link MDU are packed without their hashmap and the `HASHMAP_IS_EMPTY` (`0xFE`) request is implemented on both sides; the block-size rename in the MDU formulas changes no value |
 | 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Integrated | `ResourceAdvertisement::app_flag_set`; the flag reaches the AcceptApp decision through `ResourceAcceptQuery` and `Callbacks::on_resource_accept_query_with_app_flag` |
-| 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Needs port | |
+| 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Structurally covered | rns-rs grinds stamps and stamped link keys natively on every target (rayon pool and per-core threads in `rns-net::stamps`), with no Python `multiprocessing` runner to select |
 | 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Needs port | |
 | 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Needs port | |
 | 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Needs port | |
@@ -864,6 +864,24 @@ to `on_resource_accept_query`.
 from the advertisement getter to the accept query).
 
 **Final disposition:** Integrated.
+
+### 18. `81b6ba36` — Enabled new stamp job runner on Android
+
+**Upstream change** (`RNS/Stamps.py`): `job_android` now dispatches to
+`job_android_persistent` (forked worker processes sharing an `mmap` stop flag
+and a manager dict) when `ANDROID_USE_PERSISTENT` is set, which it is, and
+keeps the previous runner as `job_android_legacy`. Both runners use PyNaCl's
+SHA-256 only when `ANDROID_PREFER_NACL` is set (also on). The persistent
+runner's progress message names the stamp cost.
+
+**Rust applicability:** Structurally covered. The Android runners choose how
+Python spreads the grind across processes on that platform; the stamp,
+workblock, target and validity are unchanged. rns-rs has no per-platform
+runner: `rns_net::stamps::generate_stamp_until` grinds on the rayon pool and
+`generate_stamped_link_keys` on one scoped thread per available core, on every
+target including Android, with the same `rns_crypto` hash.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
