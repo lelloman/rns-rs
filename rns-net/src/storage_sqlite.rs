@@ -458,7 +458,9 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
 
     // Version 2 adds the announced link request cost. The migration is a
     // single idempotent step; on migrated databases the column trails
-    // identity_hash, so writes name their target columns.
+    // identity_hash, so writes name their target columns. Upstream calls its
+    // migrations pre-release and plans to fold them into the final 1.6.0
+    // schema; recheck these steps against that schema when it lands.
     if db_version > 0 && db_version < 2 {
         conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost REAL", [])
             .map_err(sql_error)?;
