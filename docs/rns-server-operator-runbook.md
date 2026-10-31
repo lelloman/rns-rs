@@ -215,6 +215,12 @@ logged until the newer binary is reinstalled. The node keeps running. Expect
 this when rolling back across that boundary, or restore the pre-upgrade
 `storage/` copy together with the old binary.
 
+Builds that include the upstream `fe2fe94d` port then rebuild the table once
+to drop `NOT NULL` from `packet_hash` and record `user_version` 3. Rolling
+back from there to a version 2 build is safe: that build names its insert
+columns, writes the version back to 2, and the next upgrade rebuilds the
+table again without losing rows.
+
 After deploying, run the manual backbone smoke test below.
 
 ### Backbone Fast-Flap Protection

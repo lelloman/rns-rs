@@ -98,7 +98,7 @@ Every commit in the audited range must appear exactly once.
 | 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Structurally covered | `cull_path_table` removes the selected entries by destination hash and next hop; `unused_pool_cull_removes_the_selected_destinations` pins that the pool shrinks to its target |
 | 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Integrated | New `known_destinations` tables declare `packet_hash` nullable; rows without a packet hash load (`sqlite_new_schema_allows_a_missing_packet_hash`); rns-rs still writes 32 zero bytes |
 | 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Non-runtime | Comment marking the `known_destinations` migrations as pre-release, to be folded into the final 1.6.0 schema; recorded at the native migration in `create_schema` |
-| 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Needs port | |
+| 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Integrated | Schema version 3: versions 1 and 2 are migrated by a table rebuild in one immediate transaction, since upstream's `ALTER COLUMN ... DROP NOT NULL` is not SQLite syntax (Python at `fe2fe94d` exits on every earlier database); the version is never lowered. Divergence: rns-rs completes the migration Python cannot |
 
 ## Per-Commit Analysis
 
@@ -947,6 +947,47 @@ befor 1.6.0 release". No executable line changes.
 rechecked when upstream finalizes the schema.
 
 **Final disposition:** Non-runtime.
+
+### 23. `fe2fe94d` — Pre-release migrations
+
+**Upstream change** (`RNS/Storage.py`): after the version 2 step, databases
+below version 3 run `ALTER TABLE known_destinations ALTER COLUMN packet_hash
+DROP NOT NULL`, and the version becomes 3. Any failure in the migrations is
+now logged at `LOG_CRITICAL` with instructions to delete the
+`known_destinations.db*` files, followed by `RNS.panic()`.
+
+SQLite has no `ALTER COLUMN` (the statement is a syntax error on SQLite
+3.45.1), so the step fails on every existing version 1 or 2 database:
+Python at `fe2fe94d` exited with status 255 opening a version 2 database
+built like Python's own. Only new databases (version 0) reach version 3.
+Upstream marks these migrations as pre-release, to be folded into the final
+1.6.0 schema (commit 22), so this is not reported, consistent with this
+audit's other unreported upstream defects.
+
+**Rust applicability:** Needs port, with a deliberate divergence. Following
+the statement as written would make rns-rs fail on every existing database,
+and staying at version 2 would make a shared file trip Python's failing step.
+The native port implements the intended end state.
+
+**Implementation:** `create_schema` runs in a `BEGIN IMMEDIATE` transaction.
+Below version 3 it rebuilds `known_destinations` (create
+`known_destinations_v3` with the nullable column, copy the named columns,
+drop the old table, rename), which also restores Python's column order after
+the version 2 `ADD COLUMN`. It writes `user_version` 3 only when the stored
+version is lower, so a newer release's version is kept. The operator runbook
+records the rollback behavior.
+
+**Evidence:** `sqlite_migrates_v2_schema_by_rebuilding_without_not_null`
+(rows, column order and the 32-byte packet hash preserved, constraint
+dropped, reopen is a no-op), `sqlite_keeps_a_newer_schema_version`, and
+`sqlite_migrates_v1_schema_and_adds_lr_cost` (now ends at version 3). Against
+Python at `fe2fe94d` (`RNS.Storage.KnownDestinationsStore` from the
+disposable worktree): a version 2 database exits with status 255; the same
+database after the rns-rs migration opens at version 3 and loads its row; a
+new rns-rs database opens at version 3.
+
+**Final disposition:** Integrated (divergence: completes the migration
+upstream's statement cannot run).
 
 ## Integration Plan
 

@@ -427,13 +427,16 @@ impl RatchetStore for KnownDestinationsStore {
     }
 }
 
-fn create_schema(conn: &Connection) -> io::Result<()> {
-    let db_version: i64 = conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap_or(0);
+/// Schema version shared with Python's `known_destinations.db`.
+const SCHEMA_VERSION: i64 = 3;
 
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS known_destinations (
+/// Columns of `known_destinations`, in Python's order.
+const KNOWN_DESTINATION_COLUMNS: &str = "destination_hash, last_heard, packet_hash, public_key, \
+     app_data, used, stamp, stamp_value, lr_cost, identity_hash";
+
+fn known_destinations_table(name: &str) -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {name} (
             destination_hash BLOB PRIMARY KEY,
             last_heard       REAL NOT NULL,
             packet_hash      BLOB,
@@ -443,8 +446,32 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
             stamp            BLOB,
             stamp_value      REAL,
             lr_cost          REAL,
-            identity_hash    BLOB NOT NULL);
-         CREATE TABLE IF NOT EXISTS ratchets (
+            identity_hash    BLOB NOT NULL);"
+    )
+}
+
+fn create_schema(conn: &Connection) -> io::Result<()> {
+    // One immediate transaction: the version read, the migration and the
+    // version write are atomic against another process opening the file.
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(sql_error)?;
+    match migrate_schema(conn) {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(sql_error),
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+fn migrate_schema(conn: &Connection) -> io::Result<()> {
+    let db_version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    conn.execute_batch(&known_destinations_table("known_destinations"))
+        .map_err(sql_error)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS ratchets (
             destination_hash BLOB PRIMARY KEY,
             ratchet          BLOB NOT NULL,
             received         REAL NOT NULL);
@@ -456,9 +483,7 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
     )
     .map_err(sql_error)?;
 
-    // Version 2 adds the announced link request cost. The migration is a
-    // single idempotent step; on migrated databases the column trails
-    // identity_hash, so writes name their target columns. Upstream calls its
+    // Version 2 adds the announced link request cost. Upstream calls its
     // migrations pre-release and plans to fold them into the final 1.6.0
     // schema; recheck these steps against that schema when it lands.
     if db_version > 0 && db_version < 2 {
@@ -466,8 +491,29 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
             .map_err(sql_error)?;
     }
 
-    conn.execute_batch("PRAGMA user_version = 2;")
-        .map_err(sql_error)
+    // Version 3 drops NOT NULL from packet_hash. Upstream issues
+    // `ALTER TABLE ... ALTER COLUMN ... DROP NOT NULL`, which SQLite does not
+    // support, so Python at fe2fe94d logs the failure and exits on every
+    // earlier database. SQLite's documented procedure is a table rebuild,
+    // which also restores Python's column order after the version 2 step.
+    if db_version > 0 && db_version < 3 {
+        conn.execute_batch(&format!(
+            "{}
+             INSERT INTO known_destinations_v3 ({KNOWN_DESTINATION_COLUMNS})
+               SELECT {KNOWN_DESTINATION_COLUMNS} FROM known_destinations;
+             DROP TABLE known_destinations;
+             ALTER TABLE known_destinations_v3 RENAME TO known_destinations;",
+            known_destinations_table("known_destinations_v3")
+        ))
+        .map_err(sql_error)?;
+    }
+
+    // Never lower a version written by a newer release.
+    if db_version < SCHEMA_VERSION {
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+            .map_err(sql_error)?;
+    }
+    Ok(())
 }
 
 fn upsert_destination(
@@ -704,6 +750,126 @@ mod tests {
         assert_eq!(loaded[0].1.public_key, [0x66; 64]);
     }
 
+    fn user_version(path: &Path) -> i64 {
+        Connection::open(path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn column_names(path: &Path) -> Vec<String> {
+        let conn = Connection::open(path).unwrap();
+        let mut statement = conn
+            .prepare("SELECT name FROM pragma_table_info('known_destinations') ORDER BY cid")
+            .unwrap();
+        let names = statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        names
+    }
+
+    #[test]
+    fn sqlite_migrates_v2_schema_by_rebuilding_without_not_null() {
+        // Upstream fe2fe94d moves to version 3 with a statement SQLite cannot
+        // run; the rebuild keeps every row and drops the constraint.
+        let dir = temp_dir();
+        let path = default_path(&dir);
+        {
+            // A version 1 table migrated to version 2 by ADD COLUMN, as
+            // Python leaves it: lr_cost trails identity_hash.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE known_destinations (
+                    destination_hash BLOB PRIMARY KEY,
+                    last_heard       REAL NOT NULL,
+                    packet_hash      BLOB NOT NULL,
+                    public_key       BLOB NOT NULL,
+                    app_data         BLOB,
+                    used             REAL NOT NULL DEFAULT 0,
+                    stamp            BLOB,
+                    stamp_value      REAL,
+                    identity_hash    BLOB NOT NULL);
+                 ALTER TABLE known_destinations ADD COLUMN lr_cost REAL;
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO known_destinations
+                   (destination_hash, last_heard, packet_hash, public_key, app_data,
+                    used, stamp, stamp_value, lr_cost, identity_hash)
+                 VALUES (?1,?2,?3,?4,?5,0,NULL,12.5,19.19921875,?6)",
+                params![
+                    [0x88u8; 16].to_vec(),
+                    1_700.0f64,
+                    [0x88u8; 32].to_vec(),
+                    [0x88u8; 64].to_vec(),
+                    Some(b"app".to_vec()),
+                    [0x88u8; 16].to_vec(),
+                ],
+            )
+            .unwrap();
+        }
+        assert!(packet_hash_not_null(&path));
+
+        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        assert_eq!(user_version(&path), 3);
+        assert!(!packet_hash_not_null(&path));
+        assert_eq!(
+            column_names(&path),
+            [
+                "destination_hash",
+                "last_heard",
+                "packet_hash",
+                "public_key",
+                "app_data",
+                "used",
+                "stamp",
+                "stamp_value",
+                "lr_cost",
+                "identity_hash"
+            ]
+        );
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded.len(), 1);
+        let entry = &loaded[0].1;
+        assert_eq!(loaded[0].0, [0x88; 16]);
+        assert_eq!(entry.public_key, [0x88; 64]);
+        assert_eq!(entry.app_data.as_deref(), Some(&b"app"[..]));
+        assert_eq!(entry.stamp_value.as_f64(), 12.5);
+        assert_eq!(
+            entry.lr_cost,
+            Some(rns_core::stamp::StampCost::from_fp(4915))
+        );
+        let packet_hash: Vec<u8> = Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT packet_hash FROM known_destinations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(packet_hash, [0x88; 32]);
+
+        // Reopening a version 3 database changes nothing.
+        drop(store);
+        KnownDestinationsStore::open(&path, 16).unwrap();
+        assert_eq!(user_version(&path), 3);
+    }
+
+    #[test]
+    fn sqlite_keeps_a_newer_schema_version() {
+        let dir = temp_dir();
+        let path = default_path(&dir);
+        KnownDestinationsStore::open(&path, 16).unwrap();
+        assert_eq!(user_version(&path), 3);
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version = 4;")
+            .unwrap();
+        KnownDestinationsStore::open(&path, 16).unwrap();
+        assert_eq!(user_version(&path), 4);
+    }
+
     #[test]
     fn sqlite_migrates_v1_schema_and_adds_lr_cost() {
         let dir = temp_dir();
@@ -756,7 +922,8 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
+        assert!(!packet_hash_not_null(&path));
 
         // An integer cost written before fractional link costs reads as whole
         // bits; one above STAMP_COST_CAP is dropped.
