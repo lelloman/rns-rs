@@ -2265,6 +2265,43 @@ fn test_resource_accept_app_query() {
 }
 
 #[test]
+fn resource_accept_query_reports_the_app_flag() {
+    for app_flag in [false, true] {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+        let options = ResourceSendOptions {
+            auto_compress: false,
+            app_flag,
+        };
+        let adv_actions =
+            init_mgr.send_resource_with_options(&link_id, &[0xCD; 100], None, options, &mut rng);
+        assert_eq!(
+            first_resource_advertisement(&init_mgr, &link_id, &adv_actions).app_flag_set(),
+            app_flag
+        );
+        let mut queried = None;
+        for action in &adv_actions {
+            if let LinkManagerAction::SendPacket { raw, .. } = action {
+                let pkt = RawPacket::unpack(raw).unwrap();
+                for a in resp_mgr.handle_local_delivery(
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
+                ) {
+                    if let LinkManagerAction::ResourceAcceptQuery { app_flag, .. } = a {
+                        queried = Some(app_flag);
+                    }
+                }
+            }
+        }
+        assert_eq!(queried, Some(app_flag));
+    }
+}
+
+#[test]
 fn test_resource_accept_app_accept() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;

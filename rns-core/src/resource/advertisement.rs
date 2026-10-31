@@ -177,6 +177,11 @@ impl ResourceAdvertisement {
         self.request_id.is_some() && self.flags.is_response
     }
 
+    /// Whether the sender set the application flag (Python `app_flag_set`).
+    pub fn app_flag_set(&self) -> bool {
+        self.flags.app_flag
+    }
+
     /// Get the number of hashmap segments needed.
     pub fn hashmap_segments(&self) -> usize {
         let total_hashes = self.num_parts as usize;

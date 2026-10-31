@@ -92,7 +92,7 @@ Every commit in the audited range must appear exactly once.
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | `4c97527`; trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | `2bf64fa`; spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
 | 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Integrated | Advertisement flag bit 6 (`AdvFlags::app_flag`) on every segment, delivered with the data (`DataReceived`, `ResourceReceived`, `ReceivedResourceFile`, `Callbacks::on_resource_received_with_app_flag`) and sent through `ResourceSendOptions`; advertisements over the link MDU are packed without their hashmap and the `HASHMAP_IS_EMPTY` (`0xFE`) request is implemented on both sides; the block-size rename in the MDU formulas changes no value |
-| 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Needs port | |
+| 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Integrated | `ResourceAdvertisement::app_flag_set`; the flag reaches the AcceptApp decision through `ResourceAcceptQuery` and `Callbacks::on_resource_accept_query_with_app_flag` |
 | 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Needs port | |
 | 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Needs port | |
 | 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Needs port | |
@@ -840,6 +840,28 @@ Resource arrives flagged; Python at the baseline sends the bit clear and has
 no attribute for it. The deferred hashmap has no live Python case: a Python
 advertisement fits the default link MDU (431 bytes) and only links with a
 smaller negotiated MTU defer it.
+
+**Final disposition:** Integrated.
+
+### 17. `9152bc13` — Added app_flag getter
+
+**Upstream change** (`RNS/Resource.py`): `ResourceAdvertisement.app_flag_set()`
+returns bit 6 of the advertisement flags. Under `ACCEPT_APP`, `Link.py` passes
+the unpacked `ResourceAdvertisement` to the application's resource callback,
+so the getter lets an application decide acceptance by the flag.
+
+**Rust applicability:** Needs port. rns-rs asks the application through
+`Callbacks::on_resource_accept_query`, which carried the hash, the transfer
+size and the metadata flag but not the application flag.
+
+**Implementation:** `ResourceAdvertisement::app_flag_set`;
+`LinkManagerAction::ResourceAcceptQuery` carries `app_flag` from the
+receiver's advertised flags, and the driver calls the new
+`Callbacks::on_resource_accept_query_with_app_flag`, whose default forwards
+to `on_resource_accept_query`.
+
+**Evidence:** `resource_accept_query_reports_the_app_flag` (both flag values,
+from the advertisement getter to the accept query).
 
 **Final disposition:** Integrated.
 

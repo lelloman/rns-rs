@@ -333,6 +333,7 @@ impl LinkManager {
         let resource_hash = receiver.resource_hash.clone();
         let transfer_size = receiver.transfer_size;
         let has_metadata = receiver.has_metadata;
+        let app_flag = receiver.flags.app_flag;
         let is_request = receiver.flags.is_request;
         let is_response = receiver.flags.is_response;
         let is_split = receiver.flags.split;
@@ -553,6 +554,7 @@ impl LinkManager {
                     resource_hash,
                     transfer_size,
                     has_metadata,
+                    app_flag,
                 }]
             }
         }

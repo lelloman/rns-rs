@@ -213,6 +213,8 @@ pub enum LinkManagerAction {
         resource_hash: Vec<u8>,
         transfer_size: u64,
         has_metadata: bool,
+        /// The application flag set in the advertisement.
+        app_flag: bool,
     },
     /// Channel message received on a link.
     ChannelMessageReceived {
