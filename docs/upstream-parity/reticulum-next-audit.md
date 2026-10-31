@@ -3,24 +3,26 @@
 ## Scope and Baseline
 
 - audit date: `2026-10-29` (commit 5 integrated `2026-10-30`; extended to
-  commit 15 on `2026-10-30`)
+  commit 15 on `2026-10-30` and to commit 23 on `2026-10-31`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`
-  (extended on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
+- target tag or ref: `rgit:master` tip `fe2fe94dd82030275bec150af87b4ec6292511c6`
+  (extended on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
+  on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` (provisional; rgit may advance before promotion)
-- target root tree: `53c78882e8623cb930a27f44f7f73454da81e846`
-- target `RNS` tree: `62151b00a54326194fd91d94157bfe37bf0dfbfb`
+- target normative commit: `fe2fe94dd82030275bec150af87b4ec6292511c6` (provisional; rgit may advance before promotion)
+- target root tree: `a236442f8591bc582d7cc958d8cb307af9f11b86`
+- target `RNS` tree: `d60e3a206f47019ff541f93d1e47f5c036c8fa0e`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`
-- commits in range: `15` (2 inventoried at the first tip, 3 added when rgit
-  advanced the same day, 10 added on 2026-10-30)
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..fe2fe94dd82030275bec150af87b4ec6292511c6`
+- commits in range: `23` (2 inventoried at the first tip, 3 added when rgit
+  advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
-  integrated on `dev` from `7911858`
+  integrated on `dev` from `7911858`; commits 16 to 23 on `dev` from
+  `b857fed`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -39,6 +41,18 @@ GitHub mirror is still at `e40191b3`, behind the baseline. The new range
 announces the 1.6.0 release in the changelog, still without a version bump or
 tag, and changes the announce wire format: the link request cost in the stamp
 extension grows from one byte to two to carry a fraction (commit 9).
+
+The rgit refresh failed on the morning of 2026-10-31 (the rgit service did
+not answer link requests) and succeeded at 2026-10-31T15:07Z, finding
+`fe2fe94d` (committed 2026-10-31T12:46Z), eight commits past `5b2b8afb`,
+inventoried as 16 to 23. The GitHub mirror is still at `e40191b3`.
+`RNS.__version__` is still `1.6.0`. The range adds an application flag and a
+deferred initial hashmap to resource advertisements (commit 16), fixes the
+unused path pool cull (commit 20) and makes the known destinations
+`packet_hash` column nullable with a schema version 3 migration (commits 21
+and 23). A new rgit branch, `patch_fix_channel_outlet_race`, holds one commit
+(`794e437f`, 2026-05-19) that is already an ancestor of the accepted
+baseline, so it adds nothing to the range.
 
 ## Audit Vocabulary
 
@@ -77,6 +91,14 @@ Every commit in the audited range must appear exactly once.
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `d9207a4`; `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | `4c97527`; trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | `2bf64fa`; spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
+| 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Needs port | |
+| 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Needs port | |
+| 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Needs port | |
+| 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Needs port | |
+| 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Needs port | |
+| 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Needs port | |
+| 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Needs port | |
+| 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Needs port | |
 
 ## Per-Commit Analysis
 
@@ -754,11 +776,12 @@ behavior from the earlier, already audited range.
 
 ## Integration Plan
 
-All fifteen commits have a final disposition. The `Link.py:311` precedence of
+Commits 1 to 15 have a final disposition; commits 16 to 23 are inventoried
+and are integrated one at a time in upstream order. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it. If upstream confirms that expression as written, the
+audit rechecks it (still present at `fe2fe94d`). If upstream confirms that expression as written, the
 `LinkManager` responder check must follow it.
 
 ## Promotion Gates
