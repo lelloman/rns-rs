@@ -91,14 +91,14 @@ Every commit in the audited range must appear exactly once.
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `d9207a4`; `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | `4c97527`; trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | `2bf64fa`; spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
-| 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Integrated | Advertisement flag bit 6 (`AdvFlags::app_flag`) on every segment, delivered with the data (`DataReceived`, `ResourceReceived`, `ReceivedResourceFile`, `Callbacks::on_resource_received_with_app_flag`) and sent through `ResourceSendOptions`; advertisements over the link MDU are packed without their hashmap and the `HASHMAP_IS_EMPTY` (`0xFE`) request is implemented on both sides; the block-size rename in the MDU formulas changes no value |
-| 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Integrated | `ResourceAdvertisement::app_flag_set`; the flag reaches the AcceptApp decision through `ResourceAcceptQuery` and `Callbacks::on_resource_accept_query_with_app_flag` |
-| 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Structurally covered | rns-rs grinds stamps and stamped link keys natively on every target (rayon pool and per-core threads in `rns-net::stamps`), with no Python `multiprocessing` runner to select |
-| 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Structurally covered | `StampCost` displays the cost as a float (`as_f64`), never its fixed-point integer; pinned by `stamp_cost_displays_the_cost_not_its_fixed_point` |
-| 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Structurally covered | `cull_path_table` removes the selected entries by destination hash and next hop; `unused_pool_cull_removes_the_selected_destinations` pins that the pool shrinks to its target |
-| 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Integrated | New `known_destinations` tables declare `packet_hash` nullable; rows without a packet hash load (`sqlite_new_schema_allows_a_missing_packet_hash`); rns-rs still writes 32 zero bytes |
-| 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Non-runtime | Comment marking the `known_destinations` migrations as pre-release, to be folded into the final 1.6.0 schema; recorded at the native migration in `create_schema` |
-| 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Integrated | Schema version 3: versions 1 and 2 are migrated by a table rebuild in one immediate transaction, since upstream's `ALTER COLUMN ... DROP NOT NULL` is not SQLite syntax (Python at `fe2fe94d` exits on every earlier database); the version is never lowered. Divergence: rns-rs completes the migration Python cannot |
+| 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Integrated | `9069f31`; Advertisement flag bit 6 (`AdvFlags::app_flag`) on every segment, delivered with the data (`DataReceived`, `ResourceReceived`, `ReceivedResourceFile`, `Callbacks::on_resource_received_with_app_flag`) and sent through `ResourceSendOptions`; advertisements over the link MDU are packed without their hashmap and the `HASHMAP_IS_EMPTY` (`0xFE`) request is implemented on both sides; the block-size rename in the MDU formulas changes no value |
+| 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Integrated | `1a8e36f`; `ResourceAdvertisement::app_flag_set`; the flag reaches the AcceptApp decision through `ResourceAcceptQuery` and `Callbacks::on_resource_accept_query_with_app_flag` |
+| 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Structurally covered | `716022f`; rns-rs grinds stamps and stamped link keys natively on every target (rayon pool and per-core threads in `rns-net::stamps`), with no Python `multiprocessing` runner to select |
+| 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Structurally covered | `0815176`; `StampCost` displays the cost as a float (`as_f64`), never its fixed-point integer; pinned by `stamp_cost_displays_the_cost_not_its_fixed_point` |
+| 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Structurally covered | `1ca1c95`; `cull_path_table` removes the selected entries by destination hash and next hop; `unused_pool_cull_removes_the_selected_destinations` pins that the pool shrinks to its target |
+| 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Integrated | `fbe0cd3`; New `known_destinations` tables declare `packet_hash` nullable; rows without a packet hash load (`sqlite_new_schema_allows_a_missing_packet_hash`); rns-rs still writes 32 zero bytes |
+| 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Non-runtime | `fafc5b4`; Comment marking the `known_destinations` migrations as pre-release, to be folded into the final 1.6.0 schema; recorded at the native migration in `create_schema` |
+| 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Integrated | `0edfd8a`; Schema version 3: versions 1 and 2 are migrated by a table rebuild in one immediate transaction, since upstream's `ALTER COLUMN ... DROP NOT NULL` is not SQLite syntax (Python at `fe2fe94d` exits on every earlier database); the version is never lowered. Divergence: rns-rs completes the migration Python cannot |
 
 ## Per-Commit Analysis
 
@@ -991,8 +991,7 @@ upstream's statement cannot run).
 
 ## Integration Plan
 
-Commits 1 to 15 have a final disposition; commits 16 to 23 are inventoried
-and are integrated one at a time in upstream order. The `Link.py:311` precedence of
+All twenty-three commits have a final disposition. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
@@ -1009,8 +1008,8 @@ audit rechecks it (still present at `fe2fe94d`). If upstream confirms that expre
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
 - [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
-  `5f46fc6b`, `a8cc6cb2`, `796ef2d4` and the current tip `5b2b8afb`; rerun if
-  rgit advances.
+  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb` and the current tip
+  `fe2fe94d`; rerun if rgit advances.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -1139,3 +1138,27 @@ commit.
 The first workspace run failed two e2e peer pool tests whose cached
 discovered peers announced `RNS 1.5.5`, below the new auto-connect minimum
 of 1.5.7; the commit 13 port updates them. The second run passed.
+
+### Commits 16 to 23 (rgit tip `fe2fe94d`)
+
+Run on 2026-10-31 at `0edfd8a` (on `018c7fa`), same host. Interop against
+`fe2fe94d` used a disposable worktree of that commit at
+`/tmp/rns-upstream-fe2fe94d`; the baseline `5d38ce30` was exercised from the
+configured checkout.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | per-commit tests named in the analyses; `cargo test -p rns-core`; `cargo test -p rns-net`; `cargo test -p rns-crypto` | All passed (rns-core lib 782, rns-net lib 1,237, e2e 66) |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,059 passed, 0 failed, 11 ignored |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,118 passed, 0 failed, 11 ignored |
+| Feature checks | `cargo check -p rns-cli -p rns-ctl --bins --no-default-features`, and with `--features iface-tcp,rns-hooks-native` | Clean |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4 (Python sends the app flag clear and has no attribute for it); 9/9 |
+| Interop, target `fe2fe94d` | the same against the `fe2fe94d` worktree | 4/4 (flagged Resources in both directions); 9/9 |
+| Storage against upstream | `RNS.Storage.KnownDestinationsStore` at `fe2fe94d` on a version 2 database, on that database after the rns-rs migration, and on a new rns-rs database | exit 255; version 3 with its row; version 3 |
+| Drift | `python3 scripts/check_upstream_drift.py --no-fetch` | rgit `fe2fe94d` ahead by the 23 audited commits; GitHub `e40191b3` behind |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
+018c7fa..0edfd8a` lists one trailer per commit, and each of the eight upstream
+hashes appears in exactly one local commit.
