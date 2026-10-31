@@ -772,4 +772,14 @@ mod tests {
         assert_eq!(format!("{}", StampValue::from_fp(8 * 256 + 128)), "8.5");
         assert_eq!(format!("{}", StampValue::from_whole(8)), "8");
     }
+
+    #[test]
+    fn stamp_cost_displays_the_cost_not_its_fixed_point() {
+        // Upstream 2ef855c8 logs `cost_from_fp(stamp_cost)`; the fixed-point
+        // integer (4915 for the 19.2 link request cost) is not a cost.
+        let cost = StampCost::from_fp(4915);
+        assert_eq!(format!("{cost}"), "19.19921875");
+        assert_eq!(format!("{}", StampCost::from_whole(8)), "8");
+        assert_eq!(format!("{}", StampCost::from_fp(8 * COST_FP + 128)), "8.5");
+    }
 }
