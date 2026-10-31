@@ -97,7 +97,7 @@ Every commit in the audited range must appear exactly once.
 | 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Structurally covered | `StampCost` displays the cost as a float (`as_f64`), never its fixed-point integer; pinned by `stamp_cost_displays_the_cost_not_its_fixed_point` |
 | 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Structurally covered | `cull_path_table` removes the selected entries by destination hash and next hop; `unused_pool_cull_removes_the_selected_destinations` pins that the pool shrinks to its target |
 | 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Integrated | New `known_destinations` tables declare `packet_hash` nullable; rows without a packet hash load (`sqlite_new_schema_allows_a_missing_packet_hash`); rns-rs still writes 32 zero bytes |
-| 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Needs port | |
+| 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Non-runtime | Comment marking the `known_destinations` migrations as pre-release, to be folded into the final 1.6.0 schema; recorded at the native migration in `create_schema` |
 | 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Needs port | |
 
 ## Per-Commit Analysis
@@ -935,6 +935,18 @@ no `NOT NULL` in a new database, and a Python-style row with a `NULL` packet
 hash loads).
 
 **Final disposition:** Integrated.
+
+### 22. `d45a5860` — Cleanup
+
+**Upstream change** (`RNS/Storage.py`): a comment above the version 2
+migration: "Pre-release migrations, will be folded into finalized schema
+befor 1.6.0 release". No executable line changes.
+
+**Rust applicability:** Non-runtime. The mapping records the same note at
+`create_schema`, since the native migrations mirror upstream's and must be
+rechecked when upstream finalizes the schema.
+
+**Final disposition:** Non-runtime.
 
 ## Integration Plan
 
