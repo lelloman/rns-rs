@@ -94,7 +94,7 @@ Every commit in the audited range must appear exactly once.
 | 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Integrated | Advertisement flag bit 6 (`AdvFlags::app_flag`) on every segment, delivered with the data (`DataReceived`, `ResourceReceived`, `ReceivedResourceFile`, `Callbacks::on_resource_received_with_app_flag`) and sent through `ResourceSendOptions`; advertisements over the link MDU are packed without their hashmap and the `HASHMAP_IS_EMPTY` (`0xFE`) request is implemented on both sides; the block-size rename in the MDU formulas changes no value |
 | 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Integrated | `ResourceAdvertisement::app_flag_set`; the flag reaches the AcceptApp decision through `ResourceAcceptQuery` and `Callbacks::on_resource_accept_query_with_app_flag` |
 | 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Structurally covered | rns-rs grinds stamps and stamped link keys natively on every target (rayon pool and per-core threads in `rns-net::stamps`), with no Python `multiprocessing` runner to select |
-| 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Needs port | |
+| 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Structurally covered | `StampCost` displays the cost as a float (`as_f64`), never its fixed-point integer; pinned by `stamp_cost_displays_the_cost_not_its_fixed_point` |
 | 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Needs port | |
 | 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Needs port | |
 | 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Needs port | |
@@ -882,6 +882,19 @@ runner: `rns_net::stamps::generate_stamp_until` grinds on the rayon pool and
 target including Android, with the same `rns_crypto` hash.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 19. `2ef855c8` — Fixed log formatting
+
+**Upstream change** (`RNS/Stamps.py`): the persistent Android runner's
+progress message added in commit 18 printed `stamp_cost`, the fixed-point
+integer; it now prints `cost_from_fp(stamp_cost)`.
+
+**Rust applicability:** Structurally covered. rns-rs carries costs as
+`StampCost`, whose `Display` formats `as_f64()`, so any logged cost is the
+fractional cost. The mapping adds `stamp_cost_displays_the_cost_not_its_fixed_point`
+to pin that.
+
+**Final disposition:** Structurally covered.
 
 ## Integration Plan
 
