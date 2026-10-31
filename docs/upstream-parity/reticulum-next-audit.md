@@ -95,7 +95,7 @@ Every commit in the audited range must appear exactly once.
 | 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Integrated | `ResourceAdvertisement::app_flag_set`; the flag reaches the AcceptApp decision through `ResourceAcceptQuery` and `Callbacks::on_resource_accept_query_with_app_flag` |
 | 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Structurally covered | rns-rs grinds stamps and stamped link keys natively on every target (rayon pool and per-core threads in `rns-net::stamps`), with no Python `multiprocessing` runner to select |
 | 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Structurally covered | `StampCost` displays the cost as a float (`as_f64`), never its fixed-point integer; pinned by `stamp_cost_displays_the_cost_not_its_fixed_point` |
-| 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Needs port | |
+| 20 | `1ee89ad8d681e2fa2d2d041f7360ca3a95876be5` | Fixed cull entry index | Structurally covered | `cull_path_table` removes the selected entries by destination hash and next hop; `unused_pool_cull_removes_the_selected_destinations` pins that the pool shrinks to its target |
 | 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Needs port | |
 | 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Needs port | |
 | 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Needs port | |
@@ -893,6 +893,24 @@ integer; it now prints `cost_from_fp(stamp_cost)`.
 `StampCost`, whose `Display` formats `as_f64()`, so any logged cost is the
 fractional cost. The mapping adds `stamp_cost_displays_the_cost_not_its_fixed_point`
 to pin that.
+
+**Final disposition:** Structurally covered.
+
+### 20. `1ee89ad8` — Fixed cull entry index
+
+**Upstream change** (`RNS/Transport.py`): the unused path pool entries are
+`(slow, path_expiry, destination_hash)` tuples. When the pool exceeded
+`PATH_POOL_UNUSED_TARGET`, the cull appended `cull_entry[1]`, the expiry
+timestamp, to `stale_paths`, so the removal loop never matched a destination
+and the pool was not reduced. It now appends `cull_entry[2]`.
+
+**Rust applicability:** Structurally covered. `cull_path_table` collects
+`(slow, expires, destination, next_hop)` and removes the selected paths by
+destination and next hop, so it never had the wrong-field removal; the
+ordering (fast before slow, earliest expiry first) is already pinned by
+`unused_pool_cull_removes_fast_interface_paths_before_slow_ones` and
+`unused_path_pool_order_is_by_expiry_not_insertion`. The mapping adds
+`unused_pool_cull_removes_the_selected_destinations`.
 
 **Final disposition:** Structurally covered.
 
