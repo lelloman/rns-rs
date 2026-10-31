@@ -502,6 +502,7 @@ system.
 - hashmap exhaustion flag values:
   - `0x00` = not exhausted
   - `0xff` = exhausted
+  - `0xfe` = empty (the advertisement carried no hashmap)
 - maximum efficient logical segment size: 1,048,575 bytes
 - initial/minimum receive window: 4/2 parts
 - slow/very-slow/fast maximum windows: 10/4/75 parts
@@ -593,7 +594,12 @@ bit 2  split
 bit 3  is_request
 bit 4  is_response
 bit 5  has_metadata
+bit 6  app_flag
 ```
+
+`app_flag` is an application-defined bit. The sender sets it on every segment
+of a Resource and the receiver reports it with the delivered data; it has no
+protocol meaning. Releases before the flag ignore the bit.
 
 The hashmap segment is the concatenation of consecutive 4-byte part map hashes.
 
@@ -602,6 +608,10 @@ The hashmap segment is the concatenation of consecutive 4-byte part map hashes.
 The sender advertises the first hashmap segment first. If the complete hashmap
 does not fit in a single advertisement, additional segments are supplied through
 HMU packets described below.
+
+If the packed advertisement would exceed the MDU of the link carrying it, the
+sender packs it again with an empty `m`. The receiver then holds no map hash
+and asks for the first hashmap segment before requesting any part (see 14.5).
 
 `original_hash` is the first segment hash for multi-segment resources. For a
 single-segment resource it equals `resource_hash`.
@@ -623,13 +633,18 @@ Rules:
 
 - if `hashmap_exhausted == 0x00`, `last_map_hash` is omitted
 - if `hashmap_exhausted == 0xff`, `last_map_hash` MUST be present
+- if `hashmap_exhausted == 0xfe`, `last_map_hash` is omitted and no part is
+  requested; the sender answers with the HMU for the segment at the
+  receiver's consecutive completion point, without the alignment check
 - `requested_map_hashes` is a concatenation of 4-byte map hashes for requested
   parts
 
 The receiver builds requests by scanning forward from the current consecutive
 completion point. If it reaches unknown hashmap entries, it sets
 `hashmap_exhausted = 0xff`, includes the last known map hash, and waits for an
-HMU before requesting more parts.
+HMU before requesting more parts. If it holds no map hash for part 0 (an
+advertisement with an empty hashmap), it sets `hashmap_exhausted = 0xfe` and
+waits for the HMU instead.
 
 ### 14.6 Resource Parts
 

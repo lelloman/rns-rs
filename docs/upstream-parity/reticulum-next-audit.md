@@ -91,7 +91,7 @@ Every commit in the audited range must appear exactly once.
 | 13 | `9b464382335bef878b282d19fea30d17bde8b847` | Added per-interface destination and PR cost configuration | Integrated | `d9207a4`; `InterfaceStampCosts` on `InterfaceInfo`, parsed from the interface options and inherited by spawned interfaces; announce and path request stamps validated at the receiving interface's cost; `DST_COST`/`PR_COST` in discovery announces, parsed, stored and exposed over RPC; auto-connect gated on them and on Reticulum 1.5.7 |
 | 14 | `1a6e26ac2bdfc73e1cbaa7495e6cec04d25d8563` | Cleanup (whitespace) | Non-runtime | `4c97527`; trailing whitespace on a blank line of `Reticulum.py`'s interface option parsing |
 | 15 | `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd` | Fixed missing interface parameter inheritances | Structurally covered | `2bf64fa`; spawned interfaces inherit through `DynamicInterfaceTemplate` and the driver's parent-to-child copy, which already cover every parameter the commit adds that rns-rs configures per interface |
-| 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Needs port | |
+| 16 | `c147201470f04c3240540d904b7190ac49f5e072` | Added app_flag signalling to resource advertisements | Integrated | Advertisement flag bit 6 (`AdvFlags::app_flag`) on every segment, delivered with the data (`DataReceived`, `ResourceReceived`, `ReceivedResourceFile`, `Callbacks::on_resource_received_with_app_flag`) and sent through `ResourceSendOptions`; advertisements over the link MDU are packed without their hashmap and the `HASHMAP_IS_EMPTY` (`0xFE`) request is implemented on both sides; the block-size rename in the MDU formulas changes no value |
 | 17 | `9152bc1319de9eda8d675144bca38effa2e2911b` | Added app_flag getter | Needs port | |
 | 18 | `81b6ba364cd5d5e0c6befd0770781ab1e45b9b85` | Enabled new stamp job runner on Android | Needs port | |
 | 19 | `2ef855c892947fa7a4b5ecc2797c0d0281a6ce52` | Fixed log formatting | Needs port | |
@@ -773,6 +773,75 @@ delay has no counterpart. The changelog's path retainment entry describes
 behavior from the earlier, already audited range.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 16. `c1472014` — Added app_flag signalling to resource advertisements
+
+**Upstream change** (`Examples/Resource.py`, `RNS/Link.py`, `RNS/Packet.py`,
+`RNS/Resource.py`; no dependency on earlier unintegrated commits):
+
+- `Resource(..., app_flag=False)` stores an application flag, packs it as bit 6
+  of the advertisement flags (`self.a << 6`), passes it to every following
+  segment, and sets `resource.app_flag` from the received advertisement. The
+  example sets and logs it.
+- `ResourceAdvertisement(..., mdu=None)` defaults to `Link.MDU`; the sender
+  passes `self.link.mdu` for the first advertisement and its retries. When the
+  packed advertisement exceeds that MDU, it is packed again with `m = b""`.
+- A new request flag `HASHMAP_IS_EMPTY = 0xFE`. The receiver's adv-time
+  hashmap update no longer cancels on zero hashes for segment 0, and
+  `request_next` sends `0xFE` with no last map hash and no part hashes while
+  `hashmap[0]` is unknown, then waits for an HMU. The sender treats `0xFE` as
+  a hashmap request without the 4-byte last map hash, skips the search
+  (`search_start = search_end = 0`, so `part_index` stays at the receiver's
+  minimum consecutive height) and the alignment check, and sends that segment.
+- `Link.MDU`, `link.update_mdu` and `Packet.ENCRYPTED_MDU` use
+  `AES256_BLOCKSIZE` instead of `AES128_BLOCKSIZE`. Both are 16, so no value
+  changes.
+
+**Rust applicability:** Needs port. rns-rs ignored bit 6, and its receiver
+answered an advertisement without a hashmap with `0xFF` and a zero last map
+hash, which the upstream sender cannot match: a Python sender on a link with
+an MDU below the advertisement size could not complete a transfer to rns-rs.
+rns-rs senders also never deferred the hashmap, so on such a link their
+advertisement exceeded the MDU.
+
+**Implementation:**
+
+- rns-core: `AdvFlags::app_flag` (bit 6), `RESOURCE_HASHMAP_IS_EMPTY`,
+  `ResourceAdvertisement::pack_for_mdu`, `ResourceSender::advertisement_mdu`
+  (default `LINK_MDU`) used by every advertisement, the `0xFE` request in
+  `ResourceReceiver::request_next` and its handling in
+  `ResourceSender::handle_request`/`build_hmu`, and `app_flag` on
+  `ResourceAction::DataReceived` (carried through `AssemblyData`, so the
+  assembly worker keeps it).
+- rns-net: every sender, including stream segments, takes the flag and the
+  link's current MDU (`configure_sender`). The flag reaches
+  `LinkManagerAction::ResourceReceived`, disk-backed `ReceivedResourceFile`
+  and split Resources (the last segment's flag, as Python reports the
+  concluding segment's). New additive API: `ResourceSendOptions`,
+  `NodeHandle::send_resource_with_options` and
+  `send_resource_reader_with_options`, `LinkManager::send_resource_with_options`
+  and `send_resource_stream_with_options`, and
+  `Callbacks::on_resource_received_with_app_flag`, whose default forwards to
+  `on_resource_received`, so existing callbacks are unchanged. Request and
+  response Resources send the flag clear, as upstream.
+- `docs/protocol-spec.md` documents bit 6, the deferred hashmap and `0xFE`.
+- Not exposed: the rns-ctl HTTP/WebSocket resource events and send endpoint
+  keep their fields; they can add the flag when a client needs it.
+
+**Evidence:** `advertisement_too_large_for_link_mdu_defers_the_initial_hashmap`
+(fails on the old receiver: the first request is `0xFF`),
+`advertisement_within_link_mdu_keeps_its_hashmap`,
+`app_flag_reaches_the_receiver`, `test_adv_flags_app_flag_is_bit_6`,
+`resource_app_flag_is_advertised_and_delivered`,
+`split_resource_segments_all_carry_the_app_flag`, and
+`python_rns_bidirectional_tcp_interop`, which now sends a flagged Resource
+each way: Python at `fe2fe94d` receives `app_flag = True` and its flagged
+Resource arrives flagged; Python at the baseline sends the bit clear and has
+no attribute for it. The deferred hashmap has no live Python case: a Python
+advertisement fits the default link MDU (431 bytes) and only links with a
+smaller negotiated MTU defer it.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 

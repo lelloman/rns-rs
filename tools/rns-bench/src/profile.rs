@@ -255,6 +255,7 @@ pub(crate) fn cycle_observed(
             ResourceAction::DataReceived {
                 data: got,
                 metadata: meta,
+                ..
             } => {
                 let t = Instant::now();
                 ensure!(

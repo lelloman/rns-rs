@@ -46,6 +46,19 @@ pub trait Callbacks: Send {
     ) {
     }
 
+    /// Called when a resource transfer delivers data, with the application
+    /// flag the sender set in the advertisement. The default ignores the flag
+    /// and forwards to [`Callbacks::on_resource_received`].
+    fn on_resource_received_with_app_flag(
+        &mut self,
+        link_id: LinkId,
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+        _app_flag: bool,
+    ) {
+        self.on_resource_received(link_id, data, metadata);
+    }
+
     /// Called when a resource transfer completes (sender-side proof validated).
     fn on_resource_completed(&mut self, _link_id: LinkId) {}
 

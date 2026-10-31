@@ -62,6 +62,7 @@ pub(super) struct AssemblyData {
     pub resource_hash: [u8; 32],
     pub compressed: bool,
     pub metadata: bool,
+    pub app_flag: bool,
     pub limit: usize,
 }
 impl AssemblyData {
@@ -94,7 +95,11 @@ impl AssemblyData {
         };
         Ok(vec![
             ResourceAction::SendProof(proof),
-            ResourceAction::DataReceived { data, metadata },
+            ResourceAction::DataReceived {
+                data,
+                metadata,
+                app_flag: self.app_flag,
+            },
             ResourceAction::Completed,
         ])
     }

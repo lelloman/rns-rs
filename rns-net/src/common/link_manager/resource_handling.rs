@@ -9,6 +9,7 @@ pub(super) struct ResourceSendParams<'a> {
     pub(super) data: &'a [u8],
     pub(super) metadata: Option<&'a [u8]>,
     pub(super) auto_compress: bool,
+    pub(super) app_flag: bool,
     pub(super) compressor: &'a dyn rns_core::buffer::types::Compressor,
     pub(super) is_response: bool,
     pub(super) request_id: Option<Vec<u8>>,
@@ -22,6 +23,14 @@ impl LinkManager {
             + constants::RESOURCE_RESPONSE_MAX_GRACE_TIME * 1.125
     }
 
+    /// Apply the per-transfer advertisement settings shared by every segment:
+    /// the application flag, and the link MDU an advertisement must fit
+    /// before its hashmap is deferred.
+    fn configure_sender(link: &ManagedLink, sender: &mut ResourceSender, app_flag: bool) {
+        sender.flags.app_flag = app_flag;
+        sender.advertisement_mdu = link.engine.mdu();
+    }
+
     pub(super) fn build_resource_senders(
         link: &ManagedLink,
         params: ResourceSendParams<'_>,
@@ -30,6 +39,7 @@ impl LinkManager {
             data,
             metadata,
             auto_compress,
+            app_flag,
             compressor,
             is_response,
             request_id,
@@ -65,7 +75,10 @@ impl LinkManager {
                 link_rtt,
                 6.0,
             )
-            .map(|sender| vec![sender]);
+            .map(|mut sender| {
+                Self::configure_sender(link, &mut sender, app_flag);
+                vec![sender]
+            });
         }
 
         if metadata_overhead > constants::RESOURCE_MAX_EFFICIENT_SIZE {
@@ -105,6 +118,7 @@ impl LinkManager {
             6.0,
         )?;
         first.data_size = logical_size;
+        Self::configure_sender(link, &mut first, app_flag);
         let original_hash = first.original_hash;
         let has_metadata = metadata.is_some();
         senders.push(first);
@@ -132,6 +146,7 @@ impl LinkManager {
             )?;
             sender.data_size = logical_size;
             sender.flags.has_metadata = has_metadata;
+            Self::configure_sender(link, &mut sender, app_flag);
             senders.push(sender);
             segment_index += 1;
             offset = end;
@@ -214,6 +229,7 @@ impl LinkManager {
         .map_err(|error| ResourceTransferError::Protocol(error.to_string()))?;
         sender.data_size = (stream.declared_length + stream.metadata_overhead) as usize;
         sender.flags.has_metadata = stream.metadata_overhead != 0;
+        Self::configure_sender(link, &mut sender, stream.app_flag);
         Ok(sender)
     }
 
@@ -888,11 +904,19 @@ impl LinkManager {
                 let mut converted_actions = Vec::new();
                 let mut segment_data = None;
                 let mut segment_metadata = None;
+                let mut segment_app_flag = false;
                 for action in assemble_actions {
                     match action {
-                        ResourceAction::DataReceived { data, metadata } => {
+                        ResourceAction::DataReceived {
+                            data,
+                            metadata,
+                            app_flag,
+                        } => {
                             segment_data = Some(data);
                             segment_metadata = metadata;
+                            // Every segment carries the flag; the last one
+                            // completes the Resource, as in Python.
+                            segment_app_flag = app_flag;
                         }
                         ResourceAction::Completed => {}
                         other => converted_actions.push(other),
@@ -931,6 +955,7 @@ impl LinkManager {
                                     converted_actions.push(ResourceAction::DataReceived {
                                         data,
                                         metadata: split.metadata,
+                                        app_flag: segment_app_flag,
                                     });
                                 }
                                 IncomingSplitStorage::File { file, path, size } => {
@@ -941,6 +966,7 @@ impl LinkManager {
                                                 key,
                                                 size,
                                                 split.metadata,
+                                                segment_app_flag,
                                             ));
                                         }
                                         Err(error) => storage_failure = Some(error.to_string()),
@@ -974,7 +1000,11 @@ impl LinkManager {
                 let mut converted_actions = Vec::new();
                 for action in assemble_actions {
                     match action {
-                        ResourceAction::DataReceived { data, metadata } => {
+                        ResourceAction::DataReceived {
+                            data,
+                            metadata,
+                            app_flag,
+                        } => {
                             match crate::resource::create_receive_file(
                                 &directory,
                                 &resource_original_hash,
@@ -987,6 +1017,7 @@ impl LinkManager {
                                     resource_original_hash,
                                     data.len() as u64,
                                     metadata,
+                                    app_flag,
                                 ))
                             }) {
                                 Ok(resource) => completed_file = Some(resource),
@@ -1512,11 +1543,16 @@ impl LinkManager {
                         ));
                     }
                 }
-                ResourceAction::DataReceived { data, metadata } => {
+                ResourceAction::DataReceived {
+                    data,
+                    metadata,
+                    app_flag,
+                } => {
                     result.push(LinkManagerAction::ResourceReceived {
                         link_id: *link_id,
                         data,
                         metadata,
+                        app_flag,
                     });
                 }
                 ResourceAction::Completed => {
@@ -1597,14 +1633,28 @@ impl LinkManager {
         auto_compress: bool,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        self.send_resource_with_compressor(
+        self.send_resource_with_options(
             link_id,
             data,
             metadata,
-            auto_compress,
-            &Bzip2Compressor,
+            ResourceSendOptions {
+                auto_compress,
+                ..ResourceSendOptions::default()
+            },
             rng,
         )
+    }
+
+    /// Start sending a resource on a link with explicit send options.
+    pub fn send_resource_with_options(
+        &mut self,
+        link_id: &LinkId,
+        data: &[u8],
+        metadata: Option<&[u8]>,
+        options: ResourceSendOptions,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        self.send_resource_with_compressor(link_id, data, metadata, options, &Bzip2Compressor, rng)
     }
 
     pub(crate) fn send_resource_with_compressor(
@@ -1612,7 +1662,7 @@ impl LinkManager {
         link_id: &LinkId,
         data: &[u8],
         metadata: Option<&[u8]>,
-        auto_compress: bool,
+        options: ResourceSendOptions,
         compressor: &dyn rns_core::buffer::types::Compressor,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
@@ -1632,7 +1682,8 @@ impl LinkManager {
             ResourceSendParams {
                 data,
                 metadata,
-                auto_compress,
+                auto_compress: options.auto_compress,
+                app_flag: options.app_flag,
                 compressor,
                 is_response: false,
                 request_id: None,
@@ -1667,6 +1718,33 @@ impl LinkManager {
         declared_length: u64,
         metadata: Option<Vec<u8>>,
         auto_compress: bool,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        self.send_resource_stream_with_options(
+            link_id,
+            transfer_id,
+            reader,
+            declared_length,
+            metadata,
+            ResourceSendOptions {
+                auto_compress,
+                ..ResourceSendOptions::default()
+            },
+            rng,
+        )
+    }
+
+    /// Start a bounded-memory Resource transfer from a sequential reader with
+    /// explicit send options.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_resource_stream_with_options(
+        &mut self,
+        link_id: &LinkId,
+        transfer_id: ResourceTransferId,
+        reader: Box<dyn Read + Send>,
+        declared_length: u64,
+        metadata: Option<Vec<u8>>,
+        options: ResourceSendOptions,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         let Some(link) = self.links.get_mut(link_id) else {
@@ -1716,7 +1794,8 @@ impl LinkManager {
             remaining: declared_length,
             declared_length,
             metadata_overhead: metadata_overhead as u64,
-            auto_compress,
+            auto_compress: options.auto_compress,
+            app_flag: options.app_flag,
         };
         let mut first = match Self::build_stream_segment(
             link,

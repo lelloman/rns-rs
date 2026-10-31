@@ -49,6 +49,7 @@ enum RustEvent {
     ResourceReceived {
         link_id: [u8; 16],
         data: Vec<u8>,
+        app_flag: bool,
     },
     ResourceCompleted {
         link_id: [u8; 16],
@@ -94,10 +95,17 @@ impl Callbacks for TestCallbacks {
         });
     }
 
-    fn on_resource_received(&mut self, link_id: LinkId, data: Vec<u8>, _metadata: Option<Vec<u8>>) {
+    fn on_resource_received_with_app_flag(
+        &mut self,
+        link_id: LinkId,
+        data: Vec<u8>,
+        _metadata: Option<Vec<u8>>,
+        app_flag: bool,
+    ) {
         let _ = self.tx.send(RustEvent::ResourceReceived {
             link_id: link_id.0,
             data,
+            app_flag,
         });
     }
 
@@ -442,6 +450,7 @@ fn start_rust_node_with(
 const PYTHON_INTEROP_SCRIPT: &str = r#"
 import json
 import hashlib
+import inspect
 import os
 import signal
 import socket
@@ -501,7 +510,7 @@ def resource_concluded(resource):
     if resource.status == RNS.Resource.COMPLETE:
         resource.data.seek(0)
         data = resource.data.read()
-        emit("python_resource_received", sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+        emit("python_resource_received", sha256=hashlib.sha256(data).hexdigest(), size=len(data), app_flag=getattr(resource, "app_flag", None))
     else:
         emit("python_resource_failed", status=resource.status)
 
@@ -647,7 +656,11 @@ try:
             if rust_link is None:
                 emit("python_resource_error", reason="link is unavailable")
             else:
-                RNS.Resource(bytes((i % 251 for i in range(100000))), rust_link, callback=resource_sent, auto_compress=False)
+                # Upstream added the application flag after 1.6.0 (c1472014).
+                app_flag = "app_flag" in inspect.signature(RNS.Resource.__init__).parameters
+                emit("python_resource_sending", app_flag=app_flag)
+                kwargs = {"app_flag": True} if app_flag else {}
+                RNS.Resource(bytes((i % 251 for i in range(100000))), rust_link, callback=resource_sent, auto_compress=False, **kwargs)
         elif command == "stop":
             break
         elif command:
@@ -797,14 +810,22 @@ fn python_rns_bidirectional_tcp_interop() {
     );
 
     python.command("send_resource_rust");
-    let python_resource = wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
-        RustEvent::ResourceReceived {
-            link_id: received_link,
-            data,
-        } if *received_link == link_id => Some(data.clone()),
-        _ => None,
-    })
-    .expect("Rust should receive a Python 100000-byte Resource");
+    let python_sending =
+        python.wait_for_event(TIMEOUT, |event| event["event"] == "python_resource_sending");
+    let python_sets_app_flag = python_sending["app_flag"] == true;
+    let (python_resource, received_app_flag) =
+        wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+            RustEvent::ResourceReceived {
+                link_id: received_link,
+                data,
+                app_flag,
+            } if *received_link == link_id => Some((data.clone(), *app_flag)),
+            _ => None,
+        })
+        .expect("Rust should receive a Python 100000-byte Resource");
+    // Python sets the flag when its Resource supports it; older releases send
+    // bit 6 clear.
+    assert_eq!(received_app_flag, python_sets_app_flag);
     assert_eq!(python_resource.len(), 100000);
     assert!(python_resource
         .iter()
@@ -812,8 +833,16 @@ fn python_rns_bidirectional_tcp_interop() {
         .all(|(index, byte)| *byte == (index % 251) as u8));
 
     let rust_resource: Vec<u8> = (0..100000).map(|index| (index % 239) as u8).collect();
-    node.send_resource(link_id, rust_resource.clone(), None)
-        .expect("Rust should send a Resource to Python");
+    node.send_resource_with_options(
+        link_id,
+        rust_resource.clone(),
+        None,
+        rns_net::resource::ResourceSendOptions {
+            auto_compress: true,
+            app_flag: true,
+        },
+    )
+    .expect("Rust should send a Resource to Python");
     wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
         RustEvent::ResourceCompleted {
             link_id: completed_link,
@@ -828,6 +857,12 @@ fn python_rns_bidirectional_tcp_interop() {
         python_received_resource["sha256"],
         hex(&rns_core::hash::full_hash(&rust_resource))
     );
+    // Releases without the flag ignore bit 6 and have no attribute for it.
+    if python_sets_app_flag {
+        assert_eq!(python_received_resource["app_flag"], true);
+    } else {
+        assert!(python_received_resource["app_flag"].is_null());
+    }
 
     node.shutdown();
 }

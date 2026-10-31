@@ -68,6 +68,23 @@ impl ResourceAdvertisement {
         msgpack::pack_str_map(&entries)
     }
 
+    /// Pack the advertisement for a link with the given MDU.
+    ///
+    /// Like Python, an advertisement that would exceed the MDU is sent with
+    /// an empty hashmap, and the receiver requests the first hashmap segment
+    /// with `RESOURCE_HASHMAP_IS_EMPTY` before any part.
+    pub fn pack_for_mdu(&self, segment: usize, mdu: usize) -> Vec<u8> {
+        let packed = self.pack(segment);
+        if packed.len() <= mdu {
+            return packed;
+        }
+        let without_hashmap = ResourceAdvertisement {
+            hashmap: Vec::new(),
+            ..self.clone()
+        };
+        without_hashmap.pack(segment)
+    }
+
     /// Unpack an advertisement from msgpack bytes.
     pub fn unpack(data: &[u8]) -> Result<Self, ResourceError> {
         let value = msgpack::unpack_exact(data).map_err(|_| ResourceError::InvalidAdvertisement)?;
@@ -201,6 +218,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let adv = make_adv(flags);
         let packed = adv.pack(0);
@@ -227,6 +245,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let adv = make_adv(flags);
         let packed = adv.pack(0);
@@ -245,6 +264,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: true,
+            app_flag: false,
         };
         let adv = make_adv(flags);
         let packed = adv.pack(0);
@@ -261,6 +281,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let mut adv = make_adv(flags);
         adv.segment_index = 2;
@@ -281,6 +302,7 @@ mod tests {
             is_request: true,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let mut adv = make_adv(flags);
         adv.request_id = Some(vec![0xDE, 0xAD, 0xBE, 0xEF]);
@@ -300,6 +322,7 @@ mod tests {
             is_request: false,
             is_response: true,
             has_metadata: false,
+            app_flag: false,
         };
         let mut adv = make_adv(flags);
         adv.request_id = Some(vec![0x42; 16]);
@@ -316,6 +339,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let adv = make_adv(flags);
         let packed = adv.pack(0);
@@ -338,6 +362,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let adv = ResourceAdvertisement {
             transfer_size: 50000,
@@ -373,6 +398,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let mut adv = make_adv(flags);
 
@@ -405,6 +431,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let mut adv = make_adv(flags);
         adv.transfer_size = (crate::constants::RESOURCE_MAX_EFFICIENT_SIZE * 3) as u64;
@@ -422,6 +449,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         let mut adv = make_adv(flags);
         adv.transfer_size = (crate::constants::RESOURCE_MAX_EFFICIENT_SIZE * 3 + 1) as u64;

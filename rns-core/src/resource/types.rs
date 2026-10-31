@@ -24,6 +24,7 @@ pub enum ResourceStatus {
 /// Bit 3: is_request
 /// Bit 4: is_response
 /// Bit 5: has_metadata
+/// Bit 6: app_flag (application-defined, carried to the receiver)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdvFlags {
@@ -33,6 +34,7 @@ pub struct AdvFlags {
     pub is_request: bool,
     pub is_response: bool,
     pub has_metadata: bool,
+    pub app_flag: bool,
 }
 
 impl AdvFlags {
@@ -56,6 +58,9 @@ impl AdvFlags {
         if self.has_metadata {
             f |= 0x20;
         }
+        if self.app_flag {
+            f |= 0x40;
+        }
         f
     }
 
@@ -67,6 +72,7 @@ impl AdvFlags {
             is_request: (f & 0x08) != 0,
             is_response: (f & 0x10) != 0,
             has_metadata: (f & 0x20) != 0,
+            app_flag: (f & 0x40) != 0,
         }
     }
 }
@@ -90,10 +96,12 @@ pub enum ResourceAction {
     SendCancelReceiver(alloc::vec::Vec<u8>),
     /// Tear down the link due to an unrecoverable resource failure.
     TeardownLink,
-    /// Resource data received successfully (data, metadata).
+    /// Resource data received successfully, with its metadata and the
+    /// advertised application flag.
     DataReceived {
         data: alloc::vec::Vec<u8>,
         metadata: Option<alloc::vec::Vec<u8>>,
+        app_flag: bool,
     },
     /// Transfer completed (proof validated).
     Completed,
@@ -159,6 +167,7 @@ mod tests {
             is_request: false,
             is_response: true,
             has_metadata: true,
+            app_flag: false,
         };
         let byte = flags.to_byte();
         assert_eq!(byte, 0x01 | 0x04 | 0x10 | 0x20);
@@ -175,9 +184,21 @@ mod tests {
             is_request: true,
             is_response: true,
             has_metadata: true,
+            app_flag: true,
         };
-        assert_eq!(flags.to_byte(), 0x3f);
-        assert_eq!(AdvFlags::from_byte(0x3f), flags);
+        assert_eq!(flags.to_byte(), 0x7f);
+        assert_eq!(AdvFlags::from_byte(0x7f), flags);
+    }
+
+    #[test]
+    fn test_adv_flags_app_flag_is_bit_6() {
+        // Python packs the application flag as `self.a << 6`.
+        let flags = AdvFlags::from_byte(0x41);
+        assert!(flags.app_flag);
+        assert!(flags.encrypted);
+        assert!(!flags.has_metadata);
+        assert_eq!(flags.to_byte(), 0x41);
+        assert!(!AdvFlags::from_byte(0x3f).app_flag);
     }
 
     #[test]
@@ -189,6 +210,7 @@ mod tests {
             is_request: false,
             is_response: false,
             has_metadata: false,
+            app_flag: false,
         };
         assert_eq!(flags.to_byte(), 0x00);
         assert_eq!(AdvFlags::from_byte(0x00), flags);

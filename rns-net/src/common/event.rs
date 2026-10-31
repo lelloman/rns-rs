@@ -330,7 +330,7 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
-        auto_compress: bool,
+        options: crate::resource::ResourceSendOptions,
     },
     /// Send a Resource from a sequential reader without buffering the full payload.
     SendResourceStream {
@@ -339,7 +339,7 @@ pub enum Event<W: Send> {
         reader: Box<dyn Read + Send>,
         declared_length: u64,
         metadata: Option<Vec<u8>>,
-        auto_compress: bool,
+        options: crate::resource::ResourceSendOptions,
     },
     /// Set the resource acceptance strategy for a link.
     SetResourceStrategy { link_id: [u8; 16], strategy: u8 },

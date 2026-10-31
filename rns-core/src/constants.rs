@@ -664,6 +664,10 @@ pub const RESOURCE_HASHMAP_IS_NOT_EXHAUSTED: u8 = 0x00;
 /// Hashmap exhausted flag
 pub const RESOURCE_HASHMAP_IS_EXHAUSTED: u8 = 0xFF;
 
+/// Hashmap empty flag: the advertisement carried no hashmap because it would
+/// not fit the link MDU, so the receiver asks for the first segment
+pub const RESOURCE_HASHMAP_IS_EMPTY: u8 = 0xFE;
+
 #[cfg(test)]
 mod tests {
     use super::*;

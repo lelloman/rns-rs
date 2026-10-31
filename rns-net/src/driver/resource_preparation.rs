@@ -27,6 +27,7 @@ struct Pending {
     generation: Arc<()>,
     cancelled: Arc<AtomicBool>,
     bytes: usize,
+    app_flag: bool,
 }
 
 pub(super) struct Worker {
@@ -133,6 +134,7 @@ impl Worker {
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
         bytes: usize,
+        app_flag: bool,
     ) -> Result<(), (Vec<u8>, Option<Vec<u8>>)> {
         if !self.can_submit(bytes) {
             return Err((data, metadata));
@@ -158,6 +160,7 @@ impl Worker {
                         generation,
                         cancelled,
                         bytes,
+                        app_flag,
                     },
                 );
                 self.bytes += bytes;
@@ -218,14 +221,34 @@ impl Compressor for PreparedCompressor {
 }
 
 impl Driver {
+    #[cfg(test)]
     pub(super) fn prepare_resource(
+        &mut self,
+        link: [u8; 16],
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+        auto_compress: bool,
+    ) {
+        self.prepare_resource_with_options(
+            link,
+            data,
+            metadata,
+            crate::resource::ResourceSendOptions {
+                auto_compress,
+                ..Default::default()
+            },
+        );
+    }
+
+    pub(super) fn prepare_resource_with_options(
         &mut self,
         link: [u8; 16],
         mut data: Vec<u8>,
         mut metadata: Option<Vec<u8>>,
-        auto_compress: bool,
+        options: crate::resource::ResourceSendOptions,
     ) {
-        if let Some((generation, bytes)) = auto_compress
+        if let Some((generation, bytes)) = options
+            .auto_compress
             .then(|| {
                 self.link_manager
                     .resource_generation(&link)
@@ -244,7 +267,7 @@ impl Driver {
                 }
             }
             if let Some(worker) = self.resource_preparation.as_mut() {
-                match worker.submit(link, generation, data, metadata, bytes) {
+                match worker.submit(link, generation, data, metadata, bytes, options.app_flag) {
                     Ok(()) => return,
                     Err(input) => {
                         (data, metadata) = input;
@@ -255,11 +278,11 @@ impl Driver {
         // No new rejection policy: unsupported or saturated work uses the existing
         // synchronous path, after earlier buffered sends on this link are installed.
         self.finish_resource_preparations_for(&link);
-        let actions = self.link_manager.send_resource_with_auto_compress(
+        let actions = self.link_manager.send_resource_with_options(
             &link,
             &data,
             metadata.as_deref(),
-            auto_compress,
+            options,
             &mut self.rng,
         );
         self.dispatch_link_actions(actions);
@@ -286,7 +309,10 @@ impl Driver {
                     &pending.link,
                     &ready.data,
                     ready.metadata.as_deref(),
-                    true,
+                    crate::resource::ResourceSendOptions {
+                        auto_compress: true,
+                        app_flag: pending.app_flag,
+                    },
                     &compressor,
                     &mut self.rng,
                 );
@@ -358,7 +384,7 @@ mod tests {
         let data = vec![value; MIN_INPUT];
         let bytes = Worker::charge(&data, &None).unwrap();
         worker
-            .submit([1; 16], Arc::new(()), data, None, bytes)
+            .submit([1; 16], Arc::new(()), data, None, bytes, false)
             .unwrap();
     }
 
@@ -391,7 +417,7 @@ mod tests {
         large_capacity.resize(MIN_INPUT, 0);
         let bytes = Worker::charge(&large_capacity, &None).unwrap();
         worker
-            .submit([1; 16], Arc::new(()), large_capacity, None, bytes)
+            .submit([1; 16], Arc::new(()), large_capacity, None, bytes, false)
             .unwrap();
         assert!(!worker.can_submit(bytes));
         worker

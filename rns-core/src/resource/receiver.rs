@@ -466,25 +466,32 @@ impl ResourceReceiver {
         let mut hashmap_exhausted = RESOURCE_HASHMAP_IS_NOT_EXHAUSTED;
         let mut requested_hashes = Vec::new();
 
-        let pn_start = (self.consecutive_completed_height + 1) as usize;
-        let search_end = core::cmp::min(pn_start + self.window.window, self.total_parts);
-        let mut i = 0;
+        if self.hash_at(0).is_none() {
+            // The advertisement carried no hashmap because it would not fit
+            // the sender's link MDU. No part can be requested before the
+            // sender delivers the first segment.
+            hashmap_exhausted = RESOURCE_HASHMAP_IS_EMPTY;
+        } else {
+            let pn_start = (self.consecutive_completed_height + 1) as usize;
+            let search_end = core::cmp::min(pn_start + self.window.window, self.total_parts);
+            let mut i = 0;
 
-        for pn in pn_start..search_end {
-            if !self.has_part(pn) {
-                match self.hash_at(pn) {
-                    Some(h) => {
-                        requested_hashes.extend_from_slice(h);
-                        self.outstanding_parts += 1;
-                        i += 1;
-                    }
-                    None => {
-                        hashmap_exhausted = RESOURCE_HASHMAP_IS_EXHAUSTED;
+            for pn in pn_start..search_end {
+                if !self.has_part(pn) {
+                    match self.hash_at(pn) {
+                        Some(h) => {
+                            requested_hashes.extend_from_slice(h);
+                            self.outstanding_parts += 1;
+                            i += 1;
+                        }
+                        None => {
+                            hashmap_exhausted = RESOURCE_HASHMAP_IS_EXHAUSTED;
+                        }
                     }
                 }
-            }
-            if i >= self.window.window || hashmap_exhausted == RESOURCE_HASHMAP_IS_EXHAUSTED {
-                break;
+                if i >= self.window.window || hashmap_exhausted == RESOURCE_HASHMAP_IS_EXHAUSTED {
+                    break;
+                }
             }
         }
 
@@ -501,6 +508,9 @@ impl ResourceReceiver {
             } else {
                 request_data.extend_from_slice(&[0u8; RESOURCE_MAPHASH_LEN]);
             }
+            self.waiting_for_hmu = true;
+        }
+        if hashmap_exhausted == RESOURCE_HASHMAP_IS_EMPTY {
             self.waiting_for_hmu = true;
         }
 
@@ -662,6 +672,7 @@ impl ResourceReceiver {
             random_hash,
             compressed: self.flags.compressed,
             metadata: self.has_metadata && self.segment_index == 1,
+            app_flag: self.flags.app_flag,
             limit: self.max_decompressed_size,
         })
     }
@@ -1016,6 +1027,7 @@ mod tests {
                 is_request: false,
                 is_response: false,
                 has_metadata: false,
+                app_flag: false,
             },
             segment_index: 1,
             total_segments: 1,
@@ -1053,6 +1065,7 @@ mod tests {
                 is_request: false,
                 is_response: false,
                 has_metadata: false,
+                app_flag: false,
             },
             segment_index: 1,
             total_segments: 1,
@@ -1239,6 +1252,7 @@ mod tests {
                 is_request: false,
                 is_response: false,
                 has_metadata: false,
+                app_flag: false,
             },
             segment_index: 1,
             total_segments: 1,
@@ -1736,6 +1750,175 @@ mod tests {
         assert_eq!(sender.status, ResourceStatus::Complete);
     }
 
+    /// Drive an accepted transfer to completion from the receiver's first
+    /// actions, returning the request flags it sent and the assembly actions.
+    fn run_transfer(
+        sender: &mut ResourceSender,
+        receiver: &mut ResourceReceiver,
+        mut pending: Vec<ResourceAction>,
+    ) -> (Vec<u8>, Vec<ResourceAction>) {
+        let mut now = 1001.0;
+        let mut request_flags = Vec::new();
+        for _ in 0..1000 {
+            if receiver.received_count == receiver.total_parts {
+                break;
+            }
+            now += 0.01;
+            let mut next = Vec::new();
+            for action in pending.drain(..) {
+                if let ResourceAction::SendRequest(request) = action {
+                    request_flags.push(request[0]);
+                    for reply in sender.handle_request(&request, now) {
+                        match reply {
+                            ResourceAction::SendPart(part) => {
+                                next.extend(receiver.receive_part(&part, now))
+                            }
+                            ResourceAction::SendHmu(hmu) => {
+                                next.extend(receiver.handle_hashmap_update(&hmu, now))
+                            }
+                            other => panic!("unexpected sender action {other:?}"),
+                        }
+                    }
+                }
+            }
+            pending = next;
+        }
+        assert_eq!(receiver.received_count, receiver.total_parts);
+        (
+            request_flags,
+            receiver.assemble(&identity_decrypt, &NoopCompressor),
+        )
+    }
+
+    fn multi_hashmap_sender(advertisement_mdu: usize) -> (Vec<u8>, ResourceSender) {
+        let mut rng = rns_crypto::FixedRng::new(&[0x5a; 64]);
+        // More parts than one advertisement hashmap segment holds.
+        let data: Vec<u8> = (0..(RESOURCE_HASHMAP_MAX_LEN + 26) * RESOURCE_SDU)
+            .map(|i| (i * 7 + i / 251) as u8)
+            .collect();
+        let mut sender = ResourceSender::new(
+            &data,
+            None,
+            RESOURCE_SDU,
+            &identity_encrypt,
+            &NoopCompressor,
+            &mut rng,
+            1000.0,
+            false,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+        assert!(sender.total_parts() > RESOURCE_HASHMAP_MAX_LEN);
+        sender.advertisement_mdu = advertisement_mdu;
+        (data, sender)
+    }
+
+    #[test]
+    fn advertisement_too_large_for_link_mdu_defers_the_initial_hashmap() {
+        // Python packs an advertisement exceeding the link MDU with an empty
+        // hashmap; the receiver asks for it with HASHMAP_IS_EMPTY and the
+        // sender answers with segment 0 before any part is requested.
+        let (data, mut sender) = multi_hashmap_sender(200);
+        let adv = sender.advertise(1000.0);
+        let ResourceAction::SendAdvertisement(adv_data) = &adv[0] else {
+            panic!("expected an advertisement");
+        };
+        assert!(adv_data.len() <= 200);
+        assert!(ResourceAdvertisement::unpack(adv_data)
+            .unwrap()
+            .hashmap
+            .is_empty());
+
+        let mut receiver =
+            ResourceReceiver::from_advertisement(adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+                .unwrap();
+        let first = receiver.accept(1000.5);
+        let [ResourceAction::SendRequest(request)] = first.as_slice() else {
+            panic!("expected one request, got {first:?}");
+        };
+        // Flag, resource hash, no last map hash and no part hashes.
+        assert_eq!(request[0], RESOURCE_HASHMAP_IS_EMPTY);
+        assert_eq!(request.len(), 1 + 32);
+        assert!(receiver.waiting_for_hmu);
+
+        let (flags, actions) = run_transfer(&mut sender, &mut receiver, first);
+        assert_eq!(flags[0], RESOURCE_HASHMAP_IS_EMPTY);
+        assert!(
+            flags.contains(&RESOURCE_HASHMAP_IS_EXHAUSTED),
+            "the second hashmap segment still uses the exhausted path: {flags:?}"
+        );
+        let received = actions.iter().find_map(|a| match a {
+            ResourceAction::DataReceived { data, .. } => Some(data.clone()),
+            _ => None,
+        });
+        assert_eq!(received.as_deref(), Some(data.as_slice()));
+        let proof = actions
+            .iter()
+            .find_map(|a| match a {
+                ResourceAction::SendProof(proof) => Some(proof.clone()),
+                _ => None,
+            })
+            .unwrap();
+        sender.handle_proof(&proof, 1100.0);
+        assert_eq!(sender.status, ResourceStatus::Complete);
+    }
+
+    #[test]
+    fn advertisement_within_link_mdu_keeps_its_hashmap() {
+        let (data, mut sender) = multi_hashmap_sender(LINK_MDU);
+        let adv = sender.get_advertisement(0);
+        assert!(adv.len() <= LINK_MDU);
+        assert_eq!(
+            ResourceAdvertisement::unpack(&adv).unwrap().hashmap.len(),
+            RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN
+        );
+        let mut receiver =
+            ResourceReceiver::from_advertisement(&adv, RESOURCE_SDU, 0.5, 1000.0, None, None)
+                .unwrap();
+        let first = receiver.accept(1001.0);
+        let (flags, actions) = run_transfer(&mut sender, &mut receiver, first);
+        assert_eq!(flags[0], RESOURCE_HASHMAP_IS_NOT_EXHAUSTED);
+        assert!(!flags.contains(&RESOURCE_HASHMAP_IS_EMPTY));
+        assert!(actions.iter().any(
+            |a| matches!(a, ResourceAction::DataReceived { data: received, .. } if *received == data)
+        ));
+    }
+
+    #[test]
+    fn app_flag_reaches_the_receiver() {
+        let (mut sender, _) = make_sender_receiver();
+        sender.flags.app_flag = true;
+        let adv = sender.get_advertisement(0);
+        let unpacked = ResourceAdvertisement::unpack(&adv).unwrap();
+        assert_eq!(unpacked.flags.to_byte() & 0x40, 0x40);
+        let mut receiver =
+            ResourceReceiver::from_advertisement(&adv, RESOURCE_SDU, 0.5, 1000.0, None, None)
+                .unwrap();
+        assert!(receiver.flags.app_flag);
+        let first = receiver.accept(1001.0);
+        let (_, actions) = run_transfer(&mut sender, &mut receiver, first);
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::DataReceived { app_flag: true, .. })));
+
+        let (mut sender, mut receiver) = make_sender_receiver();
+        let first = receiver.accept(1001.0);
+        let (_, actions) = run_transfer(&mut sender, &mut receiver, first);
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            ResourceAction::DataReceived {
+                app_flag: false,
+                ..
+            }
+        )));
+    }
+
     #[test]
     fn test_full_transfer_with_metadata() {
         let data = b"data with metadata";
@@ -1793,7 +1976,7 @@ mod tests {
         let (recv_data, recv_meta) = assemble_actions
             .iter()
             .find_map(|a| match a {
-                ResourceAction::DataReceived { data, metadata } => {
+                ResourceAction::DataReceived { data, metadata, .. } => {
                     Some((data.clone(), metadata.clone()))
                 }
                 _ => None,
