@@ -436,7 +436,7 @@ fn create_schema(conn: &Connection) -> io::Result<()> {
         "CREATE TABLE IF NOT EXISTS known_destinations (
             destination_hash BLOB PRIMARY KEY,
             last_heard       REAL NOT NULL,
-            packet_hash      BLOB NOT NULL,
+            packet_hash      BLOB,
             public_key       BLOB NOT NULL,
             app_data         BLOB,
             used             REAL NOT NULL DEFAULT 0,
@@ -659,6 +659,47 @@ mod tests {
         assert!(!never.was_used);
         assert_eq!(never.last_used_at, None);
         assert!(!never.retained);
+    }
+
+    fn packet_hash_not_null(path: &Path) -> bool {
+        let conn = Connection::open(path).unwrap();
+        conn.query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('known_destinations')
+             WHERE name = 'packet_hash'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+            != 0
+    }
+
+    #[test]
+    fn sqlite_new_schema_allows_a_missing_packet_hash() {
+        // Upstream eab2983b: Python stores entries without a packet hash
+        // (for example from legacy imports) as NULL.
+        let dir = temp_dir();
+        let path = default_path(&dir);
+        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        assert!(!packet_hash_not_null(&path));
+
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO known_destinations
+               (destination_hash, last_heard, packet_hash, public_key, app_data,
+                used, stamp, stamp_value, lr_cost, identity_hash)
+             VALUES (?1,?2,NULL,?3,NULL,0,NULL,NULL,NULL,?4)",
+            params![
+                [0x66u8; 16].to_vec(),
+                1_200.0f64,
+                [0x66u8; 64].to_vec(),
+                [0x66u8; 16].to_vec(),
+            ],
+        )
+        .unwrap();
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, [0x66; 16]);
+        assert_eq!(loaded[0].1.public_key, [0x66; 64]);
     }
 
     #[test]
