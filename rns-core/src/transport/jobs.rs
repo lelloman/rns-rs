@@ -617,6 +617,35 @@ mod tests {
     }
 
     #[test]
+    fn unused_pool_cull_removes_the_selected_destinations() {
+        // Upstream 1ee89ad8: the pool cull queued each entry's expiry instead
+        // of its destination hash, so no path was removed and the pool never
+        // shrank. Culling must leave exactly the target and be stable after.
+        let mut table = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+        for i in 0..5u8 {
+            table.insert(
+                [0x50 + i; 16],
+                path_with_usage(100.0, 1000.0 + f64::from(i), 0.0),
+            );
+        }
+
+        assert_eq!(
+            cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2),
+            3
+        );
+        assert_eq!(table.len(), 2);
+        assert!(table.contains_key(&[0x53; 16]));
+        assert!(table.contains_key(&[0x54; 16]));
+        assert_eq!(
+            cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2),
+            0
+        );
+        assert_eq!(table.len(), 2);
+    }
+
+    #[test]
     fn unused_path_pool_order_is_by_expiry_not_insertion() {
         let mut table = BTreeMap::new();
         let mut interfaces = BTreeMap::new();
