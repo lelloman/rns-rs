@@ -25,6 +25,25 @@ pub enum ResourceTransferError {
     Cancelled,
 }
 
+/// Options for an outgoing Resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceSendOptions {
+    /// Attempt compression and use the result only when smaller.
+    pub auto_compress: bool,
+    /// Application-defined flag carried in the advertisement (bit 6 of its
+    /// flags, Python `Resource(app_flag=...)`) and reported to the receiver.
+    pub app_flag: bool,
+}
+
+impl Default for ResourceSendOptions {
+    fn default() -> Self {
+        Self {
+            auto_compress: true,
+            app_flag: false,
+        }
+    }
+}
+
 /// How independent incoming Resources are delivered to the application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceReceiveMode {
@@ -65,6 +84,8 @@ pub struct ReceivedResourceFile {
     pub original_hash: [u8; 32],
     pub size: u64,
     pub metadata: Option<Vec<u8>>,
+    /// The application flag the sender set in the advertisement.
+    pub app_flag: bool,
 }
 
 impl ReceivedResourceFile {
@@ -73,12 +94,14 @@ impl ReceivedResourceFile {
         original_hash: [u8; 32],
         size: u64,
         metadata: Option<Vec<u8>>,
+        app_flag: bool,
     ) -> Self {
         Self {
             path: Some(path),
             original_hash,
             size,
             metadata,
+            app_flag,
         }
     }
 
@@ -252,14 +275,14 @@ mod tests {
         let temporary = root.path().join("temporary");
         fs::write(&temporary, b"resource").unwrap();
         {
-            let artifact = ReceivedResourceFile::new(temporary.clone(), [7; 32], 8, None);
+            let artifact = ReceivedResourceFile::new(temporary.clone(), [7; 32], 8, None, false);
             assert_eq!(artifact.path(), temporary);
         }
         assert!(!temporary.exists());
 
         fs::write(&temporary, b"resource").unwrap();
         let destination = root.path().join("saved");
-        let artifact = ReceivedResourceFile::new(temporary.clone(), [7; 32], 8, None);
+        let artifact = ReceivedResourceFile::new(temporary.clone(), [7; 32], 8, None, false);
         artifact.persist(&destination, false).unwrap();
         assert_eq!(fs::read(destination).unwrap(), b"resource");
         assert!(!temporary.exists());

@@ -3071,13 +3071,33 @@ impl RnsNode {
         metadata: Option<Vec<u8>>,
         auto_compress: bool,
     ) -> Result<(), SendError> {
+        self.send_resource_with_options(
+            link_id,
+            data,
+            metadata,
+            crate::resource::ResourceSendOptions {
+                auto_compress,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Send a resource on an established link with explicit send options,
+    /// including the application flag the receiver sees with the data.
+    pub fn send_resource_with_options(
+        &self,
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+        options: crate::resource::ResourceSendOptions,
+    ) -> Result<(), SendError> {
         self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::SendResource {
                 link_id,
                 data,
                 metadata,
-                auto_compress,
+                options,
             })
             .map_err(|_| SendError)
     }
@@ -3092,6 +3112,27 @@ impl RnsNode {
         metadata: Option<Vec<u8>>,
         auto_compress: bool,
     ) -> Result<crate::resource::ResourceTransferId, SendError> {
+        self.send_resource_reader_with_options(
+            link_id,
+            reader,
+            declared_length,
+            metadata,
+            crate::resource::ResourceSendOptions {
+                auto_compress,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Send a Resource from a sequential reader with explicit send options.
+    pub fn send_resource_reader_with_options<R: Read + Send + 'static>(
+        &self,
+        link_id: [u8; 16],
+        reader: R,
+        declared_length: u64,
+        metadata: Option<Vec<u8>>,
+        options: crate::resource::ResourceSendOptions,
+    ) -> Result<crate::resource::ResourceTransferId, SendError> {
         self.reject_new_work_if_draining()?;
         let transfer_id = crate::resource::ResourceTransferId(
             NEXT_RESOURCE_TRANSFER_ID.fetch_add(1, Ordering::Relaxed),
@@ -3103,7 +3144,7 @@ impl RnsNode {
                 reader: Box::new(reader),
                 declared_length,
                 metadata,
-                auto_compress,
+                options,
             })
             .map_err(|_| SendError)?;
         Ok(transfer_id)

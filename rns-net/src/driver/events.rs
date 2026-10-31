@@ -1358,14 +1358,14 @@ impl Driver {
                     link_id,
                     data,
                     metadata,
-                    auto_compress,
+                    options,
                 } => {
                     if self.is_draining() {
                         self.reject_new_work("send resource");
-                        let _ = (link_id, data, metadata, auto_compress);
+                        let _ = (link_id, data, metadata, options);
                         continue;
                     }
-                    self.prepare_resource(link_id, data, metadata, auto_compress);
+                    self.prepare_resource_with_options(link_id, data, metadata, options);
                 }
                 Event::SendResourceStream {
                     link_id,
@@ -1373,7 +1373,7 @@ impl Driver {
                     reader,
                     declared_length,
                     metadata,
-                    auto_compress,
+                    options,
                 } => {
                     if self.is_draining() {
                         self.callbacks.on_resource_stream_failed(
@@ -1384,13 +1384,13 @@ impl Driver {
                         continue;
                     }
                     self.finish_resource_preparations_for(&link_id);
-                    let link_actions = self.link_manager.send_resource_stream(
+                    let link_actions = self.link_manager.send_resource_stream_with_options(
                         &link_id,
                         transfer_id,
                         reader,
                         declared_length,
                         metadata,
-                        auto_compress,
+                        options,
                         &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);

@@ -80,6 +80,10 @@ pub struct ResourceSender {
     pub sender_grace_time: f64,
     /// Receiver min consecutive height (for search optimization)
     receiver_min_consecutive_height: usize,
+    /// MDU of the link carrying the advertisement. An advertisement that
+    /// would exceed it is sent without its hashmap, which the receiver then
+    /// requests as a hashmap update.
+    pub advertisement_mdu: usize,
 }
 
 impl ResourceSender {
@@ -211,6 +215,7 @@ impl ResourceSender {
             is_request: request_id.is_some() && !is_response,
             is_response: request_id.is_some() && is_response,
             has_metadata,
+            app_flag: false,
         };
 
         Ok(ResourceSender {
@@ -250,6 +255,7 @@ impl ResourceSender {
             last_part_sent: now,
             sender_grace_time: RESOURCE_SENDER_GRACE_TIME,
             receiver_min_consecutive_height: 0,
+            advertisement_mdu: LINK_MDU,
         })
     }
 
@@ -268,7 +274,7 @@ impl ResourceSender {
             total_segments: self.total_segments,
             request_id: self.request_id.clone(),
         };
-        adv.pack(segment)
+        adv.pack_for_mdu(segment, self.advertisement_mdu)
     }
 
     /// Advertise the resource. Returns SendAdvertisement action.
@@ -290,8 +296,10 @@ impl ResourceSender {
             return vec![];
         }
 
-        let wants_more_hashmap = request_data.first() == Some(&RESOURCE_HASHMAP_IS_EXHAUSTED);
-        let pad = if wants_more_hashmap {
+        let hashmap_is_empty = request_data.first() == Some(&RESOURCE_HASHMAP_IS_EMPTY);
+        let hashmap_is_exhausted = request_data.first() == Some(&RESOURCE_HASHMAP_IS_EXHAUSTED);
+        let wants_more_hashmap = hashmap_is_empty || hashmap_is_exhausted;
+        let pad = if hashmap_is_exhausted {
             1 + RESOURCE_MAPHASH_LEN
         } else {
             1
@@ -349,7 +357,7 @@ impl ResourceSender {
 
         // Handle hashmap exhaustion
         if wants_more_hashmap {
-            match self.build_hmu(request_data, now) {
+            match self.build_hmu(request_data, hashmap_is_empty, now) {
                 Ok(hmu) => actions.push(ResourceAction::SendHmu(hmu)),
                 Err(_) => {
                     actions.extend(self.cancel());
@@ -368,27 +376,39 @@ impl ResourceSender {
     }
 
     /// Build hashmap update data.
-    fn build_hmu(&mut self, request_data: &[u8], now: f64) -> Result<Vec<u8>, ResourceError> {
-        if request_data.len() < 1 + RESOURCE_MAPHASH_LEN {
-            return Err(ResourceError::InvalidState);
-        }
+    ///
+    /// For an exhausted hashmap the request names the last map hash the
+    /// receiver holds; for an empty one (an advertisement sent without its
+    /// hashmap) it names none and the update starts at the receiver's
+    /// consecutive height, as in Python.
+    fn build_hmu(
+        &mut self,
+        request_data: &[u8],
+        hashmap_is_empty: bool,
+        now: f64,
+    ) -> Result<Vec<u8>, ResourceError> {
+        let mut part_index = self.receiver_min_consecutive_height;
+        if !hashmap_is_empty {
+            if request_data.len() < 1 + RESOURCE_MAPHASH_LEN {
+                return Err(ResourceError::InvalidState);
+            }
 
-        let last_map_hash_bytes = &request_data[1..1 + RESOURCE_MAPHASH_LEN];
-        let mut last_map_hash = [0u8; RESOURCE_MAPHASH_LEN];
-        last_map_hash.copy_from_slice(last_map_hash_bytes);
+            let last_map_hash_bytes = &request_data[1..1 + RESOURCE_MAPHASH_LEN];
+            let mut last_map_hash = [0u8; RESOURCE_MAPHASH_LEN];
+            last_map_hash.copy_from_slice(last_map_hash_bytes);
 
-        // Find the part index of the last map hash
-        let search_start = self.receiver_min_consecutive_height;
-        let search_end = core::cmp::min(
-            search_start + RESOURCE_COLLISION_GUARD_SIZE,
-            self.total_parts,
-        );
+            // Find the part index of the last map hash
+            let search_start = self.receiver_min_consecutive_height;
+            let search_end = core::cmp::min(
+                search_start + RESOURCE_COLLISION_GUARD_SIZE,
+                self.total_parts,
+            );
 
-        let mut part_index = search_start;
-        for idx in search_start..search_end {
-            part_index = idx + 1;
-            if self.part_hashes[idx] == last_map_hash {
-                break;
+            for idx in search_start..search_end {
+                part_index = idx + 1;
+                if self.part_hashes[idx] == last_map_hash {
+                    break;
+                }
             }
         }
 
@@ -400,7 +420,7 @@ impl ResourceSender {
         };
 
         // Verify alignment
-        if !part_index.is_multiple_of(RESOURCE_HASHMAP_MAX_LEN) {
+        if !hashmap_is_empty && !part_index.is_multiple_of(RESOURCE_HASHMAP_MAX_LEN) {
             return Err(ResourceError::InvalidState);
         }
 

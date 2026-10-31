@@ -1869,11 +1869,13 @@ impl Driver {
                     link_id,
                     data,
                     metadata,
+                    app_flag,
                 } => {
-                    self.callbacks.on_resource_received(
+                    self.callbacks.on_resource_received_with_app_flag(
                         rns_core::types::LinkId(link_id),
                         data,
                         metadata,
+                        app_flag,
                     );
                 }
                 LinkManagerAction::ResourceFileReceived { link_id, resource } => {

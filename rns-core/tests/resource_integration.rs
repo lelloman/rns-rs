@@ -282,7 +282,7 @@ fn test_full_cycle_with_metadata() {
     let (recv_data, recv_meta) = assemble_actions
         .iter()
         .find_map(|a| match a {
-            ResourceAction::DataReceived { data, metadata } => {
+            ResourceAction::DataReceived { data, metadata, .. } => {
                 Some((data.clone(), metadata.clone()))
             }
             _ => None,

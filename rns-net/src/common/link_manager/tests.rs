@@ -2637,6 +2637,83 @@ fn test_resource_full_transfer() {
 }
 
 #[test]
+fn resource_app_flag_is_advertised_and_delivered() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+
+    let original_data = b"flagged resource".to_vec();
+    let options = ResourceSendOptions {
+        auto_compress: false,
+        app_flag: true,
+    };
+    let adv_actions =
+        init_mgr.send_resource_with_options(&link_id, &original_data, None, options, &mut rng);
+    let adv = first_resource_advertisement(&init_mgr, &link_id, &adv_actions);
+    assert!(adv.flags.app_flag);
+    let managed = init_mgr.links.get(&link_id).unwrap();
+    assert_eq!(
+        managed.outgoing_resources[0].advertisement_mdu,
+        managed.engine.mdu()
+    );
+
+    let mut pending: Vec<(char, LinkManagerAction)> =
+        adv_actions.into_iter().map(|a| ('i', a)).collect();
+    let mut delivered_flag = None;
+    for _ in 0..50 {
+        if pending.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for (source, action) in pending.drain(..) {
+            if let LinkManagerAction::SendPacket { raw, .. } = action {
+                let pkt = RawPacket::unpack(&raw).unwrap();
+                let target = if source == 'i' {
+                    &mut resp_mgr
+                } else {
+                    &mut init_mgr
+                };
+                let actions = target.handle_local_delivery(
+                    pkt.destination_hash,
+                    &raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
+                );
+                for a in &actions {
+                    if let LinkManagerAction::ResourceReceived { data, app_flag, .. } = a {
+                        assert_eq!(*data, original_data);
+                        delivered_flag = Some(*app_flag);
+                    }
+                }
+                let target_source = if source == 'i' { 'r' } else { 'i' };
+                next.extend(actions.into_iter().map(|a| (target_source, a)));
+            }
+        }
+        pending = next;
+    }
+    assert_eq!(delivered_flag, Some(true));
+}
+
+#[test]
+fn split_resource_segments_all_carry_the_app_flag() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE + 1024);
+    let options = ResourceSendOptions {
+        auto_compress: false,
+        app_flag: true,
+    };
+    init_mgr.send_resource_with_options(&link_id, &data, None, options, &mut rng);
+    let managed = init_mgr.links.get(&link_id).unwrap();
+    assert_eq!(managed.outgoing_resources.len(), 2);
+    assert!(managed
+        .outgoing_resources
+        .iter()
+        .all(|sender| sender.flags.split && sender.flags.app_flag));
+}
+
+#[test]
 fn test_split_resource_advertisement_and_progress_entries() {
     let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
@@ -4491,6 +4568,7 @@ fn test_process_resource_actions_mapping() {
         ResourceAction::DataReceived {
             data: vec![1, 2, 3],
             metadata: Some(vec![4, 5]),
+            app_flag: true,
         },
         ResourceAction::Completed,
         ResourceAction::Failed(rns_core::resource::ResourceError::Timeout),
@@ -4505,7 +4583,7 @@ fn test_process_resource_actions_mapping() {
 
     assert!(matches!(
         result[0],
-        LinkManagerAction::ResourceReceived { .. }
+        LinkManagerAction::ResourceReceived { app_flag: true, .. }
     ));
     assert!(matches!(
         result[1],

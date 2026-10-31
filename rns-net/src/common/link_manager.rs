@@ -31,7 +31,8 @@ mod resource_handling;
 mod state;
 
 use crate::resource::{
-    ReceivedResourceFile, ResourceReceiveMode, ResourceTransferError, ResourceTransferId,
+    ReceivedResourceFile, ResourceReceiveMode, ResourceSendOptions, ResourceTransferError,
+    ResourceTransferId,
 };
 use resource_handling::ResourceSendParams;
 use state::*;
@@ -88,6 +89,7 @@ struct OutgoingStreamTransfer {
     declared_length: u64,
     metadata_overhead: u64,
     auto_compress: bool,
+    app_flag: bool,
 }
 
 /// Response produced by an application request handler.
@@ -172,6 +174,8 @@ pub enum LinkManagerAction {
         link_id: LinkId,
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
+        /// The application flag the sender set in the advertisement.
+        app_flag: bool,
     },
     /// A disk-backed Resource is ready for application ownership.
     ResourceFileReceived {
