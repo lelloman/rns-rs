@@ -117,7 +117,7 @@ Every commit in the audited range must appear exactly once.
 | 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Integrated | `0edfd8a`; Schema version 3: versions 1 and 2 are migrated by a table rebuild in one immediate transaction, since upstream's `ALTER COLUMN ... DROP NOT NULL` is not SQLite syntax (Python at `fe2fe94d` exits on every earlier database); the version is never lowered. Divergence: rns-rs completes the migration Python cannot |
 | 24 | `f1fc51ba09ef2549cb7e3f33520316a30cd6d422` | Cleanup | Structurally covered | `create_schema` already runs the version read, the migration and the version write in one `BEGIN IMMEDIATE` transaction (commit 23, `b40b618`), rolled back on failure |
 | 25 | `1d9067c3bdd9b874442f30f9cbed5481f128eb18` | Improved storage error handling | Integrated | `KnownDestinationsStore::save_all` writes each destination in its own savepoint; a constraint, type-mismatch or too-big error leaves that destination out, is logged once at error level and retried on the next save, while other errors still abort the save; ratchets are already written one row per call; `sqlite_save_skips_a_rejected_destination_and_saves_the_rest` |
-| 26 | `c4ed59be2cc6b0c168f16b50ba315f3fe9dacde7` | Cleanup | Needs port | |
+| 26 | `c4ed59be2cc6b0c168f16b50ba315f3fe9dacde7` | Cleanup | Integrated | `SCHEMA_VERSION` 0 (the 1.6.0 release format); versions 1 to 3 are rebuilt into it with their rows kept (version 1 gains `lr_cost` first), where Python drops the table; versions above 3 are left alone; the stamp worker log line is renamed; `sqlite_rebuilds_a_v2_database_into_the_release_format`, `sqlite_rebuilds_a_v3_database_into_the_release_format`, `sqlite_keeps_a_version_above_the_pre_release_range`; runbook rollback note. Divergence: rows kept |
 | 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Needs port | |
 | 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Needs port | |
 | 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Needs port | |
@@ -1066,6 +1066,61 @@ save, then saved once valid and removed from the rejected set).
 
 **Final disposition:** Integrated (divergence: retried every save rather
 than quarantined until updated).
+
+### 26. `c4ed59be` — Cleanup (release database format)
+
+**Upstream change** (`RNS/Storage.py`, `RNS/Transport.py`): the
+pre-release migrations are removed. `__create_schema` logs a warning and
+drops `known_destinations` when `user_version` is above 0 ("Pre-release
+database detected, rebuilding known destinations DB to release format",
+marked to be removed in 1.6.1), recreates it with the final columns
+(nullable `packet_hash`, `lr_cost` before `identity_hash`), and writes
+`user_version` 0 in a `BEGIN`/`COMMIT` block that holds no migrations yet. A
+failure there is logged at `LOG_CRITICAL` but no longer panics. The
+`ratchets` table is kept. In `Transport.py` the "Loaded path table entry"
+message moves to `LOG_EXTREME`, the reconstruction failure messages are
+reformatted, and "Starting announce stamper worker" becomes "Starting stamp
+worker".
+
+This supersedes commit 23's version 3, and with it the `ALTER COLUMN`
+statement SQLite rejects: Python at `6927c3c5` opens every earlier database.
+
+**Rust applicability:** Needs port. rns-rs wrote version 3, which Python now
+treats as pre-release and drops; staying there would also leave the two
+implementations disagreeing about the release version.
+
+**Implementation:** `SCHEMA_VERSION` is 0. A database at version 1, 2 or 3
+is rebuilt in the existing `BEGIN IMMEDIATE` transaction: version 1 first
+gains `lr_cost`, then every pre-release version is copied by column name into
+`known_destinations_release` with the final schema, the old table dropped,
+the new one renamed, and `user_version` set to 0. A new database stays at 0
+without a write. A version above 3 is treated as written by a newer release
+and left alone, so a later upstream migration is not undone; this needs a
+recheck when 1.6.1 removes the pre-release cleanup. rns-rs already falls
+back and logs when the store cannot be opened, so there is no panic to
+remove. Of the `Transport.py` messages, only the stamper's has an rns-rs
+counterpart (`rns_net::stamper`), now "Starting stamp worker"; rns-rs does
+not log per path table entry when restoring transport state. The operator
+runbook's rollback note describes version 0.
+
+Divergence: upstream drops a pre-release table and relearns destinations
+from announces; rns-rs keeps the rows. The result is the release format
+either way, so Python opens an rns-rs database without rebuilding it.
+
+**Evidence:** `sqlite_rebuilds_a_v2_database_into_the_release_format` (row,
+32-byte packet hash and column order kept, constraint dropped, version 0,
+reopen is a no-op), `sqlite_rebuilds_a_v3_database_into_the_release_format`,
+`sqlite_keeps_a_version_above_the_pre_release_range`,
+`sqlite_migrates_v1_schema_and_adds_lr_cost` (ends at version 0) and
+`sqlite_new_schema_allows_a_missing_packet_hash` (a new database is at
+version 0). Against Python at `6927c3c5` (`RNS.Storage.KnownDestinationsStore`
+from a disposable worktree): a version 2 database migrated by rns-rs opens
+at version 0 with its row and no rebuild warning; the same database opened
+directly by Python is dropped to zero rows with the warning; new databases
+from either side open on the other at version 0, and a database Python
+rebuilt opens in rns-rs.
+
+**Final disposition:** Integrated (divergence: pre-release rows are kept).
 
 ## Integration Plan
 
