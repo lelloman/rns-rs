@@ -104,10 +104,7 @@ pub fn prettyfrequency(freq: f64) -> String {
 /// `STAMP_COST_CAP`, with three decimals, or `?` when there is none.
 pub fn prettycost(value: Option<f64>) -> String {
     match value {
-        Some(value) => format!(
-            "{:.3}",
-            rns_core::stamp::StampCost::from_f64(value).as_f64()
-        ),
+        Some(value) => rns_crypto::stamp_value::pretty_cost(value),
         None => "?".into(),
     }
 }

@@ -121,7 +121,7 @@ Every commit in the audited range must appear exactly once.
 | 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Integrated | Path table RPC entries carry `value` and `lr_cost` from the known destination (None when unknown), also in `GET /api/paths`; `rns_cli::format::prettycost`; `rnstatus` discovered interfaces print the stamp value with it after `Transport`, plus `Costs : Dst …, PR …` when both keys are reported; `rnpath -t` appends `(dv:…/lc:…)`; `query_path_table`, `path_table_pickle_carries_stamp_value_and_lr_cost`, `prettycost_quantizes_clamps_and_rounds_like_upstream`, rnstatus and rnpath display tests, live `python_rnpath_lists_rust_path_table` (Python `rnpath -t` at `6927c3c5` raised `KeyError: 'value'` against rns-rs before) |
 | 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Non-runtime | Debug message only; rns-rs does not log a destination stamp loaded from storage (`ensure_destination_stamp` reuses it silently and logs only a newly ground stamp) |
 | 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Non-runtime | Debug message only; fixes the undefined `RNS.prettystampval` from commit 27; rns-rs has no per-discovery "Discovered … with stamp value" log |
-| 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Needs port | |
+| 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Integrated | The insufficient discovery stamp diagnostic prints the value with `rns_crypto::stamp_value::pretty_cost` (`7.250`), which `rns_cli::format::prettycost` now shares; `insufficient_stamp_diagnostic_includes_calculated_value`, `pretty_cost_matches_upstream_prettycost` |
 | 31 | `6927c3c589683041f027d9a04c598cb257d957a7` | Cleanup | Needs port | |
 
 ## Per-Commit Analysis
@@ -1214,6 +1214,29 @@ and rejections; see commit 30), and the commit 27 defect never existed in
 the port.
 
 **Final disposition:** Non-runtime; mapping only.
+
+### 30. `22bf35d5` — Cleanup (insufficient discovery stamp log)
+
+**Upstream change** (`RNS/Discovery.py`): `InterfaceAnnounceHandler` logs
+"Ignored discovered interface with insufficient stamp value …" with the
+value formatted by `RNS.prettycost` instead of `str()`.
+
+**Rust applicability:** Needs port. rns-rs logs the same diagnostic at debug
+level when a discovery announce's stamp value is below the required value,
+and printed the value with `StampValue`'s `Display` (`7.25`).
+
+**Implementation:** `rns_crypto::stamp_value::pretty_cost` holds the
+`prettycost` formatting (quantize and clamp through `StampCost::from_f64`,
+three decimals) so `rns-net` can use it; `rns_cli::format::prettycost` from
+commit 27 now calls it for its numeric case. `insufficient_stamp_diagnostic`
+prints the value with it. The "previously discovered" variant carries no
+value, as upstream's.
+
+**Evidence:** `insufficient_stamp_diagnostic_includes_calculated_value` (now
+`7.250`, matching `RNS.prettycost(7.25)` at `6927c3c5`) and
+`pretty_cost_matches_upstream_prettycost`.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 

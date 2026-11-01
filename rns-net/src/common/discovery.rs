@@ -221,8 +221,13 @@ pub struct DiscoveredInterface {
     pub pr_cost: Option<StampCost>,
 }
 
+/// Upstream prints the rejected value with `RNS.prettycost` since rgit
+/// `22bf35d5`.
 fn insufficient_stamp_diagnostic(value: StampValue) -> String {
-    format!("Ignored discovered interface with insufficient stamp value {value}")
+    format!(
+        "Ignored discovered interface with insufficient stamp value {}",
+        rns_crypto::stamp_value::pretty_cost(value.as_f64())
+    )
 }
 
 /// Bounded FIFO cache for discovery payloads with invalid proof-of-work stamps.
@@ -1012,7 +1017,7 @@ mod tests {
     fn insufficient_stamp_diagnostic_includes_calculated_value() {
         assert_eq!(
             insufficient_stamp_diagnostic(StampValue::from_fp(7 * 256 + 64)),
-            "Ignored discovered interface with insufficient stamp value 7.25"
+            "Ignored discovered interface with insufficient stamp value 7.250"
         );
     }
 
