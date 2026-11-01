@@ -1012,6 +1012,55 @@ fn python_rns_is_available_for_utility_interop() {
 
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnpath_lists_rust_path_table() {
+    // Since rgit 21170877 Python's rnpath reads `value` and `lr_cost` from
+    // every path table entry, so a daemon without them breaks `rnpath -t`.
+    let harness = Harness::start("python-rnpath");
+    let listener_identity = harness.path("listener.identity");
+    let receive = harness.path("receive");
+    fs::create_dir_all(&receive).unwrap();
+    let destination = harness.destination(Implementation::Rust, "rncp", &listener_identity);
+    let _listener = harness.listener(
+        Implementation::Rust,
+        "rncp",
+        &listener_identity,
+        &destination,
+        &[
+            "--no-auth".into(),
+            "--save".into(),
+            receive.to_string_lossy().into_owned(),
+            "-b".into(),
+            "1".into(),
+        ],
+    );
+
+    let mut command = harness.python_command("rnpath");
+    command.args(["--config", harness.client_config.to_str().unwrap(), "-t"]);
+    let output = run(command);
+    assert_success(&output, "Python rnpath -t against the Rust daemon");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains(&destination))
+        .unwrap_or_else(|| panic!("rnpath did not list {destination}:\n{stdout}"));
+
+    let mut probe = Command::new("python3");
+    probe.args(["-c", "import RNS; print(hasattr(RNS, 'prettycost'))"]);
+    let probe = run(probe);
+    assert_success(&probe, "probe RNS.prettycost");
+    if String::from_utf8_lossy(&probe.stdout).trim() == "True" {
+        // The listener's destination is a known destination of the client
+        // daemon, so its stamp value is reported; it announces no link
+        // request cost.
+        assert!(
+            line.contains("(dv:") && !line.contains("(dv:?") && line.ends_with("/lc:?)"),
+            "unexpected rnpath line: {line}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_rnstatus_manages_rust_interface() {
     let mut version_command = Command::new("python3");
     version_command.args(["-c", "import RNS; print(RNS.__version__)"]);

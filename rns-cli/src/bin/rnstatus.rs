@@ -8,7 +8,7 @@ use std::process;
 use std::time::{Duration, Instant};
 
 use rns_cli::args::Args;
-use rns_cli::format::{prettyfrequency, prettyhexrep, prettytime, size_str, speed_str};
+use rns_cli::format::{prettycost, prettyfrequency, prettyhexrep, prettytime, size_str, speed_str};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
@@ -1607,6 +1607,10 @@ fn show_discovered_interfaces(
                 "Transport    : {}",
                 if transport { "Enabled" } else { "Disabled" }
             );
+            println!("Stamp Value  : {}", value);
+            if let Some(costs) = discovered_costs(iface) {
+                println!("Costs        : {}", costs);
+            }
             println!(
                 "Distance     : {} hop{}",
                 hops,
@@ -1660,8 +1664,6 @@ fn show_discovered_interfaces(
             if let Some(port) = iface.get("port").and_then(|v| v.as_int()) {
                 println!("Port         : {}", port);
             }
-
-            println!("Stamp Value  : {}", value);
 
             // Config entry
             if let Some(config) = iface.get("config_entry").and_then(|v| v.as_str()) {
@@ -1756,16 +1758,36 @@ fn show_discovered_interfaces(
 
 const DISCOVERY_DETAIL_SEPARATOR_WIDTH: usize = 47;
 
-/// A discovered interface's stamp value as upstream prints it with `str()`.
-/// Values are floats since rgit `78fb90ea` (`24.0`, `24.73046875`); older
-/// daemons send whole-bit integers. Rust's `{:?}` matches Python's float repr
-/// for these exactly representable values.
+/// A number from an RPC value, as `RNS.prettycost` accepts it: a float or
+/// an integer (older daemons send whole-bit integer values), anything else
+/// is no number.
+fn pickle_number(value: Option<&PickleValue>) -> Option<f64> {
+    value.and_then(|value| {
+        value
+            .as_float()
+            .or_else(|| value.as_int().map(|v| v as f64))
+    })
+}
+
+/// A discovered interface's stamp value as upstream prints it since rgit
+/// `21170877`, with `RNS.prettycost` (`24.730`).
 fn discovered_stamp_value(iface: &PickleValue) -> String {
-    match iface.get("value").or_else(|| iface.get("stamp_value")) {
-        Some(PickleValue::Float(value)) => format!("{value:?}"),
-        Some(value) => value.as_int().unwrap_or(0).to_string(),
-        None => "0".to_string(),
-    }
+    prettycost(pickle_number(
+        iface.get("value").or_else(|| iface.get("stamp_value")),
+    ))
+}
+
+/// The announced destination and path request costs, printed only when the
+/// daemon reports both keys (upstream `21170877` `has_cost_info`); a cost the
+/// interface did not announce prints as `?`.
+fn discovered_costs(iface: &PickleValue) -> Option<String> {
+    let dst_cost = iface.get("dst_cost")?;
+    let pr_cost = iface.get("pr_cost")?;
+    Some(format!(
+        "Dst {}, PR {}",
+        prettycost(pickle_number(Some(dst_cost))),
+        prettycost(pickle_number(Some(pr_cost)))
+    ))
 }
 
 fn discovered_stack(iface: &PickleValue) -> String {
@@ -2039,20 +2061,50 @@ mod tests {
     }
 
     #[test]
-    fn discovered_stamp_value_prints_like_python_str() {
+    fn discovered_stamp_value_prints_like_python_prettycost() {
         let iface = |value: PickleValue| {
             PickleValue::Dict(vec![(PickleValue::String("value".into()), value)])
         };
         assert_eq!(
             discovered_stamp_value(&iface(PickleValue::Float(24.73046875))),
-            "24.73046875"
+            "24.730"
         );
         assert_eq!(
             discovered_stamp_value(&iface(PickleValue::Float(24.0))),
-            "24.0"
+            "24.000"
         );
-        assert_eq!(discovered_stamp_value(&iface(PickleValue::Int(24))), "24");
-        assert_eq!(discovered_stamp_value(&PickleValue::Dict(Vec::new())), "0");
+        assert_eq!(
+            discovered_stamp_value(&iface(PickleValue::Int(24))),
+            "24.000"
+        );
+        assert_eq!(discovered_stamp_value(&iface(PickleValue::None)), "?");
+        assert_eq!(discovered_stamp_value(&PickleValue::Dict(Vec::new())), "?");
+    }
+
+    #[test]
+    fn discovered_costs_need_both_keys_and_print_unknown_as_question_mark() {
+        let key = |name: &str, value: PickleValue| (PickleValue::String(name.into()), value);
+        assert_eq!(
+            discovered_costs(&PickleValue::Dict(vec![
+                key("dst_cost", PickleValue::Float(23.5)),
+                key("pr_cost", PickleValue::Float(15.80078125)),
+            ])),
+            Some("Dst 23.500, PR 15.801".into())
+        );
+        assert_eq!(
+            discovered_costs(&PickleValue::Dict(vec![
+                key("dst_cost", PickleValue::None),
+                key("pr_cost", PickleValue::None),
+            ])),
+            Some("Dst ?, PR ?".into())
+        );
+        assert_eq!(
+            discovered_costs(&PickleValue::Dict(vec![key(
+                "dst_cost",
+                PickleValue::Float(23.5)
+            )])),
+            None
+        );
     }
 
     #[test]

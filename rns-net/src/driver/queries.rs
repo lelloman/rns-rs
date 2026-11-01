@@ -354,6 +354,7 @@ impl Driver {
                             .map(|i| i.name.clone())
                     })
                     .unwrap_or_default();
+                let known = self.known_destinations.get(hash);
                 PathTableEntry {
                     hash: *hash,
                     timestamp: entry.timestamp,
@@ -363,6 +364,8 @@ impl Driver {
                     used: entry.used,
                     interface: entry.receiving_interface,
                     interface_name: iface_name,
+                    stamp_value: known.map(|known| known.stamp_value),
+                    lr_cost: known.and_then(|known| known.lr_cost),
                 }
             })
             .collect();

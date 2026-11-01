@@ -7,7 +7,7 @@ use std::process;
 use std::time::Duration;
 
 use rns_cli::args::Args;
-use rns_cli::format::{prettyfrequency, prettyhexrep, prettytime};
+use rns_cli::format::{prettycost, prettyfrequency, prettyhexrep, prettytime};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
@@ -265,18 +265,35 @@ fn render_path_table(response: &PickleValue, show_usage: bool) {
                 }
             };
             println!(
-                "{:<34} {:>6} {:<34} {:<10} {}{}",
+                "{:<34} {:>6} {:<34} {:<10} {} {}{}",
                 &hash[..hash.len().min(32)],
                 hops,
                 &via[..via.len().min(32)],
                 expires,
                 interface,
+                path_costs(entry),
                 usage,
             );
         }
     } else {
         eprintln!("Unexpected response format");
     }
+}
+
+/// The destination's stamp value and link request cost, in upstream's
+/// `rnpath` notation since rgit `21170877` (`(dv:25.000/lc:19.199)`), with
+/// `?` for what the daemon does not know or does not report.
+fn path_costs(entry: &PickleValue) -> String {
+    let number = |key: &str| {
+        entry
+            .get(key)
+            .and_then(|v| v.as_float().or_else(|| v.as_int().map(|v| v as f64)))
+    };
+    format!(
+        "(dv:{}/lc:{})",
+        prettycost(number("value")),
+        prettycost(number("lr_cost"))
+    )
 }
 
 fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
@@ -789,6 +806,29 @@ mod tests {
         assert_eq!(pretty_date_elapsed(3600), "60 minutes");
         assert_eq!(pretty_date_elapsed(7199), "119 minutes");
         assert_eq!(pretty_date_elapsed(7200), "2 hours");
+    }
+
+    #[test]
+    fn rnpath_path_costs_use_upstream_notation() {
+        let entry = |value: PickleValue, lr_cost: PickleValue| {
+            PickleValue::Dict(vec![
+                (PickleValue::String("value".into()), value),
+                (PickleValue::String("lr_cost".into()), lr_cost),
+            ])
+        };
+        assert_eq!(
+            path_costs(&entry(
+                PickleValue::Float(25.0),
+                PickleValue::Float(4915.0 / 256.0)
+            )),
+            "(dv:25.000/lc:19.199)"
+        );
+        assert_eq!(
+            path_costs(&entry(PickleValue::Float(0.0), PickleValue::None)),
+            "(dv:0.000/lc:?)"
+        );
+        // A daemon from before 21170877 sends neither key.
+        assert_eq!(path_costs(&PickleValue::Dict(Vec::new())), "(dv:?/lc:?)");
     }
 
     #[test]

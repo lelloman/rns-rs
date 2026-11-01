@@ -99,6 +99,19 @@ pub fn prettyfrequency(freq: f64) -> String {
     }
 }
 
+/// Format a stamp value or cost as upstream's `RNS.prettycost` does
+/// (rgit `21170877`): quantized to the 1/256 cost grid and clamped to
+/// `STAMP_COST_CAP`, with three decimals, or `?` when there is none.
+pub fn prettycost(value: Option<f64>) -> String {
+    match value {
+        Some(value) => format!(
+            "{:.3}",
+            rns_core::stamp::StampCost::from_f64(value).as_f64()
+        ),
+        None => "?".into(),
+    }
+}
+
 /// RFC 4648 Base32 encoding (standard alphabet, with padding).
 pub fn base32_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -159,6 +172,21 @@ mod tests {
         assert_eq!(size_str(1234), "1.23 KB");
         assert_eq!(size_str(1234567), "1.23 MB");
         assert_eq!(size_str(1234567890), "1.23 GB");
+    }
+
+    #[test]
+    fn prettycost_quantizes_clamps_and_rounds_like_upstream() {
+        assert_eq!(prettycost(None), "?");
+        assert_eq!(prettycost(Some(23.5)), "23.500");
+        assert_eq!(prettycost(Some(24.734375)), "24.734");
+        // Rounded onto the 1/256 grid first: 19.2 is 4915/256.
+        assert_eq!(prettycost(Some(19.2)), "19.199");
+        // Exact ties round to even, as Python's format does.
+        assert_eq!(prettycost(Some(0.0625)), "0.062");
+        assert_eq!(prettycost(Some(0.1875)), "0.188");
+        // Clamped to the cost cap, as quantize_cost is.
+        assert_eq!(prettycost(Some(256.0)), "100.000");
+        assert_eq!(prettycost(Some(-1.0)), "0.000");
     }
 
     #[test]

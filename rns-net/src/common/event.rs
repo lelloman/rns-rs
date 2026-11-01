@@ -1089,6 +1089,11 @@ pub struct PathTableEntry {
     pub used: f64,
     pub interface: InterfaceId,
     pub interface_name: String,
+    /// Stamp value of the destination's announce, when it is a known
+    /// destination (upstream `21170877` path table `value`).
+    pub stamp_value: Option<rns_core::stamp::StampValue>,
+    /// Link request cost the destination announced, when known (`lr_cost`).
+    pub lr_cost: Option<rns_core::stamp::StampCost>,
 }
 
 /// A single rate table entry for query responses.

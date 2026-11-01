@@ -573,6 +573,8 @@ fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
                             "used": p.used,
                             "interface": p.interface_name,
                             "timestamp": p.timestamp,
+                            "value": p.stamp_value.map(|v| v.as_f64()),
+                            "lr_cost": p.lr_cost.map(|c| c.as_f64()),
                         })
                     })
                     .collect();
