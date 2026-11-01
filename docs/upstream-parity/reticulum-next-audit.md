@@ -3,26 +3,29 @@
 ## Scope and Baseline
 
 - audit date: `2026-10-29` (commit 5 integrated `2026-10-30`; extended to
-  commit 15 on `2026-10-30` and to commit 23 on `2026-10-31`)
+  commit 15 on `2026-10-30`, to commit 23 on `2026-10-31` and to commit 31 on
+  `2026-11-01`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `fe2fe94dd82030275bec150af87b4ec6292511c6`
-  (extended on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
+- target tag or ref: `rgit:master` tip `6927c3c589683041f027d9a04c598cb257d957a7`
+  (extended on 2026-11-01 from `fe2fe94dd82030275bec150af87b4ec6292511c6`,
+  on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
   on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `fe2fe94dd82030275bec150af87b4ec6292511c6` (provisional; rgit may advance before promotion)
-- target root tree: `a236442f8591bc582d7cc958d8cb307af9f11b86`
-- target `RNS` tree: `d60e3a206f47019ff541f93d1e47f5c036c8fa0e`
+- target normative commit: `6927c3c589683041f027d9a04c598cb257d957a7` (provisional; rgit may advance before promotion)
+- target root tree: `d3879d98d7e3a58ed1d860f061fae622dba81f8e`
+- target `RNS` tree: `11804a141590db5d3bed8cc2b10c013e463bedea`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..fe2fe94dd82030275bec150af87b4ec6292511c6`
-- commits in range: `23` (2 inventoried at the first tip, 3 added when rgit
-  advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31)
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..6927c3c589683041f027d9a04c598cb257d957a7`
+- commits in range: `31` (2 inventoried at the first tip, 3 added when rgit
+  advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31, 8
+  added on 2026-11-01)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
   integrated on `dev` from `7911858`; commits 16 to 23 on `dev` from
-  `b857fed`
+  `b857fed`; commits 24 to 31 inventoried on `dev` at `aec6087`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -53,6 +56,19 @@ unused path pool cull (commit 20) and makes the known destinations
 and 23). A new rgit branch, `patch_fix_channel_outlet_race`, holds one commit
 (`794e437f`, 2026-05-19) that is already an ancestor of the accepted
 baseline, so it adds nothing to the range.
+
+The 2026-11-01 refresh (both remotes fetched at 2026-11-01T07:41Z) found rgit
+at `6927c3c5` (committed 2026-10-31T17:37Z), eight linear commits past
+`fe2fe94d`, inventoried as 24 to 31. The GitHub mirror is still at
+`e40191b3`, `RNS.__version__` is still `1.6.0`, and no rgit branch other than
+`master` moved. Commit 25 replaces commit 23's `ALTER COLUMN ... DROP NOT
+NULL` migration, which SQLite rejects, with a rebuild of pre-release
+databases into the release format, and wraps persistence in per-row error
+handling. Commit 27 adds the stamp value and link request cost to the
+path-table RPC entries (`value`, `lr_cost`) that `rnpath` now formats
+unconditionally, plus a `prettycost` helper used by `rnstatus` and
+`rnpath`. The remaining commits are cleanups in `Storage.py`,
+`Transport.py`, `Destination.py`, `Discovery.py` and `rnpath.py`.
 
 ## Audit Vocabulary
 
@@ -99,6 +115,14 @@ Every commit in the audited range must appear exactly once.
 | 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Integrated | `fbe0cd3`; New `known_destinations` tables declare `packet_hash` nullable; rows without a packet hash load (`sqlite_new_schema_allows_a_missing_packet_hash`); rns-rs still writes 32 zero bytes |
 | 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Non-runtime | `fafc5b4`; Comment marking the `known_destinations` migrations as pre-release, to be folded into the final 1.6.0 schema; recorded at the native migration in `create_schema` |
 | 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Integrated | `0edfd8a`; Schema version 3: versions 1 and 2 are migrated by a table rebuild in one immediate transaction, since upstream's `ALTER COLUMN ... DROP NOT NULL` is not SQLite syntax (Python at `fe2fe94d` exits on every earlier database); the version is never lowered. Divergence: rns-rs completes the migration Python cannot |
+| 24 | `f1fc51ba09ef2549cb7e3f33520316a30cd6d422` | Cleanup | Needs port | |
+| 25 | `1d9067c3bdd9b874442f30f9cbed5481f128eb18` | Improved storage error handling | Needs port | |
+| 26 | `c4ed59be2cc6b0c168f16b50ba315f3fe9dacde7` | Cleanup | Needs port | |
+| 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Needs port | |
+| 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Needs port | |
+| 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Needs port | |
+| 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Needs port | |
+| 31 | `6927c3c589683041f027d9a04c598cb257d957a7` | Cleanup | Needs port | |
 
 ## Per-Commit Analysis
 
@@ -991,25 +1015,27 @@ upstream's statement cannot run).
 
 ## Integration Plan
 
-All twenty-three commits have a final disposition. The `Link.py:311` precedence of
+Commits 1 to 23 have a final disposition; commits 24 to 31 are inventoried
+and are integrated one at a time in upstream order. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it (still present at `fe2fe94d`). If upstream confirms that expression as written, the
+audit rechecks it (still present at `6927c3c5`). If upstream confirms that expression as written, the
 `LinkManager` responder check must follow it.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
+- [ ] Every upstream commit has a final disposition. Commits 24 to 31 are
+  inventoried only.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
-  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb` and the current tip
-  `fe2fe94d`; rerun if rgit advances.
+- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb` and `fe2fe94d`; not yet run
+  at the current tip `6927c3c5`.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
