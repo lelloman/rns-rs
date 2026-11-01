@@ -118,7 +118,7 @@ Every commit in the audited range must appear exactly once.
 | 24 | `f1fc51ba09ef2549cb7e3f33520316a30cd6d422` | Cleanup | Structurally covered | `create_schema` already runs the version read, the migration and the version write in one `BEGIN IMMEDIATE` transaction (commit 23, `b40b618`), rolled back on failure |
 | 25 | `1d9067c3bdd9b874442f30f9cbed5481f128eb18` | Improved storage error handling | Integrated | `KnownDestinationsStore::save_all` writes each destination in its own savepoint; a constraint, type-mismatch or too-big error leaves that destination out, is logged once at error level and retried on the next save, while other errors still abort the save; ratchets are already written one row per call; `sqlite_save_skips_a_rejected_destination_and_saves_the_rest` |
 | 26 | `c4ed59be2cc6b0c168f16b50ba315f3fe9dacde7` | Cleanup | Integrated | `SCHEMA_VERSION` 0 (the 1.6.0 release format); versions 1 to 3 are rebuilt into it with their rows kept (version 1 gains `lr_cost` first), where Python drops the table; versions above 3 are left alone; the stamp worker log line is renamed; `sqlite_rebuilds_a_v2_database_into_the_release_format`, `sqlite_rebuilds_a_v3_database_into_the_release_format`, `sqlite_keeps_a_version_above_the_pre_release_range`; runbook rollback note. Divergence: rows kept |
-| 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Needs port | |
+| 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Integrated | Path table RPC entries carry `value` and `lr_cost` from the known destination (None when unknown), also in `GET /api/paths`; `rns_cli::format::prettycost`; `rnstatus` discovered interfaces print the stamp value with it after `Transport`, plus `Costs : Dst …, PR …` when both keys are reported; `rnpath -t` appends `(dv:…/lc:…)`; `query_path_table`, `path_table_pickle_carries_stamp_value_and_lr_cost`, `prettycost_quantizes_clamps_and_rounds_like_upstream`, rnstatus and rnpath display tests, live `python_rnpath_lists_rust_path_table` (Python `rnpath -t` at `6927c3c5` raised `KeyError: 'value'` against rns-rs before) |
 | 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Needs port | |
 | 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Needs port | |
 | 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Needs port | |
@@ -1121,6 +1121,68 @@ from either side open on the other at version 0, and a database Python
 rebuilt opens in rns-rs.
 
 **Final disposition:** Integrated (divergence: pre-release rows are kept).
+
+### 27. `21170877` — Added stamp cost display to utilities
+
+**Upstream change:**
+
+- `RNS/__init__.py`: `prettycost(value)` returns `"?"` for `None` or a
+  non-number, otherwise `quantize_cost(value)` (rounded onto the 1/256 cost
+  grid and clamped to `STAMP_COST_CAP`) with three decimals.
+- `RNS/Reticulum.py`: each path table RPC entry gains `value` (the known
+  destination's stamp value, entry 6) and `lr_cost` (entry 7), both `None`
+  when the destination is not known.
+- `RNS/Utilities/rnpath.py`: `rnpath -t` prints each path as
+  `<hash> {hops:>3}h via <via> on <interface> expires in <compact time>
+  (dv:<value>/lc:<lr_cost>)`, reading `path["value"]` and `path["lr_cost"]`
+  directly; the usage suffix is computed but no longer printed.
+- `RNS/Utilities/rnstatus.py`: a discovered interface's detail view prints
+  `Stamp Value` after `Transport`, formatted with `prettycost`, followed by
+  `Costs        : Dst <dst_cost>, PR <pr_cost>` when the info has both
+  `dst_cost` and `pr_cost` keys; the table view's value column uses
+  `prettycost` too.
+- `RNS/Discovery.py`: the "Discovered … with stamp value" debug message
+  calls `RNS.prettystampval`, which does not exist (fixed to `prettycost` by
+  commit 29).
+
+**Rust applicability:** Needs port. Python's `rnpath -t` against an rns-rs
+shared instance raised `KeyError: 'value'` at `6927c3c5` (reproduced with
+the new interop test), so the RPC keys are an interop requirement. The
+display changes apply to the native `rnstatus` and `rnpath`.
+
+**Implementation:**
+
+- `PathTableEntry` gains `stamp_value` and `lr_cost`, filled by the driver's
+  path table query from `known_destinations`. The RPC pickle always carries
+  `value` and `lr_cost`, as floats or `None`, and `GET /api/paths` reports
+  them as `value` and `lr_cost` (null when unknown).
+- `rns_cli::format::prettycost` quantizes through `StampCost::from_f64`
+  (upstream's `cost_to_fp`) and prints three decimals. Rust's `{:.3}`
+  matches Python's formatting on all 25,601 grid values from 0 to 100,
+  including the 800 exact ties, which both round half to even.
+- `rnstatus`: the discovered interface detail view moves `Stamp Value` after
+  `Transport`, prints it with `prettycost`, and adds the `Costs` line when
+  the daemon reports both keys (a missing cost prints `?`, as upstream). The
+  table view uses `prettycost`. An integer value from an older daemon prints
+  as `24.000`.
+- `rnpath`: the native table keeps its own columns (and the usage suffix)
+  and appends upstream's `(dv:<value>/lc:<lr_cost>)`, with `?` when a daemon
+  does not report a key.
+- rns-rs has no "Discovered … with stamp value" log; see commit 29.
+
+**Evidence:** `query_path_table` (unstamped announce reports value 0 and no
+cost, a set value and cost are reported, both `None` once the destination
+is no longer known), `path_table_pickle_carries_stamp_value_and_lr_cost`,
+`prettycost_quantizes_clamps_and_rounds_like_upstream` (pinned to Python's
+output), `discovered_stamp_value_prints_like_python_prettycost`,
+`discovered_costs_need_both_keys_and_print_unknown_as_question_mark`,
+`rnpath_path_costs_use_upstream_notation`. Live:
+`python_rnpath_lists_rust_path_table` passes against Python at `6927c3c5`
+(the line ends `(dv:<value>/lc:?)`) and at the baseline `5d38ce30`, and
+fails with `KeyError: 'value'` against `6927c3c5` when the two RPC keys are
+removed.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 

@@ -4743,13 +4743,38 @@ fn query_path_table() {
     driver.run();
 
     let resp = resp_rx.recv().unwrap();
-    match resp {
+    let dest_hash = match resp {
         QueryResponse::PathTable(entries) => {
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].hops, 1);
+            // The announce is unstamped and carries no link request cost.
+            assert_eq!(
+                entries[0].stamp_value,
+                Some(rns_core::stamp::StampValue::ZERO)
+            );
+            assert_eq!(entries[0].lr_cost, None);
+            entries[0].hash
         }
         _ => panic!("unexpected response"),
-    }
+    };
+
+    // Upstream 21170877: entries carry the known destination's stamp value
+    // and link request cost, and neither once it is no longer known.
+    let known = driver.known_destinations.get_mut(&dest_hash).unwrap();
+    known.stamp_value = rns_core::stamp::StampValue::from_fp(25 * 256 + 64);
+    known.lr_cost = Some(rns_core::stamp::StampCost::from_fp(4915));
+    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
+        panic!("unexpected response");
+    };
+    assert_eq!(entries[0].stamp_value.map(|v| v.as_f64()), Some(25.25));
+    assert_eq!(entries[0].lr_cost.map(|c| c.fp()), Some(4915));
+
+    driver.known_destinations.remove(&dest_hash);
+    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
+        panic!("unexpected response");
+    };
+    assert_eq!(entries[0].stamp_value, None);
+    assert_eq!(entries[0].lr_cost, None);
 }
 
 #[test]

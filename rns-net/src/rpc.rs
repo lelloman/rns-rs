@@ -2063,6 +2063,21 @@ fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
                     PickleValue::String("interface".into()),
                     PickleValue::String(e.interface_name.clone()),
                 ),
+                // Upstream 21170877: the known destination's stamp value and
+                // link request cost, None when it is not a known destination
+                // (or announced no cost). rnpath reads both unconditionally.
+                (
+                    PickleValue::String("value".into()),
+                    e.stamp_value
+                        .map(|value| PickleValue::Float(value.as_f64()))
+                        .unwrap_or(PickleValue::None),
+                ),
+                (
+                    PickleValue::String("lr_cost".into()),
+                    e.lr_cost
+                        .map(|cost| PickleValue::Float(cost.as_f64()))
+                        .unwrap_or(PickleValue::None),
+                ),
             ])
         })
         .collect();
@@ -4000,6 +4015,42 @@ mod tests {
         let response = handle_rpc_request(&request, &event_tx).unwrap();
         assert_eq!(parse_hook_result(&response).unwrap(), Ok(()));
         driver.join().unwrap();
+    }
+
+    #[test]
+    fn path_table_pickle_carries_stamp_value_and_lr_cost() {
+        // Upstream 21170877: rnpath formats `value` and `lr_cost` of every
+        // entry, so both keys are present, as None when unknown.
+        let entry = |stamp_value, lr_cost| PathTableEntry {
+            hash: [0x11; 16],
+            timestamp: 1.0,
+            via: [0x22; 16],
+            hops: 2,
+            expires: 3.0,
+            used: 0.0,
+            interface: crate::InterfaceId(1),
+            interface_name: "iface".into(),
+            stamp_value,
+            lr_cost,
+        };
+        let pickle = path_table_to_pickle(&[
+            entry(
+                Some(rns_core::stamp::StampValue::from_fp(25 * 256 + 64)),
+                Some(rns_core::stamp::StampCost::from_fp(4915)),
+            ),
+            entry(None, None),
+        ]);
+        let entries = pickle.as_list().unwrap();
+        assert_eq!(
+            entries[0].get("value").and_then(|v| v.as_float()),
+            Some(25.25)
+        );
+        assert_eq!(
+            entries[0].get("lr_cost").and_then(|v| v.as_float()),
+            Some(4915.0 / 256.0)
+        );
+        assert_eq!(entries[1].get("value"), Some(&PickleValue::None));
+        assert_eq!(entries[1].get("lr_cost"), Some(&PickleValue::None));
     }
 
     #[test]
