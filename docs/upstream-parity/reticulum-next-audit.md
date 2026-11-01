@@ -119,7 +119,7 @@ Every commit in the audited range must appear exactly once.
 | 25 | `1d9067c3bdd9b874442f30f9cbed5481f128eb18` | Improved storage error handling | Integrated | `KnownDestinationsStore::save_all` writes each destination in its own savepoint; a constraint, type-mismatch or too-big error leaves that destination out, is logged once at error level and retried on the next save, while other errors still abort the save; ratchets are already written one row per call; `sqlite_save_skips_a_rejected_destination_and_saves_the_rest` |
 | 26 | `c4ed59be2cc6b0c168f16b50ba315f3fe9dacde7` | Cleanup | Integrated | `SCHEMA_VERSION` 0 (the 1.6.0 release format); versions 1 to 3 are rebuilt into it with their rows kept (version 1 gains `lr_cost` first), where Python drops the table; versions above 3 are left alone; the stamp worker log line is renamed; `sqlite_rebuilds_a_v2_database_into_the_release_format`, `sqlite_rebuilds_a_v3_database_into_the_release_format`, `sqlite_keeps_a_version_above_the_pre_release_range`; runbook rollback note. Divergence: rows kept |
 | 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Integrated | Path table RPC entries carry `value` and `lr_cost` from the known destination (None when unknown), also in `GET /api/paths`; `rns_cli::format::prettycost`; `rnstatus` discovered interfaces print the stamp value with it after `Transport`, plus `Costs : Dst …, PR …` when both keys are reported; `rnpath -t` appends `(dv:…/lc:…)`; `query_path_table`, `path_table_pickle_carries_stamp_value_and_lr_cost`, `prettycost_quantizes_clamps_and_rounds_like_upstream`, rnstatus and rnpath display tests, live `python_rnpath_lists_rust_path_table` (Python `rnpath -t` at `6927c3c5` raised `KeyError: 'value'` against rns-rs before) |
-| 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Needs port | |
+| 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Non-runtime | Debug message only; rns-rs does not log a destination stamp loaded from storage (`ensure_destination_stamp` reuses it silently and logs only a newly ground stamp) |
 | 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Needs port | |
 | 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Needs port | |
 | 31 | `6927c3c589683041f027d9a04c598cb257d957a7` | Cleanup | Needs port | |
@@ -1183,6 +1183,19 @@ fails with `KeyError: 'value'` against `6927c3c5` when the two RPC keys are
 removed.
 
 **Final disposition:** Integrated.
+
+### 28. `af4504d6` — Cleanup (loaded stamp log)
+
+**Upstream change** (`RNS/Destination.py`): the `LOG_DEBUG` message
+"Loaded stamp with value … for …", logged when a destination finds a
+persisted stamp at construction, formats the value with `RNS.prettycost`.
+
+**Rust applicability:** Non-runtime. rns-rs has no counterpart message:
+`ensure_destination_stamp` and the announce path reuse a persisted stamp
+without logging and only log a newly generated one. Stamp handling is
+unchanged.
+
+**Final disposition:** Non-runtime; mapping only.
 
 ## Integration Plan
 
