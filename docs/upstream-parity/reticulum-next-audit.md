@@ -115,7 +115,7 @@ Every commit in the audited range must appear exactly once.
 | 21 | `eab2983b9516a29d6699a3c54c36691e6113b0e3` | Fixed invalid schema constraint | Integrated | `fbe0cd3`; New `known_destinations` tables declare `packet_hash` nullable; rows without a packet hash load (`sqlite_new_schema_allows_a_missing_packet_hash`); rns-rs still writes 32 zero bytes |
 | 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Non-runtime | `fafc5b4`; Comment marking the `known_destinations` migrations as pre-release, to be folded into the final 1.6.0 schema; recorded at the native migration in `create_schema` |
 | 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Integrated | `0edfd8a`; Schema version 3: versions 1 and 2 are migrated by a table rebuild in one immediate transaction, since upstream's `ALTER COLUMN ... DROP NOT NULL` is not SQLite syntax (Python at `fe2fe94d` exits on every earlier database); the version is never lowered. Divergence: rns-rs completes the migration Python cannot |
-| 24 | `f1fc51ba09ef2549cb7e3f33520316a30cd6d422` | Cleanup | Needs port | |
+| 24 | `f1fc51ba09ef2549cb7e3f33520316a30cd6d422` | Cleanup | Structurally covered | `create_schema` already runs the version read, the migration and the version write in one `BEGIN IMMEDIATE` transaction (commit 23, `b40b618`), rolled back on failure |
 | 25 | `1d9067c3bdd9b874442f30f9cbed5481f128eb18` | Improved storage error handling | Needs port | |
 | 26 | `c4ed59be2cc6b0c168f16b50ba315f3fe9dacde7` | Cleanup | Needs port | |
 | 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Needs port | |
@@ -1012,6 +1012,20 @@ new rns-rs database opens at version 3.
 
 **Final disposition:** Integrated (divergence: completes the migration
 upstream's statement cannot run).
+
+### 24. `f1fc51ba` — Cleanup (migration transaction)
+
+**Upstream change** (`RNS/Storage.py`): the pre-release migrations of
+`KnownDestinationsStore.__create_schema` run between an explicit `BEGIN` and
+`COMMIT`, so the `ALTER TABLE` steps and the `user_version` write apply
+together.
+
+**Rust applicability:** Structurally covered. The commit 23 port already
+wraps `migrate_schema` in a `BEGIN IMMEDIATE` transaction in
+`create_schema` and rolls it back on any error, which is atomic and also
+excludes a second process between the version read and the version write.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
