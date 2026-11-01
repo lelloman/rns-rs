@@ -122,7 +122,7 @@ Every commit in the audited range must appear exactly once.
 | 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Non-runtime | Debug message only; rns-rs does not log a destination stamp loaded from storage (`ensure_destination_stamp` reuses it silently and logs only a newly ground stamp) |
 | 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Non-runtime | Debug message only; fixes the undefined `RNS.prettystampval` from commit 27; rns-rs has no per-discovery "Discovered … with stamp value" log |
 | 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Integrated | The insufficient discovery stamp diagnostic prints the value with `rns_crypto::stamp_value::pretty_cost` (`7.250`), which `rns_cli::format::prettycost` now shares; `insufficient_stamp_diagnostic_includes_calculated_value`, `pretty_cost_matches_upstream_prettycost` |
-| 31 | `6927c3c589683041f027d9a04c598cb257d957a7` | Cleanup | Needs port | |
+| 31 | `6927c3c589683041f027d9a04c598cb257d957a7` | Cleanup | Non-runtime | Quoting fix in upstream's `rnpath.py` f-string, which Python before 3.12 could not parse; the native `rnpath` output from commit 27 is unaffected |
 
 ## Per-Commit Analysis
 
@@ -1237,6 +1237,21 @@ value, as upstream's.
 `pretty_cost_matches_upstream_prettycost`.
 
 **Final disposition:** Integrated.
+
+### 31. `6927c3c5` — Cleanup (rnpath quoting)
+
+**Upstream change** (`RNS/Utilities/rnpath.py`): the path table line added
+in commit 27 used double-quoted subscripts (`path["hops"]`) inside a
+double-quoted f-string; they become single-quoted, and the commented-out
+previous `print` is removed. Reusing the enclosing quote inside an f-string
+is only valid from Python 3.12 (PEP 701), so from commit 27 to commit 30
+`rnpath.py` would not compile on older interpreters. This follows from the
+grammar; only Python 3.12 was available here, so it was not reproduced.
+
+**Rust applicability:** Non-runtime. The output is unchanged, and the native
+`rnpath` (commit 27) has no counterpart to the quoting.
+
+**Final disposition:** Non-runtime; mapping only.
 
 ## Integration Plan
 
