@@ -25,7 +25,7 @@
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
   integrated on `dev` from `7911858`; commits 16 to 23 on `dev` from
-  `b857fed`; commits 24 to 31 inventoried on `dev` at `aec6087`
+  `b857fed`; commits 24 to 31 on `dev` from `147c987`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -1255,8 +1255,7 @@ grammar; only Python 3.12 was available here, so it was not reproduced.
 
 ## Integration Plan
 
-Commits 1 to 23 have a final disposition; commits 24 to 31 are inventoried
-and are integrated one at a time in upstream order. The `Link.py:311` precedence of
+All thirty-one commits have a final disposition. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
@@ -1265,17 +1264,16 @@ audit rechecks it (still present at `6927c3c5`). If upstream confirms that expre
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition. Commits 24 to 31 are
-  inventoried only.
+- [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
-  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb` and `fe2fe94d`; not yet run
-  at the current tip `6927c3c5`.
+- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d` and the current
+  tip `6927c3c5`; rerun if rgit advances.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -1428,3 +1426,28 @@ configured checkout.
 Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
 018c7fa..0edfd8a` lists one trailer per commit, and each of the eight upstream
 hashes appears in exactly one local commit.
+
+### Commits 24 to 31 (rgit tip `6927c3c5`)
+
+Run on 2026-11-01 at `e2cf9f1` (on `147c987`, which is `origin/master`
+`ce78462` plus the inventory commit), same host. Interop against `6927c3c5`
+used a disposable worktree of that commit at `/tmp/rns-upstream-6927c3c5`;
+the baseline `5d38ce30` was exercised from the configured checkout.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | per-commit tests named in the analyses | All passed |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,068 passed, 0 failed, 12 ignored |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,127 passed, 0 failed, 12 ignored |
+| Feature checks | `cargo check -p rns-cli -p rns-ctl --bins --no-default-features`, and with `--features iface-tcp,rns-hooks-native` | Clean |
+| Interop, baseline `5d38ce30` | `python_interop -- --include-ignored`; `utility_interop -- --include-ignored` | 4/4; 10/10 (the new `python_rnpath_lists_rust_path_table` skips its format check, as the baseline has no `prettycost`) |
+| Interop, target `6927c3c5` | the same against the `6927c3c5` worktree | 4/4; 10/10 |
+| `rnpath` against rns-rs | `python_rnpath_lists_rust_path_table` at `6927c3c5` with the two RPC keys removed | Fails with `KeyError: 'value'`, as predicted; passes with them |
+| Storage against upstream | `RNS.Storage.KnownDestinationsStore` at `6927c3c5` on version 2 databases (before and after the rns-rs migration) and on new databases from either side | Dropped to zero rows with the rebuild warning; version 0 with its row and no warning; version 0 both ways |
+| Drift | `python3 scripts/check_upstream_drift.py` (fetched 2026-11-01T08:18Z) | rgit `6927c3c5` ahead by the 31 audited commits; GitHub `e40191b3` behind |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
+147c987..e2cf9f1` lists one trailer per commit, and the eight hashes equal
+`git rev-list fe2fe94d..6927c3c5`, each in exactly one local commit.
