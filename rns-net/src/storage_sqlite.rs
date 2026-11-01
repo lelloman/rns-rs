@@ -464,8 +464,13 @@ impl RatchetStore for KnownDestinationsStore {
     }
 }
 
-/// Schema version shared with Python's `known_destinations.db`.
-const SCHEMA_VERSION: i64 = 3;
+/// Schema version of Python's released `known_destinations.db` (upstream
+/// `c4ed59be`): the 1.6.0 release format is version 0, with no migrations.
+const SCHEMA_VERSION: i64 = 0;
+
+/// Highest pre-release version (`fe2fe94d`). Versions 1 to 3 were written by
+/// pre-release Python or by rns-rs before the release format settled.
+const LAST_PRE_RELEASE_VERSION: i64 = 3;
 
 /// Columns of `known_destinations`, in Python's order.
 const KNOWN_DESTINATION_COLUMNS: &str = "destination_hash, last_heard, packet_hash, public_key, \
@@ -520,35 +525,29 @@ fn migrate_schema(conn: &Connection) -> io::Result<()> {
     )
     .map_err(sql_error)?;
 
-    // Version 2 adds the announced link request cost. Upstream calls its
-    // migrations pre-release and plans to fold them into the final 1.6.0
-    // schema; recheck these steps against that schema when it lands.
-    if db_version > 0 && db_version < 2 {
-        conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost REAL", [])
-            .map_err(sql_error)?;
-    }
-
-    // Version 3 drops NOT NULL from packet_hash. Upstream issues
-    // `ALTER TABLE ... ALTER COLUMN ... DROP NOT NULL`, which SQLite does not
-    // support, so Python at fe2fe94d logs the failure and exits on every
-    // earlier database. SQLite's documented procedure is a table rebuild,
-    // which also restores Python's column order after the version 2 step.
-    if db_version > 0 && db_version < 3 {
+    // Pre-release databases (versions 1 to 3) are brought to the release
+    // format. Upstream drops their `known_destinations` table and relearns it
+    // from announces; rns-rs rebuilds it with the rows kept. Version 1 lacks
+    // `lr_cost`; version 2 has `packet_hash NOT NULL`, which SQLite can only
+    // drop by rebuilding the table, and the rebuild also restores Python's
+    // column order after the `ADD COLUMN`. Version 3 already has the release
+    // columns and is rebuilt the same way. A version above 3 comes from a
+    // newer release and is left as it is.
+    if (1..=LAST_PRE_RELEASE_VERSION).contains(&db_version) {
+        if db_version < 2 {
+            conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost REAL", [])
+                .map_err(sql_error)?;
+        }
         conn.execute_batch(&format!(
             "{}
-             INSERT INTO known_destinations_v3 ({KNOWN_DESTINATION_COLUMNS})
+             INSERT INTO known_destinations_release ({KNOWN_DESTINATION_COLUMNS})
                SELECT {KNOWN_DESTINATION_COLUMNS} FROM known_destinations;
              DROP TABLE known_destinations;
-             ALTER TABLE known_destinations_v3 RENAME TO known_destinations;",
-            known_destinations_table("known_destinations_v3")
+             ALTER TABLE known_destinations_release RENAME TO known_destinations;
+             PRAGMA user_version = {SCHEMA_VERSION};",
+            known_destinations_table("known_destinations_release")
         ))
         .map_err(sql_error)?;
-    }
-
-    // Never lower a version written by a newer release.
-    if db_version < SCHEMA_VERSION {
-        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
-            .map_err(sql_error)?;
     }
     Ok(())
 }
@@ -811,6 +810,8 @@ mod tests {
         let path = default_path(&dir);
         let store = KnownDestinationsStore::open(&path, 16).unwrap();
         assert!(!packet_hash_not_null(&path));
+        // The release format is version 0 (upstream c4ed59be).
+        assert_eq!(user_version(&path), 0);
 
         let conn = Connection::open(&path).unwrap();
         conn.execute(
@@ -853,9 +854,9 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_migrates_v2_schema_by_rebuilding_without_not_null() {
-        // Upstream fe2fe94d moves to version 3 with a statement SQLite cannot
-        // run; the rebuild keeps every row and drops the constraint.
+    fn sqlite_rebuilds_a_v2_database_into_the_release_format() {
+        // Upstream c4ed59be drops pre-release tables and settles on version
+        // 0; the rebuild keeps every row and drops the constraint.
         let dir = temp_dir();
         let path = default_path(&dir);
         {
@@ -896,7 +897,7 @@ mod tests {
         assert!(packet_hash_not_null(&path));
 
         let store = KnownDestinationsStore::open(&path, 16).unwrap();
-        assert_eq!(user_version(&path), 3);
+        assert_eq!(user_version(&path), 0);
         assert!(!packet_hash_not_null(&path));
         assert_eq!(
             column_names(&path),
@@ -932,18 +933,63 @@ mod tests {
             .unwrap();
         assert_eq!(packet_hash, [0x88; 32]);
 
-        // Reopening a version 3 database changes nothing.
+        // Reopening a release database changes nothing.
         drop(store);
         KnownDestinationsStore::open(&path, 16).unwrap();
-        assert_eq!(user_version(&path), 3);
+        assert_eq!(user_version(&path), 0);
+        assert_eq!(
+            KnownDestinationsStore::open(&path, 16)
+                .unwrap()
+                .load_all()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
-    fn sqlite_keeps_a_newer_schema_version() {
+    fn sqlite_rebuilds_a_v3_database_into_the_release_format() {
+        // Version 3, written by rns-rs or Python at fe2fe94d, already has the
+        // release columns; it keeps its rows and moves to version 0.
+        let dir = temp_dir();
+        let path = default_path(&dir);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!(
+                "{}
+                 PRAGMA user_version = 3;",
+                known_destinations_table("known_destinations")
+            ))
+            .unwrap();
+            conn.execute(
+                "INSERT INTO known_destinations
+                   (destination_hash, last_heard, packet_hash, public_key, app_data,
+                    used, stamp, stamp_value, lr_cost, identity_hash)
+                 VALUES (?1,?2,NULL,?3,NULL,0,NULL,25.0,NULL,?4)",
+                params![
+                    [0x99u8; 16].to_vec(),
+                    1_900.0f64,
+                    [0x99u8; 64].to_vec(),
+                    [0x99u8; 16].to_vec(),
+                ],
+            )
+            .unwrap();
+        }
+
+        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        assert_eq!(user_version(&path), 0);
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, [0x99; 16]);
+        assert_eq!(loaded[0].1.stamp_value.as_f64(), 25.0);
+    }
+
+    #[test]
+    fn sqlite_keeps_a_version_above_the_pre_release_range() {
         let dir = temp_dir();
         let path = default_path(&dir);
         KnownDestinationsStore::open(&path, 16).unwrap();
-        assert_eq!(user_version(&path), 3);
+        assert_eq!(user_version(&path), 0);
         Connection::open(&path)
             .unwrap()
             .execute_batch("PRAGMA user_version = 4;")
@@ -1004,7 +1050,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 0);
         assert!(!packet_hash_not_null(&path));
 
         // An integer cost written before fractional link costs reads as whole

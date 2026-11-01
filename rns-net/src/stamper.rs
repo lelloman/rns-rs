@@ -416,7 +416,7 @@ impl Stamper {
             .spawn(move || worker_main(inner));
         match spawned {
             Ok(_) => {
-                log::debug!("Starting announce stamper worker");
+                log::debug!("Starting stamp worker");
                 queues.worker_alive = true;
             }
             Err(error) => log::warn!("could not start stamper worker: {error}"),
