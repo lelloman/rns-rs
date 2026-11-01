@@ -116,7 +116,7 @@ Every commit in the audited range must appear exactly once.
 | 22 | `d45a5860fdf57b35c4906c22920653476f065f7e` | Cleanup | Non-runtime | `fafc5b4`; Comment marking the `known_destinations` migrations as pre-release, to be folded into the final 1.6.0 schema; recorded at the native migration in `create_schema` |
 | 23 | `fe2fe94dd82030275bec150af87b4ec6292511c6` | Pre-release migrations | Integrated | `0edfd8a`; Schema version 3: versions 1 and 2 are migrated by a table rebuild in one immediate transaction, since upstream's `ALTER COLUMN ... DROP NOT NULL` is not SQLite syntax (Python at `fe2fe94d` exits on every earlier database); the version is never lowered. Divergence: rns-rs completes the migration Python cannot |
 | 24 | `f1fc51ba09ef2549cb7e3f33520316a30cd6d422` | Cleanup | Structurally covered | `create_schema` already runs the version read, the migration and the version write in one `BEGIN IMMEDIATE` transaction (commit 23, `b40b618`), rolled back on failure |
-| 25 | `1d9067c3bdd9b874442f30f9cbed5481f128eb18` | Improved storage error handling | Needs port | |
+| 25 | `1d9067c3bdd9b874442f30f9cbed5481f128eb18` | Improved storage error handling | Integrated | `KnownDestinationsStore::save_all` writes each destination in its own savepoint; a constraint, type-mismatch or too-big error leaves that destination out, is logged once at error level and retried on the next save, while other errors still abort the save; ratchets are already written one row per call; `sqlite_save_skips_a_rejected_destination_and_saves_the_rest` |
 | 26 | `c4ed59be2cc6b0c168f16b50ba315f3fe9dacde7` | Cleanup | Needs port | |
 | 27 | `2117087710366f5dbc464fea9997ad850ffc8086` | Added stamp cost display to utilities | Needs port | |
 | 28 | `af4504d6750c5db224f5228783c9a738458c874e` | Cleanup | Needs port | |
@@ -1026,6 +1026,46 @@ wraps `migrate_schema` in a `BEGIN IMMEDIATE` transaction in
 excludes a second process between the version read and the version write.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 25. `1d9067c3` — Improved storage error handling
+
+**Upstream change** (`RNS/Storage.py`): `KnownDestinationsStore.apply` runs
+each batched statement through `__wrap_exec`, which executes 4096-row chunks
+in a `SAVEPOINT`. On `IntegrityError` or `DataError` it rolls the chunk back
+and retries row by row, each in its own savepoint, collecting the rows that
+still fail. Rejected known destinations and ratchets are quarantined and
+logged once at `LOG_ERROR`; quarantined entries are skipped by later flushes
+until `mark_dirty`, `mark_deleted`, `remember_ratchet` or `remove_ratchet`
+touches them again. Other exceptions still roll back the whole transaction,
+re-mark everything dirty and propagate. The returned count excludes
+rejects. `RNS` is imported at module level instead of inside methods.
+
+**Rust applicability:** Needs port. `save_all` replaces the stored snapshot
+in one transaction, so a single destination that SQLite rejects (for
+example a NaN timestamp, which SQLite binds as NULL against
+`last_heard NOT NULL`) failed every later save and left the database
+frozen at its last good snapshot.
+
+**Implementation:** `save_all` writes each destination and its
+`known_destination_meta` row in a savepoint. A failure whose SQLite code is
+`ConstraintViolation`, `TypeMismatch` or `TooBig` (the codes Python maps to
+`IntegrityError` and `DataError`) rolls back only that savepoint; the
+destination is left out of the snapshot, logged once at error level, and
+remembered in the store's rejected set so repeated failures are not logged
+again. Any other error aborts the save as before. The count returned
+excludes rejected destinations. rns-rs writes per destination rather than in
+4096-row chunks, so there is no chunk retry. Divergence: rns-rs saves whole
+snapshots, so a rejected destination is retried on every save instead of
+waiting for an update to clear a quarantine; a valid update heals it either
+way, and the log stays one line per rejection. Ratchets are written one row
+per `RatchetStore::remember` call, so a rejected ratchet already fails alone.
+
+**Evidence:** `sqlite_save_skips_a_rejected_destination_and_saves_the_rest`
+(two of three destinations saved, the rejected one kept out across a second
+save, then saved once valid and removed from the rejected set).
+
+**Final disposition:** Integrated (divergence: retried every save rather
+than quarantined until updated).
 
 ## Integration Plan
 

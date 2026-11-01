@@ -29,6 +29,9 @@ pub struct KnownDestinationsStore {
     #[allow(dead_code)]
     hash_width: usize,
     read_only: bool,
+    /// Destinations whose last save was rejected by a constraint or data
+    /// error, so each rejection is logged once (upstream's quarantine).
+    rejected: Mutex<HashSet<[u8; 16]>>,
 }
 
 impl KnownDestinationsStore {
@@ -67,6 +70,7 @@ impl KnownDestinationsStore {
             conn: Mutex::new(conn),
             hash_width,
             read_only,
+            rejected: Mutex::new(HashSet::new()),
         })
     }
 
@@ -163,7 +167,14 @@ impl KnownDestinationsStore {
         Ok(destinations)
     }
 
-    /// Replace the persisted snapshot with `destinations`.
+    /// Replace the persisted snapshot with `destinations` and return how
+    /// many were written.
+    ///
+    /// Each destination is written in its own savepoint. One that a
+    /// constraint or data error rejects is left out and logged once, and the
+    /// rest of the snapshot is still saved; the next save retries it, so a
+    /// later valid update heals it (upstream `1d9067c3`). Other errors abort
+    /// the whole save.
     pub fn save_all(
         &self,
         destinations: &HashMap<[u8; 16], KnownDestination>,
@@ -172,16 +183,42 @@ impl KnownDestinationsStore {
             return Ok(0);
         }
         let mut conn = self.lock();
-        let tx = conn.transaction().map_err(sql_error)?;
+        let mut tx = conn.transaction().map_err(sql_error)?;
         tx.execute("DELETE FROM known_destinations", [])
             .map_err(sql_error)?;
         tx.execute("DELETE FROM known_destination_meta", [])
             .map_err(sql_error)?;
+        let mut rejects = Vec::new();
         for (destination_hash, destination) in destinations {
-            upsert_destination(&tx, *destination_hash, destination)?;
+            let row = tx.savepoint().map_err(sql_error)?;
+            match upsert_destination(&row, *destination_hash, destination) {
+                Ok(()) => row.commit().map_err(sql_error)?,
+                Err(error) if is_rejected_row(&error) => {
+                    drop(row);
+                    rejects.push((*destination_hash, error));
+                }
+                Err(error) => return Err(sql_error(error)),
+            }
         }
         tx.commit().map_err(sql_error)?;
-        Ok(destinations.len())
+        drop(conn);
+
+        let mut rejected = self
+            .rejected
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::mem::take(&mut *rejected);
+        for (destination_hash, error) in &rejects {
+            if !previous.contains(destination_hash) {
+                log::error!(
+                    "invalid known destination data for {} at persist: {}",
+                    hex_16(destination_hash),
+                    error
+                );
+            }
+            rejected.insert(*destination_hash);
+        }
+        Ok(destinations.len() - rejects.len())
     }
 
     /// Import a legacy msgpack known-destinations file from Python or older
@@ -201,7 +238,7 @@ impl KnownDestinationsStore {
         let mut conn = self.lock();
         let tx = conn.transaction().map_err(sql_error)?;
         for (destination_hash, destination) in &legacy {
-            upsert_destination(&tx, *destination_hash, destination)?;
+            upsert_destination(&tx, *destination_hash, destination).map_err(sql_error)?;
         }
         tx.commit().map_err(sql_error)?;
         Ok(legacy.len())
@@ -520,7 +557,7 @@ fn upsert_destination(
     conn: &Connection,
     destination_hash: [u8; 16],
     destination: &KnownDestination,
-) -> io::Result<()> {
+) -> rusqlite::Result<()> {
     let used = match (destination.was_used, destination.last_used_at) {
         (_, Some(last_used_at)) => last_used_at,
         (true, None) => -1.0,
@@ -553,8 +590,7 @@ fn upsert_destination(
             destination.lr_cost.map(|cost| cost.as_f64()),
             destination.identity_hash.to_vec(),
         ],
-    )
-    .map_err(sql_error)?;
+    )?;
     conn.execute(
         "INSERT INTO known_destination_meta VALUES (?1,?2,?3,?4)
          ON CONFLICT(destination_hash) DO UPDATE SET
@@ -567,9 +603,26 @@ fn upsert_destination(
             destination.receiving_interface as i64,
             i64::from(destination.retained),
         ],
-    )
-    .map_err(sql_error)?;
+    )?;
     Ok(())
+}
+
+/// Whether a write failed on the row's data rather than the database: a
+/// constraint violation, type mismatch or oversized value, the errors
+/// Python maps to `IntegrityError` and `DataError`.
+fn is_rejected_row(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(
+            rusqlite::ErrorCode::ConstraintViolation
+                | rusqlite::ErrorCode::TypeMismatch
+                | rusqlite::ErrorCode::TooBig
+        )
+    )
+}
+
+fn hex_16(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn parse_legacy_ratchet(data: &[u8]) -> Option<RatchetEntry> {
@@ -707,6 +760,35 @@ mod tests {
         assert!(!never.was_used);
         assert_eq!(never.last_used_at, None);
         assert!(!never.retained);
+    }
+
+    #[test]
+    fn sqlite_save_skips_a_rejected_destination_and_saves_the_rest() {
+        let dir = temp_dir();
+        let store = KnownDestinationsStore::open(&default_path(&dir), 16).unwrap();
+        // SQLite binds NaN as NULL, which `last_heard NOT NULL` rejects.
+        let mut invalid = destination(0x22, None, false);
+        invalid.received_at = f64::NAN;
+        let mut destinations = HashMap::from([
+            ([0x11; 16], destination(0x11, None, false)),
+            ([0x22; 16], invalid),
+            ([0x33; 16], destination(0x33, None, false)),
+        ]);
+
+        assert_eq!(store.save_all(&destinations).unwrap(), 2);
+        let loaded: HashMap<_, _> = store.load_all().unwrap().into_iter().collect();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains_key(&[0x11; 16]) && loaded.contains_key(&[0x33; 16]));
+        assert!(store.rejected.lock().unwrap().contains(&[0x22; 16]));
+
+        // Still rejected on the next save, without failing it.
+        assert_eq!(store.save_all(&destinations).unwrap(), 2);
+
+        // A valid update heals the destination.
+        destinations.insert([0x22; 16], destination(0x22, None, false));
+        assert_eq!(store.save_all(&destinations).unwrap(), 3);
+        assert_eq!(store.load_all().unwrap().len(), 3);
+        assert!(store.rejected.lock().unwrap().is_empty());
     }
 
     fn packet_hash_not_null(path: &Path) -> bool {
