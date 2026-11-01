@@ -467,6 +467,14 @@ impl fmt::Display for StampCost {
     }
 }
 
+/// A stamp value or cost as upstream's `RNS.prettycost` prints it (rgit
+/// `21170877`): rounded onto the cost grid and clamped like
+/// [`StampCost::from_f64`] (`quantize_cost`), with three decimals. Rust's
+/// `{:.3}` rounds the grid's exact ties half to even, as Python does.
+pub fn pretty_cost(value: f64) -> String {
+    format!("{:.3}", StampCost::from_f64(value).as_f64())
+}
+
 /// Value of a 256-bit stamp product.
 pub fn value_of_product(product: &[u8; 32]) -> StampValue {
     let lz = leading_zeros(product);
@@ -781,5 +789,17 @@ mod tests {
         assert_eq!(format!("{cost}"), "19.19921875");
         assert_eq!(format!("{}", StampCost::from_whole(8)), "8");
         assert_eq!(format!("{}", StampCost::from_fp(8 * COST_FP + 128)), "8.5");
+    }
+
+    #[test]
+    fn pretty_cost_matches_upstream_prettycost() {
+        // Outputs of RNS.prettycost at rgit 6927c3c5.
+        assert_eq!(pretty_cost(23.5), "23.500");
+        assert_eq!(pretty_cost(24.73046875), "24.730");
+        assert_eq!(pretty_cost(19.2), "19.199");
+        assert_eq!(pretty_cost(0.0625), "0.062");
+        assert_eq!(pretty_cost(0.1875), "0.188");
+        assert_eq!(pretty_cost(256.0), "100.000");
+        assert_eq!(pretty_cost(-1.0), "0.000");
     }
 }
