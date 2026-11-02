@@ -911,6 +911,11 @@ impl Driver {
                 self.engine
                     .destination_filter_mut()
                     .set_required_only(enabled);
+                if enabled {
+                    log::debug!("Setting announce filtering to required only");
+                } else {
+                    log::debug!("Setting announce filtering to all");
+                }
                 QueryResponse::DestinationTypeRegistration(true)
             }
             QueryRequest::ManageInterface { operation, name } => {
