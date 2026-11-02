@@ -3495,6 +3495,30 @@ mod tests {
     }
 
     #[test]
+    fn rpc_connection_closes_after_a_failed_request() {
+        // Upstream closes the RPC connection in a `finally` block; here the
+        // stream is owned by `handle_connection` and dropped on every return.
+        let key = derive_auth_key(b"test-private-key");
+        let (server, mut client) = tcp_pair();
+        let (event_tx, event_rx) = crate::event::channel();
+        drop(event_rx);
+
+        let handler = thread::spawn(move || handle_connection(server, &key, &event_tx));
+
+        client_auth(&mut client, &key).unwrap();
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("path_table".into()),
+        )]);
+        send_bytes(&mut client, &pickle::encode(&request)).unwrap();
+
+        let error = handler.join().unwrap().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        let mut buf = [0u8; 1];
+        assert_eq!(client.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
     fn verify_sha256_response() {
         let key = derive_auth_key(b"mykey");
         let message = b"{sha256}abcdefghijklmnopqrstuvwxyz0123456789ABCD";
