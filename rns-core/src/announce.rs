@@ -59,7 +59,8 @@ pub struct ValidatedAnnounce {
     pub app_data: Option<Vec<u8>>,
     /// Detached destination stamp parsed from the announce, if present.
     pub stamp: Option<[u8; constants::STAMP_LENGTH]>,
-    /// Fractional stamp value, or zero when absent or invalid.
+    /// Fractional value of the parsed stamp, including one below the
+    /// required cost (upstream 0cc6f5ae), or zero when no stamp is present.
     pub stamp_value: StampValue,
     /// Link request stamp cost announced in the extension's last two bytes,
     /// if present.
@@ -82,8 +83,8 @@ impl ValidatedAnnounce {
     ///
     /// Mirrors upstream `Identity.validate_announce`: only a valid stamp is
     /// stripped from `app_data`. A present-but-invalid stamp stays in
-    /// `app_data` and records value `0`, while enforcement decides whether the
-    /// announce is accepted.
+    /// `app_data` and still records its value (upstream 0cc6f5ae), while
+    /// enforcement decides whether the announce is accepted.
     pub fn apply_stamp(
         &mut self,
         destination_hash: &[u8; 16],
@@ -127,6 +128,7 @@ impl ValidatedAnnounce {
         material.extend_from_slice(&self.public_key);
         material.extend_from_slice(&self.name_hash);
         let workblock = stamp_workblock(&material, 0);
+        self.stamp_value = stamp_value(&workblock, &stamp);
 
         if stamp_valid(&stamp, required_value, &workblock) {
             let stripped_len = app_data.len() - constants::EXT_PAYLOAD_LENGTH;
@@ -135,11 +137,9 @@ impl ValidatedAnnounce {
             } else {
                 Some(app_data[..stripped_len].to_vec())
             };
-            self.stamp_value = stamp_value(&workblock, &stamp);
             self.lr_cost = Some(lr_cost);
             AnnounceStampStatus::Valid
         } else {
-            self.stamp_value = StampValue::ZERO;
             AnnounceStampStatus::Invalid
         }
     }
@@ -697,15 +697,17 @@ mod tests {
     }
 
     #[test]
-    fn test_announce_stamp_below_required_value_is_kept_and_invalid() {
-        let (parsed, dh, stamp, _) = stamped_announce(Some(b"app-data"), StampCost::from_whole(4));
+    fn test_announce_stamp_below_required_value_is_kept_invalid_and_valued() {
+        let (parsed, dh, stamp, value) =
+            stamped_announce(Some(b"app-data"), StampCost::from_whole(4));
         let mut validated = parsed.validate(&dh).unwrap();
         assert_eq!(
             validated.apply_stamp(&dh, StampCost::from_whole(200)),
             AnnounceStampStatus::Invalid
         );
         assert_eq!(validated.stamp, Some(stamp));
-        assert_eq!(validated.stamp_value, StampValue::ZERO);
+        assert!(value > StampValue::ZERO);
+        assert_eq!(validated.stamp_value, value);
         assert_eq!(validated.lr_cost, None);
         assert_eq!(
             validated.app_data.as_ref().map(|data| data.len()),
