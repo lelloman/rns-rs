@@ -134,8 +134,16 @@ fn find_free_port() -> u16 {
     // Keep listener allocations out of the default ephemeral client-port range.
     let base = 10_000 + (pid % 200) * 100;
     let _ = NEXT_PORT.compare_exchange(0, base, Ordering::SeqCst, Ordering::SeqCst);
-
-    NEXT_PORT.fetch_add(1, Ordering::SeqCst)
+    // Skip ports another process already holds, such as a developer's
+    // daemon or IDE listening in this range.
+    loop {
+        let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
+        if std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+            && std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok()
+        {
+            return port;
+        }
+    }
 }
 
 fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Option<Vec<u8>> {
