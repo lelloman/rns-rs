@@ -963,6 +963,7 @@ pub struct RnsNode {
     ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
     ratchet_expiry: Duration,
     /// Destination types this application needs (upstream 825c2e19).
+    #[cfg(feature = "iface-local")]
     pub(crate) destination_types: crate::shared_client::DestinationTypeRequester,
 }
 
@@ -2599,6 +2600,7 @@ impl RnsNode {
             transport_state_dir,
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
+            #[cfg(feature = "iface-local")]
             destination_types: Default::default(),
         };
         // Destination stamps live under `storage/stamps` next to the cache
@@ -4182,6 +4184,7 @@ impl RnsNode {
             transport_state_dir: None,
             ratchet_store: None,
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
+            #[cfg(feature = "iface-local")]
             destination_types: Default::default(),
         }
     }
@@ -4219,6 +4222,7 @@ impl RnsNode {
     }
 
     fn shutdown_inner(&mut self) {
+        #[cfg(feature = "iface-local")]
         self.destination_types.withdraw_from_shared_instance();
         if self.driver_handle.is_none()
             && self.verify_handle.is_none()
@@ -4943,6 +4947,7 @@ mod tests {
             transport_state_dir: None,
             ratchet_store: Some(ratchet_store),
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
+            #[cfg(feature = "iface-local")]
             destination_types: Default::default(),
         };
 
