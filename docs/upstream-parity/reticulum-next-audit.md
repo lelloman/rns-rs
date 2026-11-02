@@ -3,29 +3,31 @@
 ## Scope and Baseline
 
 - audit date: `2026-10-29` (commit 5 integrated `2026-10-30`; extended to
-  commit 15 on `2026-10-30`, to commit 23 on `2026-10-31` and to commit 31 on
-  `2026-11-01`)
+  commit 15 on `2026-10-30`, to commit 23 on `2026-10-31`, to commit 31 on
+  `2026-11-01` and to commit 36 on `2026-11-02`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `6927c3c589683041f027d9a04c598cb257d957a7`
-  (extended on 2026-11-01 from `fe2fe94dd82030275bec150af87b4ec6292511c6`,
+- target tag or ref: `rgit:master` tip `d3874ddedbf485db3151be1234d35da10c498ef1`
+  (extended on 2026-11-02 from `6927c3c589683041f027d9a04c598cb257d957a7`,
+  on 2026-11-01 from `fe2fe94dd82030275bec150af87b4ec6292511c6`,
   on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
   on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `6927c3c589683041f027d9a04c598cb257d957a7` (provisional; rgit may advance before promotion)
-- target root tree: `d3879d98d7e3a58ed1d860f061fae622dba81f8e`
-- target `RNS` tree: `11804a141590db5d3bed8cc2b10c013e463bedea`
+- target normative commit: `d3874ddedbf485db3151be1234d35da10c498ef1` (provisional; rgit may advance before promotion)
+- target root tree: `268821810f2c06d2b22c420402e98bda99b124b5`
+- target `RNS` tree: `ac06728152422e2d259136a51c71da34a666df9f`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..6927c3c589683041f027d9a04c598cb257d957a7`
-- commits in range: `31` (2 inventoried at the first tip, 3 added when rgit
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..d3874ddedbf485db3151be1234d35da10c498ef1`
+- commits in range: `36` (2 inventoried at the first tip, 3 added when rgit
   advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31, 8
-  added on 2026-11-01)
+  added on 2026-11-01, 5 added on 2026-11-02)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
   integrated on `dev` from `7911858`; commits 16 to 23 on `dev` from
-  `b857fed`; commits 24 to 31 on `dev` from `147c987`
+  `b857fed`; commits 24 to 31 on `dev` from `147c987`; commits 32 to 36
+  inventoried on `dev` at `15d817e`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -69,6 +71,29 @@ path-table RPC entries (`value`, `lr_cost`) that `rnpath` now formats
 unconditionally, plus a `prettycost` helper used by `rnstatus` and
 `rnpath`. The remaining commits are cleanups in `Storage.py`,
 `Transport.py`, `Destination.py`, `Discovery.py` and `rnpath.py`.
+
+The 2026-11-02 refresh (both remotes fetched at 2026-11-02T08:17Z) found rgit
+at `d3874dde` (committed 2026-11-02T00:57Z), five linear commits past
+`6927c3c5`, inventoried as 32 to 36. The GitHub mirror is still at
+`e40191b3`, `RNS.__version__` is still `1.6.0`, and the other rgit branches
+still point at their May 2026 tips. Commit 32 closes the RPC connection in a
+`finally` block. Commits 33 and 34 add bounded (128-entry) caches of valid and
+invalid announce validation results keyed by packet hash, re-checking cached
+stamp values against the receiving interface's destination cost and clearing
+both caches whenever the blackhole list changes; the local-client
+rebroadcast, path-request answer and announce-handler paths now abort when
+the destination's identity was culled meanwhile. Commit 35 adds destination
+type filtering: a `[filter]` config section (`required_only`,
+`ignored_types`, `allowed_types`) that drops announces by name hash at
+ingress, three new shared-instance RPC calls (`wants_destination_type`,
+`unwants_destination_type`, `unwants_all_destination_types`, each carrying a
+`requester` and an unchecked `signature`), `Destination.name_hash`, and calls
+to `wants_destination_type` from `rnstatus`, `rnpath`, `rncp`, `rnx`, `rnsh`,
+`rngit` and the blackhole updater. Commit 36 adds two debug log lines. By
+inspection, rns-rs answers the three unknown RPC calls with `None`
+(`handle_rpc_request` falls through), so the Python utilities at `d3874dde`
+keep working against an rns-rs shared instance; the live utility interop run
+below confirms it.
 
 ## Audit Vocabulary
 
@@ -123,6 +148,11 @@ Every commit in the audited range must appear exactly once.
 | 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Non-runtime | Debug message only; fixes the undefined `RNS.prettystampval` from commit 27; rns-rs has no per-discovery "Discovered … with stamp value" log |
 | 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Integrated | The insufficient discovery stamp diagnostic prints the value with `rns_crypto::stamp_value::pretty_cost` (`7.250`), which `rns_cli::format::prettycost` now shares; `insufficient_stamp_diagnostic_includes_calculated_value`, `pretty_cost_matches_upstream_prettycost` |
 | 31 | `6927c3c589683041f027d9a04c598cb257d957a7` | Cleanup | Non-runtime | Quoting fix in upstream's `rnpath.py` f-string, which Python before 3.12 could not parse; the native `rnpath` output from commit 27 is unaffected |
+| 32 | `263dc6bae573ca9cfa95e8eb52012835bd048d86` | RPC error handling | Needs port | |
+| 33 | `0cc6f5aef3f33c78d3e0f30fbaab170006613b48` | Announce validation caching | Needs port | |
+| 34 | `ade030ada9480b1163b17444dc3efb2f11ad2948` | Announce validation caching | Needs port | |
+| 35 | `825c2e19934f14da4d135bbc65b8b5a4832cc06f` | Added basic destination type filtering | Needs port | |
+| 36 | `d3874ddedbf485db3151be1234d35da10c498ef1` | Logging | Needs port | |
 
 ## Per-Commit Analysis
 
@@ -1255,25 +1285,28 @@ grammar; only Python 3.12 was available here, so it was not reproduced.
 
 ## Integration Plan
 
-All thirty-one commits have a final disposition. The `Link.py:311` precedence of
+Commits 1 to 31 have a final disposition; commits 32 to 36 are inventoried
+and are integrated one at a time in upstream order. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it (still present at `6927c3c5`). If upstream confirms that expression as written, the
+audit rechecks it (still present at `d3874dde`). If upstream confirms that expression as written, the
 `LinkManager` responder check must follow it.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
+- [ ] Every upstream commit has a final disposition. Commits 32 to 36 are
+  inventoried only.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
-  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d` and the current
-  tip `6927c3c5`; rerun if rgit advances.
+- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d` and `6927c3c5`.
+  At the current tip `d3874dde` it passed 4/4 and 10/10 on 2026-11-02 against
+  `15d817e`, before commits 32 to 36 were integrated; rerun after they are.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
