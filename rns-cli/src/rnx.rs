@@ -242,6 +242,9 @@ fn run(options: Options) -> Result<i32, Box<dyn std::error::Error>> {
             cancellations: cancellations.clone(),
         }),
     )?;
+    if !options.listen {
+        node.wants_destination_type(&format!("{APP_NAME}.{ASPECT}"));
+    }
     if options.listen {
         listen(
             &node,

@@ -44,7 +44,49 @@ fn add_traffic(total: &mut TrafficDetail, detail: TrafficDetail) {
     total.ptxf += detail.ptxf;
 }
 
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 impl Driver {
+    /// `Transport._wants_destination_type`: returns `false` for a blocked
+    /// type.
+    pub(crate) fn wants_destination_type(&mut self, full_name: &str, requester: &[u8]) -> bool {
+        use rns_core::transport::destination_filter::destination_type;
+        let registered = self
+            .engine
+            .destination_filter_mut()
+            .want(destination_type(full_name), requester);
+        if registered {
+            log::debug!(
+                "Registered <{full_name}> destinations requirement for <{}>",
+                hex_bytes(requester)
+            );
+        }
+        registered
+    }
+
+    /// `Transport._unwants_destination_type`: returns whether the requester
+    /// had registered the type.
+    pub(crate) fn unwants_destination_type(&mut self, full_name: &str, requester: &[u8]) -> bool {
+        use rns_core::transport::destination_filter::destination_type;
+        let destination_type = destination_type(full_name);
+        let filter = self.engine.destination_filter_mut();
+        let was_registered = filter.unwant(destination_type, requester);
+        if was_registered {
+            log::debug!(
+                "Deregistered <{full_name}> destinations requirement for <{}>",
+                hex_bytes(requester)
+            );
+            if !filter.is_wanted(&destination_type) {
+                log::debug!(
+                    "No remaining requesters for <{full_name}> destinations, type deregistered"
+                );
+            }
+        }
+        was_registered
+    }
+
     pub(super) fn dynamic_burst_counts(&self, parent_id: InterfaceId) -> (usize, usize) {
         self.dynamic_interface_parents
             .iter()
@@ -725,6 +767,13 @@ impl Driver {
             }
             QueryRequest::DropAllVia { .. } => QueryResponse::DropAllVia(0),
             QueryRequest::DropAnnounceQueues => QueryResponse::DropAnnounceQueues,
+            QueryRequest::WantsDestinationType { .. }
+            | QueryRequest::UnwantsDestinationType { .. }
+            | QueryRequest::UnwantsAllDestinationTypes { .. }
+            | QueryRequest::SetRequiredDestinationsOnly { .. } => {
+                // Mutating queries are handled by handle_query_mut
+                QueryResponse::DestinationTypeRegistration(false)
+            }
             QueryRequest::TransportIdentity => {
                 QueryResponse::TransportIdentity(self.engine.identity_hash().copied())
             }
@@ -838,6 +887,32 @@ impl Driver {
     /// Handle a mutating query request.
     pub(crate) fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
+            QueryRequest::WantsDestinationType {
+                full_name,
+                requester,
+            } => QueryResponse::DestinationTypeRegistration(
+                self.wants_destination_type(&full_name, &requester),
+            ),
+            QueryRequest::UnwantsDestinationType {
+                full_name,
+                requester,
+            } => QueryResponse::DestinationTypeRegistration(
+                self.unwants_destination_type(&full_name, &requester),
+            ),
+            QueryRequest::UnwantsAllDestinationTypes { requester } => {
+                self.engine.destination_filter_mut().unwant_all(&requester);
+                log::debug!(
+                    "Deregistered all destination requirements for <{}>",
+                    hex_bytes(&requester)
+                );
+                QueryResponse::DestinationTypeRegistration(true)
+            }
+            QueryRequest::SetRequiredDestinationsOnly { enabled } => {
+                self.engine
+                    .destination_filter_mut()
+                    .set_required_only(enabled);
+                QueryResponse::DestinationTypeRegistration(true)
+            }
             QueryRequest::ManageInterface { operation, name } => {
                 QueryResponse::InterfaceManagement(self.manage_interface(operation, &name))
             }

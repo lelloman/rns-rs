@@ -13,7 +13,7 @@
 use std::io;
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -25,10 +25,12 @@ use rns_crypto::identity::Identity;
 
 use crate::driver::{Callbacks, Driver};
 use crate::event;
-use crate::event::Event;
+use crate::event::{Event, QueryRequest, QueryResponse};
 use crate::interface::local::LocalClientConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::node::RnsNode;
+use crate::pickle::PickleValue;
+use crate::rpc::{RpcAddr, RpcClient};
 use crate::storage;
 use crate::time;
 
@@ -52,7 +54,148 @@ impl Default for SharedClientConfig {
     }
 }
 
+/// The destination types an application needs announces of (upstream
+/// 825c2e19). A shared instance with `[filter] required_only` drops
+/// announces of any other type, so a client registers what it needs there.
+pub(crate) struct DestinationTypeRequester {
+    /// `Transport.application_identity.hash`: identifies this application's
+    /// registrations, so they can be withdrawn together.
+    requester: [u8; 16],
+    /// Whether this node is a shared instance client.
+    shared_client: bool,
+    /// Address and key of the shared instance's RPC server, when known.
+    shared_rpc: Option<(RpcAddr, [u8; 32])>,
+    /// Whether a type was registered with the shared instance, so the
+    /// registrations are withdrawn on shutdown.
+    registered: AtomicBool,
+}
+
+impl Default for DestinationTypeRequester {
+    fn default() -> Self {
+        DestinationTypeRequester {
+            requester: *Identity::new(&mut rns_crypto::OsRng).hash(),
+            shared_client: false,
+            shared_rpc: None,
+            registered: AtomicBool::new(false),
+        }
+    }
+}
+
+impl DestinationTypeRequester {
+    /// Send one destination type call to the shared instance. A failed call
+    /// or one the instance does not understand reports `false`.
+    fn call_shared_instance(&self, key: &str, value: PickleValue) -> bool {
+        let Some((addr, auth_key)) = &self.shared_rpc else {
+            return false;
+        };
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String(key.into()), value),
+            (
+                PickleValue::String("requester".into()),
+                PickleValue::Bytes(self.requester.to_vec()),
+            ),
+            (PickleValue::String("signature".into()), PickleValue::None),
+        ]);
+        match RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(&request)) {
+            Ok(response) => response.as_bool() == Some(true),
+            // Debug level: a Python shared instance on Linux serves RPC on
+            // an abstract Unix socket, which this TCP client cannot reach,
+            // and registration only matters when it filters announces.
+            Err(e) => {
+                log::debug!(
+                    "Shared instance RPC failed while setting destination type filters: {e}"
+                );
+                false
+            }
+        }
+    }
+
+    /// Withdraw this application's registrations from the shared instance,
+    /// as the Python exit handler does.
+    pub(crate) fn withdraw_from_shared_instance(&self) {
+        if self.registered.swap(false, Ordering::Relaxed) {
+            self.call_shared_instance("unwants_all_destination_types", PickleValue::Bool(true));
+        }
+    }
+}
+
 impl RnsNode {
+    /// `Reticulum.wants_destination_type`: this application needs announces
+    /// of the destination type `full_name`, such as `rncp.receive`.
+    ///
+    /// The type is registered with the local transport and, on a shared
+    /// instance client, with the shared instance, whose answer is returned.
+    /// Returns `false` for a blocked type.
+    pub fn wants_destination_type(&self, full_name: &str) -> bool {
+        let local = self.destination_type_query(QueryRequest::WantsDestinationType {
+            full_name: full_name.into(),
+            requester: self.destination_types.requester.to_vec(),
+        });
+        if !self.destination_types.shared_client || self.destination_types.shared_rpc.is_none() {
+            return local;
+        }
+        let registered = self.destination_types.call_shared_instance(
+            "wants_destination_type",
+            PickleValue::String(full_name.into()),
+        );
+        if registered {
+            self.destination_types
+                .registered
+                .store(true, Ordering::Relaxed);
+        }
+        registered
+    }
+
+    /// `Reticulum.unwants_destination_type`: withdraw a need registered with
+    /// [`Self::wants_destination_type`]. Returns whether it was registered.
+    pub fn unwants_destination_type(&self, full_name: &str) -> bool {
+        let local = self.destination_type_query(QueryRequest::UnwantsDestinationType {
+            full_name: full_name.into(),
+            requester: self.destination_types.requester.to_vec(),
+        });
+        if !self.destination_types.shared_client || self.destination_types.shared_rpc.is_none() {
+            return local;
+        }
+        self.destination_types.call_shared_instance(
+            "unwants_destination_type",
+            PickleValue::String(full_name.into()),
+        )
+    }
+
+    /// `Reticulum.unwants_all_destination_types`: withdraw every destination
+    /// type this application registered.
+    pub fn unwants_all_destination_types(&self) -> bool {
+        let local = self.destination_type_query(QueryRequest::UnwantsAllDestinationTypes {
+            requester: self.destination_types.requester.to_vec(),
+        });
+        if !self.destination_types.shared_client || self.destination_types.shared_rpc.is_none() {
+            return local;
+        }
+        self.destination_types
+            .registered
+            .store(false, Ordering::Relaxed);
+        self.destination_types
+            .call_shared_instance("unwants_all_destination_types", PickleValue::Bool(true))
+    }
+
+    /// `Reticulum.required_announces_only`: on a shared instance client, let
+    /// through only announces of the types this application registered and
+    /// the shared instance's own destinations. Other nodes return `false`,
+    /// so an application cannot squelch announces for the node as a whole.
+    pub fn required_announces_only(&self, enabled: bool) -> bool {
+        if !self.destination_types.shared_client {
+            return false;
+        }
+        self.destination_type_query(QueryRequest::SetRequiredDestinationsOnly { enabled })
+    }
+
+    fn destination_type_query(&self, request: QueryRequest) -> bool {
+        matches!(
+            self.query(request),
+            Ok(QueryResponse::DestinationTypeRegistration(true))
+        )
+    }
+
     /// Connect to an existing shared instance as a client.
     ///
     /// The client runs `transport_enabled: false` — it does no routing,
@@ -187,13 +330,10 @@ impl RnsNode {
                 driver.run();
             })?;
 
-        Ok(RnsNode::from_parts(
-            tx,
-            driver_handle,
-            None,
-            tick_interval_ms,
-            accepting_work,
-        ))
+        let mut node =
+            RnsNode::from_parts(tx, driver_handle, None, tick_interval_ms, accepting_work);
+        node.destination_types.shared_client = true;
+        Ok(node)
     }
 
     /// Connect to a shared instance, with config loaded from a config directory.
@@ -220,8 +360,27 @@ impl RnsNode {
             port: rns_config.reticulum.shared_instance_port,
             rpc_port: rns_config.reticulum.instance_control_port,
         };
+        let rpc_port = shared_config.rpc_port;
 
-        Self::connect_shared(shared_config, callbacks)
+        let mut node = Self::connect_shared(shared_config, callbacks)?;
+        node.use_shared_instance_rpc(&config_dir, rpc_port);
+        Ok(node)
+    }
+
+    /// Reach the shared instance's RPC server for destination type
+    /// registrations. Its key derives from the shared instance's transport
+    /// identity, which clients read from the same storage directory; without
+    /// one, registrations stay local.
+    pub(crate) fn use_shared_instance_rpc(&mut self, config_dir: &Path, rpc_port: u16) {
+        match storage::load_identity(&config_dir.join("storage").join("transport_identity")) {
+            Ok(identity) => {
+                let auth_key =
+                    crate::rpc::derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
+                self.destination_types.shared_rpc =
+                    Some((RpcAddr::Tcp("127.0.0.1".into(), rpc_port), auth_key));
+            }
+            Err(e) => log::debug!("No shared instance RPC key for destination type filters: {e}"),
+        }
     }
 }
 
@@ -557,6 +716,59 @@ mod tests {
 
     fn find_free_port() -> u16 {
         crate::test_support::port()
+    }
+
+    #[test]
+    fn shared_client_registers_destination_types_with_the_shared_instance() {
+        // Upstream 825c2e19: clients send their needed destination types to
+        // the shared instance over RPC and withdraw them on exit.
+        let dir = tempfile::tempdir().unwrap();
+        let rpc_port = find_free_port();
+        let shared_port = find_free_port();
+        std::fs::write(
+            dir.path().join("config"),
+            format!(
+                "[reticulum]\nshare_instance = yes\ninstance_control_port = {rpc_port}\n\
+                 shared_instance_port = {shared_port}\n\n[filter]\n\
+                 required_only = yes\nignored_types = nomadnetwork.node\n"
+            ),
+        )
+        .unwrap();
+        let daemon = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let client =
+            RnsNode::connect_shared_from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+
+        // Only the shared instance knows the type is blocked, so `false`
+        // shows the call reached it.
+        assert!(client.wants_destination_type("rncp.receive"));
+        assert!(!client.wants_destination_type("nomadnetwork.node"));
+        assert!(!client.unwants_destination_type("rnx.execute"));
+        assert!(client.unwants_destination_type("rncp.receive"));
+        assert!(client.wants_destination_type("rnx.execute"));
+
+        assert!(client.required_announces_only(true));
+        assert!(!daemon.required_announces_only(true));
+
+        // Shutting the client down withdraws its registrations.
+        let auth_key = client.destination_types.shared_rpc.as_ref().unwrap().1;
+        let requester = client.destination_types.requester;
+        client.shutdown();
+        let mut rpc =
+            RpcClient::connect(&RpcAddr::Tcp("127.0.0.1".into(), rpc_port), &auth_key).unwrap();
+        let response = rpc
+            .call(&PickleValue::Dict(vec![
+                (
+                    PickleValue::String("unwants_destination_type".into()),
+                    PickleValue::String("rnx.execute".into()),
+                ),
+                (
+                    PickleValue::String("requester".into()),
+                    PickleValue::Bytes(requester.to_vec()),
+                ),
+            ]))
+            .unwrap();
+        assert_eq!(response, PickleValue::Bool(false));
+        daemon.shutdown();
     }
 
     #[test]

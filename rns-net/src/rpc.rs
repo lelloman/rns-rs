@@ -469,6 +469,13 @@ fn send_probe_error_pickle(err: crate::event::SendProbeError) -> PickleValue {
 }
 
 /// Translate an RPC request dict to a query event and get response.
+fn destination_type_registration(response: QueryResponse) -> PickleValue {
+    PickleValue::Bool(matches!(
+        response,
+        QueryResponse::DestinationTypeRegistration(true)
+    ))
+}
+
 fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Result<PickleValue> {
     if let Some(operation) = request.get("manage").and_then(PickleValue::as_str) {
         let operation = match operation {
@@ -980,6 +987,52 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                 )));
             }
         }
+    }
+
+    // Destination type requirements of local applications (upstream
+    // 825c2e19). Upstream does not validate the signature yet, so it is
+    // ignored here too.
+    if let (Some(full_name), Some(requester)) = (
+        request
+            .get("wants_destination_type")
+            .and_then(|v| v.as_str()),
+        request.get("requester").and_then(|v| v.as_bytes()),
+    ) {
+        let resp = send_query(
+            event_tx,
+            QueryRequest::WantsDestinationType {
+                full_name: full_name.to_string(),
+                requester: requester.to_vec(),
+            },
+        )?;
+        return Ok(destination_type_registration(resp));
+    }
+    if let (Some(full_name), Some(requester)) = (
+        request
+            .get("unwants_destination_type")
+            .and_then(|v| v.as_str()),
+        request.get("requester").and_then(|v| v.as_bytes()),
+    ) {
+        let resp = send_query(
+            event_tx,
+            QueryRequest::UnwantsDestinationType {
+                full_name: full_name.to_string(),
+                requester: requester.to_vec(),
+            },
+        )?;
+        return Ok(destination_type_registration(resp));
+    }
+    if let (Some(_), Some(requester)) = (
+        request.get("unwants_all_destination_types"),
+        request.get("requester").and_then(|v| v.as_bytes()),
+    ) {
+        let resp = send_query(
+            event_tx,
+            QueryRequest::UnwantsAllDestinationTypes {
+                requester: requester.to_vec(),
+            },
+        )?;
+        return Ok(destination_type_registration(resp));
     }
 
     // Handle "unblackhole" requests
@@ -3516,6 +3569,88 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
         let mut buf = [0u8; 1];
         assert_eq!(client.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
+    fn destination_type_rpc_calls_reach_the_driver() {
+        // The calls Python `Reticulum.wants_destination_type` and friends
+        // send to the shared instance (upstream 825c2e19).
+        let (event_tx, event_rx) = crate::event::channel();
+        let driver = thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..3 {
+                let Ok(Event::Query(request, resp_tx)) =
+                    event_rx.recv_timeout(std::time::Duration::from_secs(5))
+                else {
+                    panic!("expected a query");
+                };
+                let response = match &*request {
+                    QueryRequest::WantsDestinationType { .. } => true,
+                    QueryRequest::UnwantsDestinationType { .. } => false,
+                    QueryRequest::UnwantsAllDestinationTypes { .. } => true,
+                    other => panic!("unexpected query {other:?}"),
+                };
+                seen.push(*request);
+                let _ = resp_tx.send(QueryResponse::DestinationTypeRegistration(response));
+            }
+            seen
+        });
+
+        let call = |entries: Vec<(&str, PickleValue)>| {
+            let request = PickleValue::Dict(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (PickleValue::String(key.into()), value))
+                    .collect(),
+            );
+            handle_rpc_request(&request, &event_tx).unwrap()
+        };
+        let requester = PickleValue::Bytes(vec![0x11; 16]);
+        assert_eq!(
+            call(vec![
+                (
+                    "wants_destination_type",
+                    PickleValue::String("rncp.receive".into())
+                ),
+                ("requester", requester.clone()),
+                ("signature", PickleValue::None),
+            ]),
+            PickleValue::Bool(true)
+        );
+        assert_eq!(
+            call(vec![
+                (
+                    "unwants_destination_type",
+                    PickleValue::String("rnx.execute".into())
+                ),
+                ("requester", requester.clone()),
+                ("signature", PickleValue::None),
+            ]),
+            PickleValue::Bool(false)
+        );
+        assert_eq!(
+            call(vec![
+                ("unwants_all_destination_types", PickleValue::Bool(true)),
+                ("requester", requester),
+                ("signature", PickleValue::None),
+            ]),
+            PickleValue::Bool(true)
+        );
+
+        let seen = driver.join().unwrap();
+        assert!(matches!(
+            &seen[0],
+            QueryRequest::WantsDestinationType { full_name, requester }
+                if full_name == "rncp.receive" && requester == &vec![0x11; 16]
+        ));
+        assert!(matches!(
+            &seen[1],
+            QueryRequest::UnwantsDestinationType { full_name, .. } if full_name == "rnx.execute"
+        ));
+        assert!(matches!(
+            &seen[2],
+            QueryRequest::UnwantsAllDestinationTypes { requester } if requester == &vec![0x11; 16]
+        ));
     }
 
     #[test]

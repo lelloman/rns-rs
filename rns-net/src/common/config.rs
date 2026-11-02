@@ -17,6 +17,7 @@ pub struct RnsConfig {
     pub reticulum: ReticulumSection,
     pub logging: LoggingSection,
     pub stamps: StampsSection,
+    pub filter: FilterSection,
     pub interfaces: Vec<ParsedInterface>,
     pub hooks: Vec<ParsedHook>,
 }
@@ -311,6 +312,40 @@ pub struct StampsSection {
     pub pr_stamp_timeout: f64,
 }
 
+/// The `[filter]` section (upstream 825c2e19): announce filtering by
+/// destination type. `required_only` is read with `as_bool` and assigned,
+/// and the two type lists with `as_list`, as full destination names such as
+/// `lxmf.delivery`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterSection {
+    /// `Transport.required_destinations_only` (`required_only`).
+    pub required_only: bool,
+    /// Types blocked with `Transport.block_destination_type`
+    /// (`ignored_types`).
+    pub ignored_types: Vec<String>,
+    /// Types allowed with `Transport.allow_destination_type`
+    /// (`allowed_types`).
+    pub allowed_types: Vec<String>,
+}
+
+impl FilterSection {
+    /// The engine filter this section configures.
+    pub fn destination_filter(
+        &self,
+    ) -> rns_core::transport::destination_filter::DestinationTypeFilter {
+        use rns_core::transport::destination_filter::{destination_type, DestinationTypeFilter};
+        let mut filter = DestinationTypeFilter::default();
+        filter.set_required_only(self.required_only);
+        for name in &self.ignored_types {
+            filter.block(destination_type(name));
+        }
+        for name in &self.allowed_types {
+            filter.allow(destination_type(name));
+        }
+        filter
+    }
+}
+
 impl Default for StampsSection {
     fn default() -> Self {
         use rns_core::constants;
@@ -426,6 +461,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     let mut reticulum_kvs: HashMap<String, String> = HashMap::new();
     let mut logging_kvs: HashMap<String, String> = HashMap::new();
     let mut stamps_kvs: HashMap<String, String> = HashMap::new();
+    let mut filter_kvs: HashMap<String, String> = HashMap::new();
     let mut interfaces: Vec<ParsedInterface> = Vec::new();
     let mut current_iface_kvs: Option<HashMap<String, String>> = None;
     let mut current_iface_name: Option<String> = None;
@@ -558,6 +594,9 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
                     "stamps" => {
                         stamps_kvs.insert(key, value);
                     }
+                    "filter" => {
+                        filter_kvs.insert(key, value);
+                    }
                     _ => {} // ignore unknown sections
                 }
             }
@@ -584,11 +623,13 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     let reticulum = build_reticulum_section(&reticulum_kvs)?;
     let logging = build_logging_section(&logging_kvs)?;
     let stamps = build_stamps_section(&stamps_kvs)?;
+    let filter = build_filter_section(&filter_kvs)?;
 
     Ok(RnsConfig {
         reticulum,
         logging,
         stamps,
+        filter,
         interfaces,
         hooks,
     })
@@ -1428,6 +1469,30 @@ fn parse_config_int(value: &str) -> Option<i64> {
 /// including `inf` and `nan`, which callers clamp.
 pub(crate) fn parse_config_float(value: &str) -> Option<f64> {
     value.trim().parse::<f64>().ok()
+}
+
+fn build_filter_section(kvs: &HashMap<String, String>) -> Result<FilterSection, ConfigError> {
+    let mut section = FilterSection::default();
+    if let Some(v) = kvs.get("required_only") {
+        section.required_only = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "required_only".into(),
+            value: v.clone(),
+        })?;
+    }
+    let list = |key: &str| -> Vec<String> {
+        kvs.get(key)
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    section.ignored_types = list("ignored_types");
+    section.allowed_types = list("allowed_types");
+    Ok(section)
 }
 
 fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, ConfigError> {
@@ -2698,6 +2763,44 @@ direct_connect_policy = identified_only
         assert!(!parse_link_mtu_discovery("[reticulum]\nlink_mtu_discovery = False\n").unwrap());
         assert!(parse_link_mtu_discovery("[logging]\nlink_mtu_discovery = No\n").unwrap());
         assert!(parse_link_mtu_discovery("[reticulum]\nlink_mtu_discovery = maybe\n").is_err());
+    }
+
+    #[test]
+    fn filter_section_defaults_to_no_filtering() {
+        let config = parse("").unwrap();
+        assert_eq!(config.filter, FilterSection::default());
+        assert!(!config.filter.required_only);
+    }
+
+    #[test]
+    fn filter_section_parses_every_option() {
+        let config = parse(
+            "[filter]\n\
+             required_only = Yes\n\
+             ignored_types = nomadnetwork.node, lxmf.propagation\n\
+             allowed_types = lxmf.delivery\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.filter,
+            FilterSection {
+                required_only: true,
+                ignored_types: vec!["nomadnetwork.node".into(), "lxmf.propagation".into()],
+                allowed_types: vec!["lxmf.delivery".into()],
+            }
+        );
+
+        use rns_core::transport::destination_filter::destination_type;
+        let filter = config.filter.destination_filter();
+        assert!(filter.required_only());
+        assert!(!filter.allows(&destination_type("nomadnetwork.node"), true));
+        assert!(filter.allows(&destination_type("lxmf.delivery"), false));
+        assert!(!filter.allows(&destination_type("rncp.receive"), false));
+    }
+
+    #[test]
+    fn filter_section_rejects_an_invalid_boolean() {
+        assert!(parse("[filter]\nrequired_only = maybe\n").is_err());
     }
 
     #[test]

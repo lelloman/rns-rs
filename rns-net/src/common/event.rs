@@ -652,6 +652,22 @@ pub enum QueryRequest {
     },
     /// Remove an identity from the blackhole list.
     UnblackholeIdentity { identity_hash: [u8; 16] },
+    /// `wants_destination_type`: a local application needs announces of
+    /// this destination type (upstream 825c2e19).
+    WantsDestinationType {
+        full_name: String,
+        requester: Vec<u8>,
+    },
+    /// `unwants_destination_type`: withdraw one such need.
+    UnwantsDestinationType {
+        full_name: String,
+        requester: Vec<u8>,
+    },
+    /// `unwants_all_destination_types`: withdraw every need of a requester.
+    UnwantsAllDestinationTypes { requester: Vec<u8> },
+    /// `Reticulum.required_announces_only`: let only required destination
+    /// types through.
+    SetRequiredDestinationsOnly { enabled: bool },
     /// Check if a path exists to a destination.
     HasPath { dest_hash: [u8; 16] },
     /// Get hop count to a destination.
@@ -795,6 +811,7 @@ pub enum QueryResponse {
     Blackholed(Vec<BlackholeInfo>),
     BlackholeResult(bool),
     UnblackholeResult(bool),
+    DestinationTypeRegistration(bool),
     HasPath(bool),
     HopsTo(Option<u8>),
     RecallIdentity(Option<crate::common::destination::AnnouncedIdentity>),

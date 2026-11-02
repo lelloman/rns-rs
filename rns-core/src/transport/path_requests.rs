@@ -415,6 +415,19 @@ impl TransportEngine {
         self.stamp_requirements
     }
 
+    /// Destination type filter applied to received announces.
+    pub fn destination_filter(&self) -> &super::destination_filter::DestinationTypeFilter {
+        &self.destination_filter
+    }
+
+    /// Mutable access to the destination type filter, for `[filter]` and
+    /// the `wants_destination_type` RPC calls.
+    pub fn destination_filter_mut(
+        &mut self,
+    ) -> &mut super::destination_filter::DestinationTypeFilter {
+        &mut self.destination_filter
+    }
+
     /// Override the compile-time `STAMPS_ENFORCED`, `DESTINATION_COST` and
     /// `PR_COST` defaults, as the `[stamps]` config section does upstream.
     pub fn set_stamp_requirements(&mut self, requirements: StampRequirements) {

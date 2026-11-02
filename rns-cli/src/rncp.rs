@@ -286,6 +286,9 @@ fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             identified: HashMap::new(),
         }),
     )?;
+    if !options.listen {
+        node.wants_destination_type(&format!("{APP_NAME}.{ASPECT}"));
+    }
 
     if options.listen {
         listen(&node, &identity, destination, allowed, options, tx, rx)

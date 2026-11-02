@@ -235,6 +235,43 @@ Discoverable interfaces announce their effective costs, and other nodes only
 auto-connect to them when the costs are within their own `destination_value`
 and `pr_value` (see [Interface Discovery](interface-discovery.md)).
 
+## Destination type filtering
+
+The `[filter]` section (upstream `825c2e19`) drops received announces by
+destination type, the full destination name such as `lxmf.delivery`:
+
+```ini
+[filter]
+  # Drop announces of these types.
+  ignored_types = nomadnetwork.node, lxmf.propagation
+  # Drop every type that is neither allowed here nor asked for by a local
+  # application.
+  required_only = yes
+  allowed_types = lxmf.delivery
+```
+
+The check runs when an announce arrives, before it is validated, forwarded or
+remembered, so a filtered destination gets no path through this node. Path
+responses are announces too. With `required_only`, the announces that get
+through are the allowed types, the types a local application asked for, and
+the destinations of this node's own local clients (or, on a client, of its
+shared instance). Ignored types are dropped in every case.
+
+Applications ask for the types they need with
+`RnsNode::wants_destination_type` (upstream
+`Reticulum.wants_destination_type`). A shared instance client also registers
+them with its shared instance over RPC, using the shared instance's RPC key
+from `storage/transport_identity`, and withdraws them when it shuts down.
+The rns-rs RPC client uses TCP on `instance_control_port`, so it cannot
+register with a Python shared instance that serves RPC on its default Linux
+abstract socket.
+`rncp` and `rnx` clients, the `rnsh` initiator and remote management in
+`rnstatus` and `rnpath` register their types, as the Python utilities do.
+Python clients from `825c2e19` on register theirs with an rns-rs shared
+instance the same way. `RnsNode::required_announces_only` applies
+`required_only` to a single client's own transport; it does nothing on a node
+that is not a shared instance client.
+
 ## Ingress control
 
 Any interface section accepts the Python-compatible ingress-control keys.

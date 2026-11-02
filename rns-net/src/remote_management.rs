@@ -175,8 +175,14 @@ impl RemoteManagementClient {
             rpc_port: rns_config.reticulum.instance_control_port,
         };
 
-        let node = RnsNode::connect_shared(shared_config, Box::new(callbacks))
+        let rpc_port = shared_config.rpc_port;
+        let mut node = RnsNode::connect_shared(shared_config, Box::new(callbacks))
             .map_err(|_| RemoteManagementError::ConnectShared)?;
+        // Upstream rnstatus and rnpath register both types, so a shared
+        // instance filtering announces still answers their path requests.
+        node.use_shared_instance_rpc(&config_dir, rpc_port);
+        node.wants_destination_type("rnstransport.remote.management");
+        node.wants_destination_type("rnstransport.info.blackhole");
 
         Ok(Self {
             node,

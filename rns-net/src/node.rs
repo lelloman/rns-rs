@@ -669,6 +669,8 @@ struct NodeQueueConfig {
     link_mtu_discovery: bool,
     /// The `[stamps]` config section.
     stamps: config::StampsSection,
+    /// The `[filter]` config section.
+    filter: config::FilterSection,
     /// `[reticulum] hop_limiter`.
     hop_limiter: u8,
 }
@@ -685,6 +687,7 @@ impl Default for NodeQueueConfig {
             inbound_capacities: crate::event::InboundQueueCapacities::default(),
             link_mtu_discovery: true,
             stamps: config::StampsSection::default(),
+            filter: config::FilterSection::default(),
             hop_limiter: rns_core::constants::HOP_LIMITER,
         }
     }
@@ -959,6 +962,8 @@ pub struct RnsNode {
     transport_state_dir: Option<std::path::PathBuf>,
     ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
     ratchet_expiry: Duration,
+    /// Destination types this application needs (upstream 825c2e19).
+    pub(crate) destination_types: crate::shared_client::DestinationTypeRequester,
 }
 
 impl RnsNode {
@@ -1531,6 +1536,7 @@ impl RnsNode {
                 inbound_capacities: rns_config.reticulum.inbound_queue_capacities,
                 link_mtu_discovery,
                 stamps: rns_config.stamps.clone(),
+                filter: rns_config.filter.clone(),
                 hop_limiter: rns_config.reticulum.hop_limiter,
             },
             interface_management,
@@ -1673,6 +1679,7 @@ impl RnsNode {
         let stamp_destinations = Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS));
         driver.set_stamp_destinations_flag(Arc::clone(&stamp_destinations));
         driver.apply_stamp_config(&queue_config.stamps, queue_config.hop_limiter);
+        *driver.engine.destination_filter_mut() = queue_config.filter.destination_filter();
         let stamp_targets = crate::stamper::StampTargets::from(&queue_config.stamps);
         driver.underlay_mark = config.underlay_mark;
         driver
@@ -2592,6 +2599,7 @@ impl RnsNode {
             transport_state_dir,
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
+            destination_types: Default::default(),
         };
         // Destination stamps live under `storage/stamps` next to the cache
         // directory, the layout `from_config_dirs` uses; a node without a
@@ -4174,6 +4182,7 @@ impl RnsNode {
             transport_state_dir: None,
             ratchet_store: None,
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
+            destination_types: Default::default(),
         }
     }
 
@@ -4210,6 +4219,7 @@ impl RnsNode {
     }
 
     fn shutdown_inner(&mut self) {
+        self.destination_types.withdraw_from_shared_instance();
         if self.driver_handle.is_none()
             && self.verify_handle.is_none()
             && self.persist_handle.is_none()
@@ -4933,6 +4943,7 @@ mod tests {
             transport_state_dir: None,
             ratchet_store: Some(ratchet_store),
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
+            destination_types: Default::default(),
         };
 
         let mut rng = OsRng;
