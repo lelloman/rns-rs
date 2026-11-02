@@ -191,7 +191,8 @@ cost. For a whole cost that is the legacy leading-zero check. With the default
 announce cost of 23.5, roughly half the stamps that releases before `a8cc6cb2`
 grind at their old target of 23 fall short. Such an announce is still accepted
 while stamps are not enforced, but, as upstream, its stamp extension is left in
-the app data and its link request cost is not recorded. Values persisted by
+the app data and its link request cost is not recorded. Since upstream
+`0cc6f5ae` its stamp value is still recorded, short as it is. Values persisted by
 earlier versions as integers load unchanged.
 
 A stamped announce carries the destination's link request cost: the value set
