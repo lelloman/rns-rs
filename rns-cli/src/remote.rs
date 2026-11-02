@@ -8,7 +8,6 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rns_net::shared_client::SharedClientConfig;
 use rns_net::{Callbacks, RnsNode};
 
 fn lock_response_data<'a>(
@@ -125,22 +124,8 @@ pub fn remote_query(
         link_closed_tx: closed_tx,
     };
 
-    // Load config for shared instance connection
-    let config_dir = rns_net::storage::resolve_config_dir(config_path);
-    let config_file = config_dir.join("config");
-    let rns_config = if config_file.exists() {
-        rns_net::config::parse_file(&config_file).ok()?
-    } else {
-        rns_net::config::parse("").ok()?
-    };
-
-    let shared_config = SharedClientConfig {
-        instance_name: rns_config.reticulum.instance_name.clone(),
-        port: rns_config.reticulum.shared_instance_port,
-        rpc_port: rns_config.reticulum.instance_control_port,
-    };
-
-    let node = RnsNode::connect_shared(shared_config, Box::new(callbacks)).ok()?;
+    let node = RnsNode::connect_shared_from_config(config_path, Box::new(callbacks)).ok()?;
+    node.wants_destination_type("rnstransport.remote.management");
     let timeout = timeout.max(Duration::from_secs_f64(
         node.medium_path_timeout().unwrap_or(0.0).max(0.0),
     ));

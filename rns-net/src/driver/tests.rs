@@ -13264,3 +13264,45 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
     assert!(shared.load(Ordering::Relaxed));
     assert!(driver.stamp_settings.stamp_lrs);
 }
+
+#[test]
+fn destination_type_queries_register_and_withdraw_requirements() {
+    use rns_core::transport::destination_filter::destination_type;
+    let mut driver = new_test_driver();
+    driver
+        .engine
+        .destination_filter_mut()
+        .block(destination_type("nomadnetwork.node"));
+    let registration = |driver: &mut Driver, request| match driver.handle_query_mut(request) {
+        QueryResponse::DestinationTypeRegistration(registered) => registered,
+        other => panic!("unexpected response {other:?}"),
+    };
+    let wants = |full_name: &str, requester: &[u8]| QueryRequest::WantsDestinationType {
+        full_name: full_name.into(),
+        requester: requester.to_vec(),
+    };
+    let unwants = |full_name: &str, requester: &[u8]| QueryRequest::UnwantsDestinationType {
+        full_name: full_name.into(),
+        requester: requester.to_vec(),
+    };
+
+    assert!(registration(&mut driver, wants("rncp.receive", b"a")));
+    assert!(registration(&mut driver, wants("rnx.execute", b"a")));
+    assert!(registration(&mut driver, wants("rnx.execute", b"b")));
+    assert!(!registration(&mut driver, wants("nomadnetwork.node", b"a")));
+    let filter = driver.engine.destination_filter();
+    assert!(filter.is_wanted(&destination_type("rncp.receive")));
+    assert!(!filter.is_wanted(&destination_type("nomadnetwork.node")));
+
+    assert!(registration(&mut driver, unwants("rncp.receive", b"a")));
+    assert!(!registration(&mut driver, unwants("rncp.receive", b"a")));
+    assert!(registration(
+        &mut driver,
+        QueryRequest::UnwantsAllDestinationTypes {
+            requester: b"a".to_vec()
+        }
+    ));
+    let filter = driver.engine.destination_filter();
+    assert!(!filter.is_wanted(&destination_type("rncp.receive")));
+    assert!(filter.is_wanted(&destination_type("rnx.execute")));
+}

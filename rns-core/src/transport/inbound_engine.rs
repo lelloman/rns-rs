@@ -152,6 +152,9 @@ impl TransportEngine {
         let Some(mut ctx) = self.prepare_decoded_packet(frame) else {
             return Vec::new();
         };
+        if !self.destination_filter_admits(&ctx) {
+            return Vec::new();
+        }
         // Routing state may have changed since decoding. Any packet whose hash
         // a step could now read is hashed first.
         if ctx.hash_deferred && !self.link_packet_hash_unread(&ctx.packet) {
@@ -175,6 +178,30 @@ impl TransportEngine {
 
         self.handle_inbound_local_delivery(&ctx, &mut actions);
         actions
+    }
+
+    /// The announce ingress filter of `Transport.inbound` (825c2e19), which
+    /// runs before anything else sees the packet. Python's `hops == 1` after
+    /// its increment means the announce was sent with zero hops; local
+    /// client hops are not incremented here.
+    fn destination_filter_admits(&self, ctx: &InboundPacketCtx) -> bool {
+        if ctx.packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE {
+            return true;
+        }
+        let start = constants::KEYSIZE / 8;
+        let Some(name_hash) = ctx
+            .packet
+            .data()
+            .get(start..start + constants::NAME_HASH_LENGTH / 8)
+        else {
+            // Malformed; announce unpacking reports the violation.
+            return true;
+        };
+        let mut destination_type = [0u8; constants::NAME_HASH_LENGTH / 8];
+        destination_type.copy_from_slice(name_hash);
+        let own_local_announce = ctx.from_local_client && ctx.packet.hops == 0;
+        self.destination_filter
+            .allows(&destination_type, own_local_announce)
     }
 
     pub(super) fn prepare_inbound_packet(

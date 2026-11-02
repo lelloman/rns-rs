@@ -61,12 +61,21 @@ struct Harness {
     client_home: PathBuf,
     listener_home: PathBuf,
     client_control_port: u16,
+    /// Whether listeners wait until the client daemon learns their path. A
+    /// filtering client daemon only learns it once a client asks for it.
+    wait_for_client_paths: bool,
     _client_daemon: ProcessGuard,
     _listener_daemon: ProcessGuard,
 }
 
 impl Harness {
     fn start(label: &str) -> Self {
+        Self::start_with_client_sections(label, "")
+    }
+
+    /// Start with extra config sections, such as `[filter]`, for the
+    /// client-side shared instance.
+    fn start_with_client_sections(label: &str, client_sections: &str) -> Self {
         // rnsd is a separate process, so the test cannot hand a bound listener
         // directly to it. Retain every reservation until its owning daemon is
         // ready to start, and serialize the short release/spawn handoff across
@@ -130,6 +139,7 @@ impl Harness {
                  instance_control_port = {client_control_port}\n\
                  discover_interfaces = No\n\
                  panic_on_interface_error = Yes\n\n\
+                 {client_sections}\n\
                  [interfaces]\n\
                    [[utility client]]\n\
                      type = TCPClientInterface\n\
@@ -176,6 +186,7 @@ impl Harness {
             client_home,
             listener_home,
             client_control_port,
+            wait_for_client_paths: client_sections.is_empty(),
             _client_daemon: client_daemon,
             _listener_daemon: listener_daemon,
         }
@@ -277,7 +288,9 @@ impl Harness {
         // one-shot announce. Confirm that the client daemon has learned the
         // path, explicitly requesting it when the announce was missed under
         // CI load, before starting a short-lived utility client.
-        self.wait_for_client_path(destination, &listener);
+        if self.wait_for_client_paths {
+            self.wait_for_client_path(destination, &listener);
+        }
         listener
     }
 
@@ -855,6 +868,94 @@ fn python_rncp_client_sends_to_rust_listener() {
     assert_eq!(
         fs::read(fetched.join("rust-fetch.bin")).unwrap(),
         fetch_expected
+    );
+}
+
+/// Upstream 825c2e19: a shared instance with `[filter] required_only`
+/// drops announces of destination types no local application asked for.
+const REQUIRED_ONLY_FILTER: &str = "[filter]\nrequired_only = Yes\n";
+
+#[test]
+fn rust_rncp_client_registers_with_a_filtering_shared_instance() {
+    let harness = Harness::start_with_client_sections("rust-rncp-filtered", REQUIRED_ONLY_FILTER);
+    let listener_identity = harness.path("listener.identity");
+    let client_identity = harness.path("client.identity");
+    let receive = harness.path("receive");
+    fs::create_dir_all(&receive).unwrap();
+    let source = harness.path("filtered.bin");
+    let expected = patterned_file(&source, 65_537);
+    let destination = harness.destination(Implementation::Rust, "rncp", &listener_identity);
+    let _listener = harness.listener(
+        Implementation::Rust,
+        "rncp",
+        &listener_identity,
+        &destination,
+        &[
+            "--no-auth".into(),
+            "--save".into(),
+            receive.to_string_lossy().into_owned(),
+            "-b".into(),
+            "1".into(),
+        ],
+    );
+    let output = rncp_send(
+        &harness,
+        Implementation::Rust,
+        &client_identity,
+        &source,
+        &destination,
+    );
+    assert_success(&output, "Rust rncp through a filtering shared instance");
+    assert_eq!(fs::read(receive.join("filtered.bin")).unwrap(), expected);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rncp_client_registers_with_a_filtering_rust_instance() {
+    let mut probe = Command::new("python3");
+    probe.args([
+        "-c",
+        "import RNS; print(hasattr(RNS.Reticulum, 'wants_destination_type'))",
+    ]);
+    let probe = probe.output().unwrap();
+    assert_success(&probe, "probe Reticulum.wants_destination_type");
+    if String::from_utf8_lossy(&probe.stdout).trim() != "True" {
+        eprintln!("Python Reticulum predates destination type filtering; skipping");
+        return;
+    }
+
+    let harness = Harness::start_with_client_sections("python-rncp-filtered", REQUIRED_ONLY_FILTER);
+    let listener_identity = harness.path("listener.identity");
+    let client_identity = harness.path("python-client.identity");
+    let receive = harness.path("receive");
+    fs::create_dir_all(&receive).unwrap();
+    let source = harness.path("python-filtered.bin");
+    let expected = patterned_file(&source, 65_537);
+    let destination = harness.destination(Implementation::Rust, "rncp", &listener_identity);
+    let _listener = harness.listener(
+        Implementation::Rust,
+        "rncp",
+        &listener_identity,
+        &destination,
+        &[
+            "--no-auth".into(),
+            "--save".into(),
+            receive.to_string_lossy().into_owned(),
+            "-b".into(),
+            "1".into(),
+        ],
+    );
+    let output = rncp_send(
+        &harness,
+        Implementation::Python,
+        &client_identity,
+        &source,
+        &destination,
+    );
+    assert_success(&output, "Python rncp through a filtering Rust instance");
+    assert_eq!(
+        fs::read(receive.join("python-filtered.bin")).unwrap(),
+        expected
     );
 }
 

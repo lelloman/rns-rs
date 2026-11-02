@@ -1967,6 +1967,7 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
             tx: event_tx.clone(),
         }),
     )?;
+    node.wants_destination_type(APP_NAME);
     let identity = prepare_identity(
         &rnsh_config,
         &rns_config,

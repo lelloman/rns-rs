@@ -6349,6 +6349,97 @@ fn enforced_announce_stamps_are_rechecked_on_a_signature_cache_hit() {
     }
 }
 
+// --- Destination type filtering (upstream 825c2e19 `[filter]`) ---
+
+fn feed_announce_on(
+    engine: &mut TransportEngine,
+    packet: &RawPacket,
+    iface: InterfaceId,
+    now: f64,
+) -> Vec<TransportAction> {
+    let mut rng = rns_crypto::FixedRng::new(&[0x77; 32]);
+    engine.handle_inbound(
+        InboundFrame {
+            raw: &packet.raw,
+            iface,
+            now,
+            rx: RxMetadata {
+                rssi: None,
+                snr: None,
+            },
+        },
+        &mut rng,
+    )
+}
+
+#[test]
+fn blocked_destination_types_are_dropped_at_ingress() {
+    let sigcache = crate::transport::destination_filter::destination_type("sigcache.test");
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_local_client_interface(2));
+    engine.destination_filter_mut().block(sigcache);
+
+    let (packet, _) = signed_announce_packet(0x41, None);
+    let actions = feed_announce(&mut engine, &packet, 1000.0);
+    assert!(actions.is_empty(), "{actions:?}");
+    assert!(!engine.has_path(&packet.destination_hash));
+
+    // Blocking also covers a local client's own destinations.
+    let (packet, _) = signed_announce_packet(0x42, None);
+    let actions = feed_announce_on(&mut engine, &packet, InterfaceId(2), 1000.0);
+    assert!(actions.is_empty(), "{actions:?}");
+    assert!(!engine.has_path(&packet.destination_hash));
+}
+
+#[test]
+fn required_only_admits_allowed_wanted_and_own_local_destination_types() {
+    use crate::transport::destination_filter::destination_type;
+    let sigcache = destination_type("sigcache.test");
+    let setup = || {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_local_client_interface(2));
+        engine.destination_filter_mut().set_required_only(true);
+        engine
+    };
+
+    // Neither allowed nor wanted: dropped from the network.
+    let mut engine = setup();
+    let (packet, _) = signed_announce_packet(0x43, None);
+    assert!(feed_announce(&mut engine, &packet, 1000.0).is_empty());
+    assert!(!engine.has_path(&packet.destination_hash));
+
+    // A local client's own destination, sent with zero hops, gets through.
+    let (packet, _) = signed_announce_packet(0x44, None);
+    feed_announce_on(&mut engine, &packet, InterfaceId(2), 1000.0);
+    assert!(engine.has_path(&packet.destination_hash));
+
+    // An announce a local client relays from further away does not.
+    let (mut packet, _) = signed_announce_packet(0x45, None);
+    packet.raw[1] = 1;
+    feed_announce_on(&mut engine, &packet, InterfaceId(2), 1000.0);
+    assert!(!engine.has_path(&packet.destination_hash));
+
+    // Allowed by config.
+    let mut engine = setup();
+    engine.destination_filter_mut().allow(sigcache);
+    let (packet, _) = signed_announce_packet(0x46, None);
+    feed_announce(&mut engine, &packet, 1000.0);
+    assert!(engine.has_path(&packet.destination_hash));
+
+    // Wanted by a local application, until it withdraws.
+    let mut engine = setup();
+    assert!(engine.destination_filter_mut().want(sigcache, b"client"));
+    let (packet, _) = signed_announce_packet(0x47, None);
+    feed_announce(&mut engine, &packet, 1000.0);
+    assert!(engine.has_path(&packet.destination_hash));
+    engine.destination_filter_mut().unwant_all(b"client");
+    let (packet, _) = signed_announce_packet(0x48, None);
+    feed_announce(&mut engine, &packet, 1000.0);
+    assert!(!engine.has_path(&packet.destination_hash));
+}
+
 #[test]
 fn enforced_path_request_stamps_use_the_receiving_interface_cost() {
     // Transport.inbound since 9b464382 validates path request stamps against

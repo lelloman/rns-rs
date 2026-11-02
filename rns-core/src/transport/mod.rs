@@ -2,6 +2,7 @@ pub mod announce_proc;
 pub mod announce_queue;
 pub mod announce_verify_queue;
 pub mod dedup;
+pub mod destination_filter;
 pub mod inbound;
 pub mod ingress_control;
 pub mod jobs;
@@ -253,6 +254,9 @@ pub struct TransportEngine {
     /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
     /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
     stamp_requirements: StampRequirements,
+    /// Announce filtering by destination type (`[filter]`, upstream
+    /// 825c2e19).
+    destination_filter: destination_filter::DestinationTypeFilter,
     /// `Transport.control_hashes`: the path request and tunnel synthesis
     /// destinations, which are handled by the engine and never bridged as
     /// plain broadcasts.
