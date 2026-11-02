@@ -6298,6 +6298,58 @@ fn enforced_announce_stamps_use_the_receiving_interface_cost() {
 }
 
 #[test]
+fn enforced_announce_stamps_are_rechecked_on_a_signature_cache_hit() {
+    // Upstream ade030ad: a cached valid announce is re-checked against the
+    // receiving interface's destination cost. Here the stamp is applied to
+    // every copy, including one whose signature check came from the cache.
+    let ext = stamp_ext_payload(0xA5);
+    let cap = crate::stamp::StampCost::from_whole(u32::from(constants::STAMP_COST_CAP));
+    for (second_cost, accepted) in [(crate::stamp::StampCost::ZERO, true), (cap, false)] {
+        let mut engine = TransportEngine::new(make_config(false));
+        let mut first = make_interface(1, constants::MODE_FULL);
+        first.stamp_costs.destination_cost = Some(crate::stamp::StampCost::ZERO);
+        engine.register_interface(first);
+        let mut second = make_interface(2, constants::MODE_FULL);
+        second.stamp_costs.destination_cost = Some(second_cost);
+        engine.register_interface(second);
+        engine.set_stamp_requirements(StampRequirements {
+            enforced: true,
+            destination_cost: crate::stamp::StampCost::ZERO,
+            path_request_cost: constants::PATH_REQUEST_STAMP_COST,
+        });
+
+        let (stamped, announce) = signed_announce_packet(0x36, Some(&ext));
+        feed_announce(&mut engine, &stamped, 1000.0);
+        assert!(engine.has_path(&stamped.destination_hash));
+        let key = TransportEngine::announce_sig_cache_key(&stamped.destination_hash, &announce);
+        assert!(engine.announce_sig_cache_contains(&key));
+
+        engine.drop_path(&stamped.destination_hash);
+        let mut rng = rns_crypto::FixedRng::new(&[0x77; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &stamped.raw,
+                iface: InterfaceId(2),
+                now: 1001.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
+        assert_eq!(
+            actions
+                .iter()
+                .any(|action| matches!(action, TransportAction::AnnounceReceived(_))),
+            accepted,
+            "second interface cost {second_cost}"
+        );
+        assert_eq!(engine.has_path(&stamped.destination_hash), accepted);
+    }
+}
+
+#[test]
 fn enforced_path_request_stamps_use_the_receiving_interface_cost() {
     // Transport.inbound since 9b464382 validates path request stamps against
     // `packet.receiving_interface.pr_cost`.
