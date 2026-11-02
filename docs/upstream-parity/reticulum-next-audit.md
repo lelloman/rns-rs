@@ -27,7 +27,7 @@
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
   integrated on `dev` from `7911858`; commits 16 to 23 on `dev` from
   `b857fed`; commits 24 to 31 on `dev` from `147c987`; commits 32 to 36
-  inventoried on `dev` at `15d817e`
+  inventoried on `dev` at `15d817e` and integrated on `dev` from `31a2493`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -148,11 +148,11 @@ Every commit in the audited range must appear exactly once.
 | 29 | `e64ce9956515fd9a2c09820f04750be333e6e52e` | Cleanup | Non-runtime | Debug message only; fixes the undefined `RNS.prettystampval` from commit 27; rns-rs has no per-discovery "Discovered … with stamp value" log |
 | 30 | `22bf35d59da7ead0ade8ca016272ed247069039b` | Cleanup | Integrated | The insufficient discovery stamp diagnostic prints the value with `rns_crypto::stamp_value::pretty_cost` (`7.250`), which `rns_cli::format::prettycost` now shares; `insufficient_stamp_diagnostic_includes_calculated_value`, `pretty_cost_matches_upstream_prettycost` |
 | 31 | `6927c3c589683041f027d9a04c598cb257d957a7` | Cleanup | Non-runtime | Quoting fix in upstream's `rnpath.py` f-string, which Python before 3.12 could not parse; the native `rnpath` output from commit 27 is unaffected |
-| 32 | `263dc6bae573ca9cfa95e8eb52012835bd048d86` | RPC error handling | Needs port | |
-| 33 | `0cc6f5aef3f33c78d3e0f30fbaab170006613b48` | Announce validation caching | Needs port | |
-| 34 | `ade030ada9480b1163b17444dc3efb2f11ad2948` | Announce validation caching | Needs port | |
-| 35 | `825c2e19934f14da4d135bbc65b8b5a4832cc06f` | Added basic destination type filtering | Needs port | |
-| 36 | `d3874ddedbf485db3151be1234d35da10c498ef1` | Logging | Needs port | |
+| 32 | `263dc6bae573ca9cfa95e8eb52012835bd048d86` | RPC error handling | Structurally covered | `fab683a`; `handle_connection` owns the RPC stream and drops it on every return, error paths included; `rpc_connection_closes_after_a_failed_request` |
+| 33 | `0cc6f5aef3f33c78d3e0f30fbaab170006613b48` | Announce validation caching | Integrated | `bdc8f5d`; a stamp below the required cost now records its value (`apply_stamp`), as upstream computes it before the check; `test_announce_stamp_below_required_value_is_kept_invalid_and_valued`. The positive cache is covered by `AnnounceSignatureCache`; the negative cache (performance only) is not ported; the culled-identity aborts have no counterpart |
+| 34 | `ade030ada9480b1163b17444dc3efb2f11ad2948` | Announce validation caching | Structurally covered | `5a6f68d`; the signature cache skips only the signature check, and `apply_stamp` runs on every copy with its interface's cost; `enforced_announce_stamps_are_rechecked_on_a_signature_cache_hit` |
+| 35 | `825c2e19934f14da4d135bbc65b8b5a4832cc06f` | Added basic destination type filtering | Integrated | `5b29f7b`; `DestinationTypeFilter` at announce ingress, `[filter]` (`required_only`, `ignored_types`, `allowed_types`), the three RPC calls, `RnsNode::wants_destination_type` and friends with shared instance registration and withdrawal on shutdown, registrations in `rncp`, `rnx`, `rnsh` and remote management; engine, config, RPC, driver and shared client tests; live filtering interop for Rust and Python `rncp`. Caveat: the TCP-only RPC client cannot register with a Python shared instance's Unix socket RPC |
+| 36 | `d3874ddedbf485db3151be1234d35da10c498ef1` | Logging | Integrated | `75f6e55`; the two `required_announces_only` debug lines, logged when the driver applies the switch |
 
 ## Per-Commit Analysis
 
@@ -1283,10 +1283,204 @@ grammar; only Python 3.12 was available here, so it was not reproduced.
 
 **Final disposition:** Non-runtime; mapping only.
 
+### 32. `263dc6ba` — RPC error handling
+
+**Upstream change** (`RNS/Reticulum.py`): `rpc_loop` closes the client
+connection in a `finally` block instead of at the end of the `try`, so a
+request whose handling raises no longer leaves its connection open.
+
+**Rust applicability:** Structurally covered. `handle_connection` takes the
+stream by value and every return, including each `?` on a failed
+authentication, decode, query or send, drops it, which closes the socket.
+
+**Evidence:** `rpc_connection_closes_after_a_failed_request` (the driver is
+gone, the `path_table` query fails with `BrokenPipe`, and the client reads
+end of stream).
+
+**Final disposition:** Structurally covered.
+
+### 33. `0cc6f5ae` — Announce validation caching
+
+**Upstream change:**
+
+- `RNS/Identity.py`: `validate_announce` keeps two 128-entry caches keyed by
+  packet hash. A cached invalid result returns its signal (`no_stamp`,
+  `blackholed`) or `False`; an `invalid_stamp` result is re-validated when
+  the receiving interface's destination cost is at or below the cached
+  stamp value. A cached valid result skips validation and only re-remembers
+  the destination when it is no longer known (a path culled meanwhile). To
+  cache that value, the stamp value is now computed before the cost check,
+  so an announce with an insufficient stamp that is accepted while stamps
+  are not enforced is remembered with its real value instead of 0.
+- `RNS/Transport.py`, `RNS/Discovery.py`: both caches are cleared whenever
+  the blackhole list changes. The local-client rebroadcast, the answer to a
+  waiting discovery path request and the announce handler callbacks now
+  stop when `Identity.recall` returns nothing because the destination was
+  culled in the meantime.
+
+**Rust applicability:**
+
+- The recorded value is observable: it reaches the known destination, the
+  path table RPC `value`, `rnstatus`, `rnpath` and `recall_stamp_value`.
+  rns-rs recorded 0 for an insufficient stamp. Needs port.
+- The positive cache is covered by `AnnounceSignatureCache`, which skips
+  only the signature check of an identical announce. The blackhole and
+  stamp checks run on every copy, so nothing needs clearing when the
+  blackhole list changes.
+- The negative cache only saves the signature check of a repeated invalid
+  announce; the outcome is the same. Not ported (performance only, no
+  protocol invariant).
+- The culled-identity aborts have no counterpart: the engine builds the
+  local-client copy and the path request answer from the received packet,
+  and announce callbacks receive the validated announce, without recalling
+  an identity.
+
+**Implementation:** `ValidatedAnnounce::apply_stamp` computes the stamp
+value before the cost check and keeps it for an invalid stamp. The stamp
+still stays in the app data and the link request cost is still not
+recorded. `docs/configuration.md` says so.
+
+**Evidence:** `test_announce_stamp_below_required_value_is_kept_invalid_and_valued`
+(fails on the previous code with value 0).
+
+**Final disposition:** Integrated. Divergence: no negative cache.
+
+### 34. `ade030ad` — Announce validation caching
+
+**Upstream change** (`RNS/Identity.py`): with stamps enforced, a cached
+valid announce is re-checked against the receiving interface's destination
+cost (or the caller's `required_value`), returning `no_stamp` or
+`invalid_stamp` when it falls short, so an announce first accepted on a
+cheap interface is still rejected on a dearer one.
+
+**Rust applicability:** Structurally covered. `process_verified_announce`
+applies the stamp to every copy with that copy's interface cost, whether
+the signature check came from the cache or not.
+
+**Evidence:** `enforced_announce_stamps_are_rechecked_on_a_signature_cache_hit`:
+the same announce, its signature cached, is accepted again on a zero-cost
+interface and rejected on one at the cost cap.
+
+**Final disposition:** Structurally covered.
+
+### 35. `825c2e19` — Added basic destination type filtering
+
+**Upstream change:**
+
+- `RNS/Transport.py`: `blocked_destination_types`,
+  `allowed_destination_types`, `client_destination_types` (per type, the
+  requesters asking for it) and `required_destinations_only`. In `inbound`,
+  right after the hop and packet filters, an announce whose name hash is
+  blocked is dropped; with `required_destinations_only`, it is dropped
+  unless its type is allowed or wanted, or it arrived with zero hops from a
+  local client or from the shared instance. A name hash shorter than 10
+  bytes is a protocol violation. `block_destination_type` also removes the
+  type's requesters; `_wants_destination_type` refuses a blocked type;
+  `_unwants_destination_type` returns whether the requester had registered
+  it and drops a type without requesters; `_unwants_all_destination_types`
+  withdraws every type of a requester.
+- `RNS/Reticulum.py`: the `[filter]` section (`required_only` with
+  `as_bool`, `ignored_types` and `allowed_types` with `as_list`); RPC calls
+  `wants_destination_type`, `unwants_destination_type` and
+  `unwants_all_destination_types` carrying `requester` and an unchecked
+  `signature`; `Reticulum.wants_destination_type` and friends, which on a
+  shared instance client register locally and over RPC (returning the RPC
+  answer, `False` on failure); `required_announces_only`, for shared
+  instance clients only; `unwants_all_destination_types` in the exit
+  handler; the get-RPC calls return `None` or `[]` on failure.
+- `RNS/Destination.py`: `Destination.name_hash(full_name)`.
+- `RNS/Discovery.py` and the utilities: the blackhole updater, `rnstatus`,
+  `rnpath`, `rncp`, `rnx`, the `rnsh` initiator and `rngit` call
+  `wants_destination_type` for the types they need.
+
+**Rust applicability:** Needs port, in four parts: the ingress filter and
+`[filter]` (configuration compatibility), the RPC calls (Python utilities
+at `825c2e19` send them to an rns-rs shared instance; without them a
+filtering rns-rs instance drops the announces those clients need), the
+native API, and client registration (rns-rs utilities under a filtering
+shared instance).
+
+**Implementation:**
+
+- `rns_core::transport::destination_filter`: `DestinationTypeFilter` and
+  `destination_type(full_name)`, the name hash of the full name as given
+  (Python splits at the dots and joins it back unchanged). The engine
+  checks it in `handle_decoded_inbound_with_announce_queue` right after
+  `prepare_decoded_packet` (hop and packet filters), before deduplication,
+  forwarding, verification or queueing. The zero-hop exception uses the
+  local client flag, since local client hops are not incremented here. A
+  short announce is left to announce unpacking, which already reports a
+  protocol violation.
+- `[filter]` parses into `FilterSection`, applied when the node starts.
+- The RPC handlers accept the three calls with a `requester` byte string and
+  ignore `signature`, and answer `True` or `False`. The driver logs the
+  registrations at debug level, as upstream.
+- `RnsNode::wants_destination_type`, `unwants_destination_type`,
+  `unwants_all_destination_types` and `required_announces_only`. The
+  requester is a random identity hash per node (upstream's
+  `Transport.application_identity`). `connect_shared_from_config` takes the
+  shared instance's RPC key from `storage/transport_identity` (only an
+  existing one; no identity is created) and the client withdraws its
+  registrations on shutdown.
+- `rncp` and `rnx` clients, the `rnsh` initiator, `remote_query` and
+  `RemoteManagementClient` register their types. `remote_query` now uses
+  `connect_shared_from_config`, which parses the same config.
+  `RemoteManagementClient` registers both management types for `rnstatus`
+  and `rnpath`; upstream `rnstatus` registers only
+  `rnstransport.remote.management`.
+- `docs/configuration.md` documents `[filter]`.
+
+Not ported: the blackhole updater registration (rns-rs has no blackhole
+updater) and `rngit` (no counterpart). The get-RPC error handling is client
+side; rns-rs utilities already report RPC failures.
+
+**Caveats:**
+
+- rns-rs's RPC client speaks TCP only. Against a Python shared instance
+  serving RPC on its default Linux abstract socket, registration fails (it
+  is logged at debug level and returns `false`), so rns-rs clients under
+  such an instance with `required_only` do not receive the types they
+  need. Registration with an rns-rs shared instance, or a Python one using
+  TCP, works.
+- Registrations are kept in memory until withdrawn, as upstream; a client
+  that is killed leaves them behind until the shared instance restarts.
+
+**Evidence:** `destination_filter` unit tests,
+`blocked_destination_types_are_dropped_at_ingress`,
+`required_only_admits_allowed_wanted_and_own_local_destination_types`,
+`filter_section_parses_every_option` (and its default and invalid-value
+tests), `destination_type_rpc_calls_reach_the_driver`,
+`destination_type_queries_register_and_withdraw_requirements`, and
+`shared_client_registers_destination_types_with_the_shared_instance`
+(against a real filtering shared instance, a blocked type is refused only
+by the shared instance, and shutdown withdraws the registrations). Live:
+`rust_rncp_client_registers_with_a_filtering_shared_instance` and
+`python_rncp_client_registers_with_a_filtering_rust_instance` (Python at
+`d3874dde`) send through a client daemon with `required_only`. The first
+fails without `rncp`'s registration and the second without the daemon's
+`wants_destination_type` handler. The Python test skips at the baseline,
+which has no `wants_destination_type`. Without the filter, the harness
+learns the listener path before any client runs; with it, the client daemon
+does not.
+
+**Final disposition:** Integrated, with the TCP RPC caveat.
+
+### 36. `d3874dde` — Logging
+
+**Upstream change** (`RNS/Reticulum.py`): `required_announces_only` logs
+"Setting announce filtering to required only" or "… to all" at debug
+level.
+
+**Rust applicability:** Needs port (log parity for commit 35's switch).
+
+**Implementation:** the driver logs the same two lines when it applies
+`SetRequiredDestinationsOnly`, which only shared instance clients send.
+
+**Final disposition:** Integrated; log text only.
+
 ## Integration Plan
 
-Commits 1 to 31 have a final disposition; commits 32 to 36 are inventoried
-and are integrated one at a time in upstream order. The `Link.py:311` precedence of
+All thirty-six commits have a final disposition. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
@@ -1295,18 +1489,17 @@ audit rechecks it (still present at `d3874dde`). If upstream confirms that expre
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition. Commits 32 to 36 are
-  inventoried only.
+- [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
-  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d` and `6927c3c5`.
-  At the current tip `d3874dde` it passed 4/4 and 10/10 on 2026-11-02 against
-  `15d817e`, before commits 32 to 36 were integrated; rerun after they are.
+- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5` and
+  the current tip `d3874dde` (4/4 and 12/12 with commits 32 to 36
+  integrated); rerun if rgit advances.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -1484,3 +1677,38 @@ the baseline `5d38ce30` was exercised from the configured checkout.
 Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
 147c987..e2cf9f1` lists one trailer per commit, and the eight hashes equal
 `git rev-list fe2fe94d..6927c3c5`, each in exactly one local commit.
+
+### Commits 32 to 36 (rgit tip `d3874dde`)
+
+Run on 2026-11-02 at `75f6e55` (on `31a2493`, which is `origin/master`
+`981667f` plus the inventory commit), same host. Formatting, lint and the
+feature checks ran at `a320fba`, which differs from `75f6e55` only in
+`docs/configuration.md`. Interop against `d3874dde` used a disposable
+worktree of that commit; the baseline `5d38ce30` was exercised from the
+configured checkout.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | per-commit tests named in the analyses | All passed; the commit 33 and 35 behavior tests also failed against the code without the change (the commit 32 and 34 tests pin existing behavior) |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,085 passed, 1 failed, 13 ignored; see the note below |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,145 passed, 0 failed, 13 ignored |
+| Feature checks | `cargo check -p rns-cli -p rns-ctl --bins --no-default-features`, and with `--features iface-tcp,rns-hooks-native` | Clean |
+| Interop, baseline `5d38ce30` | `python_interop -- --include-ignored`; `utility_interop -- --include-ignored` | 4/4; 12/12 (`python_rncp_client_registers_with_a_filtering_rust_instance` skips, as the baseline has no `wants_destination_type`) |
+| Interop, target `d3874dde` | the same against the `d3874dde` worktree | 4/4; 12/12 |
+| Filtering against rns-rs | the two filtering `rncp` tests with `rncp`'s registration, or the daemon's `wants_destination_type` handler, removed | Both fail, as the path never reaches the client daemon; both pass with them |
+| Drift | `python3 scripts/check_upstream_drift.py` (fetched 2026-11-02T08:54Z) | rgit `d3874dde` ahead by the 36 audited commits; GitHub `e40191b3` behind |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+The one workspace failure was `test_single_bidirectional` in
+`rns-net/tests/e2e.rs`, which could not start its transport node with
+`AddrInUse`. The e2e port allocator hands out fixed ports from
+`10000 + (pid % 200) * 100` without checking that they are free, and this
+host has listeners in that range (a Java process on 127.0.0.1:17525, and
+11434 and 12865). The `e2e` binary then passed 66/66 in three reruns. The
+test touches nothing changed here; the allocator is a pre-existing harness
+defect, not fixed in this integration.
+
+Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
+31a2493..75f6e55` lists one trailer per commit, and the five hashes equal
+`git rev-list 6927c3c5..d3874dde`, each in exactly one local commit.
