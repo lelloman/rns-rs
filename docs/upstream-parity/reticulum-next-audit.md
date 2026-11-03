@@ -30,7 +30,8 @@
   integrated on `dev` from `7911858`; commits 16 to 23 on `dev` from
   `b857fed`; commits 24 to 31 on `dev` from `147c987`; commits 32 to 36
   inventoried on `dev` at `15d817e` and integrated on `dev` from `31a2493`;
-  commits 37 to 40 inventoried on `dev` at `1d68ffe`
+  commits 37 to 40 inventoried on `dev` at `1d68ffe` and integrated on `dev`
+  from `d4b6527`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -1635,8 +1636,7 @@ there.
 
 ## Integration Plan
 
-Commits 1 to 36 have a final disposition; commits 37 to 40 are inventoried
-and are integrated one at a time in upstream order. The `Link.py:311` precedence of
+All forty commits have a final disposition. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
@@ -1645,19 +1645,17 @@ audit rechecks it (still present at `ecd677ba`). If upstream confirms that expre
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition. Commits 37 to 40 are
-  inventoried only.
+- [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
-  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5` and
-  `d3874dde` (4/4 and 12/12 with commits 32 to 36 integrated). Not yet run
-  at the current tip `ecd677ba`; rerun after commits 37 to 40 are
-  integrated.
+- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+  `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
+  `d3874dde` and the current tip `ecd677ba` (4/4 and 12/12 with commits 37
+  to 40 integrated); rerun if rgit advances.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -1870,3 +1868,27 @@ defect, not fixed in this integration.
 Mapping check: `git log --format='%h %(trailers:key=Upstream-Commit,valueonly)'
 31a2493..75f6e55` lists one trailer per commit, and the five hashes equal
 `git rev-list 6927c3c5..d3874dde`, each in exactly one local commit.
+
+### Commits 37 to 40 (rgit tip `ecd677ba`)
+
+Run on 2026-11-03 at `d80a235` (on `d4b6527`, which is `origin/master`
+`cf477b2`'s tree plus the inventory commit), same host. Interop against
+`ecd677ba` used a disposable worktree of that commit (`import RNS` reports
+1.6.0 and `RNS.prettycost(None)` returns `n` from it); the baseline
+`5d38ce30` was exercised from the configured checkout.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | per-commit tests named in the analyses | All passed; the three commit 39 tests also failed against `acc360c` (the code before commit 39) with only the new tests and constants copied in |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p rns-net --all-targets --features rns-hooks -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,086 passed, 0 failed, 13 ignored |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,145 passed, 0 failed, 13 ignored |
+| Feature checks | `cargo check -p rns-net --no-default-features`; `cargo check -p rns-tun -p rns-tun-android` | Clean |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4; 12/12 |
+| Interop, target `ecd677ba` | the same against the `ecd677ba` worktree | 4/4; 12/12 (`python_rnpath_lists_rust_path_table` with Python printing `n`) |
+| Drift | `python3 scripts/check_upstream_drift.py` (fetched 2026-11-03T07:57Z) | rgit `ecd677ba` ahead by the 40 audited commits; GitHub `e40191b3` behind |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+Mapping check: `git log --grep='Upstream-Commit: <hash>' origin/master..d80a235`
+for each of `git rev-list d3874dde..ecd677ba` finds exactly one local
+commit: `366feba`, `acc360c`, `c9ed6e1` and `d80a235`.
