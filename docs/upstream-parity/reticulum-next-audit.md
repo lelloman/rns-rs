@@ -1591,10 +1591,13 @@ builds requests at 32, 48 or 64 bytes (`build_path_request_packet` with a
 - `parse_path_request` processes only the three lengths, so the engine
   drops the other sizes even when it is called directly. The tag is always
   16 bytes now, and the truncation is gone.
-- Unchanged: a request of 16 bytes or fewer is still dropped as tagless with
-  a violation. rns-rs also counts a violation for one shorter than 16
-  bytes, which upstream drops silently (`if not len(packet.data) >= 16:
-  return`); this predates the range and is out of its scope.
+- Unchanged: a 16-byte request is still dropped as tagless with a
+  violation. rns-rs used to count a violation for one shorter than 16
+  bytes too, which upstream drops silently (`if not len(packet.data) >= 16:
+  return`). That predated the range and was aligned in a follow-up commit
+  (`path_requests_shorter_than_a_destination_hash_are_dropped_silently`). An
+  empty payload is still a malformed-packet violation, which this check
+  never sees.
 
 **Evidence:** `path_requests_of_invalid_length_are_dropped` (rns-core;
 lengths 17, 31, 33, 47, 49 and 63 yield no action, 32 and 48 are forwarded),

@@ -4424,6 +4424,39 @@ fn path_requests_of_invalid_length_are_protocol_violations_and_dropped() {
 }
 
 #[test]
+fn path_requests_shorter_than_a_destination_hash_are_dropped_silently() {
+    // Upstream Transport.inbound returns early, without a protocol violation,
+    // when a path request is shorter than a truncated hash. A 16 byte one is
+    // a tagless request and still counts.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "short-path-requests");
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_PLAIN,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    // An empty payload is a malformed packet, rejected before this check.
+    for (len, violations) in [(1, 0), (15, 0), (16, 1)] {
+        let request = RawPacket::pack(
+            flags,
+            0,
+            &driver.path_request_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &vec![0x47; len],
+        )
+        .unwrap();
+        driver.handle_frame_event(InterfaceId(1), request.raw, None, None);
+
+        let stats = &driver.interfaces[&InterfaceId(1)].stats;
+        assert_eq!(stats.protocol_violations, violations, "length {len}");
+        assert_eq!(stats.prxc, 0, "a {len} byte path request was recorded");
+    }
+}
+
+#[test]
 fn oversized_announce_counts_a_protocol_violation() {
     let mut driver = new_test_driver();
     register_test_generic_interface(&mut driver, 1, "announce-size-violations");
