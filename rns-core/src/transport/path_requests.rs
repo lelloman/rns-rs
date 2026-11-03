@@ -225,40 +225,41 @@ impl TransportEngine {
         let mut destination_hash = [0u8; 16];
         destination_hash.copy_from_slice(&data[..16]);
 
-        // Stamped 1.6.0+ requests carry a 16-byte extension payload after the
-        // destination hash, transport id and tag. Anything longer is an
-        // excessive request and is dropped. A 49..63 byte unstamped request
-        // has an oversized tag: as upstream `parse_path_request`, it is still
-        // processed with the tag truncated to 16 bytes (the caller counts the
-        // protocol violation).
-        let (request_len, ext_payload) = if data.len() == constants::PATH_REQUEST_STAMPED_LENGTH {
-            let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
-            ext.copy_from_slice(&data[constants::PATH_REQUEST_LENGTH..]);
-            (constants::PATH_REQUEST_LENGTH, Some(ext))
-        } else {
-            if data.len() > constants::PATH_REQUEST_STAMPED_LENGTH {
-                return None;
-            }
-            (data.len(), None)
-        };
-        let request_data = &data[..request_len];
-
-        let tag_bytes = if request_data.len() > 32 {
-            Some(&request_data[32..])
-        } else if request_data.len() > 16 {
-            Some(&request_data[16..])
-        } else {
-            None
-        };
-        let Some(tag_bytes) = tag_bytes else {
+        if data.len() <= 16 {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Ignoring tagless path request for {:02x?}",
                 &destination_hash[..4],
             );
             return None;
+        }
+
+        // Since upstream cda4d72b only the legacy (destination hash and tag),
+        // unstamped (with transport id) and stamped (with a 16-byte extension
+        // payload) lengths are processed; any other tagged request, such as
+        // one with an oversized tag, is dropped (the driver counts the
+        // protocol violation).
+        if !constants::is_valid_path_request_length(data.len()) {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Invalid path request size {} for {:02x?}",
+                data.len(),
+                &destination_hash[..4],
+            );
+            return None;
+        }
+        let ext_payload = if data.len() == constants::PATH_REQUEST_STAMPED_LENGTH {
+            let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
+            ext.copy_from_slice(&data[constants::PATH_REQUEST_LENGTH..]);
+            Some(ext)
+        } else {
+            None
+        };
+        let tag_bytes = if data.len() == constants::PATH_REQUEST_LEGACY_LENGTH {
+            &data[16..32]
+        } else {
+            &data[32..48]
         };
 
-        let tag_len = tag_bytes.len().min(16);
+        let tag_len = tag_bytes.len();
 
         let mut carried_stamp_value = None;
         let mut stamped = false;

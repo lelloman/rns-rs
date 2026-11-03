@@ -86,6 +86,18 @@ pub const PATH_REQUEST_LENGTH: usize = 48;
 /// Stamped path request length: unstamped data plus the extension payload.
 pub const PATH_REQUEST_STAMPED_LENGTH: usize = PATH_REQUEST_LENGTH + PR_EXT_PAYLOAD_LENGTH;
 
+/// Legacy path request length without a transport id: destination hash and
+/// tag (`Transport.PR_LEGACY_LENGTH`, rgit `cda4d72b`).
+pub const PATH_REQUEST_LEGACY_LENGTH: usize = 32;
+
+/// Whether `len` is a path request length upstream accepts since rgit
+/// `cda4d72b`: legacy, unstamped or stamped.
+pub const fn is_valid_path_request_length(len: usize) -> bool {
+    len == PATH_REQUEST_LEGACY_LENGTH
+        || len == PATH_REQUEST_LENGTH
+        || len == PATH_REQUEST_STAMPED_LENGTH
+}
+
 /// Whether incoming announces are checked for stamps.
 pub const STAMPS_ENABLED: bool = true;
 

@@ -2911,26 +2911,47 @@ fn unstamped_relay_payload_has_marker_and_sentinel_flags() {
 }
 
 #[test]
-fn path_request_with_oversized_tag_is_truncated_and_forwarded() {
-    // Transport.parse_path_request: 49..63 byte unstamped requests keep the
-    // first 16 tag bytes; the oversized tail is ignored.
-    let mut engine = TransportEngine::new(make_config(true));
-    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
-    engine.register_interface(make_interface(2, constants::MODE_FULL));
-
+fn path_requests_of_invalid_length_are_dropped() {
+    // Upstream cda4d72b: only the legacy (32), unstamped (48) and stamped
+    // (64) lengths are processed. A request with an oversized or truncated
+    // tag was processed before, with the tag cut to 16 bytes.
     let dest = [0xDB; 16];
     let tag = [0x0B; 16];
-    let mut data = make_transport_path_request_data(&dest, &[0x99; 16], &tag);
-    data.push(0xFF);
+    let request = make_transport_path_request_data(&dest, &[0x99; 16], &tag);
+    for len in [17, 31, 33, 47, 49, 63] {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        let mut data = request.clone();
+        data.resize(len, 0xFF);
 
-    let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
-    assert_eq!(actions.len(), 1);
-    let TransportAction::SendOnInterface { raw, .. } = &actions[0] else {
-        panic!("Expected SendOnInterface for oversized-tag path request");
-    };
-    let packet = RawPacket::unpack(raw).expect("forwarded path request");
-    assert_eq!(packet.data().len(), constants::PATH_REQUEST_LENGTH);
-    assert_eq!(&packet.data()[32..], &tag);
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+        assert!(
+            actions.is_empty(),
+            "a {len} byte path request was processed"
+        );
+    }
+
+    for len in [
+        constants::PATH_REQUEST_LEGACY_LENGTH,
+        constants::PATH_REQUEST_LENGTH,
+    ] {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        let data = if len == constants::PATH_REQUEST_LEGACY_LENGTH {
+            [&dest[..], &tag[..]].concat()
+        } else {
+            request.clone()
+        };
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+        assert_eq!(
+            actions.len(),
+            1,
+            "a {len} byte path request was not forwarded"
+        );
+    }
 }
 
 #[test]
@@ -3104,12 +3125,21 @@ fn path_request_for_local_destination_requests_path_response() {
         let actions = engine.handle_path_request(&data, InterfaceId(2), 1000.0);
         expect_local_path_response(&actions, &dest, &tag, InterfaceId(2));
 
-        // A transport request (dest + requestor id + tag) on interface 1,
-        // with a short tag that must be passed through unpadded.
-        let short_tag = [0x33; 4];
-        let data = make_transport_path_request_data(&dest, &[0x77; 16], &short_tag);
+        // A transport request (dest + requestor id + tag) on interface 1.
+        let transport_tag = [0x33; 16];
+        let data = make_transport_path_request_data(&dest, &[0x77; 16], &transport_tag);
         let actions = engine.handle_path_request(&data, InterfaceId(1), 1001.0);
-        expect_local_path_response(&actions, &dest, &short_tag, InterfaceId(1));
+        expect_local_path_response(&actions, &dest, &transport_tag, InterfaceId(1));
+
+        // A short tag gives an invalid length, dropped since upstream
+        // cda4d72b rather than answered with the tag unpadded.
+        let short_tag = [0x34; 4];
+        let short = make_transport_path_request_data(&dest, &[0x77; 16], &short_tag);
+        let actions = engine.handle_path_request(&short, InterfaceId(1), 1001.5);
+        assert!(
+            actions.is_empty(),
+            "short-tag request answered: {actions:?}"
+        );
 
         // A repeated tag is dropped by the discovery tag dedup before it
         // reaches the local answer, as in Python.
