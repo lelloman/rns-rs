@@ -41,6 +41,13 @@ impl Driver {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
             }
+            if tagless_path_request {
+                // Logged on the pathing target since upstream ecd677ba.
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Protocol violation on interface {}: Tagless path request",
+                    interface_id.0
+                );
+            }
             return false;
         }
         // Upstream cda4d72b: a tagged path request of any length other than
@@ -59,7 +66,8 @@ impl Driver {
                     path_request_len
                 );
             } else {
-                log::debug!(
+                // Logged on the pathing target since upstream ecd677ba.
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                     "Protocol violation on interface {}: Invalid path request size {}",
                     interface_id.0,
                     path_request_len
