@@ -175,7 +175,7 @@ Every commit in the audited range must appear exactly once.
 | 34 | `ade030ada9480b1163b17444dc3efb2f11ad2948` | Announce validation caching | Structurally covered | `5a6f68d`; the signature cache skips only the signature check, and `apply_stamp` runs on every copy with its interface's cost; `enforced_announce_stamps_are_rechecked_on_a_signature_cache_hit` |
 | 35 | `825c2e19934f14da4d135bbc65b8b5a4832cc06f` | Added basic destination type filtering | Integrated | `5b29f7b`; `DestinationTypeFilter` at announce ingress, `[filter]` (`required_only`, `ignored_types`, `allowed_types`), the three RPC calls, `RnsNode::wants_destination_type` and friends with shared instance registration and withdrawal on shutdown, registrations in `rncp`, `rnx`, `rnsh` and remote management; engine, config, RPC, driver and shared client tests; live filtering interop for Rust and Python `rncp`. Caveat: the TCP-only RPC client cannot register with a Python shared instance's Unix socket RPC |
 | 36 | `d3874ddedbf485db3151be1234d35da10c498ef1` | Logging | Integrated | `75f6e55`; the two `required_announces_only` debug lines, logged when the driver applies the switch |
-| 37 | `fa683e6c21190ea452a9e9d20f1ca59170db9782` | Android job cancel | Needs port | |
+| 37 | `fa683e6c21190ea452a9e9d20f1ca59170db9782` | Android job cancel | Structurally covered | Mapping commit; rns-rs has no per-platform stamp runner, and its grinds (`generate_stamp_until`, `generate_stamped_link_keys`) stop every worker at their deadline on all targets, Android included; no upstream caller reads the new `cancel_work` result |
 | 38 | `d5891fde146b5c489a504eeac17d97ac54043a61` | Cleanup | Needs port | |
 | 39 | `cda4d72bb8c47aa6e6aee8d81a7d9b32d1e48d41` | Tightened PR protocol violations to drop | Needs port | |
 | 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Needs port | |
@@ -1503,6 +1503,28 @@ level.
 `SetRequiredDestinationsOnly`, which only shared instance clients send.
 
 **Final disposition:** Integrated; log text only.
+
+### 37. `fa683e6c` — Android job cancel
+
+**Upstream change** (`RNS/Stamps.py`): `cancel_work` returns `True` when it
+cancelled a job and `False` when the job was unknown or cancelling raised.
+The persistent Android runner from commit 18 now polls `active_jobs` and
+raises its shared stop flag when the job was cancelled; before, cancelling a
+job on Android set the flag in `active_jobs` that this runner never read, so
+its workers ground on until they found a stamp.
+
+**Rust applicability:** Structurally covered. rns-rs has no per-platform
+runner (commit 18). Upstream cancels a job from the path request and link
+request stamp watchdogs (`Transport.py:4006`, `Link.py:352`) and when a
+pending link is torn down (`Link.py:758`). rns-rs bounds both grinds by a
+deadline instead: `generate_stamp_until` and `generate_stamped_link_keys`
+check it on every worker and stop them all when it passes, on every target.
+A stamped link only exists once its keys are ground (`spawn_stamped_link_keys`
+then `complete_create_link`), so there is no pending link to tear down while
+the grind runs. The new return value has no reader upstream; the three
+callers ignore it.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
