@@ -4356,34 +4356,71 @@ fn hop_limited_frame_counts_a_hop_limiter_hit_not_a_protocol_violation() {
 }
 
 #[test]
-fn excessive_path_request_data_counts_a_protocol_violation() {
+fn path_requests_of_invalid_length_are_protocol_violations_and_dropped() {
+    // Upstream cda4d72b: only the legacy (32), unstamped (48) and stamped
+    // (64) lengths are processed; any other tagged request counts a protocol
+    // violation and is dropped before it is recorded or answered.
     let mut driver = new_test_driver();
     register_test_generic_interface(&mut driver, 1, "path-request-violations");
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_PLAIN,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let invalid_lengths = [17, 31, 33, 47, 49, 63, 65];
+    for (index, len) in invalid_lengths.into_iter().enumerate() {
+        let mut request_data = vec![0x44; 16];
+        request_data.resize(len, 0x50 + index as u8);
+        let request = RawPacket::pack(
+            flags,
+            0,
+            &driver.path_request_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &request_data,
+        )
+        .unwrap();
+        driver.handle_frame_event(InterfaceId(1), request.raw, None, None);
 
-    let mut request_data = vec![0x44; 16];
-    request_data.extend_from_slice(&[0x55; 16]);
-    request_data.extend_from_slice(&[0x66; 17]);
-    let request = RawPacket::pack(
-        PacketFlags {
-            header_type: constants::HEADER_1,
-            context_flag: constants::FLAG_UNSET,
-            transport_type: constants::TRANSPORT_BROADCAST,
-            destination_type: constants::DESTINATION_PLAIN,
-            packet_type: constants::PACKET_TYPE_DATA,
-        },
-        0,
-        &driver.path_request_dest,
-        None,
-        constants::CONTEXT_NONE,
-        &request_data,
-    )
-    .unwrap();
-    driver.handle_frame_event(InterfaceId(1), request.raw, None, None);
+        let stats = &driver.interfaces[&InterfaceId(1)].stats;
+        assert_eq!(stats.protocol_violations, index as u64 + 1, "length {len}");
+        assert_eq!(stats.prxc, 0, "a {len} byte path request was recorded");
+    }
 
-    assert_eq!(
-        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
-        1
-    );
+    for (index, len) in [
+        constants::PATH_REQUEST_LEGACY_LENGTH,
+        constants::PATH_REQUEST_LENGTH,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request_data = vec![0x45; 16];
+        request_data.resize(len, 0x60 + index as u8);
+        let request = RawPacket::pack(
+            flags,
+            0,
+            &driver.path_request_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &request_data,
+        )
+        .unwrap();
+        driver.handle_frame_event(InterfaceId(1), request.raw, None, None);
+
+        let stats = &driver.interfaces[&InterfaceId(1)].stats;
+        assert_eq!(
+            stats.protocol_violations,
+            invalid_lengths.len() as u64,
+            "length {len}"
+        );
+        assert_eq!(
+            stats.prxc,
+            index as u64 + 1,
+            "a {len} byte path request was dropped"
+        );
+    }
 }
 
 #[test]

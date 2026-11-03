@@ -177,7 +177,7 @@ Every commit in the audited range must appear exactly once.
 | 36 | `d3874ddedbf485db3151be1234d35da10c498ef1` | Logging | Integrated | `75f6e55`; the two `required_announces_only` debug lines, logged when the driver applies the switch |
 | 37 | `fa683e6c21190ea452a9e9d20f1ca59170db9782` | Android job cancel | Structurally covered | Mapping commit; rns-rs has no per-platform stamp runner, and its grinds (`generate_stamp_until`, `generate_stamped_link_keys`) stop every worker at their deadline on all targets, Android included; no upstream caller reads the new `cancel_work` result |
 | 38 | `d5891fde146b5c489a504eeac17d97ac54043a61` | Cleanup | Integrated | `rns_cli::format::prettycost` prints a missing value as `n`, so `rnpath -t` shows `(dv:n/lc:n)` and `rnstatus` `Dst n, PR n`; the pathing "is now N hops away" line formats the value with `pretty_cost`, and the validated announce debug line carries `(v:…)`; `prettycost_quantizes_clamps_and_rounds_like_upstream`, the rnpath and rnstatus cost display tests, and `python_rnpath_lists_rust_path_table` accepting either marker |
-| 39 | `cda4d72bb8c47aa6e6aee8d81a7d9b32d1e48d41` | Tightened PR protocol violations to drop | Needs port | |
+| 39 | `cda4d72bb8c47aa6e6aee8d81a7d9b32d1e48d41` | Tightened PR protocol violations to drop | Integrated | `PATH_REQUEST_LEGACY_LENGTH` and `is_valid_path_request_length`; the driver's ingress check counts a protocol violation and drops a tagged path request of any other length, and `parse_path_request` processes only those lengths; `path_requests_of_invalid_length_are_dropped`, `path_requests_of_invalid_length_are_protocol_violations_and_dropped`, the short-tag case of `path_request_for_local_destination_requests_path_response` |
 | 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Needs port | |
 
 ## Per-Commit Analysis
@@ -1558,6 +1558,55 @@ rnpath `path_costs` test and the rnstatus discovered value and cost tests.
 Python on both sides of the change.
 
 **Final disposition:** Integrated; display only.
+
+### 39. `cda4d72b` — Tightened PR protocol violations to drop
+
+**Upstream change** (`RNS/Transport.py`): `Transport.inbound` used to count
+a protocol violation for an unstamped path request longer than
+`PR_LENGTH` (48) and not `PR_STAMPED_LENGTH` (64), then process it anyway,
+with `parse_path_request` truncating the oversized tag to 16 bytes. Lengths
+17 to 31 and 33 to 47 (a short tag, with or without a transport id) were
+processed without a violation. Now any request whose length is not 64, 48 or
+the new `PR_LEGACY_LENGTH` (32, destination hash and tag) counts a violation
+and returns from `inbound`, so it is neither answered nor forwarded. A
+request longer than 64 bytes was already dropped as excessive, and one of 16
+bytes or fewer as tagless. Both TODOs say only the stamped length will be
+allowed after the stamp transition.
+
+**Rust applicability:** Needs port. rns-rs processed the same sizes as
+upstream before: it counted the violation for 49 to 63 bytes in the driver
+and processed the request with its tag cut to 16 bytes. rns-rs itself only
+builds requests at 32, 48 or 64 bytes (`build_path_request_packet` with a
+16-byte tag), so Python at `ecd677ba` keeps accepting them.
+
+**Implementation:**
+- `PATH_REQUEST_LEGACY_LENGTH` (32) and `is_valid_path_request_length` in
+  `rns_core::constants`.
+- The driver's ingress check (`events.rs`), where upstream's check in
+  `inbound` sits, counts a protocol violation for any tagged path request of
+  another length and drops the frame. It logs "Excessive path request size of
+  N bytes" above 64 bytes and "Invalid path request size N" otherwise, at
+  debug level, as upstream's `protocol_violation` does at this commit.
+- `parse_path_request` processes only the three lengths, so the engine
+  drops the other sizes even when it is called directly. The tag is always
+  16 bytes now, and the truncation is gone.
+- Unchanged: a request of 16 bytes or fewer is still dropped as tagless with
+  a violation. rns-rs also counts a violation for one shorter than 16
+  bytes, which upstream drops silently (`if not len(packet.data) >= 16:
+  return`); this predates the range and is out of its scope.
+
+**Evidence:** `path_requests_of_invalid_length_are_dropped` (rns-core;
+lengths 17, 31, 33, 47, 49 and 63 yield no action, 32 and 48 are forwarded),
+`path_requests_of_invalid_length_are_protocol_violations_and_dropped`
+(driver; each of 17, 31, 33, 47, 49, 63 and 65 bytes adds a violation and is
+not recorded as an incoming path request, while 32 and 48 bytes are), and
+the short-tag case of `path_request_for_local_destination_requests_path_response`,
+which used to be answered with the tag unpadded and is now dropped. Each
+test replaces one that pinned the old behavior:
+`path_request_with_oversized_tag_is_truncated_and_forwarded` and
+`excessive_path_request_data_counts_a_protocol_violation`.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 

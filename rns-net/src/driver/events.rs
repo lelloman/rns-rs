@@ -43,13 +43,29 @@ impl Driver {
             }
             return false;
         }
-        if is_path_request
-            && parsed_packet.data().len() > rns_core::constants::PATH_REQUEST_LENGTH
-            && parsed_packet.data().len() != rns_core::constants::PATH_REQUEST_STAMPED_LENGTH
-        {
+        // Upstream cda4d72b: a tagged path request of any length other than
+        // the legacy, unstamped or stamped one is a protocol violation and is
+        // dropped (before, only a 49 to 63 byte one counted, and it was still
+        // processed).
+        let path_request_len = parsed_packet.data().len();
+        if is_path_request && !rns_core::constants::is_valid_path_request_length(path_request_len) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
             }
+            if path_request_len > rns_core::constants::PATH_REQUEST_STAMPED_LENGTH {
+                log::debug!(
+                    "Protocol violation on interface {}: Excessive path request size of {} bytes",
+                    interface_id.0,
+                    path_request_len
+                );
+            } else {
+                log::debug!(
+                    "Protocol violation on interface {}: Invalid path request size {}",
+                    interface_id.0,
+                    path_request_len
+                );
+            }
+            return false;
         }
         if !self.engine.accepts_decoded_packet(decoded, interface_id) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
