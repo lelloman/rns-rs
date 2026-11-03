@@ -178,7 +178,7 @@ Every commit in the audited range must appear exactly once.
 | 37 | `fa683e6c21190ea452a9e9d20f1ca59170db9782` | Android job cancel | Structurally covered | Mapping commit; rns-rs has no per-platform stamp runner, and its grinds (`generate_stamp_until`, `generate_stamped_link_keys`) stop every worker at their deadline on all targets, Android included; no upstream caller reads the new `cancel_work` result |
 | 38 | `d5891fde146b5c489a504eeac17d97ac54043a61` | Cleanup | Integrated | `rns_cli::format::prettycost` prints a missing value as `n`, so `rnpath -t` shows `(dv:n/lc:n)` and `rnstatus` `Dst n, PR n`; the pathing "is now N hops away" line formats the value with `pretty_cost`, and the validated announce debug line carries `(v:…)`; `prettycost_quantizes_clamps_and_rounds_like_upstream`, the rnpath and rnstatus cost display tests, and `python_rnpath_lists_rust_path_table` accepting either marker |
 | 39 | `cda4d72bb8c47aa6e6aee8d81a7d9b32d1e48d41` | Tightened PR protocol violations to drop | Integrated | `PATH_REQUEST_LEGACY_LENGTH` and `is_valid_path_request_length`; the driver's ingress check counts a protocol violation and drops a tagged path request of any other length, and `parse_path_request` processes only those lengths; `path_requests_of_invalid_length_are_dropped`, `path_requests_of_invalid_length_are_protocol_violations_and_dropped`, the short-tag case of `path_request_for_local_destination_requests_path_response` |
-| 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Needs port | |
+| 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Integrated | The driver logs the tagless and invalid size path request violations on the `rns::pathing` target, and the excessive size one at debug; log only, by inspection |
 
 ## Per-Commit Analysis
 
@@ -1607,6 +1607,31 @@ test replaces one that pinned the old behavior:
 `excessive_path_request_data_counts_a_protocol_violation`.
 
 **Final disposition:** Integrated.
+
+### 40. `ecd677ba` — Improved protocol violation logging
+
+**Upstream change:** `Interface.protocol_violation` takes an optional log
+level, defaulting to debug (`RNS/Interfaces/Interface.py`). In
+`Transport.inbound` the tagless path request violation and commit 39's
+invalid size violation log at `LOG_PATHING`. The separate "Ignoring tagless
+path request" pathing line is folded into the violation message.
+
+**Rust applicability:** Needs port (log levels only). The driver's ingress
+check is where rns-rs counts these violations, and the `rns::pathing` trace
+target is its counterpart of `LOG_PATHING`.
+
+**Implementation:** the driver logs "Protocol violation on interface N:
+Tagless path request" and "… Invalid path request size N" on the pathing
+target. The excessive size violation stays at debug, as upstream's default.
+The engine keeps its own pathing trace lines for both cases, which are only
+reached when `parse_path_request` is called directly, since the driver drops
+these frames first.
+
+**Evidence:** log only, checked by inspection; rns-rs has no log capture in
+its tests. Counting and dropping are unchanged from commit 39 and pinned
+there.
+
+**Final disposition:** Integrated; log levels only.
 
 ## Integration Plan
 
