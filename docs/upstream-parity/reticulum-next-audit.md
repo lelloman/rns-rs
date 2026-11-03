@@ -176,7 +176,7 @@ Every commit in the audited range must appear exactly once.
 | 35 | `825c2e19934f14da4d135bbc65b8b5a4832cc06f` | Added basic destination type filtering | Integrated | `5b29f7b`; `DestinationTypeFilter` at announce ingress, `[filter]` (`required_only`, `ignored_types`, `allowed_types`), the three RPC calls, `RnsNode::wants_destination_type` and friends with shared instance registration and withdrawal on shutdown, registrations in `rncp`, `rnx`, `rnsh` and remote management; engine, config, RPC, driver and shared client tests; live filtering interop for Rust and Python `rncp`. Caveat: the TCP-only RPC client cannot register with a Python shared instance's Unix socket RPC |
 | 36 | `d3874ddedbf485db3151be1234d35da10c498ef1` | Logging | Integrated | `75f6e55`; the two `required_announces_only` debug lines, logged when the driver applies the switch |
 | 37 | `fa683e6c21190ea452a9e9d20f1ca59170db9782` | Android job cancel | Structurally covered | Mapping commit; rns-rs has no per-platform stamp runner, and its grinds (`generate_stamp_until`, `generate_stamped_link_keys`) stop every worker at their deadline on all targets, Android included; no upstream caller reads the new `cancel_work` result |
-| 38 | `d5891fde146b5c489a504eeac17d97ac54043a61` | Cleanup | Needs port | |
+| 38 | `d5891fde146b5c489a504eeac17d97ac54043a61` | Cleanup | Integrated | `rns_cli::format::prettycost` prints a missing value as `n`, so `rnpath -t` shows `(dv:n/lc:n)` and `rnstatus` `Dst n, PR n`; the pathing "is now N hops away" line formats the value with `pretty_cost`, and the validated announce debug line carries `(v:…)`; `prettycost_quantizes_clamps_and_rounds_like_upstream`, the rnpath and rnstatus cost display tests, and `python_rnpath_lists_rust_path_table` accepting either marker |
 | 39 | `cda4d72bb8c47aa6e6aee8d81a7d9b32d1e48d41` | Tightened PR protocol violations to drop | Needs port | |
 | 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Needs port | |
 
@@ -1525,6 +1525,39 @@ the grind runs. The new return value has no reader upstream; the three
 callers ignore it.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 38. `d5891fde` — Cleanup (cost display)
+
+**Upstream change:** `RNS.prettycost` returns `n` instead of `?` for a
+missing or non-numeric value (`RNS/__init__.py`). The pathing line
+"Destination … (v:…) is now N hops away" formats the value with
+`prettycost` instead of printing the raw float (`RNS/Transport.py`). The
+valid announce log line (`RNS/Identity.py`, at `LOG_EXTREME`) is rewritten
+as one f-string that adds `(v:<prettycost of the stamp value>)` after the
+destination hash.
+
+**Rust applicability:** Needs port. `prettycost` output is user visible in
+`rnpath -t` and `rnstatus`, whose cost formatting follows upstream since
+commit 27.
+
+**Implementation:**
+- `rns_cli::format::prettycost` returns `n` for `None`. `rnpath -t` prints
+  `(dv:n/lc:n)` for a destination with neither value, and `rnstatus` prints
+  `Dst n, PR n` and a stamp value of `n` for a discovered interface without
+  them.
+- The driver's pathing "is now N hops away" trace line formats the value
+  with `rns_crypto::stamp_value::pretty_cost` (it already printed `(v:n)`
+  for a missing or zero value, as upstream's `if destination_value` does).
+- rns-rs has no counterpart to upstream's valid announce line; its
+  `Announce:validated` debug line now carries `(v:…)` in the same format,
+  `n` for a zero value.
+
+**Evidence:** `prettycost_quantizes_clamps_and_rounds_like_upstream`, the
+rnpath `path_costs` test and the rnstatus discovered value and cost tests.
+`python_rnpath_lists_rust_path_table` accepts `?` and `n`, so it holds for
+Python on both sides of the change.
+
+**Final disposition:** Integrated; display only.
 
 ## Integration Plan
 

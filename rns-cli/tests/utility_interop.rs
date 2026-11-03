@@ -1152,9 +1152,13 @@ fn python_rnpath_lists_rust_path_table() {
     if String::from_utf8_lossy(&probe.stdout).trim() == "True" {
         // The listener's destination is a known destination of the client
         // daemon, so its stamp value is reported; it announces no link
-        // request cost.
+        // request cost. `prettycost` prints a missing value as `?`, and as
+        // `n` since rgit `d5891fde`.
+        let missing = ["?", "n"];
         assert!(
-            line.contains("(dv:") && !line.contains("(dv:?") && line.ends_with("/lc:?)"),
+            line.contains("(dv:")
+                && !missing.iter().any(|m| line.contains(&format!("(dv:{m}/")))
+                && missing.iter().any(|m| line.ends_with(&format!("/lc:{m})"))),
             "unexpected rnpath line: {line}"
         );
     }

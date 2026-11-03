@@ -1241,12 +1241,20 @@ impl Driver {
                         stamp_value,
                         lr_cost,
                     );
+                    // Upstream d5891fde adds the stamp value to the valid
+                    // announce line, `n` when there is none.
+                    let value_str = if stamp_value == rns_core::stamp::StampValue::ZERO {
+                        String::from("n")
+                    } else {
+                        rns_crypto::stamp_value::pretty_cost(stamp_value.as_f64())
+                    };
                     log::debug!(
-                        "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
+                        "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. (v:{}) hops={}",
                         destination_hash[0],
                         destination_hash[1],
                         destination_hash[2],
                         destination_hash[3],
+                        value_str,
                         hops,
                     );
                     self.callbacks.on_announce(announced);
@@ -1261,7 +1269,10 @@ impl Driver {
                     let value_str = match stamp_value
                         .filter(|value| *value != rns_core::stamp::StampValue::ZERO)
                     {
-                        Some(value) => format!(" (v:{value})"),
+                        Some(value) => format!(
+                            " (v:{})",
+                            rns_crypto::stamp_value::pretty_cost(value.as_f64())
+                        ),
                         None => String::from(" (v:n)"),
                     };
                     log::trace!(target: crate::logging::PATHING_LOG_TARGET,
