@@ -282,7 +282,7 @@ fn render_path_table(response: &PickleValue, show_usage: bool) {
 
 /// The destination's stamp value and link request cost, in upstream's
 /// `rnpath` notation since rgit `21170877` (`(dv:25.000/lc:19.199)`), with
-/// `?` for what the daemon does not know or does not report.
+/// `n` for what the daemon does not know or does not report.
 fn path_costs(entry: &PickleValue) -> String {
     let number = |key: &str| {
         entry
@@ -825,10 +825,10 @@ mod tests {
         );
         assert_eq!(
             path_costs(&entry(PickleValue::Float(0.0), PickleValue::None)),
-            "(dv:0.000/lc:?)"
+            "(dv:0.000/lc:n)"
         );
         // A daemon from before 21170877 sends neither key.
-        assert_eq!(path_costs(&PickleValue::Dict(Vec::new())), "(dv:?/lc:?)");
+        assert_eq!(path_costs(&PickleValue::Dict(Vec::new())), "(dv:n/lc:n)");
     }
 
     #[test]

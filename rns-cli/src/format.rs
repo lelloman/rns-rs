@@ -101,11 +101,12 @@ pub fn prettyfrequency(freq: f64) -> String {
 
 /// Format a stamp value or cost as upstream's `RNS.prettycost` does
 /// (rgit `21170877`): quantized to the 1/256 cost grid and clamped to
-/// `STAMP_COST_CAP`, with three decimals, or `?` when there is none.
+/// `STAMP_COST_CAP`, with three decimals, or `n` when there is none (`?`
+/// before rgit `d5891fde`).
 pub fn prettycost(value: Option<f64>) -> String {
     match value {
         Some(value) => rns_crypto::stamp_value::pretty_cost(value),
-        None => "?".into(),
+        None => "n".into(),
     }
 }
 
@@ -173,7 +174,7 @@ mod tests {
 
     #[test]
     fn prettycost_quantizes_clamps_and_rounds_like_upstream() {
-        assert_eq!(prettycost(None), "?");
+        assert_eq!(prettycost(None), "n");
         assert_eq!(prettycost(Some(23.5)), "23.500");
         assert_eq!(prettycost(Some(24.734375)), "24.734");
         // Rounded onto the 1/256 grid first: 19.2 is 4915/256.

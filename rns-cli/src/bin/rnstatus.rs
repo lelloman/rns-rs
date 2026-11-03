@@ -1779,7 +1779,7 @@ fn discovered_stamp_value(iface: &PickleValue) -> String {
 
 /// The announced destination and path request costs, printed only when the
 /// daemon reports both keys (upstream `21170877` `has_cost_info`); a cost the
-/// interface did not announce prints as `?`.
+/// interface did not announce prints as `n`.
 fn discovered_costs(iface: &PickleValue) -> Option<String> {
     let dst_cost = iface.get("dst_cost")?;
     let pr_cost = iface.get("pr_cost")?;
@@ -2077,8 +2077,8 @@ mod tests {
             discovered_stamp_value(&iface(PickleValue::Int(24))),
             "24.000"
         );
-        assert_eq!(discovered_stamp_value(&iface(PickleValue::None)), "?");
-        assert_eq!(discovered_stamp_value(&PickleValue::Dict(Vec::new())), "?");
+        assert_eq!(discovered_stamp_value(&iface(PickleValue::None)), "n");
+        assert_eq!(discovered_stamp_value(&PickleValue::Dict(Vec::new())), "n");
     }
 
     #[test]
@@ -2096,7 +2096,7 @@ mod tests {
                 key("dst_cost", PickleValue::None),
                 key("pr_cost", PickleValue::None),
             ])),
-            Some("Dst ?, PR ?".into())
+            Some("Dst n, PR n".into())
         );
         assert_eq!(
             discovered_costs(&PickleValue::Dict(vec![key(
