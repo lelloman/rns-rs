@@ -182,7 +182,7 @@ fn reader_loop(
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
-                            data: frame,
+                            data: frame.into(),
                             rssi: None,
                             snr: None,
                         })
@@ -479,7 +479,7 @@ mod tests {
                         if let Some(frame) = decoder.feed(&buf[..n]).into_iter().next() {
                             let _ = tx.send(Event::Frame {
                                 interface_id: InterfaceId(0),
-                                data: frame,
+                                data: frame.into(),
                                 rssi: None,
                                 snr: None,
                             });
@@ -502,7 +502,7 @@ mod tests {
 
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { data, .. } => assert_eq!(data, payload),
+            Event::Frame { data, .. } => assert_eq!(data, payload.into()),
             other => panic!("expected Frame, got {:?}", other),
         }
 
@@ -532,7 +532,7 @@ mod tests {
                         for frame in decoder.feed(&buf[..n]) {
                             let _ = tx.send(Event::Frame {
                                 interface_id: id,
-                                data: frame,
+                                data: frame.into(),
                                 rssi: None,
                                 snr: None,
                             });

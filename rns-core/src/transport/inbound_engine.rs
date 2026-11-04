@@ -46,7 +46,7 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
     ) -> Vec<TransportAction> {
-        let Ok(decoded) = self.decode_inbound(frame.raw.to_vec()) else {
+        let Ok(decoded) = self.decode_inbound(PacketBytes::from(frame.raw)) else {
             return Vec::new();
         };
         self.handle_decoded_inbound_with_announce_queue(
@@ -76,7 +76,7 @@ impl TransportEngine {
     /// It takes ownership of the wire bytes, which the decoded packet keeps.
     pub fn decode_inbound(
         &self,
-        raw: Vec<u8>,
+        raw: PacketBytes,
     ) -> Result<DecodedPacket, crate::packet::PacketError> {
         // Only link data qualifies; decode everything else directly.
         let flags = raw
@@ -86,9 +86,9 @@ impl TransportEngine {
             flags.packet_type == constants::PACKET_TYPE_DATA
                 && flags.destination_type == constants::DESTINATION_LINK
         }) {
-            return DecodedPacket::unpack_owned(raw);
+            return DecodedPacket::unpack_shared(raw);
         }
-        let mut packet = RawPacket::unpack_unhashed(raw)?;
+        let mut packet = RawPacket::unpack_shared_unhashed(raw)?;
         let hash_deferred = self.link_packet_hash_unread(&packet);
         if !hash_deferred {
             packet.hash_in_place();
@@ -100,14 +100,14 @@ impl TransportEngine {
     }
 
     /// Whether every inbound step that handles `packet` leaves its hash unread.
-    fn link_packet_hash_unread(&self, packet: &RawPacket) -> bool {
+    fn link_packet_hash_unread<B: AsRef<[u8]>>(&self, packet: &RawPacket<B>) -> bool {
         self.forwards_link_packet_unhashed(packet) || self.delivers_resource_part_unhashed(packet)
     }
 
     /// A resource part for a local link is only delivered, and its delivery
     /// hands the part to the resource receiver. Path-table routing would key a
     /// reverse entry on the hash, so a destination with a path is excluded.
-    fn delivers_resource_part_unhashed(&self, packet: &RawPacket) -> bool {
+    fn delivers_resource_part_unhashed<B: AsRef<[u8]>>(&self, packet: &RawPacket<B>) -> bool {
         packet.is_link_resource_part()
             && self
                 .local_destinations
@@ -120,7 +120,7 @@ impl TransportEngine {
     /// that [`packet_filter_at_hops`](Self::packet_filter_at_hops) admits
     /// before deduplication, and it is neither delivered locally nor routed
     /// through the path table.
-    fn forwards_link_packet_unhashed(&self, packet: &RawPacket) -> bool {
+    fn forwards_link_packet_unhashed<B: AsRef<[u8]>>(&self, packet: &RawPacket<B>) -> bool {
         packet.flags.packet_type == constants::PACKET_TYPE_DATA
             && packet.flags.destination_type == constants::DESTINATION_LINK
             && matches!(
@@ -229,9 +229,9 @@ impl TransportEngine {
         })
     }
 
-    pub(super) fn filtered_inbound_hops(
+    pub(super) fn filtered_inbound_hops<B: AsRef<[u8]>>(
         &self,
-        packet: &RawPacket,
+        packet: &RawPacket<B>,
         iface: InterfaceId,
     ) -> Option<(u8, bool)> {
         let from_local_client = self
@@ -272,7 +272,7 @@ impl TransportEngine {
         })
     }
 
-    fn remember_inbound_packet_hash(&mut self, packet: &RawPacket) {
+    fn remember_inbound_packet_hash<B: AsRef<[u8]>>(&mut self, packet: &RawPacket<B>) {
         let remember_hash = !(self.link_table.contains_key(&packet.destination_hash)
             || (packet.flags.packet_type == constants::PACKET_TYPE_PROOF
                 && packet.context == constants::CONTEXT_LRPROOF));
@@ -588,12 +588,12 @@ impl TransportEngine {
             // the action boundary without changing ordinary callback bytes.
             let delivery_raw =
                 if ctx.packet.context == constants::CONTEXT_LRRTT && ctx.packet.raw.len() >= 2 {
-                    let mut raw = ctx.packet.raw.clone();
+                    let mut raw = ctx.packet.raw.to_vec();
                     raw[1] = ctx.packet.hops;
                     PacketBytes::from(raw)
                 } else {
-                    // One copy into the shared buffer, not a clone and a copy.
-                    PacketBytes::from(ctx.packet.raw.as_slice())
+                    // The received bytes themselves, shared.
+                    ctx.packet.raw.clone()
                 };
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: ctx.packet.destination_hash,
@@ -610,7 +610,7 @@ impl TransportEngine {
 
     fn process_inbound_announce(
         &mut self,
-        packet: &RawPacket,
+        packet: &RawPacket<PacketBytes>,
         original_raw: &[u8],
         iface: InterfaceId,
         now: f64,
@@ -679,13 +679,13 @@ impl TransportEngine {
         );
     }
 
-    fn announce_raw_for_local_clients(&self, packet: &RawPacket) -> PacketBytes {
+    fn announce_raw_for_local_clients(&self, packet: &RawPacket<PacketBytes>) -> PacketBytes {
         let Some(identity_hash) = self.config.identity_hash else {
-            return PacketBytes::from(packet.raw.clone());
+            return packet.raw.clone();
         };
 
         if packet.raw.len() < 2 {
-            return PacketBytes::from(packet.raw.clone());
+            return packet.raw.clone();
         }
 
         let payload_start = if packet.flags.header_type == constants::HEADER_2 {
@@ -694,7 +694,7 @@ impl TransportEngine {
             2usize
         };
         if packet.raw.len() < payload_start {
-            return PacketBytes::from(packet.raw.clone());
+            return packet.raw.clone();
         }
 
         let flags = (constants::HEADER_2 << 6)
@@ -717,7 +717,11 @@ impl TransportEngine {
         announce.signature_cache_key(destination_hash)
     }
 
-    fn announce_received_from(&mut self, packet: &RawPacket, now: f64) -> [u8; 16] {
+    fn announce_received_from<B: AsRef<[u8]>>(
+        &mut self,
+        packet: &RawPacket<B>,
+        now: f64,
+    ) -> [u8; 16] {
         if let Some(transport_id) = packet.transport_id {
             if self.config.transport_enabled {
                 if let Some(announce_entry) = self.announce_table.get_mut(&packet.destination_hash)
@@ -748,9 +752,9 @@ impl TransportEngine {
         }
     }
 
-    fn should_hold_announce(
+    fn should_hold_announce<B: AsRef<[u8]>>(
         &mut self,
-        packet: &RawPacket,
+        packet: &RawPacket<B>,
         original_raw: &[u8],
         iface: InterfaceId,
         now: f64,
@@ -1181,7 +1185,7 @@ impl TransportEngine {
                     retries: constants::PATHFINDER_R,
                     received_from: ctx.received_from,
                     hops: ctx.packet.hops,
-                    packet_raw: ctx.packet.raw.clone(),
+                    packet_raw: ctx.packet.raw.to_vec(),
                     packet_data: ctx.packet.data().to_vec(),
                     destination_hash: ctx.packet.destination_hash,
                     context_flag: ctx.packet.flags.context_flag,
@@ -1241,7 +1245,7 @@ impl TransportEngine {
                 retries: constants::PATHFINDER_R,
                 received_from: ctx.received_from,
                 hops: ctx.packet.hops,
-                packet_raw: ctx.packet.raw.clone(),
+                packet_raw: ctx.packet.raw.to_vec(),
                 packet_data: ctx.packet.data().to_vec(),
                 destination_hash: ctx.packet.destination_hash,
                 context_flag: ctx.packet.flags.context_flag,
@@ -1349,7 +1353,7 @@ impl TransportEngine {
                 }
             } else {
                 // Could be for a local pending link - deliver locally
-                let mut delivery_raw = packet.raw.clone();
+                let mut delivery_raw = packet.raw.to_vec();
                 // LinkManager must see the same post-ingress hop metric that
                 // was authenticated and considered by transport.
                 if delivery_raw.len() >= 2 {
@@ -1390,7 +1394,7 @@ impl TransportEngine {
             // Deliver to local receipts
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: packet.destination_hash,
-                raw: PacketBytes::from(packet.raw.clone()),
+                raw: packet.raw.clone(),
                 packet_hash: packet.packet_hash,
                 receiving_interface: ctx.iface,
             });

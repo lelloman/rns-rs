@@ -344,7 +344,7 @@ fn reader_loop(
                             if tx
                                 .send(Event::Frame {
                                     interface_id: id,
-                                    data,
+                                    data: data.into(),
                                     rssi: None,
                                     snr: None,
                                 })

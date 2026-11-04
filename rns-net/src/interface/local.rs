@@ -512,7 +512,7 @@ fn unix_reader_loop(
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
-                            data: frame,
+                            data: frame.into(),
                             rssi: None,
                             snr: None,
                         })
@@ -600,7 +600,7 @@ fn tcp_reader_loop(
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
-                            data: frame,
+                            data: frame.into(),
                             rssi: None,
                             snr: None,
                         })
@@ -786,7 +786,7 @@ fn local_client_reader_loop(
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
-                            data: frame,
+                            data: frame.into(),
                             rssi: None,
                             snr: None,
                         })
@@ -1154,7 +1154,7 @@ mod tests {
 
         let event = server_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { data, .. } => assert_eq!(data, payload),
+            Event::Frame { data, .. } => assert_eq!(data, payload.into()),
             other => panic!("expected Frame, got {:?}", other),
         }
 
@@ -1164,7 +1164,7 @@ mod tests {
 
         let event = client_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { data, .. } => assert_eq!(data, payload2),
+            Event::Frame { data, .. } => assert_eq!(data, payload2.into()),
             other => panic!("expected Frame, got {:?}", other),
         }
     }
@@ -1283,7 +1283,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(98));
-                assert_eq!(data, inbound);
+                assert_eq!(data, inbound.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -1500,7 +1500,7 @@ mod tests {
                 interface_id, data, ..
             } => {
                 assert_eq!(interface_id, InterfaceId(97));
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }

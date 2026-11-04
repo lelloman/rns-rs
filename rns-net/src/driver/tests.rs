@@ -2320,7 +2320,7 @@ fn make_pending_verify_announce(dest: [u8; 16]) -> (AnnounceVerifyKey, PendingAn
         },
         PendingAnnounce {
             original_raw: packet.raw.clone(),
-            packet,
+            packet: packet.map_raw(rns_core::transport::types::PacketBytes::from),
             interface: InterfaceId(1),
             received_from,
             queued_at: 100.0,
@@ -2404,14 +2404,14 @@ fn malformed_inbound_frame_does_not_block_later_valid_frame() {
     // must continue and process the valid announce that follows it.
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: vec![0xff],
+        data: vec![0xff].into(),
         rssi: None,
         snr: None,
     })
     .unwrap();
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -2465,7 +2465,7 @@ fn queued_startup_events_register_dynamic_interface_before_frame() {
     .unwrap();
     tx.send(Event::Frame {
         interface_id: InterfaceId(100),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -3434,7 +3434,7 @@ fn announce_callback() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -4128,7 +4128,7 @@ fn frame_updates_rx_stats() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(-10.5),
     })
@@ -4797,7 +4797,7 @@ fn query_path_table() {
     let announce_raw = build_announce_packet(&identity);
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -4891,7 +4891,7 @@ fn query_drop_path() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -5027,7 +5027,7 @@ fn register_destination_and_deliver() {
     let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"data").unwrap();
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -7805,7 +7805,7 @@ fn disabled_interface_drops_ingress_and_egress() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: vec![0x00, 0x01, 0x42],
+        data: vec![0x00, 0x01, 0x42].into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -8018,7 +8018,7 @@ fn announce_received_populates_known_destinations() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -8619,7 +8619,7 @@ fn query_has_path() {
         rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -8689,7 +8689,7 @@ fn query_hops_to() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -8750,7 +8750,7 @@ fn query_recall_identity() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -9389,7 +9389,7 @@ fn prove_all_generates_proof_on_delivery() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -9471,7 +9471,7 @@ fn prove_none_does_not_generate_proof() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -9544,7 +9544,7 @@ fn no_proof_strategy_does_not_generate_proof() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -9645,7 +9645,7 @@ fn prove_app_calls_callback() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -9753,7 +9753,7 @@ fn inbound_proof_fires_callback() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -9854,7 +9854,7 @@ fn inbound_proof_for_unknown_packet_is_ignored() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -9954,7 +9954,7 @@ fn inbound_implicit_proof_matches_truncated_destination() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -10208,7 +10208,7 @@ fn inbound_proof_with_valid_signature_fires_callback() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -10332,7 +10332,7 @@ fn inbound_proof_with_invalid_signature_rejected() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: packet.raw,
+        data: packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -10408,7 +10408,7 @@ fn proof_data_is_valid_explicit_proof() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: data_packet.raw,
+        data: data_packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -11213,7 +11213,7 @@ fn inbound_proof_populates_completed_proofs() {
     // Deliver the frame — this generates a proof which gets sent on wire
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: data_packet.raw,
+        data: data_packet.raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -11502,7 +11502,7 @@ fn announce_stores_receiving_interface_in_known_destinations() {
 
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -11583,7 +11583,7 @@ fn announce_on_different_interfaces_stores_correct_id() {
     // Send on interface 2
     tx.send(Event::Frame {
         interface_id: InterfaceId(2),
-        data: announce_raw,
+        data: announce_raw.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -11802,7 +11802,7 @@ fn re_announce_updates_receiving_interface() {
     // Same announce on interface 1, then interface 2
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: announce_raw.clone(),
+        data: announce_raw.clone().into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -11814,7 +11814,7 @@ fn re_announce_updates_receiving_interface() {
     let announce_raw2 = build_announce_packet(&identity2);
     tx.send(Event::Frame {
         interface_id: InterfaceId(2),
-        data: announce_raw2,
+        data: announce_raw2.into(),
         rssi: Some(-100),
         snr: Some(10.5),
     })
@@ -12442,7 +12442,7 @@ fn transport_node_answers_path_requests_for_local_destinations() {
     ] {
         tx.send(Event::Frame {
             interface_id: InterfaceId(1),
-            data: local_path_request_frame(&driver, &dest, &tag),
+            data: local_path_request_frame(&driver, &dest, &tag).into(),
             rssi: None,
             snr: None,
         })
@@ -12548,7 +12548,7 @@ fn registered_but_never_announced_destination_is_not_answered() {
     .unwrap();
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
-        data: local_path_request_frame(&driver, &never_announced, &[0xD4; 16]),
+        data: local_path_request_frame(&driver, &never_announced, &[0xD4; 16]).into(),
         rssi: None,
         snr: None,
     })

@@ -1,4 +1,5 @@
 use super::*;
+use rns_core::transport::types::PacketBytes;
 use rns_core::transport::{DecodedInboundFrame, DecodedPacket, RxMetadata};
 
 /// Events the driver handles before flushing driver-run writers and polling
@@ -14,7 +15,7 @@ impl Driver {
         rssi: Option<i16>,
         snr: Option<f32>,
     ) {
-        self.handle_classified_frame_event(interface_id, data, rssi, snr, false);
+        self.handle_classified_frame_event(interface_id, data.into(), rssi, snr, false);
     }
 
     /// Inbound admission checks that run on a decoded packet before the
@@ -101,7 +102,7 @@ impl Driver {
     fn handle_classified_frame_event(
         &mut self,
         interface_id: InterfaceId,
-        data: Vec<u8>,
+        data: PacketBytes,
         rssi: Option<i16>,
         snr: Option<f32>,
         ingress_limited: bool,
@@ -130,7 +131,7 @@ impl Driver {
         let packet = if let Some(entry) = self.interfaces.get(&interface_id) {
             if let Some(ref ifac_state) = entry.ifac {
                 match ifac::unmask_inbound(&data, ifac_state) {
-                    Some(unmasked) => unmasked,
+                    Some(unmasked) => PacketBytes::from(unmasked),
                     None => {
                         log::debug!("[{}] IFAC rejected packet", interface_id.0);
                         if let Some(entry) = self.interfaces.get_mut(&interface_id) {

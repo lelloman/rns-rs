@@ -461,7 +461,7 @@ impl WeaveSession {
                 let interface_id = self.ensure_peer(source, now);
                 let _ = self.tx.send(Event::Frame {
                     interface_id,
-                    data: packet,
+                    data: packet.into(),
                     rssi: None,
                     snr: None,
                 });
@@ -926,7 +926,7 @@ mod tests {
                 interface_id, data, ..
             } = rx.recv_timeout(Duration::from_secs(1)).unwrap()
             {
-                break interface_id == peer_id && data == b"rns-packet";
+                break interface_id == peer_id && *data == b"rns-packet"[..];
             }
         });
         session.process_frame(&endpoint_frame).unwrap();

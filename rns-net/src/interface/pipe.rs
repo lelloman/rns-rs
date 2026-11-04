@@ -157,7 +157,7 @@ fn reader_loop(
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
-                            data: frame,
+                            data: frame.into(),
                             rssi: None,
                             snr: None,
                         })
@@ -381,7 +381,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(100));
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -411,7 +411,7 @@ mod tests {
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
             Event::Frame { data, .. } => {
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }

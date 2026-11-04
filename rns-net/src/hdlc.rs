@@ -3,6 +3,7 @@
 //! Matches Python `TCPInterface.py` HDLC encoding/decoding.
 
 use rns_core::constants::HEADER_MINSIZE;
+use rns_core::transport::types::PacketBytes;
 
 const FLAG: u8 = 0x7E;
 const ESC: u8 = 0x7D;
@@ -103,14 +104,47 @@ pub struct Decoder {
     max_frame_size: Option<usize>,
     max_buffer_size: usize,
     /// Output of [`Decoder::feed_reused`], kept so its buffers are reused.
-    batch: DecodeBatch,
+    batch: DecodeBatch<PacketBytes>,
 }
 
 /// Complete frames and non-empty frames rejected by configured size bounds.
-#[derive(Debug, Default, Eq, PartialEq)]
-pub struct DecodeBatch {
-    pub frames: Vec<Vec<u8>>,
+#[derive(Debug, Eq, PartialEq)]
+pub struct DecodeBatch<F = Vec<u8>> {
+    pub frames: Vec<F>,
     pub invalid_frame_lengths: Vec<usize>,
+}
+
+impl<F> Default for DecodeBatch<F> {
+    fn default() -> Self {
+        Self {
+            frames: Vec::new(),
+            invalid_frame_lengths: Vec::new(),
+        }
+    }
+}
+
+/// How a completed frame leaves the decoder's working buffer.
+pub trait DecodedFrame: Sized {
+    /// Take the frame in `buffer`, leaving `buffer` empty for the next one.
+    fn take(buffer: &mut Vec<u8>) -> Self;
+}
+
+impl DecodedFrame for Vec<u8> {
+    fn take(buffer: &mut Vec<u8>) -> Self {
+        // Successive frames tend to be alike in size: start the next one
+        // with this one's capacity.
+        let next = Vec::with_capacity(buffer.len());
+        core::mem::replace(buffer, next)
+    }
+}
+
+impl DecodedFrame for PacketBytes {
+    fn take(buffer: &mut Vec<u8>) -> Self {
+        // One allocation at the frame's size; the working buffer is kept.
+        let frame = PacketBytes::from(buffer.as_slice());
+        buffer.clear();
+        frame
+    }
 }
 
 impl Decoder {
@@ -167,10 +201,11 @@ impl Decoder {
         decoded
     }
 
-    /// Feed raw bytes and return the frames and rejected lengths in a batch
-    /// the decoder keeps, for the caller to drain: a stream reader calling
-    /// this per read reuses the batch's buffers instead of allocating them.
-    pub fn feed_reused(&mut self, chunk: &[u8]) -> &mut DecodeBatch {
+    /// Feed raw bytes and return the frames, as shared bytes, and rejected
+    /// lengths in a batch the decoder keeps, for the caller to drain: a
+    /// stream reader calling this per read reuses the batch's buffers and the
+    /// decoder's frame buffer instead of allocating them.
+    pub fn feed_reused(&mut self, chunk: &[u8]) -> &mut DecodeBatch<PacketBytes> {
         let mut batch = core::mem::take(&mut self.batch);
         batch.frames.clear();
         batch.invalid_frame_lengths.clear();
@@ -179,7 +214,7 @@ impl Decoder {
         &mut self.batch
     }
 
-    fn feed_into(&mut self, chunk: &[u8], decoded: &mut DecodeBatch) {
+    fn feed_into<F: DecodedFrame>(&mut self, chunk: &[u8], decoded: &mut DecodeBatch<F>) {
         let mut rest = chunk;
         loop {
             if !self.in_frame {
@@ -233,18 +268,13 @@ impl Decoder {
         }
     }
 
-    fn finish_frame(&mut self, decoded: &mut DecodeBatch) {
+    fn finish_frame<F: DecodedFrame>(&mut self, decoded: &mut DecodeBatch<F>) {
         let frame_len = self.frame.len();
         let within_maximum = self
             .max_frame_size
             .is_none_or(|max_frame_size| frame_len <= max_frame_size);
         if frame_len >= self.min_frame_size && within_maximum {
-            // Successive frames tend to be alike in size: start the next one
-            // with this one's capacity.
-            let next = Vec::with_capacity(frame_len);
-            decoded
-                .frames
-                .push(core::mem::replace(&mut self.frame, next));
+            decoded.frames.push(F::take(&mut self.frame));
         } else {
             if frame_len != 0 {
                 decoded.invalid_frame_lengths.push(frame_len);

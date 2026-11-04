@@ -1,6 +1,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
+use super::types::PacketBytes;
 use crate::packet::RawPacket;
 
 use super::types::InterfaceId;
@@ -22,7 +23,7 @@ pub struct AnnounceVerifyKey {
 #[derive(Debug, Clone)]
 pub struct PendingAnnounce {
     pub original_raw: Vec<u8>,
-    pub packet: RawPacket,
+    pub packet: RawPacket<PacketBytes>,
     pub interface: InterfaceId,
     pub received_from: [u8; 16],
     pub queued_at: f64,
@@ -289,7 +290,7 @@ mod tests {
             },
             PendingAnnounce {
                 original_raw: vec![hops],
-                packet: make_packet(dest, hops, hops),
+                packet: make_packet(dest, hops, hops).map_raw(PacketBytes::from),
                 interface: InterfaceId(1),
                 received_from,
                 queued_at: 10.0,

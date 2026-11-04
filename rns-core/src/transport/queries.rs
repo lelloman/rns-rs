@@ -43,7 +43,10 @@ impl TransportEngine {
             .count()
     }
 
-    pub fn is_unvalidated_link_packet(&self, packet: &crate::packet::RawPacket) -> bool {
+    pub fn is_unvalidated_link_packet<B: AsRef<[u8]>>(
+        &self,
+        packet: &crate::packet::RawPacket<B>,
+    ) -> bool {
         packet.flags.packet_type != crate::constants::PACKET_TYPE_ANNOUNCE
             && packet.flags.packet_type != crate::constants::PACKET_TYPE_LINKREQUEST
             && packet.context != crate::constants::CONTEXT_LRPROOF
@@ -54,9 +57,9 @@ impl TransportEngine {
     }
 
     /// Classify packet-filter rejections that are peer protocol violations.
-    pub fn is_packet_filter_protocol_violation(
+    pub fn is_packet_filter_protocol_violation<B: AsRef<[u8]>>(
         &self,
-        packet: &crate::packet::RawPacket,
+        packet: &crate::packet::RawPacket<B>,
         interface: InterfaceId,
     ) -> bool {
         let mut hops = packet.hops.saturating_add(1);

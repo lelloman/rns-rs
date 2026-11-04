@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use rns_core::announce::ValidatedAnnounce;
 use rns_core::transport::announce_verify_queue::AnnounceVerifyKey;
-use rns_core::transport::types::{InterfaceId, InterfaceInfo};
+use rns_core::transport::types::{InterfaceId, InterfaceInfo, PacketBytes};
 
 use crate::common::link_manager::RequestResponse;
 
@@ -193,10 +193,11 @@ pub struct AnnounceReplay {
 // Boxing the large registration variant would change this published event API.
 #[allow(clippy::large_enum_variant)]
 pub enum Event<W: Send> {
-    /// A decoded frame arrived from an interface.
+    /// A decoded frame arrived from an interface. Its bytes are shared, so
+    /// the packet decoded from them is delivered without copying them.
     Frame {
         interface_id: InterfaceId,
-        data: Vec<u8>,
+        data: PacketBytes,
         rssi: Option<i16>,
         snr: Option<f32>,
     },
