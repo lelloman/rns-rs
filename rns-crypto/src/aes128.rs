@@ -62,10 +62,20 @@ impl Aes128 {
             return Err(CbcError::UnalignedLength);
         }
         let mut buf = ciphertext.to_vec();
-        Aes128CbcDec::new(&self.key.into(), iv.into())
-            .decrypt_padded::<NoPadding>(&mut buf)
-            .map_err(|_| CbcError::UnalignedLength)?;
+        self.decrypt_cbc_in_place(&mut buf, iv)?;
         Ok(buf)
+    }
+
+    /// [`Self::decrypt_cbc`] in place: `buf` holds the ciphertext and is
+    /// left holding the plaintext, padding included.
+    pub fn decrypt_cbc_in_place(&self, buf: &mut [u8], iv: &[u8; 16]) -> Result<(), CbcError> {
+        if !buf.len().is_multiple_of(BLOCK_SIZE) {
+            return Err(CbcError::UnalignedLength);
+        }
+        Aes128CbcDec::new(&self.key.into(), iv.into())
+            .decrypt_padded::<NoPadding>(buf)
+            .map_err(|_| CbcError::UnalignedLength)?;
+        Ok(())
     }
 }
 

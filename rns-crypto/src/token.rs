@@ -155,6 +155,44 @@ impl Token {
         ))
     }
 
+    /// [`Token::decrypt`] into `out`, replacing its contents and reusing
+    /// its capacity. On error `out` holds no plaintext.
+    pub fn decrypt_into(&self, token: &[u8], out: &mut Vec<u8>) -> Result<(), TokenError> {
+        out.clear();
+        if token.len() <= TOKEN_OVERHEAD {
+            return Err(TokenError::InvalidToken);
+        }
+        if !self
+            .verify_hmac(token)
+            .map_err(|_| TokenError::InvalidToken)?
+        {
+            return Err(TokenError::HmacMismatch);
+        }
+        let iv: [u8; 16] = token[..16].try_into().unwrap();
+        let ciphertext = &token[16..token.len() - 32];
+        if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
+            return Err(TokenError::DecryptionFailed);
+        }
+        out.extend_from_slice(ciphertext);
+        let decrypted = match &self.mode {
+            AesMode::Aes128(aes) => aes.decrypt_cbc_in_place(out, &iv),
+            AesMode::Aes256(aes) => aes.decrypt_cbc_in_place(out, &iv),
+        };
+        let unpadded_len = decrypted
+            .ok()
+            .and_then(|()| pkcs7::unpad(out, 16).ok().map(<[u8]>::len));
+        match unpadded_len {
+            Some(len) => {
+                out.truncate(len);
+                Ok(())
+            }
+            None => {
+                out.clear();
+                Err(TokenError::DecryptionFailed)
+            }
+        }
+    }
+
     pub fn decrypt(&self, token: &[u8]) -> Result<Vec<u8>, TokenError> {
         if token.len() <= TOKEN_OVERHEAD {
             return Err(TokenError::InvalidToken);
@@ -288,6 +326,33 @@ impl Token {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decrypting_into_a_reused_buffer_matches_decrypt() {
+        for key in [[7u8; 32].as_slice(), [9u8; 64].as_slice()] {
+            let token = Token::new(key).unwrap();
+            let other = Token::new(&[1u8; 32]).unwrap();
+            let mut out = vec![0x55; 3];
+            for len in [0usize, 1, 15, 16, 17, 100, 384] {
+                let plaintext: Vec<u8> = (0..len).map(|i| i as u8).collect();
+                let good = token.encrypt_with_iv(&plaintext, &[len as u8; 16]);
+                let mut tampered = good.clone();
+                tampered[20] ^= 1;
+                let foreign = other.encrypt_with_iv(&plaintext, &[0; 16]);
+                for input in [&good[..], &tampered[..], &foreign[..], &good[..40], &[][..]] {
+                    let expected = token.decrypt(input);
+                    let got = token.decrypt_into(input, &mut out);
+                    assert_eq!(
+                        format!("{:?}", got.map(|()| out.clone())),
+                        format!("{expected:?}")
+                    );
+                    if expected.is_err() {
+                        assert!(out.is_empty());
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn encrypting_in_place_matches_encrypting_into_a_new_buffer() {

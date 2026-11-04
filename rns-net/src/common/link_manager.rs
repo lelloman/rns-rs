@@ -274,6 +274,8 @@ pub struct LinkManager {
     resource_scratch: Vec<rns_core::resource::ResourceAction>,
     /// Reused list of requested part indices a sender answers with.
     resource_part_scratch: Vec<usize>,
+    /// Reused buffer for the plaintext of a received link packet.
+    plaintext_scratch: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,6 +318,14 @@ impl LinkManager {
             current_done
         };
         (completed.saturating_add(current).min(total), total)
+    }
+
+    /// Keep a handled plaintext's buffer for the next decryption.
+    fn recycle_plaintext(&mut self, mut plaintext: Vec<u8>) {
+        if plaintext.capacity() > self.plaintext_scratch.capacity() {
+            plaintext.clear();
+            self.plaintext_scratch = plaintext;
+        }
     }
 
     fn resource_hash_key(hash: &[u8]) -> Option<[u8; 32]> {
@@ -387,6 +397,7 @@ impl LinkManager {
             link_request_costs: Default::default(),
             resource_scratch: Vec::new(),
             resource_part_scratch: Vec::new(),
+            plaintext_scratch: Vec::new(),
         }
     }
 
@@ -1214,6 +1225,7 @@ impl LinkManager {
             Error,
         }
 
+        let mut scratch = core::mem::take(&mut self.plaintext_scratch);
         let result = {
             let link = match self.links.get_mut(link_id_bytes) {
                 Some(l) => l,
@@ -1248,6 +1260,19 @@ impl LinkManager {
                 }
                 return;
             }
+
+            // Plaintexts are decrypted into a reused buffer, returned to
+            // `plaintext_scratch` by the handler that reads them.
+            let mut decrypt = |engine: &LinkEngine, ciphertext: &[u8]| {
+                let mut plaintext = core::mem::take(&mut scratch);
+                match engine.decrypt_into(ciphertext, &mut plaintext) {
+                    Ok(()) => Ok(plaintext),
+                    Err(error) => {
+                        scratch = plaintext;
+                        Err(error)
+                    }
+                }
+            };
 
             link.route_interface = Some(receiving_interface);
             if packet.flags.header_type == constants::HEADER_2 {
@@ -1308,7 +1333,7 @@ impl LinkManager {
                         received_at,
                     }
                 }
-                constants::CONTEXT_LINKCLOSE => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_LINKCLOSE => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) if plaintext.as_slice() == link_id_bytes => {
                         let teardown_actions = link.engine.handle_teardown();
                         let link_id = *link.engine.link_id();
@@ -1319,7 +1344,7 @@ impl LinkManager {
                     }
                     _ => LinkDataResult::Error,
                 },
-                constants::CONTEXT_CHANNEL => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_CHANNEL => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1332,7 +1357,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_REQUEST => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_REQUEST => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1346,7 +1371,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESPONSE => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_RESPONSE => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1359,7 +1384,7 @@ impl LinkManager {
                     Err(_) => LinkDataResult::Error,
                 },
                 // --- Resource contexts ---
-                constants::CONTEXT_RESOURCE_ADV => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_RESOURCE_ADV => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1371,7 +1396,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_REQ => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_RESOURCE_REQ => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1383,7 +1408,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_HMU => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_RESOURCE_HMU => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1405,7 +1430,7 @@ impl LinkManager {
                         raw_data: packet.data(),
                     }
                 }
-                constants::CONTEXT_RESOURCE_PRF => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_RESOURCE_PRF => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1417,7 +1442,7 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_ICL => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_RESOURCE_ICL => match decrypt(&link.engine, packet.data()) {
                     Ok(resource_hash) if resource_hash.len() == 32 => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1429,7 +1454,7 @@ impl LinkManager {
                     }
                     _ => LinkDataResult::Error,
                 },
-                constants::CONTEXT_RESOURCE_RCL => match link.engine.decrypt(packet.data()) {
+                constants::CONTEXT_RESOURCE_RCL => match decrypt(&link.engine, packet.data()) {
                     Ok(resource_hash) if resource_hash.len() == 32 => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1441,7 +1466,7 @@ impl LinkManager {
                     }
                     _ => LinkDataResult::Error,
                 },
-                _ => match link.engine.decrypt(packet.data()) {
+                _ => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
@@ -1457,6 +1482,7 @@ impl LinkManager {
                 },
             }
         }; // mutable borrow of self.links dropped here
+        self.plaintext_scratch = scratch;
 
         // Second pass: process results using self methods
         match result {
@@ -1565,6 +1591,7 @@ impl LinkManager {
                     }
                 }
                 out.extend(self.build_link_packet_proof(&link_id, &packet_hash));
+                self.recycle_plaintext(plaintext);
             }
             LinkDataResult::Request {
                 link_id,
@@ -1587,6 +1614,7 @@ impl LinkManager {
                         &link_id[..4]
                     );
                 }
+                self.recycle_plaintext(plaintext);
             }
             LinkDataResult::Response {
                 link_id,
@@ -1596,6 +1624,7 @@ impl LinkManager {
                 out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Unpack msgpack response: [Bin(request_id), response_value]
                 out.extend(self.handle_response(&link_id, &plaintext, None, None));
+                self.recycle_plaintext(plaintext);
             }
             LinkDataResult::Generic {
                 link_id,
@@ -1620,6 +1649,7 @@ impl LinkManager {
             } => {
                 out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 out.extend(self.handle_resource_adv(&link_id, &plaintext, rng));
+                self.recycle_plaintext(plaintext);
             }
             LinkDataResult::ResourceReq {
                 link_id,
@@ -1628,6 +1658,7 @@ impl LinkManager {
             } => {
                 out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 self.handle_resource_req_into(&link_id, &plaintext, rng, out);
+                self.recycle_plaintext(plaintext);
             }
             LinkDataResult::ResourceHmu {
                 link_id,
@@ -1636,6 +1667,7 @@ impl LinkManager {
             } => {
                 out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 out.extend(self.handle_resource_hmu(&link_id, &plaintext, rng));
+                self.recycle_plaintext(plaintext);
             }
             LinkDataResult::ResourcePart {
                 link_id,
@@ -1652,6 +1684,7 @@ impl LinkManager {
             } => {
                 out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 out.extend(self.handle_resource_prf(&link_id, &plaintext, rng));
+                self.recycle_plaintext(plaintext);
             }
             LinkDataResult::ResourceIcl {
                 link_id,

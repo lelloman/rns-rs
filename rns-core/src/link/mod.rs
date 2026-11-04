@@ -457,6 +457,15 @@ impl LinkEngine {
         link_decrypt(token, ciphertext)
     }
 
+    /// [`LinkEngine::decrypt`] into `out`, replacing its contents and
+    /// reusing its capacity.
+    pub fn decrypt_into(&self, ciphertext: &[u8], out: &mut Vec<u8>) -> Result<(), LinkError> {
+        let token = self.token.as_ref().ok_or(LinkError::NoSessionKey)?;
+        token
+            .decrypt_into(ciphertext, out)
+            .map_err(|_| LinkError::CryptoError)
+    }
+
     /// Decrypt ciphertext held in consecutive chunks without joining them,
     /// dropping the first `skip` plaintext bytes.
     pub fn decrypt_chunks(&self, chunks: &[&[u8]], skip: usize) -> Result<Vec<u8>, LinkError> {
