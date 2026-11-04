@@ -97,11 +97,14 @@ impl SqliteAnnounceCache {
         let conn = Connection::open(&db_path).map_err(sql_error)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(sql_error)?;
+        // Upstream 8a09c9b5: `auto_vacuum` only takes effect before the
+        // database header is written, which switching to WAL does, so it
+        // must come first.
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
+            "PRAGMA auto_vacuum=INCREMENTAL;
+             PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              PRAGMA journal_size_limit=8388608;
-             PRAGMA auto_vacuum=INCREMENTAL;
              CREATE TABLE IF NOT EXISTS cached_announces (
                 packet_hash         BLOB PRIMARY KEY,
                 received            REAL NOT NULL,
@@ -110,6 +113,7 @@ impl SqliteAnnounceCache {
              PRAGMA user_version = 1;",
         )
         .map_err(sql_error)?;
+        convert_to_incremental_vacuum(&conn, &db_path);
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -187,8 +191,13 @@ impl SqliteAnnounceCache {
             .map_err(sql_error)?;
         tx.commit().map_err(sql_error)?;
         if removed > 0 {
-            conn.execute("PRAGMA incremental_vacuum", [])
+            // `incremental_vacuum` returns a row per freed page and frees
+            // them as it is stepped, so it is read to completion.
+            let mut statement = conn
+                .prepare("PRAGMA incremental_vacuum")
                 .map_err(sql_error)?;
+            let mut rows = statement.query([]).map_err(sql_error)?;
+            while rows.next().map_err(sql_error)?.is_some() {}
         }
         Ok(removed)
     }
@@ -354,6 +363,35 @@ fn now() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// A cache created with the old pragma order has `auto_vacuum=NONE`, so its
+/// `incremental_vacuum` after a clean reclaims nothing. Upstream leaves such a
+/// file as it is; here a one-time `VACUUM` applies the incremental mode set
+/// on this connection. A failure (for example too little disk space for the
+/// copy) is logged and the cache keeps working without it.
+fn convert_to_incremental_vacuum(conn: &Connection, db_path: &Path) {
+    const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+    let mode = match conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            log::warn!("Could not read announce cache auto_vacuum mode: {}", error);
+            return;
+        }
+    };
+    if mode == AUTO_VACUUM_INCREMENTAL {
+        return;
+    }
+    log::info!(
+        "Converting announce cache {} to incremental auto-vacuum",
+        db_path.display()
+    );
+    if let Err(error) = conn.execute_batch("VACUUM") {
+        log::warn!(
+            "Could not convert announce cache to incremental auto-vacuum: {}",
+            error
+        );
+    }
+}
+
 fn sql_error(error: rusqlite::Error) -> io::Error {
     io::Error::other(error.to_string())
 }
@@ -478,6 +516,62 @@ mod tests {
         assert!(cache.get(&keep).unwrap().is_some());
         assert!(cache.get(&stale1).unwrap().is_none());
         assert!(cache.get(&stale2).unwrap().is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn pragma(db_path: &Path, name: &str) -> i64 {
+        let conn = Connection::open(db_path).unwrap();
+        conn.query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn sqlite_cache_uses_incremental_vacuum_and_reclaims_cleaned_pages() {
+        let (root, dir) = sqlite_cache_dir();
+        let db_path = root.join("announces.db");
+        let cache = AnnounceCache::new(dir.clone());
+        assert_eq!(pragma(&db_path, "auto_vacuum"), 2);
+
+        let hashes: Vec<[u8; 32]> = (0..64u8).map(|i| [i; 32]).collect();
+        for hash in &hashes {
+            cache.store(hash, &[0x5A; 4096], None).unwrap();
+        }
+        assert_eq!(cache.clean(&hashes[..1]).unwrap(), 63);
+        assert_eq!(pragma(&db_path, "freelist_count"), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sqlite_cache_created_with_the_old_pragma_order_is_converted_once() {
+        let (root, dir) = sqlite_cache_dir();
+        let db_path = root.join("announces.db");
+        {
+            // The order rns-rs used before upstream 8a09c9b5.
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA auto_vacuum=INCREMENTAL;
+                 CREATE TABLE cached_announces (
+                    packet_hash         BLOB PRIMARY KEY,
+                    received            REAL NOT NULL,
+                    raw                 BLOB NOT NULL,
+                    interface_reference TEXT);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cached_announces VALUES (?1, 0, ?2, 'kept')",
+                params![vec![0x42u8; 32], vec![1u8, 2, 3]],
+            )
+            .unwrap();
+        }
+        assert_eq!(pragma(&db_path, "auto_vacuum"), 0);
+
+        let cache = AnnounceCache::new(dir.clone());
+        assert_eq!(pragma(&db_path, "auto_vacuum"), 2);
+        let (raw, interface) = cache.get(&[0x42; 32]).unwrap().unwrap();
+        assert_eq!(raw, vec![1, 2, 3]);
+        assert_eq!(interface.as_deref(), Some("kept"));
         let _ = fs::remove_dir_all(&root);
     }
 
