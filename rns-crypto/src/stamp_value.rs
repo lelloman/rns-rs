@@ -9,6 +9,8 @@
 //! fixed-point [`StampValue`]s; conversion to `f64` only happens where a value
 //! leaves the process, as upstream reports them as floats.
 
+use alloc::format;
+use alloc::string::String;
 use core::fmt;
 
 use crate::sha256;

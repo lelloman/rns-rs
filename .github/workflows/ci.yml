@@ -122,6 +122,9 @@ jobs:
           cargo check -p rns-cli -p rns-ctl --bins --no-default-features
           cargo check -p rns-cli -p rns-ctl --bins --no-default-features --features iface-tcp,rns-hooks-native
 
+      - name: Check core crates without std
+        run: cargo check -p rns-crypto -p rns-core --no-default-features
+
       - name: Run workspace tests
         run: cargo test --workspace
 
