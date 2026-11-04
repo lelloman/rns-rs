@@ -52,8 +52,10 @@ pub(crate) fn route_outbound_with_options(
     options: OutboundRouteOptions,
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
-    // Built from the slice: cloning the Vec first would copy the packet twice.
-    let shared_raw = PacketBytes::from(packet.raw.as_slice());
+    // Built from the slice (cloning the Vec first would copy the packet
+    // twice), and only on the paths that send the packet unchanged: the
+    // per-interface paths build their own bytes.
+    let shared_raw = || PacketBytes::from(packet.raw.as_slice());
 
     // Don't route announces or PLAIN/GROUP via path table
     let use_path_table = packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
@@ -89,7 +91,7 @@ pub(crate) fn route_outbound_with_options(
                 // Direct: hops <= 1, send on path interface.
                 let raw = outbound_info
                     .map(|iface| raw_for_interface(packet, dest_type, iface, options))
-                    .unwrap_or_else(|| shared_raw.clone());
+                    .unwrap_or_else(shared_raw);
                 actions.push(TransportAction::SendOnInterface {
                     interface: path_entry.receiving_interface,
                     raw,
@@ -108,7 +110,7 @@ pub(crate) fn route_outbound_with_options(
             let raw = interfaces
                 .get(&iface)
                 .map(|iface_info| raw_for_interface(packet, dest_type, iface_info, options))
-                .unwrap_or_else(|| shared_raw.clone());
+                .unwrap_or_else(shared_raw);
             actions.push(TransportAction::SendOnInterface {
                 interface: iface,
                 raw,
@@ -155,14 +157,14 @@ pub(crate) fn route_outbound_with_options(
             let raw = interfaces
                 .get(&iface)
                 .map(|iface_info| raw_for_interface(packet, dest_type, iface_info, options))
-                .unwrap_or_else(|| shared_raw.clone());
+                .unwrap_or_else(shared_raw);
             actions.push(TransportAction::SendOnInterface {
                 interface: iface,
                 raw,
             });
         } else {
             actions.push(TransportAction::BroadcastOnAllInterfaces {
-                raw: shared_raw,
+                raw: shared_raw(),
                 exclude: None,
             });
         }
