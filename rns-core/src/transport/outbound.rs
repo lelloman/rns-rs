@@ -52,6 +52,31 @@ pub(crate) fn route_outbound_with_options(
     options: OutboundRouteOptions,
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
+    route_outbound_into(
+        path_table,
+        interfaces,
+        local_destinations,
+        packet,
+        dest_type,
+        attached_interface,
+        options,
+        &mut actions,
+    );
+    actions
+}
+
+/// [`route_outbound_with_options`], appending to `actions`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn route_outbound_into(
+    path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
+    interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
+    local_destinations: &alloc::collections::BTreeMap<[u8; 16], u8>,
+    packet: &RawPacket,
+    dest_type: u8,
+    attached_interface: Option<InterfaceId>,
+    options: OutboundRouteOptions,
+    actions: &mut Vec<TransportAction>,
+) {
     // Built from the slice (cloning the Vec first would copy the packet
     // twice), and only on the paths that send the packet unchanged: the
     // per-interface paths build their own bytes.
@@ -97,7 +122,7 @@ pub(crate) fn route_outbound_with_options(
                     raw,
                 });
             }
-            return actions;
+            return;
         }
     }
 
@@ -115,7 +140,7 @@ pub(crate) fn route_outbound_with_options(
                 interface: iface,
                 raw,
             });
-            return actions;
+            return;
         }
         // No attached interface — fall through to broadcast
     }
@@ -169,8 +194,6 @@ pub(crate) fn route_outbound_with_options(
             });
         }
     }
-
-    actions
 }
 
 fn inject_transport_header_with_hops(packet: &RawPacket, next_hop: &[u8; 16], hops: u8) -> Vec<u8> {

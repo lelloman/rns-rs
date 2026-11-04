@@ -304,23 +304,26 @@ impl Driver {
             rx: RxMetadata { rssi, snr },
         };
 
-        let actions = if self.async_announce_verification {
+        let mut actions = self.transport_actions.take();
+        if self.async_announce_verification {
             let mut announce_queue = self
                 .announce_verify_queue
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            self.engine.handle_decoded_inbound_with_announce_queue(
+            self.engine.handle_decoded_inbound_into(
                 inbound_frame,
                 &mut self.rng,
                 Some(&mut announce_queue),
-            )
+                &mut actions,
+            );
         } else {
-            self.engine.handle_decoded_inbound_with_announce_queue(
+            self.engine.handle_decoded_inbound_into(
                 inbound_frame,
                 &mut self.rng,
                 None,
-            )
-        };
+                &mut actions,
+            );
+        }
         if actions.iter().any(|action| {
             matches!(
                 action,

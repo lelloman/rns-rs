@@ -149,11 +149,25 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
     ) -> Vec<TransportAction> {
+        let mut actions = Vec::new();
+        self.handle_decoded_inbound_into(frame, rng, announce_queue, &mut actions);
+        actions
+    }
+
+    /// [`Self::handle_decoded_inbound_with_announce_queue`], appending the
+    /// actions to `actions` so a caller can reuse one buffer across packets.
+    pub fn handle_decoded_inbound_into(
+        &mut self,
+        frame: DecodedInboundFrame,
+        rng: &mut dyn Rng,
+        announce_queue: Option<&mut AnnounceVerifyQueue>,
+        actions: &mut Vec<TransportAction>,
+    ) {
         let Some(mut ctx) = self.prepare_decoded_packet(frame) else {
-            return Vec::new();
+            return;
         };
         if !self.destination_filter_admits(&ctx) {
-            return Vec::new();
+            return;
         }
         // Routing state may have changed since decoding. Any packet whose hash
         // a step could now read is hashed first.
@@ -161,23 +175,21 @@ impl TransportEngine {
             ctx.packet.hash_in_place();
             ctx.hash_deferred = false;
         }
-        let mut actions = Vec::new();
 
         // A deferred packet's context bypasses deduplication.
         if !ctx.hash_deferred {
             self.remember_inbound_packet_hash(&ctx.packet);
         }
-        self.bridge_plain_broadcast(&ctx, &mut actions);
-        self.handle_transport_forwarding(&ctx, &mut actions);
-        self.handle_link_table_routing(&ctx, &mut actions);
-        self.handle_inbound_announce(&ctx, rng, announce_queue, &mut actions);
+        self.bridge_plain_broadcast(&ctx, actions);
+        self.handle_transport_forwarding(&ctx, actions);
+        self.handle_link_table_routing(&ctx, actions);
+        self.handle_inbound_announce(&ctx, rng, announce_queue, actions);
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_PROOF {
-            self.process_inbound_proof(&ctx, &mut actions);
+            self.process_inbound_proof(&ctx, actions);
         }
 
-        self.handle_inbound_local_delivery(&ctx, &mut actions);
-        actions
+        self.handle_inbound_local_delivery(&ctx, actions);
     }
 
     /// The announce ingress filter of `Transport.inbound` (825c2e19), which
