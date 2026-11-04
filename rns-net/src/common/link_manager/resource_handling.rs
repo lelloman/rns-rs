@@ -301,7 +301,8 @@ impl LinkManager {
         // would request the same parts and deliver the payload again. Preserve
         // pending approval, progress and assembly; its normal retry timer handles
         // lost requests. Concluded receivers remain protected until tick cleanup.
-        if link.concluded_incoming.contains(&receiver.resource_hash)
+        if Self::resource_hash_key(&receiver.resource_hash)
+            .is_some_and(|key| link.concluded_incoming.contains(&key))
             || link
                 .incoming_resources
                 .iter()
@@ -785,7 +786,10 @@ impl LinkManager {
             link.incoming_resources.retain(|r| {
                 let active = r.status < rns_core::resource::ResourceStatus::Complete;
                 if !active {
-                    concluded.insert(r.resource_hash.clone());
+                    // Receivers hold a validated 32-byte hash.
+                    if let Some(key) = Self::resource_hash_key(&r.resource_hash) {
+                        concluded.insert(key);
+                    }
                 }
                 active
             });
@@ -855,7 +859,11 @@ impl LinkManager {
 
         if let Some(idx) = assemble_idx {
             let eligible = Self::receive_offload_eligible(link, &link.incoming_resources[idx]);
-            let resource_hash = link.incoming_resources[idx].resource_hash.clone();
+            let Some(resource_hash) =
+                Self::resource_hash_key(&link.incoming_resources[idx].resource_hash)
+            else {
+                return;
+            };
             let _ = link;
             // Earlier application completions go first, with their final
             // action types.
@@ -876,7 +884,7 @@ impl LinkManager {
             let Some(idx) = link
                 .incoming_resources
                 .iter()
-                .position(|r| r.resource_hash == resource_hash)
+                .position(|r| r.resource_hash[..] == resource_hash[..])
             else {
                 return;
             };
@@ -1487,50 +1495,35 @@ impl LinkManager {
             match action {
                 ResourceAction::SendAdvertisement(data) => {
                     // Link-encrypt and send as CONTEXT_RESOURCE_ADV
-                    let encrypted = self
-                        .links
-                        .get(link_id)
-                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
-                    if let Some(encrypted) = encrypted {
-                        self.build_link_packet_into(
-                            link_id,
-                            constants::CONTEXT_RESOURCE_ADV,
-                            &encrypted,
-                            out,
-                        );
-                    }
+                    self.build_encrypted_link_packet_into(
+                        link_id,
+                        constants::CONTEXT_RESOURCE_ADV,
+                        &data,
+                        rng,
+                        out,
+                    );
                 }
                 ResourceAction::SendPart(data) => {
                     // Parts are NOT link-encrypted — send raw as CONTEXT_RESOURCE
                     self.build_link_packet_into(link_id, constants::CONTEXT_RESOURCE, &data, out);
                 }
                 ResourceAction::SendRequest(data) => {
-                    let encrypted = self
-                        .links
-                        .get(link_id)
-                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
-                    if let Some(encrypted) = encrypted {
-                        self.build_link_packet_into(
-                            link_id,
-                            constants::CONTEXT_RESOURCE_REQ,
-                            &encrypted,
-                            out,
-                        );
-                    }
+                    self.build_encrypted_link_packet_into(
+                        link_id,
+                        constants::CONTEXT_RESOURCE_REQ,
+                        &data,
+                        rng,
+                        out,
+                    );
                 }
                 ResourceAction::SendHmu(data) => {
-                    let encrypted = self
-                        .links
-                        .get(link_id)
-                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
-                    if let Some(encrypted) = encrypted {
-                        self.build_link_packet_into(
-                            link_id,
-                            constants::CONTEXT_RESOURCE_HMU,
-                            &encrypted,
-                            out,
-                        );
-                    }
+                    self.build_encrypted_link_packet_into(
+                        link_id,
+                        constants::CONTEXT_RESOURCE_HMU,
+                        &data,
+                        rng,
+                        out,
+                    );
                 }
                 ResourceAction::SendProof(data) => {
                     let flags = PacketFlags {
@@ -1559,31 +1552,31 @@ impl LinkManager {
                     }
                 }
                 ResourceAction::SendCancelInitiator(data) => {
-                    let encrypted = self
+                    if self
                         .links
                         .get(link_id)
-                        .filter(|link| link.engine.state() == LinkState::Active)
-                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
-                    if let Some(encrypted) = encrypted {
-                        self.build_link_packet_into(
+                        .is_some_and(|link| link.engine.state() == LinkState::Active)
+                    {
+                        self.build_encrypted_link_packet_into(
                             link_id,
                             constants::CONTEXT_RESOURCE_ICL,
-                            &encrypted,
+                            &data,
+                            rng,
                             out,
                         );
                     }
                 }
                 ResourceAction::SendCancelReceiver(data) => {
-                    let encrypted = self
+                    if self
                         .links
                         .get(link_id)
-                        .filter(|link| link.engine.state() == LinkState::Active)
-                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
-                    if let Some(encrypted) = encrypted {
-                        self.build_link_packet_into(
+                        .is_some_and(|link| link.engine.state() == LinkState::Active)
+                    {
+                        self.build_encrypted_link_packet_into(
                             link_id,
                             constants::CONTEXT_RESOURCE_RCL,
-                            &encrypted,
+                            &data,
+                            rng,
                             out,
                         );
                     }
@@ -1660,6 +1653,32 @@ impl LinkManager {
             .unwrap_or(constants::MTU);
         if let Ok(raw) =
             RawPacket::pack_raw_shared_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
+        {
+            out.push(LinkManagerAction::SendPacket {
+                raw,
+                dest_type: constants::DESTINATION_LINK,
+                attached_interface: None,
+            });
+        }
+    }
+
+    /// Link-encrypt `plaintext` straight into a new link DATA packet with
+    /// `context`, appending it to `out`; nothing when the link is unknown or
+    /// cannot encrypt.
+    pub(super) fn build_encrypted_link_packet_into(
+        &self,
+        link_id: &LinkId,
+        context: u8,
+        plaintext: &[u8],
+        rng: &mut dyn Rng,
+        out: &mut Vec<LinkManagerAction>,
+    ) {
+        let Some(link) = self.links.get(link_id) else {
+            return;
+        };
+        let max_mtu = link.engine.mtu() as usize;
+        if let Some(raw) =
+            encrypted_link_packet(&link.engine, link_id, context, plaintext, rng, max_mtu)
         {
             out.push(LinkManagerAction::SendPacket {
                 raw,
@@ -1905,4 +1924,36 @@ impl LinkManager {
             link.resource_receive_mode = mode;
         }
     }
+}
+
+/// A link DATA packet with `context` whose payload is `plaintext`
+/// link-encrypted in place: the ciphertext needs no buffer of its own.
+pub(super) fn encrypted_link_packet(
+    engine: &rns_core::link::LinkEngine,
+    link_id: &LinkId,
+    context: u8,
+    plaintext: &[u8],
+    rng: &mut dyn Rng,
+    max_mtu: usize,
+) -> Option<rns_core::transport::types::PacketBytes> {
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_LINK,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let mut encrypted = Err(());
+    let raw = RawPacket::pack_raw_shared_filled_with_max_mtu(
+        flags,
+        0,
+        link_id,
+        None,
+        context,
+        engine.encrypted_len(plaintext.len()),
+        max_mtu,
+        |payload| encrypted = engine.encrypt_into(plaintext, rng, payload).map_err(|_| ()),
+    )
+    .ok()?;
+    encrypted.ok().map(|()| raw)
 }

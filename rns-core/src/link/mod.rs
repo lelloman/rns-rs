@@ -427,6 +427,30 @@ impl LinkEngine {
         Ok(link_encrypt(token, plaintext, rng))
     }
 
+    /// Whether this link has a session key to encrypt with.
+    pub fn can_encrypt(&self) -> bool {
+        self.token.is_some()
+    }
+
+    /// Length of the ciphertext [`LinkEngine::encrypt`] produces for a
+    /// plaintext of `plaintext_len` bytes.
+    pub fn encrypted_len(&self, plaintext_len: usize) -> usize {
+        Token::token_len(plaintext_len)
+    }
+
+    /// [`LinkEngine::encrypt`] into `out`, which must be exactly
+    /// [`LinkEngine::encrypted_len`]`(plaintext.len())` bytes long.
+    pub fn encrypt_into(
+        &self,
+        plaintext: &[u8],
+        rng: &mut dyn Rng,
+        out: &mut [u8],
+    ) -> Result<(), LinkError> {
+        let token = self.token.as_ref().ok_or(LinkError::NoSessionKey)?;
+        token.encrypt_into(plaintext, rng, out);
+        Ok(())
+    }
+
     /// Decrypt ciphertext received on this link.
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, LinkError> {
         let token = self.token.as_ref().ok_or(LinkError::NoSessionKey)?;

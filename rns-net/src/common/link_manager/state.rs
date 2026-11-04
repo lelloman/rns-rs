@@ -30,7 +30,7 @@ pub(super) struct ManagedLink {
     pub(super) incoming_resources: Vec<ResourceReceiver>,
     /// Hashes of incoming resources concluded since the last tick, so that an
     /// advertisement retry of one is still ignored after its receiver is gone.
-    pub(super) concluded_incoming: crate::common::FastHashSet<Vec<u8>>,
+    pub(super) concluded_incoming: crate::common::FastHashSet<[u8; 32]>,
     /// Active outgoing resource transfers.
     pub(super) outgoing_resources: Vec<ResourceSender>,
     /// Request IDs awaiting a packet or resource response.

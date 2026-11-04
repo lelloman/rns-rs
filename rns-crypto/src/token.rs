@@ -89,6 +89,41 @@ impl Token {
         self.encrypt_with_iv(plaintext, &iv)
     }
 
+    /// Length of the token [`Token::encrypt`] produces for a plaintext of
+    /// `plaintext_len` bytes.
+    pub fn token_len(plaintext_len: usize) -> usize {
+        16 + plaintext_len + (pkcs7::BLOCK_SIZE - plaintext_len % pkcs7::BLOCK_SIZE) + 32
+    }
+
+    /// [`Token::encrypt`] into `out`, which must be exactly
+    /// [`Token::token_len`]`(plaintext.len())` bytes long.
+    pub fn encrypt_into(&self, plaintext: &[u8], rng: &mut dyn Rng, out: &mut [u8]) {
+        let mut iv = [0u8; 16];
+        rng.fill_bytes(&mut iv);
+        self.encrypt_with_iv_into(plaintext, &iv, out)
+    }
+
+    /// [`Token::encrypt_with_iv`] into `out`, which must be exactly
+    /// [`Token::token_len`]`(plaintext.len())` bytes long.
+    pub fn encrypt_with_iv_into(&self, plaintext: &[u8], iv: &[u8; 16], out: &mut [u8]) {
+        assert_eq!(
+            out.len(),
+            Self::token_len(plaintext.len()),
+            "token buffer length"
+        );
+        let (body, tag) = out.split_at_mut(out.len() - 32);
+        let padding = body.len() - 16 - plaintext.len();
+        body[..16].copy_from_slice(iv);
+        body[16..16 + plaintext.len()].copy_from_slice(plaintext);
+        body[16 + plaintext.len()..].fill(padding as u8);
+        match &self.mode {
+            AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
+            AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
+        }
+        .expect("PKCS7 padding always produces block-aligned plaintext");
+        tag.copy_from_slice(&hmac_sha256(&self.signing_key, body));
+    }
+
     pub fn encrypt_with_iv(&self, plaintext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         // Build the whole token in one buffer: the plaintext is copied once,
         // padded and encrypted in place, then signed and the tag appended.
@@ -253,6 +288,21 @@ impl Token {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encrypting_in_place_matches_encrypting_into_a_new_buffer() {
+        for key in [[7u8; 32].as_slice(), [9u8; 64].as_slice()] {
+            let token = Token::new(key).unwrap();
+            for len in [0usize, 1, 15, 16, 17, 31, 32, 33, 100, 383, 384] {
+                let plaintext: Vec<u8> = (0..len).map(|i| i as u8).collect();
+                let iv = [len as u8; 16];
+                let mut out = vec![0xaa; Token::token_len(len)];
+                token.encrypt_with_iv_into(&plaintext, &iv, &mut out);
+                assert_eq!(out, token.encrypt_with_iv(&plaintext, &iv));
+                assert_eq!(token.decrypt(&out).unwrap(), plaintext);
+            }
+        }
+    }
     use crate::FixedRng;
 
     #[test]
