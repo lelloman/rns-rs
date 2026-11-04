@@ -201,7 +201,7 @@ Every commit in the audited range must appear exactly once.
 | 39 | `cda4d72bb8c47aa6e6aee8d81a7d9b32d1e48d41` | Tightened PR protocol violations to drop | Integrated | `PATH_REQUEST_LEGACY_LENGTH` and `is_valid_path_request_length`; the driver's ingress check counts a protocol violation and drops a tagged path request of any other length, and `parse_path_request` processes only those lengths; `path_requests_of_invalid_length_are_dropped`, `path_requests_of_invalid_length_are_protocol_violations_and_dropped`, the short-tag case of `path_request_for_local_destination_requests_path_response` |
 | 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Integrated | The driver logs the tagless and invalid size path request violations on the `rns::pathing` target, and the excessive size one at debug; log only, by inspection |
 | 41 | `e49fafecce95d8155bfcc54f7aff3df1a430d77a` | Optimized announce handler callback handling | Structurally covered | Mapping commit; rns-rs has no announce handler registry or aspect filters: the driver calls the node's single `Callbacks::on_announce` with each validated announce, and applications filter for themselves; matching by name hash selects the same announces as the old expected-hash match |
-| 42 | `8a09c9b550b761d8d7a9b471125e23ca5bff1d9b` | Fixed pragma ordering | Needs port | |
+| 42 | `8a09c9b550b761d8d7a9b471125e23ca5bff1d9b` | Fixed pragma ordering | Integrated | `SqliteAnnounceCache::open` sets `auto_vacuum=INCREMENTAL` before WAL, converts an existing `NONE` cache once with `VACUUM` (rns-rs addition), and `clean` steps `incremental_vacuum` to completion; `sqlite_cache_uses_incremental_vacuum_and_reclaims_cleaned_pages`, `sqlite_cache_created_with_the_old_pragma_order_is_converted_once` |
 | 43 | `ceac4a28bd45956f8b5d6c1b4834be48d0724bf9` | Disabled statement caching, fetch under lock | Needs port | |
 | 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Needs port | |
 | 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Needs port | |
@@ -1691,6 +1691,45 @@ callback. Deferring thread start to the job loop is Python's threading
 model; the Rust callback runs on the driver thread and is not delayed.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 42. `8a09c9b5` — Fixed pragma ordering
+
+**Upstream change** (`RNS/Storage.py`): `AnnounceCache` sets
+`PRAGMA auto_vacuum=INCREMENTAL` before `journal_mode=WAL` instead of after
+it. SQLite only changes `auto_vacuum` before the database header is written,
+and switching a new file to WAL writes it, so the old order left every cache
+at `auto_vacuum=NONE` and the `incremental_vacuum` after each clean freed
+nothing. The fix applies to newly created caches; an existing one keeps
+`NONE`.
+
+**Rust applicability:** Needs port, and rns-rs had the same order in
+`SqliteAnnounceCache::open`. On 2026-11-04 both VPS announce caches reported
+`auto_vacuum=0`, with 2,353 of 2,638 (vps-eu) and 1,406 of 2,160 (vps-us)
+pages free. The known destinations store (`storage_sqlite.rs`) sets no
+`auto_vacuum`, like upstream's `KnownDestinationsStore`, and is unaffected.
+
+**Rust change:**
+
+- `auto_vacuum=INCREMENTAL` now comes first, as upstream.
+- Beyond upstream: a cache that still reports `auto_vacuum` other than
+  incremental after the pragmas is converted once with `VACUUM`. A failure
+  is logged and the cache keeps working. On a copy of the vps-eu cache this
+  took 0.02 s and shrank it from 10.8 MB to 0.8 MB with every row intact.
+- `clean` read `PRAGMA incremental_vacuum` with `execute`, which fails
+  ("Execute returned results") as soon as the pragma frees a page, since it
+  returns a row per freed page. It never freed one before, so the error never
+  showed; with the fix alone, every clean that removed entries would have
+  returned an error. It now steps the pragma to completion.
+
+**Evidence:** `sqlite_cache_uses_incremental_vacuum_and_reclaims_cleaned_pages`
+(a new cache is incremental, and a clean of 63 of 64 4 KiB entries leaves no
+free pages) and
+`sqlite_cache_created_with_the_old_pragma_order_is_converted_once` (a file
+built with the old order is converted on open and keeps its row). Both fail
+on the old order.
+
+**Final disposition:** Integrated, with the one-time conversion of existing
+caches as an rns-rs addition.
 
 ## Integration Plan
 
