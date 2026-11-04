@@ -203,7 +203,7 @@ Every commit in the audited range must appear exactly once.
 | 41 | `e49fafecce95d8155bfcc54f7aff3df1a430d77a` | Optimized announce handler callback handling | Structurally covered | Mapping commit; rns-rs has no announce handler registry or aspect filters: the driver calls the node's single `Callbacks::on_announce` with each validated announce, and applications filter for themselves; matching by name hash selects the same announces as the old expected-hash match |
 | 42 | `8a09c9b550b761d8d7a9b471125e23ca5bff1d9b` | Fixed pragma ordering | Integrated | `SqliteAnnounceCache::open` sets `auto_vacuum=INCREMENTAL` before WAL, converts an existing `NONE` cache once with `VACUUM` (rns-rs addition), and `clean` steps `incremental_vacuum` to completion; `sqlite_cache_uses_incremental_vacuum_and_reclaims_cleaned_pages`, `sqlite_cache_created_with_the_old_pragma_order_is_converted_once` |
 | 43 | `ceac4a28bd45956f8b5d6c1b4834be48d0724bf9` | Disabled statement caching, fetch under lock | Structurally covered | Mapping commit; both SQLite stores hold their connection in a `Mutex<Connection>`, so every read already runs under the lock that flushes take, and neither uses `prepare_cached` |
-| 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Needs port | |
+| 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Non-runtime | Mapping commit; removes a stale locking comment from `remember_ratchet` |
 | 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Needs port | |
 
 ## Per-Commit Analysis
@@ -1748,6 +1748,16 @@ flush. Neither uses rusqlite's statement cache (`prepare_cached`); statements
 are prepared per call.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 44. `9b6678b3` — Cleanup
+
+**Upstream change** (`RNS/Storage.py`): removes the comment "Caller must hold
+Identity.known_destinations_lock." above `KnownDestinationsStore.remember_ratchet`,
+which commit 43 made stale by taking the store's own lock for the read.
+
+**Rust applicability:** Non-runtime; a comment only.
+
+**Final disposition:** Non-runtime; mapping only.
 
 ## Integration Plan
 
