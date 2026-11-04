@@ -12,7 +12,7 @@ pub(super) struct ManagedLink {
     pub(super) channel: Option<Channel>,
     /// Authenticated identity/request packets received before the responder's LRRTT.
     pub(super) pre_rtt_packets: Vec<PreRttPacket>,
-    pub(super) pending_channel_packets: HashMap<[u8; 32], Sequence>,
+    pub(super) pending_channel_packets: crate::common::FastHashMap<[u8; 32], Sequence>,
     pub(super) channel_send_ok: u64,
     pub(super) channel_send_not_ready: u64,
     pub(super) channel_send_too_big: u64,
@@ -30,17 +30,17 @@ pub(super) struct ManagedLink {
     pub(super) incoming_resources: Vec<ResourceReceiver>,
     /// Hashes of incoming resources concluded since the last tick, so that an
     /// advertisement retry of one is still ignored after its receiver is gone.
-    pub(super) concluded_incoming: std::collections::HashSet<Vec<u8>>,
+    pub(super) concluded_incoming: crate::common::FastHashSet<Vec<u8>>,
     /// Active outgoing resource transfers.
     pub(super) outgoing_resources: Vec<ResourceSender>,
     /// Request IDs awaiting a packet or resource response.
-    pub(super) pending_requests: HashMap<[u8; 16], PendingRequest>,
+    pub(super) pending_requests: crate::common::FastHashMap<[u8; 16], PendingRequest>,
     /// Logical incoming split transfers, keyed by original resource hash.
-    pub(super) incoming_splits: HashMap<[u8; 32], IncomingSplitTransfer>,
+    pub(super) incoming_splits: crate::common::FastHashMap<[u8; 32], IncomingSplitTransfer>,
     /// Logical outgoing split transfers, keyed by original resource hash.
-    pub(super) outgoing_splits: HashMap<[u8; 32], OutgoingSplitTransfer>,
+    pub(super) outgoing_splits: crate::common::FastHashMap<[u8; 32], OutgoingSplitTransfer>,
     /// Reader state for bounded-memory outgoing transfers.
-    pub(super) outgoing_streams: HashMap<[u8; 32], OutgoingStreamTransfer>,
+    pub(super) outgoing_streams: crate::common::FastHashMap<[u8; 32], OutgoingStreamTransfer>,
     /// Resource acceptance strategy.
     pub(super) resource_strategy: ResourceStrategy,
     /// Delivery policy for independent incoming Resources.

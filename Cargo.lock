@@ -2443,6 +2443,7 @@ dependencies = [
  "criterion",
  "ctrlc",
  "env_logger",
+ "foldhash",
  "futures",
  "libc",
  "log",
