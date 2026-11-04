@@ -4440,7 +4440,7 @@ mod tests {
         event_tx
             .try_send(Event::Frame {
                 interface_id: InterfaceId(2),
-                data: vec![0],
+                data: vec![0].into(),
                 rssi: None,
                 snr: None,
             })
@@ -4448,7 +4448,7 @@ mod tests {
         assert!(event_tx
             .try_send(Event::Frame {
                 interface_id: InterfaceId(2),
-                data: vec![0],
+                data: vec![0].into(),
                 rssi: None,
                 snr: None,
             })
@@ -4458,7 +4458,7 @@ mod tests {
         assert!(event_tx
             .try_send(Event::Frame {
                 interface_id: InterfaceId(2),
-                data: vec![0],
+                data: vec![0].into(),
                 rssi: None,
                 snr: None,
             })

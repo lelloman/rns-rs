@@ -2632,7 +2632,7 @@ mod tests {
         }
         let released = recv_non_peer_event(&rx, Duration::from_secs(5)).unwrap();
         assert!(
-            matches!(released, Event::Frame { data, .. } if data == vec![1u8; 32]),
+            matches!(released, Event::Frame { data, .. } if data == vec![1u8; 32].into()),
             "held producer was not released after DATA pressure recovered"
         );
     }
@@ -2670,7 +2670,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(8100));
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -2750,7 +2750,7 @@ mod tests {
         client.write_all(&hdlc::frame(&inbound)).unwrap();
         let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { data, .. } => assert_eq!(data, inbound),
+            Event::Frame { data, .. } => assert_eq!(data, inbound.into()),
             other => panic!("inbound frame was starved by outbound backpressure: {other:?}"),
         }
     }
@@ -2843,8 +2843,8 @@ mod tests {
                 other => panic!("expected Frame, got {:?}", other),
             }
         }
-        assert!(received.contains(&payload1));
-        assert!(received.contains(&payload2));
+        assert!(received.iter().any(|d| **d == payload1[..]));
+        assert!(received.iter().any(|d| **d == payload2[..]));
     }
 
     #[test]
@@ -2889,7 +2889,7 @@ mod tests {
         let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
             Event::Frame { data, .. } => {
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -2962,7 +2962,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(9100));
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -3131,7 +3131,7 @@ mod tests {
         let payload: Vec<u8> = (0..32).collect();
         second.write_all(&hdlc::frame(&payload)).unwrap();
         match recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap() {
-            Event::Frame { data, .. } => assert_eq!(data, payload),
+            Event::Frame { data, .. } => assert_eq!(data, payload.into()),
             other => panic!("expected Frame, got {:?}", other),
         }
         // The reconnect thread exits once the new socket is served here.
@@ -3310,7 +3310,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, client_id);
-                assert_eq!(data, vec![1u8; 24]);
+                assert_eq!(data, vec![1u8; 24].into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -3578,7 +3578,7 @@ mod tests {
                 let payload = vec![0x41; 32];
                 client.write_all(&hdlc::frame(&payload)).unwrap();
                 let frame = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
-                assert!(matches!(frame, Event::Frame { data, .. } if data == payload));
+                assert!(matches!(frame, Event::Frame { data, .. } if data == payload.into()));
             }
 
             drop(client);

@@ -1292,7 +1292,7 @@ mod tests {
                         let packet = RawPacket::unpack(&raw[..len]).ok();
                         let event = Event::Frame {
                             interface_id,
-                            data: raw[..len].to_vec(),
+                            data: raw[..len].to_vec().into(),
                             rssi: None,
                             snr: None,
                         };
@@ -1376,7 +1376,7 @@ mod tests {
         .raw;
         Event::Frame {
             interface_id: InterfaceId(interface_id),
-            data: raw,
+            data: raw.into(),
             rssi: None,
             snr: None,
         }

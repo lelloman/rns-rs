@@ -164,7 +164,7 @@ fn udp_reader_loop(
                 if tx
                     .send(Event::Frame {
                         interface_id: id,
-                        data: buf[..n].to_vec(),
+                        data: buf[..n].into(),
                         rssi: None,
                         snr: None,
                     })
@@ -387,7 +387,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(10));
-                assert_eq!(data, payload);
+                assert_eq!(&*data, &payload[..]);
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -457,7 +457,7 @@ mod tests {
 
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { data, .. } => assert_eq!(data, b"ping"),
+            Event::Frame { data, .. } => assert_eq!(&*data, b"ping"),
             other => panic!("expected Frame, got {:?}", other),
         }
     }
@@ -490,7 +490,7 @@ mod tests {
         for i in 0..5u8 {
             let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
             match event {
-                Event::Frame { data, .. } => assert_eq!(data, vec![i]),
+                Event::Frame { data, .. } => assert_eq!(data, vec![i].into()),
                 other => panic!("expected Frame, got {:?}", other),
             }
         }
@@ -516,7 +516,7 @@ mod tests {
         sender.send_to(b"after-empty", &target).unwrap();
 
         match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
-            Event::Frame { data, .. } => assert_eq!(data, b"after-empty"),
+            Event::Frame { data, .. } => assert_eq!(&*data, b"after-empty"),
             other => panic!("expected non-empty Frame, got {other:?}"),
         }
     }

@@ -385,6 +385,19 @@ impl RawPacket {
         Ok(packet)
     }
 
+    /// [`RawPacket::unpack_owned`] for shared bytes, kept as they are.
+    pub fn unpack_shared(raw: PacketBytes) -> Result<RawPacket<PacketBytes>, PacketError> {
+        RawPacket::<PacketBytes>::parse::<true>(raw)
+    }
+
+    /// [`RawPacket::unpack`] for shared bytes, leaving `packet_hash` zeroed
+    /// (see [`RawPacket::unpack_unhashed`]).
+    pub(crate) fn unpack_shared_unhashed(
+        raw: PacketBytes,
+    ) -> Result<RawPacket<PacketBytes>, PacketError> {
+        RawPacket::<PacketBytes>::parse::<false>(raw)
+    }
+
     /// [`RawPacket::unpack_outbound`] for shared bytes, kept as they are.
     pub fn unpack_outbound_shared(raw: PacketBytes) -> Result<RawPacket<PacketBytes>, PacketError> {
         let mut packet = RawPacket::<PacketBytes>::parse::<false>(raw)?;
@@ -520,7 +533,8 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
         self.as_view().map_raw(<[u8]>::to_vec)
     }
 
-    fn map_raw<C>(self, f: impl FnOnce(B) -> C) -> RawPacket<C> {
+    /// This packet with its bytes converted by `f`, fields unchanged.
+    pub fn map_raw<C>(self, f: impl FnOnce(B) -> C) -> RawPacket<C> {
         RawPacket {
             flags: self.flags,
             hops: self.hops,

@@ -544,11 +544,15 @@ impl TransportEngine {
     ///
     /// Transport.py:1187-1238
     #[cfg(test)]
-    pub(super) fn packet_filter(&self, packet: &RawPacket) -> bool {
+    pub(super) fn packet_filter<B: AsRef<[u8]>>(&self, packet: &RawPacket<B>) -> bool {
         self.packet_filter_at_hops(packet, packet.hops)
     }
 
-    pub(super) fn packet_filter_at_hops(&self, packet: &RawPacket, hops: u8) -> bool {
+    pub(super) fn packet_filter_at_hops<B: AsRef<[u8]>>(
+        &self,
+        packet: &RawPacket<B>,
+        hops: u8,
+    ) -> bool {
         // Filter packets for other transport instances
         if packet.transport_id.is_some()
             && packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE

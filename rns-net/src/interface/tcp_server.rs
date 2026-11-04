@@ -600,7 +600,7 @@ mod tests {
             for round in 0..ROUNDS {
                 let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
                 assert!(
-                    matches!(event, Event::Frame { interface_id: InterfaceId(1200), data, .. } if data == payload),
+                    matches!(event, Event::Frame { interface_id: InterfaceId(1200), data, .. } if *data == payload[..]),
                     "read interruption must preserve the connection and partial frame"
                 );
                 println!("EINTR_FRAME_{round}");
@@ -721,7 +721,7 @@ mod tests {
 
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            Event::Frame { interface_id: InterfaceId(1100), data, .. } if data == valid
+            Event::Frame { interface_id: InterfaceId(1100), data, .. } if data == valid.into()
         ));
     }
 
@@ -860,7 +860,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(2000));
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }

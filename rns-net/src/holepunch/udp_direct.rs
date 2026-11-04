@@ -169,7 +169,7 @@ fn run_reader(
                 if len > 0 {
                     let _ = tx.send(Event::Frame {
                         interface_id,
-                        data: buf[..len].to_vec(),
+                        data: buf[..len].into(),
                         rssi: None,
                         snr: None,
                     });

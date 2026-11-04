@@ -1565,7 +1565,7 @@ fn data_receiver_loop(
                 if tx
                     .send(Event::Frame {
                         interface_id: iface_id,
-                        data: data.to_vec(),
+                        data: data.into(),
                         rssi: None,
                         snr: None,
                     })

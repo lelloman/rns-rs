@@ -609,7 +609,7 @@ fn peer_reader_loop(
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
-                            data: frame,
+                            data: frame.into(),
                             rssi: None,
                             snr: None,
                         })

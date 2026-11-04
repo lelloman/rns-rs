@@ -116,7 +116,7 @@ impl<'a> InboundFrame<'a> {
 /// A syntactically decoded packet. Routing/admission is rechecked on every use.
 /// Fields are read-only so cached hashes cannot diverge from the parsed bytes.
 pub struct DecodedPacket {
-    packet: RawPacket,
+    packet: RawPacket<PacketBytes>,
     /// Set by [`TransportEngine::decode_inbound`] for link traffic whose hash
     /// it leaves unread; `packet.packet_hash` is then zeroed until the engine
     /// needs it.
@@ -125,15 +125,20 @@ pub struct DecodedPacket {
 
 impl DecodedPacket {
     pub fn unpack(raw: &[u8]) -> Result<Self, crate::packet::PacketError> {
-        RawPacket::unpack(raw).map(Self::hashed)
+        Self::unpack_shared(PacketBytes::from(raw))
     }
 
-    /// Decode wire bytes the caller owns without copying them.
+    /// Decode wire bytes the caller owns (copied once into shared bytes).
     pub fn unpack_owned(raw: Vec<u8>) -> Result<Self, crate::packet::PacketError> {
-        RawPacket::unpack_owned(raw).map(Self::hashed)
+        Self::unpack_shared(PacketBytes::from(raw))
     }
 
-    fn hashed(packet: RawPacket) -> Self {
+    /// Decode shared wire bytes without copying them.
+    pub fn unpack_shared(raw: PacketBytes) -> Result<Self, crate::packet::PacketError> {
+        RawPacket::unpack_shared(raw).map(Self::hashed)
+    }
+
+    fn hashed(packet: RawPacket<PacketBytes>) -> Self {
         Self {
             packet,
             hash_deferred: false,
@@ -142,7 +147,7 @@ impl DecodedPacket {
 
     /// The decoded fields. Its `packet_hash` is zeroed when hashing was
     /// deferred; read the hash through [`DecodedPacket::packet_hash`].
-    pub fn packet(&self) -> &RawPacket {
+    pub fn packet(&self) -> &RawPacket<PacketBytes> {
         &self.packet
     }
 
@@ -161,18 +166,18 @@ pub struct DecodedInboundFrame {
 }
 
 struct InboundPacketCtx {
-    packet: RawPacket,
+    packet: RawPacket<PacketBytes>,
     /// `packet.packet_hash` is zeroed: the packet is link traffic that is
     /// only forwarded, or a local link resource part, and nothing reads it.
     hash_deferred: bool,
-    original_raw: Option<Vec<u8>>,
+    original_raw: Option<PacketBytes>,
     iface: InterfaceId,
     now: f64,
     from_local_client: bool,
 }
 
 struct VerifiedAnnounceCtx<'a> {
-    packet: &'a RawPacket,
+    packet: &'a RawPacket<PacketBytes>,
     original_raw: &'a [u8],
     iface: InterfaceId,
     now: f64,

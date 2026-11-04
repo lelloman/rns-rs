@@ -713,7 +713,7 @@ mod tests {
         let payload: Vec<u8> = (0..32).collect();
         second.write_all(&hdlc::frame(&payload)).unwrap();
         match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
-            Event::Frame { data, .. } => assert_eq!(data, payload),
+            Event::Frame { data, .. } => assert_eq!(data, payload.into()),
             other => panic!("expected Frame, got {:?}", other),
         }
         // The reconnect thread exits once the new socket is served here.
@@ -805,7 +805,7 @@ mod tests {
                 snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(1));
-                assert_eq!(data, payload);
+                assert_eq!(data, payload.into());
             }
             other => panic!("expected Frame, got {:?}", other),
         }
@@ -837,7 +837,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            Event::Frame { data, .. } if data == minimum_valid
+            Event::Frame { data, .. } if data == minimum_valid.into()
         ));
 
         // IFAC bytes are part of the on-wire frame allowance.
@@ -847,7 +847,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(5)).unwrap(),
-            Event::Frame { data, .. } if data == maximum_valid
+            Event::Frame { data, .. } if data == maximum_valid.into()
         ));
 
         // An oversized frame is discarded and cannot poison the next frame.
@@ -858,7 +858,7 @@ mod tests {
         server_stream.write_all(&hdlc::frame(&recovery)).unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(5)).unwrap(),
-            Event::Frame { data, .. } if data == recovery
+            Event::Frame { data, .. } if data == recovery.into()
         ));
     }
 
@@ -913,7 +913,7 @@ mod tests {
         for expected in &payloads {
             let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
             match event {
-                Event::Frame { data, .. } => assert_eq!(&data, expected),
+                Event::Frame { data, .. } => assert_eq!(&*data, &expected[..]),
                 other => panic!("expected Frame, got {:?}", other),
             }
         }
@@ -946,7 +946,7 @@ mod tests {
 
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { data, .. } => assert_eq!(data, payload),
+            Event::Frame { data, .. } => assert_eq!(data, payload.into()),
             other => panic!("expected Frame, got {:?}", other),
         }
     }

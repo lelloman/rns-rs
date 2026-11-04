@@ -495,7 +495,7 @@ fn reader_loop(
                                 if tx
                                     .send(Event::Frame {
                                         interface_id: sub_id,
-                                        data,
+                                        data: data.into(),
                                         rssi: last_rssi,
                                         snr: last_snr,
                                     })

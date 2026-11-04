@@ -1934,7 +1934,7 @@ fn test_prepare_inbound_packet_only_retains_original_raw_for_announces() {
         .expect("packet should parse and pass filter");
 
     assert!(ctx.original_raw.is_none());
-    assert_eq!(ctx.packet.raw, packet.raw);
+    assert_eq!(*ctx.packet.raw, *packet.raw);
     assert_eq!(ctx.packet.hops, 1);
     assert_eq!(ctx.iface, InterfaceId(9));
 
@@ -4843,7 +4843,7 @@ fn decoded_admission_rechecks_interface_hops_and_preserves_metadata() {
         })
         .unwrap();
     assert_eq!(ctx.packet.hops, 1);
-    assert_eq!(ctx.packet.raw, raw.raw);
+    assert_eq!(*ctx.packet.raw, *raw.raw);
     assert_eq!(ctx.packet.packet_hash, raw.packet_hash);
     assert_eq!(ctx.packet.rssi, rx.rssi);
     assert_eq!(ctx.packet.snr, rx.snr);
@@ -5017,7 +5017,9 @@ fn relayed_link_traffic_forwards_identically_without_its_hash() {
         let mut deferring = relay_with_validated_link(link_id);
         let mut hashing = relay_with_validated_link(link_id);
 
-        let decoded = deferring.decode_inbound(packet.raw.clone()).unwrap();
+        let decoded = deferring
+            .decode_inbound(packet.raw.as_slice().into())
+            .unwrap();
         let deferred = deferred_contexts.contains(&context);
         assert_eq!(
             decoded.packet_hash().is_none(),
@@ -5030,7 +5032,9 @@ fn relayed_link_traffic_forwards_identically_without_its_hash() {
 
         // Twice: a repeat must be treated the same way by both engines.
         for now in [1001.0, 1002.0] {
-            let decoded = deferring.decode_inbound(packet.raw.clone()).unwrap();
+            let decoded = deferring
+                .decode_inbound(packet.raw.as_slice().into())
+                .unwrap();
             let unhashed = handle_decoded_at(&mut deferring, decoded, now);
             let decoded = DecodedPacket::unpack(&packet.raw).unwrap();
             let hashed = handle_decoded_at(&mut hashing, decoded, now);
@@ -5074,7 +5078,7 @@ fn deferred_hash_is_computed_when_routing_changes_before_handling() {
     // The link becomes this node's own: the packet must be delivered with
     // its real hash.
     let mut engine = relay_with_validated_link(link_id);
-    let decoded = engine.decode_inbound(packet.raw.clone()).unwrap();
+    let decoded = engine.decode_inbound(packet.raw.as_slice().into()).unwrap();
     assert!(decoded.packet_hash().is_none());
     engine.register_destination(link_id, constants::DESTINATION_LINK);
     let actions = handle_decoded_at(&mut engine, decoded, 1001.0);
@@ -5088,7 +5092,9 @@ fn deferred_hash_is_computed_when_routing_changes_before_handling() {
     // handled exactly as a hashed one.
     let mut deferring = relay_with_validated_link(link_id);
     let mut hashing = relay_with_validated_link(link_id);
-    let decoded = deferring.decode_inbound(packet.raw.clone()).unwrap();
+    let decoded = deferring
+        .decode_inbound(packet.raw.as_slice().into())
+        .unwrap();
     assert!(decoded.packet_hash().is_none());
     deferring.link_table.remove(&link_id);
     hashing.link_table.remove(&link_id);
@@ -5121,10 +5127,10 @@ fn own_link_resource_parts_alone_skip_hashing() {
 
     // Delivered with a zeroed hash, and not recorded for deduplication.
     let mut engine = own_link();
-    let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+    let decoded = engine.decode_inbound(part.raw.as_slice().into()).unwrap();
     assert!(decoded.packet_hash().is_none());
     for now in [1001.0, 1002.0] {
-        let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+        let decoded = engine.decode_inbound(part.raw.as_slice().into()).unwrap();
         let delivered: Vec<_> = handle_decoded_at(&mut engine, decoded, now)
             .into_iter()
             .filter_map(|action| match action {
@@ -5142,14 +5148,16 @@ fn own_link_resource_parts_alone_skip_hashing() {
     let mut engine = relay_with_validated_link(link_id);
     engine.register_destination(link_id, constants::DESTINATION_LINK);
     assert!(engine
-        .decode_inbound(part.raw.clone())
+        .decode_inbound(part.raw.as_slice().into())
         .unwrap()
         .packet_hash()
         .is_none());
 
     // Other contexts on the same link are hashed.
     let channel = link_data_packet(&link_id, constants::CONTEXT_CHANNEL, b"channel");
-    let decoded = own_link().decode_inbound(channel.raw.clone()).unwrap();
+    let decoded = own_link()
+        .decode_inbound(channel.raw.as_slice().into())
+        .unwrap();
     assert_eq!(decoded.packet_hash(), Some(&channel.packet_hash));
 
     // A path-table route would key a reverse entry on the hash.
@@ -5158,13 +5166,13 @@ fn own_link_resource_parts_alone_skip_hashing() {
         link_id,
         PathSet::from_single(make_path_entry(1000.0, 1, InterfaceId(1), [0xAA; 16]), 1),
     );
-    let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+    let decoded = engine.decode_inbound(part.raw.as_slice().into()).unwrap();
     assert_eq!(decoded.packet_hash(), Some(&part.packet_hash));
 
     // A part for no local destination is hashed.
     let mut engine = TransportEngine::new(make_config(true));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
-    let decoded = engine.decode_inbound(part.raw.clone()).unwrap();
+    let decoded = engine.decode_inbound(part.raw.as_slice().into()).unwrap();
     assert_eq!(decoded.packet_hash(), Some(&part.packet_hash));
 }
 

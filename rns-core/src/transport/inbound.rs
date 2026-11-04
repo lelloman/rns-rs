@@ -15,7 +15,7 @@ pub struct LocalHopRewrite {
 }
 
 impl LocalHopRewrite {
-    fn hop_byte(self, packet: &RawPacket) -> u8 {
+    fn hop_byte<B: AsRef<[u8]>>(self, packet: &RawPacket<B>) -> u8 {
         if self.local_hops_delta != 0 && self.from_local_client && !self.skip_local_hops_delta {
             self.local_hops_delta
         } else {
@@ -28,17 +28,17 @@ impl LocalHopRewrite {
 ///
 /// Transport.py:1427-1504: When we receive a HEADER_2 packet with our
 /// transport_id, we forward it toward the destination using our path table.
-pub fn forward_transport_packet(
-    packet: &RawPacket,
+pub fn forward_transport_packet<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     next_hop: [u8; 16],
     remaining_hops: u8,
     _outbound_interface: InterfaceId,
 ) -> Vec<u8> {
     if remaining_hops > 1 {
         // Replace transport_id with next_hop, update hops.
-        let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+        let tail = &packet.raw.as_ref()[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
         let mut new_raw = Vec::with_capacity(2 + next_hop.len() + tail.len());
-        new_raw.push(packet.raw[0]); // flags unchanged
+        new_raw.push(packet.raw.as_ref()[0]); // flags unchanged
         new_raw.push(packet.hops); // updated hop count
         new_raw.extend_from_slice(&next_hop); // transport_id = next hop
                                               // Skip old transport_id (bytes 2..18), keep dest_hash + context + data
@@ -53,8 +53,8 @@ pub fn forward_transport_packet(
         // clients (#183).
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
-            | (packet.raw[0] & 0x0F);
-        let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+            | (packet.raw.as_ref()[0] & 0x0F);
+        let tail = &packet.raw.as_ref()[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
         let mut new_raw = Vec::with_capacity(2 + tail.len());
         new_raw.push(new_flags);
         new_raw.push(packet.hops);
@@ -63,17 +63,17 @@ pub fn forward_transport_packet(
     } else if packet.flags.header_type == constants::HEADER_1 {
         // remaining_hops == 0 for a HEADER_1 packet to a local client: there
         // is no transport header to strip, only update hops.
-        let mut new_raw = Vec::with_capacity(packet.raw.len());
-        new_raw.push(packet.raw[0]);
+        let mut new_raw = Vec::with_capacity(packet.raw.as_ref().len());
+        new_raw.push(packet.raw.as_ref()[0]);
         new_raw.push(packet.hops);
-        new_raw.extend_from_slice(&packet.raw[2..]);
+        new_raw.extend_from_slice(&packet.raw.as_ref()[2..]);
         new_raw
     } else {
         // remaining_hops == 0: final local delivery, strip transport header.
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
-            | (packet.raw[0] & 0x0F);
-        let tail = &packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+            | (packet.raw.as_ref()[0] & 0x0F);
+        let tail = &packet.raw.as_ref()[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
         let mut new_raw = Vec::with_capacity(2 + tail.len());
         new_raw.push(new_flags);
         new_raw.push(packet.hops);
@@ -124,8 +124,8 @@ pub fn clamp_forwarded_link_request_mtu(
 }
 
 /// Create a link table entry for a forwarded LINKREQUEST.
-pub fn create_link_entry(
-    packet: &RawPacket,
+pub fn create_link_entry<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     next_hop: [u8; 16],
     outbound_interface: InterfaceId,
     remaining_hops: u8,
@@ -160,8 +160,8 @@ pub fn create_link_entry(
 }
 
 /// Create a reverse table entry for proof routing.
-pub fn create_reverse_entry(
-    packet: &RawPacket,
+pub fn create_reverse_entry<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     outbound_interface: InterfaceId,
     receiving_interface: InterfaceId,
     now: f64,
@@ -180,17 +180,17 @@ pub fn create_reverse_entry(
 /// Transport.py:2090-2100: Pop the reverse entry, check that the proof
 /// arrived on the correct interface (outbound_interface), then forward
 /// it to the receiving_interface.
-pub fn route_proof_via_reverse(
-    packet: &RawPacket,
+pub fn route_proof_via_reverse<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     reverse_entry: &ReverseEntry,
     receiving_interface: InterfaceId,
     hop_rewrite: LocalHopRewrite,
 ) -> Option<TransportAction> {
     if receiving_interface == reverse_entry.outbound_interface {
-        let mut new_raw = Vec::with_capacity(packet.raw.len());
-        new_raw.push(packet.raw[0]);
+        let mut new_raw = Vec::with_capacity(packet.raw.as_ref().len());
+        new_raw.push(packet.raw.as_ref()[0]);
         new_raw.push(hop_rewrite.hop_byte(packet));
-        new_raw.extend_from_slice(&packet.raw[2..]);
+        new_raw.extend_from_slice(&packet.raw.as_ref()[2..]);
 
         Some(TransportAction::SendOnInterface {
             interface: reverse_entry.receiving_interface,
@@ -204,8 +204,8 @@ pub fn route_proof_via_reverse(
 /// Route link traffic bidirectionally through the link table.
 ///
 /// Transport.py:1514-1549.
-fn link_table_outbound_interface(
-    packet: &RawPacket,
+fn link_table_outbound_interface<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     link_entry: &LinkEntry,
     receiving_interface: InterfaceId,
 ) -> Option<InterfaceId> {
@@ -240,33 +240,33 @@ fn link_table_outbound_interface(
     Some(outbound_interface)
 }
 
-pub fn route_via_link_table(
-    packet: &RawPacket,
+pub fn route_via_link_table<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     link_entry: &LinkEntry,
     receiving_interface: InterfaceId,
     hop_rewrite: LocalHopRewrite,
 ) -> Option<(InterfaceId, Vec<u8>)> {
     let outbound_interface =
         link_table_outbound_interface(packet, link_entry, receiving_interface)?;
-    let mut new_raw = Vec::with_capacity(packet.raw.len());
-    new_raw.push(packet.raw[0]);
+    let mut new_raw = Vec::with_capacity(packet.raw.as_ref().len());
+    new_raw.push(packet.raw.as_ref()[0]);
     new_raw.push(hop_rewrite.hop_byte(packet));
-    new_raw.extend_from_slice(&packet.raw[2..]);
+    new_raw.extend_from_slice(&packet.raw.as_ref()[2..]);
 
     Some((outbound_interface, new_raw))
 }
 
 /// Build the final shared forwarding buffer directly, avoiding a temporary Vec
 /// and its subsequent conversion copy. The source packet remains unchanged.
-pub(super) fn route_via_link_table_shared(
-    packet: &RawPacket,
+pub(super) fn route_via_link_table_shared<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     link_entry: &LinkEntry,
     receiving_interface: InterfaceId,
     hop_rewrite: LocalHopRewrite,
 ) -> Option<(InterfaceId, PacketBytes)> {
     let outbound_interface =
         link_table_outbound_interface(packet, link_entry, receiving_interface)?;
-    let mut raw: PacketBytes = packet.raw.as_slice().into();
+    let mut raw: PacketBytes = packet.raw.as_ref().into();
     Arc::get_mut(&mut raw).expect("fresh forwarding buffer is uniquely owned")[1] =
         hop_rewrite.hop_byte(packet);
     Some((outbound_interface, raw))
