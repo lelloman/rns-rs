@@ -2197,7 +2197,7 @@ mod tests {
     /// taking any event, as a driver busy with other work would.
     fn serve_for(rx: &crate::event::EventReceiver, duration: Duration) {
         let deadline = Instant::now() + duration;
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         while Instant::now() < deadline {
             ready.clear();
             rx.poll_ready(&mut ready).unwrap();

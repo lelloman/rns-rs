@@ -36,6 +36,7 @@ pub mod hdlc;
 pub mod kiss;
 pub mod link_send;
 pub mod logging;
+pub(crate) mod poll;
 pub mod rnode_kiss;
 pub use common::time;
 pub mod driver;
