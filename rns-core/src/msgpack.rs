@@ -277,8 +277,8 @@ pub(crate) fn pack_str(s: &str, buf: &mut Vec<u8>) {
     buf.extend_from_slice(bytes);
 }
 
-fn pack_array(items: &[Value], buf: &mut Vec<u8>) {
-    let len = items.len();
+/// Append the header of an array of `len` items, as [`pack`] writes it.
+pub fn pack_array_header(len: usize, buf: &mut Vec<u8>) {
     if len <= 15 {
         buf.push(0x90 | len as u8);
     } else if len <= 0xFFFF {
@@ -288,13 +288,9 @@ fn pack_array(items: &[Value], buf: &mut Vec<u8>) {
         buf.push(0xdd);
         buf.extend_from_slice(&(len as u32).to_be_bytes());
     }
-    for item in items {
-        pack_into(item, buf);
-    }
 }
 
-fn pack_map(entries: &[(Value, Value)], buf: &mut Vec<u8>) {
-    let len = entries.len();
+fn pack_map_header(len: usize, buf: &mut Vec<u8>) {
     if len <= 15 {
         buf.push(0x80 | len as u8);
     } else if len <= 0xFFFF {
@@ -304,6 +300,53 @@ fn pack_map(entries: &[(Value, Value)], buf: &mut Vec<u8>) {
         buf.push(0xdf);
         buf.extend_from_slice(&(len as u32).to_be_bytes());
     }
+}
+
+/// Append binary data, as [`pack`] writes [`Value::Bin`].
+pub fn pack_bin_into(data: &[u8], buf: &mut Vec<u8>) {
+    pack_bin(data, buf);
+}
+
+/// Append a value decoded by [`unpack_ref`] exactly as [`pack`] writes the
+/// [`Value`] that [`unpack`] decodes from the same bytes.
+pub fn pack_ref_into(value: ValueRef<'_>, buf: &mut Vec<u8>) {
+    match value {
+        ValueRef::Nil => buf.push(0xc0),
+        ValueRef::Bool(true) => buf.push(0xc3),
+        ValueRef::Bool(false) => buf.push(0xc2),
+        ValueRef::UInt(v) => pack_uint(v, buf),
+        ValueRef::Int(v) => pack_int(v, buf),
+        ValueRef::Float(v) => {
+            buf.push(0xcb);
+            buf.extend_from_slice(&v.to_bits().to_be_bytes());
+        }
+        ValueRef::Bin(data) => pack_bin(data, buf),
+        ValueRef::Str(s) => pack_str(s, buf),
+        ValueRef::Array { len, .. } => {
+            pack_array_header(len, buf);
+            for item in value.array_items().into_iter().flatten() {
+                pack_ref_into(item, buf);
+            }
+        }
+        ValueRef::Map { len, .. } => {
+            pack_map_header(len, buf);
+            for (k, v) in value.map_entries().into_iter().flatten() {
+                pack_ref_into(k, buf);
+                pack_ref_into(v, buf);
+            }
+        }
+    }
+}
+
+fn pack_array(items: &[Value], buf: &mut Vec<u8>) {
+    pack_array_header(items.len(), buf);
+    for item in items {
+        pack_into(item, buf);
+    }
+}
+
+fn pack_map(entries: &[(Value, Value)], buf: &mut Vec<u8>) {
+    pack_map_header(entries.len(), buf);
     for (k, v) in entries {
         pack_into(k, buf);
         pack_into(v, buf);
@@ -745,6 +788,77 @@ fn unpack_map_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Encoded values that exercise every format, including encodings
+    /// [`pack`] never writes (float32, non-minimal integers and lengths).
+    fn encoded_corpus() -> Vec<Vec<u8>> {
+        let mut corpus: Vec<Vec<u8>> = vec![
+            vec![0xc0],
+            vec![0xc2],
+            vec![0xc3],
+            vec![0x7f],
+            vec![0xe0],
+            vec![0xcc, 0x05],
+            vec![0xcd, 0x00, 0x05],
+            vec![0xcf, 0, 0, 0, 0, 0, 0, 0, 1],
+            vec![0xd0, 0x05],
+            vec![0xd3, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00],
+            vec![0xca, 0x3f, 0x80, 0x00, 0x00],
+            vec![0xcb, 0x40, 0x09, 0x21, 0xfb, 0x54, 0x44, 0x2d, 0x18],
+            vec![0xc4, 0x02, 0xaa, 0xbb],
+            vec![0xc5, 0x00, 0x01, 0xaa],
+            vec![0xa3, b'a', b'b', b'c'],
+            vec![0xd9, 0x01, b'x'],
+            vec![0x93, 0x01, 0xc4, 0x01, 0xff, 0x92, 0xc0, 0xa1, b'k'],
+            vec![0xdc, 0x00, 0x02, 0xc3, 0xc2],
+            vec![
+                0x82, 0xa1, b'a', 0x01, 0xa1, b'a', 0x92, 0x02, 0xca, 0, 0, 0, 0,
+            ],
+            vec![0xde, 0x00, 0x01, 0x01, 0x80],
+        ];
+        corpus.push(pack(&Value::Array(vec![
+            Value::Float(1.5),
+            Value::Bin(vec![7; 300]),
+            Value::Str("s".repeat(40)),
+            Value::Array((0..20).map(Value::UInt).collect()),
+            Value::Map((0..20).map(|i| (Value::Int(-i), Value::Nil)).collect()),
+        ])));
+        corpus
+    }
+
+    #[test]
+    fn packing_a_borrowed_value_matches_packing_its_owned_form() {
+        let mut inputs = encoded_corpus();
+        // Plus every prefix and one-byte corruption of the corpus, so the
+        // accepted set is wide and the rejected one is checked to agree.
+        let mut extra = Vec::new();
+        for input in &inputs {
+            for end in 0..input.len() {
+                extra.push(input[..end].to_vec());
+            }
+            for i in 0..input.len() {
+                for byte in [0x00, 0x7f, 0x90, 0xc4, 0xca, 0xdc, 0xff] {
+                    let mut corrupt = input.clone();
+                    corrupt[i] = byte;
+                    extra.push(corrupt);
+                }
+            }
+        }
+        inputs.extend(extra);
+        let mut accepted = 0;
+        for input in &inputs {
+            let owned = unpack_exact(input);
+            let borrowed = unpack_exact_ref(input);
+            assert_eq!(owned.is_ok(), borrowed.is_ok(), "{input:02x?}");
+            if let (Ok(owned), Ok(borrowed)) = (owned, borrowed) {
+                let mut packed = Vec::new();
+                pack_ref_into(borrowed, &mut packed);
+                assert_eq!(packed, pack(&owned), "{input:02x?}");
+                accepted += 1;
+            }
+        }
+        assert!(accepted > 100);
+    }
 
     fn roundtrip(v: &Value) -> Value {
         let packed = pack(v);

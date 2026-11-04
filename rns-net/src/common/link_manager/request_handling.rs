@@ -9,23 +9,25 @@ impl LinkManager {
         request_id: [u8; 16],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        use rns_core::msgpack::{self, Value};
+        use rns_core::msgpack::{self, ValueRef};
 
         // Python-compatible format: msgpack([timestamp, Bin(path_hash), data_value])
-        let arr = match msgpack::unpack_exact(plaintext) {
-            Ok(Value::Array(arr)) if arr.len() >= 3 => arr,
+        let request = match msgpack::unpack_exact_ref(plaintext) {
+            Ok(request @ ValueRef::Array { len, .. }) if len >= 3 => request,
             _ => return Vec::new(),
         };
-
-        let path_hash_bytes = match &arr[1] {
-            Value::Bin(b) if b.len() == 16 => b,
-            _ => return Vec::new(),
+        let mut items = request.array_items().into_iter().flatten().skip(1);
+        let (Some(ValueRef::Bin(path_hash_bytes)), Some(data_value)) = (items.next(), items.next())
+        else {
+            return Vec::new();
         };
-        let mut path_hash = [0u8; 16];
-        path_hash.copy_from_slice(path_hash_bytes);
+        let Ok(path_hash) = <[u8; 16]>::try_from(path_hash_bytes) else {
+            return Vec::new();
+        };
 
         // Re-encode the data element for the handler
-        let request_data = msgpack::pack(&arr[2]);
+        let mut request_data = Vec::with_capacity(plaintext.len());
+        msgpack::pack_ref_into(data_value, &mut request_data);
 
         // Check if this is a management path (handled by the driver)
         if self.management_paths.contains(&path_hash) {
@@ -164,13 +166,7 @@ impl LinkManager {
         response_data: &[u8],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        use rns_core::msgpack::{self, Value};
-
-        let response_value = msgpack::unpack_exact(response_data)
-            .unwrap_or_else(|_| Value::Bin(response_data.to_vec()));
-
-        let response_array = Value::Array(vec![Value::Bin(request_id.to_vec()), response_value]);
-        let response_plaintext = msgpack::pack(&response_array);
+        let response_plaintext = pack_response(request_id, response_data);
 
         let mut actions = Vec::new();
         if let Some(link) = self.links.get(link_id) {
@@ -212,12 +208,7 @@ impl LinkManager {
         auto_compress: bool,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        use rns_core::msgpack::{self, Value};
-
-        let response_value = msgpack::unpack_exact(response_data)
-            .unwrap_or_else(|_| Value::Bin(response_data.to_vec()));
-        let response_array = Value::Array(vec![Value::Bin(request_id.to_vec()), response_value]);
-        let resource_payload = msgpack::pack(&response_array);
+        let resource_payload = pack_response(request_id, response_data);
         self.send_file_response_resource(
             link_id,
             request_id,
@@ -340,7 +331,7 @@ impl LinkManager {
         max_response_size: Option<usize>,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        use rns_core::msgpack::{self, Value};
+        use rns_core::msgpack::{self, ValueRef};
 
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
@@ -353,16 +344,13 @@ impl LinkManager {
 
         let path_hash = compute_path_hash(path);
 
-        // Decode data bytes to msgpack Value (or use Bin if can't decode)
-        let data_value = msgpack::unpack_exact(data).unwrap_or_else(|_| Value::Bin(data.to_vec()));
-
-        // Python-compatible format: msgpack([timestamp, Bin(path_hash), data_value])
-        let request_array = Value::Array(vec![
-            Value::Float(time::now()),
-            Value::Bin(path_hash.to_vec()),
-            data_value,
-        ]);
-        let plaintext = msgpack::pack(&request_array);
+        // Python-compatible format: msgpack([timestamp, Bin(path_hash), data_value]),
+        // with the data as the msgpack it holds, or as Bin if it holds none.
+        let mut plaintext = Vec::with_capacity(data.len() + 32);
+        msgpack::pack_array_header(3, &mut plaintext);
+        msgpack::pack_ref_into(ValueRef::Float(time::now()), &mut plaintext);
+        msgpack::pack_bin_into(&path_hash, &mut plaintext);
+        pack_msgpack_or_bin(data, &mut plaintext);
 
         if plaintext.len() > link.engine.mdu() {
             let request_id = rns_core::hash::truncated_hash(&plaintext);
@@ -456,22 +444,18 @@ impl LinkManager {
         use rns_core::msgpack;
 
         // Python-compatible packet response: msgpack([Bin(request_id), response_value]).
-        let packet_response = msgpack::unpack_exact(plaintext).ok().and_then(|value| {
-            let msgpack::Value::Array(arr) = value else {
+        let packet_response = msgpack::unpack_exact_ref(plaintext).ok().and_then(|value| {
+            let msgpack::ValueRef::Array { len, .. } = value else {
                 return None;
             };
-            if arr.len() < 2 {
+            if len < 2 {
                 return None;
             }
-            let msgpack::Value::Bin(request_id_bytes) = &arr[0] else {
-                return None;
-            };
-            if request_id_bytes.len() != 16 {
-                return None;
-            }
-            let mut request_id = [0u8; 16];
-            request_id.copy_from_slice(request_id_bytes);
-            Some((request_id, msgpack::pack(&arr[1])))
+            let mut items = value.array_items()?;
+            let request_id = <[u8; 16]>::try_from(items.next()?.as_bin()?).ok()?;
+            let mut response_data = Vec::with_capacity(plaintext.len());
+            msgpack::pack_ref_into(items.next()?, &mut response_data);
+            Some((request_id, response_data))
         });
 
         let (request_id, response_data, check_size) = match packet_response {
@@ -480,11 +464,9 @@ impl LinkManager {
                 let Some(request_id) = resource_request_id else {
                     return Vec::new();
                 };
-                (
-                    request_id,
-                    msgpack::pack(&msgpack::Value::Bin(plaintext.to_vec())),
-                    false,
-                )
+                let mut response_data = Vec::with_capacity(plaintext.len() + 5);
+                msgpack::pack_bin_into(plaintext, &mut response_data);
+                (request_id, response_data, false)
             }
         };
 
@@ -537,4 +519,22 @@ impl LinkManager {
         out.copy_from_slice(bytes);
         Some(out)
     }
+}
+
+/// Append `data` as the msgpack value it holds, or as Bin if it holds none.
+fn pack_msgpack_or_bin(data: &[u8], buf: &mut Vec<u8>) {
+    use rns_core::msgpack;
+    match msgpack::unpack_exact_ref(data) {
+        Ok(value) => msgpack::pack_ref_into(value, buf),
+        Err(_) => msgpack::pack_bin_into(data, buf),
+    }
+}
+
+/// Python-compatible response: msgpack([Bin(request_id), response_value]).
+fn pack_response(request_id: &[u8; 16], response_data: &[u8]) -> Vec<u8> {
+    let mut packed = Vec::with_capacity(response_data.len() + 24);
+    rns_core::msgpack::pack_array_header(2, &mut packed);
+    rns_core::msgpack::pack_bin_into(request_id, &mut packed);
+    pack_msgpack_or_bin(response_data, &mut packed);
+    packed
 }
