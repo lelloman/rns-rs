@@ -111,7 +111,7 @@ pub(crate) struct LoopWriter {
     /// Confirmed sends, completed once their last byte is written.
     completions: VecDeque<(u64, Completion)>,
     metrics: AsyncWriterMetrics,
-    poller: Arc<polling::Poller>,
+    poller: Arc<crate::poll::Poller>,
     key: usize,
     registered: bool,
     want_writable: bool,
@@ -147,7 +147,7 @@ pub(crate) fn wrap(
     let key = write_key(interface_id);
     // SAFETY: `fd` is owned by `inner`, which outlives the registration:
     // `Drop` deletes it before the fields (and the socket) are dropped.
-    let registered = match unsafe { poller.add(fd, polling::Event::none(key)) } {
+    let registered = match unsafe { poller.add(fd, crate::poll::Event::none(key)) } {
         Ok(()) => true,
         Err(error) => {
             log::warn!(
@@ -413,9 +413,9 @@ impl LoopWriter {
             return;
         }
         let interest = if want {
-            polling::Event::writable(self.key)
+            crate::poll::Event::writable(self.key)
         } else {
-            polling::Event::none(self.key)
+            crate::poll::Event::none(self.key)
         };
         // SAFETY: the descriptor stays open while registered (see `wrap`).
         let source = unsafe { BorrowedFd::borrow_raw(self.fd) };
@@ -633,7 +633,7 @@ mod tests {
         metrics: AsyncWriterMetrics,
         peer: TcpStream,
         rx: crate::event::EventReceiver,
-        poller: Arc<polling::Poller>,
+        poller: Arc<crate::poll::Poller>,
     }
 
     fn fixture(send_buffer: Option<usize>) -> Fixture {
@@ -763,7 +763,7 @@ mod tests {
 
         let expected = crate::hdlc::frame(&payload);
         let mut received = Vec::new();
-        let mut events = polling::Events::new();
+        let mut events = crate::poll::Events::new();
         f.peer
             .set_read_timeout(Some(Duration::from_millis(20)))
             .unwrap();
@@ -816,7 +816,7 @@ mod tests {
         let expected_len = admitted * crate::hdlc::frame(&frame).len();
         let reader = std::thread::spawn(move || read_exact(&mut f.peer, expected_len).len());
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut events = polling::Events::new();
+        let mut events = crate::poll::Events::new();
         while f.metrics.queued_frames() > 0 {
             assert!(Instant::now() < deadline, "buffer never drained");
             events.clear();

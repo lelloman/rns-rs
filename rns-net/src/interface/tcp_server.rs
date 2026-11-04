@@ -995,7 +995,7 @@ mod tests {
     }
 
     fn serve_pass(rx: &crate::event::EventReceiver) {
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         rx.wait(&mut ready, Some(Duration::from_millis(50)))
             .unwrap();
         rx.serve_sources(&ready);

@@ -263,10 +263,10 @@ struct QueueShared {
     changed: Condvar,
     /// The receiver can wait here instead of on `changed`, together with any
     /// sources registered on it. Producers wake it with `Poller::notify`.
-    poller: Arc<polling::Poller>,
+    poller: Arc<crate::poll::Poller>,
     /// How sources are watched: level-triggered where the poller supports it,
     /// so a source that keeps reading costs no re-arm per event.
-    source_mode: polling::PollMode,
+    source_mode: crate::poll::PollMode,
     sources: Mutex<SourceRegistry>,
     sender_count: AtomicUsize,
     control_capacity: usize,
@@ -314,8 +314,11 @@ impl QueueShared {
         // SAFETY: the source owns the descriptor and is deleted from the
         // poller before it is dropped (see `remove_source`).
         if let Err(error) = unsafe {
-            self.poller
-                .add_with_mode(source.fd(), polling::Event::readable(key), self.source_mode)
+            self.poller.add_with_mode(
+                source.fd(),
+                crate::poll::Event::readable(key),
+                self.source_mode,
+            )
         } {
             return Err((error, source));
         }
@@ -349,7 +352,7 @@ impl QueueShared {
     /// Stop watching a source that stays registered. A oneshot source is
     /// already unwatched after its event.
     fn disarm_source(&self, key: usize, source: &dyn LoopSource) {
-        if self.source_mode == polling::PollMode::Oneshot {
+        if self.source_mode == crate::poll::PollMode::Oneshot {
             return;
         }
         // SAFETY: the source owns its descriptor while registered.
@@ -366,9 +369,9 @@ impl QueueShared {
         readable: bool,
     ) -> std::io::Result<()> {
         let interest = if readable {
-            polling::Event::readable(key)
+            crate::poll::Event::readable(key)
         } else {
-            polling::Event::none(key)
+            crate::poll::Event::none(key)
         };
         self.poller.modify_with_mode(fd, interest, self.source_mode)
     }
@@ -468,7 +471,7 @@ impl Drop for EventSender {
 impl EventSender {
     /// The poller the receiver waits in; sources registered on it wake the
     /// receiver like a queued event does.
-    pub(crate) fn poller(&self) -> &Arc<polling::Poller> {
+    pub(crate) fn poller(&self) -> &Arc<crate::poll::Poller> {
         &self.shared.poller
     }
 
@@ -939,7 +942,7 @@ impl EventReceiver {
     /// already waiting.
     pub(crate) fn wait(
         &self,
-        ready: &mut polling::Events,
+        ready: &mut crate::poll::Events,
         timeout: Option<Duration>,
     ) -> std::io::Result<()> {
         if self.has_prefetched() {
@@ -975,7 +978,7 @@ impl EventReceiver {
     /// that still has queued events: sources must not starve while other
     /// threads keep the queue busy. Suspended sources resume only once
     /// inbound data has room again.
-    pub(crate) fn poll_ready(&self, ready: &mut polling::Events) -> std::io::Result<()> {
+    pub(crate) fn poll_ready(&self, ready: &mut crate::poll::Events) -> std::io::Result<()> {
         let room = {
             let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
             self.shared.data_has_room(&state)
@@ -1009,7 +1012,7 @@ impl EventReceiver {
 
     /// Serve the loop sources `ready` reports readable. Keys of other kinds
     /// (the driver's writers) are left to the caller.
-    pub(crate) fn serve_sources(&self, ready: &polling::Events) {
+    pub(crate) fn serve_sources(&self, ready: &crate::poll::Events) {
         let mut registry = self
             .shared
             .sources
@@ -1034,7 +1037,7 @@ impl EventReceiver {
             let status = source.on_ready(&mut cx);
             match status {
                 SourceStatus::Rearm => {
-                    if self.shared.source_mode == polling::PollMode::Oneshot {
+                    if self.shared.source_mode == crate::poll::PollMode::Oneshot {
                         self.shared.arm_source(event.key, source.as_ref());
                     }
                 }
@@ -1143,7 +1146,7 @@ impl EventReceiver {
     /// Blocking receive. While waiting it serves loop sources, so any
     /// receiver drives the sockets registered on the queue.
     pub(crate) fn recv_classified(&self) -> Result<ReceivedEvent, std::sync::mpsc::RecvError> {
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         loop {
             if let Some(event) = self.try_recv_classified()? {
                 return Ok(event);
@@ -1181,7 +1184,7 @@ impl EventReceiver {
             return Ok(event.event);
         }
         let deadline = Instant::now() + timeout;
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         loop {
             match self.try_recv_classified() {
                 Ok(Some(event)) => return Ok(event.event),
@@ -1219,11 +1222,11 @@ pub(crate) fn channel_with_queue_capacities(
     control_capacity: usize,
     inbound_capacities: InboundQueueCapacities,
 ) -> (EventSender, EventReceiver) {
-    let poller = Arc::new(polling::Poller::new().expect("create the driver event poller"));
+    let poller = Arc::new(crate::poll::Poller::new().expect("create the driver event poller"));
     let source_mode = if poller.supports_level() {
-        polling::PollMode::Level
+        crate::poll::PollMode::Level
     } else {
-        polling::PollMode::Oneshot
+        crate::poll::PollMode::Oneshot
     };
     let shared = Arc::new(QueueShared {
         local_ratchets: Default::default(),
@@ -1684,7 +1687,7 @@ mod tests {
     ) -> std::sync::mpsc::Receiver<(EventReceiver, std::io::Result<()>)> {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut ready = polling::Events::new();
+            let mut ready = crate::poll::Events::new();
             let result = rx.wait(&mut ready, timeout);
             let _ = done_tx.send((rx, result));
         });
@@ -1777,7 +1780,7 @@ mod tests {
         tx.send(Event::Tick).unwrap();
         peer.write_all(&[1, 2, 3]).unwrap();
         // The queue is not empty, so `wait` would return without polling.
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         rx.poll_ready(&mut ready).unwrap();
         rx.serve_sources(&ready);
         assert_eq!(*events.lock().unwrap(), ["read"]);
@@ -1918,7 +1921,7 @@ mod tests {
     }
 
     fn serve_once(rx: &EventReceiver) {
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         rx.wait(&mut ready, Some(Duration::from_millis(20)))
             .unwrap();
         rx.serve_sources(&ready);
@@ -1933,7 +1936,7 @@ mod tests {
         // Still readable, but neither waiting (which resumes suspended
         // sources) nor polling serves it while paused.
         serve_once(&rx);
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         rx.poll_ready(&mut ready).unwrap();
         rx.serve_sources(&ready);
         rx.sweep_stopped_sources();
@@ -2017,7 +2020,7 @@ mod tests {
     fn wait_returns_at_once_when_events_are_queued() {
         let (tx, rx) = channel();
         tx.send(Event::Tick).unwrap();
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         rx.wait(&mut ready, None).unwrap();
         assert!(matches!(
             rx.try_recv_classified().unwrap().map(|r| r.event),
@@ -2079,15 +2082,18 @@ mod tests {
         result.unwrap();
         assert!(rx.try_recv_classified().is_err());
         // Waiting again once disconnected returns immediately.
-        rx.wait(&mut polling::Events::new(), None).unwrap();
+        rx.wait(&mut crate::poll::Events::new(), None).unwrap();
     }
 
     #[test]
     fn wait_times_out_without_events() {
         let (_tx, rx) = channel();
         let started = std::time::Instant::now();
-        rx.wait(&mut polling::Events::new(), Some(Duration::from_millis(30)))
-            .unwrap();
+        rx.wait(
+            &mut crate::poll::Events::new(),
+            Some(Duration::from_millis(30)),
+        )
+        .unwrap();
         assert!(started.elapsed() >= Duration::from_millis(25));
         assert!(rx.try_recv_classified().unwrap().is_none());
     }
@@ -2107,7 +2113,7 @@ mod tests {
             })
             .collect();
         drop(tx);
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         let mut received = 0;
         loop {
             match rx.try_recv_classified() {

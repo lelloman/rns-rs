@@ -1054,7 +1054,7 @@ impl Driver {
     pub fn run(&mut self) {
         self.link_manager
             .set_receive_worker_wake(self.event_tx.clone());
-        let mut ready = polling::Events::new();
+        let mut ready = crate::poll::Events::new();
         // Events handled since driver-run writers were last flushed.
         let mut unflushed = 0usize;
         loop {
