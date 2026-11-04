@@ -204,7 +204,7 @@ Every commit in the audited range must appear exactly once.
 | 42 | `8a09c9b550b761d8d7a9b471125e23ca5bff1d9b` | Fixed pragma ordering | Integrated | `SqliteAnnounceCache::open` sets `auto_vacuum=INCREMENTAL` before WAL, converts an existing `NONE` cache once with `VACUUM` (rns-rs addition), and `clean` steps `incremental_vacuum` to completion; `sqlite_cache_uses_incremental_vacuum_and_reclaims_cleaned_pages`, `sqlite_cache_created_with_the_old_pragma_order_is_converted_once` |
 | 43 | `ceac4a28bd45956f8b5d6c1b4834be48d0724bf9` | Disabled statement caching, fetch under lock | Structurally covered | Mapping commit; both SQLite stores hold their connection in a `Mutex<Connection>`, so every read already runs under the lock that flushes take, and neither uses `prepare_cached` |
 | 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Non-runtime | Mapping commit; removes a stale locking comment from `remember_ratchet` |
-| 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Needs port | |
+| 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Structurally covered | Mapping commit; the Unix and TCP RPC accept loops log a failed `accept` and continue, and an accepted stream closes on drop, so there is no unset connection to close |
 
 ## Per-Commit Analysis
 
@@ -1758,6 +1758,22 @@ which commit 43 made stale by taking the store's own lock for the read.
 **Rust applicability:** Non-runtime; a comment only.
 
 **Final disposition:** Non-runtime; mapping only.
+
+### 45. `53dc223a` — Fixed RPC error handling
+
+**Upstream change** (`RNS/Reticulum.py`): `rpc_loop` sets `conn = None`
+before `accept` and closes it in `finally` only when set. Before, a failed
+`accept` left `conn` unbound on the first pass (or bound to the previous,
+already closed connection), so the `finally` raised and ended the RPC
+thread, after which local clients could no longer query the shared instance.
+
+**Rust applicability:** Structurally covered. The Unix and TCP RPC accept
+loops (`rpc_server_loop_unix` and the TCP loop in `rpc.rs`) match on
+`accept()`: an error is logged, the loop sleeps 100 ms and continues, and an
+accepted stream is closed by its drop when its handler returns. There is no
+connection to close after a failed accept.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
