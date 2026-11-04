@@ -21,7 +21,7 @@ fn extract_send_packet(actions: &[LinkManagerAction]) -> Vec<u8> {
     actions
         .iter()
         .find_map(|action| match action {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .expect("expected SendPacket action")
@@ -29,7 +29,7 @@ fn extract_send_packet(actions: &[LinkManagerAction]) -> Vec<u8> {
 
 fn extract_send_packet_at(actions: &[LinkManagerAction], index: usize) -> Vec<u8> {
     match &actions[index] {
-        LinkManagerAction::SendPacket { raw, .. } => raw.clone(),
+        LinkManagerAction::SendPacket { raw, .. } => raw.to_vec(),
         _ => panic!("expected SendPacket at index {index}"),
     }
 }

@@ -105,7 +105,7 @@ impl LinkManager {
                                     .insert(packet_hash, sequence);
                             }
                             result.push(LinkManagerAction::SendPacket {
-                                raw: raw_bytes,
+                                raw: raw_bytes.into(),
                                 dest_type: constants::DESTINATION_LINK,
                                 attached_interface: None,
                             });

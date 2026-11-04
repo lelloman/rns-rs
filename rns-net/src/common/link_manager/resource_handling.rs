@@ -1517,14 +1517,17 @@ impl LinkManager {
                         destination_type: constants::DESTINATION_LINK,
                         packet_type: constants::PACKET_TYPE_PROOF,
                     };
-                    if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
-                        flags,
-                        0,
-                        link_id,
-                        None,
-                        constants::CONTEXT_RESOURCE_PRF,
-                        &data,
-                    ) {
+                    if let Ok((raw, _packet_hash)) =
+                        RawPacket::pack_raw_shared_with_hash_with_max_mtu(
+                            flags,
+                            0,
+                            link_id,
+                            None,
+                            constants::CONTEXT_RESOURCE_PRF,
+                            &data,
+                            constants::MTU,
+                        )
+                    {
                         out.push(LinkManagerAction::SendPacket {
                             raw,
                             dest_type: constants::DESTINATION_LINK,
@@ -1633,7 +1636,7 @@ impl LinkManager {
             .map(|l| l.engine.mtu() as usize)
             .unwrap_or(constants::MTU);
         if let Ok(raw) =
-            RawPacket::pack_raw_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
+            RawPacket::pack_raw_shared_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
         {
             out.push(LinkManagerAction::SendPacket {
                 raw,

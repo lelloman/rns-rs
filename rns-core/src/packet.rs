@@ -1,7 +1,33 @@
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
 use crate::constants;
+use crate::transport::types::PacketBytes;
+
+/// Storage for a packet's wire bytes that can hand them over as shared
+/// [`PacketBytes`]: shared bytes are cloned, anything else is copied.
+pub trait PacketStorage: AsRef<[u8]> {
+    fn to_shared(&self) -> PacketBytes;
+}
+
+impl PacketStorage for Vec<u8> {
+    fn to_shared(&self) -> PacketBytes {
+        PacketBytes::from(self.as_slice())
+    }
+}
+
+impl PacketStorage for &[u8] {
+    fn to_shared(&self) -> PacketBytes {
+        PacketBytes::from(*self)
+    }
+}
+
+impl PacketStorage for Arc<[u8]> {
+    fn to_shared(&self) -> PacketBytes {
+        self.clone()
+    }
+}
 
 #[derive(Debug)]
 pub enum PacketError {
@@ -221,6 +247,78 @@ impl RawPacket {
 
     /// Pack only wire bytes when the caller does not need a packet hash.
     /// Validation and encoding match the hash-producing packing methods.
+    /// [`RawPacket::pack_raw_with_hash_with_max_mtu`] into shared bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_raw_shared_with_hash_with_max_mtu(
+        flags: PacketFlags,
+        hops: u8,
+        destination_hash: &[u8; 16],
+        transport_id: Option<&[u8; 16]>,
+        context: u8,
+        data: &[u8],
+        max_mtu: usize,
+    ) -> Result<(PacketBytes, [u8; 32]), PacketError> {
+        let raw = Self::pack_raw_shared_with_max_mtu(
+            flags,
+            hops,
+            destination_hash,
+            transport_id,
+            context,
+            data,
+            max_mtu,
+        )?;
+        let packet_hash = Self::compute_packet_hash(flags.header_type, &raw);
+        Ok((raw, packet_hash))
+    }
+
+    /// [`RawPacket::pack_raw_with_max_mtu`] into shared bytes, allocated once
+    /// at their final size, for packets that are routed and sent as they are.
+    pub fn pack_raw_shared_with_max_mtu(
+        flags: PacketFlags,
+        hops: u8,
+        destination_hash: &[u8; 16],
+        transport_id: Option<&[u8; 16]>,
+        context: u8,
+        data: &[u8],
+        max_mtu: usize,
+    ) -> Result<PacketBytes, PacketError> {
+        if flags.header_type == constants::HEADER_2 && transport_id.is_none() {
+            return Err(PacketError::MissingTransportId);
+        }
+        let transport_id = transport_id.filter(|_| flags.header_type == constants::HEADER_2);
+        let len =
+            2 + transport_id.map_or(0, |id| id.len()) + destination_hash.len() + 1 + data.len();
+        if len > max_mtu {
+            return Err(PacketError::ExceedsMtu);
+        }
+        let mut shared = Arc::<[u8]>::new_uninit_slice(len);
+        let out = Arc::get_mut(&mut shared).expect("a new Arc is unique");
+        let mut at = 0;
+        let mut put = |bytes: &[u8]| {
+            let slots = &mut out[at..at + bytes.len()];
+            // SAFETY: `slots` is in bounds and exactly `bytes.len()` long; u8
+            // and MaybeUninit<u8> share a layout.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    slots.as_mut_ptr().cast::<u8>(),
+                    bytes.len(),
+                )
+            };
+            at += bytes.len();
+        };
+        put(&[flags.pack(), hops]);
+        if let Some(transport_id) = transport_id {
+            put(transport_id);
+        }
+        put(destination_hash);
+        put(&[context]);
+        put(data);
+        assert_eq!(at, len);
+        // SAFETY: every one of the `len` bytes was written above.
+        Ok(unsafe { shared.assume_init() })
+    }
+
     pub fn pack_raw_with_max_mtu(
         flags: PacketFlags,
         hops: u8,
@@ -281,6 +379,15 @@ impl RawPacket {
     /// it (see [`RawPacket::is_link_resource_part`]).
     pub fn unpack_outbound(raw: Vec<u8>) -> Result<Self, PacketError> {
         let mut packet = Self::unpack_unhashed(raw)?;
+        if !packet.is_link_resource_part() {
+            packet.hash_in_place();
+        }
+        Ok(packet)
+    }
+
+    /// [`RawPacket::unpack_outbound`] for shared bytes, kept as they are.
+    pub fn unpack_outbound_shared(raw: PacketBytes) -> Result<RawPacket<PacketBytes>, PacketError> {
+        let mut packet = RawPacket::<PacketBytes>::parse::<false>(raw)?;
         if !packet.is_link_resource_part() {
             packet.hash_in_place();
         }
@@ -718,6 +825,50 @@ mod tests {
             request
         )
         .is_unproven_link_data());
+    }
+
+    #[test]
+    fn shared_packing_matches_owned_packing_and_unpacks_alike() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let header2 = PacketFlags {
+            header_type: constants::HEADER_2,
+            ..flags
+        };
+        let dest = [0x11; 16];
+        let tid = [0x22; 16];
+        for (flags, tid) in [(flags, None), (flags, Some(&tid)), (header2, Some(&tid))] {
+            for len in [1usize, 2, 15, 16, 400, 465] {
+                let data: Vec<u8> = (0..len).map(|i| i as u8).collect();
+                for mtu in [len + 18, len + 35, 500] {
+                    let owned =
+                        RawPacket::pack_raw_with_max_mtu(flags, 3, &dest, tid, 0x07, &data, mtu);
+                    let shared = RawPacket::pack_raw_shared_with_max_mtu(
+                        flags, 3, &dest, tid, 0x07, &data, mtu,
+                    );
+                    match (owned, shared) {
+                        (Ok(owned), Ok(shared)) => {
+                            assert_eq!(&owned[..], &shared[..]);
+                            let a = RawPacket::unpack_outbound(owned).unwrap();
+                            let b = RawPacket::unpack_outbound_shared(shared).unwrap();
+                            assert_eq!(a.packet_hash, b.packet_hash);
+                            assert_eq!(a.data(), b.data());
+                        }
+                        (Err(PacketError::ExceedsMtu), Err(PacketError::ExceedsMtu)) => {}
+                        other => panic!("diverged: {other:?}"),
+                    }
+                }
+            }
+        }
+        assert!(matches!(
+            RawPacket::pack_raw_shared_with_max_mtu(header2, 0, &dest, None, 0, &[1], 500),
+            Err(PacketError::MissingTransportId)
+        ));
     }
 
     #[test]

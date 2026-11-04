@@ -1679,7 +1679,7 @@ impl Driver {
                 } => {
                     // Take the bytes instead of copying them; a resource part
                     // is not hashed, since nothing reads its hash.
-                    let mut decoded = RawPacket::unpack_outbound(raw);
+                    let mut decoded = RawPacket::unpack_outbound_shared(raw);
                     if dest_type == rns_core::constants::DESTINATION_LINK
                         && attached_interface.is_none()
                     {
@@ -1695,7 +1695,7 @@ impl Driver {
                                         // Reparse only when routing changed the wire header,
                                         // releasing the old payload copies first.
                                         drop(decoded);
-                                        decoded = RawPacket::unpack_outbound(raw);
+                                        decoded = RawPacket::unpack_outbound_shared(raw.into());
                                         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                             "Link SendPacket rewrite: link={:02x?} iface={} header=1->2 tid={:02x?}",
                                             &link_id[..4],
