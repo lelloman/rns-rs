@@ -767,6 +767,8 @@ pub struct Driver {
     >,
     /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
     pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
+    /// Reused transport action buffers (see [`crate::action_pool`]).
+    pub(crate) transport_actions: crate::action_pool::ActionPool<TransportAction>,
     /// Completed proofs for probe polling: packet_hash → (rtt_seconds, received_time).
     pub(crate) completed_proofs: HashMap<[u8; 32], (f64, f64)>,
     /// Locally registered destinations: hash → dest_type.
@@ -1019,6 +1021,7 @@ impl Driver {
             path_request_dest,
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
+            transport_actions: crate::action_pool::ActionPool::new(),
             completed_proofs: HashMap::new(),
             local_destinations,
             shared_announces: HashMap::new(),

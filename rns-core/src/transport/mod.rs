@@ -38,7 +38,7 @@ use self::inbound::{
     forward_transport_packet, route_proof_via_reverse, route_via_link_table, LocalHopRewrite,
 };
 use self::ingress_control::IngressControl;
-use self::outbound::{route_outbound_with_options, should_transmit_announce, OutboundRouteOptions};
+use self::outbound::{route_outbound_into, should_transmit_announce, OutboundRouteOptions};
 use self::pathfinder::{
     extract_random_blob, timebase_from_random_blob, trusted_timebase_from_random_blobs,
     MultiPathDecision,

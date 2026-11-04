@@ -9,8 +9,23 @@ impl TransportEngine {
         attached_interface: Option<InterfaceId>,
         now: f64,
     ) -> Vec<TransportAction> {
+        let mut actions = Vec::new();
+        self.handle_outbound_into(packet, dest_type, attached_interface, now, &mut actions);
+        actions
+    }
+
+    /// [`Self::handle_outbound`], appending the actions to `actions` so a
+    /// caller can reuse one buffer across packets.
+    pub fn handle_outbound_into(
+        &mut self,
+        packet: &RawPacket,
+        dest_type: u8,
+        attached_interface: Option<InterfaceId>,
+        now: f64,
+        actions: &mut Vec<TransportAction>,
+    ) {
         if packet.hops >= constants::PATHFINDER_M {
-            return Vec::new();
+            return;
         }
 
         let uses_path = packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
@@ -25,7 +40,8 @@ impl TransportEngine {
             }
         }
 
-        let actions = route_outbound_with_options(
+        let start = actions.len();
+        route_outbound_into(
             &self.path_table,
             &self.interfaces,
             &self.local_destinations,
@@ -36,6 +52,7 @@ impl TransportEngine {
                 identity_hash: self.config.identity_hash,
                 local_hops_delta: self.config.local_hops_delta,
             },
+            actions,
         );
 
         // Add to packet hashlist for outbound packets. A link resource part is
@@ -46,9 +63,10 @@ impl TransportEngine {
 
         // Gate announces with hops > 0 through the bandwidth queue
         if packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE && packet.hops > 0 {
-            self.gate_announce_actions(actions, &packet.destination_hash, packet.hops, now)
-        } else {
-            actions
+            let routed: Vec<TransportAction> = actions.drain(start..).collect();
+            let gated =
+                self.gate_announce_actions(routed, &packet.destination_hash, packet.hops, now);
+            actions.extend(gated);
         }
     }
 

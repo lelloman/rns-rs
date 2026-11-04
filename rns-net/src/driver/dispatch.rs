@@ -1053,7 +1053,7 @@ impl Driver {
     /// packet hooks run only at depth 0.
     fn dispatch_actions_at_depth(
         &mut self,
-        actions: Vec<TransportAction>,
+        mut actions: Vec<TransportAction>,
         ingress_limited: bool,
         depth: usize,
     ) {
@@ -1063,7 +1063,7 @@ impl Driver {
         #[cfg(not(feature = "hooks"))]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
-        for action in actions {
+        for action in actions.drain(..) {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
                     self.dispatch_send_on_interface_action_with_hooks(
@@ -1645,6 +1645,7 @@ impl Driver {
                 }
             }
         }
+        self.transport_actions.give(actions);
 
         // Dispatch any actions injected by hooks during action processing
         #[cfg(feature = "hooks")]
@@ -1729,11 +1730,13 @@ impl Driver {
                                     (packet.destination_hash, time::now()),
                                 );
                             }
-                            let transport_actions = self.engine.handle_outbound(
+                            let mut transport_actions = self.transport_actions.take();
+                            self.engine.handle_outbound_into(
                                 &packet,
                                 dest_type,
                                 attached_interface,
                                 time::now(),
+                                &mut transport_actions,
                             );
                             self.dispatch_all(transport_actions);
                         }

@@ -30,6 +30,7 @@
 #[cfg(feature = "hooks")]
 extern crate rns_hooks_crate as rns_hooks;
 
+mod action_pool;
 pub mod common;
 pub mod event;
 pub mod hdlc;
