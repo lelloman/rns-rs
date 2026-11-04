@@ -2375,6 +2375,7 @@ dependencies = [
  "ed25519-dalek",
  "esp-idf-sys",
  "hmac",
+ "libc",
  "serde_json",
  "sha2 0.11.1",
  "x25519-dalek",

@@ -45,7 +45,9 @@ impl Rng for FixedRng {
     }
 }
 
-/// OS-backed RNG using getrandom(2) syscall on Linux.
+/// OS-backed RNG: the kernel's generator through getrandom(3) on Linux
+/// (served without a system call where the C library and kernel support it),
+/// `/dev/urandom` elsewhere, the hardware RNG on ESP-IDF.
 #[cfg(feature = "std")]
 pub struct OsRng;
 
@@ -62,7 +64,23 @@ impl Rng for OsRng {
                 );
             }
         }
-        #[cfg(not(target_os = "espidf"))]
+        #[cfg(target_os = "linux")]
+        {
+            let mut rest = dest;
+            while !rest.is_empty() {
+                // SAFETY: `rest` is valid for writes of `rest.len()` bytes.
+                let n = unsafe { libc::getrandom(rest.as_mut_ptr().cast(), rest.len(), 0) };
+                if n < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    panic!("getrandom failed: {error}");
+                }
+                rest = &mut rest[n as usize..];
+            }
+        }
+        #[cfg(not(any(target_os = "espidf", target_os = "linux")))]
         {
             use std::io::Read;
             // Opened once: opening it for every draw cost an open and a close
@@ -80,6 +98,18 @@ impl Rng for OsRng {
 #[cfg(all(test, feature = "std", not(target_os = "espidf")))]
 mod tests {
     use super::{OsRng, Rng};
+
+    #[test]
+    fn os_rng_fills_large_and_empty_buffers() {
+        let mut empty = [0u8; 0];
+        OsRng.fill_bytes(&mut empty);
+        let mut large = std::vec![0u8; 1 << 20];
+        OsRng.fill_bytes(&mut large);
+        // Every 64 KiB window holds random bytes, so no part was skipped.
+        assert!(large
+            .chunks(1 << 16)
+            .all(|chunk| chunk.iter().any(|&b| b != 0)));
+    }
 
     #[test]
     fn os_rng_fills_buffers_from_concurrent_threads() {
