@@ -292,8 +292,20 @@ impl ResourceSender {
     /// request_data format:
     /// [exhausted_flag: u8][last_map_hash: 4 bytes if exhausted][resource_hash: 32 bytes][requested_hashes: N*4 bytes]
     pub fn handle_request(&mut self, request_data: &[u8], now: f64) -> Vec<ResourceAction> {
+        let mut actions = Vec::new();
+        self.handle_request_into(request_data, now, &mut actions);
+        actions
+    }
+
+    /// [`Self::handle_request`], appending the actions to `out`.
+    pub fn handle_request_into(
+        &mut self,
+        request_data: &[u8],
+        now: f64,
+        out: &mut Vec<ResourceAction>,
+    ) {
         if self.status == ResourceStatus::Failed {
-            return vec![];
+            return;
         }
 
         let hashmap_is_empty = request_data.first() == Some(&RESOURCE_HASHMAP_IS_EMPTY);
@@ -306,7 +318,7 @@ impl ResourceSender {
         };
 
         if request_data.len() < pad + 32 || request_data[pad..pad + 32] != self.resource_hash {
-            return vec![];
+            return;
         }
 
         // Measure RTT from advertisement
@@ -321,21 +333,8 @@ impl ResourceSender {
         self.retries_left = self.max_retries;
         self.last_activity = now;
 
-        let requested_hashes_data = &request_data[pad + 32..];
-        let mut actions = Vec::new();
-
-        // Parse requested map hashes
-        let num_requested = requested_hashes_data.len() / RESOURCE_MAPHASH_LEN;
-        let mut map_hashes_requested = Vec::with_capacity(num_requested);
-        for i in 0..num_requested {
-            let start = i * RESOURCE_MAPHASH_LEN;
-            let end = start + RESOURCE_MAPHASH_LEN;
-            if end <= requested_hashes_data.len() {
-                let mut h = [0u8; RESOURCE_MAPHASH_LEN];
-                h.copy_from_slice(&requested_hashes_data[start..end]);
-                map_hashes_requested.push(h);
-            }
-        }
+        // Requested map hashes, read in place.
+        let map_hashes_requested = request_data[pad + 32..].chunks_exact(RESOURCE_MAPHASH_LEN);
 
         // Search for requested parts within guard window
         let search_start = self.receiver_min_consecutive_height;
@@ -345,8 +344,11 @@ impl ResourceSender {
         );
 
         for part_idx in search_start..search_end {
-            if map_hashes_requested.contains(&self.part_hashes[part_idx]) {
-                actions.push(ResourceAction::SendPart(self.part(part_idx).to_vec()));
+            if map_hashes_requested
+                .clone()
+                .any(|h| h == self.part_hashes[part_idx].as_slice())
+            {
+                out.push(ResourceAction::SendPart(self.part(part_idx).to_vec()));
                 if !self.sent_indices[part_idx] {
                     self.sent_indices[part_idx] = true;
                     self.sent_parts += 1;
@@ -358,10 +360,10 @@ impl ResourceSender {
         // Handle hashmap exhaustion
         if wants_more_hashmap {
             match self.build_hmu(request_data, hashmap_is_empty, now) {
-                Ok(hmu) => actions.push(ResourceAction::SendHmu(hmu)),
+                Ok(hmu) => out.push(ResourceAction::SendHmu(hmu)),
                 Err(_) => {
-                    actions.extend(self.cancel());
-                    return actions;
+                    out.extend(self.cancel());
+                    return;
                 }
             }
         }
@@ -371,8 +373,6 @@ impl ResourceSender {
             self.status = ResourceStatus::AwaitingProof;
             self.retries_left = 3; // hardcoded in Python
         }
-
-        actions
     }
 
     /// Build hashmap update data.
