@@ -34,6 +34,9 @@ pub struct TcpClientConfig {
     pub bitrate: Option<u64>,
     /// Hardware MTU, overriding the bitrate tier.
     pub fixed_mtu: Option<u32>,
+    /// Write buffered frames once the oldest has waited this long instead of
+    /// at the end of the driver's pass (`flush_after_us`; off by default).
+    pub flush_after: Option<Duration>,
     pub runtime: Arc<Mutex<TcpClientRuntime>>,
 }
 
@@ -78,6 +81,7 @@ impl Default for TcpClientConfig {
             device: None,
             bitrate: None,
             fixed_mtu: None,
+            flush_after: None,
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
                 target_host: "127.0.0.1".into(),
                 target_port: 4242,
@@ -97,6 +101,7 @@ struct TcpWriter {
     stream: TcpStream,
     /// Reused encoding buffer for coalesced writes.
     scratch: Vec<u8>,
+    flush_after: Option<Duration>,
 }
 
 impl Writer for TcpWriter {
@@ -110,6 +115,10 @@ impl Writer for TcpWriter {
 
     fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
         Some(self.stream.as_raw_fd())
+    }
+
+    fn loop_flush_after(&self) -> Option<Duration> {
+        self.flush_after
     }
 }
 
@@ -253,6 +262,7 @@ fn start_with_ifac_control(
     let writer_stream = stream.try_clone()?;
 
     let id = config.interface_id;
+    let flush_after = config.flush_after;
     // Initial connect: writer is None because it's returned directly to the caller
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
@@ -273,6 +283,7 @@ fn start_with_ifac_control(
         Box::new(TcpWriter {
             stream: writer_stream,
             scratch: Vec::new(),
+            flush_after,
         }),
         control,
     ))
@@ -526,6 +537,7 @@ fn reconnect(
                 let new_writer: Box<dyn Writer> = Box::new(TcpWriter {
                     stream: writer_stream,
                     scratch: Vec::new(),
+                    flush_after: config.flush_after,
                 });
                 let _ = tx.send(Event::InterfaceUp(
                     config.interface_id,
@@ -570,6 +582,7 @@ impl InterfaceFactory for TcpClientFactory {
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
         let (bitrate, fixed_mtu) = super::parse_tcp_rate_params(params)?;
+        let flush_after = super::parse_flush_after(params)?;
 
         Ok(Box::new(TcpClientConfig {
             name: name.to_string(),
@@ -579,6 +592,7 @@ impl InterfaceFactory for TcpClientFactory {
             device: params.get("device").cloned(),
             bitrate,
             fixed_mtu,
+            flush_after,
             ..TcpClientConfig::default()
         }))
     }
@@ -753,6 +767,7 @@ mod tests {
                 max_reconnect_tries: Some(2),
                 connect_timeout: Duration::from_secs(2),
             })),
+            flush_after: None,
             device: None,
             bitrate: None,
             fixed_mtu: None,
@@ -1019,6 +1034,7 @@ mod tests {
             device: None,
             bitrate: None,
             fixed_mtu: None,
+            flush_after: None,
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
                 target_host: "192.0.2.1".into(),
                 target_port: 12345,

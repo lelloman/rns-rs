@@ -4,7 +4,10 @@
 //! straight into one byte buffer; the driver writes it to the socket with
 //! nonblocking sends once per pass, before it waits for more input
 //! ([`Writer::flush_pending`]), or as soon as a batch's worth is buffered,
-//! so a burst leaves in few large writes. Bytes the socket cannot take yet stay buffered; the writer then
+//! so a burst leaves in few large writes. An interface configured with
+//! `flush_after_us` also writes once its oldest buffered byte has waited that
+//! long, so a peer is not kept idle while the driver works through a long
+//! pass. Bytes the socket cannot take yet stay buffered; the writer then
 //! registers writable interest on the driver's poller and finishes when the
 //! driver reports the socket writable.
 
@@ -126,6 +129,12 @@ pub(crate) struct LoopWriter {
     interface_name: String,
     event_tx: EventSender,
     egress: Option<LoopEgress>,
+    /// Write buffered bytes once the oldest has waited this long, instead
+    /// of only at the end of the driver's pass.
+    flush_after: Option<Duration>,
+    /// When the buffer last went from empty to holding bytes; kept only
+    /// with `flush_after`.
+    pending_since: Option<Instant>,
 }
 
 pub(crate) fn wrap(
@@ -136,6 +145,7 @@ pub(crate) fn wrap(
     event_tx: EventSender,
 ) -> (Box<dyn Writer>, AsyncWriterMetrics) {
     let egress = inner.loop_egress();
+    let flush_after = inner.loop_flush_after();
     let metrics = AsyncWriterMetrics {
         queued_frames: Arc::default(),
         worker_alive: Arc::new(AtomicBool::new(true)),
@@ -180,6 +190,8 @@ pub(crate) fn wrap(
         interface_name: interface_name.to_string(),
         event_tx,
         egress,
+        flush_after,
+        pending_since: None,
     };
     (Box::new(writer), metrics)
 }
@@ -207,6 +219,9 @@ impl LoopWriter {
         if self.head == self.out.len() {
             self.out.clear();
             self.head = 0;
+        }
+        if self.flush_after.is_some() && self.buffered() == 0 {
+            self.pending_since = Some(Instant::now());
         }
         let before = self.out.len();
         crate::hdlc::append_frame(data, &mut self.out);
@@ -494,9 +509,17 @@ impl LoopWriter {
 }
 
 impl LoopWriter {
-    fn drain_if_batch_full(&mut self) {
+    /// Write now when a batch's worth is buffered, or when buffered bytes
+    /// have waited past `flush_after` and the socket is not known full.
+    fn drain_if_due(&mut self) {
         if self.buffered() >= EAGER_WRITE_BYTES {
             self.drain();
+            return;
+        }
+        if let (Some(after), Some(since)) = (self.flush_after, self.pending_since) {
+            if !self.want_writable && self.buffered() > 0 && since.elapsed() >= after {
+                self.drain();
+            }
         }
     }
 }
@@ -504,7 +527,7 @@ impl LoopWriter {
 impl Writer for LoopWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.admit_unconfirmed(data)?;
-        self.drain_if_batch_full();
+        self.drain_if_due();
         Ok(())
     }
 
@@ -537,7 +560,7 @@ impl Writer for LoopWriter {
         for frame in frames {
             self.admit_unconfirmed(frame)?;
         }
-        self.drain_if_batch_full();
+        self.drain_if_due();
         Ok(())
     }
 
@@ -567,7 +590,7 @@ impl Writer for LoopWriter {
         if let Some(completion) = completion.take() {
             self.completions.push_back((self.appended, completion));
         }
-        self.drain_if_batch_full();
+        self.drain_if_due();
         Ok(())
     }
 
@@ -681,6 +704,63 @@ mod tests {
             .unwrap();
         let mut byte = [0u8; 1];
         matches!(peer.read(&mut byte), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+    }
+
+    /// Owns the socket so it stays open; the loop writer writes its
+    /// descriptor directly.
+    struct TimedSocket {
+        _stream: TcpStream,
+        after: Duration,
+    }
+
+    impl Writer for TimedSocket {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            unreachable!("the loop writer writes the descriptor itself")
+        }
+
+        fn loop_flush_after(&self) -> Option<Duration> {
+            Some(self.after)
+        }
+    }
+
+    #[test]
+    fn frames_that_waited_past_flush_after_leave_with_the_next_send() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        let fd = stream.as_raw_fd();
+        let (tx, _rx) = crate::event::channel();
+        let after = Duration::from_millis(50);
+        let (mut writer, _) = wrap(
+            Box::new(TimedSocket {
+                _stream: stream,
+                after,
+            }),
+            fd,
+            InterfaceId(7),
+            "t",
+            tx,
+        );
+
+        writer.send_frame(&[1]).unwrap();
+        writer.send_frame(&[2]).unwrap();
+        assert!(
+            nothing_readable(&mut peer),
+            "young frames wait for the pass"
+        );
+        std::thread::sleep(after);
+        writer.send_frame(&[3]).unwrap();
+        let mut expected = crate::hdlc::frame(&[1]);
+        expected.extend(crate::hdlc::frame(&[2]));
+        expected.extend(crate::hdlc::frame(&[3]));
+        assert_eq!(read_exact(&mut peer, expected.len()), expected);
+
+        // The buffer emptied, so the next frame's wait starts afresh.
+        writer.send_frame(&[4]).unwrap();
+        assert!(nothing_readable(&mut peer));
+        writer.flush_pending();
+        let expected = crate::hdlc::frame(&[4]);
+        assert_eq!(read_exact(&mut peer, expected.len()), expected);
     }
 
     #[test]
