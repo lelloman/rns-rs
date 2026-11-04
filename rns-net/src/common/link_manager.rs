@@ -269,6 +269,8 @@ pub struct LinkManager {
     /// by registered handler closures. Used for management destinations.
     management_paths: Vec<[u8; 16]>,
     link_mtu_discovery: bool,
+    /// Reused buffer for the resource actions of one packet.
+    resource_scratch: Vec<rns_core::resource::ResourceAction>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,6 +382,7 @@ impl LinkManager {
             management_paths: Vec::new(),
             link_mtu_discovery: true,
             link_request_costs: Default::default(),
+            resource_scratch: Vec::new(),
         }
     }
 
@@ -695,11 +698,33 @@ impl LinkManager {
         receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
+        let mut out = Vec::new();
+        self.handle_local_delivery_into(
+            dest_hash,
+            raw,
+            packet_hash,
+            receiving_interface,
+            rng,
+            &mut out,
+        );
+        out
+    }
+
+    /// [`Self::handle_local_delivery`], appending to `out`.
+    pub fn handle_local_delivery_into(
+        &mut self,
+        dest_hash: [u8; 16],
+        raw: &[u8],
+        packet_hash: [u8; 32],
+        receiving_interface: rns_core::transport::types::InterfaceId,
+        rng: &mut dyn Rng,
+        out: &mut Vec<LinkManagerAction>,
+    ) {
         // The transport engine hashed these bytes on receipt, unless they are
         // a resource part.
         let packet = match RawPacket::unpack_prehashed(raw, packet_hash) {
             Ok(p) => p,
-            Err(_) => return Vec::new(),
+            Err(_) => return,
         };
 
         // Python accounts link traffic once the packet is accepted on its
@@ -712,22 +737,29 @@ impl LinkManager {
 
         match packet.flags.packet_type {
             constants::PACKET_TYPE_LINKREQUEST => {
-                self.handle_linkrequest(&dest_hash, &packet, receiving_interface, rng)
+                out.extend(self.handle_linkrequest(&dest_hash, &packet, receiving_interface, rng))
             }
             constants::PACKET_TYPE_PROOF if packet.context == constants::CONTEXT_LRPROOF => {
                 // LRPROOF: dest_hash is the link_id
-                self.handle_lrproof(&dest_hash, &packet, receiving_interface, rng)
+                out.extend(self.handle_lrproof(&dest_hash, &packet, receiving_interface, rng))
             }
             constants::PACKET_TYPE_PROOF if packet.context == constants::CONTEXT_RESOURCE_PRF => {
                 // Resource proofs are PROOF packets with raw proof data, not
                 // encrypted DATA packets.
-                self.handle_resource_prf(&dest_hash, packet.data(), rng)
+                out.extend(self.handle_resource_prf(&dest_hash, packet.data(), rng))
             }
-            constants::PACKET_TYPE_PROOF => self.handle_link_proof(&dest_hash, &packet, rng),
-            constants::PACKET_TYPE_DATA => {
-                self.handle_link_data(&dest_hash, &packet, packet_hash, receiving_interface, rng)
+            constants::PACKET_TYPE_PROOF => {
+                out.extend(self.handle_link_proof(&dest_hash, &packet, rng))
             }
-            _ => Vec::new(),
+            constants::PACKET_TYPE_DATA => self.handle_link_data_into(
+                &dest_hash,
+                &packet,
+                packet_hash,
+                receiving_interface,
+                rng,
+                out,
+            ),
+            _ => {}
         }
     }
 
@@ -1078,14 +1110,15 @@ impl LinkManager {
     /// Structured to avoid borrow checker issues: we perform engine operations
     /// on the link, collect intermediate results, drop the mutable borrow, then
     /// call self methods that need immutable access.
-    fn handle_link_data(
+    fn handle_link_data_into(
         &mut self,
         link_id_bytes: &[u8; 16],
         packet: &RawPacket,
         packet_hash: [u8; 32],
         receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
-    ) -> Vec<LinkManagerAction> {
+        out: &mut Vec<LinkManagerAction>,
+    ) {
         // First pass: perform engine operations, collect results
         enum LinkDataResult<'a> {
             Lrrtt {
@@ -1178,7 +1211,7 @@ impl LinkManager {
         let result = {
             let link = match self.links.get_mut(link_id_bytes) {
                 Some(l) => l,
-                None => return Vec::new(),
+                None => return,
             };
 
             // Python exposes ACTIVE to its utility thread before the proof thread
@@ -1207,7 +1240,7 @@ impl LinkManager {
                         receiving_interface,
                     });
                 }
-                return Vec::new();
+                return;
             }
 
             link.route_interface = Some(receiving_interface);
@@ -1420,13 +1453,12 @@ impl LinkManager {
         }; // mutable borrow of self.links dropped here
 
         // Second pass: process results using self methods
-        let mut actions = Vec::new();
         match result {
             LinkDataResult::Lrrtt {
                 link_id,
                 link_actions,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &link_actions));
+                out.extend(self.process_link_actions(&link_id, &link_actions));
                 // Initialize channel
                 if let Some(link) = self.links.get_mut(&link_id) {
                     if link.engine.state() == LinkState::Active {
@@ -1440,20 +1472,21 @@ impl LinkManager {
                     .map(|link| std::mem::take(&mut link.pre_rtt_packets))
                     .unwrap_or_default();
                 for pending in pending {
-                    actions.extend(self.handle_link_data(
+                    self.handle_link_data_into(
                         &link_id,
                         &pending.packet,
                         pending.packet_hash,
                         pending.receiving_interface,
                         rng,
-                    ));
+                        out,
+                    );
                 }
             }
             LinkDataResult::Identify {
                 link_id,
                 link_actions,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &link_actions));
+                out.extend(self.process_link_actions(&link_id, &link_actions));
             }
             LinkDataResult::Keepalive {
                 link_id,
@@ -1465,7 +1498,7 @@ impl LinkManager {
                     "Link keepalive received: link={:02x?} reply={reply}",
                     &link_id[..4]
                 );
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 if reply {
                     let flags = PacketFlags {
                         header_type: constants::HEADER_1,
@@ -1482,7 +1515,7 @@ impl LinkManager {
                         constants::CONTEXT_KEEPALIVE,
                         &[0xfe],
                     ) {
-                        actions.push(LinkManagerAction::SendPacket {
+                        out.push(LinkManagerAction::SendPacket {
                             raw,
                             dest_type: constants::DESTINATION_LINK,
                             attached_interface: None,
@@ -1497,7 +1530,7 @@ impl LinkManager {
                 link_id,
                 teardown_actions,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &teardown_actions));
+                out.extend(self.process_link_actions(&link_id, &teardown_actions));
             }
             LinkDataResult::Channel {
                 link_id,
@@ -1505,7 +1538,7 @@ impl LinkManager {
                 plaintext,
                 packet_hash,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Feed plaintext to channel
                 if let Some(link) = self.links.get_mut(&link_id) {
                     if let Some(ref mut channel) = link.channel {
@@ -1522,10 +1555,10 @@ impl LinkManager {
                             as u64;
                         // process_channel_actions needs immutable self, so collect first
                         let _ = link;
-                        actions.extend(self.process_channel_actions(&link_id, chan_actions, rng));
+                        out.extend(self.process_channel_actions(&link_id, chan_actions, rng));
                     }
                 }
-                actions.extend(self.build_link_packet_proof(&link_id, &packet_hash));
+                out.extend(self.build_link_packet_proof(&link_id, &packet_hash));
             }
             LinkDataResult::Request {
                 link_id,
@@ -1533,14 +1566,14 @@ impl LinkManager {
                 plaintext,
                 request_id,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 let size_ok = self
                     .links
                     .get(&link_id)
                     .and_then(|link| link.max_request_size)
                     .is_none_or(|limit| plaintext.len() <= limit);
                 if size_ok {
-                    actions.extend(self.handle_request(&link_id, &plaintext, request_id, rng));
+                    out.extend(self.handle_request(&link_id, &plaintext, request_id, rng));
                 } else {
                     log::debug!(
                         "ignored request with excessive size {} bytes on link {:02x?}",
@@ -1554,9 +1587,9 @@ impl LinkManager {
                 inbound_actions,
                 plaintext,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Unpack msgpack response: [Bin(request_id), response_value]
-                actions.extend(self.handle_response(&link_id, &plaintext, None, None));
+                out.extend(self.handle_response(&link_id, &plaintext, None, None));
             }
             LinkDataResult::Generic {
                 link_id,
@@ -1565,75 +1598,73 @@ impl LinkManager {
                 context,
                 packet_hash,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.push(LinkManagerAction::LinkDataReceived {
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.push(LinkManagerAction::LinkDataReceived {
                     link_id,
                     context,
                     data: plaintext,
                 });
 
-                actions.extend(self.build_link_packet_proof(&link_id, &packet_hash));
+                out.extend(self.build_link_packet_proof(&link_id, &packet_hash));
             }
             LinkDataResult::ResourceAdv {
                 link_id,
                 inbound_actions,
                 plaintext,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_adv(&link_id, &plaintext, rng));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.handle_resource_adv(&link_id, &plaintext, rng));
             }
             LinkDataResult::ResourceReq {
                 link_id,
                 inbound_actions,
                 plaintext,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_req(&link_id, &plaintext, rng));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                self.handle_resource_req_into(&link_id, &plaintext, rng, out);
             }
             LinkDataResult::ResourceHmu {
                 link_id,
                 inbound_actions,
                 plaintext,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_hmu(&link_id, &plaintext, rng));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.handle_resource_hmu(&link_id, &plaintext, rng));
             }
             LinkDataResult::ResourcePart {
                 link_id,
                 inbound_actions,
                 raw_data,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_part(&link_id, raw_data, rng));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                self.handle_resource_part_into(&link_id, raw_data, rng, out);
             }
             LinkDataResult::ResourcePrf {
                 link_id,
                 inbound_actions,
                 plaintext,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_prf(&link_id, &plaintext, rng));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.handle_resource_prf(&link_id, &plaintext, rng));
             }
             LinkDataResult::ResourceIcl {
                 link_id,
                 inbound_actions,
                 resource_hash,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_icl(&link_id, &resource_hash));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.handle_resource_icl(&link_id, &resource_hash));
             }
             LinkDataResult::ResourceRcl {
                 link_id,
                 inbound_actions,
                 resource_hash,
             } => {
-                actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_rcl(&link_id, &resource_hash));
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.extend(self.handle_resource_rcl(&link_id, &resource_hash));
             }
             LinkDataResult::Error => {}
         }
-
-        actions
     }
 
     pub fn send_on_link(

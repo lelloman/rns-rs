@@ -971,14 +971,17 @@ impl Driver {
                     return;
                 }
             }
-            let link_actions = self.link_manager.handle_local_delivery(
+            let mut link_actions = self.link_actions.take();
+            self.link_manager.handle_local_delivery_into(
                 destination_hash,
                 &raw,
                 packet_hash,
                 receiving_interface,
                 &mut self.rng,
+                &mut link_actions,
             );
             if link_actions.is_empty() {
+                self.link_actions.give(link_actions);
                 let packet_hash = delivered_packet_hash(&raw, packet_hash);
                 if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
                     if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
@@ -1655,11 +1658,11 @@ impl Driver {
     }
 
     /// Dispatch link manager actions.
-    pub(crate) fn dispatch_link_actions(&mut self, actions: Vec<LinkManagerAction>) {
+    pub(crate) fn dispatch_link_actions(&mut self, mut actions: Vec<LinkManagerAction>) {
         #[cfg(feature = "hooks")]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
-        for action in actions {
+        for action in actions.drain(..) {
             if matches!(
                 action,
                 LinkManagerAction::LinkEstablished { .. }
@@ -2096,6 +2099,7 @@ impl Driver {
                 }
             }
         }
+        self.link_actions.give(actions);
 
         // Dispatch any actions injected by hooks during action processing
         #[cfg(feature = "hooks")]

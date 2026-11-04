@@ -634,20 +634,22 @@ impl LinkManager {
         self.process_resource_actions(link_id, resource_actions, rng)
     }
 
-    /// Handle resource request (CONTEXT_RESOURCE_REQ) — feed to sender.
-    pub(super) fn handle_resource_req(
+    /// Handle resource request (CONTEXT_RESOURCE_REQ) — feed to sender,
+    /// appending to `out`.
+    pub(super) fn handle_resource_req_into(
         &mut self,
         link_id: &LinkId,
         plaintext: &[u8],
         rng: &mut dyn Rng,
-    ) -> Vec<LinkManagerAction> {
-        let link = match self.links.get_mut(link_id) {
-            Some(l) => l,
-            None => return Vec::new(),
+        out: &mut Vec<LinkManagerAction>,
+    ) {
+        let mut all_actions = core::mem::take(&mut self.resource_scratch);
+        let Some(link) = self.links.get_mut(link_id) else {
+            self.resource_scratch = all_actions;
+            return;
         };
 
         let now = time::now();
-        let mut all_actions = Vec::new();
         let mut progress_update = None;
         let mut progress_stream_hash = None;
         for sender in &mut link.outgoing_resources {
@@ -655,8 +657,9 @@ impl LinkManager {
                 continue;
             }
             let before_sent = sender.sent_parts;
-            let resource_actions = sender.handle_request(plaintext, now);
-            if !resource_actions.is_empty() {
+            let before = all_actions.len();
+            sender.handle_request_into(plaintext, now, &mut all_actions);
+            if all_actions.len() > before {
                 if sender.sent_parts != before_sent {
                     progress_stream_hash = Some(sender.original_hash);
                     if sender.flags.split {
@@ -671,13 +674,13 @@ impl LinkManager {
                         progress_update = Some((sender.sent_parts, sender.total_parts()));
                     }
                 }
-                all_actions.extend(resource_actions);
                 break;
             }
         }
 
         let _ = link;
-        let mut out = self.process_resource_actions(link_id, all_actions, rng);
+        self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
+        self.resource_scratch = all_actions;
         if let Some((received, total)) = progress_update {
             if let Some((stream, transferred)) = progress_stream_hash.and_then(|hash| {
                 self.links.get(link_id).and_then(|link| {
@@ -705,7 +708,6 @@ impl LinkManager {
                 });
             }
         }
-        out
     }
 
     /// Handle resource HMU (CONTEXT_RESOURCE_HMU) — feed to receiver.
@@ -734,16 +736,20 @@ impl LinkManager {
         self.process_resource_actions(link_id, all_actions, rng)
     }
 
-    /// Handle resource part (CONTEXT_RESOURCE) — feed raw to receiver.
-    pub(super) fn handle_resource_part(
+    /// Handle resource part (CONTEXT_RESOURCE) — feed raw to receiver,
+    /// appending to `out`.
+    pub(super) fn handle_resource_part_into(
         &mut self,
         link_id: &LinkId,
         raw_data: &[u8],
         rng: &mut dyn Rng,
-    ) -> Vec<LinkManagerAction> {
-        let actions = self.receive_resource_part(link_id, raw_data, rng);
+        out: &mut Vec<LinkManagerAction>,
+    ) {
+        let mut scratch = core::mem::take(&mut self.resource_scratch);
+        self.receive_resource_part_into(link_id, raw_data, rng, &mut scratch, out);
+        scratch.clear();
+        self.resource_scratch = scratch;
         self.prune_concluded_incoming(link_id);
-        actions
     }
 
     /// Drop a link's incoming Resources that have concluded, as soon as they
@@ -763,20 +769,23 @@ impl LinkManager {
         }
     }
 
-    fn receive_resource_part(
+    /// Feed a resource part to the link's receivers, appending what follows
+    /// to `out`. `all_actions` is an empty scratch buffer.
+    fn receive_resource_part_into(
         &mut self,
         link_id: &LinkId,
         raw_data: &[u8],
         rng: &mut dyn Rng,
-    ) -> Vec<LinkManagerAction> {
+        all_actions: &mut Vec<ResourceAction>,
+        out: &mut Vec<LinkManagerAction>,
+    ) {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
-            None => return Vec::new(),
+            None => return,
         };
 
         let now = time::now();
         let resource_sdu = Self::resource_sdu_for_link(link);
-        let mut all_actions = Vec::new();
         let mut assemble_idx = None;
         let mut assembled_is_request = false;
         let mut assembled_is_response = false;
@@ -789,8 +798,9 @@ impl LinkManager {
             if receiver.status >= rns_core::resource::ResourceStatus::Assembling {
                 continue;
             }
-            let resource_actions = receiver.receive_part(raw_data, now);
-            if !resource_actions.is_empty() {
+            let before = all_actions.len();
+            receiver.receive_part_into(raw_data, now, all_actions);
+            if all_actions.len() > before {
                 if receiver.received_count == receiver.total_parts {
                     assemble_idx = Some(idx);
                 }
@@ -802,36 +812,31 @@ impl LinkManager {
                             split.current_total_parts = receiver.total_parts;
                             let (received, total) =
                                 Self::incoming_split_progress(split, resource_sdu);
-                            for action in resource_actions {
-                                match action {
-                                    ResourceAction::ProgressUpdate { .. } => {
-                                        all_actions.push(ResourceAction::ProgressUpdate {
-                                            received,
-                                            total,
-                                        });
-                                    }
-                                    other => all_actions.push(other),
+                            // Progress is reported for the whole split.
+                            for action in &mut all_actions[before..] {
+                                if let ResourceAction::ProgressUpdate {
+                                    received: r,
+                                    total: t,
+                                } = action
+                                {
+                                    *r = received;
+                                    *t = total;
                                 }
                             }
-                        } else {
-                            all_actions.extend(resource_actions);
                         }
-                    } else {
-                        all_actions.extend(resource_actions);
                     }
-                } else {
-                    all_actions.extend(resource_actions);
                 }
                 break;
             }
         }
 
-        let mut preceding = Vec::new();
         if let Some(idx) = assemble_idx {
             let eligible = Self::receive_offload_eligible(link, &link.incoming_resources[idx]);
             let resource_hash = link.incoming_resources[idx].resource_hash.clone();
             let _ = link;
-            preceding = self.wait_receive_for(link_id, rng);
+            // Earlier application completions go first, with their final
+            // action types.
+            out.extend(self.wait_receive_for(link_id, rng));
             if eligible {
                 self.ensure_receive_worker();
             }
@@ -843,14 +848,14 @@ impl LinkManager {
                 .get_mut(link_id)
                 .filter(|link| link.engine.state() == LinkState::Active)
             else {
-                return preceding;
+                return;
             };
             let Some(idx) = link
                 .incoming_resources
                 .iter()
                 .position(|r| r.resource_hash == resource_hash)
             else {
-                return preceding;
+                return;
             };
             if eligible && self.receive_worker.is_some() {
                 let receiver = &mut link.incoming_resources[idx];
@@ -871,8 +876,8 @@ impl LinkManager {
                 };
                 all_actions.extend(actions);
                 let _ = link;
-                preceding.extend(self.process_resource_actions(link_id, all_actions, rng));
-                return preceding;
+                self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
+                return;
             }
             let split_key = if link.incoming_resources[idx].flags.split {
                 Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
@@ -1045,7 +1050,10 @@ impl LinkManager {
             all_actions.extend(assemble_actions);
         }
 
-        let mut out = self.process_resource_actions(link_id, all_actions, rng);
+        // Only this Resource's actions pass through request/response
+        // conversion, from `start` on.
+        let start = out.len();
+        self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
         if let Some(resource) = completed_file {
             out.push(LinkManagerAction::ResourceFileReceived {
                 link_id: *link_id,
@@ -1061,7 +1069,7 @@ impl LinkManager {
 
         if assembled_is_request {
             let mut converted = Vec::new();
-            for action in out {
+            for action in out.drain(start..).collect::<Vec<_>>() {
                 match action {
                     LinkManagerAction::ResourceReceived { data, .. } => {
                         if let Some(request_id) = request_request_id {
@@ -1074,10 +1082,10 @@ impl LinkManager {
                     other => converted.push(other),
                 }
             }
-            out = converted;
+            out.extend(converted);
         } else if assembled_is_response {
             let mut converted = Vec::new();
-            for action in out {
+            for action in out.drain(start..).collect::<Vec<_>>() {
                 match action {
                     LinkManagerAction::ResourceReceived { data, metadata, .. } => {
                         converted.extend(self.handle_response(
@@ -1093,13 +1101,8 @@ impl LinkManager {
                     other => converted.push(other),
                 }
             }
-            out = converted;
+            out.extend(converted);
         }
-
-        // Earlier application completions already have their final action types.
-        // Only this Resource's actions pass through request/response conversion.
-        preceding.extend(out);
-        preceding
     }
 
     /// Handle resource proof (CONTEXT_RESOURCE_PRF) — feed to sender.
@@ -1430,7 +1433,20 @@ impl LinkManager {
         actions: Vec<ResourceAction>,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        let mut result = Vec::new();
+        let mut out = Vec::new();
+        self.process_resource_actions_into(link_id, actions, rng, &mut out);
+        out
+    }
+
+    /// [`Self::process_resource_actions`], appending to `out`; `actions` may
+    /// drain a reused buffer.
+    pub(super) fn process_resource_actions_into(
+        &mut self,
+        link_id: &LinkId,
+        actions: impl IntoIterator<Item = ResourceAction>,
+        rng: &mut dyn Rng,
+        out: &mut Vec<LinkManagerAction>,
+    ) {
         for action in actions {
             let requires_active_link = matches!(
                 &action,
@@ -1441,7 +1457,7 @@ impl LinkManager {
                     | ResourceAction::SendProof(_)
             );
             if requires_active_link && !self.resource_link_is_active(link_id) {
-                result.extend(self.abort_resources_on_inactive_link(link_id));
+                out.extend(self.abort_resources_on_inactive_link(link_id));
                 continue;
             }
 
@@ -1453,20 +1469,17 @@ impl LinkManager {
                         .get(link_id)
                         .and_then(|link| link.engine.encrypt(&data, rng).ok());
                     if let Some(encrypted) = encrypted {
-                        result.extend(self.build_link_packet(
+                        self.build_link_packet_into(
                             link_id,
                             constants::CONTEXT_RESOURCE_ADV,
                             &encrypted,
-                        ));
+                            out,
+                        );
                     }
                 }
                 ResourceAction::SendPart(data) => {
                     // Parts are NOT link-encrypted — send raw as CONTEXT_RESOURCE
-                    result.extend(self.build_link_packet(
-                        link_id,
-                        constants::CONTEXT_RESOURCE,
-                        &data,
-                    ));
+                    self.build_link_packet_into(link_id, constants::CONTEXT_RESOURCE, &data, out);
                 }
                 ResourceAction::SendRequest(data) => {
                     let encrypted = self
@@ -1474,11 +1487,12 @@ impl LinkManager {
                         .get(link_id)
                         .and_then(|link| link.engine.encrypt(&data, rng).ok());
                     if let Some(encrypted) = encrypted {
-                        result.extend(self.build_link_packet(
+                        self.build_link_packet_into(
                             link_id,
                             constants::CONTEXT_RESOURCE_REQ,
                             &encrypted,
-                        ));
+                            out,
+                        );
                     }
                 }
                 ResourceAction::SendHmu(data) => {
@@ -1487,11 +1501,12 @@ impl LinkManager {
                         .get(link_id)
                         .and_then(|link| link.engine.encrypt(&data, rng).ok());
                     if let Some(encrypted) = encrypted {
-                        result.extend(self.build_link_packet(
+                        self.build_link_packet_into(
                             link_id,
                             constants::CONTEXT_RESOURCE_HMU,
                             &encrypted,
-                        ));
+                            out,
+                        );
                     }
                 }
                 ResourceAction::SendProof(data) => {
@@ -1510,7 +1525,7 @@ impl LinkManager {
                         constants::CONTEXT_RESOURCE_PRF,
                         &data,
                     ) {
-                        result.push(LinkManagerAction::SendPacket {
+                        out.push(LinkManagerAction::SendPacket {
                             raw,
                             dest_type: constants::DESTINATION_LINK,
                             attached_interface: None,
@@ -1524,11 +1539,12 @@ impl LinkManager {
                         .filter(|link| link.engine.state() == LinkState::Active)
                         .and_then(|link| link.engine.encrypt(&data, rng).ok());
                     if let Some(encrypted) = encrypted {
-                        result.extend(self.build_link_packet(
+                        self.build_link_packet_into(
                             link_id,
                             constants::CONTEXT_RESOURCE_ICL,
                             &encrypted,
-                        ));
+                            out,
+                        );
                     }
                 }
                 ResourceAction::SendCancelReceiver(data) => {
@@ -1538,11 +1554,12 @@ impl LinkManager {
                         .filter(|link| link.engine.state() == LinkState::Active)
                         .and_then(|link| link.engine.encrypt(&data, rng).ok());
                     if let Some(encrypted) = encrypted {
-                        result.extend(self.build_link_packet(
+                        self.build_link_packet_into(
                             link_id,
                             constants::CONTEXT_RESOURCE_RCL,
                             &encrypted,
-                        ));
+                            out,
+                        );
                     }
                 }
                 ResourceAction::DataReceived {
@@ -1550,7 +1567,7 @@ impl LinkManager {
                     metadata,
                     app_flag,
                 } => {
-                    result.push(LinkManagerAction::ResourceReceived {
+                    out.push(LinkManagerAction::ResourceReceived {
                         link_id: *link_id,
                         data,
                         metadata,
@@ -1558,10 +1575,10 @@ impl LinkManager {
                     });
                 }
                 ResourceAction::Completed => {
-                    result.push(LinkManagerAction::ResourceCompleted { link_id: *link_id });
+                    out.push(LinkManagerAction::ResourceCompleted { link_id: *link_id });
                 }
                 ResourceAction::Failed(e) => {
-                    result.push(LinkManagerAction::ResourceFailed {
+                    out.push(LinkManagerAction::ResourceFailed {
                         link_id: *link_id,
                         error: format!("{}", e),
                     });
@@ -1569,10 +1586,10 @@ impl LinkManager {
                 ResourceAction::TeardownLink => {
                     // Python `Resource.cancel` on a CORRUPT resource calls
                     // `Link.teardown()`, which sends LINKCLOSE to the peer.
-                    result.extend(self.teardown_link(link_id));
+                    out.extend(self.teardown_link(link_id));
                 }
                 ResourceAction::ProgressUpdate { received, total } => {
-                    result.push(LinkManagerAction::ResourceProgress {
+                    out.push(LinkManagerAction::ResourceProgress {
                         link_id: *link_id,
                         received,
                         total,
@@ -1580,16 +1597,29 @@ impl LinkManager {
                 }
             }
         }
-        result
     }
 
     /// Build a link DATA packet with a given context and data.
+    #[cfg(test)]
     pub(super) fn build_link_packet(
         &self,
         link_id: &LinkId,
         context: u8,
         data: &[u8],
     ) -> Vec<LinkManagerAction> {
+        let mut out = Vec::new();
+        self.build_link_packet_into(link_id, context, data, &mut out);
+        out
+    }
+
+    /// [`Self::build_link_packet`], appending to `out`.
+    pub(super) fn build_link_packet_into(
+        &self,
+        link_id: &LinkId,
+        context: u8,
+        data: &[u8],
+        out: &mut Vec<LinkManagerAction>,
+    ) {
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
             context_flag: constants::FLAG_UNSET,
@@ -1597,7 +1627,6 @@ impl LinkManager {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let mut actions = Vec::new();
         let max_mtu = self
             .links
             .get(link_id)
@@ -1606,13 +1635,12 @@ impl LinkManager {
         if let Ok(raw) =
             RawPacket::pack_raw_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
         {
-            actions.push(LinkManagerAction::SendPacket {
+            out.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
         }
-        actions
     }
 
     /// Start sending a resource on a link.
