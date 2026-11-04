@@ -31,9 +31,24 @@ pub struct ResourceAdvertisement {
     pub request_id: Option<Vec<u8>>,
 }
 
-impl ResourceAdvertisement {
-    /// Pack the advertisement to msgpack bytes.
-    /// `segment` controls which hashmap segment to include (0-based).
+/// An advertisement's fields, borrowed, for packing without copying them.
+#[derive(Clone, Copy)]
+pub(crate) struct AdvertisementFields<'a> {
+    pub transfer_size: u64,
+    pub data_size: u64,
+    pub num_parts: u64,
+    pub resource_hash: &'a [u8],
+    pub random_hash: &'a [u8],
+    pub original_hash: &'a [u8],
+    pub hashmap: &'a [u8],
+    pub flags: AdvFlags,
+    pub segment_index: u64,
+    pub total_segments: u64,
+    pub request_id: Option<&'a [u8]>,
+}
+
+impl AdvertisementFields<'_> {
+    /// [`ResourceAdvertisement::pack`].
     pub fn pack(&self, segment: usize) -> Vec<u8> {
         let hashmap_start = segment * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
         let max_end = (segment + 1) * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
@@ -50,7 +65,7 @@ impl ResourceAdvertisement {
         let bins = self.resource_hash.len()
             + self.random_hash.len()
             + self.original_hash.len()
-            + self.request_id.as_ref().map_or(0, Vec::len)
+            + self.request_id.map_or(0, <[u8]>::len)
             + hashmap_segment.len();
         let mut out = Vec::with_capacity(1 + 11 * 2 + 6 * 9 + 5 * 5 + bins);
         out.push(0x80 | 11);
@@ -62,9 +77,9 @@ impl ResourceAdvertisement {
         uint(&mut out, "d", self.data_size);
         uint(&mut out, "n", self.num_parts);
         for (key, value) in [
-            ("h", &self.resource_hash),
-            ("r", &self.random_hash),
-            ("o", &self.original_hash),
+            ("h", self.resource_hash),
+            ("r", self.random_hash),
+            ("o", self.original_hash),
         ] {
             msgpack::pack_str(key, &mut out);
             msgpack::pack_bin(value, &mut out);
@@ -72,7 +87,7 @@ impl ResourceAdvertisement {
         uint(&mut out, "i", self.segment_index);
         uint(&mut out, "l", self.total_segments);
         msgpack::pack_str("q", &mut out);
-        match &self.request_id {
+        match self.request_id {
             Some(id) => msgpack::pack_bin(id, &mut out),
             None => out.push(0xc0),
         }
@@ -82,21 +97,50 @@ impl ResourceAdvertisement {
         out
     }
 
+    /// [`ResourceAdvertisement::pack_for_mdu`].
+    pub fn pack_for_mdu(&self, segment: usize, mdu: usize) -> Vec<u8> {
+        let packed = self.pack(segment);
+        if packed.len() <= mdu {
+            return packed;
+        }
+        AdvertisementFields {
+            hashmap: &[],
+            ..*self
+        }
+        .pack(segment)
+    }
+}
+
+impl ResourceAdvertisement {
+    pub(crate) fn fields(&self) -> AdvertisementFields<'_> {
+        AdvertisementFields {
+            transfer_size: self.transfer_size,
+            data_size: self.data_size,
+            num_parts: self.num_parts,
+            resource_hash: &self.resource_hash,
+            random_hash: &self.random_hash,
+            original_hash: &self.original_hash,
+            hashmap: &self.hashmap,
+            flags: self.flags,
+            segment_index: self.segment_index,
+            total_segments: self.total_segments,
+            request_id: self.request_id.as_deref(),
+        }
+    }
+
+    /// Pack the advertisement to msgpack bytes.
+    /// `segment` controls which hashmap segment to include (0-based).
+    pub fn pack(&self, segment: usize) -> Vec<u8> {
+        self.fields().pack(segment)
+    }
+
     /// Pack the advertisement for a link with the given MDU.
     ///
     /// Like Python, an advertisement that would exceed the MDU is sent with
     /// an empty hashmap, and the receiver requests the first hashmap segment
     /// with `RESOURCE_HASHMAP_IS_EMPTY` before any part.
     pub fn pack_for_mdu(&self, segment: usize, mdu: usize) -> Vec<u8> {
-        let packed = self.pack(segment);
-        if packed.len() <= mdu {
-            return packed;
-        }
-        let without_hashmap = ResourceAdvertisement {
-            hashmap: Vec::new(),
-            ..self.clone()
-        };
-        without_hashmap.pack(segment)
+        self.fields().pack_for_mdu(segment, mdu)
     }
 
     /// Unpack an advertisement from msgpack bytes.

@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use rns_crypto::Rng;
 
-use super::advertisement::ResourceAdvertisement;
+use super::advertisement::AdvertisementFields;
 use super::parts::{build_hashmap, has_collision, map_hash, prepend_metadata};
 use super::proof::{data_hash_state, finish_with, validate_proof};
 use super::types::*;
@@ -261,20 +261,20 @@ impl ResourceSender {
 
     /// Generate the advertisement for the given hashmap segment.
     pub fn get_advertisement(&self, segment: usize) -> Vec<u8> {
-        let adv = ResourceAdvertisement {
+        AdvertisementFields {
             transfer_size: self.transfer_size as u64,
             data_size: self.data_size as u64,
             num_parts: self.total_parts as u64,
-            resource_hash: self.resource_hash.to_vec(),
-            random_hash: self.random_hash.clone(),
-            original_hash: self.original_hash.to_vec(),
-            hashmap: self.hashmap.clone(),
+            resource_hash: &self.resource_hash,
+            random_hash: &self.random_hash,
+            original_hash: &self.original_hash,
+            hashmap: &self.hashmap,
             flags: self.flags,
             segment_index: self.segment_index,
             total_segments: self.total_segments,
-            request_id: self.request_id.clone(),
-        };
-        adv.pack_for_mdu(segment, self.advertisement_mdu)
+            request_id: self.request_id.as_deref(),
+        }
+        .pack_for_mdu(segment, self.advertisement_mdu)
     }
 
     /// Advertise the resource. Returns SendAdvertisement action.
@@ -302,6 +302,29 @@ impl ResourceSender {
         &mut self,
         request_data: &[u8],
         now: f64,
+        out: &mut Vec<ResourceAction>,
+    ) {
+        let mut parts = Vec::new();
+        let start = out.len();
+        self.handle_request_parts_into(request_data, now, &mut parts, out);
+        // The parts go out before anything else the request produced.
+        out.splice(
+            start..start,
+            parts
+                .iter()
+                .map(|&index| ResourceAction::SendPart(self.part(index).to_vec())),
+        );
+    }
+
+    /// [`Self::handle_request_into`] without copying the requested parts:
+    /// their indices are appended to `parts` in sending order, each standing
+    /// for a [`ResourceAction::SendPart`] of [`Self::part_data`] that comes
+    /// before the actions appended to `out`.
+    pub fn handle_request_parts_into(
+        &mut self,
+        request_data: &[u8],
+        now: f64,
+        parts: &mut Vec<usize>,
         out: &mut Vec<ResourceAction>,
     ) {
         if self.status == ResourceStatus::Failed {
@@ -348,7 +371,7 @@ impl ResourceSender {
                 .clone()
                 .any(|h| h == self.part_hashes[part_idx].as_slice())
             {
-                out.push(ResourceAction::SendPart(self.part(part_idx).to_vec()));
+                parts.push(part_idx);
                 if !self.sent_indices[part_idx] {
                     self.sent_indices[part_idx] = true;
                     self.sent_parts += 1;
@@ -550,6 +573,11 @@ impl ResourceSender {
         }
 
         vec![]
+    }
+
+    /// The bytes of part `index` as sent, or `None` past the last part.
+    pub fn part_data(&self, index: usize) -> Option<&[u8]> {
+        (index < self.total_parts).then(|| self.part(index))
     }
 
     fn part(&self, index: usize) -> &[u8] {

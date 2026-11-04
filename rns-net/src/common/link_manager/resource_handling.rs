@@ -652,14 +652,18 @@ impl LinkManager {
         let now = time::now();
         let mut progress_update = None;
         let mut progress_stream_hash = None;
-        for sender in &mut link.outgoing_resources {
+        // Requested parts are packed straight from the sender's data.
+        let mut parts = core::mem::take(&mut self.resource_part_scratch);
+        let mut part_sender = None;
+        for (index, sender) in link.outgoing_resources.iter_mut().enumerate() {
             if sender.flags.split && sender.status == rns_core::resource::ResourceStatus::Queued {
                 continue;
             }
             let before_sent = sender.sent_parts;
             let before = all_actions.len();
-            sender.handle_request_into(plaintext, now, &mut all_actions);
-            if all_actions.len() > before {
+            sender.handle_request_parts_into(plaintext, now, &mut parts, &mut all_actions);
+            if all_actions.len() > before || !parts.is_empty() {
+                part_sender = Some(index);
                 if sender.sent_parts != before_sent {
                     progress_stream_hash = Some(sender.original_hash);
                     if sender.flags.split {
@@ -679,6 +683,25 @@ impl LinkManager {
         }
 
         let _ = link;
+        if let Some(sender) = part_sender {
+            for &part in &parts {
+                if !self.resource_link_is_active(link_id) {
+                    out.extend(self.abort_resources_on_inactive_link(link_id));
+                    continue;
+                }
+                let data = self
+                    .links
+                    .get(link_id)
+                    .and_then(|link| link.outgoing_resources.get(sender))
+                    .and_then(|sender| sender.part_data(part));
+                if let Some(data) = data {
+                    // Parts are NOT link-encrypted — send raw as CONTEXT_RESOURCE
+                    self.build_link_packet_into(link_id, constants::CONTEXT_RESOURCE, data, out);
+                }
+            }
+        }
+        parts.clear();
+        self.resource_part_scratch = parts;
         self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
         self.resource_scratch = all_actions;
         if let Some((received, total)) = progress_update {

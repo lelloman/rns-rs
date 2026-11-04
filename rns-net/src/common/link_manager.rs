@@ -272,6 +272,8 @@ pub struct LinkManager {
     link_mtu_discovery: bool,
     /// Reused buffer for the resource actions of one packet.
     resource_scratch: Vec<rns_core::resource::ResourceAction>,
+    /// Reused list of requested part indices a sender answers with.
+    resource_part_scratch: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,6 +386,7 @@ impl LinkManager {
             link_mtu_discovery: true,
             link_request_costs: Default::default(),
             resource_scratch: Vec::new(),
+            resource_part_scratch: Vec::new(),
         }
     }
 
