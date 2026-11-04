@@ -78,14 +78,17 @@ impl PacketFlags {
 // RawPacket: wire-level packet representation
 // =============================================================================
 
+/// A packet's header fields and its wire bytes `raw`, owned (`Vec<u8>`, the
+/// default) or in other storage: a borrowed view (`&[u8]`) reads a packet
+/// without copying it, and shared bytes (`PacketBytes`) are cloned, not copied.
 #[derive(Debug, Clone)]
-pub struct RawPacket {
+pub struct RawPacket<B = Vec<u8>> {
     pub flags: PacketFlags,
     pub hops: u8,
     pub transport_id: Option<[u8; 16]>,
     pub destination_hash: [u8; 16],
     pub context: u8,
-    pub raw: Vec<u8>,
+    pub raw: B,
     pub packet_hash: [u8; 32],
     pub rssi: Option<i16>,
     pub snr: Option<f32>,
@@ -102,22 +105,6 @@ impl RawPacket {
         }
     }
 
-    /// The payload: the wire bytes after the header.
-    #[inline]
-    pub fn data(&self) -> &[u8] {
-        &self.raw[Self::data_offset(self.flags.header_type)..]
-    }
-
-    /// Whether this packet is a part of a link resource. Nothing reads such
-    /// a packet's hash: the packet filter admits parts before deduplication,
-    /// no proof or receipt covers them, and the resource receiver locates a
-    /// part by its map hash. A part's hash cannot mark any other packet as a
-    /// duplicate either, since the context byte is hashed.
-    #[inline]
-    pub fn is_link_resource_part(&self) -> bool {
-        Self::is_link_resource_part_header(&self.flags, self.context)
-    }
-
     /// [`RawPacket::is_link_resource_part`] for wire bytes that are not
     /// unpacked; `false` when they are too short to carry a context byte.
     pub fn is_link_resource_part_wire(raw: &[u8]) -> bool {
@@ -127,31 +114,6 @@ impl RawPacket {
         let flags = PacketFlags::unpack(flags);
         raw.get(Self::data_offset(flags.header_type) - 1)
             .is_some_and(|&context| Self::is_link_resource_part_header(&flags, context))
-    }
-
-    /// Whether a link peer never proves this packet: link data in a context
-    /// with its own protocol handling (requests and responses, resource
-    /// control and parts, keepalives, identification, RTT and close). Only
-    /// plain link data and channel messages are proven, so a sent packet in
-    /// one of these contexts has no receipt to wait for.
-    pub fn is_unproven_link_data(&self) -> bool {
-        self.flags.packet_type == constants::PACKET_TYPE_DATA
-            && self.flags.destination_type == constants::DESTINATION_LINK
-            && matches!(
-                self.context,
-                constants::CONTEXT_REQUEST
-                    | constants::CONTEXT_RESPONSE
-                    | constants::CONTEXT_RESOURCE
-                    | constants::CONTEXT_RESOURCE_ADV
-                    | constants::CONTEXT_RESOURCE_REQ
-                    | constants::CONTEXT_RESOURCE_HMU
-                    | constants::CONTEXT_RESOURCE_ICL
-                    | constants::CONTEXT_RESOURCE_RCL
-                    | constants::CONTEXT_KEEPALIVE
-                    | constants::CONTEXT_LINKIDENTIFY
-                    | constants::CONTEXT_LRRTT
-                    | constants::CONTEXT_LINKCLOSE
-            )
     }
 
     #[inline]
@@ -298,20 +260,20 @@ impl RawPacket {
 
     /// Unpack raw bytes into fields.
     pub fn unpack(raw: &[u8]) -> Result<Self, PacketError> {
-        Self::unpack_with::<true, _>(raw)
+        RawPacket::<&[u8]>::parse::<true>(raw).map(|packet| packet.map_raw(<[u8]>::to_vec))
     }
 
     /// Unpack wire bytes the caller owns, keeping them as `raw` instead of
     /// copying them.
     pub fn unpack_owned(raw: Vec<u8>) -> Result<Self, PacketError> {
-        Self::unpack_with::<true, _>(raw)
+        Self::parse::<true>(raw)
     }
 
     /// Unpack owned wire bytes into fields, leaving `packet_hash` zeroed.
     /// Callers must hash the packet with [`RawPacket::hash_in_place`] before
     /// anything reads `packet_hash`.
     pub(crate) fn unpack_unhashed(raw: Vec<u8>) -> Result<Self, PacketError> {
-        Self::unpack_with::<false, _>(raw)
+        Self::parse::<false>(raw)
     }
 
     /// Unpack owned wire bytes of a packet this node sends. A link resource
@@ -329,15 +291,144 @@ impl RawPacket {
     /// these exact bytes (for example a delivered packet's hash), instead of
     /// hashing them again. The hash is trusted, not checked.
     pub fn unpack_prehashed(raw: &[u8], packet_hash: [u8; 32]) -> Result<Self, PacketError> {
-        let mut packet = Self::unpack_with::<false, _>(raw)?;
-        packet.packet_hash = packet_hash;
-        Ok(packet)
+        RawPacket::view_prehashed(raw, packet_hash).map(|packet| packet.map_raw(<[u8]>::to_vec))
     }
 
-    fn unpack_with<const HASH: bool, B>(input: B) -> Result<Self, PacketError>
-    where
-        B: AsRef<[u8]> + Into<Vec<u8>>,
-    {
+    fn hashable_tail(header_type: u8, raw: &[u8]) -> &[u8] {
+        if header_type == constants::HEADER_2 {
+            // Skip transport_id: raw[2..18] is transport_id (16 bytes)
+            &raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]
+        } else {
+            &raw[2..]
+        }
+    }
+
+    fn compute_hashable_part(header_type: u8, raw: &[u8]) -> Vec<u8> {
+        let tail = Self::hashable_tail(header_type, raw);
+        let mut hashable = Vec::with_capacity(1 + tail.len());
+        hashable.push(raw[0] & 0b00001111);
+        hashable.extend_from_slice(tail);
+        hashable
+    }
+
+    /// SHA-256 of the hashable part, fed from the wire bytes without building
+    /// the concatenated buffer that [`RawPacket::get_hashable_part`] returns.
+    fn compute_packet_hash(header_type: u8, raw: &[u8]) -> [u8; 32] {
+        let mut hasher = rns_crypto::sha256::Sha256::new();
+        hasher.update(&[raw[0] & 0b00001111]);
+        hasher.update(Self::hashable_tail(header_type, raw));
+        hasher.digest()
+    }
+}
+
+impl<B: AsRef<[u8]>> RawPacket<B> {
+    /// The payload: the wire bytes after the header.
+    #[inline]
+    pub fn data(&self) -> &[u8] {
+        &self.raw.as_ref()[<RawPacket>::data_offset(self.flags.header_type)..]
+    }
+
+    /// Whether this packet is a part of a link resource. Nothing reads such
+    /// a packet's hash: the packet filter admits parts before deduplication,
+    /// no proof or receipt covers them, and the resource receiver locates a
+    /// part by its map hash. A part's hash cannot mark any other packet as a
+    /// duplicate either, since the context byte is hashed.
+    #[inline]
+    pub fn is_link_resource_part(&self) -> bool {
+        <RawPacket>::is_link_resource_part_header(&self.flags, self.context)
+    }
+
+    /// Whether a link peer never proves this packet: link data in a context
+    /// with its own protocol handling (requests and responses, resource
+    /// control and parts, keepalives, identification, RTT and close). Only
+    /// plain link data and channel messages are proven, so a sent packet in
+    /// one of these contexts has no receipt to wait for.
+    pub fn is_unproven_link_data(&self) -> bool {
+        self.flags.packet_type == constants::PACKET_TYPE_DATA
+            && self.flags.destination_type == constants::DESTINATION_LINK
+            && matches!(
+                self.context,
+                constants::CONTEXT_REQUEST
+                    | constants::CONTEXT_RESPONSE
+                    | constants::CONTEXT_RESOURCE
+                    | constants::CONTEXT_RESOURCE_ADV
+                    | constants::CONTEXT_RESOURCE_REQ
+                    | constants::CONTEXT_RESOURCE_HMU
+                    | constants::CONTEXT_RESOURCE_ICL
+                    | constants::CONTEXT_RESOURCE_RCL
+                    | constants::CONTEXT_KEEPALIVE
+                    | constants::CONTEXT_LINKIDENTIFY
+                    | constants::CONTEXT_LRRTT
+                    | constants::CONTEXT_LINKCLOSE
+            )
+    }
+
+    /// Get the hashable part of the packet.
+    ///
+    /// From Python Packet.py:354-361:
+    /// - Take raw[0] & 0x0F (mask out upper 4 bits of flags)
+    /// - For HEADER_1: append raw[2:]
+    /// - For HEADER_2: skip transport_id: append raw[18:]
+    pub fn get_hashable_part(&self) -> Vec<u8> {
+        <RawPacket>::compute_hashable_part(self.flags.header_type, self.raw.as_ref())
+    }
+
+    /// Compute `packet_hash` from the packet's wire bytes.
+    pub(crate) fn hash_in_place(&mut self) {
+        self.packet_hash =
+            <RawPacket>::compute_packet_hash(self.flags.header_type, self.raw.as_ref());
+    }
+
+    /// Full SHA-256 hash of the hashable part.
+    pub fn get_hash(&self) -> [u8; 32] {
+        self.packet_hash
+    }
+
+    /// Truncated hash (first 16 bytes) of the cached packet hash.
+    ///
+    /// Packet construction and unpacking compute `packet_hash` once; routing
+    /// paths use this prefix instead of hashing the raw packet again.
+    pub fn get_truncated_hash(&self) -> [u8; 16] {
+        let mut result = [0u8; 16];
+        result.copy_from_slice(&self.packet_hash[..16]);
+        result
+    }
+    /// A view of this packet borrowing its bytes.
+    pub fn as_view(&self) -> RawPacket<&[u8]> {
+        RawPacket {
+            flags: self.flags,
+            hops: self.hops,
+            transport_id: self.transport_id,
+            destination_hash: self.destination_hash,
+            context: self.context,
+            raw: self.raw.as_ref(),
+            packet_hash: self.packet_hash,
+            rssi: self.rssi,
+            snr: self.snr,
+        }
+    }
+
+    /// This packet with its bytes copied into an owned buffer.
+    pub fn to_owned_packet(&self) -> RawPacket {
+        self.as_view().map_raw(<[u8]>::to_vec)
+    }
+
+    fn map_raw<C>(self, f: impl FnOnce(B) -> C) -> RawPacket<C> {
+        RawPacket {
+            flags: self.flags,
+            hops: self.hops,
+            transport_id: self.transport_id,
+            destination_hash: self.destination_hash,
+            context: self.context,
+            raw: f(self.raw),
+            packet_hash: self.packet_hash,
+            rssi: self.rssi,
+            snr: self.snr,
+        }
+    }
+
+    /// Parse `input`, keeping it as `raw`.
+    fn parse<const HASH: bool>(input: B) -> Result<Self, PacketError> {
         let raw = input.as_ref();
         if raw.len() < constants::HEADER_MINSIZE {
             return Err(PacketError::TooShort);
@@ -370,7 +461,7 @@ impl RawPacket {
             }
 
             let packet_hash = if HASH {
-                Self::compute_packet_hash(flags.header_type, raw)
+                <RawPacket>::compute_packet_hash(flags.header_type, raw)
             } else {
                 [0; 32]
             };
@@ -381,7 +472,7 @@ impl RawPacket {
                 transport_id: Some(transport_id),
                 destination_hash,
                 context,
-                raw: input.into(),
+                raw: input,
                 packet_hash,
                 rssi: None,
                 snr: None,
@@ -402,7 +493,7 @@ impl RawPacket {
             }
 
             let packet_hash = if HASH {
-                Self::compute_packet_hash(flags.header_type, raw)
+                <RawPacket>::compute_packet_hash(flags.header_type, raw)
             } else {
                 [0; 32]
             };
@@ -413,7 +504,7 @@ impl RawPacket {
                 transport_id: None,
                 destination_hash,
                 context,
-                raw: input.into(),
+                raw: input,
                 packet_hash,
                 rssi: None,
                 snr: None,
@@ -422,61 +513,14 @@ impl RawPacket {
             Err(PacketError::InvalidHeaderType)
         }
     }
+}
 
-    /// Get the hashable part of the packet.
-    ///
-    /// From Python Packet.py:354-361:
-    /// - Take raw[0] & 0x0F (mask out upper 4 bits of flags)
-    /// - For HEADER_1: append raw[2:]
-    /// - For HEADER_2: skip transport_id: append raw[18:]
-    pub fn get_hashable_part(&self) -> Vec<u8> {
-        Self::compute_hashable_part(self.flags.header_type, &self.raw)
-    }
-
-    fn hashable_tail(header_type: u8, raw: &[u8]) -> &[u8] {
-        if header_type == constants::HEADER_2 {
-            // Skip transport_id: raw[2..18] is transport_id (16 bytes)
-            &raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]
-        } else {
-            &raw[2..]
-        }
-    }
-
-    fn compute_hashable_part(header_type: u8, raw: &[u8]) -> Vec<u8> {
-        let tail = Self::hashable_tail(header_type, raw);
-        let mut hashable = Vec::with_capacity(1 + tail.len());
-        hashable.push(raw[0] & 0b00001111);
-        hashable.extend_from_slice(tail);
-        hashable
-    }
-
-    /// SHA-256 of the hashable part, fed from the wire bytes without building
-    /// the concatenated buffer that [`RawPacket::get_hashable_part`] returns.
-    fn compute_packet_hash(header_type: u8, raw: &[u8]) -> [u8; 32] {
-        let mut hasher = rns_crypto::sha256::Sha256::new();
-        hasher.update(&[raw[0] & 0b00001111]);
-        hasher.update(Self::hashable_tail(header_type, raw));
-        hasher.digest()
-    }
-
-    /// Compute `packet_hash` from the packet's wire bytes.
-    pub(crate) fn hash_in_place(&mut self) {
-        self.packet_hash = Self::compute_packet_hash(self.flags.header_type, &self.raw);
-    }
-
-    /// Full SHA-256 hash of the hashable part.
-    pub fn get_hash(&self) -> [u8; 32] {
-        self.packet_hash
-    }
-
-    /// Truncated hash (first 16 bytes) of the cached packet hash.
-    ///
-    /// Packet construction and unpacking compute `packet_hash` once; routing
-    /// paths use this prefix instead of hashing the raw packet again.
-    pub fn get_truncated_hash(&self) -> [u8; 16] {
-        let mut result = [0u8; 16];
-        result.copy_from_slice(&self.packet_hash[..16]);
-        result
+impl<'a> RawPacket<&'a [u8]> {
+    /// [`RawPacket::unpack_prehashed`] as a view of `raw`, without copying it.
+    pub fn view_prehashed(raw: &'a [u8], packet_hash: [u8; 32]) -> Result<Self, PacketError> {
+        let mut packet = Self::parse::<false>(raw)?;
+        packet.packet_hash = packet_hash;
+        Ok(packet)
     }
 }
 
