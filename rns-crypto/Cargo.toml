@@ -38,3 +38,6 @@ harness = false
 [[bench]]
 name = "ratchets"
 harness = false
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", default-features = false }
