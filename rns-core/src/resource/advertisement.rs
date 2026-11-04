@@ -1,9 +1,8 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::types::{AdvFlags, ResourceError};
 use crate::constants::{RESOURCE_HASHMAP_MAX_LEN, RESOURCE_MAPHASH_LEN};
-use crate::msgpack::{self, Value};
+use crate::msgpack;
 
 /// Resource advertisement data, corresponding to Python's ResourceAdvertisement.
 #[derive(Debug, Clone)]
@@ -45,27 +44,42 @@ impl ResourceAdvertisement {
             &[]
         };
 
-        let q_value = match &self.request_id {
-            Some(id) => Value::Bin(id.clone()),
-            None => Value::Nil,
+        // Written directly, in Python's key order (t, d, n, h, r, o, i, l, q,
+        // f, m): building a msgpack value first cloned every field. Sized for
+        // the worst case so the buffer is allocated once.
+        let bins = self.resource_hash.len()
+            + self.random_hash.len()
+            + self.original_hash.len()
+            + self.request_id.as_ref().map_or(0, Vec::len)
+            + hashmap_segment.len();
+        let mut out = Vec::with_capacity(1 + 11 * 2 + 6 * 9 + 5 * 5 + bins);
+        out.push(0x80 | 11);
+        let uint = |out: &mut Vec<u8>, key: &str, value: u64| {
+            msgpack::pack_str(key, out);
+            msgpack::pack_uint(value, out);
         };
-
-        // Match Python's key order: t, d, n, h, r, o, i, l, q, f, m
-        let entries: Vec<(&str, Value)> = vec![
-            ("t", Value::UInt(self.transfer_size)),
-            ("d", Value::UInt(self.data_size)),
-            ("n", Value::UInt(self.num_parts)),
-            ("h", Value::Bin(self.resource_hash.clone())),
-            ("r", Value::Bin(self.random_hash.clone())),
-            ("o", Value::Bin(self.original_hash.clone())),
-            ("i", Value::UInt(self.segment_index)),
-            ("l", Value::UInt(self.total_segments)),
-            ("q", q_value),
-            ("f", Value::UInt(self.flags.to_byte() as u64)),
-            ("m", Value::Bin(hashmap_segment.to_vec())),
-        ];
-
-        msgpack::pack_str_map(&entries)
+        uint(&mut out, "t", self.transfer_size);
+        uint(&mut out, "d", self.data_size);
+        uint(&mut out, "n", self.num_parts);
+        for (key, value) in [
+            ("h", &self.resource_hash),
+            ("r", &self.random_hash),
+            ("o", &self.original_hash),
+        ] {
+            msgpack::pack_str(key, &mut out);
+            msgpack::pack_bin(value, &mut out);
+        }
+        uint(&mut out, "i", self.segment_index);
+        uint(&mut out, "l", self.total_segments);
+        msgpack::pack_str("q", &mut out);
+        match &self.request_id {
+            Some(id) => msgpack::pack_bin(id, &mut out),
+            None => out.push(0xc0),
+        }
+        uint(&mut out, "f", self.flags.to_byte() as u64);
+        msgpack::pack_str("m", &mut out);
+        msgpack::pack_bin(hashmap_segment, &mut out);
+        out
     }
 
     /// Pack the advertisement for a link with the given MDU.
@@ -87,65 +101,39 @@ impl ResourceAdvertisement {
 
     /// Unpack an advertisement from msgpack bytes.
     pub fn unpack(data: &[u8]) -> Result<Self, ResourceError> {
-        let value = msgpack::unpack_exact(data).map_err(|_| ResourceError::InvalidAdvertisement)?;
-
-        let t = value
-            .map_get("t")
-            .and_then(|v| v.as_uint())
-            .ok_or(ResourceError::InvalidAdvertisement)?;
-        let d = value
-            .map_get("d")
-            .and_then(|v| v.as_uint())
-            .ok_or(ResourceError::InvalidAdvertisement)?;
-        let n = value
-            .map_get("n")
-            .and_then(|v| v.as_uint())
-            .ok_or(ResourceError::InvalidAdvertisement)?;
-        let h = value
-            .map_get("h")
-            .and_then(|v| v.as_bin())
-            .ok_or(ResourceError::InvalidAdvertisement)?
-            .to_vec();
-        let r = value
-            .map_get("r")
-            .and_then(|v| v.as_bin())
-            .ok_or(ResourceError::InvalidAdvertisement)?
-            .to_vec();
-        let o = value
-            .map_get("o")
-            .and_then(|v| v.as_bin())
-            .ok_or(ResourceError::InvalidAdvertisement)?
-            .to_vec();
-        let m = value
-            .map_get("m")
-            .and_then(|v| v.as_bin())
-            .ok_or(ResourceError::InvalidAdvertisement)?
-            .to_vec();
-        let f = value
-            .map_get("f")
-            .and_then(|v| v.as_uint())
-            .ok_or(ResourceError::InvalidAdvertisement)? as u8;
-        let i = value
-            .map_get("i")
-            .and_then(|v| v.as_uint())
-            .ok_or(ResourceError::InvalidAdvertisement)?;
-        let l = value
-            .map_get("l")
-            .and_then(|v| v.as_uint())
-            .ok_or(ResourceError::InvalidAdvertisement)?;
-
-        let q_val = value
-            .map_get("q")
-            .ok_or(ResourceError::InvalidAdvertisement)?;
-        let request_id = if q_val.is_nil() {
+        // Read in place: decoding to a msgpack value first allocated every
+        // key and field, and each field was then copied again.
+        let invalid = ResourceError::InvalidAdvertisement;
+        let value = msgpack::unpack_exact_ref(data).map_err(|_| invalid.clone())?;
+        let mut fields: [Option<msgpack::ValueRef<'_>>; 11] = [None; 11];
+        for (key, field) in value.map_entries().ok_or(invalid.clone())? {
+            let Some(key) = key.as_str() else { continue };
+            let Some(index) = ["t", "d", "n", "h", "r", "o", "i", "l", "q", "f", "m"]
+                .iter()
+                .position(|k| *k == key)
+            else {
+                continue;
+            };
+            // The first entry for a key wins, as in `Value::map_get`.
+            fields[index].get_or_insert(field);
+        }
+        let [t, d, n, h, r, o, i, l, q, f, m] = fields;
+        let uint =
+            |v: Option<msgpack::ValueRef<'_>>| v.and_then(|v| v.as_uint()).ok_or(invalid.clone());
+        let bin = |v: Option<msgpack::ValueRef<'_>>| {
+            v.and_then(|v| v.as_bin())
+                .map(<[u8]>::to_vec)
+                .ok_or(invalid.clone())
+        };
+        let (t, d, n) = (uint(t)?, uint(d)?, uint(n)?);
+        let (h, r, o, m) = (bin(h)?, bin(r)?, bin(o)?, bin(m)?);
+        let f = uint(f)? as u8;
+        let (i, l) = (uint(i)?, uint(l)?);
+        let q = q.ok_or(invalid.clone())?;
+        let request_id = if q.is_nil() {
             None
         } else {
-            Some(
-                q_val
-                    .as_bin()
-                    .ok_or(ResourceError::InvalidAdvertisement)?
-                    .to_vec(),
-            )
+            Some(q.as_bin().ok_or(invalid.clone())?.to_vec())
         };
 
         if t > (crate::constants::RESOURCE_MAX_EFFICIENT_SIZE * 3) as u64 {
@@ -195,6 +183,214 @@ impl ResourceAdvertisement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msgpack::Value;
+    use alloc::vec;
+
+    /// The encoder before direct writing, kept as the reference.
+    fn pack_reference(adv: &ResourceAdvertisement, segment: usize) -> Vec<u8> {
+        let hashmap_start = segment * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
+        let max_end = (segment + 1) * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
+        let hashmap_end = core::cmp::min(max_end, adv.hashmap.len());
+        let hashmap_segment = if hashmap_start < adv.hashmap.len() {
+            &adv.hashmap[hashmap_start..hashmap_end]
+        } else {
+            &[]
+        };
+        let q_value = match &adv.request_id {
+            Some(id) => Value::Bin(id.clone()),
+            None => Value::Nil,
+        };
+        let entries: Vec<(&str, Value)> = vec![
+            ("t", Value::UInt(adv.transfer_size)),
+            ("d", Value::UInt(adv.data_size)),
+            ("n", Value::UInt(adv.num_parts)),
+            ("h", Value::Bin(adv.resource_hash.clone())),
+            ("r", Value::Bin(adv.random_hash.clone())),
+            ("o", Value::Bin(adv.original_hash.clone())),
+            ("i", Value::UInt(adv.segment_index)),
+            ("l", Value::UInt(adv.total_segments)),
+            ("q", q_value),
+            ("f", Value::UInt(adv.flags.to_byte() as u64)),
+            ("m", Value::Bin(hashmap_segment.to_vec())),
+        ];
+        msgpack::pack_str_map(&entries)
+    }
+
+    /// The decoder before reading in place, kept as the reference.
+    fn unpack_reference(data: &[u8]) -> Option<ResourceAdvertisement> {
+        let value = msgpack::unpack_exact(data).ok()?;
+        let uint = |k| value.map_get(k).and_then(|v| v.as_uint());
+        let bin = |k| {
+            value
+                .map_get(k)
+                .and_then(|v| v.as_bin())
+                .map(<[u8]>::to_vec)
+        };
+        let (t, d, n) = (uint("t")?, uint("d")?, uint("n")?);
+        let (h, r, o, m) = (bin("h")?, bin("r")?, bin("o")?, bin("m")?);
+        let f = uint("f")? as u8;
+        let (i, l) = (uint("i")?, uint("l")?);
+        let q = value.map_get("q")?;
+        let request_id = if q.is_nil() {
+            None
+        } else {
+            Some(q.as_bin()?.to_vec())
+        };
+        if t > (crate::constants::RESOURCE_MAX_EFFICIENT_SIZE * 3) as u64 {
+            return None;
+        }
+        Some(ResourceAdvertisement {
+            transfer_size: t,
+            data_size: d,
+            num_parts: n,
+            resource_hash: h,
+            random_hash: r,
+            original_hash: o,
+            hashmap: m,
+            flags: AdvFlags::from_byte(f),
+            segment_index: i,
+            total_segments: l,
+            request_id,
+        })
+    }
+
+    struct XorShift(u64);
+    impl XorShift {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn bytes(&mut self, len: usize) -> Vec<u8> {
+            (0..len).map(|_| self.next() as u8).collect()
+        }
+    }
+
+    fn random_adv(rng: &mut XorShift) -> ResourceAdvertisement {
+        // Sizes cross every msgpack integer width.
+        let widths = [
+            0u64,
+            1,
+            127,
+            128,
+            255,
+            256,
+            65_535,
+            65_536,
+            u32::MAX as u64,
+            u64::MAX,
+        ];
+        let pick = |rng: &mut XorShift| {
+            let w = widths[(rng.next() % widths.len() as u64) as usize];
+            w.saturating_sub(rng.next() % 3)
+        };
+        let hashmap_len = [0usize, 4, 300, 74 * 4 * 2][(rng.next() % 4) as usize];
+        let original_len = (rng.next() % 40) as usize;
+        ResourceAdvertisement {
+            transfer_size: pick(rng) % 1_000_000,
+            data_size: pick(rng),
+            num_parts: pick(rng),
+            resource_hash: rng.bytes(32),
+            random_hash: rng.bytes(4),
+            original_hash: rng.bytes(original_len),
+            hashmap: rng.bytes(hashmap_len),
+            flags: AdvFlags::from_byte(rng.next() as u8),
+            segment_index: pick(rng),
+            total_segments: pick(rng),
+            request_id: rng.next().is_multiple_of(2).then(|| rng.bytes(16)),
+        }
+    }
+
+    fn same(a: &Option<ResourceAdvertisement>, b: &Option<ResourceAdvertisement>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.transfer_size == b.transfer_size
+                    && a.data_size == b.data_size
+                    && a.num_parts == b.num_parts
+                    && a.resource_hash == b.resource_hash
+                    && a.random_hash == b.random_hash
+                    && a.original_hash == b.original_hash
+                    && a.hashmap == b.hashmap
+                    && a.flags.to_byte() == b.flags.to_byte()
+                    && a.segment_index == b.segment_index
+                    && a.total_segments == b.total_segments
+                    && a.request_id == b.request_id
+            }
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn direct_pack_matches_the_value_encoder_byte_for_byte() {
+        let mut rng = XorShift(0x5EED_0001);
+        for _ in 0..2_000 {
+            let adv = random_adv(&mut rng);
+            for segment in 0..3 {
+                assert_eq!(adv.pack(segment), pack_reference(&adv, segment));
+            }
+        }
+    }
+
+    #[test]
+    fn in_place_unpack_matches_the_value_decoder_on_valid_and_corrupt_input() {
+        let mut rng = XorShift(0x5EED_0002);
+        let mut cases = 0;
+        for round in 0..400u32 {
+            let adv = random_adv(&mut rng);
+            let packed = adv.pack(0);
+            let check = |data: &[u8]| {
+                let new = ResourceAdvertisement::unpack(data).ok();
+                assert!(
+                    same(&new, &unpack_reference(data)),
+                    "diverged on {data:02x?}"
+                );
+            };
+            check(&packed);
+            // Every truncation, every single-byte change at a few values, and
+            // random multi-byte flips.
+            for len in 0..packed.len() {
+                check(&packed[..len]);
+            }
+            let mut extended = packed.clone();
+            extended.push(0xc0);
+            check(&extended);
+            if round.is_multiple_of(8) {
+                for at in 0..packed.len() {
+                    for value in [
+                        0x00, 0x7f, 0x80, 0xa1, 0xc0, 0xc1, 0xc4, 0xcc, 0xd0, 0xd9, 0xdc, 0xde,
+                        0xff,
+                    ] {
+                        let mut mutated = packed.clone();
+                        mutated[at] = value;
+                        check(&mutated);
+                        cases += 1;
+                    }
+                }
+            }
+            for _ in 0..20 {
+                let mut mutated = packed.clone();
+                for _ in 0..(1 + rng.next() % 4) {
+                    let at = (rng.next() as usize) % mutated.len();
+                    mutated[at] = rng.next() as u8;
+                }
+                check(&mutated);
+                cases += 1;
+            }
+        }
+        // Duplicate keys: the first entry wins in both decoders.
+        let adv = random_adv(&mut rng);
+        let mut packed = adv.pack(0);
+        packed[0] = 0x80 | 12;
+        msgpack::pack_str("t", &mut packed);
+        msgpack::pack_uint(5, &mut packed);
+        assert!(same(
+            &ResourceAdvertisement::unpack(&packed).ok(),
+            &unpack_reference(&packed)
+        ));
+        assert!(cases > 10_000);
+    }
 
     fn make_adv(flags: AdvFlags) -> ResourceAdvertisement {
         ResourceAdvertisement {

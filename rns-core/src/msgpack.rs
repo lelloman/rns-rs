@@ -206,7 +206,7 @@ fn pack_into(value: &Value, buf: &mut Vec<u8>) {
     }
 }
 
-fn pack_uint(v: u64, buf: &mut Vec<u8>) {
+pub(crate) fn pack_uint(v: u64, buf: &mut Vec<u8>) {
     if v <= 127 {
         buf.push(v as u8);
     } else if v <= 0xFF {
@@ -244,7 +244,7 @@ fn pack_int(v: i64, buf: &mut Vec<u8>) {
     }
 }
 
-fn pack_bin(data: &[u8], buf: &mut Vec<u8>) {
+pub(crate) fn pack_bin(data: &[u8], buf: &mut Vec<u8>) {
     let len = data.len();
     if len <= 0xFF {
         buf.push(0xc4);
@@ -259,7 +259,7 @@ fn pack_bin(data: &[u8], buf: &mut Vec<u8>) {
     buf.extend_from_slice(data);
 }
 
-fn pack_str(s: &str, buf: &mut Vec<u8>) {
+pub(crate) fn pack_str(s: &str, buf: &mut Vec<u8>) {
     let bytes = s.as_bytes();
     let len = bytes.len();
     if len <= 31 {
@@ -330,205 +330,23 @@ pub fn unpack(data: &[u8]) -> Result<(Value, usize), Error> {
 }
 
 fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
-    if data.is_empty() {
-        return Err(Error::UnexpectedEof);
-    }
-    if depth > MAX_DEPTH {
-        return Err(Error::MaxDepthExceeded);
-    }
-    let b = data[0];
-    match b {
-        // positive fixint: 0x00..0x7f
-        0x00..=0x7f => Ok((Value::UInt(b as u64), 1)),
-
-        // fixmap: 0x80..0x8f
-        0x80..=0x8f => {
-            let len = (b & 0x0f) as usize;
-            unpack_map_entries(data, 1, len, depth)
-        }
-
-        // fixarray: 0x90..0x9f
-        0x90..=0x9f => {
-            let len = (b & 0x0f) as usize;
-            unpack_array_entries(data, 1, len, depth)
-        }
-
-        // fixstr: 0xa0..0xbf
-        0xa0..=0xbf => {
-            let len = (b & 0x1f) as usize;
-            unpack_str_bytes(data, 1, len)
-        }
-
-        // nil
-        0xc0 => Ok((Value::Nil, 1)),
-
-        // (unused)
-        0xc1 => Err(Error::UnsupportedFormat(b)),
-
-        // bool
-        0xc2 => Ok((Value::Bool(false), 1)),
-        0xc3 => Ok((Value::Bool(true), 1)),
-
-        // float32
-        0xca => {
-            ensure_len(data, 5)?;
-            let bits = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-            Ok((Value::Float(f32::from_bits(bits) as f64), 5))
-        }
-
-        // float64
-        0xcb => {
-            ensure_len(data, 9)?;
-            let bits = u64::from_be_bytes([
-                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-            ]);
-            Ok((Value::Float(f64::from_bits(bits)), 9))
-        }
-
-        // bin8
-        0xc4 => {
-            ensure_len(data, 2)?;
-            let len = data[1] as usize;
-            let needed = 2usize.checked_add(len).ok_or(Error::UnexpectedEof)?;
-            ensure_len(data, needed)?;
-            Ok((Value::Bin(data[2..2 + len].to_vec()), 2 + len))
-        }
-
-        // bin16
-        0xc5 => {
-            ensure_len(data, 3)?;
-            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-            let needed = 3usize.checked_add(len).ok_or(Error::UnexpectedEof)?;
-            ensure_len(data, needed)?;
-            Ok((Value::Bin(data[3..3 + len].to_vec()), 3 + len))
-        }
-
-        // bin32
-        0xc6 => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-            let needed = 5usize.checked_add(len).ok_or(Error::UnexpectedEof)?;
-            ensure_len(data, needed)?;
-            Ok((Value::Bin(data[5..5 + len].to_vec()), 5 + len))
-        }
-
-        // uint8
-        0xcc => {
-            ensure_len(data, 2)?;
-            Ok((Value::UInt(data[1] as u64), 2))
-        }
-
-        // uint16
-        0xcd => {
-            ensure_len(data, 3)?;
-            let v = u16::from_be_bytes([data[1], data[2]]);
-            Ok((Value::UInt(v as u64), 3))
-        }
-
-        // uint32
-        0xce => {
-            ensure_len(data, 5)?;
-            let v = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-            Ok((Value::UInt(v as u64), 5))
-        }
-
-        // uint64
-        0xcf => {
-            ensure_len(data, 9)?;
-            let v = u64::from_be_bytes([
-                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-            ]);
-            Ok((Value::UInt(v), 9))
-        }
-
-        // int8
-        0xd0 => {
-            ensure_len(data, 2)?;
-            Ok((Value::Int(data[1] as i8 as i64), 2))
-        }
-
-        // int16
-        0xd1 => {
-            ensure_len(data, 3)?;
-            let v = i16::from_be_bytes([data[1], data[2]]);
-            Ok((Value::Int(v as i64), 3))
-        }
-
-        // int32
-        0xd2 => {
-            ensure_len(data, 5)?;
-            let v = i32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-            Ok((Value::Int(v as i64), 5))
-        }
-
-        // int64
-        0xd3 => {
-            ensure_len(data, 9)?;
-            let v = i64::from_be_bytes([
-                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-            ]);
-            Ok((Value::Int(v), 9))
-        }
-
-        // str8
-        0xd9 => {
-            ensure_len(data, 2)?;
-            let len = data[1] as usize;
-            unpack_str_bytes(data, 2, len)
-        }
-
-        // str16
-        0xda => {
-            ensure_len(data, 3)?;
-            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-            unpack_str_bytes(data, 3, len)
-        }
-
-        // str32
-        0xdb => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-            unpack_str_bytes(data, 5, len)
-        }
-
-        // array16
-        0xdc => {
-            ensure_len(data, 3)?;
-            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-            unpack_array_entries(data, 3, len, depth)
-        }
-
-        // array32
-        0xdd => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-            unpack_array_entries(data, 5, len, depth)
-        }
-
-        // map16
-        0xde => {
-            ensure_len(data, 3)?;
-            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-            unpack_map_entries(data, 3, len, depth)
-        }
-
-        // map32
-        0xdf => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-            unpack_map_entries(data, 5, len, depth)
-        }
-
-        // negative fixint: 0xe0..0xff
-        0xe0..=0xff => Ok((Value::Int(b as i8 as i64), 1)),
-
-        _ => Err(Error::UnsupportedFormat(b)),
-    }
+    let (value, consumed) = unpack_ref(data, depth)?;
+    Ok((value.to_owned_value()?, consumed))
 }
 
 /// Decode a complete msgpack value, ensuring no trailing data.
 pub fn unpack_exact(data: &[u8]) -> Result<Value, Error> {
     let (value, consumed) = unpack(data)?;
+    if consumed != data.len() {
+        return Err(Error::TrailingData);
+    }
+    Ok(value)
+}
+
+/// Decode a complete msgpack value without copying it, ensuring no trailing
+/// data. Accepts and rejects exactly the inputs [`unpack_exact`] does.
+pub fn unpack_exact_ref(data: &[u8]) -> Result<ValueRef<'_>, Error> {
+    let (value, consumed) = unpack_ref(data, 0)?;
     if consumed != data.len() {
         return Err(Error::TrailingData);
     }
@@ -543,55 +361,385 @@ fn ensure_len(data: &[u8], needed: usize) -> Result<(), Error> {
     }
 }
 
-fn unpack_str_bytes(data: &[u8], offset: usize, len: usize) -> Result<(Value, usize), Error> {
-    let needed = offset.checked_add(len).ok_or(Error::UnexpectedEof)?;
-    ensure_len(data, needed)?;
-    let bytes = &data[offset..offset + len];
-    let s = core::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
-    Ok((Value::Str(String::from(s)), offset + len))
+/// A decoded msgpack value borrowing from its input. Arrays and maps are
+/// validated when decoded (formats, nesting depth, UTF-8) and keep their
+/// encoded items, which [`ValueRef::array_items`] and [`ValueRef::map_entries`]
+/// decode on demand.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ValueRef<'a> {
+    Nil,
+    Bool(bool),
+    UInt(u64),
+    Int(i64),
+    Float(f64),
+    Bin(&'a [u8]),
+    Str(&'a str),
+    Array {
+        len: usize,
+        items: &'a [u8],
+        depth: usize,
+    },
+    Map {
+        len: usize,
+        entries: &'a [u8],
+        depth: usize,
+    },
 }
 
-fn unpack_array_entries(
+impl<'a> ValueRef<'a> {
+    pub fn as_uint(&self) -> Option<u64> {
+        match self {
+            ValueRef::UInt(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn as_bin(&self) -> Option<&'a [u8]> {
+        match self {
+            ValueRef::Bin(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&'a str> {
+        match self {
+            ValueRef::Str(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn is_nil(&self) -> bool {
+        matches!(self, ValueRef::Nil)
+    }
+
+    /// The items of an array, or `None` for any other value.
+    pub fn array_items(&self) -> Option<Items<'a>> {
+        match *self {
+            ValueRef::Array { len, items, depth } => Some(Items {
+                rest: items,
+                remaining: len,
+                depth: depth + 1,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The (key, value) entries of a map, or `None` for any other value.
+    pub fn map_entries(&self) -> Option<Entries<'a>> {
+        match *self {
+            ValueRef::Map {
+                len,
+                entries,
+                depth,
+            } => Some(Entries(Items {
+                rest: entries,
+                remaining: len * 2,
+                depth: depth + 1,
+            })),
+            _ => None,
+        }
+    }
+
+    /// Look up a string key in a map: the first entry with that key, as
+    /// [`Value::map_get`] does.
+    pub fn map_get(&self, key: &str) -> Option<ValueRef<'a>> {
+        self.map_entries()?
+            .find_map(|(k, v)| (k.as_str() == Some(key)).then_some(v))
+    }
+
+    fn to_owned_value(self) -> Result<Value, Error> {
+        Ok(match self {
+            ValueRef::Nil => Value::Nil,
+            ValueRef::Bool(b) => Value::Bool(b),
+            ValueRef::UInt(v) => Value::UInt(v),
+            ValueRef::Int(v) => Value::Int(v),
+            ValueRef::Float(v) => Value::Float(v),
+            ValueRef::Bin(b) => Value::Bin(b.to_vec()),
+            ValueRef::Str(s) => Value::Str(String::from(s)),
+            ValueRef::Array { len, .. } => {
+                let mut items = Vec::with_capacity(len);
+                for item in self.array_items().into_iter().flatten() {
+                    items.push(item.to_owned_value()?);
+                }
+                Value::Array(items)
+            }
+            ValueRef::Map { len, .. } => {
+                let mut entries = Vec::with_capacity(len);
+                for (k, v) in self.map_entries().into_iter().flatten() {
+                    entries.push((k.to_owned_value()?, v.to_owned_value()?));
+                }
+                Value::Map(entries)
+            }
+        })
+    }
+}
+
+/// Items of a validated array (or keys and values of a map, in order).
+#[derive(Debug, Clone)]
+pub struct Items<'a> {
+    rest: &'a [u8],
+    remaining: usize,
+    depth: usize,
+}
+
+impl<'a> Iterator for Items<'a> {
+    type Item = ValueRef<'a>;
+
+    fn next(&mut self) -> Option<ValueRef<'a>> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.remaining -= 1;
+        // Validated when the container was decoded, so this cannot fail.
+        let (value, consumed) = unpack_ref(self.rest, self.depth).ok()?;
+        self.rest = &self.rest[consumed..];
+        Some(value)
+    }
+}
+
+/// Entries of a validated map.
+#[derive(Debug, Clone)]
+pub struct Entries<'a>(Items<'a>);
+
+impl<'a> Iterator for Entries<'a> {
+    type Item = (ValueRef<'a>, ValueRef<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some((self.0.next()?, self.0.next()?))
+    }
+}
+
+/// Decode one value from the start of `data` without copying, returning it
+/// and the bytes consumed. Nested arrays and maps are validated in full.
+pub fn unpack_ref(data: &[u8], depth: usize) -> Result<(ValueRef<'_>, usize), Error> {
+    if data.is_empty() {
+        return Err(Error::UnexpectedEof);
+    }
+    if depth > MAX_DEPTH {
+        return Err(Error::MaxDepthExceeded);
+    }
+    let b = data[0];
+    match b {
+        // positive fixint: 0x00..0x7f
+        0x00..=0x7f => Ok((ValueRef::UInt(b as u64), 1)),
+
+        // fixmap: 0x80..0x8f
+        0x80..=0x8f => unpack_map_ref(data, 1, (b & 0x0f) as usize, depth),
+
+        // fixarray: 0x90..0x9f
+        0x90..=0x9f => unpack_array_ref(data, 1, (b & 0x0f) as usize, depth),
+
+        // fixstr: 0xa0..0xbf
+        0xa0..=0xbf => unpack_str_ref(data, 1, (b & 0x1f) as usize),
+
+        // nil
+        0xc0 => Ok((ValueRef::Nil, 1)),
+
+        // (unused)
+        0xc1 => Err(Error::UnsupportedFormat(b)),
+
+        // bool
+        0xc2 => Ok((ValueRef::Bool(false), 1)),
+        0xc3 => Ok((ValueRef::Bool(true), 1)),
+
+        // float32
+        0xca => {
+            ensure_len(data, 5)?;
+            let bits = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+            Ok((ValueRef::Float(f32::from_bits(bits) as f64), 5))
+        }
+
+        // float64
+        0xcb => {
+            ensure_len(data, 9)?;
+            let bits = u64::from_be_bytes([
+                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
+            ]);
+            Ok((ValueRef::Float(f64::from_bits(bits)), 9))
+        }
+
+        // bin8, bin16, bin32
+        0xc4 => {
+            ensure_len(data, 2)?;
+            unpack_bin_ref(data, 2, data[1] as usize)
+        }
+        0xc5 => {
+            ensure_len(data, 3)?;
+            unpack_bin_ref(data, 3, u16::from_be_bytes([data[1], data[2]]) as usize)
+        }
+        0xc6 => {
+            ensure_len(data, 5)?;
+            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            unpack_bin_ref(data, 5, len)
+        }
+
+        // uint8
+        0xcc => {
+            ensure_len(data, 2)?;
+            Ok((ValueRef::UInt(data[1] as u64), 2))
+        }
+
+        // uint16
+        0xcd => {
+            ensure_len(data, 3)?;
+            let v = u16::from_be_bytes([data[1], data[2]]);
+            Ok((ValueRef::UInt(v as u64), 3))
+        }
+
+        // uint32
+        0xce => {
+            ensure_len(data, 5)?;
+            let v = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+            Ok((ValueRef::UInt(v as u64), 5))
+        }
+
+        // uint64
+        0xcf => {
+            ensure_len(data, 9)?;
+            let v = u64::from_be_bytes([
+                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
+            ]);
+            Ok((ValueRef::UInt(v), 9))
+        }
+
+        // int8
+        0xd0 => {
+            ensure_len(data, 2)?;
+            Ok((ValueRef::Int(data[1] as i8 as i64), 2))
+        }
+
+        // int16
+        0xd1 => {
+            ensure_len(data, 3)?;
+            let v = i16::from_be_bytes([data[1], data[2]]);
+            Ok((ValueRef::Int(v as i64), 3))
+        }
+
+        // int32
+        0xd2 => {
+            ensure_len(data, 5)?;
+            let v = i32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+            Ok((ValueRef::Int(v as i64), 5))
+        }
+
+        // int64
+        0xd3 => {
+            ensure_len(data, 9)?;
+            let v = i64::from_be_bytes([
+                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
+            ]);
+            Ok((ValueRef::Int(v), 9))
+        }
+
+        // str8, str16, str32
+        0xd9 => {
+            ensure_len(data, 2)?;
+            unpack_str_ref(data, 2, data[1] as usize)
+        }
+        0xda => {
+            ensure_len(data, 3)?;
+            unpack_str_ref(data, 3, u16::from_be_bytes([data[1], data[2]]) as usize)
+        }
+        0xdb => {
+            ensure_len(data, 5)?;
+            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            unpack_str_ref(data, 5, len)
+        }
+
+        // array16, array32
+        0xdc => {
+            ensure_len(data, 3)?;
+            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
+            unpack_array_ref(data, 3, len, depth)
+        }
+        0xdd => {
+            ensure_len(data, 5)?;
+            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            unpack_array_ref(data, 5, len, depth)
+        }
+
+        // map16, map32
+        0xde => {
+            ensure_len(data, 3)?;
+            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
+            unpack_map_ref(data, 3, len, depth)
+        }
+        0xdf => {
+            ensure_len(data, 5)?;
+            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            unpack_map_ref(data, 5, len, depth)
+        }
+
+        // negative fixint: 0xe0..0xff
+        0xe0..=0xff => Ok((ValueRef::Int(b as i8 as i64), 1)),
+
+        _ => Err(Error::UnsupportedFormat(b)),
+    }
+}
+
+fn unpack_bin_ref(data: &[u8], offset: usize, len: usize) -> Result<(ValueRef<'_>, usize), Error> {
+    let end = offset.checked_add(len).ok_or(Error::UnexpectedEof)?;
+    ensure_len(data, end)?;
+    Ok((ValueRef::Bin(&data[offset..end]), end))
+}
+
+fn unpack_str_ref(data: &[u8], offset: usize, len: usize) -> Result<(ValueRef<'_>, usize), Error> {
+    let end = offset.checked_add(len).ok_or(Error::UnexpectedEof)?;
+    ensure_len(data, end)?;
+    let s = core::str::from_utf8(&data[offset..end]).map_err(|_| Error::InvalidUtf8)?;
+    Ok((ValueRef::Str(s), end))
+}
+
+/// Validate `count` values after `start` at `depth + 1`; returns the offset
+/// after them.
+fn skip_items(data: &[u8], start: usize, count: usize, depth: usize) -> Result<usize, Error> {
+    let mut offset = start;
+    for _ in 0..count {
+        let (_, consumed) = unpack_ref(&data[offset..], depth + 1)?;
+        offset += consumed;
+    }
+    Ok(offset)
+}
+
+fn unpack_array_ref(
     data: &[u8],
     start: usize,
     count: usize,
     depth: usize,
-) -> Result<(Value, usize), Error> {
+) -> Result<(ValueRef<'_>, usize), Error> {
     if count > data.len().saturating_sub(start) {
         return Err(Error::UnexpectedEof);
     }
-    let mut offset = start;
-    let mut items = Vec::with_capacity(count);
-    for _ in 0..count {
-        let (v, consumed) = unpack_depth(&data[offset..], depth + 1)?;
-        items.push(v);
-        offset += consumed;
-    }
-    Ok((Value::Array(items), offset))
+    let end = skip_items(data, start, count, depth)?;
+    Ok((
+        ValueRef::Array {
+            len: count,
+            items: &data[start..end],
+            depth,
+        },
+        end,
+    ))
 }
 
-fn unpack_map_entries(
+fn unpack_map_ref(
     data: &[u8],
     start: usize,
     count: usize,
     depth: usize,
-) -> Result<(Value, usize), Error> {
-    if count
+) -> Result<(ValueRef<'_>, usize), Error> {
+    let items = count
         .checked_mul(2)
-        .is_none_or(|minimum_items| minimum_items > data.len().saturating_sub(start))
-    {
-        return Err(Error::UnexpectedEof);
-    }
-    let mut offset = start;
-    let mut entries = Vec::with_capacity(count);
-    for _ in 0..count {
-        let (k, kc) = unpack_depth(&data[offset..], depth + 1)?;
-        offset += kc;
-        let (v, vc) = unpack_depth(&data[offset..], depth + 1)?;
-        offset += vc;
-        entries.push((k, v));
-    }
-    Ok((Value::Map(entries), offset))
+        .filter(|items| *items <= data.len().saturating_sub(start))
+        .ok_or(Error::UnexpectedEof)?;
+    let end = skip_items(data, start, items, depth)?;
+    Ok((
+        ValueRef::Map {
+            len: count,
+            entries: &data[start..end],
+            depth,
+        },
+        end,
+    ))
 }
 
 #[cfg(test)]
