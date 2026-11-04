@@ -274,8 +274,15 @@ impl ResourceReceiver {
 
     /// Receive a part. Matches by map hash and stores it.
     pub fn receive_part(&mut self, part_data: &[u8], now: f64) -> Vec<ResourceAction> {
+        let mut actions = Vec::new();
+        self.receive_part_into(part_data, now, &mut actions);
+        actions
+    }
+
+    /// [`Self::receive_part`], appending the actions to `out`.
+    pub fn receive_part_into(&mut self, part_data: &[u8], now: f64, out: &mut Vec<ResourceAction>) {
         if self.status >= ResourceStatus::Assembling {
-            return vec![];
+            return;
         }
 
         self.last_activity = now;
@@ -337,20 +344,18 @@ impl ResourceReceiver {
             }
         }
 
-        let mut actions = Vec::new();
-
         // Check if all parts received
         if self.received_count == self.total_parts {
-            actions.push(ResourceAction::ProgressUpdate {
+            out.push(ResourceAction::ProgressUpdate {
                 received: self.received_count,
                 total: self.total_parts,
             });
             // Assembly will be triggered by caller
-            return actions;
+            return;
         }
 
         if matched {
-            actions.push(ResourceAction::ProgressUpdate {
+            out.push(ResourceAction::ProgressUpdate {
                 received: self.received_count,
                 total: self.total_parts,
             });
@@ -372,11 +377,8 @@ impl ResourceReceiver {
                 }
             }
 
-            let next_actions = self.request_next(now);
-            actions.extend(next_actions);
+            self.request_next_into(now, out);
         }
-
-        actions
     }
 
     /// Handle a hashmap update packet.
@@ -455,16 +457,31 @@ impl ResourceReceiver {
 
     /// Build and return request for next window of parts.
     pub fn request_next(&mut self, now: f64) -> Vec<ResourceAction> {
+        let mut actions = Vec::new();
+        self.request_next_into(now, &mut actions);
+        actions
+    }
+
+    /// [`Self::request_next`], appending the request to `out`. The request is
+    /// written into one buffer sized for the window.
+    pub fn request_next_into(&mut self, now: f64, out: &mut Vec<ResourceAction>) {
         if self.status >= ResourceStatus::Assembling {
-            return vec![];
+            return;
         }
         if self.status == ResourceStatus::Failed || self.waiting_for_hmu {
-            return vec![];
+            return;
         }
 
         self.outstanding_parts = 0;
         let mut hashmap_exhausted = RESOURCE_HASHMAP_IS_NOT_EXHAUSTED;
-        let mut requested_hashes = Vec::new();
+        // [exhausted flag][last map hash, if exhausted][resource hash][requested hashes]
+        let mut request_data = Vec::with_capacity(
+            1 + RESOURCE_MAPHASH_LEN
+                + self.resource_hash.len()
+                + self.window.window * RESOURCE_MAPHASH_LEN,
+        );
+        request_data.push(hashmap_exhausted);
+        let hashes_at = request_data.len();
 
         if self.hash_at(0).is_none() {
             // The advertisement carried no hashmap because it would not fit
@@ -480,7 +497,7 @@ impl ResourceReceiver {
                 if !self.has_part(pn) {
                     match self.hash_at(pn) {
                         Some(h) => {
-                            requested_hashes.extend_from_slice(h);
+                            request_data.extend_from_slice(h);
                             self.outstanding_parts += 1;
                             i += 1;
                         }
@@ -495,34 +512,40 @@ impl ResourceReceiver {
             }
         }
 
-        let mut request_data = Vec::new();
-        request_data.push(hashmap_exhausted);
+        request_data[0] = hashmap_exhausted;
+        // The requested hashes were written first; the fields that precede
+        // them on the wire go in front.
+        let mut prefix = [0u8; RESOURCE_MAPHASH_LEN + 32];
+        let mut prefix_len = 0;
         if hashmap_exhausted == RESOURCE_HASHMAP_IS_EXHAUSTED {
             // Append last known map hash
-            if self.hashmap_height > 0 {
-                if let Some(last_hash) = self.hash_at(self.hashmap_height - 1) {
-                    request_data.extend_from_slice(last_hash);
-                } else {
-                    request_data.extend_from_slice(&[0u8; RESOURCE_MAPHASH_LEN]);
-                }
+            let last_hash = if self.hashmap_height > 0 {
+                self.hash_at(self.hashmap_height - 1).copied()
             } else {
-                request_data.extend_from_slice(&[0u8; RESOURCE_MAPHASH_LEN]);
-            }
+                None
+            };
+            prefix[..RESOURCE_MAPHASH_LEN]
+                .copy_from_slice(&last_hash.unwrap_or([0u8; RESOURCE_MAPHASH_LEN]));
+            prefix_len = RESOURCE_MAPHASH_LEN;
             self.waiting_for_hmu = true;
         }
         if hashmap_exhausted == RESOURCE_HASHMAP_IS_EMPTY {
             self.waiting_for_hmu = true;
         }
-
-        request_data.extend_from_slice(&self.resource_hash);
-        request_data.extend_from_slice(&requested_hashes);
+        request_data.splice(
+            hashes_at..hashes_at,
+            prefix[..prefix_len]
+                .iter()
+                .chain(self.resource_hash.iter())
+                .copied(),
+        );
 
         self.last_activity = now;
         self.req_sent = now;
         self.req_sent_bytes = request_data.len();
         self.req_resp = None;
 
-        vec![ResourceAction::SendRequest(request_data)]
+        out.push(ResourceAction::SendRequest(request_data));
     }
 
     /// Assemble received parts, decrypt, decompress, verify hash.
