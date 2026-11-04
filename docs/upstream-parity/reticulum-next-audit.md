@@ -202,7 +202,7 @@ Every commit in the audited range must appear exactly once.
 | 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Integrated | The driver logs the tagless and invalid size path request violations on the `rns::pathing` target, and the excessive size one at debug; log only, by inspection |
 | 41 | `e49fafecce95d8155bfcc54f7aff3df1a430d77a` | Optimized announce handler callback handling | Structurally covered | Mapping commit; rns-rs has no announce handler registry or aspect filters: the driver calls the node's single `Callbacks::on_announce` with each validated announce, and applications filter for themselves; matching by name hash selects the same announces as the old expected-hash match |
 | 42 | `8a09c9b550b761d8d7a9b471125e23ca5bff1d9b` | Fixed pragma ordering | Integrated | `SqliteAnnounceCache::open` sets `auto_vacuum=INCREMENTAL` before WAL, converts an existing `NONE` cache once with `VACUUM` (rns-rs addition), and `clean` steps `incremental_vacuum` to completion; `sqlite_cache_uses_incremental_vacuum_and_reclaims_cleaned_pages`, `sqlite_cache_created_with_the_old_pragma_order_is_converted_once` |
-| 43 | `ceac4a28bd45956f8b5d6c1b4834be48d0724bf9` | Disabled statement caching, fetch under lock | Needs port | |
+| 43 | `ceac4a28bd45956f8b5d6c1b4834be48d0724bf9` | Disabled statement caching, fetch under lock | Structurally covered | Mapping commit; both SQLite stores hold their connection in a `Mutex<Connection>`, so every read already runs under the lock that flushes take, and neither uses `prepare_cached` |
 | 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Needs port | |
 | 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Needs port | |
 
@@ -1730,6 +1730,24 @@ on the old order.
 
 **Final disposition:** Integrated, with the one-time conversion of existing
 caches as an rns-rs addition.
+
+### 43. `ceac4a28` — Disabled statement caching, fetch under lock
+
+**Upstream change** (`RNS/Storage.py`): the known destinations store (both
+read-only and read-write) and the announce cache open their connection with
+`cached_statements=0`, turning off Python's per-connection statement cache.
+The ratchet lookups in `remember_ratchet` and `recall_ratchet`, and the
+announce cache `get`, now run their `SELECT` under the store's `_flush_lock`,
+so a read on one thread no longer shares the connection with a flush running
+on another.
+
+**Rust applicability:** Structurally covered. `SqliteKnownDestinations` and
+`SqliteAnnounceCache` each keep their connection in a `Mutex<Connection>`,
+and every read and write goes through `lock()`, so no query runs alongside a
+flush. Neither uses rusqlite's statement cache (`prepare_cached`); statements
+are prepared per call.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
