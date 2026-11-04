@@ -102,6 +102,8 @@ pub struct Decoder {
     min_frame_size: usize,
     max_frame_size: Option<usize>,
     max_buffer_size: usize,
+    /// Output of [`Decoder::feed_reused`], kept so its buffers are reused.
+    batch: DecodeBatch,
 }
 
 /// Complete frames and non-empty frames rejected by configured size bounds.
@@ -130,6 +132,7 @@ impl Decoder {
             min_frame_size,
             max_frame_size: None,
             max_buffer_size: max_buffer_size.max(2),
+            batch: DecodeBatch::default(),
         }
     }
 
@@ -147,6 +150,7 @@ impl Decoder {
             min_frame_size: HEADER_MINSIZE.saturating_add(1),
             max_frame_size: Some(hardware_mtu.saturating_add(ifac_size)),
             max_buffer_size: hardware_mtu.saturating_mul(2).max(2),
+            batch: DecodeBatch::default(),
         }
     }
 
@@ -159,6 +163,23 @@ impl Decoder {
     /// were rejected by the configured minimum or maximum.
     pub fn feed_with_diagnostics(&mut self, chunk: &[u8]) -> DecodeBatch {
         let mut decoded = DecodeBatch::default();
+        self.feed_into(chunk, &mut decoded);
+        decoded
+    }
+
+    /// Feed raw bytes and return the frames and rejected lengths in a batch
+    /// the decoder keeps, for the caller to drain: a stream reader calling
+    /// this per read reuses the batch's buffers instead of allocating them.
+    pub fn feed_reused(&mut self, chunk: &[u8]) -> &mut DecodeBatch {
+        let mut batch = core::mem::take(&mut self.batch);
+        batch.frames.clear();
+        batch.invalid_frame_lengths.clear();
+        self.feed_into(chunk, &mut batch);
+        self.batch = batch;
+        &mut self.batch
+    }
+
+    fn feed_into(&mut self, chunk: &[u8], decoded: &mut DecodeBatch) {
         let mut rest = chunk;
         loop {
             if !self.in_frame {
@@ -166,7 +187,7 @@ impl Decoder {
                 // opens; without a FLAG they are discarded.
                 let Some(start) = memchr::memchr(FLAG, rest) else {
                     self.pending_wire_len = 0;
-                    return decoded;
+                    return;
                 };
                 self.pending_wire_len = start + 1;
                 self.in_frame = true;
@@ -200,7 +221,7 @@ impl Decoder {
                 continue;
             }
             // The closing FLAG also opens the next frame.
-            self.finish_frame(&mut decoded);
+            self.finish_frame(decoded);
             self.pending_wire_len = 1;
             rest = &rest[index + 1..];
         }
@@ -210,7 +231,6 @@ impl Decoder {
             self.pending_wire_len = 0;
             self.frame.clear();
         }
-        decoded
     }
 
     fn finish_frame(&mut self, decoded: &mut DecodeBatch) {
