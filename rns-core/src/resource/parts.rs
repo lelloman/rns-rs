@@ -1,14 +1,14 @@
 use alloc::vec::Vec;
 
 use crate::constants::{RESOURCE_COLLISION_GUARD_SIZE, RESOURCE_MAPHASH_LEN};
-use crate::hash::full_hash;
 
 /// Compute map hash for a part: SHA-256(part_data + random_hash)[:4]
 pub fn map_hash(part_data: &[u8], random_hash: &[u8]) -> [u8; RESOURCE_MAPHASH_LEN] {
-    let mut input = Vec::with_capacity(part_data.len() + random_hash.len());
-    input.extend_from_slice(part_data);
-    input.extend_from_slice(random_hash);
-    let hash = full_hash(&input);
+    // Hashed in two updates: no buffer joining the part and the random hash.
+    let mut hasher = rns_crypto::sha256::Sha256::new();
+    hasher.update(part_data);
+    hasher.update(random_hash);
+    let hash = hasher.digest();
     let mut result = [0u8; RESOURCE_MAPHASH_LEN];
     result.copy_from_slice(&hash[..RESOURCE_MAPHASH_LEN]);
     result
