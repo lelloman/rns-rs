@@ -722,7 +722,9 @@ impl LinkManager {
     ) {
         // The transport engine hashed these bytes on receipt, unless they are
         // a resource part.
-        let packet = match RawPacket::unpack_prehashed(raw, packet_hash) {
+        // A view of the delivered bytes: handlers read the packet without
+        // owning a copy of it.
+        let packet = match RawPacket::view_prehashed(raw, packet_hash) {
             Ok(p) => p,
             Err(_) => return,
         };
@@ -767,7 +769,7 @@ impl LinkManager {
     fn handle_linkrequest(
         &mut self,
         dest_hash: &[u8; 16],
-        packet: &RawPacket,
+        packet: &RawPacket<&[u8]>,
         receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
@@ -931,7 +933,7 @@ impl LinkManager {
     fn handle_link_proof(
         &mut self,
         link_id: &LinkId,
-        packet: &RawPacket,
+        packet: &RawPacket<&[u8]>,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         if packet.data().len() != 96 {
@@ -1013,7 +1015,7 @@ impl LinkManager {
     fn handle_lrproof(
         &mut self,
         link_id_bytes: &[u8; 16],
-        packet: &RawPacket,
+        packet: &RawPacket<&[u8]>,
         receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
@@ -1113,7 +1115,7 @@ impl LinkManager {
     fn handle_link_data_into(
         &mut self,
         link_id_bytes: &[u8; 16],
-        packet: &RawPacket,
+        packet: &RawPacket<&[u8]>,
         packet_hash: [u8; 32],
         receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
@@ -1235,7 +1237,7 @@ impl LinkManager {
                     && link.engine.decrypt(packet.data()).is_ok()
                 {
                     link.pre_rtt_packets.push(PreRttPacket {
-                        packet: packet.clone(),
+                        packet: packet.to_owned_packet(),
                         packet_hash,
                         receiving_interface,
                     });
@@ -1474,7 +1476,7 @@ impl LinkManager {
                 for pending in pending {
                     self.handle_link_data_into(
                         &link_id,
-                        &pending.packet,
+                        &pending.packet.as_view(),
                         pending.packet_hash,
                         pending.receiving_interface,
                         rng,
