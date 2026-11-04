@@ -2,9 +2,9 @@ use super::*;
 
 impl TransportEngine {
     /// Route an outbound packet.
-    pub fn handle_outbound(
+    pub fn handle_outbound<B: crate::packet::PacketStorage>(
         &mut self,
-        packet: &RawPacket,
+        packet: &RawPacket<B>,
         dest_type: u8,
         attached_interface: Option<InterfaceId>,
         now: f64,
@@ -16,9 +16,9 @@ impl TransportEngine {
 
     /// [`Self::handle_outbound`], appending the actions to `actions` so a
     /// caller can reuse one buffer across packets.
-    pub fn handle_outbound_into(
+    pub fn handle_outbound_into<B: crate::packet::PacketStorage>(
         &mut self,
-        packet: &RawPacket,
+        packet: &RawPacket<B>,
         dest_type: u8,
         attached_interface: Option<InterfaceId>,
         now: f64,

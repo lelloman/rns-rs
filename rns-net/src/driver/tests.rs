@@ -10041,7 +10041,7 @@ fn link_dispatch_preserves_route_headers_and_proof_tracking() {
             expected.extend_from_slice(&packet.raw[2..]);
         }
         driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
-            raw: packet.raw,
+            raw: packet.raw.into(),
             dest_type: constants::DESTINATION_LINK,
             attached_interface: attached.then_some(InterfaceId(1)),
         }]);
@@ -10051,7 +10051,7 @@ fn link_dispatch_preserves_route_headers_and_proof_tracking() {
             assert_eq!(driver.sent_packets[&packet.packet_hash].0, link_id);
         }
         driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
-            raw: vec![0],
+            raw: vec![0].into(),
             dest_type: constants::DESTINATION_LINK,
             attached_interface: None,
         }]);
@@ -10088,7 +10088,7 @@ fn link_manager_data_send_is_tracked_for_proofs() {
     let destination_hash = packet.destination_hash;
 
     driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
-        raw: packet.raw,
+        raw: packet.raw.into(),
         dest_type: constants::DESTINATION_LINK,
         attached_interface: Some(InterfaceId(1)),
     }]);

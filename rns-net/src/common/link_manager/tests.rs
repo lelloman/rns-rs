@@ -81,7 +81,7 @@ fn create_link_with_stamped_keys_emits_stamped_link_request() {
     let raw = actions
         .iter()
         .find_map(|action| match action {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .expect("link request packet");
@@ -181,7 +181,7 @@ fn test_full_handshake_via_manager() {
 
     // Extract the LINKREQUEST packet raw bytes
     let linkrequest_raw = match &init_actions[1] {
-        LinkManagerAction::SendPacket { raw, .. } => raw.clone(),
+        LinkManagerAction::SendPacket { raw, .. } => raw.to_vec(),
         _ => panic!("Expected SendPacket"),
     };
 
@@ -205,7 +205,7 @@ fn test_full_handshake_via_manager() {
 
     // Extract LRPROOF packet
     let lrproof_raw = match &resp_actions[1] {
-        LinkManagerAction::SendPacket { raw, .. } => raw.clone(),
+        LinkManagerAction::SendPacket { raw, .. } => raw.to_vec(),
         _ => panic!("Expected SendPacket for LRPROOF"),
     };
 
@@ -229,7 +229,7 @@ fn test_full_handshake_via_manager() {
     let lrrtt_raw = init_actions2
         .iter()
         .find_map(|a| match a {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .expect("Should have LRRTT SendPacket");
@@ -1133,7 +1133,7 @@ fn extract_send_packet(actions: &[LinkManagerAction]) -> Vec<u8> {
 
 fn extract_send_packet_at(actions: &[LinkManagerAction], idx: usize) -> Vec<u8> {
     match &actions[idx] {
-        LinkManagerAction::SendPacket { raw, .. } => raw.clone(),
+        LinkManagerAction::SendPacket { raw, .. } => raw.to_vec(),
         other => panic!("Expected SendPacket at index {}, got {:?}", idx, other),
     }
 }
@@ -1142,7 +1142,7 @@ pub(super) fn extract_any_send_packet(actions: &[LinkManagerAction]) -> Vec<u8> 
     actions
         .iter()
         .find_map(|a| match a {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .expect("Expected at least one SendPacket action")
@@ -2409,7 +2409,7 @@ fn retried_resource_advertisements_deliver_once() {
         let raw_adv = advertisements
             .iter()
             .find_map(|a| match a {
-                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
                 _ => None,
             })
             .unwrap();
@@ -2419,7 +2419,7 @@ fn retried_resource_advertisements_deliver_once() {
             queue.push_back((
                 true,
                 LinkManagerAction::SendPacket {
-                    raw: raw_adv.clone(),
+                    raw: raw_adv.clone().into(),
                     dest_type: constants::DESTINATION_LINK,
                     attached_interface: None,
                 },
@@ -2462,7 +2462,7 @@ fn retried_resource_advertisements_deliver_once() {
                         queue.push_front((
                             true,
                             LinkManagerAction::SendPacket {
-                                raw: raw_adv.clone(),
+                                raw: raw_adv.clone().into(),
                                 dest_type: constants::DESTINATION_LINK,
                                 attached_interface: None,
                             },
@@ -3551,7 +3551,7 @@ fn link_traffic_accounting_uses_ciphertext_data_once() {
     let raw = actions
         .iter()
         .find_map(|action| match action {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .unwrap();
@@ -5267,7 +5267,7 @@ fn stamped_link_request_completes_the_handshake_with_a_responder() {
     let linkrequest_raw = init_actions
         .iter()
         .find_map(|action| match action {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .expect("LINKREQUEST send packet");
@@ -5298,7 +5298,7 @@ fn stamped_link_request_completes_the_handshake_with_a_responder() {
     let lrproof_raw = resp_actions
         .iter()
         .find_map(|action| match action {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .expect("LRPROOF send packet");
@@ -5318,7 +5318,7 @@ fn stamped_link_request_completes_the_handshake_with_a_responder() {
     let lrrtt_raw = init_actions
         .iter()
         .find_map(|action| match action {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
             _ => None,
         })
         .expect("LRRTT send packet");
@@ -5365,7 +5365,7 @@ fn create_link_with_keys_none_generates_fresh_unstamped_keys() {
         actions
             .iter()
             .find_map(|action| match action {
-                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
                 _ => None,
             })
             .map(|raw| RawPacket::unpack(&raw).unwrap().data().to_vec())
@@ -5397,7 +5397,7 @@ fn link_request_with_stamp_value(
         let raw = actions
             .iter()
             .find_map(|action| match action {
-                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
                 _ => None,
             })
             .expect("LINKREQUEST send packet");

@@ -127,9 +127,10 @@ impl From<Vec<u8>> for RequestResponse {
 /// Actions produced by LinkManager for the driver to dispatch.
 #[derive(Debug)]
 pub enum LinkManagerAction {
-    /// Send a packet via the transport engine outbound path.
+    /// Send a packet via the transport engine outbound path. The wire bytes
+    /// are shared, so routing hands them to the interface without a copy.
     SendPacket {
-        raw: Vec<u8>,
+        raw: rns_core::transport::types::PacketBytes,
         dest_type: u8,
         attached_interface: Option<rns_core::transport::types::InterfaceId>,
     },
@@ -675,7 +676,7 @@ impl LinkManager {
             LinkManagerAction::RegisterLinkDest { link_id },
             // Send the LINKREQUEST packet
             LinkManagerAction::SendPacket {
-                raw: packet.raw,
+                raw: packet.raw.into(),
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             },
@@ -915,7 +916,7 @@ impl LinkManager {
                 packet.transport_id.is_some()
             );
             actions.push(LinkManagerAction::SendPacket {
-                raw,
+                raw: raw.into(),
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -1002,7 +1003,7 @@ impl LinkManager {
             &proof_data,
         ) {
             vec![LinkManagerAction::SendPacket {
-                raw,
+                raw: raw.into(),
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             }]
@@ -1090,7 +1091,7 @@ impl LinkManager {
             &lrrtt_encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
-                raw,
+                raw: raw.into(),
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -1518,7 +1519,7 @@ impl LinkManager {
                         &[0xfe],
                     ) {
                         out.push(LinkManagerAction::SendPacket {
-                            raw,
+                            raw: raw.into(),
                             dest_type: constants::DESTINATION_LINK,
                             attached_interface: None,
                         });
@@ -1723,7 +1724,7 @@ impl LinkManager {
             RawPacket::pack_raw_with_hash(flags, 0, link_id, None, context, &encrypted)
                 .map_err(|_| LinkDatagramError::PacketEncodingFailed)?;
         actions.push(LinkManagerAction::SendPacket {
-            raw,
+            raw: raw.into(),
             dest_type: constants::DESTINATION_LINK,
             attached_interface: None,
         });
@@ -1765,7 +1766,7 @@ impl LinkManager {
             &encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
-                raw,
+                raw: raw.into(),
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -1826,7 +1827,7 @@ impl LinkManager {
         )
         .ok()?;
         Some(LinkManagerAction::SendPacket {
-            raw,
+            raw: raw.into(),
             dest_type: constants::DESTINATION_LINK,
             attached_interface: None,
         })
@@ -1900,7 +1901,7 @@ impl LinkManager {
                     &[0xff],
                 ) {
                     all_actions.push(LinkManagerAction::SendPacket {
-                        raw,
+                        raw: raw.into(),
                         dest_type: constants::DESTINATION_LINK,
                         attached_interface: None,
                     });
@@ -2152,7 +2153,7 @@ impl LinkManager {
     /// Account a packed outbound action at the single driver dispatch point.
     /// LINKREQUEST is accounted when its engine is created since its wire
     /// destination is not the resulting link ID.
-    pub fn record_outbound_packet(&mut self, packet: &RawPacket) {
+    pub fn record_outbound_packet<B: AsRef<[u8]>>(&mut self, packet: &RawPacket<B>) {
         if packet.flags.destination_type == constants::DESTINATION_LINK {
             if let Some(link) = self.links.get_mut(&packet.destination_hash) {
                 link.engine.record_outbound_traffic(packet.data().len());

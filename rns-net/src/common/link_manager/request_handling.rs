@@ -183,7 +183,7 @@ impl LinkManager {
                     packet_type: constants::PACKET_TYPE_DATA,
                 };
                 let max_mtu = link.engine.mtu() as usize;
-                if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
+                if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_shared_with_hash_with_max_mtu(
                     flags,
                     0,
                     link_id,
@@ -416,7 +416,7 @@ impl LinkManager {
 
         let mut actions = Vec::new();
         let max_mtu = link.engine.mtu() as usize;
-        if let Ok((raw, packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
+        if let Ok((raw, packet_hash)) = RawPacket::pack_raw_shared_with_hash_with_max_mtu(
             flags,
             0,
             link_id,

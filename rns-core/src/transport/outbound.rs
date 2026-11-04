@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use super::tables::PathSet;
 use super::types::{InterfaceId, InterfaceInfo, PacketBytes, TransportAction};
 use crate::constants;
-use crate::packet::RawPacket;
+use crate::packet::{PacketStorage, RawPacket};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct OutboundRouteOptions {
@@ -67,11 +67,11 @@ pub(crate) fn route_outbound_with_options(
 
 /// [`route_outbound_with_options`], appending to `actions`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn route_outbound_into(
+pub(crate) fn route_outbound_into<B: PacketStorage>(
     path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
     local_destinations: &alloc::collections::BTreeMap<[u8; 16], u8>,
-    packet: &RawPacket,
+    packet: &RawPacket<B>,
     dest_type: u8,
     attached_interface: Option<InterfaceId>,
     options: OutboundRouteOptions,
@@ -80,7 +80,7 @@ pub(crate) fn route_outbound_into(
     // Built from the slice (cloning the Vec first would copy the packet
     // twice), and only on the paths that send the packet unchanged: the
     // per-interface paths build their own bytes.
-    let shared_raw = || PacketBytes::from(packet.raw.as_slice());
+    let shared_raw = || packet.raw.to_shared();
 
     // Don't route announces or PLAIN/GROUP via path table
     let use_path_table = packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
@@ -104,7 +104,7 @@ pub(crate) fn route_outbound_into(
                 if packet.flags.header_type == constants::HEADER_1 {
                     let hops = outbound_info
                         .and_then(|iface| local_hops_delta(packet, dest_type, iface, options))
-                        .unwrap_or(packet.raw[1]);
+                        .unwrap_or(packet.raw.as_ref()[1]);
                     actions.push(TransportAction::SendOnInterface {
                         interface: path_entry.receiving_interface,
                         raw: inject_transport_header_with_hops(packet, &path_entry.next_hop, hops)
@@ -196,15 +196,20 @@ pub(crate) fn route_outbound_into(
     }
 }
 
-fn inject_transport_header_with_hops(packet: &RawPacket, next_hop: &[u8; 16], hops: u8) -> Vec<u8> {
+fn inject_transport_header_with_hops<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
+    next_hop: &[u8; 16],
+    hops: u8,
+) -> Vec<u8> {
+    let raw = packet.raw.as_ref();
     let new_flags =
-        (constants::HEADER_2 << 6) | (constants::TRANSPORT_TRANSPORT << 4) | (packet.raw[0] & 0x0F);
+        (constants::HEADER_2 << 6) | (constants::TRANSPORT_TRANSPORT << 4) | (raw[0] & 0x0F);
 
     let mut new_raw = Vec::new();
     new_raw.push(new_flags);
     new_raw.push(hops);
     new_raw.extend_from_slice(next_hop); // transport_id = next hop
-    new_raw.extend_from_slice(&packet.raw[2..]); // dest_hash + context + data
+    new_raw.extend_from_slice(&raw[2..]); // dest_hash + context + data
     new_raw
 }
 
@@ -216,8 +221,8 @@ fn mangle_hops(raw: &[u8], hops: u8) -> PacketBytes {
     new_raw.into()
 }
 
-fn local_hops_delta(
-    packet: &RawPacket,
+fn local_hops_delta<B: AsRef<[u8]>>(
+    packet: &RawPacket<B>,
     dest_type: u8,
     iface: &InterfaceInfo,
     options: OutboundRouteOptions,
@@ -234,14 +239,14 @@ fn local_hops_delta(
     }
 }
 
-fn raw_for_interface(
-    packet: &RawPacket,
+fn raw_for_interface<B: PacketStorage>(
+    packet: &RawPacket<B>,
     dest_type: u8,
     iface: &InterfaceInfo,
     options: OutboundRouteOptions,
 ) -> PacketBytes {
     let Some(hops) = local_hops_delta(packet, dest_type, iface, options) else {
-        return PacketBytes::from(packet.raw.as_slice());
+        return packet.raw.to_shared();
     };
 
     if packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
@@ -252,7 +257,7 @@ fn raw_for_interface(
         }
     }
 
-    mangle_hops(&packet.raw, hops)
+    mangle_hops(packet.raw.as_ref(), hops)
 }
 
 /// Determine whether an announce should be transmitted on a given interface.
