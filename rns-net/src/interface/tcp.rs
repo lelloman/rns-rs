@@ -338,8 +338,8 @@ pub(crate) fn read_stream_frames(
         }
         let n = n as usize;
         read += n;
-        let decoded = decoder.feed_with_diagnostics(&cx.buf[..n]);
-        for frame_len in decoded.invalid_frame_lengths {
+        let decoded = decoder.feed_reused(&cx.buf[..n]);
+        for &frame_len in &decoded.invalid_frame_lengths {
             log::debug!(
                 "[{}] invalid HDLC frame of {} bytes received on interface {}, dropping frame",
                 name,
@@ -348,7 +348,7 @@ pub(crate) fn read_stream_frames(
             );
         }
         on_read(n, decoded.frames.len());
-        let frames = decoded.frames.into_iter().map(|frame| Event::Frame {
+        let frames = decoded.frames.drain(..).map(|frame| Event::Frame {
             interface_id: id,
             data: frame,
             rssi: None,
