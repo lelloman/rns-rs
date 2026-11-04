@@ -4,26 +4,28 @@
 
 - audit date: `2026-10-29` (commit 5 integrated `2026-10-30`; extended to
   commit 15 on `2026-10-30`, to commit 23 on `2026-10-31`, to commit 31 on
-  `2026-11-01`, to commit 36 on `2026-11-02` and to commit 40 on
-  `2026-11-03`)
+  `2026-11-01`, to commit 36 on `2026-11-02`, to commit 40 on
+  `2026-11-03` and to commit 45 on `2026-11-04`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`
-  (extended on 2026-11-03 from `d3874ddedbf485db3151be1234d35da10c498ef1`,
+- target tag or ref: `rgit:master` tip `53dc223a031ff46ad311c395ee7a3ee97ebe2aef`
+  (extended on 2026-11-04 from `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`,
+  on 2026-11-03 from `d3874ddedbf485db3151be1234d35da10c498ef1`,
   on 2026-11-02 from `6927c3c589683041f027d9a04c598cb257d957a7`,
   on 2026-11-01 from `fe2fe94dd82030275bec150af87b4ec6292511c6`,
   on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
   on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` (provisional; rgit may advance before promotion)
-- target root tree: `4781698816465d829f68ef87e02a2d1143c7e5a5`
-- target `RNS` tree: `1a5601fe7422d58402b4de30c714f9da29a907ca`
+- target normative commit: `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` (provisional; rgit may advance before promotion)
+- target root tree: `453eaed7d6ee88bf24c00e810d94318de15368a2`
+- target `RNS` tree: `772ecbaa0a420626287f8a161b7aec14d224509e`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`
-- commits in range: `40` (2 inventoried at the first tip, 3 added when rgit
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..53dc223a031ff46ad311c395ee7a3ee97ebe2aef`
+- commits in range: `45` (2 inventoried at the first tip, 3 added when rgit
   advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31, 8
-  added on 2026-11-01, 5 added on 2026-11-02, 4 added on 2026-11-03)
+  added on 2026-11-01, 5 added on 2026-11-02, 4 added on 2026-11-03, 5
+  added on 2026-11-04)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
@@ -31,7 +33,7 @@
   `b857fed`; commits 24 to 31 on `dev` from `147c987`; commits 32 to 36
   inventoried on `dev` at `15d817e` and integrated on `dev` from `31a2493`;
   commits 37 to 40 inventoried on `dev` at `1d68ffe` and integrated on `dev`
-  from `d4b6527`
+  from `d4b6527`; commits 41 to 45 inventoried on `dev` at `cdeb528`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -118,6 +120,24 @@ the stamped length, so Python at `ecd677ba` keeps accepting them, but its
 `parse_path_request` still processes the other sizes the way upstream did
 before commit 39.
 
+The 2026-11-04 refresh (GitHub fetched at 2026-11-04T08:25:10Z, rgit at
+08:25:14Z) found rgit at `53dc223a` (committed 2026-11-03T23:02Z), five
+linear commits past `ecd677ba`, inventoried as 41 to 45. The GitHub mirror is
+still at `e40191b3`, `RNS.__version__` is still `1.6.0`, and the other rgit
+branches still point at their May 2026 tips. Commit 41 keys the announce
+handlers by the name hash of their aspect filter, adds a `paused` flag, and
+starts the handler threads from the job loop instead of from inbound
+processing. Commit 42 sets `auto_vacuum=INCREMENTAL` on the announce cache
+before `journal_mode=WAL`. SQLite ignores `auto_vacuum` once WAL has written
+the database header, and rns-rs's `SqliteAnnounceCache::open` uses the old
+order: both VPS announce caches report `auto_vacuum=0`, with 2,353 of 2,638
+(vps-eu) and 1,406 of 2,160 (vps-us) pages free, so the periodic
+`incremental_vacuum` reclaims nothing. Reordering only helps a new file; an
+existing one needs a one-time `VACUUM` after the mode is set. Commit 43
+disables Python's statement cache and reads the stores under their flush
+lock; commit 44 drops a comment; commit 45 guards `conn.close()` in the RPC
+loop when `accept` fails.
+
 ## Audit Vocabulary
 
 - **Needs port**: compatible behavior is absent or observably different.
@@ -180,6 +200,11 @@ Every commit in the audited range must appear exactly once.
 | 38 | `d5891fde146b5c489a504eeac17d97ac54043a61` | Cleanup | Integrated | `rns_cli::format::prettycost` prints a missing value as `n`, so `rnpath -t` shows `(dv:n/lc:n)` and `rnstatus` `Dst n, PR n`; the pathing "is now N hops away" line formats the value with `pretty_cost`, and the validated announce debug line carries `(v:…)`; `prettycost_quantizes_clamps_and_rounds_like_upstream`, the rnpath and rnstatus cost display tests, and `python_rnpath_lists_rust_path_table` accepting either marker |
 | 39 | `cda4d72bb8c47aa6e6aee8d81a7d9b32d1e48d41` | Tightened PR protocol violations to drop | Integrated | `PATH_REQUEST_LEGACY_LENGTH` and `is_valid_path_request_length`; the driver's ingress check counts a protocol violation and drops a tagged path request of any other length, and `parse_path_request` processes only those lengths; `path_requests_of_invalid_length_are_dropped`, `path_requests_of_invalid_length_are_protocol_violations_and_dropped`, the short-tag case of `path_request_for_local_destination_requests_path_response` |
 | 40 | `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15` | Improved protocol violation logging | Integrated | The driver logs the tagless and invalid size path request violations on the `rns::pathing` target, and the excessive size one at debug; log only, by inspection |
+| 41 | `e49fafecce95d8155bfcc54f7aff3df1a430d77a` | Optimized announce handler callback handling | Needs port | |
+| 42 | `8a09c9b550b761d8d7a9b471125e23ca5bff1d9b` | Fixed pragma ordering | Needs port | |
+| 43 | `ceac4a28bd45956f8b5d6c1b4834be48d0724bf9` | Disabled statement caching, fetch under lock | Needs port | |
+| 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Needs port | |
+| 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Needs port | |
 
 ## Per-Commit Analysis
 
@@ -1639,26 +1664,29 @@ there.
 
 ## Integration Plan
 
-All forty commits have a final disposition. The `Link.py:311` precedence of
+Commits 1 to 40 have a final disposition; commits 41 to 45 are inventoried
+and are integrated one at a time in upstream order. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it (still present at `ecd677ba`). If upstream confirms that expression as written, the
+audit rechecks it (still present at `53dc223a`). If upstream confirms that expression as written, the
 `LinkManager` responder check must follow it.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
+- [ ] Every upstream commit has a final disposition. Commits 41 to 45 are
+  inventoried only.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
-  `d3874dde` and the current tip `ecd677ba` (4/4 and 12/12 with commits 37
-  to 40 integrated); rerun if rgit advances.
+  `d3874dde` and `ecd677ba` (4/4 and 12/12 with commits 37 to 40
+  integrated). Not yet run at the current tip `53dc223a`; rerun after
+  commits 41 to 45 are integrated.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
