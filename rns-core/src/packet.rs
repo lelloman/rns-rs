@@ -272,23 +272,26 @@ impl RawPacket {
             return Err(PacketError::MissingTransportId);
         }
 
-        let mut raw = Vec::new();
-        raw.push(flags.pack());
-        raw.push(hops);
-
-        if let Some(transport_id) = transport_id {
-            if flags.header_type == constants::HEADER_2 {
-                raw.extend_from_slice(transport_id);
-            }
+        let transport_id = transport_id.filter(|_| flags.header_type == constants::HEADER_2);
+        // flags, hops, [transport id], destination hash, context, data
+        let len =
+            2 + transport_id.map_or(0, |id| id.len()) + destination_hash.len() + 1 + data.len();
+        if len > max_mtu {
+            return Err(PacketError::ExceedsMtu);
         }
 
+        // Sized once: growing from empty cost an allocation and several
+        // reallocations per packet.
+        let mut raw = Vec::with_capacity(len);
+        raw.push(flags.pack());
+        raw.push(hops);
+        if let Some(transport_id) = transport_id {
+            raw.extend_from_slice(transport_id);
+        }
         raw.extend_from_slice(destination_hash);
         raw.push(context);
         raw.extend_from_slice(data);
-
-        if raw.len() > max_mtu {
-            return Err(PacketError::ExceedsMtu);
-        }
+        debug_assert_eq!(raw.len(), len);
 
         Ok(raw)
     }
