@@ -5,7 +5,7 @@ use crate::aes128::Aes128;
 use crate::aes256::Aes256;
 use aes::cipher::{array::Array, BlockModeDecrypt};
 
-use crate::hmac::{hmac_sha256, hmac_sha256_verify, HmacSha256};
+use crate::hmac::HmacSha256;
 use crate::pkcs7;
 use crate::Rng;
 
@@ -56,7 +56,9 @@ impl CbcDecryptor {
 }
 
 pub struct Token {
-    signing_key: Vec<u8>,
+    /// HMAC keyed once with the signing key: each tag clones it instead of
+    /// hashing the key's inner and outer pads again.
+    mac: HmacSha256,
     mode: AesMode,
 }
 
@@ -64,18 +66,18 @@ impl Token {
     pub fn new(key: &[u8]) -> Result<Self, TokenError> {
         match key.len() {
             32 => {
-                let signing_key = key[..16].to_vec();
+                let signing_key = &key[..16];
                 let encryption_key: [u8; 16] = key[16..32].try_into().unwrap();
                 Ok(Token {
-                    signing_key,
+                    mac: HmacSha256::new(signing_key),
                     mode: AesMode::Aes128(Aes128::new(&encryption_key)),
                 })
             }
             64 => {
-                let signing_key = key[..32].to_vec();
+                let signing_key = &key[..32];
                 let encryption_key: [u8; 32] = key[32..64].try_into().unwrap();
                 Ok(Token {
-                    signing_key,
+                    mac: HmacSha256::new(signing_key),
                     mode: AesMode::Aes256(Aes256::new(&encryption_key)),
                 })
             }
@@ -121,7 +123,7 @@ impl Token {
             AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
         }
         .expect("PKCS7 padding always produces block-aligned plaintext");
-        tag.copy_from_slice(&hmac_sha256(&self.signing_key, body));
+        tag.copy_from_slice(&self.tag(body));
     }
 
     pub fn encrypt_with_iv(&self, plaintext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
@@ -138,9 +140,16 @@ impl Token {
         }
         .expect("PKCS7 padding always produces block-aligned plaintext");
 
-        let mac = hmac_sha256(&self.signing_key, &token);
+        let mac = self.tag(&token);
         token.extend_from_slice(&mac);
         token
+    }
+
+    /// HMAC-SHA256 of `data` under the signing key.
+    fn tag(&self, data: &[u8]) -> [u8; 32] {
+        let mut mac = self.mac.clone();
+        mac.update(data);
+        mac.finalize()
     }
 
     pub fn verify_hmac(&self, token: &[u8]) -> Result<bool, TokenError> {
@@ -148,11 +157,9 @@ impl Token {
             return Err(TokenError::InvalidToken);
         }
         let received_hmac = &token[token.len() - 32..];
-        Ok(hmac_sha256_verify(
-            &self.signing_key,
-            &token[..token.len() - 32],
-            received_hmac,
-        ))
+        let mut mac = self.mac.clone();
+        mac.update(&token[..token.len() - 32]);
+        Ok(mac.verify(received_hmac))
     }
 
     /// [`Token::decrypt`] into `out`, replacing its contents and reusing
@@ -245,7 +252,7 @@ impl Token {
         // `decrypt`; it is authenticated but not decrypted.
         let aligned = ciphertext_len.is_multiple_of(16);
 
-        let mut mac = HmacSha256::new(&self.signing_key);
+        let mut mac = self.mac.clone();
         let mut iv = [0u8; 16];
         let mut tag = [0u8; 32];
         let mut plaintext = Vec::with_capacity(if aligned { ciphertext_len - skip } else { 0 });
@@ -326,6 +333,7 @@ impl Token {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hmac::hmac_sha256;
 
     #[test]
     fn decrypting_into_a_reused_buffer_matches_decrypt() {
@@ -609,7 +617,8 @@ mod tests {
                 .unwrap();
                 let mut expected = iv.to_vec();
                 expected.extend_from_slice(&ciphertext);
-                let mac = hmac_sha256(&token.signing_key, &expected);
+                // Tags from the raw signing key, not the token's keyed state.
+                let mac = hmac_sha256(&key[..key.len() / 2], &expected);
                 expected.extend_from_slice(&mac);
                 let encrypted = token.encrypt_with_iv(&plaintext, &iv);
                 assert_eq!(encrypted, expected, "key {} len {len}", key.len());
