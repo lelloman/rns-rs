@@ -169,33 +169,13 @@ impl LinkManager {
         let response_plaintext = pack_response(request_id, response_data);
 
         let mut actions = Vec::new();
-        if let Some(link) = self.links.get(link_id) {
-            if let Ok(encrypted) = link.engine.encrypt(&response_plaintext, rng) {
-                let flags = PacketFlags {
-                    header_type: constants::HEADER_1,
-                    context_flag: constants::FLAG_UNSET,
-                    transport_type: constants::TRANSPORT_BROADCAST,
-                    destination_type: constants::DESTINATION_LINK,
-                    packet_type: constants::PACKET_TYPE_DATA,
-                };
-                let max_mtu = link.engine.mtu() as usize;
-                if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_shared_with_hash_with_max_mtu(
-                    flags,
-                    0,
-                    link_id,
-                    None,
-                    constants::CONTEXT_RESPONSE,
-                    &encrypted,
-                    max_mtu,
-                ) {
-                    actions.push(LinkManagerAction::SendPacket {
-                        raw,
-                        dest_type: constants::DESTINATION_LINK,
-                        attached_interface: None,
-                    });
-                }
-            }
-        }
+        self.build_encrypted_link_packet_into(
+            link_id,
+            constants::CONTEXT_RESPONSE,
+            &response_plaintext,
+            rng,
+            &mut actions,
+        );
         actions
     }
 
@@ -389,30 +369,17 @@ impl LinkManager {
             return self.process_resource_actions(link_id, adv_actions, rng);
         }
 
-        let encrypted = match link.engine.encrypt(&plaintext, rng) {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
-
-        let flags = PacketFlags {
-            header_type: constants::HEADER_1,
-            context_flag: constants::FLAG_UNSET,
-            transport_type: constants::TRANSPORT_BROADCAST,
-            destination_type: constants::DESTINATION_LINK,
-            packet_type: constants::PACKET_TYPE_DATA,
-        };
-
         let mut actions = Vec::new();
         let max_mtu = link.engine.mtu() as usize;
-        if let Ok((raw, packet_hash)) = RawPacket::pack_raw_shared_with_hash_with_max_mtu(
-            flags,
-            0,
+        if let Some(raw) = super::resource_handling::encrypted_link_packet(
+            &link.engine,
             link_id,
-            None,
             constants::CONTEXT_REQUEST,
-            &encrypted,
+            &plaintext,
+            rng,
             max_mtu,
         ) {
+            let packet_hash = RawPacket::packet_hash_of(constants::HEADER_1, &raw);
             let mut request_id = [0u8; 16];
             request_id.copy_from_slice(&packet_hash[..16]);
             let deadline = Self::request_response_deadline(link, time::now());

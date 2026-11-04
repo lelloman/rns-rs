@@ -1709,11 +1709,6 @@ impl LinkManager {
             });
         }
 
-        let encrypted = match link.engine.encrypt(plaintext, rng) {
-            Ok(e) => e,
-            Err(_) => return Err(LinkDatagramError::EncryptionFailed),
-        };
-
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
             context_flag: constants::FLAG_UNSET,
@@ -1722,16 +1717,34 @@ impl LinkManager {
             packet_type: constants::PACKET_TYPE_DATA,
         };
 
-        let mut actions = Vec::new();
-        let (raw, _packet_hash) =
-            RawPacket::pack_raw_with_hash(flags, 0, link_id, None, context, &encrypted)
-                .map_err(|_| LinkDatagramError::PacketEncodingFailed)?;
-        actions.push(LinkManagerAction::SendPacket {
-            raw: raw.into(),
+        // As before, a link that cannot encrypt reports that first.
+        if !link.engine.can_encrypt() {
+            return Err(LinkDatagramError::EncryptionFailed);
+        }
+        // The ciphertext is written straight into the packet.
+        let mut encrypted = Err(LinkDatagramError::EncryptionFailed);
+        let raw = RawPacket::pack_raw_shared_filled_with_max_mtu(
+            flags,
+            0,
+            link_id,
+            None,
+            context,
+            link.engine.encrypted_len(plaintext.len()),
+            constants::MTU,
+            |payload| {
+                encrypted = link
+                    .engine
+                    .encrypt_into(plaintext, rng, payload)
+                    .map_err(|_| LinkDatagramError::EncryptionFailed);
+            },
+        )
+        .map_err(|_| LinkDatagramError::PacketEncodingFailed)?;
+        encrypted?;
+        Ok(vec![LinkManagerAction::SendPacket {
+            raw,
             dest_type: constants::DESTINATION_LINK,
             attached_interface: None,
-        });
-        Ok(actions)
+        }])
     }
 
     /// Send an identify message on a link (initiator reveals identity to responder).

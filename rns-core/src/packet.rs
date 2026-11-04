@@ -271,6 +271,58 @@ impl RawPacket {
         Ok((raw, packet_hash))
     }
 
+    /// The packet hash of packed wire bytes with the given header type.
+    pub fn packet_hash_of(header_type: u8, raw: &[u8]) -> [u8; 32] {
+        Self::compute_packet_hash(header_type, raw)
+    }
+
+    /// [`RawPacket::pack_raw_shared_with_max_mtu`] with a payload of
+    /// `payload_len` bytes that `fill` writes in place, so a payload produced
+    /// for this packet (a ciphertext, say) needs no buffer of its own. `fill`
+    /// receives the payload zeroed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_raw_shared_filled_with_max_mtu(
+        flags: PacketFlags,
+        hops: u8,
+        destination_hash: &[u8; 16],
+        transport_id: Option<&[u8; 16]>,
+        context: u8,
+        payload_len: usize,
+        max_mtu: usize,
+        fill: impl FnOnce(&mut [u8]),
+    ) -> Result<PacketBytes, PacketError> {
+        if flags.header_type == constants::HEADER_2 && transport_id.is_none() {
+            return Err(PacketError::MissingTransportId);
+        }
+        let transport_id = transport_id.filter(|_| flags.header_type == constants::HEADER_2);
+        let header_len = 2 + transport_id.map_or(0, |id| id.len()) + destination_hash.len() + 1;
+        let len = header_len + payload_len;
+        if len > max_mtu {
+            return Err(PacketError::ExceedsMtu);
+        }
+        let mut shared = Arc::<[u8]>::new_uninit_slice(len);
+        let out = Arc::get_mut(&mut shared).expect("a new Arc is unique");
+        // SAFETY: `out` is `len` writable bytes; zeroing initialises them all,
+        // and u8 and MaybeUninit<u8> share a layout.
+        let out: &mut [u8] = unsafe {
+            core::ptr::write_bytes(out.as_mut_ptr(), 0, len);
+            core::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u8>(), len)
+        };
+        out[0] = flags.pack();
+        out[1] = hops;
+        let mut at = 2;
+        if let Some(transport_id) = transport_id {
+            out[at..at + 16].copy_from_slice(transport_id);
+            at += 16;
+        }
+        out[at..at + 16].copy_from_slice(destination_hash);
+        at += 16;
+        out[at] = context;
+        fill(&mut out[header_len..]);
+        // SAFETY: every byte was initialised by the zeroing above.
+        Ok(unsafe { shared.assume_init() })
+    }
+
     /// [`RawPacket::pack_raw_with_max_mtu`] into shared bytes, allocated once
     /// at their final size, for packets that are routed and sent as they are.
     pub fn pack_raw_shared_with_max_mtu(
@@ -865,6 +917,17 @@ mod tests {
                     let shared = RawPacket::pack_raw_shared_with_max_mtu(
                         flags, 3, &dest, tid, 0x07, &data, mtu,
                     );
+                    let filled = RawPacket::pack_raw_shared_filled_with_max_mtu(
+                        flags,
+                        3,
+                        &dest,
+                        tid,
+                        0x07,
+                        data.len(),
+                        mtu,
+                        |payload| payload.copy_from_slice(&data),
+                    );
+                    assert_eq!(format!("{shared:?}"), format!("{filled:?}"));
                     match (owned, shared) {
                         (Ok(owned), Ok(shared)) => {
                             assert_eq!(&owned[..], &shared[..]);
@@ -881,6 +944,19 @@ mod tests {
         }
         assert!(matches!(
             RawPacket::pack_raw_shared_with_max_mtu(header2, 0, &dest, None, 0, &[1], 500),
+            Err(PacketError::MissingTransportId)
+        ));
+        assert!(matches!(
+            RawPacket::pack_raw_shared_filled_with_max_mtu(
+                header2,
+                0,
+                &dest,
+                None,
+                0,
+                1,
+                500,
+                |_| {}
+            ),
             Err(PacketError::MissingTransportId)
         ));
     }
