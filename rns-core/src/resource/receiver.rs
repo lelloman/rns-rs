@@ -9,6 +9,9 @@ use super::window::WindowState;
 use crate::buffer::types::Compressor;
 use crate::constants::*;
 
+/// Parts' worth of storage a receiver reserves ahead at most.
+const PART_RESERVE_PARTS: usize = 64;
+
 /// Decrypts a resource's ciphertext held as its parts, in order, dropping the
 /// first `skip` plaintext bytes (the random prefix). It must authenticate the
 /// whole ciphertext before returning any plaintext.
@@ -36,8 +39,10 @@ pub struct ResourceReceiver {
     pub data_size: u64,
     /// Total parts
     pub total_parts: usize,
-    /// Received parts data (None = not yet received)
-    parts: Vec<Option<Vec<u8>>>,
+    /// Received parts, back to back in arrival order.
+    part_data: Vec<u8>,
+    /// Part index -> (start, length) in `part_data` (None = not yet received)
+    part_spans: Vec<Option<(usize, usize)>>,
     /// Hashmap: part index -> map_hash (None if not yet known)
     hashmap: Vec<Option<[u8; RESOURCE_MAPHASH_LEN]>>,
     /// Number of hashmap entries populated
@@ -147,7 +152,6 @@ impl ResourceReceiver {
         // that is never followed by data holds no per-part allocation. The
         // hashmap holds only the entries the advertisement carries.
         let initial_hashes = core::cmp::min(adv.hashmap.len() / RESOURCE_MAPHASH_LEN, total_parts);
-        let parts_vec: Vec<Option<Vec<u8>>> = Vec::new();
         let mut hashmap_vec: Vec<Option<[u8; RESOURCE_MAPHASH_LEN]>> =
             Vec::with_capacity(initial_hashes);
 
@@ -178,7 +182,8 @@ impl ResourceReceiver {
             transfer_size: adv.transfer_size,
             data_size: adv.data_size,
             total_parts,
-            parts: parts_vec,
+            part_data: Vec::new(),
+            part_spans: Vec::new(),
             hashmap: hashmap_vec,
             hashmap_height,
             waiting_for_hmu: false,
@@ -212,14 +217,25 @@ impl ResourceReceiver {
     }
 
     fn has_part(&self, index: usize) -> bool {
-        self.parts.get(index).is_some_and(Option::is_some)
+        self.part_spans.get(index).is_some_and(Option::is_some)
     }
 
-    fn store_part(&mut self, index: usize, data: Vec<u8>) {
-        if self.parts.len() <= index {
-            self.parts.resize(index + 1, None);
+    fn store_part(&mut self, index: usize, data: &[u8]) {
+        if self.part_spans.len() <= index {
+            // Reserve for the rest of a small transfer at once, and in bounded
+            // steps for a large one, so storage still grows only with what
+            // arrives.
+            let wanted = (index + 1).max(self.total_parts.min(PART_RESERVE_PARTS));
+            self.part_spans.reserve(wanted - self.part_spans.len());
+            self.part_spans.resize(index + 1, None);
         }
-        self.parts[index] = Some(data);
+        if self.part_data.capacity() - self.part_data.len() < data.len() {
+            let remaining = self.total_parts - self.received_count;
+            let wanted = remaining.min(PART_RESERVE_PARTS).saturating_mul(self.sdu);
+            self.part_data.reserve(wanted.max(data.len()));
+        }
+        self.part_spans[index] = Some((self.part_data.len(), data.len()));
+        self.part_data.extend_from_slice(data);
     }
 
     fn hash_at(&self, index: usize) -> Option<&[u8; RESOURCE_MAPHASH_LEN]> {
@@ -325,7 +341,7 @@ impl ResourceReceiver {
             if let Some(h) = self.hash_at(i) {
                 if *h == part_hash {
                     if !self.has_part(i) {
-                        self.store_part(i, part_data.to_vec());
+                        self.store_part(i, part_data);
                         self.rtt_rxd_bytes += part_data.len();
                         self.received_count += 1;
                         self.outstanding_parts = self.outstanding_parts.saturating_sub(1);
@@ -624,7 +640,7 @@ impl ResourceReceiver {
         self.status = ResourceStatus::Assembling;
 
         // Part storage grows as parts arrive; a short vector means a part is missing.
-        if self.parts.len() != self.total_parts {
+        if self.part_spans.len() != self.total_parts {
             self.status = ResourceStatus::Failed;
             return Err(vec![ResourceAction::Failed(ResourceError::InvalidState)]);
         }
@@ -632,9 +648,9 @@ impl ResourceReceiver {
         // Every part must be held; size from the parts actually held, not the
         // advertised transfer size.
         let mut stream_len = 0usize;
-        for part in &self.parts {
-            match part {
-                Some(data) => match stream_len.checked_add(data.len()) {
+        for span in &self.part_spans {
+            match span {
+                Some((_, len)) => match stream_len.checked_add(*len) {
                     Some(len) => stream_len = len,
                     None => {
                         self.status = ResourceStatus::Failed;
@@ -649,17 +665,25 @@ impl ResourceReceiver {
         }
         // Assembly is terminal for part reception. The parts are released once
         // authentication has produced the plaintext, including on failure.
-        let parts = core::mem::take(&mut self.parts);
+        let part_data = core::mem::take(&mut self.part_data);
+        let part_spans = core::mem::take(&mut self.part_spans);
+        let parts = || {
+            part_spans
+                .iter()
+                .flatten()
+                .map(|&(start, len)| &part_data[start..start + len])
+        };
         self.hashmap = Vec::new();
 
         // The plaintext starts with the random prefix, which is dropped here.
         let plaintext = if self.flags.encrypted {
             // Each part is authenticated and decrypted in turn, without
             // joining the ciphertext first.
-            let chunks: Vec<&[u8]> = parts.iter().flatten().map(Vec::as_slice).collect();
+            let chunks: Vec<&[u8]> = parts().collect();
             let decrypted = decrypt_fn(&chunks, RESOURCE_RANDOM_HASH_SIZE);
             drop(chunks);
-            drop(parts);
+            drop(part_spans);
+            drop(part_data);
             match decrypted {
                 Ok(d) => d,
                 Err(_) => {
@@ -675,7 +699,7 @@ impl ResourceReceiver {
             };
             let mut plaintext = Vec::with_capacity(len);
             let mut skip = RESOURCE_RANDOM_HASH_SIZE;
-            for data in parts.iter().flatten() {
+            for data in parts() {
                 let from = skip.min(data.len());
                 plaintext.extend_from_slice(&data[from..]);
                 skip -= from;
@@ -905,7 +929,7 @@ mod tests {
     fn assembly_handoff_matches_synchronous_actions_and_releases_parts() {
         let mut receiver = ready_receiver();
         let job = receiver.prepare_assembly(&identity_decrypt).unwrap();
-        assert!(receiver.parts.is_empty() && receiver.hashmap.is_empty());
+        assert!(receiver.part_spans.is_empty() && receiver.hashmap.is_empty());
         receiver.waiting_for_hmu = true;
         assert!(receiver
             .handle_hashmap_update(&receiver.resource_hash.clone(), 1004.0)
@@ -952,7 +976,7 @@ mod tests {
         let mut receiver = ready_receiver();
         assert!(receiver.prepare_assembly(&|_, _| Err(())).is_err());
         assert!(receiver.assembly_id().is_none());
-        assert!(receiver.parts.is_empty() && receiver.hashmap.is_empty());
+        assert!(receiver.part_spans.is_empty() && receiver.hashmap.is_empty());
         assert!(receiver
             .prepare_assembly(&|_, _| panic!("failed assembly retried"))
             .is_err());
@@ -986,8 +1010,12 @@ mod tests {
             }
         }
         // Exercise uneven parts and a misleading size without allocating from it.
-        receiver.parts = stream.chunks(7).map(|part| Some(part.to_vec())).collect();
-        receiver.total_parts = receiver.parts.len();
+        receiver.part_data = stream.to_vec();
+        receiver.part_spans = (0..stream.len())
+            .step_by(7)
+            .map(|start| Some((start, (stream.len() - start).min(7))))
+            .collect();
+        receiver.total_parts = receiver.part_spans.len();
         receiver.received_count = receiver.total_parts;
         receiver.transfer_size = u64::MAX;
         let actions = receiver.assemble(
@@ -1197,7 +1225,8 @@ mod tests {
         assert!(actions
             .iter()
             .any(|action| matches!(action, ResourceAction::SendRequest(_))));
-        assert_eq!(receiver.parts.capacity(), 0);
+        assert_eq!(receiver.part_spans.capacity(), 0);
+        assert_eq!(receiver.part_data.capacity(), 0);
         assert!(receiver.hashmap.capacity() <= RESOURCE_HASHMAP_MAX_LEN);
         assert_eq!(receiver.hashmap.len(), receiver.hashmap_height);
     }
@@ -1235,7 +1264,7 @@ mod tests {
         )
         .unwrap();
         assert!(receiver.total_parts > 1);
-        assert!(receiver.parts.is_empty());
+        assert!(receiver.part_spans.is_empty());
 
         let request = receiver
             .accept(1000.0)
@@ -1255,7 +1284,7 @@ mod tests {
             .unwrap();
         receiver.receive_part(&first_part, 1002.0);
         assert_eq!(receiver.received_count, 1);
-        assert_eq!(receiver.parts.len(), 1);
+        assert_eq!(receiver.part_spans.len(), 1);
     }
 
     #[test]
@@ -1596,7 +1625,7 @@ mod tests {
             .expect("request must include the inclusive tail of the next window");
 
         let actions = receiver.receive_part(&window_tail, 1005.0);
-        assert!(receiver.parts[window_tail_index].is_some());
+        assert!(receiver.part_spans[window_tail_index].is_some());
         assert_eq!(receiver.received_count, 2);
         assert_eq!(receiver.consecutive_completed_height, 0);
         assert!(actions.iter().any(|action| matches!(
