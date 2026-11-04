@@ -9,6 +9,7 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rns_core::constants;
 use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo};
@@ -34,6 +35,10 @@ pub struct TcpServerConfig {
     pub bitrate: Option<u64>,
     /// Hardware MTU of accepted clients, overriding the bitrate tier.
     pub fixed_mtu: Option<u32>,
+    /// Write buffered frames to each client once the oldest has waited this
+    /// long instead of at the end of the driver's pass (`flush_after_us`;
+    /// off by default).
+    pub flush_after: Option<Duration>,
     pub runtime: Arc<Mutex<TcpServerRuntime>>,
 }
 
@@ -68,6 +73,7 @@ impl Default for TcpServerConfig {
             ingress_control: IngressControlConfig::enabled(),
             bitrate: None,
             fixed_mtu: None,
+            flush_after: None,
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -83,6 +89,7 @@ struct TcpServerWriter {
     stream: TcpStream,
     /// Reused encoding buffer for coalesced writes.
     scratch: Vec<u8>,
+    flush_after: Option<Duration>,
 }
 
 impl Writer for TcpServerWriter {
@@ -96,6 +103,10 @@ impl Writer for TcpServerWriter {
 
     fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
         Some(self.stream.as_raw_fd())
+    }
+
+    fn loop_flush_after(&self) -> Option<Duration> {
+        self.flush_after
     }
 }
 
@@ -150,6 +161,7 @@ fn start_with_template(
             ingress_control,
             bitrate,
             mtu,
+            flush_after: config.flush_after,
             active_connections,
             control: control.clone(),
             dynamic_template,
@@ -175,6 +187,7 @@ struct ListenerSource {
     ingress_control: IngressControlConfig,
     bitrate: Option<u64>,
     mtu: u32,
+    flush_after: Option<Duration>,
     active_connections: Arc<AtomicUsize>,
     control: ListenerControl,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
@@ -325,6 +338,7 @@ impl ListenerSource {
         let writer: Box<dyn Writer> = Box::new(TcpServerWriter {
             stream: writer_stream,
             scratch: Vec::new(),
+            flush_after: self.flush_after,
         });
 
         let info = InterfaceInfo {
@@ -476,6 +490,7 @@ impl InterfaceFactory for TcpServerFactory {
             .unwrap_or(4242);
         let max_connections = params.get("max_connections").and_then(|v| v.parse().ok());
         let (bitrate, fixed_mtu) = super::parse_tcp_rate_params(params)?;
+        let flush_after = super::parse_flush_after(params)?;
         let mut config = TcpServerConfig {
             name: name.to_string(),
             listen_ip,
@@ -485,6 +500,7 @@ impl InterfaceFactory for TcpServerFactory {
             ingress_control: IngressControlConfig::enabled(),
             bitrate,
             fixed_mtu,
+            flush_after,
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -562,6 +578,7 @@ mod tests {
             max_connections,
             bitrate: None,
             fixed_mtu: None,
+            flush_after: None,
             ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
@@ -1017,6 +1034,7 @@ mod tests {
             ingress_control: config.ingress_control,
             bitrate: None,
             mtu: crate::interface::TCP_DEFAULT_MTU,
+            flush_after: None,
             active_connections: Arc::new(AtomicUsize::new(0)),
             control: ListenerControl::new(),
             dynamic_template: None,

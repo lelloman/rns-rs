@@ -66,6 +66,29 @@ unless one of these keys is set:
 A server applies them to every client it accepts. The link MTU signalled in
 link requests is the smaller of the two ends' hardware MTUs.
 
+## TCP write batching
+
+A TCP interface buffers outgoing frames while the driver handles what it
+received and writes them out together once it has handled everything, so a
+burst leaves in few writes. On a busy connection the peer can sit idle while a
+long pass runs. `flush_after_us` (an rns-rs extension, unset by default) also
+writes buffered frames as soon as a new frame finds the oldest one has waited
+that many microseconds:
+
+```ini
+[[Backbone link]]
+  type = TCPClientInterface
+  target_host = 10.0.0.2
+  target_port = 4242
+  flush_after_us = 25
+```
+
+It raises throughput and lowers latency for request/response traffic, at the
+cost of more, smaller writes, and so more CPU per packet. It only helps when
+it is shorter than the driver's passes; in a loopback request benchmark 25 us
+raised throughput by 45% for 11% more CPU per request, while 50 us changed
+little. A server applies it to every client it accepts.
+
 ## Inbound queues
 
 Inbound packets go through four independent queues, drained in priority order:

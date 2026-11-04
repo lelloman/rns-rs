@@ -318,6 +318,14 @@ pub trait Writer: Send {
         None
     }
 
+    /// For a [`Writer::loop_socket`] writer: write buffered frames once the
+    /// oldest has waited this long, rather than only when the driver has
+    /// handled everything it received. Trades CPU (more, smaller writes) for
+    /// latency and throughput toward a peer that waits on these frames.
+    fn loop_flush_after(&self) -> Option<Duration> {
+        None
+    }
+
     /// Called by the driver once per tick, so driver-run writers can detect
     /// a peer that stopped reading even when nothing new is sent.
     #[doc(hidden)]
@@ -507,6 +515,21 @@ pub(crate) fn parse_tcp_rate_params(
         None => None,
     };
     Ok((bitrate, fixed_mtu))
+}
+
+/// The optional `flush_after_us` key of a TCP interface (an rns-rs
+/// extension): microseconds a frame may wait in the driver's write buffer
+/// before it is written, instead of waiting for the end of the driver's pass.
+pub(crate) fn parse_flush_after(
+    params: &HashMap<String, String>,
+) -> Result<Option<Duration>, String> {
+    match params.get("flush_after_us") {
+        Some(value) => value
+            .parse::<u64>()
+            .map(|us| Some(Duration::from_micros(us)))
+            .map_err(|_| format!("invalid flush_after_us {value:?}")),
+        None => Ok(None),
+    }
 }
 
 /// Hardware MTU of a TCP interface: `fixed_mtu` when configured, else
@@ -1506,6 +1529,42 @@ mod tests {
                 Err("Configured MTU of 499 bytes is too small".to_string())
             );
             assert!(rates(&[("bitrate", "fast")]).is_err());
+        }
+    }
+
+    #[test]
+    fn tcp_interfaces_take_the_flush_after_key() {
+        let params = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        for factory in [
+            &tcp::TcpClientFactory as &dyn InterfaceFactory,
+            &tcp_server::TcpServerFactory,
+        ] {
+            let flush_after = |pairs: &[(&str, &str)]| {
+                let config = factory
+                    .parse_config("bench", InterfaceId(1), &params(pairs))
+                    .map_err(|error| error.to_string())?;
+                let any = config.into_any();
+                Ok::<_, String>(
+                    if let Some(c) = any.downcast_ref::<tcp::TcpClientConfig>() {
+                        c.flush_after
+                    } else {
+                        any.downcast_ref::<tcp_server::TcpServerConfig>()
+                            .unwrap()
+                            .flush_after
+                    },
+                )
+            };
+            assert_eq!(flush_after(&[]), Ok(None));
+            assert_eq!(
+                flush_after(&[("flush_after_us", "25")]),
+                Ok(Some(Duration::from_micros(25)))
+            );
+            assert!(flush_after(&[("flush_after_us", "soon")]).is_err());
         }
     }
 
