@@ -6,7 +6,6 @@
 //!
 //! Python reference: Link.py, RequestReceipt.py, Resource.py
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -259,8 +258,8 @@ pub struct LinkManager {
     /// The authoritative O(1) link-id index for pending, active, and closing
     /// links. Link state lives in each `ManagedLink`, so lifecycle transitions
     /// cannot desynchronise separate list and lookup-map representations.
-    links: HashMap<LinkId, ManagedLink>,
-    link_destinations: HashMap<[u8; 16], LinkDestination>,
+    links: crate::common::FastHashMap<LinkId, ManagedLink>,
+    link_destinations: crate::common::FastHashMap<[u8; 16], LinkDestination>,
     /// Per-destination link request costs and `LR_STAMPS_ENFORCED`, shared
     /// with the node API and the announce builder.
     link_request_costs: crate::stamps::LinkRequestCosts,
@@ -374,8 +373,8 @@ impl LinkManager {
         LinkManager {
             receive_worker: None,
             receive_worker_wake: None,
-            links: HashMap::new(),
-            link_destinations: HashMap::new(),
+            links: Default::default(),
+            link_destinations: Default::default(),
             request_handlers: Vec::new(),
             deferred_request_handlers: Vec::new(),
             management_paths: Vec::new(),
@@ -642,7 +641,7 @@ impl LinkManager {
             engine,
             channel: None,
             pre_rtt_packets: Vec::new(),
-            pending_channel_packets: HashMap::new(),
+            pending_channel_packets: Default::default(),
             channel_send_ok: 0,
             channel_send_not_ready: 0,
             channel_send_too_big: 0,
@@ -654,12 +653,12 @@ impl LinkManager {
             remote_identity: None,
             dest_sig_pub_bytes: Some(*dest_sig_pub_bytes),
             incoming_resources: Vec::new(),
-            concluded_incoming: std::collections::HashSet::new(),
+            concluded_incoming: Default::default(),
             outgoing_resources: Vec::new(),
-            pending_requests: HashMap::new(),
-            incoming_splits: HashMap::new(),
-            outgoing_splits: HashMap::new(),
-            outgoing_streams: HashMap::new(),
+            pending_requests: Default::default(),
+            incoming_splits: Default::default(),
+            outgoing_splits: Default::default(),
+            outgoing_streams: Default::default(),
             resource_strategy: ResourceStrategy::default(),
             resource_receive_mode: ResourceReceiveMode::default(),
             max_request_size: None,
@@ -823,7 +822,7 @@ impl LinkManager {
             engine,
             channel: None,
             pre_rtt_packets: Vec::new(),
-            pending_channel_packets: HashMap::new(),
+            pending_channel_packets: Default::default(),
             channel_send_ok: 0,
             channel_send_not_ready: 0,
             channel_send_too_big: 0,
@@ -835,12 +834,12 @@ impl LinkManager {
             remote_identity: None,
             dest_sig_pub_bytes: None,
             incoming_resources: Vec::new(),
-            concluded_incoming: std::collections::HashSet::new(),
+            concluded_incoming: Default::default(),
             outgoing_resources: Vec::new(),
-            pending_requests: HashMap::new(),
-            incoming_splits: HashMap::new(),
-            outgoing_splits: HashMap::new(),
-            outgoing_streams: HashMap::new(),
+            pending_requests: Default::default(),
+            incoming_splits: Default::default(),
+            outgoing_splits: Default::default(),
+            outgoing_streams: Default::default(),
             resource_strategy: ld.resource_strategy,
             resource_receive_mode: ResourceReceiveMode::default(),
             max_request_size: ld.max_request_size,
