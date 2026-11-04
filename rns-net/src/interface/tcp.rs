@@ -359,6 +359,12 @@ pub(crate) fn read_stream_frames(
             Ok(false) => return StreamRead::Suspend,
             Err(_) => return StreamRead::DriverGone,
         }
+        // A short read emptied the receive queue: another `recv` would only
+        // return EAGAIN. Data or a close arriving later is reported again
+        // (level-triggered) or after the re-arm (oneshot).
+        if n < cx.buf.len() {
+            break;
+        }
     }
     StreamRead::Rearm
 }
