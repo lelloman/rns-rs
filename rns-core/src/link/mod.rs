@@ -432,6 +432,17 @@ impl LinkEngine {
         Ok(link_encrypt(token, plaintext, rng))
     }
 
+    /// [`Self::encrypt`] with the tag left to the caller (see
+    /// [`Token::encrypt_untagged`]).
+    pub fn encrypt_untagged(
+        &self,
+        plaintext: &[u8],
+        rng: &mut dyn Rng,
+    ) -> Result<(Vec<u8>, rns_crypto::hmac::HmacSha256), LinkError> {
+        let token = self.token.as_ref().ok_or(LinkError::NoSessionKey)?;
+        Ok(token.encrypt_untagged(plaintext, rng))
+    }
+
     /// Whether this link has a session key to encrypt with.
     pub fn can_encrypt(&self) -> bool {
         self.token.is_some()

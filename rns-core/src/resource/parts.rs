@@ -17,27 +17,53 @@ pub fn map_hash(part_data: &[u8], random_hash: &[u8]) -> [u8; RESOURCE_MAPHASH_L
 /// The map hashes of `encrypted` cut into `sdu`-byte parts, with `data`
 /// absorbed into `data_state` alongside: each part's blocks are compressed
 /// together with as many of `data`'s.
+///
+/// With `mac`, `encrypted` is a token whose last 32 bytes are its tag still
+/// to be written: the MAC takes every byte before them alongside, and the
+/// tag is written before the parts that hold it are hashed.
 pub(crate) fn map_hashes_with_data(
-    encrypted: &[u8],
+    encrypted: &mut [u8],
     sdu: usize,
     random_hash: &[u8],
     data: &[u8],
     data_state: &mut rns_crypto::sha256::Sha256,
+    mac: Option<rns_crypto::hmac::HmacSha256>,
 ) -> Vec<[u8; RESOURCE_MAPHASH_LEN]> {
+    use rns_crypto::sha256::{update_pair, Sha256};
+    let finish = |mut hasher: Sha256| {
+        hasher.update(random_hash);
+        let mut result = [0u8; RESOURCE_MAPHASH_LEN];
+        result.copy_from_slice(&hasher.digest()[..RESOURCE_MAPHASH_LEN]);
+        result
+    };
     let mut rest = data;
-    let hashes = encrypted
-        .chunks(sdu)
-        .map(|part| {
-            let mut hasher = rns_crypto::sha256::Sha256::new();
-            let (paired, after) = rest.split_at(part.len().min(rest.len()));
-            rns_crypto::sha256::update_pair(&mut hasher, part, data_state, paired);
-            rest = after;
-            hasher.update(random_hash);
-            let mut result = [0u8; RESOURCE_MAPHASH_LEN];
-            result.copy_from_slice(&hasher.digest()[..RESOURCE_MAPHASH_LEN]);
-            result
-        })
-        .collect();
+    let mut take = |len: usize| {
+        let (paired, after) = rest.split_at(len.min(rest.len()));
+        rest = after;
+        paired
+    };
+    let mut hashes = Vec::with_capacity(encrypted.len().div_ceil(sdu));
+    let mut tagged_from = 0;
+    if let Some(mut mac) = mac {
+        let signed = encrypted.len() - 32;
+        // Parts wholly before the tag: part, MAC and data together.
+        tagged_from = signed / sdu * sdu;
+        for part in encrypted[..tagged_from].chunks(sdu) {
+            let mut hasher = Sha256::new();
+            mac.update_tripled(part, &mut hasher, part, data_state, take(part.len()));
+            hashes.push(finish(hasher));
+        }
+        let unsigned = &encrypted[tagged_from..signed];
+        mac.update_paired(unsigned, data_state, take(unsigned.len()));
+        let tag = mac.finalize();
+        encrypted[signed..].copy_from_slice(&tag);
+    }
+    for part in encrypted[tagged_from..].chunks(sdu) {
+        let mut hasher = Sha256::new();
+        update_pair(&mut hasher, part, data_state, take(part.len()));
+        hashes.push(finish(hasher));
+    }
+    let rest = take(usize::MAX);
     data_state.update(rest);
     hashes
 }
@@ -162,18 +188,36 @@ mod tests {
         let encrypted: Vec<u8> = (0..5000).map(|i| (i * 7) as u8).collect();
         for data_len in [0usize, 10, 4000, 5000, 9000] {
             let data: Vec<u8> = (0..data_len).map(|i| (i * 11) as u8).collect();
-            for sdu in [1usize, 63, 64, 464, 5000, 9000] {
+            for sdu in [1usize, 31, 63, 64, 464, 5000, 9000] {
                 let mut state = rns_crypto::sha256::Sha256::new();
-                let hashes = map_hashes_with_data(&encrypted, sdu, b"rand", &data, &mut state);
+                let mut bytes = encrypted.clone();
+                let hashes =
+                    map_hashes_with_data(&mut bytes, sdu, b"rand", &data, &mut state, None);
                 let expected: Vec<_> = encrypted
                     .chunks(sdu)
                     .map(|p| map_hash(p, b"rand"))
                     .collect();
                 assert_eq!(hashes, expected, "data {data_len} sdu {sdu}");
                 assert_eq!(state.digest(), rns_crypto::sha256::sha256(&data));
+                assert_eq!(bytes, encrypted);
+
+                // With the tag written alongside.
+                let token = rns_crypto::token::Token::new(&[0x33; 64]).unwrap();
+                let plain = &encrypted[..data_len.min(4000)];
+                let tagged = token.encrypt(plain, &mut rns_crypto::FixedRng::new(&[0x10; 16]));
+                let (mut untagged, mac) =
+                    token.encrypt_untagged(plain, &mut rns_crypto::FixedRng::new(&[0x10; 16]));
+                let mut state = rns_crypto::sha256::Sha256::new();
+                let hashes =
+                    map_hashes_with_data(&mut untagged, sdu, b"rand", &data, &mut state, Some(mac));
+                assert_eq!(untagged, tagged, "data {data_len} sdu {sdu}");
+                let expected: Vec<_> = tagged.chunks(sdu).map(|p| map_hash(p, b"rand")).collect();
+                assert_eq!(hashes, expected, "tagged data {data_len} sdu {sdu}");
+                assert_eq!(state.digest(), rns_crypto::sha256::sha256(&data));
             }
         }
     }
+
     use super::*;
 
     #[test]

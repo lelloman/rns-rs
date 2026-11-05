@@ -328,7 +328,7 @@ mod tests {
             &vec![42; 32768],
             Some(b"metadata"),
             constants::RESOURCE_SDU,
-            &|x| x.to_vec(),
+            &|x: &[u8]| x.to_vec(),
             &Bzip2Compressor,
             &mut rng,
             1000.,
