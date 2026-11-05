@@ -39,5 +39,8 @@ harness = false
 name = "ratchets"
 harness = false
 
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+cpufeatures = { version = "0.3", default-features = false }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2", default-features = false }

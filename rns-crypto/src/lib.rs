@@ -3,6 +3,8 @@ extern crate alloc;
 
 pub mod aes128;
 pub mod aes256;
+#[cfg(target_arch = "x86_64")]
+mod aes256_ni;
 pub mod ed25519;
 pub mod hkdf;
 pub mod hmac;

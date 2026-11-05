@@ -59,6 +59,16 @@ impl Aes256 {
         if !buf.len().is_multiple_of(BLOCK_SIZE) {
             return Err(CbcError::UnalignedLength);
         }
+        #[cfg(target_arch = "x86_64")]
+        if crate::aes256_ni::encrypt_cbc(&self.key, iv, buf) {
+            return Ok(());
+        }
+        self.encrypt_cbc_portable(buf, iv)
+    }
+
+    /// [`encrypt_cbc_in_place`](Self::encrypt_cbc_in_place) through the
+    /// generic cipher, on CPUs without a dedicated path.
+    fn encrypt_cbc_portable(&self, buf: &mut [u8], iv: &[u8; 16]) -> Result<(), CbcError> {
         let message_len = buf.len();
         Aes256CbcEnc::new(&self.key.into(), iv.into())
             .encrypt_padded::<NoPadding>(buf, message_len)
@@ -101,6 +111,29 @@ impl Aes256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dedicated_cbc_encryption_matches_the_generic_cipher() {
+        let mut seed = 0x9e37_79b9u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 24) as u8
+        };
+        for blocks in [1usize, 2, 3, 16, 255, 4096] {
+            for _ in 0..8 {
+                let key: [u8; 32] = core::array::from_fn(|_| next());
+                let iv: [u8; 16] = core::array::from_fn(|_| next());
+                let plain: Vec<u8> = (0..blocks * 16).map(|_| next()).collect();
+                let aes = Aes256::new(&key);
+                let mut fast = plain.clone();
+                aes.encrypt_cbc_in_place(&mut fast, &iv).unwrap();
+                let mut generic = plain.clone();
+                aes.encrypt_cbc_portable(&mut generic, &iv).unwrap();
+                assert_eq!(fast, generic);
+                assert_eq!(aes.decrypt_cbc(&fast, &iv).unwrap(), plain);
+            }
+        }
+    }
 
     #[test]
     fn test_aes256_encrypt_decrypt_block() {
