@@ -62,6 +62,9 @@ struct IncomingSplitTransfer {
     metadata: Option<Vec<u8>>,
     is_request: bool,
     is_response: bool,
+    /// The window and rate estimate the last completed segment ended with;
+    /// the next segment continues from them.
+    window: Option<(rns_core::resource::WindowState, Option<f64>)>,
 }
 
 enum IncomingSplitStorage {

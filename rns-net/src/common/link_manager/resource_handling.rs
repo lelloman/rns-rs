@@ -457,6 +457,7 @@ impl LinkManager {
             Some(key) => key,
             None => return Vec::new(),
         };
+        let mut receiver = receiver;
 
         if !is_request && !is_response {
             let maximum = match &link.resource_receive_mode {
@@ -492,6 +493,13 @@ impl LinkManager {
             }
 
             let current_total_parts = receiver.total_parts;
+            if let Some((window, eifr)) = link
+                .incoming_splits
+                .get(&original_hash)
+                .and_then(|split| split.window.clone())
+            {
+                receiver.continue_from(window, eifr);
+            }
             link.incoming_resources.push(receiver);
             let idx = link.incoming_resources.len() - 1;
             if let Some(split) = link.incoming_splits.get_mut(&original_hash) {
@@ -539,6 +547,7 @@ impl LinkManager {
                         metadata: None,
                         is_request: true,
                         is_response: false,
+                        window: None,
                     },
                 );
             }
@@ -597,6 +606,7 @@ impl LinkManager {
                         metadata: None,
                         is_request: false,
                         is_response,
+                        window: None,
                     },
                 );
             }
@@ -651,6 +661,7 @@ impl LinkManager {
                             metadata: None,
                             is_request: false,
                             is_response,
+                            window: None,
                         },
                     );
                 }
@@ -732,6 +743,7 @@ impl LinkManager {
                             metadata: None,
                             is_request: link.incoming_resources[idx].flags.is_request,
                             is_response: link.incoming_resources[idx].flags.is_response,
+                            window: None,
                         },
                     );
                 }
@@ -1049,6 +1061,10 @@ impl LinkManager {
                 None
             };
             let split_segment_index = link.incoming_resources[idx].segment_index;
+            let split_window = (
+                link.incoming_resources[idx].window.clone(),
+                link.incoming_resources[idx].eifr,
+            );
             let split_segment_total = link.incoming_resources[idx].total_segments;
             let split_segment_parts = link.incoming_resources[idx].total_parts;
             let split_is_request = link.incoming_resources[idx].flags.is_request;
@@ -1112,6 +1128,7 @@ impl LinkManager {
                             split.metadata = segment_metadata;
                         }
                         split.completed_segments = split_segment_index;
+                        split.window = Some(split_window);
                         split.current_segment_index = split_segment_index;
                         split.current_received_parts = split_segment_parts;
                         split.current_total_parts = split_segment_parts;
