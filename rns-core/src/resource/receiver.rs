@@ -358,6 +358,34 @@ impl ResourceReceiver {
         self.has_parts_to_decrypt()
     }
 
+    /// [`Self::decrypt_next_part`] for held parts until about `budget` bytes
+    /// are done; at least one part is. Returns whether more held parts wait.
+    pub fn decrypt_held_parts(
+        &mut self,
+        start: impl FnOnce() -> Option<TokenDecryptStream>,
+        budget: usize,
+    ) -> bool {
+        let mut done = self.next_part_len();
+        if !self.decrypt_next_part(start) {
+            return false;
+        }
+        while done < budget {
+            done += self.next_part_len();
+            // The decryption has started: `start` is not called again.
+            if !self.decrypt_next_part(|| None) {
+                return false;
+            }
+        }
+        self.has_parts_to_decrypt()
+    }
+
+    fn next_part_len(&self) -> usize {
+        match self.part_spans.get(self.decrypted_parts) {
+            Some(Some((_, len))) => *len,
+            _ => 0,
+        }
+    }
+
     /// Receive a part. Matches by map hash and stores it.
     pub fn receive_part(&mut self, part_data: &[u8], now: f64) -> Vec<ResourceAction> {
         let mut actions = Vec::new();
@@ -1081,6 +1109,24 @@ mod tests {
                     &NoopCompressor,
                 );
                 assert_eq!(actions, expected, "len {len} sdu {sdu} ahead {ahead}");
+            }
+            // In budgeted batches, as the driver's idle work does.
+            for budget in [1, 250, 1000, usize::MAX] {
+                let mut receiver = encrypted_receiver(&token, len, sdu);
+                let mut jobs = 0;
+                while receiver.decrypt_held_parts(
+                    || Some(token.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE)),
+                    budget,
+                ) {
+                    jobs += 1;
+                }
+                assert!(!receiver.has_parts_to_decrypt());
+                assert!(jobs < total.max(1));
+                let actions = receiver.assemble(
+                    &|_, _| panic!("parts decrypted ahead were decrypted again"),
+                    &NoopCompressor,
+                );
+                assert_eq!(actions, expected, "len {len} sdu {sdu} budget {budget}");
             }
         }
     }
