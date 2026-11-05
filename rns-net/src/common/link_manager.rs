@@ -704,7 +704,7 @@ impl LinkManager {
     /// Returns actions for the driver to dispatch. The `dest_hash` is the
     /// packet's destination_hash field. `raw` is the full packet bytes.
     /// `packet_hash` is the SHA-256 hash, or zeroed for a resource part,
-    /// whose hash nothing here reads.
+    /// part request or proof, whose hash nothing here reads.
     pub fn handle_local_delivery(
         &mut self,
         dest_hash: [u8; 16],
@@ -736,7 +736,7 @@ impl LinkManager {
         out: &mut Vec<LinkManagerAction>,
     ) {
         // The transport engine hashed these bytes on receipt, unless they are
-        // a resource part.
+        // a resource part, part request or proof.
         // A view of the delivered bytes: handlers read the packet without
         // owning a copy of it.
         let packet = match RawPacket::view_prehashed(raw, packet_hash) {

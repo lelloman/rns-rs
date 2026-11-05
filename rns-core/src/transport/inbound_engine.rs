@@ -67,9 +67,9 @@ impl TransportEngine {
     /// filter admits without consulting deduplication, is not hashed: no
     /// step that handles it reads the hash. Its hash cannot reject any later
     /// packet either, since a packet with the same hash has the same context.
-    /// Nor is a resource part for a local link (see
-    /// [`RawPacket::is_link_resource_part`]); its delivery carries a zeroed
-    /// hash. [`DecodedPacket::packet_hash`] reports whether hashing was
+    /// Nor is a resource part, part request or resource proof for a local
+    /// link (see [`RawPacket::is_unhashed_link_resource`]); its delivery
+    /// carries a zeroed hash. [`DecodedPacket::packet_hash`] reports whether hashing was
     /// deferred.
     ///
     /// [`handle_decoded_inbound_with_announce_queue`]: Self::handle_decoded_inbound_with_announce_queue
@@ -78,13 +78,15 @@ impl TransportEngine {
         &self,
         raw: PacketBytes,
     ) -> Result<DecodedPacket, crate::packet::PacketError> {
-        // Only link data qualifies; decode everything else directly.
+        // Only link data and proofs qualify; decode everything else directly.
         let flags = raw
             .first()
             .map(|flags| crate::packet::PacketFlags::unpack(*flags));
         if !flags.is_some_and(|flags| {
-            flags.packet_type == constants::PACKET_TYPE_DATA
-                && flags.destination_type == constants::DESTINATION_LINK
+            matches!(
+                flags.packet_type,
+                constants::PACKET_TYPE_DATA | constants::PACKET_TYPE_PROOF
+            ) && flags.destination_type == constants::DESTINATION_LINK
         }) {
             return DecodedPacket::unpack_shared(raw);
         }
@@ -101,14 +103,15 @@ impl TransportEngine {
 
     /// Whether every inbound step that handles `packet` leaves its hash unread.
     fn link_packet_hash_unread<B: AsRef<[u8]>>(&self, packet: &RawPacket<B>) -> bool {
-        self.forwards_link_packet_unhashed(packet) || self.delivers_resource_part_unhashed(packet)
+        self.forwards_link_packet_unhashed(packet) || self.delivers_link_resource_unhashed(packet)
     }
 
-    /// A resource part for a local link is only delivered, and its delivery
-    /// hands the part to the resource receiver. Path-table routing would key a
-    /// reverse entry on the hash, so a destination with a path is excluded.
-    fn delivers_resource_part_unhashed<B: AsRef<[u8]>>(&self, packet: &RawPacket<B>) -> bool {
-        packet.is_link_resource_part()
+    /// A resource part, part request or resource proof for a local link is
+    /// only delivered, and its delivery hands the payload to the resource
+    /// code. Path-table routing would key a reverse entry on the hash, so a
+    /// destination with a path is excluded.
+    fn delivers_link_resource_unhashed<B: AsRef<[u8]>>(&self, packet: &RawPacket<B>) -> bool {
+        packet.is_unhashed_link_resource()
             && self
                 .local_destinations
                 .contains_key(&packet.destination_hash)
