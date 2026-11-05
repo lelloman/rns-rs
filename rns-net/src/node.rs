@@ -653,6 +653,9 @@ pub struct NodeConfig {
     /// If true, a single interface failing to start will abort the entire node.
     /// If false (default), the error is logged and remaining interfaces continue.
     pub panic_on_interface_error: bool,
+    /// Threads that verify link packet proofs off the driver thread
+    /// (`Auto`: none on a single CPU).
+    pub link_proof_verify_threads: crate::ProofVerifyThreads,
     /// External provider bridge for hook-emitted events.
     #[cfg(feature = "hooks")]
     pub provider_bridge: Option<crate::provider_bridge::ProviderBridgeConfig>,
@@ -748,6 +751,7 @@ impl Default for NodeConfig {
             ),
             registry: None,
             panic_on_interface_error: false,
+            link_proof_verify_threads: Default::default(),
             #[cfg(feature = "hooks")]
             provider_bridge: None,
         }
@@ -1493,6 +1497,7 @@ impl RnsNode {
             interfaces: interface_configs,
             registry: None,
             panic_on_interface_error: private || rns_config.reticulum.panic_on_interface_error,
+            link_proof_verify_threads: Default::default(),
             #[cfg(feature = "hooks")]
             provider_bridge: if !private && rns_config.reticulum.provider_bridge {
                 Some(crate::provider_bridge::ProviderBridgeConfig {
@@ -1686,6 +1691,9 @@ impl RnsNode {
         driver
             .link_manager
             .set_link_mtu_discovery(queue_config.link_mtu_discovery);
+        driver
+            .link_manager
+            .set_proof_verify_threads(config.link_proof_verify_threads);
         driver.set_announce_verify_queue_config(
             queue_config.announce_max_entries,
             queue_config.announce_max_bytes,
@@ -5163,6 +5171,7 @@ mod tests {
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -5512,6 +5521,7 @@ share_instance = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: true,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -5584,6 +5594,7 @@ share_instance = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6491,6 +6502,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6572,6 +6584,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6649,6 +6662,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6723,6 +6737,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6837,6 +6852,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6919,6 +6935,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6999,6 +7016,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -7092,6 +7110,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -7175,6 +7194,7 @@ enable_transport = False
         let node = RnsNode::start(
             NodeConfig {
                 panic_on_interface_error: false,
+                link_proof_verify_threads: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,

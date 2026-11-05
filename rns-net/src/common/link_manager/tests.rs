@@ -4009,6 +4009,89 @@ fn test_channel_proof_reopens_send_window() {
 }
 
 #[test]
+fn link_proofs_verified_on_the_pool_reopen_the_window_and_bad_ones_do_not() {
+    let (mut init_mgr, resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let (wake, events) = crate::event::channel();
+    init_mgr.set_receive_worker_wake(wake);
+    init_mgr.set_proof_verify_threads(ProofVerifyThreads::Fixed(2));
+
+    for payload in [&b"first"[..], b"second"] {
+        init_mgr
+            .send_channel_message(&link_id, 42, payload, &mut rng)
+            .unwrap();
+    }
+    let tracked: Vec<[u8; 32]> = init_mgr.links[&link_id]
+        .pending_channel_packets
+        .keys()
+        .copied()
+        .collect();
+    assert_eq!(tracked.len(), 2);
+    // The first proof is the peer's; the second is signed with the wrong key.
+    let signers = [
+        &resp_mgr.links[&link_id].engine,
+        &init_mgr.links[&link_id].engine,
+    ];
+    let proofs: Vec<_> = tracked
+        .iter()
+        .zip(signers)
+        .map(|(hash, signer)| {
+            let mut data = hash.to_vec();
+            data.extend_from_slice(&signer.sign_packet_hash(hash));
+            let flags = PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_PROOF,
+            };
+            RawPacket::pack(flags, 0, &link_id, None, constants::CONTEXT_NONE, &data).unwrap()
+        })
+        .collect();
+    for proof in &proofs {
+        let actions = init_mgr.handle_local_delivery(
+            link_id,
+            &proof.raw,
+            proof.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        assert!(actions.is_empty());
+    }
+    // Nothing is settled before the pool's verdicts are taken.
+    assert_eq!(init_mgr.links[&link_id].pending_channel_packets.len(), 2);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut wakes = 0;
+    while init_mgr.links[&link_id].channel_proofs_received == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no verdict from the pool"
+        );
+        if events
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_ok()
+        {
+            wakes += 1;
+        }
+        init_mgr
+            .poll_proof_pool(&mut rng)
+            .expect("the pool is running");
+    }
+    // Let the bad proof's verdict arrive too.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    init_mgr.poll_proof_pool(&mut rng);
+    assert!(wakes >= 1);
+    let link = &init_mgr.links[&link_id];
+    assert_eq!(link.channel_proofs_received, 1);
+    assert_eq!(link.pending_channel_packets.len(), 1);
+    assert!(link.pending_channel_packets.contains_key(&tracked[1]));
+    init_mgr
+        .send_channel_message(&link_id, 42, b"third", &mut rng)
+        .expect("the verified proof frees one channel slot");
+}
+
+#[test]
 fn responder_channel_message_receives_initiator_delivery_proof() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;

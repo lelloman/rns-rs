@@ -117,6 +117,7 @@ fn main() {
     let server_node = RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
+            link_proof_verify_threads: Default::default(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -214,6 +215,7 @@ fn main() {
     let client_node = RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
+            link_proof_verify_threads: Default::default(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,

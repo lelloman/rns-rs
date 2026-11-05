@@ -24,6 +24,8 @@ use rns_crypto::{OsRng, Rng};
 use super::time;
 
 mod channel_handling;
+mod proof_pool;
+pub use proof_pool::ProofVerifyThreads;
 mod receive_worker;
 mod request_handling;
 mod resource_handling;
@@ -291,6 +293,13 @@ pub enum LinkManagerAction {
 pub struct LinkManager {
     receive_worker: Option<receive_worker::Worker>,
     receive_worker_wake: Option<crate::event::EventSender>,
+    /// Threads to verify link proofs on, started with the first proof.
+    proof_verify_threads: ProofVerifyThreads,
+    proof_pool: Option<proof_pool::ProofPool>,
+    /// Whether starting the pool was settled, either way.
+    proof_pool_settled: bool,
+    /// Reused buffer for the pool's verdicts.
+    proof_verdicts: Vec<proof_pool::Verdict>,
     /// The authoritative O(1) link-id index for pending, active, and closing
     /// links. Link state lives in each `ManagedLink`, so lifecycle transitions
     /// cannot desynchronise separate list and lookup-map representations.
@@ -432,6 +441,10 @@ impl LinkManager {
         LinkManager {
             receive_worker: None,
             receive_worker_wake: None,
+            proof_verify_threads: ProofVerifyThreads::Fixed(0),
+            proof_pool: None,
+            proof_pool_settled: false,
+            proof_verdicts: Vec::new(),
             links: Default::default(),
             link_destinations: Default::default(),
             request_handlers: Vec::new(),
@@ -455,6 +468,48 @@ impl LinkManager {
     /// The per-destination link request costs this manager enforces.
     pub fn link_request_costs(&self) -> &crate::stamps::LinkRequestCosts {
         &self.link_request_costs
+    }
+
+    /// How many threads verify link proofs (see [`ProofVerifyThreads`]).
+    pub(crate) fn set_proof_verify_threads(&mut self, threads: ProofVerifyThreads) {
+        self.proof_verify_threads = threads;
+        self.proof_pool = None;
+        self.proof_pool_settled = false;
+    }
+
+    /// The pool to verify a link proof on, started on first use when
+    /// threads are configured and the driver can be woken.
+    fn proof_pool(&mut self) -> Option<&proof_pool::ProofPool> {
+        if !self.proof_pool_settled {
+            self.proof_pool_settled = true;
+            let threads = self.proof_verify_threads.count();
+            if let (true, Some(wake)) = (threads > 0, self.receive_worker_wake.clone()) {
+                match proof_pool::ProofPool::start(threads, wake) {
+                    Ok(pool) => self.proof_pool = Some(pool),
+                    Err(error) => log::warn!("link proofs verified inline: {error}"),
+                }
+            }
+        }
+        self.proof_pool.as_ref()
+    }
+
+    /// Apply the verdicts the proof pool has ready; `None` without a pool.
+    pub(crate) fn poll_proof_pool(&mut self, rng: &mut dyn Rng) -> Option<Vec<LinkManagerAction>> {
+        let pool = self.proof_pool.as_ref()?;
+        let mut verdicts = core::mem::take(&mut self.proof_verdicts);
+        pool.drain(&mut verdicts);
+        let mut actions = Vec::new();
+        for verdict in verdicts.drain(..) {
+            if verdict.valid {
+                actions.extend(self.link_proof_verified(
+                    &verdict.link_id,
+                    &verdict.packet_hash,
+                    rng,
+                ));
+            }
+        }
+        self.proof_verdicts = verdicts;
+        Some(actions)
     }
 
     pub(crate) fn set_link_mtu_discovery(&mut self, enabled: bool) {
@@ -1007,17 +1062,40 @@ impl LinkManager {
         let mut signature = [0u8; 64];
         signature.copy_from_slice(&packet.data()[32..]);
 
+        let Some(key) = self
+            .links
+            .get(link_id)
+            .and_then(|link| link.engine.peer_signing_key())
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        if let Some(pool) = self.proof_pool() {
+            if pool.submit(*link_id, tracked_hash, signature, key.clone()) {
+                return Vec::new();
+            }
+        }
+        if !key.verify(&signature, &tracked_hash) {
+            return Vec::new();
+        }
+        self.link_proof_verified(link_id, &tracked_hash, rng)
+    }
+
+    /// Act on a link proof whose signature checked out.
+    fn link_proof_verified(
+        &mut self,
+        link_id: &LinkId,
+        tracked_hash: &[u8; 32],
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
         let Some(link) = self.links.get_mut(link_id) else {
             return Vec::new();
         };
-        if !link.engine.validate_packet_proof(&tracked_hash, &signature) {
-            return Vec::new();
-        }
         // A proof the peer signed is evidence the link is alive, whether or
         // not it answers a tracked channel packet: plain confirmed sends
         // complete on transmission and leave nothing to match here.
         link.engine.record_proof(time::now());
-        let Some(sequence) = link.pending_channel_packets.remove(&tracked_hash) else {
+        let Some(sequence) = link.pending_channel_packets.remove(tracked_hash) else {
             return Vec::new();
         };
         link.channel_proofs_received += 1;
