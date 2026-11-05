@@ -14,6 +14,34 @@ pub fn map_hash(part_data: &[u8], random_hash: &[u8]) -> [u8; RESOURCE_MAPHASH_L
     result
 }
 
+/// The map hashes of `encrypted` cut into `sdu`-byte parts, with `data`
+/// absorbed into `data_state` alongside: each part's blocks are compressed
+/// together with as many of `data`'s.
+pub(crate) fn map_hashes_with_data(
+    encrypted: &[u8],
+    sdu: usize,
+    random_hash: &[u8],
+    data: &[u8],
+    data_state: &mut rns_crypto::sha256::Sha256,
+) -> Vec<[u8; RESOURCE_MAPHASH_LEN]> {
+    let mut rest = data;
+    let hashes = encrypted
+        .chunks(sdu)
+        .map(|part| {
+            let mut hasher = rns_crypto::sha256::Sha256::new();
+            let (paired, after) = rest.split_at(part.len().min(rest.len()));
+            rns_crypto::sha256::update_pair(&mut hasher, part, data_state, paired);
+            rest = after;
+            hasher.update(random_hash);
+            let mut result = [0u8; RESOURCE_MAPHASH_LEN];
+            result.copy_from_slice(&hasher.digest()[..RESOURCE_MAPHASH_LEN]);
+            result
+        })
+        .collect();
+    data_state.update(rest);
+    hashes
+}
+
 /// Split data into SDU-sized parts and compute their map hashes.
 /// Returns (parts_data, map_hashes).
 pub fn split_into_parts(
@@ -128,6 +156,24 @@ pub(crate) fn extract_metadata_owned(mut assembled: Vec<u8>) -> Option<(Vec<u8>,
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn map_hashes_with_data_match_separate_hashes() {
+        let encrypted: Vec<u8> = (0..5000).map(|i| (i * 7) as u8).collect();
+        for data_len in [0usize, 10, 4000, 5000, 9000] {
+            let data: Vec<u8> = (0..data_len).map(|i| (i * 11) as u8).collect();
+            for sdu in [1usize, 63, 64, 464, 5000, 9000] {
+                let mut state = rns_crypto::sha256::Sha256::new();
+                let hashes = map_hashes_with_data(&encrypted, sdu, b"rand", &data, &mut state);
+                let expected: Vec<_> = encrypted
+                    .chunks(sdu)
+                    .map(|p| map_hash(p, b"rand"))
+                    .collect();
+                assert_eq!(hashes, expected, "data {data_len} sdu {sdu}");
+                assert_eq!(state.digest(), rns_crypto::sha256::sha256(&data));
+            }
+        }
+    }
     use super::*;
 
     #[test]

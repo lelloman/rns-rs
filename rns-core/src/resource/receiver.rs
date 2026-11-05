@@ -9,7 +9,6 @@ use super::types::*;
 use super::window::WindowState;
 use crate::buffer::types::Compressor;
 use crate::constants::*;
-use rns_crypto::sha256::Sha256;
 use rns_crypto::token::TokenDecryptStream;
 
 /// Parts' worth of storage a receiver reserves ahead at most.
@@ -30,9 +29,6 @@ pub struct ResourceReceiver {
     /// assembly; see [`Self::decrypt_next_part`].
     decrypt: Option<Box<TokenDecryptStream>>,
     decrypted_parts: usize,
-    /// SHA-256 of the settled plaintext of an uncompressed resource, and how
-    /// many plaintext bytes it covers.
-    plain_hash: Option<(Sha256, usize)>,
     /// Current status
     pub status: ResourceStatus,
     /// Resource hash (from advertisement, 32 bytes)
@@ -186,7 +182,6 @@ impl ResourceReceiver {
             assembly_id: None,
             decrypt: None,
             decrypted_parts: 0,
-            plain_hash: None,
             status: ResourceStatus::None,
             resource_hash: adv.resource_hash,
             random_hash: adv.random_hash,
@@ -330,13 +325,15 @@ impl ResourceReceiver {
             return false;
         }
         if self.decrypt.is_none() {
-            let Some(stream) = start() else {
+            let Some(mut stream) = start() else {
                 return false;
             };
-            self.decrypt = Some(Box::new(stream));
+            // The plaintext of an uncompressed resource is the data its hash
+            // covers, hashed alongside the tag's MAC.
             if !self.flags.compressed {
-                self.plain_hash = Some((Sha256::new(), 0));
+                stream.hash_plaintext();
             }
+            self.decrypt = Some(Box::new(stream));
         }
         let Some(stream) = self.decrypt.as_mut() else {
             return false;
@@ -346,15 +343,6 @@ impl ResourceReceiver {
         };
         stream.update(&self.part_data[at..at + len]);
         self.decrypted_parts += 1;
-        if let Some((hash, hashed)) = self.plain_hash.as_mut() {
-            // The last block may still lose its padding.
-            let plaintext = stream.plaintext();
-            let settled = plaintext.len().saturating_sub(16);
-            if settled > *hashed {
-                hash.update(&plaintext[*hashed..settled]);
-                *hashed = settled;
-            }
-        }
         self.has_parts_to_decrypt()
     }
 
@@ -781,14 +769,13 @@ impl ResourceReceiver {
                 for data in parts().skip(self.decrypted_parts) {
                     stream.update(data);
                 }
-                let decrypted = stream.finish().map_err(|_| ());
-                if let (Ok(plaintext), Some((mut hash, hashed))) =
-                    (&decrypted, self.plain_hash.take())
-                {
-                    hash.update(&plaintext[hashed..]);
-                    data_state = Some(Box::new(hash));
-                }
-                decrypted
+                stream
+                    .finish_hashed()
+                    .map_err(|_| ())
+                    .map(|(plaintext, hash)| {
+                        data_state = hash.map(Box::new);
+                        plaintext
+                    })
             } else {
                 // Each part is authenticated and decrypted in turn, without
                 // joining the ciphertext first.
