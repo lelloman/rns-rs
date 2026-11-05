@@ -1062,6 +1062,9 @@ impl Driver {
         // Events handled since driver-run writers were last flushed.
         let mut unflushed = 0usize;
         loop {
+            // Each turn handles at most one event and reads the clock at most
+            // once (see `time::hold`). The scope ends before the loop waits.
+            let clock = time::hold();
             self.poll_resource_preparations();
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
             self.dispatch_link_actions(actions);
@@ -1081,6 +1084,7 @@ impl Driver {
                     // Everything the last poll delivered has been handled:
                     // send this pass's output before waiting for more.
                     self.flush_writers();
+                    drop(clock);
                     unflushed = 0;
                     ready.clear();
                     if let Err(error) = self.rx.wait(&mut ready, None) {
