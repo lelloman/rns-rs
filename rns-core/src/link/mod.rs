@@ -45,6 +45,8 @@ pub struct LinkEngine {
     // Peer keys
     peer_pub_bytes: Option<[u8; 32]>,
     peer_sig_pub_bytes: Option<[u8; 32]>,
+    /// The peer's signing key, parsed once instead of for every proof.
+    peer_sig_pub: Option<Ed25519PublicKey>,
 
     // Session crypto
     derived_key: Option<Vec<u8>>,
@@ -152,6 +154,7 @@ impl LinkEngine {
             sig_prv,
             peer_pub_bytes: None,
             peer_sig_pub_bytes: None,
+            peer_sig_pub: None,
             derived_key: None,
             token: None,
             request_time: now,
@@ -246,6 +249,7 @@ impl LinkEngine {
             sig_prv: Ed25519PrivateKey::from_bytes(&owner_sig_prv.private_bytes()),
             peer_pub_bytes: Some(peer_pub),
             peer_sig_pub_bytes: Some(peer_sig_pub),
+            peer_sig_pub: Ed25519PublicKey::from_bytes(&peer_sig_pub).ok(),
             derived_key: Some(derived_key),
             token: Some(token),
             request_time: now,
@@ -323,6 +327,7 @@ impl LinkEngine {
 
         self.peer_pub_bytes = Some(peer_pub);
         self.peer_sig_pub_bytes = Some(*peer_sig_pub_bytes);
+        self.peer_sig_pub = Some(peer_sig_pub);
 
         // ECDH + HKDF
         let derived_key = perform_key_exchange(&self.prv, &peer_pub, &self.link_id, self.mode)?;
@@ -480,10 +485,9 @@ impl LinkEngine {
 
     /// Validate a delivery proof using the remote endpoint's Link signing key.
     pub fn validate_packet_proof(&self, packet_hash: &[u8; 32], signature: &[u8; 64]) -> bool {
-        self.peer_sig_pub_bytes
-            .and_then(|bytes| Ed25519PublicKey::from_bytes(&bytes).ok())
-            .map(|key| key.verify(signature, packet_hash))
-            .unwrap_or(false)
+        self.peer_sig_pub
+            .as_ref()
+            .is_some_and(|key| key.verify(signature, packet_hash))
     }
 
     /// Build LINKIDENTIFY data (encrypted).
