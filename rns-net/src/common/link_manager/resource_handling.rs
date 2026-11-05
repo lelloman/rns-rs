@@ -5,6 +5,10 @@ use super::*;
 /// requests and responses. Further advertisements are refused until one ends.
 pub(super) const MAX_ACTIVE_INCOMING_RESOURCES: usize = 16;
 
+/// Bytes of held resource parts one idle job decrypts ahead: about one part
+/// of a large-MTU link, or every part a small response holds.
+const IDLE_DECRYPT_BYTES: usize = 64 * 1024;
+
 pub(super) struct ResourceSendParams<'a> {
     pub(super) data: &'a [u8],
     pub(super) metadata: Option<&'a [u8]>,
@@ -249,8 +253,11 @@ impl LinkManager {
         Vec::new()
     }
 
-    /// Decrypt one held part of an incoming resource, so that its assembly
-    /// has less left to do once the last part arrives.
+    /// Decrypt held parts of an incoming resource, so that its assembly has
+    /// less left to do once the last part arrives. One job does at least
+    /// one part and about [`IDLE_DECRYPT_BYTES`]: the driver polls its
+    /// sources between jobs, and small parts would make that poll the
+    /// larger cost.
     fn decrypt_received_part_ahead(&mut self) {
         let Some((link_id, resource_hash)) = self.receive_decrypts.pop_front() else {
             return;
@@ -266,9 +273,10 @@ impl LinkManager {
         else {
             return;
         };
-        if receiver
-            .decrypt_next_part(|| engine.decrypt_stream(constants::RESOURCE_RANDOM_HASH_SIZE))
-        {
+        if receiver.decrypt_held_parts(
+            || engine.decrypt_stream(constants::RESOURCE_RANDOM_HASH_SIZE),
+            IDLE_DECRYPT_BYTES,
+        ) {
             self.receive_decrypts.push_back((link_id, resource_hash));
         }
     }
