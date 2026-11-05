@@ -1084,6 +1084,12 @@ impl Driver {
                     // Everything the last poll delivered has been handled:
                     // send this pass's output before waiting for more.
                     self.flush_writers();
+                    if self.link_manager.has_idle_work() {
+                        // One job per turn: events that arrive meanwhile go first.
+                        let actions = self.link_manager.run_idle_work(&mut self.rng);
+                        self.dispatch_link_actions(actions);
+                        continue;
+                    }
                     drop(clock);
                     unflushed = 0;
                     ready.clear();

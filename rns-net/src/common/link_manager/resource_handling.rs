@@ -233,6 +233,84 @@ impl LinkManager {
         Ok(sender)
     }
 
+    /// Whether [`Self::run_idle_work`] has anything to do.
+    pub fn has_idle_work(&self) -> bool {
+        !self.stream_prebuilds.is_empty()
+    }
+
+    /// Prepare the next segment of one stream whose current segment is fully
+    /// sent and awaits its proof, so that the proof can advertise it at once.
+    /// The driver calls this only when no event is waiting.
+    pub fn run_idle_work(&mut self, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
+        let Some((link_id, original_hash, segment_index)) = self.stream_prebuilds.pop() else {
+            return Vec::new();
+        };
+        let Some(link) = self
+            .links
+            .get_mut(&link_id)
+            .filter(|link| link.engine.state() == LinkState::Active)
+        else {
+            return Vec::new();
+        };
+        let mut total_segments = None;
+        for sender in &link.outgoing_resources {
+            if !sender.flags.split || sender.original_hash != original_hash {
+                continue;
+            }
+            if sender.segment_index > segment_index {
+                // Already prepared, or the proof came first.
+                return Vec::new();
+            }
+            if sender.segment_index == segment_index
+                && sender.status == rns_core::resource::ResourceStatus::AwaitingProof
+            {
+                total_segments = Some(sender.total_segments);
+            }
+        }
+        let Some(total_segments) = total_segments else {
+            return Vec::new();
+        };
+        let Some(mut stream) = link.outgoing_streams.remove(&original_hash) else {
+            return Vec::new();
+        };
+        match Self::build_stream_segment(
+            link,
+            &mut stream,
+            None,
+            segment_index + 1,
+            total_segments,
+            Some(original_hash),
+            rng,
+            time::now(),
+        ) {
+            Ok(next) => {
+                link.outgoing_resources.push(next);
+                link.outgoing_streams.insert(original_hash, stream);
+                Vec::new()
+            }
+            Err(error) => {
+                // The source has advanced past this segment: the transfer
+                // cannot go on, so its segment in flight is cancelled.
+                let mut cancel = Vec::new();
+                for sender in &mut link.outgoing_resources {
+                    if sender.flags.split && sender.original_hash == original_hash {
+                        cancel.extend(sender.cancel());
+                    }
+                }
+                link.outgoing_resources
+                    .retain(|s| !s.flags.split || s.original_hash != original_hash);
+                link.outgoing_splits.remove(&original_hash);
+                let mut actions = self.process_resource_actions(&link_id, cancel, rng);
+                actions.push(LinkManagerAction::ResourceStreamFailed {
+                    link_id,
+                    transfer_id: stream.transfer_id,
+                    error,
+                });
+                actions
+            }
+        }
+    }
+
     pub(super) fn start_resource_senders(
         link: &mut ManagedLink,
         mut senders: Vec<ResourceSender>,
@@ -662,9 +740,23 @@ impl LinkManager {
             }
             let before_sent = sender.sent_parts;
             let before = all_actions.len();
+            let was_awaiting_proof =
+                sender.status == rns_core::resource::ResourceStatus::AwaitingProof;
             sender.handle_request_parts_into(plaintext, now, &mut parts, &mut all_actions);
             if all_actions.len() > before || !parts.is_empty() {
                 part_sender = Some(index);
+                if !was_awaiting_proof
+                    && sender.status == rns_core::resource::ResourceStatus::AwaitingProof
+                    && sender.flags.split
+                    && sender.segment_index < sender.total_segments
+                    && link.outgoing_streams.contains_key(&sender.original_hash)
+                {
+                    self.stream_prebuilds.push((
+                        *link_id,
+                        sender.original_hash,
+                        sender.segment_index,
+                    ));
+                }
                 if sender.sent_parts != before_sent {
                     progress_stream_hash = Some(sender.original_hash);
                     if sender.flags.split {

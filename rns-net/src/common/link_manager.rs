@@ -285,6 +285,9 @@ pub struct LinkManager {
     resource_part_scratch: Vec<usize>,
     /// Reused buffer for the plaintext of a received link packet.
     plaintext_scratch: Vec<u8>,
+    /// Streams whose segment (link, original hash, index) is fully sent and
+    /// awaits its proof: the next segment can be prepared meanwhile.
+    stream_prebuilds: Vec<(LinkId, [u8; 32], u64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,6 +410,7 @@ impl LinkManager {
             resource_scratch: Vec::new(),
             resource_part_scratch: Vec::new(),
             plaintext_scratch: Vec::new(),
+            stream_prebuilds: Vec::new(),
         }
     }
 
@@ -1999,8 +2003,36 @@ impl LinkManager {
 
             // Tick outgoing resources (senders)
             let mut sender_actions = Vec::new();
+            let mut failed_splits = Vec::new();
             for sender in &mut link.outgoing_resources {
-                sender_actions.extend(sender.tick(now));
+                let actions = sender.tick(now);
+                if sender.flags.split
+                    && actions.iter().any(|action| {
+                        matches!(action, rns_core::resource::ResourceAction::Failed(_))
+                    })
+                {
+                    failed_splits.push(sender.original_hash);
+                    if let Some(stream) = link.outgoing_streams.remove(&sender.original_hash) {
+                        // As when a proof fails it: the stream reports the failure.
+                        all_actions.push(LinkManagerAction::ResourceStreamFailed {
+                            link_id: *link_id,
+                            transfer_id: stream.transfer_id,
+                            error: ResourceTransferError::Protocol(
+                                rns_core::resource::ResourceError::Timeout.to_string(),
+                            ),
+                        });
+                        sender_actions.extend(actions.into_iter().filter(|action| {
+                            !matches!(action, rns_core::resource::ResourceAction::Failed(_))
+                        }));
+                        continue;
+                    }
+                }
+                sender_actions.extend(actions);
+            }
+            if !failed_splits.is_empty() {
+                // Later segments already prepared go with the failed one.
+                link.outgoing_resources
+                    .retain(|s| !s.flags.split || !failed_splits.contains(&s.original_hash));
             }
 
             // Tick incoming resources (receivers)
