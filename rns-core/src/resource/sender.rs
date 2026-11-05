@@ -6,7 +6,9 @@ use alloc::vec::Vec;
 use rns_crypto::Rng;
 
 use super::advertisement::AdvertisementFields;
-use super::parts::{build_hashmap, has_collision, map_hash, prepend_metadata};
+use super::parts::{
+    build_hashmap, has_collision, map_hash, map_hashes_with_data, prepend_metadata,
+};
 use super::proof::{data_hash_state, finish_with, validate_proof};
 use super::types::*;
 use crate::buffer::types::Compressor;
@@ -169,29 +171,42 @@ impl ResourceSender {
         let mut collision_retries = 0;
         const MAX_COLLISION_RETRIES: usize = 100;
 
-        let data_state = data_hash_state(&uncompressed_data);
+        // The data hash is taken with the first attempt's map hashes.
+        let mut data_state = None;
         loop {
             final_random_hash = {
                 let rh = get_random_hash(rng);
                 rh[..RESOURCE_RANDOM_HASH_SIZE].to_vec()
             };
 
-            resource_hash = finish_with(&data_state, &final_random_hash);
+            part_hashes = match (&data_state, sdu) {
+                (_, 0) => Vec::new(),
+                (None, _) => {
+                    let mut state = rns_crypto::sha256::Sha256::new();
+                    let hashes = map_hashes_with_data(
+                        &encrypted_data,
+                        sdu,
+                        &final_random_hash,
+                        &uncompressed_data,
+                        &mut state,
+                    );
+                    data_state = Some(state);
+                    hashes
+                }
+                (Some(_), _) => encrypted_data
+                    .chunks(sdu)
+                    .map(|part| map_hash(part, &final_random_hash))
+                    .collect(),
+            };
+            let state = data_state.get_or_insert_with(|| data_hash_state(&uncompressed_data));
+
+            resource_hash = finish_with(state, &final_random_hash);
             truncated_resource_hash = {
                 let mut t = [0u8; 16];
                 t.copy_from_slice(&resource_hash[..16]);
                 t
             };
-            expected_proof = finish_with(&data_state, &resource_hash);
-
-            part_hashes = if sdu == 0 {
-                Vec::new()
-            } else {
-                encrypted_data
-                    .chunks(sdu)
-                    .map(|part| map_hash(part, &final_random_hash))
-                    .collect()
-            };
+            expected_proof = finish_with(state, &resource_hash);
 
             if !has_collision(&part_hashes) {
                 break;
