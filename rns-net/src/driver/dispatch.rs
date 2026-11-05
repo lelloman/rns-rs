@@ -1680,6 +1680,13 @@ impl Driver {
                     // Take the bytes instead of copying them; a resource part
                     // is not hashed, since nothing reads its hash.
                     let mut decoded = RawPacket::unpack_outbound_shared(raw);
+                    // The outbound path records the hash for deduplication;
+                    // start loading its bucket while routing runs.
+                    if let Ok(packet) = &decoded {
+                        if !packet.is_link_resource_part() {
+                            self.engine.prefetch_packet_hash(&packet.packet_hash);
+                        }
+                    }
                     if dest_type == rns_core::constants::DESTINATION_LINK
                         && attached_interface.is_none()
                     {
