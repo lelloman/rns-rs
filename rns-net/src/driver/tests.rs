@@ -13376,3 +13376,57 @@ fn destination_type_queries_register_and_withdraw_requirements() {
     assert!(!filter.is_wanted(&destination_type("rncp.receive")));
     assert!(filter.is_wanted(&destination_type("rnx.execute")));
 }
+
+#[test]
+fn plain_link_packets_are_proved_by_the_destination_strategy() {
+    use rns_core::types::ProofStrategy;
+    let dest = [0x6D; 16];
+    let packet_hash = [0x2B; 32];
+    for (strategy, proved, asked) in [
+        (None, false, false),
+        (Some(ProofStrategy::ProveNone), false, false),
+        (Some(ProofStrategy::ProveApp), true, true),
+        (Some(ProofStrategy::ProveAll), true, false),
+    ] {
+        let proof_requested = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: Arc::new(Mutex::new(Vec::new())),
+            proof_requested: proof_requested.clone(),
+        };
+        let (tx, rx) = event::channel();
+        let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(cbs));
+        if let Some(strategy) = strategy {
+            driver.proof_strategies.insert(dest, (strategy, None));
+        }
+        assert_eq!(
+            driver.link_packet_proof_wanted(dest, &packet_hash),
+            proved,
+            "{strategy:?}"
+        );
+        // The mock application agrees to every PROVE_APP request.
+        let requests = proof_requested.lock().unwrap().clone();
+        assert_eq!(
+            requests,
+            if asked {
+                vec![(DestHash(dest), PacketHash(packet_hash))]
+            } else {
+                Vec::new()
+            },
+            "{strategy:?}"
+        );
+    }
+}

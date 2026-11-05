@@ -134,6 +134,15 @@ pub enum LinkManagerAction {
         dest_type: u8,
         attached_interface: Option<rns_core::transport::types::InterfaceId>,
     },
+    /// A plain link packet arrived on a link to `dest_hash`. As in upstream
+    /// `Link.receive`, the destination's proof strategy decides whether it
+    /// is proved; the driver holds the strategies and answers through
+    /// [`LinkManager::prove_link_packet`].
+    ProofRequired {
+        link_id: LinkId,
+        dest_hash: [u8; 16],
+        packet_hash: [u8; 32],
+    },
     /// Link established — notify callbacks.
     LinkEstablished {
         link_id: LinkId,
@@ -985,6 +994,16 @@ impl LinkManager {
         self.process_channel_actions(link_id, chan_actions, rng)
     }
 
+    /// Prove a packet received on `link_id`: the proof packet to send, signed
+    /// with the link's key, or nothing when the link is gone.
+    pub fn prove_link_packet(
+        &mut self,
+        link_id: &LinkId,
+        packet_hash: &[u8; 32],
+    ) -> Vec<LinkManagerAction> {
+        self.build_link_packet_proof(link_id, packet_hash)
+    }
+
     fn build_link_packet_proof(
         &mut self,
         link_id: &LinkId,
@@ -1639,8 +1658,13 @@ impl LinkManager {
                     context,
                     data: plaintext,
                 });
-
-                out.extend(self.build_link_packet_proof(&link_id, &packet_hash));
+                if let Some(link) = self.links.get(&link_id) {
+                    out.push(LinkManagerAction::ProofRequired {
+                        link_id,
+                        dest_hash: link.dest_hash,
+                        packet_hash,
+                    });
+                }
             }
             LinkDataResult::ResourceAdv {
                 link_id,
