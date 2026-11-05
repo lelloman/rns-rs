@@ -478,6 +478,11 @@ impl LinkEngine {
         link_decrypt_chunks(token, chunks, skip)
     }
 
+    /// Start a [`Self::decrypt_chunks`] whose chunks are fed as they arrive.
+    pub fn decrypt_stream(&self, skip: usize) -> Option<rns_crypto::token::TokenDecryptStream> {
+        Some(self.token.as_ref()?.decrypt_stream(skip))
+    }
+
     /// Sign an explicit delivery proof for a packet sent over this Link.
     pub fn sign_packet_hash(&self, packet_hash: &[u8; 32]) -> [u8; 64] {
         self.sig_prv.sign(packet_hash)

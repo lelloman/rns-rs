@@ -28,6 +28,7 @@ impl std::error::Error for CbcError {}
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
+#[derive(Clone)]
 pub struct Aes256 {
     key: [u8; 32],
 }

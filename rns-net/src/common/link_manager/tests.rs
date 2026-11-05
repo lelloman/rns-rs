@@ -1937,13 +1937,23 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
 /// sender's idle work once the packets of a round are handled. Returns the
 /// received data, whether the sender completed, and how many proofs found
 /// the next segment already prepared.
+/// What [`drive_stream_with_idle_work`] observed.
+struct StreamRun {
+    received: Option<Vec<u8>>,
+    completed: bool,
+    /// Proofs that found the next segment already prepared.
+    prepared_at_proof: usize,
+    /// Idle turns the receiving side spent decrypting parts ahead.
+    receiver_idle_turns: usize,
+}
+
 fn drive_stream_with_idle_work(
     init_mgr: &mut LinkManager,
     resp_mgr: &mut LinkManager,
     link_id: &LinkId,
     initial: Vec<LinkManagerAction>,
     rng: &mut dyn Rng,
-) -> (Option<Vec<u8>>, bool, usize) {
+) -> StreamRun {
     let mut pending: Vec<(char, Vec<u8>)> = initial
         .into_iter()
         .filter_map(|action| match action {
@@ -1952,6 +1962,7 @@ fn drive_stream_with_idle_work(
         })
         .collect();
     let (mut received, mut completed, mut prepared_at_proof) = (None, false, 0);
+    let mut receiver_idle_turns = 0;
     for _ in 0..30_000 {
         if pending.is_empty() {
             break;
@@ -2007,9 +2018,18 @@ fn drive_stream_with_idle_work(
                 }
             }
         }
+        while resp_mgr.has_idle_work() {
+            assert!(resp_mgr.run_idle_work(rng).is_empty());
+            receiver_idle_turns += 1;
+        }
         pending = next;
     }
-    (received, completed, prepared_at_proof)
+    StreamRun {
+        received,
+        completed,
+        prepared_at_proof,
+        receiver_idle_turns,
+    }
 }
 
 #[test]
@@ -2028,12 +2048,16 @@ fn streaming_resource_prepares_the_next_segment_while_awaiting_the_proof() {
         &mut rng,
     );
     assert!(!init_mgr.has_idle_work());
-    let (received, completed, prepared_at_proof) =
+    let run =
         drive_stream_with_idle_work(&mut init_mgr, &mut resp_mgr, &link_id, initial, &mut rng);
-    assert_eq!(received, Some(data));
-    assert!(completed);
+    assert_eq!(run.received, Some(data));
+    assert!(run.completed);
     // Segments 2, 3 and 4 were ready when the proofs of 1, 2 and 3 came.
-    assert_eq!(prepared_at_proof, 3);
+    assert_eq!(run.prepared_at_proof, 3);
+    // The receiver decrypted parts ahead of each segment's assembly, and
+    // nothing is left queued.
+    assert!(run.receiver_idle_turns > 0);
+    assert!(!resp_mgr.has_idle_work());
     assert!(!init_mgr.has_idle_work());
     assert!(init_mgr.links[&link_id].outgoing_resources.is_empty());
     assert!(init_mgr.links[&link_id].outgoing_streams.is_empty());
