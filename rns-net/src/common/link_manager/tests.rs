@@ -1933,6 +1933,198 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
+/// Pump packets between two managers as the driver does, running the
+/// sender's idle work once the packets of a round are handled. Returns the
+/// received data, whether the sender completed, and how many proofs found
+/// the next segment already prepared.
+fn drive_stream_with_idle_work(
+    init_mgr: &mut LinkManager,
+    resp_mgr: &mut LinkManager,
+    link_id: &LinkId,
+    initial: Vec<LinkManagerAction>,
+    rng: &mut dyn Rng,
+) -> (Option<Vec<u8>>, bool, usize) {
+    let mut pending: Vec<(char, Vec<u8>)> = initial
+        .into_iter()
+        .filter_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(('i', raw.to_vec())),
+            _ => None,
+        })
+        .collect();
+    let (mut received, mut completed, mut prepared_at_proof) = (None, false, 0);
+    for _ in 0..30_000 {
+        if pending.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for (source, raw) in pending.drain(..) {
+            let pkt = RawPacket::unpack(&raw).unwrap();
+            let (target, target_source) = if source == 'i' {
+                (&mut *resp_mgr, 'r')
+            } else {
+                (&mut *init_mgr, 'i')
+            };
+            if target_source == 'i' && pkt.context == constants::CONTEXT_RESOURCE_PRF {
+                let resources = &target.links[link_id].outgoing_resources;
+                let current = resources
+                    .iter()
+                    .filter(|s| s.status != rns_core::resource::ResourceStatus::Queued)
+                    .map(|s| s.segment_index)
+                    .max();
+                if current.is_some_and(|index| {
+                    resources.iter().any(|s| {
+                        s.segment_index == index + 1
+                            && s.status == rns_core::resource::ResourceStatus::Queued
+                    })
+                }) {
+                    prepared_at_proof += 1;
+                }
+            }
+            let actions = target.handle_local_delivery(
+                pkt.destination_hash,
+                &raw,
+                pkt.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                rng,
+            );
+            for action in actions {
+                match action {
+                    LinkManagerAction::SendPacket { raw, .. } => {
+                        next.push((target_source, raw.to_vec()))
+                    }
+                    LinkManagerAction::ResourceReceived { data, .. } => received = Some(data),
+                    LinkManagerAction::ResourceStreamCompleted { .. } => completed = true,
+                    LinkManagerAction::ResourceFailed { error, .. } => panic!("{error}"),
+                    LinkManagerAction::ResourceStreamFailed { error, .. } => panic!("{error:?}"),
+                    _ => {}
+                }
+            }
+        }
+        while init_mgr.has_idle_work() {
+            for action in init_mgr.run_idle_work(rng) {
+                if let LinkManagerAction::SendPacket { raw, .. } = action {
+                    next.push(('i', raw.to_vec()));
+                }
+            }
+        }
+        pending = next;
+    }
+    (received, completed, prepared_at_proof)
+}
+
+#[test]
+fn streaming_resource_prepares_the_next_segment_while_awaiting_the_proof() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 3 + 777);
+    let initial = init_mgr.send_resource_stream(
+        &link_id,
+        ResourceTransferId(7),
+        Box::new(std::io::Cursor::new(data.clone())),
+        data.len() as u64,
+        None,
+        false,
+        &mut rng,
+    );
+    assert!(!init_mgr.has_idle_work());
+    let (received, completed, prepared_at_proof) =
+        drive_stream_with_idle_work(&mut init_mgr, &mut resp_mgr, &link_id, initial, &mut rng);
+    assert_eq!(received, Some(data));
+    assert!(completed);
+    // Segments 2, 3 and 4 were ready when the proofs of 1, 2 and 3 came.
+    assert_eq!(prepared_at_proof, 3);
+    assert!(!init_mgr.has_idle_work());
+    assert!(init_mgr.links[&link_id].outgoing_resources.is_empty());
+    assert!(init_mgr.links[&link_id].outgoing_streams.is_empty());
+}
+
+#[test]
+fn stream_segment_timeout_drops_the_prepared_segment_and_fails_the_stream_once() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 2);
+    let mut pending: Vec<LinkManagerAction> = init_mgr.send_resource_stream(
+        &link_id,
+        ResourceTransferId(9),
+        Box::new(std::io::Cursor::new(data.clone())),
+        data.len() as u64,
+        None,
+        false,
+        &mut rng,
+    );
+    // Run until the first segment is fully sent; its proof is withheld.
+    for _ in 0..10_000 {
+        if init_mgr.has_idle_work() {
+            break;
+        }
+        let mut next = Vec::new();
+        for action in pending.drain(..) {
+            let LinkManagerAction::SendPacket { raw, .. } = action else {
+                continue;
+            };
+            let pkt = RawPacket::unpack(&raw).unwrap();
+            for reply in resp_mgr.handle_local_delivery(
+                pkt.destination_hash,
+                &raw,
+                pkt.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            ) {
+                let LinkManagerAction::SendPacket { raw, .. } = reply else {
+                    continue;
+                };
+                let pkt = RawPacket::unpack(&raw).unwrap();
+                if pkt.context == constants::CONTEXT_RESOURCE_PRF {
+                    continue;
+                }
+                next.extend(init_mgr.handle_local_delivery(
+                    pkt.destination_hash,
+                    &raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
+                ));
+            }
+        }
+        pending = next;
+    }
+    assert!(init_mgr.has_idle_work());
+    assert!(init_mgr.run_idle_work(&mut rng).is_empty());
+    assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 2);
+
+    let link = init_mgr.links.get_mut(&link_id).unwrap();
+    let in_flight = link
+        .outgoing_resources
+        .iter_mut()
+        .find(|s| s.status == rns_core::resource::ResourceStatus::AwaitingProof)
+        .unwrap();
+    in_flight.retries_left = 0;
+    in_flight.last_part_sent = 0.0;
+    let actions = init_mgr.tick(&mut rng);
+    let stream_failures = actions
+        .iter()
+        .filter(|a| {
+            matches!(
+                a,
+                LinkManagerAction::ResourceStreamFailed {
+                    transfer_id: ResourceTransferId(9),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(stream_failures, 1);
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. })));
+    let link = &init_mgr.links[&link_id];
+    assert!(link.outgoing_resources.is_empty());
+    assert!(link.outgoing_streams.is_empty());
+    assert!(link.outgoing_splits.is_empty());
+}
+
 #[test]
 fn streaming_resource_exact_data_limit_splits_for_first_segment_metadata() {
     let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
