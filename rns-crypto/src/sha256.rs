@@ -1,23 +1,83 @@
+//! SHA-256 over a block state of its own, so that two independent messages
+//! can be compressed together (see [`update_pair`]); blocks go through the
+//! `sha2` compression function otherwise.
+
+use sha2::block_api::compress256;
 use sha2::Digest;
+
+const INITIAL_STATE: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
 
 #[derive(Clone)]
 pub struct Sha256 {
-    inner: sha2::Sha256,
+    state: [u32; 8],
+    /// A block not yet complete.
+    block: [u8; 64],
+    block_len: usize,
+    /// Bytes absorbed in total.
+    len: u64,
 }
 
 impl Sha256 {
     pub fn new() -> Self {
         Sha256 {
-            inner: sha2::Sha256::new(),
+            state: INITIAL_STATE,
+            block: [0; 64],
+            block_len: 0,
+            len: 0,
         }
     }
 
     pub fn update(&mut self, data: &[u8]) {
-        self.inner.update(data);
+        let rest = self.top_up(data);
+        let (blocks, tail) = rest.as_chunks::<64>();
+        compress256(&mut self.state, blocks);
+        self.keep(tail);
     }
 
     pub fn digest(&self) -> [u8; 32] {
-        self.inner.clone().finalize().into()
+        let mut padded = self.clone();
+        let bits = padded.len.wrapping_mul(8);
+        padded.block[padded.block_len] = 0x80;
+        padded.block[padded.block_len + 1..].fill(0);
+        if padded.block_len >= 56 {
+            compress256(&mut padded.state, core::slice::from_ref(&padded.block));
+            padded.block.fill(0);
+        }
+        padded.block[56..].copy_from_slice(&bits.to_be_bytes());
+        compress256(&mut padded.state, core::slice::from_ref(&padded.block));
+        let mut out = [0u8; 32];
+        for (bytes, word) in out.chunks_exact_mut(4).zip(padded.state) {
+            bytes.copy_from_slice(&word.to_be_bytes());
+        }
+        out
+    }
+
+    /// Complete a partly filled block from `data`, compressing it once
+    /// full, and return the rest of `data`. A non-empty rest means the block
+    /// is empty.
+    fn top_up<'a>(&mut self, data: &'a [u8]) -> &'a [u8] {
+        self.len = self.len.wrapping_add(data.len() as u64);
+        if self.block_len == 0 {
+            return data;
+        }
+        let n = (64 - self.block_len).min(data.len());
+        self.block[self.block_len..self.block_len + n].copy_from_slice(&data[..n]);
+        self.block_len += n;
+        if self.block_len == 64 {
+            compress256(&mut self.state, core::slice::from_ref(&self.block));
+            self.block_len = 0;
+        }
+        &data[n..]
+    }
+
+    /// Hold the bytes after the last whole block of a rest from `top_up`.
+    fn keep(&mut self, tail: &[u8]) {
+        if !tail.is_empty() {
+            self.block[..tail.len()].copy_from_slice(tail);
+            self.block_len = tail.len();
+        }
     }
 }
 
@@ -25,6 +85,28 @@ impl Default for Sha256 {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// `a.update(a_data)` and `b.update(b_data)`, with as many of their blocks
+/// as possible compressed together.
+pub fn update_pair(a: &mut Sha256, a_data: &[u8], b: &mut Sha256, b_data: &[u8]) {
+    let (a_blocks, a_tail) = a.top_up(a_data).as_chunks::<64>();
+    let (b_blocks, b_tail) = b.top_up(b_data).as_chunks::<64>();
+    let n = a_blocks.len().min(b_blocks.len());
+    compress_pair(&mut a.state, &a_blocks[..n], &mut b.state, &b_blocks[..n]);
+    compress256(&mut a.state, &a_blocks[n..]);
+    compress256(&mut b.state, &b_blocks[n..]);
+    a.keep(a_tail);
+    b.keep(b_tail);
+}
+
+fn compress_pair(a: &mut [u32; 8], a_blocks: &[[u8; 64]], b: &mut [u32; 8], b_blocks: &[[u8; 64]]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::sha256_x2::compress_pair(a, a_blocks, b, b_blocks) {
+        return;
+    }
+    compress256(a, a_blocks);
+    compress256(b, b_blocks);
 }
 
 pub fn sha256(data: &[u8]) -> [u8; 32] {
@@ -117,6 +199,45 @@ mod tests {
 
         assert_eq!(snapshot, sha256(b"abc"));
         assert_eq!(hasher.digest(), sha256(b"abcdef"));
+    }
+
+    #[test]
+    fn paired_updates_match_separate_hashes() {
+        let a: alloc::vec::Vec<u8> = (0..5000).map(|i| (i * 31 + 7) as u8).collect();
+        let b: alloc::vec::Vec<u8> = (0..5000).map(|i| (i * 17 + 3) as u8).collect();
+        for (a_len, b_len) in [
+            (0, 0),
+            (1, 0),
+            (64, 64),
+            (100, 3000),
+            (4999, 64),
+            (5000, 5000),
+        ] {
+            for (a_step, b_step) in [(1, 1), (7, 64), (64, 1), (100, 333), (5000, 5000)] {
+                let (mut x, mut y) = (Sha256::new(), Sha256::new());
+                // Odd starting offsets leave partly filled blocks.
+                x.update(&[0x55; 3]);
+                let (mut ai, mut bi) = (0, 0);
+                while ai < a_len || bi < b_len {
+                    let a_end = (ai + a_step).min(a_len);
+                    let b_end = (bi + b_step).min(b_len);
+                    update_pair(&mut x, &a[ai..a_end], &mut y, &b[bi..b_end]);
+                    (ai, bi) = (a_end, b_end);
+                }
+                let mut expected_a = alloc::vec![0x55; 3];
+                expected_a.extend_from_slice(&a[..a_len]);
+                assert_eq!(
+                    x.digest(),
+                    sha256(&expected_a),
+                    "a {a_len} {a_step}/{b_step}"
+                );
+                assert_eq!(
+                    y.digest(),
+                    sha256(&b[..b_len]),
+                    "b {b_len} {a_step}/{b_step}"
+                );
+            }
+        }
     }
 
     fn hex_to_bytes(hex: &str) -> alloc::vec::Vec<u8> {

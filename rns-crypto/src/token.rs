@@ -7,6 +7,7 @@ use aes::cipher::{array::Array, BlockModeDecrypt};
 
 use crate::hmac::HmacSha256;
 use crate::pkcs7;
+use crate::sha256::Sha256;
 use crate::Rng;
 
 pub const TOKEN_OVERHEAD: usize = 48; // 16 IV + 32 HMAC
@@ -269,6 +270,7 @@ impl Token {
             first_block: true,
             last_byte: 0,
             plaintext: Vec::new(),
+            plain_hash: None,
         }
     }
 }
@@ -297,9 +299,18 @@ pub struct TokenDecryptStream {
     first_block: bool,
     last_byte: u8,
     plaintext: Vec<u8>,
+    /// SHA-256 of the settled plaintext, and how many bytes it covers.
+    plain_hash: Option<(Sha256, usize)>,
 }
 
 impl TokenDecryptStream {
+    /// Also hash the plaintext, together with the tag's MAC, as it settles;
+    /// [`Self::finish_hashed`] returns the hash. Call before any update.
+    pub fn hash_plaintext(&mut self) {
+        debug_assert!(self.signed == 0 && self.tail_len == 0);
+        self.plain_hash = Some((Sha256::new(), 0));
+    }
+
     /// Reserve room for `additional` more plaintext bytes.
     pub fn reserve(&mut self, additional: usize) {
         self.plaintext.reserve(additional);
@@ -335,11 +346,24 @@ impl TokenDecryptStream {
         self.tail_len = 32;
     }
 
-    fn absorb_signed(&mut self, mut data: &[u8]) {
+    fn absorb_signed(&mut self, data: &[u8]) {
         if data.is_empty() {
             return;
         }
-        self.mac.update(data);
+        self.decrypt_signed(data);
+        match self.plain_hash.as_mut() {
+            Some((hash, hashed)) => {
+                // The last block may still lose its padding.
+                let settled = self.plaintext.len().saturating_sub(16).max(*hashed);
+                self.mac
+                    .update_paired(data, hash, &self.plaintext[*hashed..settled]);
+                *hashed = settled;
+            }
+            None => self.mac.update(data),
+        }
+    }
+
+    fn decrypt_signed(&mut self, mut data: &[u8]) {
         if self.signed < 16 {
             let n = (16 - self.signed).min(data.len());
             self.iv[self.signed..self.signed + n].copy_from_slice(&data[..n]);
@@ -381,6 +405,20 @@ impl TokenDecryptStream {
             self.block[..rest.len()].copy_from_slice(rest);
             self.block_len = rest.len();
         }
+    }
+
+    /// [`Self::finish`], with the SHA-256 state over the whole plaintext
+    /// when [`Self::hash_plaintext`] was called.
+    pub fn finish_hashed(mut self) -> Result<(Vec<u8>, Option<Sha256>), TokenError> {
+        let plain_hash = self.plain_hash.take();
+        let plaintext = self.finish()?;
+        Ok(match plain_hash {
+            Some((mut hash, hashed)) => {
+                hash.update(&plaintext[hashed..]);
+                (plaintext, Some(hash))
+            }
+            None => (plaintext, None),
+        })
     }
 
     /// Check the tag and return the plaintext, as [`Token::decrypt_chunks`]
@@ -696,6 +734,14 @@ mod tests {
                 }
                 let result = stream.finish().unwrap();
                 assert_eq!(result, plaintext[4..]);
+                let mut hashed = token.decrypt_stream(4);
+                hashed.hash_plaintext();
+                for chunk in bytes.chunks(step) {
+                    hashed.update(chunk);
+                }
+                let (again, hash) = hashed.finish_hashed().unwrap();
+                assert_eq!(again, result);
+                assert_eq!(hash.unwrap().digest(), crate::sha256::sha256(&result));
                 for partial in partials {
                     let settled = partial.len().saturating_sub(16);
                     assert_eq!(partial[..settled], result[..settled]);

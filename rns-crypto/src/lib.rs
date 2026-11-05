@@ -12,6 +12,8 @@ pub mod identity;
 pub mod pkcs7;
 pub mod ratchet;
 pub mod sha256;
+#[cfg(target_arch = "x86_64")]
+mod sha256_x2;
 pub mod sha512;
 pub mod stamp_value;
 pub mod token;
