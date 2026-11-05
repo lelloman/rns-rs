@@ -326,6 +326,8 @@ pub enum Event<W: Send> {
     ResourcePreparationReady,
     /// Internal wakeup for the bounded Resource assembly mailbox.
     ResourceAssemblyReady,
+    /// Internal wakeup: link proofs were verified off the driver thread.
+    LinkProofsVerified,
     /// Send a resource on a link.
     SendResource {
         link_id: [u8; 16],
@@ -1314,6 +1316,7 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .finish(),
             Event::ResourcePreparationReady => f.write_str("ResourcePreparationReady"),
             Event::ResourceAssemblyReady => f.write_str("ResourceAssemblyReady"),
+            Event::LinkProofsVerified => f.write_str("LinkProofsVerified"),
             Event::SendResource { link_id, data, .. } => f
                 .debug_struct("SendResource")
                 .field("link_id", link_id)

@@ -25,6 +25,7 @@ pub struct Ed25519PrivateKey {
     inner: ed25519_dalek::SigningKey,
 }
 
+#[derive(Clone)]
 pub struct Ed25519PublicKey {
     inner: ed25519_dalek::VerifyingKey,
 }

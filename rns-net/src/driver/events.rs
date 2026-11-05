@@ -1068,6 +1068,9 @@ impl Driver {
             self.poll_resource_preparations();
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
             self.dispatch_link_actions(actions);
+            if let Some(actions) = self.link_manager.poll_proof_pool(&mut self.rng) {
+                self.dispatch_link_actions(actions);
+            }
             self.flush_pending_link_frames();
             if self
                 .state_snapshot_schedule
@@ -1409,7 +1412,9 @@ impl Driver {
                     let link_actions = self.link_manager.teardown_link(&link_id);
                     self.dispatch_link_actions(link_actions);
                 }
-                Event::ResourcePreparationReady | Event::ResourceAssemblyReady => {}
+                Event::ResourcePreparationReady
+                | Event::ResourceAssemblyReady
+                | Event::LinkProofsVerified => {}
                 Event::SendResource {
                     link_id,
                     data,
