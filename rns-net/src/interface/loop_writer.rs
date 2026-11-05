@@ -215,6 +215,15 @@ impl LoopWriter {
         self.buffered() == 0 || self.buffered() + bytes <= limit
     }
 
+    /// Whether `data` fits now as a frame. Escaping at most doubles a
+    /// payload, so its exact encoded size, which takes a scan of the
+    /// payload, is computed (once, into `exact`) only when that bound does
+    /// not fit.
+    fn frame_fits(&self, data: &[u8], exact: &mut Option<usize>) -> bool {
+        self.fits(data.len().saturating_mul(2).saturating_add(2))
+            || self.fits(*exact.get_or_insert_with(|| crate::hdlc::framed_len(data)))
+    }
+
     fn append(&mut self, data: &[u8]) {
         if self.head == self.out.len() {
             self.out.clear();
@@ -238,15 +247,16 @@ impl LoopWriter {
         if self.failed {
             return Err(Self::offline());
         }
-        let bytes = crate::hdlc::framed_len(data);
-        if !self.fits(bytes) {
+        let mut exact = None;
+        if !self.frame_fits(data, &mut exact) {
             self.drain();
             if self.failed {
                 return Err(Self::offline());
             }
         }
         if let Some(egress) = &self.egress {
-            if egress.control.stalled() || !self.fits(bytes) {
+            if egress.control.stalled() || !self.frame_fits(data, &mut exact) {
+                let bytes = *exact.get_or_insert_with(|| crate::hdlc::framed_len(data));
                 egress.control.record_drop(bytes);
                 log::debug!(
                     "[{}:{}] egress control dropped outbound frame of {} bytes",
@@ -259,7 +269,11 @@ impl LoopWriter {
             }
             return Ok(());
         }
-        if !self.fits(bytes) && (self.skip_wait || !self.wait_for_space(bytes)) {
+        if !self.frame_fits(data, &mut exact)
+            && (self.skip_wait
+                || !self
+                    .wait_for_space(*exact.get_or_insert_with(|| crate::hdlc::framed_len(data))))
+        {
             self.skip_wait = true;
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -572,13 +586,13 @@ impl Writer for LoopWriter {
         if self.failed {
             return Err(Self::offline());
         }
-        let bytes = crate::hdlc::framed_len(data);
-        if !self.fits(bytes) {
+        let mut exact = None;
+        if !self.frame_fits(data, &mut exact) {
             self.drain();
             if self.failed {
                 return Err(Self::offline());
             }
-            if !self.fits(bytes) {
+            if !self.frame_fits(data, &mut exact) {
                 // Confirmed senders retry through the completion machinery.
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
