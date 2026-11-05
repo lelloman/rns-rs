@@ -91,6 +91,29 @@ struct OutgoingStreamTransfer {
     app_flag: bool,
 }
 
+/// Ask Linux to back a large buffer's capacity with huge pages. Filling it
+/// then takes one page fault per 2 MiB instead of one per 4 KiB; with small
+/// pages, the faults were most of the time spent storing each received
+/// segment of a split Resource.
+#[cfg(target_os = "linux")]
+fn advise_huge_pages(buffer: &Vec<u8>) {
+    const HUGE_PAGE: usize = 2 << 20;
+    if buffer.capacity() < 2 * HUGE_PAGE {
+        return;
+    }
+    let start = buffer.as_ptr() as usize;
+    let aligned = start.next_multiple_of(HUGE_PAGE);
+    let len = (start + buffer.capacity()).saturating_sub(aligned) / HUGE_PAGE * HUGE_PAGE;
+    if len == 0 {
+        return;
+    }
+    // SAFETY: the range lies within the buffer's own allocation, and the
+    // advice changes only how the kernel backs it, not its contents.
+    unsafe {
+        libc::madvise(aligned as *mut libc::c_void, len, libc::MADV_HUGEPAGE);
+    }
+}
+
 /// Response produced by an application request handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestResponse {
@@ -362,7 +385,10 @@ impl LinkManager {
             // peer's claim, so the reservation never exceeds the mode's limit.
             ResourceReceiveMode::Memory { max_bytes } => {
                 let capacity = usize::try_from(data_size.min(*max_bytes)).unwrap_or(0);
-                Ok(IncomingSplitStorage::Memory(Vec::with_capacity(capacity)))
+                let buffer = Vec::with_capacity(capacity);
+                #[cfg(target_os = "linux")]
+                advise_huge_pages(&buffer);
+                Ok(IncomingSplitStorage::Memory(buffer))
             }
             ResourceReceiveMode::TemporaryFile { directory, .. } => {
                 let (file, path) = crate::resource::create_receive_file(directory, original_hash)?;
