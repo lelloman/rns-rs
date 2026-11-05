@@ -301,6 +301,15 @@ impl ResourceReceiver {
         ]
     }
 
+    /// Continue the window and rate estimate the previous segment of the
+    /// same split transfer ended with, instead of starting slow again.
+    pub fn continue_from(&mut self, window: WindowState, eifr: Option<f64>) {
+        self.window = window;
+        if eifr.is_some() {
+            self.previous_eifr = eifr;
+        }
+    }
+
     /// Whether held parts wait for [`Self::decrypt_next_part`].
     pub fn has_parts_to_decrypt(&self) -> bool {
         self.flags.encrypted

@@ -1945,6 +1945,8 @@ struct StreamRun {
     prepared_at_proof: usize,
     /// Idle turns the receiving side spent decrypting parts ahead.
     receiver_idle_turns: usize,
+    /// The window limit each later segment's receiver started with.
+    later_segment_window_max: Vec<usize>,
 }
 
 fn drive_stream_with_idle_work(
@@ -1963,6 +1965,7 @@ fn drive_stream_with_idle_work(
         .collect();
     let (mut received, mut completed, mut prepared_at_proof) = (None, false, 0);
     let mut receiver_idle_turns = 0;
+    let mut later_segment_window_max = Vec::new();
     for _ in 0..30_000 {
         if pending.is_empty() {
             break;
@@ -1998,6 +2001,15 @@ fn drive_stream_with_idle_work(
                 rns_core::transport::types::InterfaceId(0),
                 rng,
             );
+            if target_source == 'r' && pkt.context == constants::CONTEXT_RESOURCE_ADV {
+                if let Some(receiver) = target.links[link_id]
+                    .incoming_resources
+                    .iter()
+                    .find(|r| r.segment_index > 1 && r.received_count == 0)
+                {
+                    later_segment_window_max.push(receiver.window.window_max);
+                }
+            }
             for action in actions {
                 match action {
                     LinkManagerAction::SendPacket { raw, .. } => {
@@ -2029,6 +2041,7 @@ fn drive_stream_with_idle_work(
         completed,
         prepared_at_proof,
         receiver_idle_turns,
+        later_segment_window_max,
     }
 }
 
@@ -2057,6 +2070,12 @@ fn streaming_resource_prepares_the_next_segment_while_awaiting_the_proof() {
     // The receiver decrypted parts ahead of each segment's assembly, and
     // nothing is left queued.
     assert!(run.receiver_idle_turns > 0);
+    // Segments 2, 3 and 4 kept the fast-link window the first one reached,
+    // instead of starting slow again.
+    assert_eq!(
+        run.later_segment_window_max,
+        [constants::RESOURCE_WINDOW_MAX_FAST; 3]
+    );
     assert!(!resp_mgr.has_idle_work());
     assert!(!init_mgr.has_idle_work());
     assert!(init_mgr.links[&link_id].outgoing_resources.is_empty());
