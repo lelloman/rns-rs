@@ -174,6 +174,22 @@ node's ports after a reboot. Use `rns-ctl -c /var/lib/rns-node` for status,
 path and probe commands; standalone `rnstatus`, `rnpath` and `rnprobe` are not
 installed.
 
+The `rns-server.service` unit must set `KillMode=mixed`. On stop, the
+supervisor asks `rnsd` to drain (up to 3 seconds) and then stops its children
+itself. With systemd's default `KillMode=control-group`, `SIGTERM` also
+reaches `rnsd` directly, and it shuts down on its own within a second, before
+it can finish draining or report its status. The supervisor then logs `rnsd
+drain timed out before supervisor shutdown`; on 2026-11-05 this happened on
+both hosts. With `mixed`, only the supervisor gets `SIGTERM`, and systemd
+still sends `SIGKILL` to any process left in the unit once the supervisor has
+exited or `TimeoutStopUSec` expires. Both VPS nodes set it in a drop-in:
+
+```bash
+ssh root@vps-eu 'mkdir -p /etc/systemd/system/rns-server.service.d
+  printf "[Service]\nKillMode=mixed\n" > /etc/systemd/system/rns-server.service.d/killmode.conf
+  systemctl daemon-reload; systemctl show rns-server -p KillMode'
+```
+
 Install the binaries on both VPS experiment nodes and restart the service.
 Keep exactly one rollback copy, named after the commit being replaced:
 
