@@ -235,16 +235,51 @@ impl LinkManager {
 
     /// Whether [`Self::run_idle_work`] has anything to do.
     pub fn has_idle_work(&self) -> bool {
-        !self.stream_prebuilds.is_empty()
+        !self.stream_prebuilds.is_empty() || !self.receive_decrypts.is_empty()
+    }
+
+    /// Do one piece of work that can wait until no event is waiting; the
+    /// driver calls this only then. Preparing a stream's next segment goes
+    /// first: the peer waits for it.
+    pub fn run_idle_work(&mut self, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
+        if let Some(prebuild) = self.stream_prebuilds.pop() {
+            return self.prepare_next_stream_segment(prebuild, rng);
+        }
+        self.decrypt_received_part_ahead();
+        Vec::new()
+    }
+
+    /// Decrypt one held part of an incoming resource, so that its assembly
+    /// has less left to do once the last part arrives.
+    fn decrypt_received_part_ahead(&mut self) {
+        let Some((link_id, resource_hash)) = self.receive_decrypts.pop_front() else {
+            return;
+        };
+        let Some(link) = self.links.get_mut(&link_id) else {
+            return;
+        };
+        let engine = &link.engine;
+        let Some(receiver) = link
+            .incoming_resources
+            .iter_mut()
+            .find(|r| r.resource_hash[..] == resource_hash[..])
+        else {
+            return;
+        };
+        if receiver
+            .decrypt_next_part(|| engine.decrypt_stream(constants::RESOURCE_RANDOM_HASH_SIZE))
+        {
+            self.receive_decrypts.push_back((link_id, resource_hash));
+        }
     }
 
     /// Prepare the next segment of one stream whose current segment is fully
     /// sent and awaits its proof, so that the proof can advertise it at once.
-    /// The driver calls this only when no event is waiting.
-    pub fn run_idle_work(&mut self, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
-        let Some((link_id, original_hash, segment_index)) = self.stream_prebuilds.pop() else {
-            return Vec::new();
-        };
+    fn prepare_next_stream_segment(
+        &mut self,
+        (link_id, original_hash, segment_index): (LinkId, [u8; 32], u64),
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
         let Some(link) = self
             .links
             .get_mut(&link_id)
@@ -922,6 +957,12 @@ impl LinkManager {
             if all_actions.len() > before {
                 if receiver.received_count == receiver.total_parts {
                     assemble_idx = Some(idx);
+                } else if receiver.has_parts_to_decrypt() {
+                    if let Ok(hash) = <[u8; 32]>::try_from(&receiver.resource_hash[..]) {
+                        if !self.receive_decrypts.contains(&(*link_id, hash)) {
+                            self.receive_decrypts.push_back((*link_id, hash));
+                        }
+                    }
                 }
                 if receiver.flags.split {
                     if let Some(key) = Self::resource_hash_key(&receiver.original_hash) {

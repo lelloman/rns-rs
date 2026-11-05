@@ -311,6 +311,9 @@ pub struct LinkManager {
     /// Streams whose segment (link, original hash, index) is fully sent and
     /// awaits its proof: the next segment can be prepared meanwhile.
     stream_prebuilds: Vec<(LinkId, [u8; 32], u64)>,
+    /// Incoming resources (link, resource hash) holding parts that can be
+    /// decrypted ahead of assembly.
+    receive_decrypts: std::collections::VecDeque<(LinkId, [u8; 32])>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,6 +440,7 @@ impl LinkManager {
             resource_part_scratch: Vec::new(),
             plaintext_scratch: Vec::new(),
             stream_prebuilds: Vec::new(),
+            receive_decrypts: std::collections::VecDeque::new(),
         }
     }
 

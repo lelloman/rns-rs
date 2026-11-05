@@ -9,6 +9,7 @@ const BLOCK_SIZE: usize = 16;
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
+#[derive(Clone)]
 pub struct Aes128 {
     key: [u8; 16],
 }

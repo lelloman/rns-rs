@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -8,6 +9,8 @@ use super::types::*;
 use super::window::WindowState;
 use crate::buffer::types::Compressor;
 use crate::constants::*;
+use rns_crypto::sha256::Sha256;
+use rns_crypto::token::TokenDecryptStream;
 
 /// Parts' worth of storage a receiver reserves ahead at most.
 const PART_RESERVE_PARTS: usize = 64;
@@ -23,6 +26,13 @@ pub type PartsDecryptFn<'a> = dyn Fn(&[&[u8]], usize) -> Result<Vec<u8>, ()> + '
 /// Returns `Vec<ResourceAction>` — no I/O, no callbacks.
 pub struct ResourceReceiver {
     assembly_id: Option<AssemblyId>,
+    /// Decryption of the parts held in order from the first, ahead of
+    /// assembly; see [`Self::decrypt_next_part`].
+    decrypt: Option<Box<TokenDecryptStream>>,
+    decrypted_parts: usize,
+    /// SHA-256 of the settled plaintext of an uncompressed resource, and how
+    /// many plaintext bytes it covers.
+    plain_hash: Option<(Sha256, usize)>,
     /// Current status
     pub status: ResourceStatus,
     /// Resource hash (from advertisement, 32 bytes)
@@ -174,6 +184,9 @@ impl ResourceReceiver {
 
         Ok(ResourceReceiver {
             assembly_id: None,
+            decrypt: None,
+            decrypted_parts: 0,
+            plain_hash: None,
             status: ResourceStatus::None,
             resource_hash: adv.resource_hash,
             random_hash: adv.random_hash,
@@ -286,6 +299,54 @@ impl ResourceReceiver {
             ResourceAction::Failed(error),
             ResourceAction::TeardownLink,
         ]
+    }
+
+    /// Whether held parts wait for [`Self::decrypt_next_part`].
+    pub fn has_parts_to_decrypt(&self) -> bool {
+        self.flags.encrypted
+            && self.status < ResourceStatus::Assembling
+            && (self.decrypted_parts as isize) <= self.consecutive_completed_height
+    }
+
+    /// Authenticate and decrypt the next held part ahead of assembly, so
+    /// that assembly only has the parts after it left to do. Parts are taken
+    /// in order from the first; `start` begins the decryption at the first
+    /// call. Returns whether more held parts wait. Nothing decrypted here is
+    /// used before assembly has checked the tag.
+    pub fn decrypt_next_part(
+        &mut self,
+        start: impl FnOnce() -> Option<TokenDecryptStream>,
+    ) -> bool {
+        if !self.has_parts_to_decrypt() {
+            return false;
+        }
+        if self.decrypt.is_none() {
+            let Some(stream) = start() else {
+                return false;
+            };
+            self.decrypt = Some(Box::new(stream));
+            if !self.flags.compressed {
+                self.plain_hash = Some((Sha256::new(), 0));
+            }
+        }
+        let Some(stream) = self.decrypt.as_mut() else {
+            return false;
+        };
+        let Some(Some((at, len))) = self.part_spans.get(self.decrypted_parts).copied() else {
+            return false;
+        };
+        stream.update(&self.part_data[at..at + len]);
+        self.decrypted_parts += 1;
+        if let Some((hash, hashed)) = self.plain_hash.as_mut() {
+            // The last block may still lose its padding.
+            let plaintext = stream.plaintext();
+            let settled = plaintext.len().saturating_sub(16);
+            if settled > *hashed {
+                hash.update(&plaintext[*hashed..settled]);
+                *hashed = settled;
+            }
+        }
+        self.has_parts_to_decrypt()
     }
 
     /// Receive a part. Matches by map hash and stores it.
@@ -674,14 +735,29 @@ impl ResourceReceiver {
                 .map(|&(start, len)| &part_data[start..start + len])
         };
         self.hashmap = Vec::new();
+        let mut data_state = None;
 
         // The plaintext starts with the random prefix, which is dropped here.
         let plaintext = if self.flags.encrypted {
-            // Each part is authenticated and decrypted in turn, without
-            // joining the ciphertext first.
-            let chunks: Vec<&[u8]> = parts().collect();
-            let decrypted = decrypt_fn(&chunks, RESOURCE_RANDOM_HASH_SIZE);
-            drop(chunks);
+            let decrypted = if let Some(mut stream) = self.decrypt.take() {
+                // Parts decrypted ahead are not fed again.
+                for data in parts().skip(self.decrypted_parts) {
+                    stream.update(data);
+                }
+                let decrypted = stream.finish().map_err(|_| ());
+                if let (Ok(plaintext), Some((mut hash, hashed))) =
+                    (&decrypted, self.plain_hash.take())
+                {
+                    hash.update(&plaintext[hashed..]);
+                    data_state = Some(Box::new(hash));
+                }
+                decrypted
+            } else {
+                // Each part is authenticated and decrypted in turn, without
+                // joining the ciphertext first.
+                let chunks: Vec<&[u8]> = parts().collect();
+                decrypt_fn(&chunks, RESOURCE_RANDOM_HASH_SIZE)
+            };
             drop(part_spans);
             drop(part_data);
             match decrypted {
@@ -715,6 +791,7 @@ impl ResourceReceiver {
         };
         Ok(AssemblyData {
             plaintext,
+            data_state,
             resource_hash,
             random_hash,
             compressed: self.flags.compressed,
@@ -923,6 +1000,93 @@ mod tests {
         }
         assert_eq!(receiver.received_count, receiver.total_parts);
         receiver
+    }
+
+    /// A receiver holding every part of a `len`-byte resource encrypted
+    /// with `token`, sent in parts of `sdu` bytes.
+    fn encrypted_receiver(
+        token: &rns_crypto::token::Token,
+        len: usize,
+        sdu: usize,
+    ) -> ResourceReceiver {
+        let mut rng = rns_crypto::FixedRng::new(&[0x42; 64]);
+        let data: Vec<u8> = (0..len).map(|i| (i * 31 + 7) as u8).collect();
+        let encrypt = |plaintext: &[u8]| token.encrypt_with_iv(plaintext, &[0x17; 16]);
+        let mut sender = ResourceSender::new(
+            &data,
+            None,
+            sdu,
+            &encrypt,
+            &NoopCompressor,
+            &mut rng,
+            1000.0,
+            false,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+        let adv = sender.get_advertisement(0);
+        let mut receiver =
+            ResourceReceiver::from_advertisement(&adv, sdu, 0.5, 1000.0, None, None).unwrap();
+        let mut actions = receiver.accept(1001.0);
+        while let Some(action) = actions.pop() {
+            if let ResourceAction::SendRequest(request) = action {
+                for action in sender.handle_request(&request, 1002.0) {
+                    if let ResourceAction::SendPart(part) = action {
+                        actions.extend(receiver.receive_part(&part, 1003.0));
+                    }
+                }
+            }
+        }
+        assert_eq!(receiver.received_count, receiver.total_parts);
+        receiver
+    }
+
+    #[test]
+    fn parts_decrypted_ahead_assemble_as_the_parts_decrypted_at_once() {
+        let token = rns_crypto::token::Token::new(&[0x5A; 64]).unwrap();
+        let decrypt =
+            |parts: &[&[u8]], skip: usize| token.decrypt_chunks(parts, skip).map_err(|_| ());
+        for (len, sdu) in [(10usize, 100usize), (5000, 100), (5000, 97), (20_000, 464)] {
+            let expected = encrypted_receiver(&token, len, sdu).assemble(&decrypt, &NoopCompressor);
+            assert!(matches!(expected[1], ResourceAction::DataReceived { .. }));
+            let total = encrypted_receiver(&token, len, sdu).total_parts;
+            for ahead in [1, total / 2, total.saturating_sub(1), total] {
+                if ahead == 0 {
+                    continue;
+                }
+                let mut receiver = encrypted_receiver(&token, len, sdu);
+                for _ in 0..ahead {
+                    receiver.decrypt_next_part(|| {
+                        Some(token.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE))
+                    });
+                }
+                assert_eq!(receiver.has_parts_to_decrypt(), ahead < total);
+                let actions = receiver.assemble(
+                    &|_, _| panic!("parts decrypted ahead were decrypted again"),
+                    &NoopCompressor,
+                );
+                assert_eq!(actions, expected, "len {len} sdu {sdu} ahead {ahead}");
+            }
+        }
+    }
+
+    #[test]
+    fn parts_decrypted_ahead_under_another_key_fail_at_assembly() {
+        let token = rns_crypto::token::Token::new(&[0x5A; 64]).unwrap();
+        let other = rns_crypto::token::Token::new(&[0x5B; 64]).unwrap();
+        let mut receiver = encrypted_receiver(&token, 5000, 100);
+        receiver.decrypt_next_part(|| Some(other.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE)));
+        let actions = receiver.assemble(&|_, _| panic!("decrypted again"), &NoopCompressor);
+        assert!(actions.contains(&ResourceAction::Failed(ResourceError::DecryptionFailed)));
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::DataReceived { .. })));
     }
 
     #[test]

@@ -8,7 +8,8 @@ use crate::{
     buffer::types::{Compressor, DecompressError},
     constants::RESOURCE_RANDOM_HASH_SIZE,
 };
-use alloc::{sync::Arc, vec, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
+use rns_crypto::sha256::Sha256;
 
 /// Identity of one assembly attempt. Equality compares attempts, not Resource hashes.
 #[derive(Clone, Debug)]
@@ -58,6 +59,8 @@ impl ResourceAssembly {
 
 pub(super) struct AssemblyData {
     pub plaintext: Vec<u8>,
+    /// SHA-256 over `plaintext`, when it was hashed as it was decrypted.
+    pub data_state: Option<Box<Sha256>>,
     pub random_hash: [u8; RESOURCE_RANDOM_HASH_SIZE],
     pub resource_hash: [u8; 32],
     pub compressed: bool,
@@ -69,7 +72,9 @@ impl AssemblyData {
     pub fn run(self, compressor: &dyn Compressor) -> Result<Vec<ResourceAction>, ResourceError> {
         // The receiver already dropped the random prefix.
         let plaintext = self.plaintext;
+        let mut data_state = self.data_state;
         let decompressed = if self.compressed {
+            data_state = None;
             compressor
                 .decompress_bounded(&plaintext, self.limit)
                 .map_err(|error| match error {
@@ -79,7 +84,7 @@ impl AssemblyData {
         } else {
             plaintext
         };
-        let data_state = data_hash_state(&decompressed);
+        let data_state = data_state.map_or_else(|| data_hash_state(&decompressed), |state| *state);
         let hash = finish_with(&data_state, &self.random_hash);
         if hash != self.resource_hash {
             return Err(ResourceError::HashMismatch);

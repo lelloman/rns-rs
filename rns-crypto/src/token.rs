@@ -30,6 +30,7 @@ impl fmt::Display for TokenError {
     }
 }
 
+#[derive(Clone)]
 enum AesMode {
     Aes128(Aes128),
     Aes256(Aes256),
@@ -241,87 +242,164 @@ impl Token {
     /// are the same, except that a plaintext shorter than `skip` is
     /// [`TokenError::DecryptionFailed`].
     pub fn decrypt_chunks(&self, chunks: &[&[u8]], skip: usize) -> Result<Vec<u8>, TokenError> {
-        assert!(skip <= 16, "decrypt_chunks skips at most one block");
         let total: usize = chunks.iter().map(|chunk| chunk.len()).sum();
-        if total <= TOKEN_OVERHEAD {
+        let mut stream = self.decrypt_stream(skip);
+        stream.reserve(total.saturating_sub(TOKEN_OVERHEAD));
+        for chunk in chunks {
+            stream.update(chunk);
+        }
+        stream.finish()
+    }
+
+    /// Start a [`Token::decrypt_chunks`] whose chunks are fed one at a time,
+    /// as they become available.
+    pub fn decrypt_stream(&self, skip: usize) -> TokenDecryptStream {
+        assert!(skip <= 16, "decrypt_chunks skips at most one block");
+        TokenDecryptStream {
+            mac: self.mac.clone(),
+            mode: self.mode.clone(),
+            decryptor: None,
+            skip,
+            signed: 0,
+            iv: [0; 16],
+            tail: [0; 32],
+            tail_len: 0,
+            block: [0; 16],
+            block_len: 0,
+            first_block: true,
+            last_byte: 0,
+            plaintext: Vec::new(),
+        }
+    }
+}
+
+/// An incremental [`Token::decrypt_chunks`]: the token's bytes are fed in
+/// order with [`TokenDecryptStream::update`], and [`TokenDecryptStream::finish`]
+/// checks the tag and returns the plaintext. The last 32 bytes seen are held
+/// back as the candidate tag; everything before them is authenticated and
+/// decrypted as it arrives. Decrypted bytes are not authentic until `finish`
+/// accepts the tag.
+pub struct TokenDecryptStream {
+    mac: HmacSha256,
+    mode: AesMode,
+    decryptor: Option<CbcDecryptor>,
+    skip: usize,
+    /// Bytes released to the MAC: the IV and the ciphertext so far.
+    signed: usize,
+    iv: [u8; 16],
+    /// The last bytes seen, up to 32: the tag if the token ends here.
+    tail: [u8; 32],
+    tail_len: usize,
+    /// A ciphertext block that straddles updates, and always the first
+    /// block, which carries the skipped bytes.
+    block: [u8; 16],
+    block_len: usize,
+    first_block: bool,
+    last_byte: u8,
+    plaintext: Vec<u8>,
+}
+
+impl TokenDecryptStream {
+    /// Reserve room for `additional` more plaintext bytes.
+    pub fn reserve(&mut self, additional: usize) {
+        self.plaintext.reserve(additional);
+    }
+
+    /// The plaintext decrypted so far, without the skipped bytes. Its last
+    /// block may still hold the padding, and none of it is authentic until
+    /// [`Self::finish`] succeeds.
+    pub fn plaintext(&self) -> &[u8] {
+        &self.plaintext
+    }
+
+    /// Feed the token's next bytes.
+    pub fn update(&mut self, data: &[u8]) {
+        let total = self.tail_len + data.len();
+        if total <= 32 {
+            self.tail[self.tail_len..total].copy_from_slice(data);
+            self.tail_len = total;
+            return;
+        }
+        // Everything but the last 32 bytes is signed data.
+        let release = total - 32;
+        let from_tail = release.min(self.tail_len);
+        if from_tail > 0 {
+            let tail = self.tail;
+            self.absorb_signed(&tail[..from_tail]);
+        }
+        let from_data = release - from_tail;
+        self.absorb_signed(&data[..from_data]);
+        let kept = self.tail_len - from_tail;
+        self.tail.copy_within(from_tail..self.tail_len, 0);
+        self.tail[kept..].copy_from_slice(&data[from_data..]);
+        self.tail_len = 32;
+    }
+
+    fn absorb_signed(&mut self, mut data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        self.mac.update(data);
+        if self.signed < 16 {
+            let n = (16 - self.signed).min(data.len());
+            self.iv[self.signed..self.signed + n].copy_from_slice(&data[..n]);
+            self.signed += n;
+            data = &data[n..];
+            if data.is_empty() {
+                return;
+            }
+        }
+        self.signed += data.len();
+        let (mode, iv) = (&self.mode, &self.iv);
+        let decryptor = self.decryptor.get_or_insert_with(|| match mode {
+            AesMode::Aes128(aes) => CbcDecryptor::Aes128(aes.cbc_decryptor(iv)),
+            AesMode::Aes256(aes) => CbcDecryptor::Aes256(aes.cbc_decryptor(iv)),
+        });
+        while !data.is_empty() && (self.block_len > 0 || self.first_block) {
+            let n = (16 - self.block_len).min(data.len());
+            self.block[self.block_len..self.block_len + n].copy_from_slice(&data[..n]);
+            self.block_len += n;
+            data = &data[n..];
+            if self.block_len == 16 {
+                decryptor.decrypt_blocks(&mut self.block);
+                let from = if self.first_block { self.skip } else { 0 };
+                self.plaintext.extend_from_slice(&self.block[from..]);
+                self.last_byte = self.block[15];
+                self.first_block = false;
+                self.block_len = 0;
+            }
+        }
+        if !data.is_empty() {
+            let whole = data.len() - data.len() % 16;
+            if whole > 0 {
+                let at = self.plaintext.len();
+                self.plaintext.extend_from_slice(&data[..whole]);
+                decryptor.decrypt_blocks(&mut self.plaintext[at..]);
+                self.last_byte = self.plaintext[self.plaintext.len() - 1];
+            }
+            let rest = &data[whole..];
+            self.block[..rest.len()].copy_from_slice(rest);
+            self.block_len = rest.len();
+        }
+    }
+
+    /// Check the tag and return the plaintext, as [`Token::decrypt_chunks`]
+    /// of every byte fed.
+    pub fn finish(self) -> Result<Vec<u8>, TokenError> {
+        if self.signed + self.tail_len <= TOKEN_OVERHEAD {
             return Err(TokenError::InvalidToken);
         }
-        let signed_len = total - 32;
-        let ciphertext_len = signed_len - 16;
-        // A misaligned ciphertext is rejected after the tag check, as in
-        // `decrypt`; it is authenticated but not decrypted.
-        let aligned = ciphertext_len.is_multiple_of(16);
-
-        let mut mac = self.mac.clone();
-        let mut iv = [0u8; 16];
-        let mut tag = [0u8; 32];
-        let mut plaintext = Vec::with_capacity(if aligned { ciphertext_len - skip } else { 0 });
-        let mut decryptor = None;
-        // A block that straddles chunks, and always the first block, which
-        // carries the skipped bytes, are decrypted here.
-        let mut block = [0u8; 16];
-        let mut block_len = 0;
-        let mut first_block = true;
-        let mut last_byte = 0u8;
-        let mut pos = 0;
-        for chunk in chunks {
-            let end = pos + chunk.len();
-            if pos < signed_len {
-                mac.update(&chunk[..signed_len.min(end) - pos]);
-            }
-            if pos < 16 {
-                let n = 16.min(end) - pos;
-                iv[pos..pos + n].copy_from_slice(&chunk[..n]);
-            }
-            let (start, stop) = (pos.max(16), end.min(signed_len));
-            if aligned && start < stop {
-                let decryptor = decryptor.get_or_insert_with(|| match &self.mode {
-                    AesMode::Aes128(aes) => CbcDecryptor::Aes128(aes.cbc_decryptor(&iv)),
-                    AesMode::Aes256(aes) => CbcDecryptor::Aes256(aes.cbc_decryptor(&iv)),
-                });
-                let mut data = &chunk[start - pos..stop - pos];
-                while !data.is_empty() && (block_len > 0 || first_block) {
-                    let n = (16 - block_len).min(data.len());
-                    block[block_len..block_len + n].copy_from_slice(&data[..n]);
-                    block_len += n;
-                    data = &data[n..];
-                    if block_len == 16 {
-                        decryptor.decrypt_blocks(&mut block);
-                        let from = if first_block { skip } else { 0 };
-                        plaintext.extend_from_slice(&block[from..]);
-                        last_byte = block[15];
-                        first_block = false;
-                        block_len = 0;
-                    }
-                }
-                if !data.is_empty() {
-                    let whole = data.len() - data.len() % 16;
-                    if whole > 0 {
-                        let at = plaintext.len();
-                        plaintext.extend_from_slice(&data[..whole]);
-                        decryptor.decrypt_blocks(&mut plaintext[at..]);
-                        last_byte = plaintext[plaintext.len() - 1];
-                    }
-                    let rest = &data[whole..];
-                    block[..rest.len()].copy_from_slice(rest);
-                    block_len = rest.len();
-                }
-            }
-            if end > signed_len {
-                let from = pos.max(signed_len);
-                tag[from - signed_len..end - signed_len].copy_from_slice(&chunk[from - pos..]);
-            }
-            pos = end;
-        }
-
-        if !mac.verify(&tag) {
+        if !self.mac.verify(&self.tail) {
             return Err(TokenError::HmacMismatch);
         }
-        if !aligned {
+        // A misaligned ciphertext is rejected after the tag check, as in
+        // `decrypt`.
+        if self.first_block || self.block_len != 0 {
             return Err(TokenError::DecryptionFailed);
         }
         // The same padding check as `pkcs7::unpad`.
-        let padding = usize::from(last_byte);
+        let mut plaintext = self.plaintext;
+        let padding = usize::from(self.last_byte);
         if padding > 16 || padding > plaintext.len() {
             return Err(TokenError::DecryptionFailed);
         }
@@ -598,6 +676,30 @@ mod tests {
                     token.decrypt_chunks(&split_at_offsets(&short, &[1]), 0),
                     Err(TokenError::InvalidToken)
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_plaintext_is_final_except_its_last_block() {
+        let mut rng = FixedRng::new(&[0x3C; 64]);
+        let token = Token::new(&[0x42u8; 64]).unwrap();
+        for len in [4usize, 15, 16, 17, 100, 1000, 5000] {
+            let plaintext: Vec<u8> = (0..len).map(|i| (i * 11) as u8).collect();
+            let bytes = token.encrypt(&plaintext, &mut rng);
+            for step in [1usize, 7, 16, 64, 500] {
+                let mut stream = token.decrypt_stream(4);
+                let mut partials = Vec::new();
+                for chunk in bytes.chunks(step) {
+                    stream.update(chunk);
+                    partials.push(stream.plaintext().to_vec());
+                }
+                let result = stream.finish().unwrap();
+                assert_eq!(result, plaintext[4..]);
+                for partial in partials {
+                    let settled = partial.len().saturating_sub(16);
+                    assert_eq!(partial[..settled], result[..settled]);
+                }
             }
         }
     }
