@@ -517,18 +517,29 @@ pub(crate) fn parse_tcp_rate_params(
     Ok((bitrate, fixed_mtu))
 }
 
+/// How long a TCP interface lets a frame wait in the driver's write buffer
+/// when `flush_after_us` is not set: 25 µs with the `low-latency-flush`
+/// feature, otherwise until the end of the driver's pass.
+pub(crate) const DEFAULT_FLUSH_AFTER: Option<Duration> = if cfg!(feature = "low-latency-flush") {
+    Some(Duration::from_micros(25))
+} else {
+    None
+};
+
 /// The optional `flush_after_us` key of a TCP interface (an rns-rs
 /// extension): microseconds a frame may wait in the driver's write buffer
-/// before it is written, instead of waiting for the end of the driver's pass.
+/// before it is written, instead of waiting for the end of the driver's pass;
+/// `off` waits for the end of the pass whatever the build's default.
 pub(crate) fn parse_flush_after(
     params: &HashMap<String, String>,
 ) -> Result<Option<Duration>, String> {
     match params.get("flush_after_us") {
+        Some(value) if value.eq_ignore_ascii_case("off") => Ok(None),
         Some(value) => value
             .parse::<u64>()
             .map(|us| Some(Duration::from_micros(us)))
             .map_err(|_| format!("invalid flush_after_us {value:?}")),
-        None => Ok(None),
+        None => Ok(DEFAULT_FLUSH_AFTER),
     }
 }
 
@@ -1559,7 +1570,8 @@ mod tests {
                     },
                 )
             };
-            assert_eq!(flush_after(&[]), Ok(None));
+            assert_eq!(flush_after(&[]), Ok(DEFAULT_FLUSH_AFTER));
+            assert_eq!(flush_after(&[("flush_after_us", "off")]), Ok(None));
             assert_eq!(
                 flush_after(&[("flush_after_us", "25")]),
                 Ok(Some(Duration::from_micros(25)))

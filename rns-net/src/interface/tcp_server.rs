@@ -37,7 +37,7 @@ pub struct TcpServerConfig {
     pub fixed_mtu: Option<u32>,
     /// Write buffered frames to each client once the oldest has waited this
     /// long instead of at the end of the driver's pass (`flush_after_us`;
-    /// off by default).
+    /// see [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
     pub runtime: Arc<Mutex<TcpServerRuntime>>,
 }
@@ -73,7 +73,7 @@ impl Default for TcpServerConfig {
             ingress_control: IngressControlConfig::enabled(),
             bitrate: None,
             fixed_mtu: None,
-            flush_after: None,
+            flush_after: super::DEFAULT_FLUSH_AFTER,
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),

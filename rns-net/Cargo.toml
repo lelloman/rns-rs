@@ -27,6 +27,13 @@ iface-rnode = []
 iface-backbone = []
 iface-i2p = []
 iface-weave = []
+# TCP interfaces write a buffered frame once it has waited 25 µs, instead of
+# at the end of the driver's pass, unless `flush_after_us` says otherwise:
+# more writes, less latency.
+low-latency-flush = []
+# `NodeConfig::link_proof_verify_threads` may start threads that verify link
+# proofs off the driver thread; without it every proof is verified inline.
+proof-pool = []
 
 [dependencies]
 zeroize = { version = "1", default-features = false, features = ["alloc"] }

@@ -35,7 +35,8 @@ pub struct TcpClientConfig {
     /// Hardware MTU, overriding the bitrate tier.
     pub fixed_mtu: Option<u32>,
     /// Write buffered frames once the oldest has waited this long instead of
-    /// at the end of the driver's pass (`flush_after_us`; off by default).
+    /// at the end of the driver's pass (`flush_after_us`; see
+    /// [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
     pub runtime: Arc<Mutex<TcpClientRuntime>>,
 }
@@ -81,7 +82,7 @@ impl Default for TcpClientConfig {
             device: None,
             bitrate: None,
             fixed_mtu: None,
-            flush_after: None,
+            flush_after: super::DEFAULT_FLUSH_AFTER,
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
                 target_host: "127.0.0.1".into(),
                 target_port: 4242,
