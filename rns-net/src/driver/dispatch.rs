@@ -1677,13 +1677,14 @@ impl Driver {
                     dest_type,
                     mut attached_interface,
                 } => {
-                    // Take the bytes instead of copying them; a resource part
-                    // is not hashed, since nothing reads its hash.
+                    // Take the bytes instead of copying them; resource parts,
+                    // part requests and proofs are not hashed, since nothing
+                    // reads their hashes.
                     let mut decoded = RawPacket::unpack_outbound_shared(raw);
                     // The outbound path records the hash for deduplication;
                     // start loading its bucket while routing runs.
                     if let Ok(packet) = &decoded {
-                        if !packet.is_link_resource_part() {
+                        if !packet.is_unhashed_link_resource() {
                             self.engine.prefetch_packet_hash(&packet.packet_hash);
                         }
                     }
@@ -2190,7 +2191,7 @@ fn is_outbound_path_request(raw: &[u8], path_request_dest: &[u8; 16]) -> bool {
 /// The hash of a delivered packet. The engine leaves a link resource part
 /// unhashed, so hash it here for the consumers that read the hash.
 fn delivered_packet_hash(raw: &[u8], packet_hash: [u8; 32]) -> [u8; 32] {
-    if RawPacket::is_link_resource_part_wire(raw) {
+    if RawPacket::is_unhashed_link_resource_wire(raw) {
         if let Ok(packet) = RawPacket::unpack(raw) {
             return packet.packet_hash;
         }

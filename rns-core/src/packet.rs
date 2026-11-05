@@ -131,22 +131,29 @@ impl RawPacket {
         }
     }
 
-    /// [`RawPacket::is_link_resource_part`] for wire bytes that are not
+    /// [`RawPacket::is_unhashed_link_resource`] for wire bytes that are not
     /// unpacked; `false` when they are too short to carry a context byte.
-    pub fn is_link_resource_part_wire(raw: &[u8]) -> bool {
+    pub fn is_unhashed_link_resource_wire(raw: &[u8]) -> bool {
         let Some(&flags) = raw.first() else {
             return false;
         };
         let flags = PacketFlags::unpack(flags);
         raw.get(Self::data_offset(flags.header_type) - 1)
-            .is_some_and(|&context| Self::is_link_resource_part_header(&flags, context))
+            .is_some_and(|&context| Self::is_unhashed_link_resource_header(&flags, context))
     }
 
     #[inline]
-    fn is_link_resource_part_header(flags: &PacketFlags, context: u8) -> bool {
-        flags.packet_type == constants::PACKET_TYPE_DATA
-            && flags.destination_type == constants::DESTINATION_LINK
-            && context == constants::CONTEXT_RESOURCE
+    fn is_unhashed_link_resource_header(flags: &PacketFlags, context: u8) -> bool {
+        flags.destination_type == constants::DESTINATION_LINK
+            && match context {
+                constants::CONTEXT_RESOURCE | constants::CONTEXT_RESOURCE_REQ => {
+                    flags.packet_type == constants::PACKET_TYPE_DATA
+                }
+                constants::CONTEXT_RESOURCE_PRF => {
+                    flags.packet_type == constants::PACKET_TYPE_PROOF
+                }
+                _ => false,
+            }
     }
 
     /// Pack fields into raw bytes.
@@ -427,11 +434,12 @@ impl RawPacket {
     }
 
     /// Unpack owned wire bytes of a packet this node sends. A link resource
-    /// part is left unhashed, its `packet_hash` zeroed, because nothing reads
-    /// it (see [`RawPacket::is_link_resource_part`]).
+    /// part, part request or proof is left unhashed, its `packet_hash`
+    /// zeroed, because nothing reads it (see
+    /// [`RawPacket::is_unhashed_link_resource`]).
     pub fn unpack_outbound(raw: Vec<u8>) -> Result<Self, PacketError> {
         let mut packet = Self::unpack_unhashed(raw)?;
-        if !packet.is_link_resource_part() {
+        if !packet.is_unhashed_link_resource() {
             packet.hash_in_place();
         }
         Ok(packet)
@@ -453,7 +461,7 @@ impl RawPacket {
     /// [`RawPacket::unpack_outbound`] for shared bytes, kept as they are.
     pub fn unpack_outbound_shared(raw: PacketBytes) -> Result<RawPacket<PacketBytes>, PacketError> {
         let mut packet = RawPacket::<PacketBytes>::parse::<false>(raw)?;
-        if !packet.is_link_resource_part() {
+        if !packet.is_unhashed_link_resource() {
             packet.hash_in_place();
         }
         Ok(packet)
@@ -500,14 +508,16 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
         &self.raw.as_ref()[<RawPacket>::data_offset(self.flags.header_type)..]
     }
 
-    /// Whether this packet is a part of a link resource. Nothing reads such
-    /// a packet's hash: the packet filter admits parts before deduplication,
-    /// no proof or receipt covers them, and the resource receiver locates a
-    /// part by its map hash. A part's hash cannot mark any other packet as a
-    /// duplicate either, since the context byte is hashed.
+    /// Whether this packet is link resource traffic whose hash nothing
+    /// reads: a part, a part request, or a resource proof. The packet filter
+    /// admits these contexts before deduplication (`Transport.packet_filter`),
+    /// no proof or receipt covers them, and their handlers read only the
+    /// payload (the receiver locates a part by its map hash). Their hashes
+    /// cannot mark any other packet as a duplicate either, since the context
+    /// byte is hashed, so they are neither computed nor remembered.
     #[inline]
-    pub fn is_link_resource_part(&self) -> bool {
-        <RawPacket>::is_link_resource_part_header(&self.flags, self.context)
+    pub fn is_unhashed_link_resource(&self) -> bool {
+        <RawPacket>::is_unhashed_link_resource_header(&self.flags, self.context)
     }
 
     /// Whether a link peer never proves this packet: link data in a context
@@ -740,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn only_link_resource_parts_are_sent_unhashed() {
+    fn only_link_resource_transfers_are_sent_unhashed() {
         let cases = [
             (
                 constants::DESTINATION_LINK,
@@ -758,12 +768,36 @@ mod tests {
                 constants::DESTINATION_LINK,
                 constants::PACKET_TYPE_DATA,
                 constants::CONTEXT_RESOURCE_REQ,
+                true,
+            ),
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_PROOF,
+                constants::CONTEXT_RESOURCE_PRF,
+                true,
+            ),
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+                constants::CONTEXT_RESOURCE_PRF,
+                false,
+            ),
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+                constants::CONTEXT_RESOURCE_HMU,
                 false,
             ),
             (
                 constants::DESTINATION_LINK,
                 constants::PACKET_TYPE_PROOF,
                 constants::CONTEXT_RESOURCE,
+                false,
+            ),
+            (
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_PROOF,
+                constants::CONTEXT_NONE,
                 false,
             ),
             (
@@ -792,8 +826,8 @@ mod tests {
                     &[9; 300],
                 )
                 .unwrap();
-                assert_eq!(packet.is_link_resource_part(), part);
-                assert_eq!(RawPacket::is_link_resource_part_wire(&packet.raw), part);
+                assert_eq!(packet.is_unhashed_link_resource(), part);
+                assert_eq!(RawPacket::is_unhashed_link_resource_wire(&packet.raw), part);
                 let sent = RawPacket::unpack_outbound(packet.raw.clone()).unwrap();
                 assert_eq!(sent.raw, packet.raw);
                 let expected = if part { [0; 32] } else { packet.packet_hash };
@@ -817,13 +851,13 @@ mod tests {
         )
         .unwrap();
         let context_at = RawPacket::data_offset(constants::HEADER_1) - 1;
-        assert!(RawPacket::is_link_resource_part_wire(
+        assert!(RawPacket::is_unhashed_link_resource_wire(
             &part.raw[..=context_at]
         ));
-        assert!(!RawPacket::is_link_resource_part_wire(
+        assert!(!RawPacket::is_unhashed_link_resource_wire(
             &part.raw[..context_at]
         ));
-        assert!(!RawPacket::is_link_resource_part_wire(&[]));
+        assert!(!RawPacket::is_unhashed_link_resource_wire(&[]));
     }
 
     #[test]

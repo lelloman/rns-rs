@@ -55,9 +55,10 @@ impl TransportEngine {
             actions,
         );
 
-        // Add to packet hashlist for outbound packets. A link resource part is
-        // not hashed: its context bypasses deduplication.
-        if !packet.is_link_resource_part() {
+        // Add to packet hashlist for outbound packets. A link resource part,
+        // part request or proof is not hashed: its context bypasses
+        // deduplication.
+        if !packet.is_unhashed_link_resource() {
             self.packet_hashlist.add(packet.packet_hash);
         }
 
