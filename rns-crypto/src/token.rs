@@ -147,6 +147,28 @@ impl Token {
         token
     }
 
+    /// [`Token::encrypt`] with the tag left to the caller: the token's last
+    /// 32 bytes are zero, and the returned MAC, fed every byte before them,
+    /// finalizes to the tag. The caller can hash those bytes together with
+    /// other data before writing it.
+    pub fn encrypt_untagged(&self, plaintext: &[u8], rng: &mut dyn Rng) -> (Vec<u8>, HmacSha256) {
+        let mut iv = [0u8; 16];
+        rng.fill_bytes(&mut iv);
+        let mut token = alloc::vec![0u8; Self::token_len(plaintext.len())];
+        let signed = token.len() - 32;
+        let body = &mut token[..signed];
+        let padding = body.len() - 16 - plaintext.len();
+        body[..16].copy_from_slice(&iv);
+        body[16..16 + plaintext.len()].copy_from_slice(plaintext);
+        body[16 + plaintext.len()..].fill(padding as u8);
+        match &self.mode {
+            AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(&mut body[16..], &iv),
+            AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut body[16..], &iv),
+        }
+        .expect("PKCS7 padding always produces block-aligned plaintext");
+        (token, self.mac.clone())
+    }
+
     /// HMAC-SHA256 of `data` under the signing key.
     fn tag(&self, data: &[u8]) -> [u8; 32] {
         let mut mac = self.mac.clone();
@@ -714,6 +736,24 @@ mod tests {
                     token.decrypt_chunks(&split_at_offsets(&short, &[1]), 0),
                     Err(TokenError::InvalidToken)
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn untagged_encryption_with_its_mac_is_the_token() {
+        for key in [[0x21u8; 32].to_vec(), [0x42u8; 64].to_vec()] {
+            let token = Token::new(&key).unwrap();
+            for len in [0usize, 1, 15, 16, 100, 5000] {
+                let plaintext: Vec<u8> = (0..len).map(|i| (i * 5) as u8).collect();
+                let expected = token.encrypt(&plaintext, &mut FixedRng::new(&[0x77; 16]));
+                let (mut bytes, mut mac) =
+                    token.encrypt_untagged(&plaintext, &mut FixedRng::new(&[0x77; 16]));
+                let signed = bytes.len() - 32;
+                assert!(bytes[signed..].iter().all(|&b| b == 0));
+                mac.update(&bytes[..signed]);
+                bytes[signed..].copy_from_slice(&mac.finalize());
+                assert_eq!(bytes, expected);
             }
         }
     }
