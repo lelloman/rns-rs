@@ -9,6 +9,46 @@ const FLAG: u8 = 0x7E;
 const ESC: u8 = 0x7D;
 const ESC_MASK: u8 = 0x20;
 
+/// Index of the first FLAG or ESC in `data`.
+///
+/// Inlined into the escape and unescape loops, which stop at every special
+/// byte: in dense payloads those come ~128 bytes apart, and a library call
+/// per stop cost more than the scan itself.
+#[inline(always)]
+fn find_special(data: &[u8]) -> Option<usize> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use core::arch::x86_64::{
+            __m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_or_si128,
+            _mm_set1_epi8,
+        };
+        let mut offset = 0;
+        while let Some(block) = data.get(offset..offset + 16) {
+            // SAFETY: SSE2 is part of the x86_64 baseline, and the unaligned
+            // load reads the 16 bytes of `block`.
+            let mask = unsafe {
+                let bytes = _mm_loadu_si128(block.as_ptr().cast::<__m128i>());
+                _mm_movemask_epi8(_mm_or_si128(
+                    _mm_cmpeq_epi8(bytes, _mm_set1_epi8(FLAG as i8)),
+                    _mm_cmpeq_epi8(bytes, _mm_set1_epi8(ESC as i8)),
+                ))
+            };
+            if mask != 0 {
+                return Some(offset + mask.trailing_zeros() as usize);
+            }
+            offset += 16;
+        }
+        data[offset..]
+            .iter()
+            .position(|&byte| byte == FLAG || byte == ESC)
+            .map(|index| offset + index)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        memchr::memchr2(FLAG, ESC, data)
+    }
+}
+
 /// Exact on-wire length after HDLC escaping and delimiter insertion.
 pub(crate) fn framed_len(data: &[u8]) -> usize {
     data.len()
@@ -24,13 +64,14 @@ pub fn escape(data: &[u8]) -> Vec<u8> {
 }
 
 fn append_escaped(data: &[u8], out: &mut Vec<u8>) {
-    let mut offset = 0;
-    for index in memchr::memchr2_iter(FLAG, ESC, data) {
-        out.extend_from_slice(&data[offset..index]);
-        out.extend_from_slice(&[ESC, data[index] ^ ESC_MASK]);
-        offset = index + 1;
+    out.reserve(data.len());
+    let mut rest = data;
+    while let Some(index) = find_special(rest) {
+        out.extend_from_slice(&rest[..index]);
+        out.extend_from_slice(&[ESC, rest[index] ^ ESC_MASK]);
+        rest = &rest[index + 1..];
     }
-    out.extend_from_slice(&data[offset..]);
+    out.extend_from_slice(rest);
 }
 
 /// Append one HDLC frame (delimiters plus escaped payload) to `out`.
@@ -243,7 +284,7 @@ impl Decoder {
                 // literal; the following byte is decoded on its own.
                 self.frame.push(ESC);
             }
-            let Some(index) = memchr::memchr2(FLAG, ESC, rest) else {
+            let Some(index) = find_special(rest) else {
                 self.frame.extend_from_slice(rest);
                 self.pending_wire_len += rest.len();
                 break;
