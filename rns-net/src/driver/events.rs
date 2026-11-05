@@ -1085,6 +1085,17 @@ impl Driver {
                     // send this pass's output before waiting for more.
                     self.flush_writers();
                     if self.link_manager.has_idle_work() {
+                        // Sources that are ready go before idle work: what
+                        // they hold, such as the rest of a window, may be
+                        // what a peer waits on.
+                        ready.clear();
+                        if let Err(error) = self.rx.wait(&mut ready, Some(Duration::ZERO)) {
+                            log::warn!("driver poll failed: {error}");
+                        }
+                        if ready.iter().next().is_some() {
+                            self.handle_ready_sources(&ready);
+                            continue;
+                        }
                         // One job per turn: events that arrive meanwhile go first.
                         let actions = self.link_manager.run_idle_work(&mut self.rng);
                         self.dispatch_link_actions(actions);
