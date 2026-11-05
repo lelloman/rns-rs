@@ -119,14 +119,16 @@ check_py_event() {
 }
 
 # py_to_rns PY_PORT PY_NAME ASPECT — Python node links to a fresh destination
-# on rns-rs client A, sends a proved packet and a resource over the link.
+# on rns-rs client A, sends a proved packet and a resource over the link. The
+# destination proves all packets: as upstream, a link proves plain data only
+# under its destination's proof strategy.
 py_to_rns() {
   local py_port="$1" name="$2" aspect="$3"
   echo ""
   echo "--- ${name} -> rns-rs client A ---"
 
   local dest
-  dest=$(create_destination "$PORT_A" "single" "$APP" "$aspect" || true)
+  dest=$(create_destination "$PORT_A" "single" "$APP" "$aspect" "all" || true)
   if [[ -z "$dest" || "$dest" == "null" ]]; then
     fail_test "${name}->A: create destination on A"
     return
