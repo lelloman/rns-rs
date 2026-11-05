@@ -21,13 +21,14 @@ esp-idf-sys = { version = "0.37", optional = true }
 ed25519-dalek = { version = "3", default-features = false, features = ["fast"] }
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "precomputed-tables"] }
 sha2 = { version = "0.11", default-features = false }
-hmac = { version = "0.13", default-features = false }
+subtle = { version = "2", default-features = false }
 aes = { version = "0.9", default-features = false }
 cbc = { version = "0.2", default-features = false, features = ["alloc", "block-padding"] }
 
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+hmac = { version = "0.13", default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
 
