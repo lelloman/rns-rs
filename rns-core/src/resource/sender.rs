@@ -15,6 +15,25 @@ use crate::buffer::types::Compressor;
 use crate::constants::*;
 use crate::hash::get_random_hash;
 
+/// How a resource's data is encrypted. Any `Fn(&[u8]) -> Vec<u8>` is one.
+pub trait ResourceEncrypt {
+    fn encrypt(&self, data: &[u8]) -> Vec<u8>;
+
+    /// The encryption with its tag left to the caller, when it has that
+    /// form: the last 32 bytes are zero, and the MAC, fed every byte before
+    /// them, finalizes to the tag. The sender then hashes those bytes
+    /// together with its other passes.
+    fn encrypt_untagged(&self, _data: &[u8]) -> Option<(Vec<u8>, rns_crypto::hmac::HmacSha256)> {
+        None
+    }
+}
+
+impl<F: Fn(&[u8]) -> Vec<u8>> ResourceEncrypt for F {
+    fn encrypt(&self, data: &[u8]) -> Vec<u8> {
+        self(data)
+    }
+}
+
 /// Resource sender state machine.
 ///
 /// Creates an advertisement, handles part requests, sends parts, and validates proofs.
@@ -111,7 +130,7 @@ impl ResourceSender {
         data: &[u8],
         metadata: Option<&[u8]>,
         sdu: usize,
-        encrypt_fn: &dyn Fn(&[u8]) -> Vec<u8>,
+        encrypt_fn: &dyn ResourceEncrypt,
         compressor: &dyn Compressor,
         rng: &mut dyn Rng,
         now: f64,
@@ -158,9 +177,21 @@ impl ResourceSender {
         data_with_random.extend_from_slice(&random_prefix);
         data_with_random.extend_from_slice(&working_data);
 
-        // Encrypt
-        let encrypted_data = encrypt_fn(&data_with_random);
+        // Encrypt. A tag left to this function is written with the first
+        // attempt's map hashes.
+        let (mut encrypted_data, mut mac) = match encrypt_fn.encrypt_untagged(&data_with_random) {
+            Some((bytes, mac)) => (bytes, Some(mac)),
+            None => (encrypt_fn.encrypt(&data_with_random), None),
+        };
         let transfer_size = encrypted_data.len();
+        if sdu == 0 {
+            if let Some(mut mac) = mac.take() {
+                let signed = encrypted_data.len() - 32;
+                mac.update(&encrypted_data[..signed]);
+                let tag = mac.finalize();
+                encrypted_data[signed..].copy_from_slice(&tag);
+            }
+        }
 
         // Keep trying until no collision in hashmap (max 100 attempts)
         let mut resource_hash;
@@ -184,11 +215,12 @@ impl ResourceSender {
                 (None, _) => {
                     let mut state = rns_crypto::sha256::Sha256::new();
                     let hashes = map_hashes_with_data(
-                        &encrypted_data,
+                        &mut encrypted_data,
                         sdu,
                         &final_random_hash,
                         &uncompressed_data,
                         &mut state,
+                        mac.take(),
                     );
                     data_state = Some(state);
                     hashes

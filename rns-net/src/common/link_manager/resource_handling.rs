@@ -9,6 +9,22 @@ pub(super) const MAX_ACTIVE_INCOMING_RESOURCES: usize = 16;
 /// of a large-MTU link, or every part a small response holds.
 const IDLE_DECRYPT_BYTES: usize = 64 * 1024;
 
+/// Encrypts resource data with a link's session key, and can leave the tag
+/// to the sender so that it is hashed together with the sender's own passes.
+struct LinkResourceEncrypt<'a>(&'a LinkEngine);
+
+impl rns_core::resource::ResourceEncrypt for LinkResourceEncrypt<'_> {
+    fn encrypt(&self, data: &[u8]) -> Vec<u8> {
+        self.0
+            .encrypt(data, &mut rns_crypto::OsRng)
+            .unwrap_or_else(|_| data.to_vec())
+    }
+
+    fn encrypt_untagged(&self, data: &[u8]) -> Option<(Vec<u8>, rns_crypto::hmac::HmacSha256)> {
+        self.0.encrypt_untagged(data, &mut rns_crypto::OsRng).ok()
+    }
+}
+
 pub(super) struct ResourceSendParams<'a> {
     pub(super) data: &'a [u8],
     pub(super) metadata: Option<&'a [u8]>,
@@ -56,12 +72,7 @@ impl LinkManager {
         let logical_size = metadata_overhead + data.len();
 
         if logical_size <= constants::RESOURCE_MAX_EFFICIENT_SIZE {
-            let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
-            let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
-                link.engine
-                    .encrypt(plaintext, &mut *enc_rng.borrow_mut())
-                    .unwrap_or_else(|_| plaintext.to_vec())
-            };
+            let encrypt_fn = LinkResourceEncrypt(&link.engine);
             return ResourceSender::new(
                 data,
                 metadata,
@@ -96,12 +107,7 @@ impl LinkManager {
         let remaining = data.len().saturating_sub(first_payload_len);
         let total_segments = 1 + remaining.div_ceil(constants::RESOURCE_MAX_EFFICIENT_SIZE) as u64;
 
-        let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
-        let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
-            link.engine
-                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
-                .unwrap_or_else(|_| plaintext.to_vec())
-        };
+        let encrypt_fn = LinkResourceEncrypt(&link.engine);
 
         let mut senders = Vec::new();
         let mut first = ResourceSender::new(
@@ -207,12 +213,7 @@ impl LinkManager {
             stream,
             constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead,
         )?;
-        let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
-        let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
-            link.engine
-                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
-                .unwrap_or_else(|_| plaintext.to_vec())
-        };
+        let encrypt_fn = LinkResourceEncrypt(&link.engine);
         let mut sender = ResourceSender::new(
             &data,
             metadata,
