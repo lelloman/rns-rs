@@ -5,27 +5,29 @@
 - audit date: `2026-10-29` (commit 5 integrated `2026-10-30`; extended to
   commit 15 on `2026-10-30`, to commit 23 on `2026-10-31`, to commit 31 on
   `2026-11-01`, to commit 36 on `2026-11-02`, to commit 40 on
-  `2026-11-03` and to commit 45 on `2026-11-04`)
+  `2026-11-03`, to commit 45 on `2026-11-04` and to commit 46 on
+  `2026-11-05`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `53dc223a031ff46ad311c395ee7a3ee97ebe2aef`
-  (extended on 2026-11-04 from `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`,
+- target tag or ref: `rgit:master` tip `3305fc1cbda16f51c5c1291032183a05823fe420`
+  (extended on 2026-11-05 from `53dc223a031ff46ad311c395ee7a3ee97ebe2aef`,
+  on 2026-11-04 from `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`,
   on 2026-11-03 from `d3874ddedbf485db3151be1234d35da10c498ef1`,
   on 2026-11-02 from `6927c3c589683041f027d9a04c598cb257d957a7`,
   on 2026-11-01 from `fe2fe94dd82030275bec150af87b4ec6292511c6`,
   on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
   on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` (provisional; rgit may advance before promotion)
-- target root tree: `453eaed7d6ee88bf24c00e810d94318de15368a2`
-- target `RNS` tree: `772ecbaa0a420626287f8a161b7aec14d224509e`
+- target normative commit: `3305fc1cbda16f51c5c1291032183a05823fe420` (provisional; rgit may advance before promotion)
+- target root tree: `e0a8c3ecb21524358de6961ab7d89dc1325ad181`
+- target `RNS` tree: `663102201bb7173e18602f4ba4004c56300b3a49`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..53dc223a031ff46ad311c395ee7a3ee97ebe2aef`
-- commits in range: `45` (2 inventoried at the first tip, 3 added when rgit
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..3305fc1cbda16f51c5c1291032183a05823fe420`
+- commits in range: `46` (2 inventoried at the first tip, 3 added when rgit
   advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31, 8
   added on 2026-11-01, 5 added on 2026-11-02, 4 added on 2026-11-03, 5
-  added on 2026-11-04)
+  added on 2026-11-04, 1 added on 2026-11-05)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
@@ -34,7 +36,8 @@
   inventoried on `dev` at `15d817e` and integrated on `dev` from `31a2493`;
   commits 37 to 40 inventoried on `dev` at `1d68ffe` and integrated on `dev`
   from `d4b6527`; commits 41 to 45 inventoried on `dev` at `cdeb528` and
-  integrated on `dev` from `b0b793c`
+  integrated on `dev` from `b0b793c`; commit 46 inventoried and mapped on
+  `origin/master` `679854d`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -139,6 +142,13 @@ disables Python's statement cache and reads the stores under their flush
 lock; commit 44 drops a comment; commit 45 guards `conn.close()` in the RPC
 loop when `accept` fails.
 
+The 2026-11-05 refresh (GitHub fetched at 2026-11-05T07:35:52Z, rgit at
+07:36:07Z) found rgit at `3305fc1c` (committed 2026-11-04T12:18Z), one commit
+past `53dc223a`, inventoried as 46. The GitHub mirror is still at `e40191b3`
+and `RNS.__version__` is still `1.6.0`. Commit 46 lowers the three
+destination type filter RPC failure logs in `Reticulum.py` from error to
+debug.
+
 ## Audit Vocabulary
 
 - **Needs port**: compatible behavior is absent or observably different.
@@ -206,6 +216,7 @@ Every commit in the audited range must appear exactly once.
 | 43 | `ceac4a28bd45956f8b5d6c1b4834be48d0724bf9` | Disabled statement caching, fetch under lock | Structurally covered | Mapping commit; both SQLite stores hold their connection in a `Mutex<Connection>`, so every read already runs under the lock that flushes take, and neither uses `prepare_cached` |
 | 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Non-runtime | Mapping commit; removes a stale locking comment from `remember_ratchet` |
 | 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Structurally covered | Mapping commit; the Unix and TCP RPC accept loops log a failed `accept` and continue, and an accepted stream closes on drop, so there is no unset connection to close |
+| 46 | `3305fc1cbda16f51c5c1291032183a05823fe420` | Adjusted loglevels | Structurally covered | Mapping commit; `DestinationTypeRequester::call_shared_instance` already logs a failed destination type filter RPC at debug, with the same message |
 
 ## Per-Commit Analysis
 
@@ -1776,13 +1787,29 @@ connection to close after a failed accept.
 
 **Final disposition:** Structurally covered; mapping only.
 
+### 46. `3305fc1c` — Adjusted loglevels
+
+**Upstream change** (`RNS/Reticulum.py`): the `wants_destination_type`,
+`unwants_destination_type` and `unwants_all_destination_types` client paths
+log a failed shared instance RPC at `LOG_DEBUG` instead of `LOG_ERROR`. A
+client that cannot reach the shared instance's RPC socket already falls back
+to returning `False`; only the log level changes.
+
+**Rust applicability:** Structurally covered. `call_shared_instance` in
+`rns-net/src/shared_client.rs` has logged this failure with `log::debug!` and
+the same message since commit 35 was integrated, because the TCP RPC client
+cannot reach a Python shared instance's abstract Unix socket and the failure
+is expected there.
+
+**Final disposition:** Structurally covered; mapping only.
+
 ## Integration Plan
 
-All forty-five commits have a final disposition. The `Link.py:311` precedence of
+All forty-six commits have a final disposition. The `Link.py:311` precedence of
 commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it (still present at `53dc223a`). If upstream confirms that expression as written, the
+audit rechecks it (still present at `3305fc1c`; `Link.py` is unchanged). If upstream confirms that expression as written, the
 `LinkManager` responder check must follow it.
 
 ## Promotion Gates
@@ -1794,10 +1821,11 @@ audit rechecks it (still present at `53dc223a`). If upstream confirms that expre
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
-  `d3874dde`, `ecd677ba` and the current tip `53dc223a` (4/4 and 12/12 with
-  commits 41 to 45 integrated); rerun if rgit advances.
+  `d3874dde`, `ecd677ba` and `53dc223a` (4/4 and 12/12 with commits 41 to 45
+  integrated). Not yet rerun at the current tip `3305fc1c`, which changes
+  only Python log levels.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
