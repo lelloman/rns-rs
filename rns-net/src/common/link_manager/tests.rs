@@ -5560,3 +5560,46 @@ fn enforced_link_cost_defaults_to_lr_cost_and_zero_disables() {
         link_request_with_stamp_value(&dest_hash, &sig_pub_bytes, None, |v| !v.meets(default_cost));
     assert!(proves_link(&deliver_link_request(&mut responder, &low)));
 }
+
+#[test]
+fn plain_link_data_asks_the_driver_before_it_is_proved() {
+    let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let actions = init_mgr.send_on_link(&link_id, b"plain", constants::CONTEXT_NONE, &mut rng);
+    let raw = extract_any_send_packet(&actions);
+    let pkt = RawPacket::unpack(&raw).unwrap();
+    let resp_actions = resp_mgr.handle_local_delivery(
+        pkt.destination_hash,
+        &raw,
+        pkt.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+
+    // No proof is sent on its own; the driver is asked, with the link's
+    // destination, which decides by that destination's proof strategy.
+    assert!(!resp_actions
+        .iter()
+        .any(|a| matches!(a, LinkManagerAction::SendPacket { .. })));
+    let dest_hash = resp_mgr.links[&link_id].dest_hash;
+    let asked: Vec<_> = resp_actions
+        .iter()
+        .filter_map(|a| match a {
+            LinkManagerAction::ProofRequired {
+                link_id: l,
+                dest_hash: d,
+                packet_hash,
+            } => Some((*l, *d, *packet_hash)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked, vec![(link_id, dest_hash, pkt.packet_hash)]);
+
+    // When it is wanted, the proof is a link PROOF carrying the packet hash.
+    let proof = resp_mgr.prove_link_packet(&link_id, &pkt.packet_hash);
+    let proof_raw = extract_any_send_packet(&proof);
+    let proof_pkt = RawPacket::unpack(&proof_raw).unwrap();
+    assert_eq!(proof_pkt.flags.packet_type, constants::PACKET_TYPE_PROOF);
+    assert_eq!(proof_pkt.destination_hash, link_id);
+    assert_eq!(&proof_pkt.data()[..32], &pkt.packet_hash);
+}

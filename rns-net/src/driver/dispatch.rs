@@ -162,6 +162,30 @@ impl Driver {
         }
     }
 
+    /// Whether a plain link packet on a link to `dest_hash` is proved, by
+    /// that destination's proof strategy (upstream `Link.receive`): always
+    /// under PROVE_ALL, when the application agrees under PROVE_APP, and
+    /// never under PROVE_NONE, the default for an unregistered destination.
+    pub(crate) fn link_packet_proof_wanted(
+        &mut self,
+        dest_hash: [u8; 16],
+        packet_hash: &[u8; 32],
+    ) -> bool {
+        use rns_core::types::ProofStrategy;
+        match self
+            .proof_strategies
+            .get(&dest_hash)
+            .map(|(strategy, _)| *strategy)
+        {
+            Some(ProofStrategy::ProveAll) => true,
+            Some(ProofStrategy::ProveApp) => self.callbacks.on_proof_requested(
+                rns_core::types::DestHash(dest_hash),
+                rns_core::types::PacketHash(*packet_hash),
+            ),
+            Some(ProofStrategy::ProveNone) | None => false,
+        }
+    }
+
     pub(crate) fn maybe_generate_proof(&mut self, dest_hash: [u8; 16], packet_hash: &[u8; 32]) {
         use rns_core::types::ProofStrategy;
 
@@ -2035,6 +2059,16 @@ impl Driver {
                 } => {
                     self.callbacks
                         .on_link_data(rns_core::types::LinkId(link_id), context, data);
+                }
+                LinkManagerAction::ProofRequired {
+                    link_id,
+                    dest_hash,
+                    packet_hash,
+                } => {
+                    if self.link_packet_proof_wanted(dest_hash, &packet_hash) {
+                        let proof = self.link_manager.prove_link_packet(&link_id, &packet_hash);
+                        self.dispatch_link_actions(proof);
+                    }
                 }
                 LinkManagerAction::ResponseReceived {
                     link_id,
