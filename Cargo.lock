@@ -2371,6 +2371,7 @@ version = "0.2.1"
 dependencies = [
  "aes",
  "cbc",
+ "cpufeatures 0.3.0",
  "criterion",
  "ed25519-dalek",
  "esp-idf-sys",
