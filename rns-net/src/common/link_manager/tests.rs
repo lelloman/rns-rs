@@ -4008,6 +4008,7 @@ fn test_channel_proof_reopens_send_window() {
         .expect("proof should free one channel slot");
 }
 
+#[cfg(feature = "proof-pool")]
 #[test]
 fn link_proofs_verified_on_the_pool_reopen_the_window_and_bad_ones_do_not() {
     let (mut init_mgr, resp_mgr, link_id) = setup_active_link();

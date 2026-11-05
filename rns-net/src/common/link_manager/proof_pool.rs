@@ -17,7 +17,8 @@ const MAX_QUEUED: usize = 4096;
 /// Threads `auto` starts at most.
 const AUTO_MAX_THREADS: usize = 4;
 
-/// How many threads verify link proofs.
+/// How many threads verify link proofs. Threads start only in builds with the
+/// `proof-pool` feature; other builds verify every proof inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProofVerifyThreads {
     /// One fewer than the CPUs this process may run on, at most four: none
@@ -29,7 +30,14 @@ pub enum ProofVerifyThreads {
 }
 
 impl ProofVerifyThreads {
+    /// Threads to start: none without the `proof-pool` feature.
     pub(super) fn count(self) -> usize {
+        if !cfg!(feature = "proof-pool") {
+            if matches!(self, ProofVerifyThreads::Fixed(n) if n > 0) {
+                log::warn!("link proofs verified inline: built without the proof-pool feature");
+            }
+            return 0;
+        }
         match self {
             ProofVerifyThreads::Fixed(n) => n,
             ProofVerifyThreads::Auto => std::thread::available_parallelism()
