@@ -120,3 +120,67 @@ unsafe fn compress2(a: &mut Lanes, block_a: &[u8; 64], b: &mut Lanes, block_b: &
     b.abef = _mm_add_epi32(b.abef, start_b.abef);
     b.cdgh = _mm_add_epi32(b.cdgh, start_b.cdgh);
 }
+
+/// [`compress_pair`] for three states; the blocks must be as many for each.
+pub(crate) fn compress_triple(
+    a: &mut [u32; 8],
+    a_blocks: &[[u8; 64]],
+    b: &mut [u32; 8],
+    b_blocks: &[[u8; 64]],
+    c: &mut [u32; 8],
+    c_blocks: &[[u8; 64]],
+) -> bool {
+    assert!(a_blocks.len() == b_blocks.len() && b_blocks.len() == c_blocks.len());
+    if !sha_ni::get() {
+        return false;
+    }
+    // SAFETY: the instructions these functions are compiled for are present.
+    unsafe {
+        let mut la = load(a);
+        let mut lb = load(b);
+        let mut lc = load(c);
+        for ((block_a, block_b), block_c) in a_blocks.iter().zip(b_blocks).zip(c_blocks) {
+            compress3(&mut la, block_a, &mut lb, block_b, &mut lc, block_c);
+        }
+        store(la, a);
+        store(lb, b);
+        store(lc, c);
+    }
+    true
+}
+
+#[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
+unsafe fn compress3(
+    a: &mut Lanes,
+    block_a: &[u8; 64],
+    b: &mut Lanes,
+    block_b: &[u8; 64],
+    c: &mut Lanes,
+    block_c: &[u8; 64],
+) {
+    let big_endian = _mm_set_epi64x(0x0c0d0e0f08090a0b, 0x0405060700010203);
+    let (start_a, start_b, start_c) = (*a, *b, *c);
+    let mut wa = [_mm_setzero_si128(); 4];
+    let mut wb = [_mm_setzero_si128(); 4];
+    let mut wc = [_mm_setzero_si128(); 4];
+    for i in 0..4 {
+        let at = i * 16;
+        wa[i] = _mm_shuffle_epi8(_mm_loadu_si128(block_a.as_ptr().add(at).cast()), big_endian);
+        wb[i] = _mm_shuffle_epi8(_mm_loadu_si128(block_b.as_ptr().add(at).cast()), big_endian);
+        wc[i] = _mm_shuffle_epi8(_mm_loadu_si128(block_c.as_ptr().add(at).cast()), big_endian);
+    }
+    for i in 0..16 {
+        if i >= 4 {
+            schedule!(wa, i);
+            schedule!(wb, i);
+            schedule!(wc, i);
+        }
+        rounds4!(a, wa[i % 4], i);
+        rounds4!(b, wb[i % 4], i);
+        rounds4!(c, wc[i % 4], i);
+    }
+    for (lanes, start) in [(a, start_a), (b, start_b), (c, start_c)] {
+        lanes.abef = _mm_add_epi32(lanes.abef, start.abef);
+        lanes.cdgh = _mm_add_epi32(lanes.cdgh, start.cdgh);
+    }
+}

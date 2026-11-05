@@ -1,7 +1,7 @@
 //! HMAC-SHA256 over [`Sha256`], so that its message can be hashed together
 //! with another (see [`HmacSha256::update_paired`]).
 
-use crate::sha256::{update_pair, Sha256};
+use crate::sha256::{update_pair, update_triple, Sha256};
 use subtle::ConstantTimeEq;
 
 #[derive(Clone)]
@@ -42,6 +42,18 @@ impl HmacSha256 {
     /// compressed together where they can be.
     pub fn update_paired(&mut self, data: &[u8], other: &mut Sha256, other_data: &[u8]) {
         update_pair(&mut self.inner, data, other, other_data);
+    }
+
+    /// [`Self::update_paired`] with two other hashes.
+    pub fn update_tripled(
+        &mut self,
+        data: &[u8],
+        b: &mut Sha256,
+        b_data: &[u8],
+        c: &mut Sha256,
+        c_data: &[u8],
+    ) {
+        update_triple(&mut self.inner, data, b, b_data, c, c_data);
     }
 
     pub fn finalize(&self) -> [u8; 32] {

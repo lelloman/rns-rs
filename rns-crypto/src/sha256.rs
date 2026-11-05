@@ -100,6 +100,54 @@ pub fn update_pair(a: &mut Sha256, a_data: &[u8], b: &mut Sha256, b_data: &[u8])
     b.keep(b_tail);
 }
 
+/// The updates of three hashes, with as many of their blocks as possible
+/// compressed together.
+pub fn update_triple(
+    a: &mut Sha256,
+    a_data: &[u8],
+    b: &mut Sha256,
+    b_data: &[u8],
+    c: &mut Sha256,
+    c_data: &[u8],
+) {
+    let (mut a_blocks, a_tail) = a.top_up(a_data).as_chunks::<64>();
+    let (mut b_blocks, b_tail) = b.top_up(b_data).as_chunks::<64>();
+    let (mut c_blocks, c_tail) = c.top_up(c_data).as_chunks::<64>();
+    let n = a_blocks.len().min(b_blocks.len()).min(c_blocks.len());
+    compress_triple(
+        (&mut a.state, &a_blocks[..n]),
+        (&mut b.state, &b_blocks[..n]),
+        (&mut c.state, &c_blocks[..n]),
+    );
+    (a_blocks, b_blocks, c_blocks) = (&a_blocks[n..], &b_blocks[n..], &c_blocks[n..]);
+    // At most two have blocks left: pair them, then the longer goes alone.
+    let mut rest = [
+        (&mut a.state, a_blocks),
+        (&mut b.state, b_blocks),
+        (&mut c.state, c_blocks),
+    ];
+    rest.sort_by_key(|(_, blocks)| core::cmp::Reverse(blocks.len()));
+    let [(x, x_blocks), (y, y_blocks), _] = rest;
+    let m = y_blocks.len();
+    compress_pair(x, &x_blocks[..m], y, y_blocks);
+    compress256(x, &x_blocks[m..]);
+    a.keep(a_tail);
+    b.keep(b_tail);
+    c.keep(c_tail);
+}
+
+type Lane<'a> = (&'a mut [u32; 8], &'a [[u8; 64]]);
+
+fn compress_triple(a: Lane<'_>, b: Lane<'_>, c: Lane<'_>) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::sha256_x2::compress_triple(a.0, a.1, b.0, b.1, c.0, c.1) {
+        return;
+    }
+    compress256(a.0, a.1);
+    compress256(b.0, b.1);
+    compress256(c.0, c.1);
+}
+
 fn compress_pair(a: &mut [u32; 8], a_blocks: &[[u8; 64]], b: &mut [u32; 8], b_blocks: &[[u8; 64]]) {
     #[cfg(target_arch = "x86_64")]
     if crate::sha256_x2::compress_pair(a, a_blocks, b, b_blocks) {
@@ -235,6 +283,50 @@ mod tests {
                     y.digest(),
                     sha256(&b[..b_len]),
                     "b {b_len} {a_step}/{b_step}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tripled_updates_match_separate_hashes() {
+        let data: alloc::vec::Vec<u8> = (0..6000).map(|i| (i * 29 + 5) as u8).collect();
+        for lens in [
+            [0, 0, 0],
+            [6000, 0, 0],
+            [100, 3000, 6000],
+            [6000, 6000, 6000],
+            [64, 1, 4000],
+        ] {
+            for steps in [[1, 1, 1], [64, 7, 500], [6000, 6000, 6000], [100, 333, 64]] {
+                let mut hashes = [Sha256::new(), Sha256::new(), Sha256::new()];
+                hashes[1].update(&[9; 5]);
+                let mut at = [0usize; 3];
+                while (0..3).any(|i| at[i] < lens[i]) {
+                    let end: [usize; 3] = core::array::from_fn(|i| (at[i] + steps[i]).min(lens[i]));
+                    let [x, y, z] = &mut hashes;
+                    update_triple(
+                        x,
+                        &data[at[0]..end[0]],
+                        y,
+                        &data[at[1]..end[1]],
+                        z,
+                        &data[at[2]..end[2]],
+                    );
+                    at = end;
+                }
+                let mut second = alloc::vec![9; 5];
+                second.extend_from_slice(&data[..lens[1]]);
+                assert_eq!(
+                    hashes[0].digest(),
+                    sha256(&data[..lens[0]]),
+                    "{lens:?} {steps:?}"
+                );
+                assert_eq!(hashes[1].digest(), sha256(&second), "{lens:?} {steps:?}");
+                assert_eq!(
+                    hashes[2].digest(),
+                    sha256(&data[..lens[2]]),
+                    "{lens:?} {steps:?}"
                 );
             }
         }
