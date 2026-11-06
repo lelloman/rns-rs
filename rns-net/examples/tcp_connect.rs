@@ -53,6 +53,7 @@ fn main() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
+            stamps: Default::default(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,

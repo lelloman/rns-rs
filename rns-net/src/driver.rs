@@ -165,6 +165,8 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) stamp_destinations: bool,
     /// `Transport.STAMP_PRS` default.
     pub(crate) stamp_path_requests: bool,
+    /// `Transport.STAMPS_ENFORCED` default.
+    pub(crate) stamps_enforced: bool,
     /// `Transport.LR_STAMPS_ENFORCED` default.
     pub(crate) lr_stamps_enforced: bool,
     /// `Transport.STAMP_LRS` default.
@@ -976,6 +978,7 @@ impl Driver {
             direct_connect_policy: crate::event::HolePunchPolicy::default(),
             stamp_destinations: rns_core::constants::STAMP_DESTINATIONS,
             stamp_path_requests: rns_core::constants::STAMP_PRS,
+            stamps_enforced: rns_core::constants::STAMPS_ENFORCED,
             lr_stamps_enforced: rns_core::constants::LR_STAMPS_ENFORCED,
             stamp_link_requests: rns_core::constants::STAMP_LRS,
             always_stamp_link_requests: rns_core::constants::ALWAYS_STAMP_LRS,
@@ -1433,6 +1436,7 @@ impl Driver {
         self.runtime_config_defaults.stamp_path_requests = stamps.stamp_prs;
         self.runtime_config_defaults.stamp_link_requests = stamps.stamp_lrs;
         self.runtime_config_defaults.always_stamp_link_requests = stamps.always_stamp_lrs;
+        self.runtime_config_defaults.stamps_enforced = stamps.stamps_enforced;
         self.runtime_config_defaults.lr_stamps_enforced = stamps.lr_stamps_enforced;
         // The per-destination cost table shared with the node API and the
         // announce builder: `lr_cost` is `Transport.LR_COST`, the cost of
@@ -1446,6 +1450,14 @@ impl Driver {
         if hop_limiter != rns_core::constants::PATHFINDER_M {
             log::debug!("Transport hop limit set to {hop_limiter}");
         }
+    }
+
+    /// Switch announce and path request stamp enforcement
+    /// (`Transport.STAMPS_ENFORCED`), keeping the required costs.
+    pub(crate) fn set_stamps_enforced(&mut self, enforced: bool) {
+        let mut requirements = self.engine.stamp_requirements();
+        requirements.enforced = enforced;
+        self.engine.set_stamp_requirements(requirements);
     }
 
     /// Share the node handle's `STAMP_DESTINATIONS` flag so runtime config

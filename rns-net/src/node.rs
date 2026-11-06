@@ -656,6 +656,12 @@ pub struct NodeConfig {
     /// Threads that verify link packet proofs off the driver thread
     /// (`Auto`: none on a single CPU).
     pub link_proof_verify_threads: crate::ProofVerifyThreads,
+    /// Stamp generation, enforcement, costs and timeouts: the `[stamps]`
+    /// section, which [`RnsNode::from_config`] reads from the config file.
+    /// Upstream's `Reticulum(enable_stamping=True)` corresponds to setting
+    /// `stamp_destinations`, `stamp_prs` and `stamp_lrs`, and
+    /// `enforce_stamps=True` to `stamps_enforced` and `lr_stamps_enforced`.
+    pub stamps: config::StampsSection,
     /// External provider bridge for hook-emitted events.
     #[cfg(feature = "hooks")]
     pub provider_bridge: Option<crate::provider_bridge::ProviderBridgeConfig>,
@@ -670,8 +676,6 @@ struct NodeQueueConfig {
     announce_overflow_policy: AnnounceQueueOverflowPolicy,
     inbound_capacities: crate::event::InboundQueueCapacities,
     link_mtu_discovery: bool,
-    /// The `[stamps]` config section.
-    stamps: config::StampsSection,
     /// The `[filter]` config section.
     filter: config::FilterSection,
     /// `[reticulum] hop_limiter`.
@@ -689,7 +693,6 @@ impl Default for NodeQueueConfig {
             announce_overflow_policy: AnnounceQueueOverflowPolicy::DropWorst,
             inbound_capacities: crate::event::InboundQueueCapacities::default(),
             link_mtu_discovery: true,
-            stamps: config::StampsSection::default(),
             filter: config::FilterSection::default(),
             hop_limiter: rns_core::constants::HOP_LIMITER,
         }
@@ -752,6 +755,7 @@ impl Default for NodeConfig {
             registry: None,
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
+            stamps: config::StampsSection::default(),
             #[cfg(feature = "hooks")]
             provider_bridge: None,
         }
@@ -1498,6 +1502,7 @@ impl RnsNode {
             registry: None,
             panic_on_interface_error: private || rns_config.reticulum.panic_on_interface_error,
             link_proof_verify_threads: Default::default(),
+            stamps: rns_config.stamps.clone(),
             #[cfg(feature = "hooks")]
             provider_bridge: if !private && rns_config.reticulum.provider_bridge {
                 Some(crate::provider_bridge::ProviderBridgeConfig {
@@ -1541,7 +1546,6 @@ impl RnsNode {
                 },
                 inbound_capacities: rns_config.reticulum.inbound_queue_capacities,
                 link_mtu_discovery,
-                stamps: rns_config.stamps.clone(),
                 filter: rns_config.filter.clone(),
                 hop_limiter: rns_config.reticulum.hop_limiter,
             },
@@ -1684,9 +1688,9 @@ impl RnsNode {
         driver.set_stamper(Arc::clone(&stamper));
         let stamp_destinations = Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS));
         driver.set_stamp_destinations_flag(Arc::clone(&stamp_destinations));
-        driver.apply_stamp_config(&queue_config.stamps, queue_config.hop_limiter);
+        driver.apply_stamp_config(&config.stamps, queue_config.hop_limiter);
         *driver.engine.destination_filter_mut() = queue_config.filter.destination_filter();
-        let stamp_targets = crate::stamper::StampTargets::from(&queue_config.stamps);
+        let stamp_targets = crate::stamper::StampTargets::from(&config.stamps);
         driver.underlay_mark = config.underlay_mark;
         driver
             .link_manager
@@ -5172,6 +5176,7 @@ mod tests {
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -5522,6 +5527,7 @@ share_instance = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: true,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -5595,6 +5601,7 @@ share_instance = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6503,6 +6510,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6585,6 +6593,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6663,6 +6672,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6738,6 +6748,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6853,6 +6864,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -6936,6 +6948,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -7017,6 +7030,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -7111,6 +7125,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -7195,6 +7210,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 link_proof_verify_threads: Default::default(),
+                stamps: Default::default(),
                 transport_enabled: false,
                 static_transport_identity: false,
                 local_hops_delta: false,
@@ -7388,8 +7404,58 @@ enable_transport = False
         for key in [
             "global.stamp_destinations",
             "global.stamp_path_requests",
+            "global.stamps_enforced",
             "global.stamp_link_requests",
             "global.always_stamp_link_requests",
+        ] {
+            let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
+                .query(QueryRequest::GetRuntimeConfig { key: key.into() })
+                .unwrap()
+            else {
+                panic!("expected runtime config entry for {key}");
+            };
+            assert_eq!(
+                entry.value,
+                crate::event::RuntimeConfigValue::Bool(true),
+                "{key}"
+            );
+            assert_eq!(
+                entry.default,
+                crate::event::RuntimeConfigValue::Bool(true),
+                "{key}"
+            );
+        }
+        node.shutdown();
+    }
+
+    #[test]
+    fn start_applies_the_node_config_stamps() {
+        // Upstream eb826cde: `Reticulum(enable_stamping=True,
+        // enforce_stamps=True)` for a node configured in code.
+        let node = RnsNode::start(
+            NodeConfig {
+                stamps: config::StampsSection {
+                    stamp_destinations: true,
+                    stamp_prs: true,
+                    stamps_enforced: true,
+                    lr_stamps_enforced: true,
+                    lr_cost: StampCost::from_whole(9),
+                    ..Default::default()
+                },
+                ..NodeConfig::default()
+            },
+            Box::new(NoopCallbacks),
+        )
+        .unwrap();
+
+        assert!(node.stamp_destinations.load(Ordering::Relaxed));
+        assert_eq!(node.link_cost(&[0u8; 16]), 9.0);
+        assert!(node.link_request_stamps_enforced());
+        for key in [
+            "global.stamp_destinations",
+            "global.stamp_path_requests",
+            "global.stamps_enforced",
+            "global.lr_stamps_enforced",
         ] {
             let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
                 .query(QueryRequest::GetRuntimeConfig { key: key.into() })

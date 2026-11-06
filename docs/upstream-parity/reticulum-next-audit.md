@@ -39,7 +39,7 @@
   from `d4b6527`; commits 41 to 45 inventoried on `dev` at `cdeb528` and
   integrated on `dev` from `b0b793c`; commit 46 inventoried and mapped on
   `origin/master` `679854d`; commits 47 and 48 inventoried on
-  `origin/master` `a029386`
+  `origin/master` `a029386`; commit 48 integrated on `dev` from `124d287`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -228,7 +228,7 @@ Every commit in the audited range must appear exactly once.
 | 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Structurally covered | Mapping commit; the Unix and TCP RPC accept loops log a failed `accept` and continue, and an accepted stream closes on drop, so there is no unset connection to close |
 | 46 | `3305fc1cbda16f51c5c1291032183a05823fe420` | Adjusted loglevels | Structurally covered | Mapping commit; `DestinationTypeRequester::call_shared_instance` already logs a failed destination type filter RPC at debug, with the same message |
 | 47 | `e9d82e698d266b198b5cfc7bb66315e505b0b6c6` | Cleanup | Structurally covered | Mapping commit; with the SQLite known destinations store, startup ratchet cleanup in rns-rs already runs on that store's `ratchets` table and never walks the legacy `storage/ratchets` directory; the changelog lines are non-runtime |
-| 48 | `eb826cde90e152d167415b42016efb0107c73035` | Allow applications to enable stamp generation and stamp enforcement | Needs decision | Config files already reach the same flags through `[stamps]`; the programmatic `RnsNode::start(NodeConfig)` path has no startup stamp settings and no runtime switch for announce and path request enforcement |
+| 48 | `eb826cde90e152d167415b42016efb0107c73035` | Allow applications to enable stamp generation and stamp enforcement | Integrated | `NodeConfig::stamps` (a `StampsSection`) gives nodes started in code the `[stamps]` settings, applied as `from_config` applies the parsed section; new runtime key `global.stamps_enforced` for announce and path request enforcement; docs |
 
 ## Per-Commit Analysis
 
@@ -1850,8 +1850,8 @@ options, the arguments only switch flags on; a `False` argument leaves the
 configured value alone. Defaults are unchanged (`STAMP_LRS = True`, the rest
 `False`).
 
-**Rust applicability:** Needs decision. A node started from configuration
-files already reaches the same flags: `[stamps] enforce_stamps` sets
+**Rust applicability:** Applicable to nodes configured in code. A node
+started from configuration files already reached the same flags: `[stamps] enforce_stamps` sets
 `stamps_enforced` and `lr_stamps_enforced` in `StampsSection`, and
 `stamp_destinations` and `stamp_prs` set their flags (`STAMP_LRS` is already
 `true`). A node started programmatically with `RnsNode::start(NodeConfig)`
@@ -1862,18 +1862,39 @@ the `StampsSection` defaults. At runtime, `global.stamp_destinations`,
 can switch generation and link request enforcement on, but nothing switches
 announce and path request enforcement (`stamps_enforced`) on after startup.
 
-The choice is whether to expose stamp settings to programmatic embedders,
-for example a `StampsSection` (or a two-flag form matching upstream) on
-`NodeConfig` applied the way `from_config` applies the parsed section, and
-whether to add a runtime key for `stamps_enforced`. Adding a field to
-`NodeConfig` touches every struct literal in the tests and tools.
+rns-rs has two separate entry points, each with one source of settings:
+`from_config` takes the built-in defaults overridden by the config file, and
+`start` takes the defaults overridden by `NodeConfig`. Every other setting a
+config file can set already had a `NodeConfig` counterpart, so the stamp
+settings follow that pattern rather than upstream's constructor layering.
 
-**Final disposition:** Needs decision; recorded, not yet implemented.
+**Implementation:** `NodeConfig` gains `stamps: StampsSection`, defaulting to
+`StampsSection::default()` (the upstream constants). `from_config` now fills
+it from the parsed `[stamps]` section instead of the private
+`NodeQueueConfig`, and node start applies it through the same
+`apply_stamp_config` call, so the runtime keys of a code-configured node
+reset to its `NodeConfig::stamps` values. Upstream's
+`enable_stamping=True` corresponds to `stamp_destinations`, `stamp_prs` and
+`stamp_lrs`, and `enforce_stamps=True` to `stamps_enforced` and
+`lr_stamps_enforced`. The new runtime key `global.stamps_enforced` switches
+announce and path request enforcement on a running node (immediate, resets
+to the startup value) and keeps the configured `destination_cost` and
+`pr_cost`. `docs/configuration.md` documents both.
+
+**Evidence:** `start_applies_the_node_config_stamps` (a node started with
+`NodeConfig::stamps` stamps destinations, enforces link request stamps,
+records `lr_cost` 9, and reports `true` as both value and default for the
+four stamp keys); `runtime_config_stamps_enforced_keeps_the_configured_costs`;
+`global.stamps_enforced` added to
+`runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag`,
+`runtime_config_list_contains_global_keys` and
+`from_config_applies_the_stamps_section_and_hop_limiter`.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 
-Forty-seven of the forty-eight commits have a final disposition; commit 48
-needs a decision on the programmatic stamp settings (see its analysis). The
+All forty-eight commits have a final disposition. The
 `Link.py:311` precedence of commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
@@ -1882,8 +1903,7 @@ audit rechecks it (still present at `eb826cde`; `Link.py` is unchanged). If upst
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition. Commit 48 needs a
-  decision.
+- [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
