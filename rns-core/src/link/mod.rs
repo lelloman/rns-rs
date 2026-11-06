@@ -499,6 +499,11 @@ impl LinkEngine {
         self.sig_prv.sign(packet_hash)
     }
 
+    /// This end's Link signing key, which signs its delivery proofs.
+    pub fn signing_key(&self) -> &Ed25519PrivateKey {
+        &self.sig_prv
+    }
+
     /// The remote endpoint's Link signing key, once known.
     pub fn peer_signing_key(&self) -> Option<&Ed25519PublicKey> {
         self.peer_sig_pub.as_ref()

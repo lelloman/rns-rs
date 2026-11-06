@@ -21,6 +21,7 @@ impl fmt::Display for Ed25519Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Ed25519Error {}
 
+#[derive(Clone)]
 pub struct Ed25519PrivateKey {
     inner: ed25519_dalek::SigningKey,
 }
