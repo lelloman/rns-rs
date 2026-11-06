@@ -1458,7 +1458,7 @@ fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
         is_local_client: false,
         wants_tunnel: false,
         tunnel_id: None,
-        mtu: 1400,
+        mtu: HW_MTU as u32,
         ia_freq: 0.0,
         ip_freq: 0.0,
         op_freq: 0.0,
@@ -2509,6 +2509,34 @@ mod tests {
             admission.note_refusal(start + PEER_REFUSAL_LOG_INTERVAL),
             Some(3)
         );
+    }
+
+    #[test]
+    fn peers_advertise_no_more_than_the_receive_buffer_takes() {
+        let shared = Arc::new(Mutex::new(SharedState::new(Arc::new(AtomicU64::new(900)))));
+        let runtime = Arc::new(Mutex::new(AutoRuntime::from_config(&AutoConfig::default())));
+        let event = add_peer(AddPeerContext {
+            shared: &shared,
+            peer_key: &PeerKey {
+                link_local_addr: "fe80::1".into(),
+                if_index: 1,
+            },
+            data_port: DEFAULT_DATA_PORT,
+            name: "auto-test",
+            ifname: "test0",
+            configured_bitrate: BITRATE_GUESS,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+            runtime: &runtime,
+            dynamic_template: None,
+            underlay_mark: None,
+            inline: false,
+        });
+        let Some(Event::InterfaceUp(_, Some(_), Some(info))) = event else {
+            panic!("expected the new peer's InterfaceUp");
+        };
+        // Packets up to the MTU must fit the data receivers' buffer, or
+        // link traffic above it is truncated and lost.
+        assert_eq!(info.mtu as usize, HW_MTU);
     }
 
     #[test]
