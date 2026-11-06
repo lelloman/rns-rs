@@ -410,6 +410,9 @@ impl Driver {
     /// continue writing.
     pub(crate) fn handle_ready_sources(&mut self, ready: &crate::poll::Events) {
         self.rx.serve_sources(ready);
+        if self.rpc_service.is_some() {
+            self.serve_rpc(ready);
+        }
         for event in ready.iter() {
             let (interface, is_write) = crate::interface::loop_writer::key_target(event.key);
             if is_write && event.writable {

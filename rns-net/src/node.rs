@@ -2412,8 +2412,30 @@ impl RnsNode {
             }
         }
 
-        // Start RPC server if share_instance is enabled
-        let rpc_server = if config.share_instance {
+        // Start the RPC servers if share_instance is enabled: on threads, or
+        // on the driver loop when the compact engine folds services.
+        let serve_rpc_threads = config.share_instance && !crate::engine::FOLD_SERVICES;
+        if config.share_instance && crate::engine::FOLD_SERVICES {
+            let mut service = crate::driver::RpcService::new(rpc_auth_key, Arc::clone(tx.poller()));
+            match std::net::TcpListener::bind(("127.0.0.1", config.rpc_port)).and_then(|listener| {
+                service.add_listener(crate::driver::RpcListener::Tcp(listener))
+            }) {
+                Ok(()) => log::info!("RPC server started on 127.0.0.1:{}", config.rpc_port),
+                Err(e) => log::error!("Failed to start RPC server: {}", e),
+            }
+            #[cfg(target_os = "linux")]
+            match crate::rpc::bind_abstract_unix(&config.instance_name).and_then(|listener| {
+                service.add_listener(crate::driver::RpcListener::Unix(listener))
+            }) {
+                Ok(()) => log::info!(
+                    "RPC server started on abstract Unix socket for {}",
+                    config.instance_name
+                ),
+                Err(e) => log::error!("Failed to start abstract Unix RPC server: {e}"),
+            }
+            driver.rpc_service = Some(service);
+        }
+        let rpc_server = if serve_rpc_threads {
             let rpc_addr = crate::rpc::RpcAddr::Tcp("127.0.0.1".into(), config.rpc_port);
             match crate::rpc::RpcServer::start(&rpc_addr, rpc_auth_key, tx.clone()) {
                 Ok(server) => {
@@ -2429,7 +2451,7 @@ impl RnsNode {
             None
         };
         #[cfg(target_os = "linux")]
-        let rpc_unix_server = if config.share_instance {
+        let rpc_unix_server = if serve_rpc_threads {
             match crate::rpc::RpcServer::start_abstract_unix(
                 &config.instance_name,
                 rpc_auth_key,

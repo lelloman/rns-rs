@@ -216,7 +216,7 @@ pub(crate) fn make_transport_config(transport_enabled: bool) -> TransportConfig 
     }
 }
 
-fn new_test_driver() -> Driver {
+pub(crate) fn new_test_driver() -> Driver {
     let transport_config = make_transport_config(false);
     let (callbacks, _, _, _, _, _) = MockCallbacks::new();
     let (tx, rx) = event::channel();
