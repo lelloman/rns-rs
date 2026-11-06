@@ -417,6 +417,9 @@ impl Driver {
         if let Some(bridge) = &self.provider_bridge {
             bridge.serve(ready);
         }
+        if let Some(probe_server) = &self.probe_server {
+            probe_server.serve(ready);
+        }
         for event in ready.iter() {
             let (interface, is_write) = crate::interface::loop_writer::key_target(event.key);
             if is_write && event.writable {

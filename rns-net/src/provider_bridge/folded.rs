@@ -22,15 +22,12 @@ use super::{
 };
 use crate::poll::{Event as Interest, Poller};
 
-/// Poller keys for the bridge: just above the RPC service's keys, which
-/// start at `1 << (usize::BITS - 2)` and span `1 << 30`.
-const KEY_BASE: usize = (1 << (usize::BITS - 2)) + (1 << 30);
-const KEY_SPAN: usize = 1 << 20;
-const LISTENER_KEY: usize = KEY_BASE;
+const KEYS: std::ops::Range<usize> = crate::engine::service_keys::PROVIDER_BRIDGE;
+const LISTENER_KEY: usize = KEYS.start;
 
 /// Whether the bridge owns a poller key.
 pub(super) fn owns(key: usize) -> bool {
-    (KEY_BASE..KEY_BASE + KEY_SPAN).contains(&key)
+    KEYS.contains(&key)
 }
 
 fn interest(key: usize, writable: bool) -> Interest {
@@ -79,7 +76,7 @@ impl FoldedIo {
     fn allocate_key(&mut self) -> usize {
         loop {
             let key = self.next_key;
-            self.next_key = if key + 1 >= KEY_BASE + KEY_SPAN {
+            self.next_key = if key + 1 >= KEYS.end {
                 LISTENER_KEY + 1
             } else {
                 key + 1
