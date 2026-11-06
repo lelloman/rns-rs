@@ -345,6 +345,8 @@ pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<Local
     result
 }
 
+mod folded;
+
 // ── Peer and worker tracking ───────────────────────────────────────────────
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -541,12 +543,41 @@ impl PeerAdmission {
 struct UdpWriter {
     socket: UdpSocket,
     target: SocketAddrV6,
+    /// Called by the driver directly on a non-blocking socket (see
+    /// [`Writer::sends_inline`]), with interface I/O folded.
+    inline: bool,
 }
 
 impl Writer for UdpWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        match self.socket.send_to(data, self.target) {
+            // A datagram the socket buffer cannot take is dropped, as the
+            // network may drop it.
+            Err(e) if self.inline && e.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            result => result.map(|_| ()),
+        }
+    }
+
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        self.socket.send_to(data, self.target).map(|_| ())
+    }
+
+    fn enqueue_confirmed(
+        &mut self,
+        data: &[u8],
+        completion: &mut Option<crate::link_send::Completion>,
+    ) -> io::Result<()> {
+        // A full buffer returns WouldBlock with the completion untouched,
+        // and the driver retries the frame.
         self.socket.send_to(data, self.target)?;
+        if let Some(completion) = completion.take() {
+            completion.finish(Ok(()));
+        }
         Ok(())
+    }
+
+    fn sends_inline(&self) -> bool {
+        self.inline
     }
 }
 
@@ -676,6 +707,17 @@ fn remove_peers_for_worker(
     tx: &EventSender,
     key: &AutoWorkerKey,
 ) {
+    for iface_id in take_peers_for_worker(shared, key) {
+        let _ = tx.send(Event::InterfaceDown(iface_id));
+    }
+}
+
+/// Forget the peers found through the worker for `key`, returning their
+/// interfaces, which the caller reports down.
+fn take_peers_for_worker(
+    shared: &Arc<Mutex<SharedState>>,
+    key: &AutoWorkerKey,
+) -> Vec<InterfaceId> {
     let removed = {
         let mut state = lock_or_recover(shared, "auto shared state");
         let removed = state
@@ -698,12 +740,29 @@ fn remove_peers_for_worker(
         removed
     };
 
-    for (_, iface_id) in removed {
-        let _ = tx.send(Event::InterfaceDown(iface_id));
-    }
+    removed.into_iter().map(|(_, iface_id)| iface_id).collect()
 }
 
 // ── Start function ─────────────────────────────────────────────────────────
+
+impl AutoWorkerContext {
+    fn discovery_handler(&self, key: &AutoWorkerKey) -> DiscoveryHandler {
+        DiscoveryHandler {
+            group_id: self.group_id.clone(),
+            shared: self.shared.clone(),
+            name: self.name.clone(),
+            ifname: key.ifname.clone(),
+            if_index: key.if_index,
+            data_port: self.data_port,
+            configured_bitrate: self.configured_bitrate,
+            ingress_control: self.ingress_control,
+            runtime: self.runtime.clone(),
+            dynamic_template: self.dynamic_template.clone(),
+            underlay_mark: self.underlay_mark,
+            inline: crate::engine::FOLD_IO,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct AutoWorkerContext {
@@ -785,30 +844,16 @@ fn start_with_template(
         underlay_mark,
     };
 
-    {
-        let allowed = config.allowed_interfaces.clone();
-        let ignored = config.ignored_interfaces.clone();
-        let running = running.clone();
-        let name = config.name.clone();
-        thread::Builder::new()
-            .name(format!("auto-supervisor-{}", name))
-            .spawn(move || {
-                auto_supervisor_loop(allowed, ignored, worker_context, running, &name);
-            })?;
-    }
-
-    {
-        let shared = shared.clone();
-        let tx = tx.clone();
-        let running = running.clone();
-        let name = config.name.clone();
-        let runtime = runtime.clone();
-
-        thread::Builder::new()
-            .name(format!("auto-peer-jobs-{}", name))
-            .spawn(move || {
-                peer_jobs_loop(shared, tx, runtime, &running, &name);
-            })?;
+    if crate::engine::FOLD_IO {
+        folded::start(
+            config.interface_id,
+            worker_context,
+            config.allowed_interfaces.clone(),
+            config.ignored_interfaces.clone(),
+            running.clone(),
+        )?;
+    } else {
+        start_threads(&config, worker_context, &shared, &runtime, &running)?;
     }
 
     let announce_interval = lock_or_recover(&runtime, "auto runtime").announce_interval_secs;
@@ -823,6 +868,45 @@ fn start_with_template(
     log::info!("[{}] AutoInterface online", config.name);
 
     Ok(super::ListenerControl::with_running_flag(running))
+}
+
+/// Run an AutoInterface on threads of its own: a supervisor that adopts
+/// network interfaces (each served by its own threads) and a peer-jobs
+/// thread that culls silent peers.
+fn start_threads(
+    config: &AutoConfig,
+    worker_context: AutoWorkerContext,
+    shared: &Arc<Mutex<SharedState>>,
+    runtime: &Arc<Mutex<AutoRuntime>>,
+    running: &Arc<AtomicBool>,
+) -> io::Result<()> {
+    {
+        let shared = shared.clone();
+        let tx = worker_context.tx.clone();
+        let running = running.clone();
+        let name = config.name.clone();
+        let runtime = runtime.clone();
+
+        thread::Builder::new()
+            .name(format!("auto-peer-jobs-{}", name))
+            .spawn(move || {
+                peer_jobs_loop(shared, tx, runtime, &running, &name);
+            })?;
+    }
+
+    {
+        let allowed = config.allowed_interfaces.clone();
+        let ignored = config.ignored_interfaces.clone();
+        let running = running.clone();
+        let name = config.name.clone();
+        thread::Builder::new()
+            .name(format!("auto-supervisor-{}", name))
+            .spawn(move || {
+                auto_supervisor_loop(allowed, ignored, worker_context, running, &name);
+            })?;
+    }
+
+    Ok(())
 }
 
 fn auto_supervisor_loop(
@@ -932,74 +1016,17 @@ fn start_auto_worker(
             })?;
     }
 
-    {
-        let group_id = context.group_id.clone();
-        let shared = context.shared.clone();
+    let handler = context.discovery_handler(key);
+    for (socket, thread_name) in [
+        (mcast_socket, format!("auto-disc-rx-{}", key.ifname)),
+        (unicast_socket, format!("auto-udisc-rx-{}", key.ifname)),
+    ] {
+        let handler = handler.clone();
         let tx = context.tx.clone();
         let running = worker_running.clone();
-        let name = context.name.clone();
-        let ifname = key.ifname.clone();
-        let if_index = key.if_index;
-        let runtime = context.runtime.clone();
-        let data_port = context.data_port;
-        let configured_bitrate = context.configured_bitrate;
-        let ingress_control = context.ingress_control;
-        let dynamic_template = context.dynamic_template.clone();
         thread::Builder::new()
-            .name(format!("auto-disc-rx-{}", key.ifname))
-            .spawn(move || {
-                discovery_receiver_loop(DiscoveryReceiverContext {
-                    socket: mcast_socket,
-                    group_id,
-                    shared,
-                    tx,
-                    running,
-                    name,
-                    ifname,
-                    if_index,
-                    data_port,
-                    configured_bitrate,
-                    ingress_control,
-                    runtime,
-                    dynamic_template,
-                    underlay_mark,
-                });
-            })?;
-    }
-
-    {
-        let group_id = context.group_id.clone();
-        let shared = context.shared.clone();
-        let tx = context.tx.clone();
-        let running = worker_running.clone();
-        let name = context.name.clone();
-        let ifname = key.ifname.clone();
-        let if_index = key.if_index;
-        let runtime = context.runtime.clone();
-        let data_port = context.data_port;
-        let configured_bitrate = context.configured_bitrate;
-        let ingress_control = context.ingress_control;
-        let dynamic_template = context.dynamic_template.clone();
-        thread::Builder::new()
-            .name(format!("auto-udisc-rx-{}", key.ifname))
-            .spawn(move || {
-                discovery_receiver_loop(DiscoveryReceiverContext {
-                    socket: unicast_socket,
-                    group_id,
-                    shared,
-                    tx,
-                    running,
-                    name,
-                    ifname,
-                    if_index,
-                    data_port,
-                    configured_bitrate,
-                    ingress_control,
-                    runtime,
-                    dynamic_template,
-                    underlay_mark,
-                });
-            })?;
+            .name(thread_name)
+            .spawn(move || discovery_receiver_loop(socket, handler, tx, running))?;
     }
 
     {
@@ -1183,13 +1210,12 @@ fn discovery_sender_loop(context: DiscoverySenderContext) {
     }
 }
 
-/// Discovery receiver: listens for discovery tokens and adds peers.
-struct DiscoveryReceiverContext {
-    socket: UdpSocket,
+/// What handling a discovery token needs: validating it and admitting the
+/// peer that sent it.
+#[derive(Clone)]
+struct DiscoveryHandler {
     group_id: Vec<u8>,
     shared: Arc<Mutex<SharedState>>,
-    tx: EventSender,
-    running: Arc<AtomicBool>,
     name: String,
     ifname: String,
     if_index: u32,
@@ -1199,88 +1225,80 @@ struct DiscoveryReceiverContext {
     runtime: Arc<Mutex<AutoRuntime>>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
+    /// Whether new peers' writers are called by the driver directly.
+    inline: bool,
 }
 
-fn discovery_receiver_loop(context: DiscoveryReceiverContext) {
-    let DiscoveryReceiverContext {
-        socket,
-        group_id,
-        shared,
-        tx,
-        running,
-        name,
-        ifname,
-        if_index,
-        data_port,
-        configured_bitrate,
-        ingress_control,
-        runtime,
-        dynamic_template,
-        underlay_mark,
-    } = context;
+impl DiscoveryHandler {
+    /// Handle one discovery datagram, returning the event that brings up
+    /// a newly admitted peer.
+    fn handle(&self, datagram: &[u8], src: std::net::SocketAddr) -> Option<Event> {
+        if datagram.len() < 32 {
+            return None;
+        }
+        // Extract source IPv6 address
+        let std::net::SocketAddr::V6(src_addr) = src else {
+            return None;
+        };
+        let peer_key = peer_key_from_src(&src_addr, self.if_index);
+        let peering_hash = &datagram[..32];
+        let expected = compute_discovery_token(&self.group_id, &peer_key.link_local_addr);
+        if peering_hash != expected {
+            log::debug!(
+                "[{}] invalid peering hash from {}",
+                self.name,
+                peer_key.link_local_addr
+            );
+            return None;
+        }
+
+        {
+            // Peers are accepted before the interface is fully online, for
+            // initial peering (Python processes after final_init_done).
+            let mut state = lock_or_recover(&self.shared, "auto shared state");
+            // Multicast echo from ourselves.
+            if state.link_local_addresses.contains(&peer_key) {
+                return None;
+            }
+            // Already known.
+            if state.peers.contains_key(&peer_key) {
+                state.refresh_peer(&peer_key, crate::time::now());
+                return None;
+            }
+        }
+
+        // New peer! Create a data writer to send to them.
+        add_peer(AddPeerContext {
+            shared: &self.shared,
+            peer_key: &peer_key,
+            data_port: self.data_port,
+            name: &self.name,
+            ifname: &self.ifname,
+            configured_bitrate: self.configured_bitrate,
+            ingress_control: self.ingress_control,
+            runtime: &self.runtime,
+            dynamic_template: self.dynamic_template.as_ref(),
+            underlay_mark: self.underlay_mark,
+            inline: self.inline,
+        })
+    }
+}
+
+/// Discovery receiver: listens for discovery tokens and adds peers.
+fn discovery_receiver_loop(
+    socket: UdpSocket,
+    handler: DiscoveryHandler,
+    tx: EventSender,
+    running: Arc<AtomicBool>,
+) {
     let mut buf = [0u8; 1024];
 
     while running.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
             Ok((n, src)) => {
-                if n < 32 {
-                    continue;
+                if let Some(event) = handler.handle(&buf[..n], src) {
+                    let _ = tx.send(event);
                 }
-
-                // Extract source IPv6 address
-                let src_addr = match src {
-                    std::net::SocketAddr::V6(v6) => v6,
-                    _ => continue,
-                };
-                let peer_key = peer_key_from_src(&src_addr, if_index);
-                let src_ip = peer_key.link_local_addr.clone();
-
-                let peering_hash = &buf[..32];
-                let expected = compute_discovery_token(&group_id, &src_ip);
-
-                if peering_hash != expected {
-                    log::debug!("[{}] invalid peering hash from {}", name, src_ip);
-                    continue;
-                }
-
-                // Check if online
-                let state = lock_or_recover(&shared, "auto shared state");
-                if !state.online {
-                    // Not fully initialized yet, but still accept for initial peering
-                    // (Python processes after final_init_done)
-                }
-
-                // Check if it's our own echo
-                if state.link_local_addresses.contains(&peer_key) {
-                    // Multicast echo from ourselves — just record it
-                    drop(state);
-                    continue;
-                }
-
-                // Check if already known
-                if state.peers.contains_key(&peer_key) {
-                    let now = crate::time::now();
-                    drop(state);
-                    let mut state = lock_or_recover(&shared, "auto shared state");
-                    state.refresh_peer(&peer_key, now);
-                    continue;
-                }
-                drop(state);
-
-                // New peer! Create a data writer to send to them.
-                add_peer(AddPeerContext {
-                    shared: &shared,
-                    tx: &tx,
-                    peer_key: &peer_key,
-                    data_port,
-                    name: &name,
-                    ifname: &ifname,
-                    configured_bitrate,
-                    ingress_control,
-                    runtime: &runtime,
-                    dynamic_template: dynamic_template.as_ref(),
-                    underlay_mark,
-                });
             }
             Err(ref e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
@@ -1289,7 +1307,7 @@ fn discovery_receiver_loop(context: DiscoveryReceiverContext) {
                 continue;
             }
             Err(e) => {
-                log::warn!("[{}] discovery recv error: {}", name, e);
+                log::warn!("[{}] discovery recv error: {}", handler.name, e);
                 if !running.load(Ordering::Relaxed) {
                     return;
                 }
@@ -1302,7 +1320,6 @@ fn discovery_receiver_loop(context: DiscoveryReceiverContext) {
 /// Add a new peer, creating a writer and emitting InterfaceUp.
 struct AddPeerContext<'a> {
     shared: &'a Arc<Mutex<SharedState>>,
-    tx: &'a EventSender,
     peer_key: &'a PeerKey,
     data_port: u16,
     name: &'a str,
@@ -1312,12 +1329,13 @@ struct AddPeerContext<'a> {
     runtime: &'a Arc<Mutex<AutoRuntime>>,
     dynamic_template: Option<&'a super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
+    inline: bool,
 }
 
-fn add_peer(context: AddPeerContext<'_>) {
+/// Admit a new peer, returning the event that brings up its interface.
+fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
     let AddPeerContext {
         shared,
-        tx,
         peer_key,
         data_port,
         name,
@@ -1327,13 +1345,14 @@ fn add_peer(context: AddPeerContext<'_>) {
         runtime: _runtime,
         dynamic_template,
         underlay_mark,
+        inline,
     } = context;
 
     {
         let mut state = lock_or_recover(shared, "auto shared state");
         if state.peers.contains_key(peer_key) {
             state.refresh_peer(peer_key, crate::time::now());
-            return;
+            return None;
         }
         let now = Instant::now();
         let decision = state.admit_new_peer(ifname, now);
@@ -1342,7 +1361,7 @@ fn add_peer(context: AddPeerContext<'_>) {
             let max_peers = state.max_peers;
             drop(state);
             log_peer_refusal(name, ifname, peer_key, decision, max_peers, report);
-            return;
+            return None;
         }
     }
 
@@ -1356,12 +1375,18 @@ fn add_peer(context: AddPeerContext<'_>) {
                 peer_key.link_local_addr,
                 e
             );
-            return;
+            return None;
         }
     };
     if let Err(error) = super::apply_underlay_mark(send_socket.as_raw_fd(), underlay_mark) {
         log::error!("[{}] failed to mark peer socket: {}", name, error);
-        return;
+        return None;
+    }
+    if inline {
+        if let Err(error) = send_socket.set_nonblocking(true) {
+            log::warn!("[{}] failed to set up peer socket: {}", name, error);
+            return None;
+        }
     }
 
     let target = match peer_target_addr(peer_key, data_port) {
@@ -1374,7 +1399,7 @@ fn add_peer(context: AddPeerContext<'_>) {
                 peer_key.if_index,
                 e
             );
-            return;
+            return None;
         }
     };
 
@@ -1383,7 +1408,7 @@ fn add_peer(context: AddPeerContext<'_>) {
     // Double-check not already added (race)
     if state.peers.contains_key(peer_key) {
         state.refresh_peer(peer_key, crate::time::now());
-        return;
+        return None;
     }
     // Both discovery receivers of a worker may admit concurrently; recheck the cap.
     if state.active_peers_on(ifname) >= state.max_peers {
@@ -1398,7 +1423,7 @@ fn add_peer(context: AddPeerContext<'_>) {
             max_peers,
             report,
         );
-        return;
+        return None;
     }
 
     let peer_id = InterfaceId(state.next_id.fetch_add(1, Ordering::Relaxed));
@@ -1407,6 +1432,7 @@ fn add_peer(context: AddPeerContext<'_>) {
     let driver_writer: Box<dyn Writer> = Box::new(UdpWriter {
         socket: send_socket,
         target,
+        inline,
     });
 
     let peer_info = rns_core::transport::types::InterfaceInfo {
@@ -1470,7 +1496,7 @@ fn add_peer(context: AddPeerContext<'_>) {
     } else {
         Event::InterfaceUp(peer_id, Some(driver_writer), Some(Box::new(peer_info)))
     };
-    let _ = tx.send(event);
+    Some(event)
 }
 
 /// Warn about an ignored discovery source when `report` says a warning is due.
@@ -1505,6 +1531,45 @@ fn log_peer_refusal(
     );
 }
 
+/// Handle one datagram on a data socket, returning the frame it carries
+/// for its peer's interface, or `None` if it is dropped.
+fn handle_data(
+    shared: &Mutex<SharedState>,
+    if_index: u32,
+    data: &[u8],
+    src: std::net::SocketAddr,
+) -> Option<Event> {
+    if data.is_empty() {
+        return None;
+    }
+    let std::net::SocketAddr::V6(src_addr) = src else {
+        return None;
+    };
+    let peer_key = peer_key_from_src(&src_addr, if_index);
+
+    // Only data from known peers is considered (as in Python, which looks
+    // up the spawned peer before deduplicating).
+    let mut state = lock_or_recover(shared, "auto shared state");
+    if !state.online || !state.peers.contains_key(&peer_key) {
+        return None;
+    }
+    let now = crate::time::now();
+    let data_hash = rns_crypto::sha256::sha256(data);
+    // Deduplication
+    if state.is_duplicate(&data_hash, now) {
+        return None;
+    }
+    state.add_dedup(data_hash, now);
+    state.refresh_peer(&peer_key, now);
+    let iface_id = state.peers.get(&peer_key)?.interface_id;
+    Some(Event::Frame {
+        interface_id: iface_id,
+        data: data.into(),
+        rssi: None,
+        snr: None,
+    })
+}
+
 /// Data receiver: receives unicast UDP data from peers and dispatches as frames.
 fn data_receiver_loop(
     socket: UdpSocket,
@@ -1519,59 +1584,10 @@ fn data_receiver_loop(
     while running.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
             Ok((n, src)) => {
-                if n == 0 {
-                    continue;
-                }
-
-                let src_addr = match src {
-                    std::net::SocketAddr::V6(v6) => v6,
-                    _ => continue,
-                };
-                let peer_key = peer_key_from_src(&src_addr, if_index);
-                let data = &buf[..n];
-
-                // Only data from known peers is considered (as in Python,
-                // which looks up the spawned peer before deduplicating).
-                let known = {
-                    let state = lock_or_recover(&shared, "auto shared state");
-                    state.online && state.peers.contains_key(&peer_key)
-                };
-                if !known {
-                    continue;
-                }
-
-                let now = crate::time::now();
-                let data_hash = rns_crypto::sha256::sha256(data);
-
-                let mut state = lock_or_recover(&shared, "auto shared state");
-
-                // Deduplication
-                if state.is_duplicate(&data_hash, now) {
-                    continue;
-                }
-                state.add_dedup(data_hash, now);
-
-                // Refresh peer
-                state.refresh_peer(&peer_key, now);
-
-                // Find the interface ID for this peer (it may have timed out meanwhile)
-                let iface_id = match state.peers.get(&peer_key) {
-                    Some(peer) => peer.interface_id,
-                    None => continue,
-                };
-
-                drop(state);
-
-                if tx
-                    .send(Event::Frame {
-                        interface_id: iface_id,
-                        data: data.into(),
-                        rssi: None,
-                        snr: None,
-                    })
-                    .is_err()
-                {
-                    return;
+                if let Some(frame) = handle_data(&shared, if_index, &buf[..n], src) {
+                    if tx.send(frame).is_err() {
+                        return;
+                    }
                 }
             }
             Err(ref e)
