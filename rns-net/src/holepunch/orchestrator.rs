@@ -99,6 +99,9 @@ pub struct HolePunchManager {
     inbound_limiter: InboundRequestLimiter,
     /// Spawn probe and punch threads (disabled by unit tests).
     spawn_workers: bool,
+    /// The driver's queue, for probes and punches run on its loop instead
+    /// of threads (see [`crate::engine::FOLD_SERVICES`]).
+    event_tx: Option<EventSender>,
 }
 
 /// Actions produced by HolePunchManager for the driver to dispatch.
@@ -145,7 +148,14 @@ impl HolePunchManager {
             allow_private_endpoints: false,
             inbound_limiter: InboundRequestLimiter::new(INBOUND_REQUEST_WINDOW),
             spawn_workers: true,
+            event_tx: None,
         }
+    }
+
+    /// Run probes and punches on the loop of the driver that `tx` feeds,
+    /// when services are folded.
+    pub(crate) fn set_event_sender(&mut self, tx: EventSender) {
+        self.event_tx = Some(tx);
     }
 
     pub fn set_policy(&mut self, policy: HolePunchPolicy) {
@@ -694,6 +704,20 @@ impl HolePunchManager {
                 let underlay_mark = self.underlay_mark;
                 let protocol_copy = *protocol;
 
+                if crate::engine::FOLD_SERVICES {
+                    super::folded_probe::start(super::folded_probe::ProbeJob {
+                        servers,
+                        protocol: protocol_copy,
+                        session_id: session_id_copy,
+                        link_id,
+                        tx: tx_clone,
+                        device: device_clone,
+                        underlay_mark,
+                        timeout: super::folded_probe::PROBE_TIMEOUT,
+                    });
+                    continue;
+                }
+
                 if let Err(e) =
                     thread::Builder::new()
                         .name("probe-worker".into())
@@ -807,13 +831,24 @@ impl HolePunchManager {
             peer_addr
         );
 
-        match puncher::start_udp_punch(
-            socket,
-            vec![peer_addr],
-            vec![],
-            session_id_copy,
-            punch_token_copy,
-        ) {
+        let started = match &self.event_tx {
+            Some(tx) if crate::engine::FOLD_SERVICES => puncher::start_udp_punch_on_loop(
+                socket,
+                vec![peer_addr],
+                vec![],
+                session_id_copy,
+                punch_token_copy,
+                tx,
+            ),
+            _ => puncher::start_udp_punch(
+                socket,
+                vec![peer_addr],
+                vec![],
+                session_id_copy,
+                punch_token_copy,
+            ),
+        };
+        match started {
             Ok(handle) => {
                 session.punch_handle = Some(handle);
             }

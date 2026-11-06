@@ -38,6 +38,7 @@ pub fn start_probe_server_with_mark(
     let socket = UdpSocket::bind(listen_addr)?;
     crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
     socket.set_nonblocking(true)?;
+    let local_addr = socket.local_addr()?;
     let (socket, wake) = crate::listen::Listener::new(socket)?;
 
     let running = Arc::new(AtomicBool::new(true));
@@ -52,6 +53,7 @@ pub fn start_probe_server_with_mark(
     Ok(ProbeServerHandle {
         running,
         wake,
+        local_addr,
         thread: Some(handle),
     })
 }
@@ -205,10 +207,16 @@ fn build_probe_response(nonce: &[u8], src: &SocketAddr) -> Vec<u8> {
 pub struct ProbeServerHandle {
     running: Arc<AtomicBool>,
     wake: crate::listen::ListenerWake,
+    local_addr: SocketAddr,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ProbeServerHandle {
+    /// The address the server answers on.
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         self.wake.wake();
@@ -599,6 +607,88 @@ pub fn probe_endpoint_failover_with_mark(
         }
     }
     Err(last_err)
+}
+
+/// A probe request, and how to recognise the reply to it.
+pub(crate) struct ProbeRequest {
+    bytes: Vec<u8>,
+    id: ProbeId,
+}
+
+enum ProbeId {
+    Rnsp([u8; 16]),
+    Stun([u8; 12]),
+}
+
+impl ProbeRequest {
+    /// A request with a fresh nonce (or STUN transaction id), unique per
+    /// local port and per request.
+    pub(crate) fn new(protocol: rns_core::holepunch::ProbeProtocol, local_port: u16) -> Self {
+        use std::sync::atomic::AtomicU32;
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut nonce = [0u8; 16];
+        nonce[..8].copy_from_slice(&nanos.to_le_bytes()[..8]);
+        nonce[8..10].copy_from_slice(&local_port.to_be_bytes());
+        nonce[10..14].copy_from_slice(&COUNTER.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+        match protocol {
+            rns_core::holepunch::ProbeProtocol::Rnsp => {
+                let mut bytes = Vec::with_capacity(PROBE_REQUEST_LEN);
+                bytes.extend_from_slice(PROBE_MAGIC);
+                bytes.push(PROBE_VERSION);
+                bytes.extend_from_slice(&nonce);
+                Self {
+                    bytes,
+                    id: ProbeId::Rnsp(nonce),
+                }
+            }
+            rns_core::holepunch::ProbeProtocol::Stun => {
+                let txn_id: [u8; 12] = nonce[..12].try_into().expect("12 of 16 bytes");
+                Self {
+                    bytes: build_stun_binding_request(&txn_id),
+                    id: ProbeId::Stun(txn_id),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The observed address, if `data` is the reply to this request.
+    pub(crate) fn reply(&self, data: &[u8]) -> Option<SocketAddr> {
+        match &self.id {
+            ProbeId::Rnsp(nonce) => parse_probe_response(data, nonce),
+            ProbeId::Stun(txn_id) => parse_stun_binding_response(data, txn_id),
+        }
+    }
+}
+
+/// A fresh socket for probing `server`, bound like the blocking probes
+/// bind theirs.
+pub(crate) fn open_probe_socket(
+    server: SocketAddr,
+    device: Option<&str>,
+    underlay_mark: Option<u32>,
+) -> io::Result<UdpSocket> {
+    let bind_addr: SocketAddr = if server.is_ipv4() {
+        SocketAddr::from(([0, 0, 0, 0], 0))
+    } else {
+        SocketAddr::from(([0u16; 8], 0))
+    };
+    let socket = UdpSocket::bind(bind_addr)?;
+    #[cfg(target_os = "linux")]
+    if let Some(dev) = device {
+        crate::interface::bind_to_device(socket.as_raw_fd(), dev)?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = device;
+    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    Ok(socket)
 }
 
 fn parse_probe_response(data: &[u8], expected_nonce: &[u8; 16]) -> Option<SocketAddr> {

@@ -47,4 +47,6 @@ pub(crate) mod service_keys {
     pub(crate) const PROVIDER_BRIDGE: Range<usize> = RPC.end..RPC.end + (1 << 20);
     /// The probe server's socket.
     pub(crate) const PROBE_SERVER: usize = PROVIDER_BRIDGE.end;
+    /// Hole-punch probes and punches in progress.
+    pub(crate) const HOLEPUNCH: Range<usize> = PROBE_SERVER + 1..PROBE_SERVER + 1 + (1 << 20);
 }
