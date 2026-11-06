@@ -34,6 +34,8 @@ low-latency-flush = []
 # `NodeConfig::link_proof_verify_threads` may start threads that verify link
 # proofs off the driver thread; without it every proof is verified inline.
 proof-pool = []
+# X25519 on aws-lc (rns-crypto's `x25519-aws-lc`): about twice as fast.
+x25519-aws-lc = ["rns-crypto/x25519-aws-lc"]
 
 [dependencies]
 zeroize = { version = "1", default-features = false, features = ["alloc"] }

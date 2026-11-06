@@ -12,9 +12,13 @@ authors.workspace = true
 default = ["std"]
 std = []
 espidf = ["esp-idf-sys"]
+# X25519 on aws-lc (BoringSSL's assembly), about twice x25519-dalek's speed
+# on x86_64; x25519-dalek remains for results aws-lc refuses to produce.
+x25519-aws-lc = ["dep:aws-lc-rs", "std"]
 
 [dependencies]
 esp-idf-sys = { version = "0.37", optional = true }
+aws-lc-rs = { version = "1.19", optional = true }
 # `fast` / `precomputed-tables` keep the basepoint tables, so signing and
 # public-key derivation are fixed-base multiplications instead of a full
 # variable-base scalar multiplication per operation.

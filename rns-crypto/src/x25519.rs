@@ -39,6 +39,10 @@ impl X25519PrivateKey {
     }
 
     pub fn public_key(&self) -> X25519PublicKey {
+        #[cfg(feature = "x25519-aws-lc")]
+        if let Some(bytes) = aws_lc::public_key(&self.bytes) {
+            return X25519PublicKey { bytes };
+        }
         let secret = x25519_dalek::StaticSecret::from(self.bytes);
         let public = x25519_dalek::PublicKey::from(&secret);
         X25519PublicKey {
@@ -47,6 +51,10 @@ impl X25519PrivateKey {
     }
 
     pub fn exchange(&self, peer: &X25519PublicKey) -> [u8; 32] {
+        #[cfg(feature = "x25519-aws-lc")]
+        if let Some(shared) = aws_lc::exchange(&self.bytes, &peer.bytes) {
+            return shared;
+        }
         let secret = x25519_dalek::StaticSecret::from(self.bytes);
         let peer_public = x25519_dalek::PublicKey::from(peer.bytes);
         *secret.diffie_hellman(&peer_public).as_bytes()
@@ -60,6 +68,27 @@ impl X25519PublicKey {
 
     pub fn public_bytes(&self) -> [u8; 32] {
         self.bytes
+    }
+}
+
+/// X25519 on aws-lc. It refuses an all-zero shared secret (a low-order
+/// peer key), where x25519-dalek returns zeros; `None` leaves such a result,
+/// and any other refusal, to x25519-dalek, so both builds agree.
+#[cfg(feature = "x25519-aws-lc")]
+mod aws_lc {
+    use aws_lc_rs::agreement::{agree, PrivateKey, UnparsedPublicKey, X25519};
+
+    pub(super) fn public_key(private: &[u8; 32]) -> Option<[u8; 32]> {
+        let key = PrivateKey::from_private_key(&X25519, private).ok()?;
+        key.compute_public_key().ok()?.as_ref().try_into().ok()
+    }
+
+    pub(super) fn exchange(private: &[u8; 32], peer: &[u8; 32]) -> Option<[u8; 32]> {
+        let key = PrivateKey::from_private_key(&X25519, private).ok()?;
+        agree(&key, UnparsedPublicKey::new(&X25519, peer), (), |shared| {
+            shared.try_into().map_err(|_| ())
+        })
+        .ok()
     }
 }
 
@@ -161,5 +190,66 @@ mod tests {
             .collect::<alloc::vec::Vec<_>>()
             .try_into()
             .unwrap()
+    }
+
+    /// x25519-dalek's results, whichever backend the build uses.
+    fn reference_exchange(private: &[u8; 32], peer: &[u8; 32]) -> [u8; 32] {
+        let secret = x25519_dalek::StaticSecret::from(clamp(*private));
+        *secret
+            .diffie_hellman(&x25519_dalek::PublicKey::from(*peer))
+            .as_bytes()
+    }
+
+    #[test]
+    fn exchange_and_public_key_match_the_reference_for_any_peer_key() {
+        let mut low_order = alloc::vec![[0u8; 32], {
+            let mut one = [0u8; 32];
+            one[0] = 1;
+            one
+        }];
+        // The other low-order points of Curve25519, and one with the high bit.
+        for hex in [
+            "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+            "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        ] {
+            let bytes: alloc::vec::Vec<u8> = (0..32)
+                .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+                .collect();
+            low_order.push(bytes.try_into().unwrap());
+        }
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            let mut out = [0u8; 32];
+            for byte in &mut out {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *byte = state as u8;
+            }
+            out
+        };
+        for round in 0..200 {
+            let private = X25519PrivateKey::from_bytes(&next());
+            let mut peer = next();
+            if round % 2 == 0 {
+                peer[31] |= 0x80;
+            }
+            let reference_public = x25519_dalek::PublicKey::from(
+                &x25519_dalek::StaticSecret::from(private.private_bytes()),
+            );
+            assert_eq!(
+                private.public_key().public_bytes(),
+                *reference_public.as_bytes()
+            );
+            for peer in core::iter::once(peer).chain(low_order.iter().copied()) {
+                assert_eq!(
+                    private.exchange(&X25519PublicKey::from_bytes(&peer)),
+                    reference_exchange(&private.private_bytes(), &peer),
+                    "peer {peer:02x?}"
+                );
+            }
+        }
     }
 }
