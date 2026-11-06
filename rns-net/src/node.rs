@@ -654,7 +654,7 @@ pub struct NodeConfig {
     /// If false (default), the error is logged and remaining interfaces continue.
     pub panic_on_interface_error: bool,
     /// Threads that verify link packet proofs off the driver thread
-    /// (`Auto`: none on a single CPU).
+    /// (`Auto`: one when the process may use more than one CPU, else none).
     pub link_proof_verify_threads: crate::ProofVerifyThreads,
     /// Stamp generation, enforcement, costs and timeouts: the `[stamps]`
     /// section, which [`RnsNode::from_config`] reads from the config file.
