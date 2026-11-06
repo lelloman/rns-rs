@@ -125,6 +125,19 @@ struct BridgeShared {
     config: ProviderBridgeConfig,
     state: Mutex<BridgeState>,
     condvar: Condvar,
+    /// Wakes the threaded bridge's listener thread from its wait for
+    /// connections, so it sees state changes.
+    listener_wake: std::sync::OnceLock<crate::listen::ListenerWake>,
+}
+
+impl BridgeShared {
+    /// Tell the listener thread the bridge's state changed.
+    fn notify(&self) {
+        self.condvar.notify_all();
+        if let Some(wake) = self.listener_wake.get() {
+            wake.wake();
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -181,6 +194,8 @@ impl ProviderBridge {
     /// Start the bridge with threads of its own.
     pub fn start(config: ProviderBridgeConfig) -> io::Result<Self> {
         let (listener, shared) = bind(config)?;
+        let (listener, wake) = crate::listen::Listener::new(listener)?;
+        let _ = shared.listener_wake.set(wake);
         let thread_shared = shared.clone();
         let thread = thread::Builder::new()
             .name("provider-bridge".into())
@@ -259,6 +274,7 @@ fn bind(config: ProviderBridgeConfig) -> io::Result<(UnixListener, Arc<BridgeSha
             total_disconnect_count: 0,
         }),
         condvar: Condvar::new(),
+        listener_wake: std::sync::OnceLock::new(),
     });
     Ok((listener, shared))
 }
@@ -419,7 +435,7 @@ impl ProviderBridge {
             return;
         }
         state.accepting = false;
-        self.shared.condvar.notify_all();
+        self.shared.notify();
         log::info!("provider bridge stopped accepting new consumers");
     }
 }
@@ -430,7 +446,7 @@ impl Drop for ProviderBridge {
             let mut state = lock_bridge_state(&self.shared);
             state.shutdown = true;
             state.accepting = false;
-            self.shared.condvar.notify_all();
+            self.shared.notify();
         }
         if let BridgeIo::Threaded(thread) = &mut self.io {
             if let Some(thread) = thread.take() {
@@ -464,23 +480,29 @@ impl Drop for ProviderBridge {
     }
 }
 
-fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
+/// Accept consumers until the bridge shuts down, waiting in a poller for a
+/// connection or a state change rather than polling.
+fn provider_bridge_loop(
+    mut listener: crate::listen::Listener<UnixListener>,
+    shared: Arc<BridgeShared>,
+) {
     loop {
+        prune_disconnected_consumers(&shared);
         {
             let state = lock_bridge_state(&shared);
             if state.shutdown {
                 break;
             }
             if !state.accepting {
-                let _ = shared
-                    .condvar
-                    .wait_timeout(state, Duration::from_millis(100));
+                // Nothing to accept: wait for a consumer to leave, or for
+                // shutdown.
+                drop(shared.condvar.wait(state));
                 continue;
             }
         }
 
         loop {
-            match listener.accept() {
+            match listener.get().accept() {
                 Ok((accepted, _)) => {
                     if let Err(err) = accepted.set_write_timeout(Some(Duration::from_secs(1))) {
                         log::debug!("provider bridge consumer timeout setup failed: {}", err);
@@ -495,6 +517,7 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
                     }
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                 Err(err) => {
                     log::warn!("provider bridge accept error: {}", err);
                     break;
@@ -502,15 +525,14 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
             }
         }
 
-        prune_disconnected_consumers(&shared);
-
-        let state = lock_bridge_state(&shared);
-        if state.shutdown {
-            break;
+        // Until a connection arrives or the state changes.
+        if let Err(err) = listener.wait() {
+            log::warn!("provider bridge cannot wait for consumers: {}", err);
+            let state = lock_bridge_state(&shared);
+            if !state.shutdown {
+                drop(shared.condvar.wait_timeout(state, Duration::from_secs(1)));
+            }
         }
-        let _ = shared
-            .condvar
-            .wait_timeout(state, Duration::from_millis(100));
     }
 
     prune_disconnected_consumers(&shared);
@@ -574,7 +596,7 @@ fn add_consumer(
         let was_connected = state.connected;
         state.connected = !state.consumers.is_empty();
         if state.connected && !was_connected {
-            shared.condvar.notify_all();
+            shared.notify();
         }
         state.consumers.len()
     };
@@ -598,7 +620,7 @@ fn mark_disconnected(
     drop(state);
     let mut bridge_state = lock_bridge_state(bridge_shared);
     bridge_state.total_disconnect_count = bridge_state.total_disconnect_count.saturating_add(1);
-    bridge_shared.condvar.notify_all();
+    bridge_shared.notify();
 }
 
 fn spawn_consumer_thread(
@@ -617,13 +639,18 @@ fn spawn_consumer_thread(
                     }
                 }
                 None => {
-                    let state = lock_consumer_state(&consumer_shared);
-                    if state.shutdown {
+                    // Every enqueue, overflow and shutdown notifies.
+                    let mut state = lock_consumer_state(&consumer_shared);
+                    while state.queue.is_empty() && state.dropped_count == 0 && !state.shutdown {
+                        state = consumer_shared
+                            .condvar
+                            .wait(state)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
+                    // Queued frames go out before a shutdown ends the thread.
+                    if state.shutdown && state.queue.is_empty() && state.dropped_count == 0 {
                         break;
                     }
-                    let _ = consumer_shared
-                        .condvar
-                        .wait_timeout(state, Duration::from_millis(100));
                 }
             }
         })
