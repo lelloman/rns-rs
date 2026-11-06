@@ -748,6 +748,9 @@ type LocalClientStream = TcpStream;
 
 #[cfg(not(target_os = "linux"))]
 fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn Writer>> {
+    if crate::engine::FOLD_IO {
+        return folded::client_writer(stream);
+    }
     Ok(Box::new(LocalWriter {
         stream: stream.try_clone()?,
         sleep_hold: None,
@@ -757,6 +760,9 @@ fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn 
 
 #[cfg(target_os = "linux")]
 fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn Writer>> {
+    if crate::engine::FOLD_IO {
+        return folded::client_writer(stream);
+    }
     stream.writer()
 }
 
@@ -877,6 +883,10 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
 
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
+    if crate::engine::FOLD_IO {
+        folded::serve_client(stream, config, tx)?;
+        return Ok(writer);
+    }
     thread::Builder::new()
         .name(format!("local-client-reader-{}", id.0))
         .spawn(move || {
@@ -1145,7 +1155,9 @@ mod tests {
         let payload: Vec<u8> = (0..32).collect();
         client.write_all(&hdlc::frame(&payload)).unwrap();
         match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
-            Event::Frame { interface_id, data, .. } => {
+            Event::Frame {
+                interface_id, data, ..
+            } => {
                 assert_eq!(interface_id, InterfaceId(7900));
                 assert_eq!(&*data, &payload[..]);
             }
