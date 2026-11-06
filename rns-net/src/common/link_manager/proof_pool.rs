@@ -14,15 +14,14 @@ use std::sync::{mpsc, Arc, Mutex};
 
 /// Proofs queued for the pool at most; past that they are checked inline.
 const MAX_QUEUED: usize = 4096;
-/// Threads `auto` starts at most.
-const AUTO_MAX_THREADS: usize = 4;
 
 /// How many threads verify link proofs. Threads start only in builds with the
 /// `proof-pool` feature; other builds verify every proof inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProofVerifyThreads {
-    /// One fewer than the CPUs this process may run on, at most four: none
-    /// on a single CPU.
+    /// One thread when this process may run on more than one CPU, none on
+    /// one. A single worker keeps up with a link at full rate; more add
+    /// wake-ups and contention on the shared queue and cost throughput.
     #[default]
     Auto,
     /// Exactly this many; 0 checks every proof on the driver thread.
@@ -40,8 +39,9 @@ impl ProofVerifyThreads {
         }
         match self {
             ProofVerifyThreads::Fixed(n) => n,
-            ProofVerifyThreads::Auto => std::thread::available_parallelism()
-                .map_or(0, |n| n.get().saturating_sub(1).min(AUTO_MAX_THREADS)),
+            ProofVerifyThreads::Auto => {
+                std::thread::available_parallelism().map_or(0, |n| usize::from(n.get() > 1))
+            }
         }
     }
 }
