@@ -773,6 +773,12 @@ pub struct Driver {
     pub(crate) link_actions: crate::action_pool::ActionPool<LinkManagerAction>,
     /// Completed proofs for probe polling: packet_hash → (rtt_seconds, received_time).
     pub(crate) completed_proofs: HashMap<[u8; 32], (f64, f64)>,
+    /// Parsed signing keys of destinations whose packet proofs were checked.
+    /// A destination's hash follows from its identity, so its key never
+    /// changes.
+    pub(crate) proof_keys: HashMap<[u8; 16], rns_crypto::ed25519::Ed25519PublicKey>,
+    /// Reused buffer for the proof pool's packet verdicts.
+    pub(crate) packet_proof_verdicts: Vec<crate::common::link_manager::ProofVerdict>,
     /// Locally registered destinations: hash → dest_type.
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
     /// Latest explicit SINGLE announces to replay after shared-client reconnect.
@@ -1026,6 +1032,8 @@ impl Driver {
             transport_actions: crate::action_pool::ActionPool::new(),
             link_actions: crate::action_pool::ActionPool::new(),
             completed_proofs: HashMap::new(),
+            proof_keys: HashMap::new(),
+            packet_proof_verdicts: Vec::new(),
             local_destinations,
             shared_announces: HashMap::new(),
             shared_reconnect_pending: HashMap::new(),
