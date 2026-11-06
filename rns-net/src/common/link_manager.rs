@@ -26,7 +26,6 @@ use super::time;
 mod channel_handling;
 mod proof_pool;
 pub use proof_pool::ProofVerifyThreads;
-pub(crate) use proof_pool::{ProofSubject, Verdict as ProofVerdict};
 mod receive_worker;
 mod request_handling;
 mod resource_handling;
@@ -494,49 +493,19 @@ impl LinkManager {
         self.proof_pool.as_ref()
     }
 
-    /// Queue the check of a proof for a packet sent to `destination` at
-    /// `sent_at`; its verdict comes back from [`Self::poll_proof_pool`].
-    /// Returns false, for the caller to check inline, without a pool or
-    /// room in it.
-    pub(crate) fn submit_packet_proof(
-        &mut self,
-        destination: [u8; 16],
-        sent_at: f64,
-        packet_hash: [u8; 32],
-        signature: [u8; 64],
-        key: &rns_crypto::ed25519::Ed25519PublicKey,
-    ) -> bool {
-        self.proof_pool().is_some_and(|pool| {
-            pool.submit(
-                ProofSubject::Packet {
-                    destination,
-                    sent_at,
-                },
-                packet_hash,
-                signature,
-                key.clone(),
-            )
-        })
-    }
-
-    /// Apply the link verdicts the proof pool has ready, and hand back the
-    /// verdicts for packets in `packets`; `None` without a pool.
-    pub(crate) fn poll_proof_pool(
-        &mut self,
-        rng: &mut dyn Rng,
-        packets: &mut Vec<ProofVerdict>,
-    ) -> Option<Vec<LinkManagerAction>> {
+    /// Apply the verdicts the proof pool has ready; `None` without a pool.
+    pub(crate) fn poll_proof_pool(&mut self, rng: &mut dyn Rng) -> Option<Vec<LinkManagerAction>> {
         let pool = self.proof_pool.as_ref()?;
         let mut verdicts = core::mem::take(&mut self.proof_verdicts);
         pool.drain(&mut verdicts);
         let mut actions = Vec::new();
         for verdict in verdicts.drain(..) {
-            match verdict.subject {
-                ProofSubject::Link(link_id) if verdict.valid => {
-                    actions.extend(self.link_proof_verified(&link_id, &verdict.packet_hash, rng));
-                }
-                ProofSubject::Link(_) => {}
-                ProofSubject::Packet { .. } => packets.push(verdict),
+            if verdict.valid {
+                actions.extend(self.link_proof_verified(
+                    &verdict.link_id,
+                    &verdict.packet_hash,
+                    rng,
+                ));
             }
         }
         self.proof_verdicts = verdicts;
@@ -1102,12 +1071,7 @@ impl LinkManager {
             return Vec::new();
         };
         if let Some(pool) = self.proof_pool() {
-            if pool.submit(
-                ProofSubject::Link(*link_id),
-                tracked_hash,
-                signature,
-                key.clone(),
-            ) {
+            if pool.submit(*link_id, tracked_hash, signature, key.clone()) {
                 return Vec::new();
             }
         }
