@@ -343,17 +343,30 @@ fn tcp_server_loop(
     control: ListenerControl,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
+    let mut listener = match crate::listen::Listener::new(listener) {
+        Ok((listener, wake)) => {
+            control.set_wake(wake);
+            listener
+        }
+        Err(e) => {
+            log::error!("Local TCP listener could not wait for connections: {}", e);
+            return;
+        }
+    };
     loop {
         if control.should_stop() {
             log::info!("Local TCP listener stopping");
             return;
         }
 
-        let stream_result = listener.accept().map(|(stream, _)| stream);
+        let stream_result = listener.get().accept().map(|(stream, _)| stream);
         let stream = match stream_result {
             Ok(s) => s,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
+                if let Err(e) = listener.wait() {
+                    log::warn!("Local server wait failed: {}", e);
+                    thread::sleep(Duration::from_millis(50));
+                }
                 continue;
             }
             Err(e) => {
@@ -381,17 +394,34 @@ fn unix_server_loop(
     control: ListenerControl,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
+    let mut listener = match crate::listen::Listener::new(listener) {
+        Ok((listener, wake)) => {
+            control.set_wake(wake);
+            listener
+        }
+        Err(e) => {
+            log::error!(
+                "[{}] Local Unix listener could not wait for connections: {}",
+                name,
+                e
+            );
+            return;
+        }
+    };
     loop {
         if control.should_stop() {
             log::info!("[{}] Local Unix listener stopping", name);
             return;
         }
 
-        let stream_result = listener.accept().map(|(stream, _)| stream);
+        let stream_result = listener.get().accept().map(|(stream, _)| stream);
         let stream = match stream_result {
             Ok(s) => s,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
+                if let Err(e) = listener.wait() {
+                    log::warn!("[{}] Local server wait failed: {}", name, e);
+                    thread::sleep(Duration::from_millis(50));
+                }
                 continue;
             }
             Err(e) => {

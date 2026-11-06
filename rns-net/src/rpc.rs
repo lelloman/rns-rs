@@ -36,6 +36,7 @@ use crate::event::{
     QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
     RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
+use crate::listen::{Listener, ListenerWake};
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
 
@@ -60,6 +61,7 @@ pub enum RpcAddr {
 /// RPC server that listens for incoming connections and handles queries.
 pub struct RpcServer {
     shutdown: Arc<AtomicBool>,
+    wake: ListenerWake,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -72,11 +74,12 @@ impl RpcServer {
         let listener = match addr {
             RpcAddr::Tcp(host, port) => {
                 let l = TcpListener::bind((host.as_str(), *port))?;
-                // Non-blocking so we can check shutdown flag
+                // Non-blocking: the thread waits in its poller, then accepts.
                 l.set_nonblocking(true)?;
                 l
             }
         };
+        let (listener, wake) = Listener::new(listener)?;
 
         let thread = thread::Builder::new()
             .name("rpc-server".into())
@@ -87,6 +90,7 @@ impl RpcServer {
 
         Ok(RpcServer {
             shutdown,
+            wake,
             thread: Some(thread),
         })
     }
@@ -101,6 +105,7 @@ impl RpcServer {
         let addr = SocketAddr::from_abstract_name(format!("rns/{instance_name}/rpc"))?;
         let listener = UnixListener::bind_addr(&addr)?;
         listener.set_nonblocking(true)?;
+        let (listener, wake) = Listener::new(listener)?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown2 = shutdown.clone();
         let thread = thread::Builder::new()
@@ -109,6 +114,7 @@ impl RpcServer {
             .map_err(io::Error::other)?;
         Ok(Self {
             shutdown,
+            wake,
             thread: Some(thread),
         })
     }
@@ -116,6 +122,7 @@ impl RpcServer {
     /// Stop the RPC server.
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        self.wake.wake();
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
@@ -124,7 +131,7 @@ impl RpcServer {
 
 #[cfg(target_os = "linux")]
 fn rpc_server_loop_unix(
-    listener: UnixListener,
+    mut listener: Listener<UnixListener>,
     auth_key: [u8; 32],
     event_tx: EventSender,
     shutdown: Arc<AtomicBool>,
@@ -135,7 +142,7 @@ fn rpc_server_loop_unix(
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
-        match listener.accept() {
+        match listener.get().accept() {
             Ok((stream, _)) => {
                 if workers.len() >= MAX_CONCURRENT_RPC_CONNECTIONS {
                     log::warn!("rejecting Unix RPC connection: {MAX_CONCURRENT_RPC_CONNECTIONS} handlers already active");
@@ -156,7 +163,10 @@ fn rpc_server_loop_unix(
                 }
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10))
+                if let Err(e) = listener.wait() {
+                    log::error!("Unix RPC wait error: {e}");
+                    thread::sleep(Duration::from_millis(100));
+                }
             }
             Err(e) => {
                 log::error!("Unix RPC accept error: {e}");
@@ -176,7 +186,7 @@ impl Drop for RpcServer {
 }
 
 fn rpc_server_loop(
-    listener: TcpListener,
+    mut listener: Listener<TcpListener>,
     auth_key: [u8; 32],
     event_tx: EventSender,
     shutdown: Arc<AtomicBool>,
@@ -190,7 +200,7 @@ fn rpc_server_loop(
             break;
         }
 
-        match listener.accept() {
+        match listener.get().accept() {
             Ok((stream, addr)) => {
                 if workers.len() >= MAX_CONCURRENT_RPC_CONNECTIONS {
                     log::warn!(
@@ -217,8 +227,10 @@ fn rpc_server_loop(
                 }
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                // No pending connection, sleep briefly and retry
-                thread::sleep(std::time::Duration::from_millis(10));
+                if let Err(e) = listener.wait() {
+                    log::error!("RPC wait error: {e}");
+                    thread::sleep(Duration::from_millis(100));
+                }
             }
             Err(e) => {
                 log::error!("RPC accept error: {}", e);
@@ -3827,6 +3839,7 @@ mod tests {
 
         let key2 = key;
         let shutdown3 = shutdown2.clone();
+        let (listener, wake) = Listener::new(listener).unwrap();
         let server_thread = thread::spawn(move || {
             rpc_server_loop(listener, key2, event_tx, shutdown3);
         });
@@ -3911,6 +3924,7 @@ mod tests {
 
         // Shutdown
         shutdown2.store(true, Ordering::Relaxed);
+        wake.wake();
         server_thread.join().unwrap();
         driver_thread.join().unwrap();
     }
@@ -3969,6 +3983,7 @@ mod tests {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let server_shutdown = shutdown.clone();
+        let (listener, wake) = Listener::new(listener).unwrap();
         let server_thread = thread::spawn(move || {
             rpc_server_loop(listener, key, event_tx, server_shutdown);
         });
@@ -4052,6 +4067,7 @@ mod tests {
         );
 
         shutdown.store(true, Ordering::Relaxed);
+        wake.wake();
         server_thread.join().unwrap();
         driver_thread.join().unwrap();
 
