@@ -210,6 +210,120 @@ impl Drop for Worker {
     }
 }
 
+/// bzip2 level of the compact engine's folded compression, which runs on the
+/// driver loop one bzip2 block at a time (`compact-threads-work` keeps the
+/// worker thread instead, at the codec's default level 6).
+///
+/// bzip2 sorts each block in a single call, so one block is the smallest
+/// slice a compression can be cut into, and the driver handles no packet
+/// while it runs. Level 1 means 100 kB blocks: about 10 ms of work each on a
+/// desktop core, and several times that on a small device. Level 6 would
+/// mean 600 kB blocks and stalls six times as long. The output is ordinary
+/// bzip2, which any node decompresses; on the data measured it was between
+/// 11% smaller (JSON) and 16% larger (source text) than level 6's, at about
+/// the same total CPU time.
+const FOLDED_COMPRESSION_LEVEL: u32 = 1;
+
+/// Input fed to the folded compressor per slice: one level-1 block.
+const FOLDED_BLOCK_BYTES: usize = 100_000;
+
+/// A compression the compact engine's driver runs in slices.
+pub(crate) struct FoldedCompression {
+    id: u64,
+    pending: Pending,
+    data: Vec<u8>,
+    metadata: Option<Vec<u8>>,
+    /// The metadata-prefixed input, when there is metadata.
+    prefixed: Option<Vec<u8>>,
+    consumed: usize,
+    encoder: bzip2::Compress,
+    output: Vec<u8>,
+}
+
+impl FoldedCompression {
+    fn new(id: u64, pending: Pending, data: Vec<u8>, metadata: Option<Vec<u8>>) -> Self {
+        let prefixed = metadata
+            .as_ref()
+            .map(|m| rns_core::resource::parts::prepend_metadata(&data, m));
+        FoldedCompression {
+            id,
+            pending,
+            data,
+            metadata,
+            prefixed,
+            consumed: 0,
+            encoder: bzip2::Compress::new(bzip2::Compression::new(FOLDED_COMPRESSION_LEVEL), 30),
+            output: Vec::new(),
+        }
+    }
+
+    fn input(&self) -> &[u8] {
+        self.prefixed.as_deref().unwrap_or(&self.data)
+    }
+
+    /// Compress the next block. Returns the finished result once the input
+    /// is consumed and the stream closed, or at once when cancelled.
+    fn step(&mut self) -> Option<(Pending, Ready)> {
+        let compressed = if self.pending.cancelled.load(Ordering::Acquire) {
+            Ok(None)
+        } else {
+            match self.compress_block() {
+                Ok(false) => return None,
+                Ok(true) => {
+                    let input_len = self.input().len();
+                    let output = core::mem::take(&mut self.output);
+                    // Kept only when it saves space, as the worker does.
+                    Ok((output.len() < input_len).then(|| output.into_boxed_slice()))
+                }
+                Err(error) => Err(format!("Resource compression failed: {error}")),
+            }
+        };
+        Some((
+            Pending {
+                link: self.pending.link,
+                generation: Arc::clone(&self.pending.generation),
+                cancelled: Arc::clone(&self.pending.cancelled),
+                bytes: self.pending.bytes,
+                app_flag: self.pending.app_flag,
+            },
+            Ready {
+                id: self.id,
+                data: core::mem::take(&mut self.data),
+                metadata: self.metadata.take(),
+                compressed,
+            },
+        ))
+    }
+
+    /// Feed one block of input (and, with the last one, close the stream).
+    /// Returns whether the stream is complete.
+    fn compress_block(&mut self) -> Result<bool, bzip2::Error> {
+        let input_len = self.input().len();
+        let end = (self.consumed + FOLDED_BLOCK_BYTES).min(input_len);
+        let action = if end == input_len {
+            bzip2::Action::Finish
+        } else {
+            bzip2::Action::Run
+        };
+        loop {
+            if self.output.capacity() - self.output.len() < 16 * 1024 {
+                self.output.reserve(64 * 1024);
+            }
+            let before = self.encoder.total_in();
+            let input = self.prefixed.as_deref().unwrap_or(&self.data);
+            let status =
+                self.encoder
+                    .compress_vec(&input[self.consumed..end], &mut self.output, action)?;
+            self.consumed += (self.encoder.total_in() - before) as usize;
+            match (action, status) {
+                (bzip2::Action::Finish, bzip2::Status::StreamEnd) => return Ok(true),
+                (bzip2::Action::Run, _) if self.consumed == end => return Ok(false),
+                _ => {}
+            }
+        }
+    }
+}
+
 struct PreparedCompressor(std::cell::RefCell<Option<Vec<u8>>>);
 impl Compressor for PreparedCompressor {
     fn compress(&self, _: &[u8]) -> Option<Vec<u8>> {
@@ -257,7 +371,35 @@ impl Driver {
             .flatten()
             .filter(|(_, bytes)| *bytes <= MAX_BYTES)
         {
-            if self.resource_preparation.is_none() {
+            let folded_room = crate::engine::FOLD_WORK
+                && self.folded.compressions.len() < MAX_JOBS
+                && bytes
+                    <= MAX_BYTES.saturating_sub(
+                        self.folded
+                            .compressions
+                            .iter()
+                            .map(|job| job.pending.bytes)
+                            .sum(),
+                    );
+            if folded_room {
+                // Compressed on the driver loop, one block per idle turn,
+                // within the worker's budget; past it, the synchronous path
+                // below runs after this link's queued compressions.
+                let id = self.folded.next_compression_id;
+                self.folded.next_compression_id = id.wrapping_add(1);
+                let pending = Pending {
+                    link,
+                    generation,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                    bytes,
+                    app_flag: options.app_flag,
+                };
+                self.folded
+                    .compressions
+                    .push_back(FoldedCompression::new(id, pending, data, metadata));
+                return;
+            }
+            if !crate::engine::FOLD_WORK && self.resource_preparation.is_none() {
                 match Worker::new(self.event_tx.clone()) {
                     Ok(worker) => self.resource_preparation = Some(worker),
                     Err(error) => log::warn!(
@@ -324,6 +466,25 @@ impl Driver {
         }
     }
 
+    /// Run one slice of the oldest folded compression, completing it when
+    /// it is done.
+    pub(super) fn step_folded_compression(&mut self) {
+        let Some(job) = self.folded.compressions.front_mut() else {
+            return;
+        };
+        if !self
+            .link_manager
+            .resource_generation(&job.pending.link)
+            .is_some_and(|current| Arc::ptr_eq(&current, &job.pending.generation))
+        {
+            job.pending.cancelled.store(true, Ordering::Release);
+        }
+        if let Some((pending, ready)) = job.step() {
+            self.folded.compressions.pop_front();
+            self.finish_prepared_resource(pending, ready);
+        }
+    }
+
     pub(super) fn poll_resource_preparations(&mut self) {
         if let Some(worker) = &mut self.resource_preparation {
             for pending in worker.pending.values() {
@@ -346,6 +507,16 @@ impl Driver {
     }
 
     pub(super) fn finish_resource_preparations_for(&mut self, link: &[u8; 16]) {
+        // Folded compressions run in order, so finishing this link's means
+        // finishing every one queued before them too.
+        while self
+            .folded
+            .compressions
+            .iter()
+            .any(|job| &job.pending.link == link)
+        {
+            self.step_folded_compression();
+        }
         while self
             .resource_preparation
             .as_ref()
@@ -362,6 +533,12 @@ impl Driver {
     }
 
     pub(super) fn stop_resource_preparations(&mut self) {
+        for job in core::mem::take(&mut self.folded.compressions) {
+            self.callbacks.on_resource_failed(
+                rns_core::types::LinkId(job.pending.link),
+                "Resource preparation cancelled by shutdown".into(),
+            );
+        }
         if let Some(worker) = self.resource_preparation.take() {
             for pending in worker.pending.values() {
                 pending.cancelled.store(true, Ordering::Release);
@@ -379,6 +556,68 @@ impl Driver {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    fn folded(data: Vec<u8>, metadata: Option<Vec<u8>>) -> FoldedCompression {
+        let pending = Pending {
+            link: [1; 16],
+            generation: Arc::new(()),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            bytes: data.len(),
+            app_flag: false,
+        };
+        FoldedCompression::new(0, pending, data, metadata)
+    }
+
+    #[test]
+    fn folded_compression_round_trips_one_block_per_slice() {
+        let text: Vec<u8> = (0..rns_core::constants::RESOURCE_MAX_EFFICIENT_SIZE)
+            .map(|i| b"compact engines fold work into the loop "[i % 40] ^ (i / 997) as u8)
+            .collect();
+        for (len, metadata) in [
+            (MIN_INPUT, None),
+            (250_000, Some(b"meta".to_vec())),
+            (300_000, None),
+            (text.len(), None),
+        ] {
+            let data = text[..len].to_vec();
+            let mut job = folded(data.clone(), metadata.clone());
+            let mut slices = 0;
+            let (pending, ready) = loop {
+                let before = job.consumed;
+                slices += 1;
+                if let Some(done) = job.step() {
+                    break done;
+                }
+                assert!(job.consumed - before <= FOLDED_BLOCK_BYTES);
+            };
+            let input = metadata
+                .as_ref()
+                .map(|m| rns_core::resource::parts::prepend_metadata(&data, m))
+                .unwrap_or_else(|| data.clone());
+            assert_eq!(
+                slices,
+                input.len().div_ceil(FOLDED_BLOCK_BYTES),
+                "len {len}"
+            );
+            assert_eq!(ready.data, data);
+            assert_eq!(ready.metadata, metadata);
+            assert_eq!(pending.link, [1; 16]);
+            let compressed = ready.compressed.unwrap().expect("compressible input");
+            let restored = crate::common::compressor::Bzip2Compressor
+                .decompress_bounded(&compressed, usize::MAX)
+                .unwrap();
+            assert_eq!(restored, input, "len {len}");
+        }
+    }
+
+    #[test]
+    fn folded_compression_stops_when_cancelled() {
+        let mut job = folded(vec![7; 300_000], None);
+        assert!(job.step().is_none());
+        job.pending.cancelled.store(true, Ordering::Release);
+        let (_, ready) = job.step().expect("a cancelled job ends at once");
+        assert_eq!(ready.compressed, Ok(None));
+    }
 
     fn submit(worker: &mut Worker, value: u8) {
         let data = vec![value; MIN_INPUT];
@@ -517,6 +756,65 @@ mod tests {
         (driver, id, errors)
     }
 
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[test]
+    fn folded_preparation_keeps_resource_order_on_the_link() {
+        let (mut driver, id, errors) = driver();
+        driver.prepare_resource(id, vec![0; MIN_INPUT], None, true);
+        assert!(driver.resource_preparation.is_none(), "no worker thread");
+        assert_eq!(driver.folded.compressions.len(), 1);
+        // A synchronous send must not overtake the queued compression.
+        driver.prepare_resource(id, vec![7; 2000], None, false);
+        assert!(driver.folded.compressions.is_empty());
+        let entries = driver.link_manager.resource_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].total_parts, 1);
+        assert!(entries[1].total_parts > 1);
+        assert!(errors.lock().unwrap().is_empty());
+    }
+
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[test]
+    fn folded_preparation_keeps_the_worker_budget() {
+        let (mut driver, id, errors) = driver();
+        for _ in 0..MAX_JOBS {
+            driver.prepare_resource(id, vec![0; MIN_INPUT], None, true);
+        }
+        assert_eq!(driver.folded.compressions.len(), MAX_JOBS);
+        // Past the budget the send runs synchronously, after the queued ones.
+        driver.prepare_resource(id, vec![0; MIN_INPUT], None, true);
+        assert!(driver.folded.compressions.is_empty());
+        let entries = driver.link_manager.resource_entries();
+        assert_eq!(entries.len(), MAX_JOBS + 1);
+        assert!(entries.iter().all(|entry| entry.total_parts == 1));
+        assert!(errors.lock().unwrap().is_empty());
+    }
+
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[test]
+    fn folded_preparation_fails_when_the_link_is_torn_down() {
+        let (mut driver, id, errors) = driver();
+        driver.prepare_resource(id, vec![0; MIN_INPUT], Some(vec![2, 3]), true);
+        driver.link_manager.teardown_link(&id);
+        driver.finish_resource_preparations_for(&id);
+        assert!(driver.link_manager.resource_entries().is_empty());
+        assert_eq!(errors.lock().unwrap().len(), 1);
+    }
+
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[test]
+    fn folded_preparation_fails_pending_work_at_shutdown() {
+        let (mut driver, id, errors) = driver();
+        driver.prepare_resource(id, vec![0; MIN_INPUT], None, true);
+        driver.stop_resource_preparations();
+        assert!(driver.folded.compressions.is_empty());
+        assert_eq!(
+            errors.lock().unwrap().as_slice(),
+            ["Resource preparation cancelled by shutdown"]
+        );
+    }
+
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn preparation_fallback_preserves_resource_order_and_drain_tracks_pending() {
         let (mut driver, id, errors) = driver();
@@ -531,6 +829,7 @@ mod tests {
         assert!(errors.lock().unwrap().is_empty());
     }
 
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn preparation_saturated_driver_falls_back_after_earlier_sends() {
         let (mut driver, id, errors) = driver();
@@ -556,6 +855,7 @@ mod tests {
         assert!(errors.lock().unwrap().is_empty());
     }
 
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn preparation_teardown_discards_ready_result_and_releases_budget() {
         let (mut driver, id, errors) = driver();
@@ -567,6 +867,7 @@ mod tests {
         assert_eq!(driver.resource_preparation.as_ref().unwrap().bytes, 0);
     }
 
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn preparation_cancellation_during_codec_skips_queued_job() {
         let (mut driver, id, errors) = driver();
@@ -598,6 +899,7 @@ mod tests {
         assert_eq!(driver.resource_preparation.as_ref().unwrap().bytes, 0);
     }
 
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn preparation_rejects_result_with_wrong_link_generation() {
         let (mut driver, id, errors) = driver();
@@ -614,6 +916,7 @@ mod tests {
         assert_eq!(errors.lock().unwrap().len(), 1);
     }
 
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn preparation_drain_finishes_accepted_work_and_shutdown_cancels_pending() {
         let (mut driver, id, errors) = driver();

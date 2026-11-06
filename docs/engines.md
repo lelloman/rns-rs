@@ -1,7 +1,7 @@
 # Engines: compact and parallel
 
-Status: in progress. The engine switch, the folded timers group and folded
-announce verification are in; the rest is design. Nothing here changes the wire protocol.
+Status: in progress. The engine switch, the folded timers group, and folded
+announce verification and resource compression are in; the rest is design. Nothing here changes the wire protocol.
 
 ## Purpose
 
@@ -162,7 +162,7 @@ established:
 | Group | Helpers today | Folded form | Effort |
 |---|---|---|---|
 | Timers and housekeeping (`compact-threads-timers` keeps the threads) | `rns-timer` (sends `Tick` every N ms), `rns-persist` (transport state snapshot every 12 h), `rns-destination-cleanup` (stale ratchet removal) | the tick comes from a periodic timerfd watched by the loop on Linux and Android (a timed wait would make the kernel arm and cancel a timer on every wait), and from a deadline the loop checks elsewhere; persistence and ratchet cleanup become idle jobs, and queued ones complete at shutdown as a joined thread would. The snapshot is written as one job; slicing it is left for a measured stall on a large path table | small (done) |
-| CPU work (`compact-threads-work` keeps the threads) | `rns-verify` (announce signatures), `rns-resource-prepare` (compression of outgoing resources), `rns-resource-receive` (assembly of incoming ones), `rns-stamper` and `rns-link-stamp` (stamp generation), `rns-proof-N` (link proof pool) | idle jobs; announce verification one announce per slice; compression and assembly in bounded chunks; stamp generation as a resumable search of a fixed number of candidates per slice; link proofs verified inline | medium: compression and stamping need resumable slicing |
+| CPU work (`compact-threads-work` keeps the threads) | `rns-verify` (announce signatures), `rns-resource-prepare` (compression of outgoing resources), `rns-resource-receive` (assembly of incoming ones), `rns-stamper` and `rns-link-stamp` (stamp generation), `rns-proof-N` (link proof pool) | idle jobs, and one unit every 64 events when the driver never goes idle. Announce verification (done): one announce per slice, through the same bounded queue. Resource compression (done): bzip2 one block per slice at level 1 (100 kB blocks, about 10 ms each on a desktop core), within the worker's job and byte budget; bzip2 sorts a block in one call, so a block is the smallest slice. Split resources and stream segments are compressed inline when built, in both engines, as before. Assembly of incoming resources in bounded chunks; stamp generation as a resumable search of a fixed number of candidates per slice; link proofs verified inline | medium: assembly and stamping remain |
 | Interface I/O (`compact-threads-io` keeps the threads) | readers for UDP, serial, KISS, RNode, pipe, local, Auto, I2P and Weave; `iface-writer-N`; reconnect threads for TCP, Backbone, serial and KISS | non-blocking, pollable sources and writers in the loop (TCP already works this way); reconnects as non-blocking connects with timers | large: one interface type at a time |
 | Services (`compact-threads-services` keeps the threads) | RPC servers and clients, the shared-instance server, the provider bridge, hole-punch probes | pollable listeners and connections in the loop | medium |
 
