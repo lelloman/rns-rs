@@ -245,33 +245,7 @@ impl LoopSource for ListenerSource {
     }
 }
 
-/// What the accept loop does after `accept` returns an error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AcceptStep {
-    /// No connection is pending: wait for readiness.
-    Drained,
-    /// The error concerned one pending connection only: try the next one.
-    Next,
-    /// The error is likely to persist (e.g. out of descriptors or memory):
-    /// stop watching the listener until the next tick.
-    Pause,
-}
-
-pub(crate) fn accept_error_step(error: &io::Error) -> AcceptStep {
-    match error.kind() {
-        io::ErrorKind::WouldBlock => AcceptStep::Drained,
-        io::ErrorKind::Interrupted
-        | io::ErrorKind::ConnectionAborted
-        | io::ErrorKind::ConnectionReset
-        | io::ErrorKind::NetworkDown
-        | io::ErrorKind::NetworkUnreachable
-        | io::ErrorKind::HostUnreachable => AcceptStep::Next,
-        // Linux reports some network errors of a pending connection
-        // through accept; they concern that connection only.
-        _ if error.raw_os_error() == Some(libc::EPROTO) => AcceptStep::Next,
-        _ => AcceptStep::Pause,
-    }
-}
+pub(crate) use super::stream_read::{accept_error_step, AcceptStep};
 
 enum Admitted {
     Client(InterfaceId, Box<dyn LoopSource>),

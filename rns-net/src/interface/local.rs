@@ -23,6 +23,8 @@ use crate::hdlc;
 use crate::interface::transmit_buffer::TransmitBuffer;
 use crate::interface::{ListenerControl, Writer};
 
+mod folded;
+
 /// Hardware MTU used by both sides of the local shared-instance interface.
 pub(crate) const HW_MTU: u32 = 262_144;
 pub(crate) const BITRATE: u64 = 1_000_000_000;
@@ -286,6 +288,10 @@ fn start_server_with_template(
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) -> io::Result<ListenerControl> {
     let control = ListenerControl::new();
+    // With interface I/O folded, the listener and its clients are served on
+    // the driver loop, keyed by the server's interface id.
+    let fold = crate::engine::FOLD_IO;
+    let key = crate::interface::loop_writer::read_key(config.interface_id);
     // Try Unix socket first on Linux
     #[cfg(target_os = "linux")]
     {
@@ -297,6 +303,18 @@ fn start_server_with_template(
                     config.instance_name
                 );
                 let name = format!("rns/{}", config.instance_name);
+                if fold {
+                    folded::serve(
+                        folded::Listener::Unix(listener),
+                        key,
+                        name,
+                        tx,
+                        next_id,
+                        control.clone(),
+                        dynamic_template,
+                    )?;
+                    return Ok(control);
+                }
                 let listener_control = control.clone();
                 thread::Builder::new()
                     .name("local-server".into())
@@ -325,6 +343,18 @@ fn start_server_with_template(
 
     log::info!("Local server listening on TCP {}", addr);
 
+    if fold {
+        folded::serve(
+            folded::Listener::Tcp(listener),
+            key,
+            addr,
+            tx,
+            next_id,
+            control.clone(),
+            dynamic_template,
+        )?;
+        return Ok(control);
+    }
     let listener_control = control.clone();
     thread::Builder::new()
         .name("local-server".into())
@@ -1069,6 +1099,72 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         connect_test_client(&instance_name, port);
+    }
+
+    fn thread_named(prefix: &str) -> bool {
+        std::fs::read_dir("/proc/self/task").unwrap().any(|task| {
+            let comm = task.unwrap().path().join("comm");
+            std::fs::read_to_string(comm).is_ok_and(|comm| comm.trim().starts_with(prefix))
+        })
+    }
+
+    #[test]
+    fn folded_server_serves_clients_on_the_driver_loop() {
+        if !crate::engine::FOLD_IO {
+            return;
+        }
+        let port = find_free_port();
+        let instance_name = crate::test_support::instance_name("test-folded");
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(7900));
+        let config = LocalServerConfig {
+            instance_name: instance_name.clone(),
+            port,
+            interface_id: InterfaceId(79),
+        };
+        let control = start_server(config, tx.clone(), next_id).unwrap();
+        let mut client = connect_test_client(&instance_name, port);
+
+        // Registered, then written by the driver with no worker thread.
+        let writer = match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::InterfaceUp(id, Some(writer), Some(_)) => {
+                assert_eq!(id, InterfaceId(7900));
+                writer
+            }
+            other => panic!("expected InterfaceUp, got {:?}", other),
+        };
+        assert!(writer.loop_socket().is_some());
+        let (mut writer, _) =
+            crate::interface::wrap_async_writer(writer, InterfaceId(7900), "local", tx, 16);
+        assert!(!thread_named("local-unix-read"));
+        assert!(!thread_named("local-reader-79"));
+        assert!(!thread_named("iface-writer-79"));
+
+        // A stopped listener leaves connected clients served.
+        control.request_stop();
+        let payload: Vec<u8> = (0..32).collect();
+        client.write_all(&hdlc::frame(&payload)).unwrap();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame { interface_id, data, .. } => {
+                assert_eq!(interface_id, InterfaceId(7900));
+                assert_eq!(&*data, &payload[..]);
+            }
+            other => panic!("expected Frame, got {:?}", other),
+        }
+
+        let outbound: Vec<u8> = (100..140).collect();
+        writer.send_frame(&outbound).unwrap();
+        writer.flush_pending();
+        let mut decoder = frame_decoder(0);
+        let mut buf = [0u8; 256];
+        let n = client.read(&mut buf).unwrap();
+        assert_eq!(decoder.feed(&buf[..n]), vec![outbound]);
+
+        drop(client);
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::InterfaceDown(id) => assert_eq!(id, InterfaceId(7900)),
+            other => panic!("expected InterfaceDown, got {:?}", other),
+        }
     }
 
     #[test]

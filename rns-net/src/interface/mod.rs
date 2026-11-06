@@ -20,6 +20,7 @@ pub mod registry;
 pub mod rnode;
 #[cfg(feature = "iface-serial")]
 pub mod serial_iface;
+pub(crate) mod stream_read;
 #[cfg(feature = "iface-tcp")]
 pub mod tcp;
 #[cfg(feature = "iface-tcp")]
