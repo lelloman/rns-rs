@@ -37,7 +37,8 @@ pub fn start_probe_server_with_mark(
 ) -> io::Result<ProbeServerHandle> {
     let socket = UdpSocket::bind(listen_addr)?;
     crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
-    socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+    socket.set_nonblocking(true)?;
+    let (socket, wake) = crate::listen::Listener::new(socket)?;
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -50,25 +51,32 @@ pub fn start_probe_server_with_mark(
 
     Ok(ProbeServerHandle {
         running,
+        wake,
         thread: Some(handle),
     })
 }
 
-fn run_probe_server(socket: UdpSocket, running: Arc<AtomicBool>) {
+/// Answer probes on a non-blocking socket, waiting in its poller between
+/// them, until `running` is cleared and the poller woken.
+fn run_probe_server(mut socket: crate::listen::Listener<UdpSocket>, running: Arc<AtomicBool>) {
     let mut buf = [0u8; 64];
     while running.load(Ordering::Relaxed) {
-        let (len, src) = match socket.recv_from(&mut buf) {
+        let (len, src) = match socket.get().recv_from(&mut buf) {
             Ok(r) => r,
-            Err(ref e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                if let Err(e) = socket.wait() {
+                    log::warn!("Probe server cannot wait for probes: {}", e);
+                    thread::sleep(Duration::from_secs(1));
+                }
                 continue;
             }
+            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
                 log::warn!("Probe server recv error: {}", e);
                 continue;
             }
         };
+        let socket = socket.get();
 
         if let Some(response) = answer_probe(&buf[..len], &src) {
             if let Err(e) = socket.send_to(&response, src) {
@@ -196,12 +204,14 @@ fn build_probe_response(nonce: &[u8], src: &SocketAddr) -> Vec<u8> {
 /// Handle to a running probe server. Stops the server when dropped.
 pub struct ProbeServerHandle {
     running: Arc<AtomicBool>,
+    wake: crate::listen::ListenerWake,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ProbeServerHandle {
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
+        self.wake.wake();
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
@@ -639,9 +649,8 @@ mod tests {
         let server_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let socket = UdpSocket::bind(server_addr).unwrap();
         let actual_addr = socket.local_addr().unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let (socket, wake) = crate::listen::Listener::new(socket).unwrap();
 
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
@@ -660,8 +669,9 @@ mod tests {
         assert_eq!(observed.ip(), std::net::Ipv4Addr::new(127, 0, 0, 1));
         assert!(observed.port() > 0);
 
-        // Stop server
+        // Stop server: waking it ends its wait at once.
         running.store(false, Ordering::Relaxed);
+        wake.wake();
         let _ = server_thread.join();
     }
 
