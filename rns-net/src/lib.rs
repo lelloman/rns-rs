@@ -36,6 +36,7 @@ pub mod event;
 pub mod hdlc;
 pub mod kiss;
 pub mod link_send;
+pub(crate) mod listen;
 pub mod logging;
 pub(crate) mod poll;
 pub mod rnode_kiss;

@@ -571,6 +571,8 @@ pub(crate) fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexG
 pub struct ListenerControl {
     stop: Arc<AtomicBool>,
     running: Option<Arc<AtomicBool>>,
+    /// Wakes the listener thread blocked waiting for a connection.
+    wake: Arc<std::sync::OnceLock<crate::listen::ListenerWake>>,
 }
 
 impl ListenerControl {
@@ -578,6 +580,7 @@ impl ListenerControl {
         Self {
             stop: Arc::new(AtomicBool::new(false)),
             running: None,
+            wake: Arc::default(),
         }
     }
 
@@ -585,6 +588,7 @@ impl ListenerControl {
         Self {
             stop: Arc::new(AtomicBool::new(false)),
             running: Some(running),
+            wake: Arc::default(),
         }
     }
 
@@ -593,6 +597,16 @@ impl ListenerControl {
         if let Some(running) = &self.running {
             running.store(false, Ordering::Relaxed);
         }
+        if let Some(wake) = self.wake.get() {
+            wake.wake();
+        }
+    }
+
+    /// Let [`Self::request_stop`] wake the listener thread's wait.
+    pub(crate) fn set_wake(&self, wake: crate::listen::ListenerWake) {
+        let _ = self.wake.set(wake);
+        // A stop requested before the wake was known is seen by the
+        // listener's own check before it first waits.
     }
 
     pub fn should_stop(&self) -> bool {
