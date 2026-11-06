@@ -436,6 +436,25 @@ impl Driver {
             && (self.folded.announces_queued || !self.folded.announces.is_empty())
     }
 
+    /// Whether folded work of any kind is waiting.
+    fn has_folded_work(&self) -> bool {
+        !self.folded.jobs.is_empty()
+            || !self.folded.compressions.is_empty()
+            || self.has_folded_announce_work()
+    }
+
+    /// Run one unit of folded work: a queued job, a compression slice, or
+    /// one announce check.
+    fn run_folded_unit(&mut self) {
+        if let Some(job) = self.folded.jobs.pop_front() {
+            self.run_folded_job(job);
+        } else if !self.folded.compressions.is_empty() {
+            self.step_folded_compression();
+        } else if self.has_folded_announce_work() {
+            self.check_folded_announce();
+        }
+    }
+
     /// Check one announce from the verification queue, taking the queued
     /// ones first if needed, and complete it as the verification thread's
     /// event would.
@@ -1275,10 +1294,7 @@ impl Driver {
                     // Everything the last poll delivered has been handled:
                     // send this pass's output before waiting for more.
                     self.flush_writers();
-                    if self.link_manager.has_idle_work()
-                        || !self.folded.jobs.is_empty()
-                        || self.has_folded_announce_work()
-                    {
+                    if self.link_manager.has_idle_work() || self.has_folded_work() {
                         // Sources that are ready go before idle work: what
                         // they hold, such as the rest of a window, may be
                         // what a peer waits on.
@@ -1291,10 +1307,8 @@ impl Driver {
                             continue;
                         }
                         // One job per turn: events that arrive meanwhile go first.
-                        if let Some(job) = self.folded.jobs.pop_front() {
-                            self.run_folded_job(job);
-                        } else if self.has_folded_announce_work() {
-                            self.check_folded_announce();
+                        if self.has_folded_work() {
+                            self.run_folded_unit();
                         } else {
                             let actions = self.link_manager.run_idle_work(&mut self.rng);
                             self.dispatch_link_actions(actions);
@@ -1326,11 +1340,7 @@ impl Driver {
                 busy_events += 1;
                 if busy_events >= FOLDED_WORK_BUSY_EVENTS {
                     busy_events = 0;
-                    if let Some(job) = self.folded.jobs.pop_front() {
-                        self.run_folded_job(job);
-                    } else if self.has_folded_announce_work() {
-                        self.check_folded_announce();
-                    }
+                    self.run_folded_unit();
                 }
             }
             // A tick queued behind a long backlog would leave the snapshot

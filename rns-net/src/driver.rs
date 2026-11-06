@@ -728,6 +728,9 @@ pub(crate) struct FoldedTimers {
     )>,
     /// Whether the verification queue may hold announces not yet taken.
     pub(crate) announces_queued: bool,
+    /// Outgoing resources compressed on the driver loop, oldest first.
+    pub(crate) compressions: std::collections::VecDeque<resource_preparation::FoldedCompression>,
+    pub(crate) next_compression_id: u64,
 }
 
 pub(crate) enum FoldedJob {
@@ -750,6 +753,8 @@ impl FoldedTimers {
             ticks_from_source: false,
             announces: std::collections::VecDeque::new(),
             announces_queued: false,
+            compressions: std::collections::VecDeque::new(),
+            next_compression_id: 0,
         }
     }
 }
