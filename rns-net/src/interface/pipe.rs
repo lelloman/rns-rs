@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,7 +15,7 @@ use std::time::Duration;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
-use crate::event::{Event, EventSender};
+use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
 use crate::interface::{lock_or_recover, Writer};
 
@@ -74,6 +75,11 @@ impl Writer for PipeWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.stdin.write_all(&hdlc::frame(data))
     }
+
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
+        // With interface I/O folded the driver writes the pipe itself.
+        crate::engine::FOLD_IO.then(|| self.stdin.as_raw_fd())
+    }
 }
 
 /// Start the pipe interface. Spawns subprocess, returns writer.
@@ -103,6 +109,11 @@ pub fn start(config: PipeConfig, tx: EventSender) -> io::Result<Box<dyn Writer>>
 
     // Signal interface up
     let _ = tx.send(Event::InterfaceUp(id, None, None));
+
+    if crate::engine::FOLD_IO {
+        Arc::new(PipeLink { config, tx }).serve(stdout, child)?;
+        return Ok(Box::new(PipeWriter { stdin }));
+    }
 
     // Spawn reader thread
     thread::Builder::new()
@@ -238,6 +249,121 @@ fn respawn(
             Err(e) => {
                 log::warn!("[{}] respawn failed: {}", config.name, e);
             }
+        }
+    }
+}
+
+/// What reading a subprocess on the driver loop needs across respawns (see
+/// [`crate::engine::FOLD_IO`]).
+struct PipeLink {
+    config: PipeConfig,
+    tx: EventSender,
+}
+
+impl PipeLink {
+    /// Read `stdout` on the driver thread from now on.
+    fn serve(
+        self: &Arc<Self>,
+        stdout: std::process::ChildStdout,
+        child: std::process::Child,
+    ) -> io::Result<()> {
+        crate::interface::stream_read::set_nonblocking(stdout.as_raw_fd())?;
+        self.tx.register_source(
+            crate::interface::loop_writer::read_key(self.config.interface_id),
+            Box::new(PipeSource {
+                stdout,
+                child: Some(child),
+                decoder: hdlc::Decoder::new(),
+                link: Arc::clone(self),
+            }),
+        )
+    }
+
+    /// Report the interface down, and on a thread of its own wait for the
+    /// subprocess, respawn it, and serve the new one on the driver.
+    fn subprocess_lost(self: &Arc<Self>, mut child: std::process::Child, kill: bool) {
+        let id = self.config.interface_id;
+        let _ = self.tx.push_from_loop([Event::InterfaceDown(id)]);
+        let link = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name(format!("pipe-respawn-{}", id.0))
+            .spawn(move || {
+                if kill {
+                    let _ = child.kill();
+                }
+                let _ = child.wait();
+                while let Some((stdout, child)) = respawn(&link.config, &link.tx) {
+                    match link.serve(stdout, child) {
+                        Ok(()) => return,
+                        Err(e) => {
+                            log::warn!("[{}] cannot read the subprocess: {}", link.config.name, e);
+                            let _ = link.tx.send(Event::InterfaceDown(id));
+                        }
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            log::error!(
+                "[{}] cannot start respawning, giving up: {}",
+                self.config.name,
+                e
+            );
+        }
+    }
+}
+
+/// A subprocess's stdout, read on the driver thread.
+struct PipeSource {
+    stdout: std::process::ChildStdout,
+    /// Taken when the subprocess is handed on: to the respawn thread, or
+    /// killed when the source goes away.
+    child: Option<std::process::Child>,
+    decoder: hdlc::Decoder,
+    link: Arc<PipeLink>,
+}
+
+impl LoopSource for PipeSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.stdout.as_raw_fd()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        use crate::interface::stream_read::{read_device_frames, StreamRead};
+        let link = &self.link;
+        let name = &link.config.name;
+        let kill = match read_device_frames(
+            self.stdout.as_raw_fd(),
+            &mut self.decoder,
+            cx,
+            &link.tx,
+            link.config.interface_id,
+            name,
+            |_, _| {},
+        ) {
+            StreamRead::Rearm => return SourceStatus::Rearm,
+            StreamRead::Suspend => return SourceStatus::Suspend,
+            StreamRead::DriverGone => return SourceStatus::Remove,
+            StreamRead::Closed => {
+                log::warn!("[{}] subprocess terminated", name);
+                false
+            }
+            StreamRead::Failed(e) => {
+                log::warn!("[{}] pipe read error: {}", name, e);
+                true
+            }
+        };
+        if let Some(child) = self.child.take() {
+            link.subprocess_lost(child, kill);
+        }
+        SourceStatus::Remove
+    }
+
+    fn on_removed(&mut self) {
+        // The driver is going away: so does the subprocess, as with the
+        // reader thread.
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
@@ -449,6 +575,77 @@ mod tests {
             got_down,
             "should receive InterfaceDown after subprocess exits"
         );
+    }
+
+    #[test]
+    fn folded_pipe_runs_on_the_driver_loop_and_respawns() {
+        if !crate::engine::FOLD_IO {
+            return;
+        }
+        let (tx, rx) = crate::event::channel();
+        let config = PipeConfig {
+            name: "test-pipe-folded".into(),
+            // Echoes one framed 32-byte packet, then exits.
+            command: "head -c 34".into(),
+            respawn_delay: Duration::from_millis(100),
+            interface_id: InterfaceId(104),
+            runtime: Arc::new(Mutex::new(PipeRuntime {
+                respawn_delay: Duration::from_millis(100),
+            })),
+        };
+        let writer = start(config, tx.clone()).unwrap();
+        assert!(writer.loop_socket().is_some());
+        let (mut writer, _) =
+            crate::interface::wrap_async_writer(writer, InterfaceId(104), "pipe", tx.clone(), 16);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(104), None, None)
+        ));
+        let threads = || {
+            std::fs::read_dir("/proc/self/task")
+                .unwrap()
+                .filter_map(|task| std::fs::read_to_string(task.unwrap().path().join("comm")).ok())
+                .collect::<Vec<_>>()
+        };
+        assert!(!threads().iter().any(|t| t.starts_with("pipe-reader-104")));
+
+        // Written and read back by the driver.
+        let payload: Vec<u8> = (0..32).collect();
+        writer.send_frame(&payload).unwrap();
+        writer.flush_pending();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame { data, .. } => assert_eq!(data, payload.clone().into()),
+            other => panic!("expected Frame, got {other:?}"),
+        }
+
+        // The subprocess exits after one packet: the interface goes down,
+        // and a new one is spawned and served.
+        let mut down = false;
+        let mut new_writer = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while new_writer.is_none() && std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Event::InterfaceDown(InterfaceId(104))) => down = true,
+                Ok(Event::InterfaceUp(InterfaceId(104), Some(writer), None)) => {
+                    new_writer = Some(writer)
+                }
+                _ => {}
+            }
+        }
+        assert!(down);
+        let (mut writer, _) = crate::interface::wrap_async_writer(
+            new_writer.expect("respawned"),
+            InterfaceId(104),
+            "pipe",
+            tx,
+            16,
+        );
+        writer.send_frame(&payload).unwrap();
+        writer.flush_pending();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame { data, .. } => assert_eq!(data, payload.into()),
+            other => panic!("expected Frame, got {other:?}"),
+        }
     }
 
     #[test]
