@@ -119,6 +119,8 @@ mod link_stamps;
 mod queries;
 mod resource_preparation;
 mod runtime_config;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod tick_source;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -714,6 +716,8 @@ pub(crate) struct FoldedTimers {
     /// Where transport state is persisted, on transport nodes.
     pub(crate) persist_dir: Option<std::path::PathBuf>,
     pub(crate) jobs: std::collections::VecDeque<FoldedJob>,
+    /// Whether a timerfd loop source delivers the tick.
+    pub(crate) ticks_from_source: bool,
 }
 
 pub(crate) enum FoldedJob {
@@ -733,6 +737,7 @@ impl FoldedTimers {
             next_persist: now + TRANSPORT_STATE_PERSIST_INTERVAL,
             persist_dir: None,
             jobs: std::collections::VecDeque::new(),
+            ticks_from_source: false,
         }
     }
 }

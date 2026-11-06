@@ -2,6 +2,11 @@ use super::*;
 use rns_core::transport::types::PacketBytes;
 use rns_core::transport::{DecodedInboundFrame, DecodedPacket, RxMetadata};
 
+/// A busy driver checks its folded tick deadline once in this many turns; an
+/// idle one checks it before it waits. A tick runs late by at most this many
+/// turns' work, which is far below its one-second period.
+const FOLDED_TIMER_CHECK_TURNS: u32 = 32;
+
 /// Events the driver handles before flushing driver-run writers and polling
 /// its sockets even though its queue has not emptied yet.
 const WRITER_FLUSH_EVENTS: usize = 1024;
@@ -432,6 +437,9 @@ impl Driver {
     }
 
     pub(crate) fn handle_tick_event(&mut self) {
+        if crate::engine::FOLD_TIMERS {
+            self.queue_folded_persistence();
+        }
         // Close sockets of detached interfaces served on this thread.
         self.rx.sweep_stopped_sources();
         // Re-arm sources that backed off after an error, e.g. a listener
@@ -635,8 +643,8 @@ impl Driver {
         self.start_ratchet_cleanup(now);
     }
 
-    /// Fire the folded timers that are due: the tick, and the transport-state
-    /// snapshot, which is queued as idle work.
+    /// Fire the folded tick if its deadline has passed, when no timerfd
+    /// delivers it.
     fn run_folded_timers(&mut self) {
         let now = Instant::now();
         if now >= self.folded.next_tick {
@@ -644,25 +652,53 @@ impl Driver {
             self.folded.next_tick = now + interval;
             self.handle_tick_event();
         }
-        if self.folded.persist_dir.is_some() && now >= self.folded.next_persist {
-            self.folded.next_persist = now + crate::driver::TRANSPORT_STATE_PERSIST_INTERVAL;
+    }
+
+    /// Queue the transport-state snapshot as idle work once it is due. The
+    /// tick drives it, about once a second.
+    fn queue_folded_persistence(&mut self) {
+        if self.folded.persist_dir.is_some() && Instant::now() >= self.folded.next_persist {
+            self.folded.next_persist =
+                Instant::now() + crate::driver::TRANSPORT_STATE_PERSIST_INTERVAL;
             self.folded
                 .jobs
                 .push_back(crate::driver::FoldedJob::PersistTransportState);
         }
     }
 
-    /// How long the driver may block waiting for events: until the next
-    /// folded timer, when timers are folded.
+    /// How long the driver may block waiting for events: until the folded
+    /// tick's deadline, unless a timerfd delivers the tick (Linux, Android).
+    /// There the driver waits without a timeout: the epoll poller hands a
+    /// wait's timeout to the kernel, which would arm and cancel a timer on
+    /// every wait.
     fn folded_wait(&self) -> Option<Duration> {
-        if !crate::engine::FOLD_TIMERS {
+        if !crate::engine::FOLD_TIMERS || self.folded.ticks_from_source {
             return None;
         }
-        let mut next = self.folded.next_tick;
-        if self.folded.persist_dir.is_some() {
-            next = next.min(self.folded.next_persist);
+        Some(
+            self.folded
+                .next_tick
+                .saturating_duration_since(Instant::now()),
+        )
+    }
+
+    /// Register the timerfd that ticks a compact driver, where there is one.
+    /// Without it the driver falls back to its tick deadline.
+    fn start_folded_tick(&mut self) {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if crate::engine::FOLD_TIMERS {
+            let source = super::tick_source::TickSource::new(
+                self.event_tx.clone(),
+                Arc::clone(&self.tick_interval_ms),
+            );
+            match source.and_then(|source| {
+                self.event_tx
+                    .register_source(super::tick_source::TICK_SOURCE_KEY, Box::new(source))
+            }) {
+                Ok(()) => self.folded.ticks_from_source = true,
+                Err(error) => log::warn!("driver tick timer unavailable: {error}"),
+            }
         }
-        Some(next.saturating_duration_since(Instant::now()))
     }
 
     pub(crate) fn run_folded_job(&mut self, job: crate::driver::FoldedJob) {
@@ -1136,15 +1172,23 @@ impl Driver {
     pub fn run(&mut self) {
         self.link_manager
             .set_receive_worker_wake(self.event_tx.clone());
+        self.start_folded_tick();
         let mut ready = crate::poll::Events::new();
         // Events handled since driver-run writers were last flushed.
         let mut unflushed = 0usize;
+        // Turns since folded timers were last checked: a busy loop checks
+        // them every so many turns, an idle one before it waits.
+        let mut unchecked_turns = 0u32;
         loop {
             // Each turn handles at most one event and reads the clock at most
             // once (see `time::hold`). The scope ends before the loop waits.
             let clock = time::hold();
-            if crate::engine::FOLD_TIMERS {
-                self.run_folded_timers();
+            if crate::engine::FOLD_TIMERS && !self.folded.ticks_from_source {
+                unchecked_turns += 1;
+                if unchecked_turns >= FOLDED_TIMER_CHECK_TURNS {
+                    unchecked_turns = 0;
+                    self.run_folded_timers();
+                }
             }
             self.poll_resource_preparations();
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
@@ -1188,6 +1232,13 @@ impl Driver {
                             self.dispatch_link_actions(actions);
                         }
                         continue;
+                    }
+                    if crate::engine::FOLD_TIMERS && !self.folded.ticks_from_source {
+                        unchecked_turns = 0;
+                        self.run_folded_timers();
+                        if !self.folded.jobs.is_empty() {
+                            continue;
+                        }
                     }
                     drop(clock);
                     unflushed = 0;

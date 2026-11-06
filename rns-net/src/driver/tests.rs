@@ -13504,6 +13504,8 @@ fn folded_timers_persist_transport_state() {
     let mut driver = new_test_driver();
     driver.folded.persist_dir = Some(dir.clone());
     driver.folded.next_persist = Instant::now();
+    // The tick queues the due snapshot; shutdown finishes it.
+    driver.event_tx.send(Event::Tick).unwrap();
     driver.event_tx.send(Event::Shutdown).unwrap();
     driver.run();
     assert!(driver.folded.jobs.is_empty());
