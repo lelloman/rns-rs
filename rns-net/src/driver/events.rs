@@ -328,8 +328,12 @@ impl Driver {
                 Some(&mut announce_queue),
                 &mut actions,
             );
-            if crate::engine::FOLD_WORK && announce_queue.len() > queued {
-                self.folded.announces_queued = true;
+            if announce_queue.len() > queued {
+                if crate::engine::FOLD_WORK {
+                    self.folded.announces_queued = true;
+                } else {
+                    self.announce_verify_signal.notify();
+                }
             }
         } else {
             self.engine.handle_decoded_inbound_into(

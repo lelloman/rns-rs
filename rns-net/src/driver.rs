@@ -950,6 +950,8 @@ pub struct Driver {
     pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
     /// Shared async announce verification queue.
     pub(crate) announce_verify_queue: Arc<Mutex<AnnounceVerifyQueue>>,
+    /// Wakes the verification thread when announces are queued.
+    pub(crate) announce_verify_signal: Arc<WorkSignal>,
     /// Whether inbound announces should be verified off the driver thread.
     pub(crate) async_announce_verification: bool,
     /// Tick counter for periodic discovery cleanup (every ~3600 ticks = ~1 hour).
@@ -1167,6 +1169,7 @@ impl Driver {
             announce_verify_queue: Arc::new(Mutex::new(AnnounceVerifyQueue::new(
                 announce_queue_max_entries,
             ))),
+            announce_verify_signal: Arc::default(),
             async_announce_verification: false,
             discovery_cleanup_counter: 0,
             discovery_cleanup_interval_ticks: runtime_config_defaults
@@ -1667,4 +1670,51 @@ pub(crate) struct PendingLinkFrame {
     data: Vec<u8>,
     is_announce: bool,
     completion: Option<crate::link_send::Completion>,
+}
+
+/// Wakes a worker thread when there is work for it, or when it should
+/// stop, so it sleeps until then instead of polling.
+#[derive(Default)]
+pub(crate) struct WorkSignal {
+    /// Work is pending; the worker is stopped.
+    state: Mutex<(bool, bool)>,
+    condvar: std::sync::Condvar,
+}
+
+impl WorkSignal {
+    fn lock(&self) -> std::sync::MutexGuard<'_, (bool, bool)> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// There is work.
+    pub(crate) fn notify(&self) {
+        self.lock().0 = true;
+        self.condvar.notify_one();
+    }
+
+    /// The worker should stop.
+    pub(crate) fn stop(&self) {
+        self.lock().1 = true;
+        self.condvar.notify_all();
+    }
+
+    pub(crate) fn stopped(&self) -> bool {
+        self.lock().1
+    }
+
+    /// Wait until there is work or the worker should stop, consuming the
+    /// notification. Returns `false` once stopped.
+    pub(crate) fn wait(&self) -> bool {
+        let mut state = self.lock();
+        while !state.0 && !state.1 {
+            state = self
+                .condvar
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        state.0 = false;
+        !state.1
+    }
 }
