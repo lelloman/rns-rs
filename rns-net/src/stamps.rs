@@ -257,14 +257,86 @@ pub fn link_request_stamp_material(
     material
 }
 
+/// Where a multi-threaded search runs its workers.
+#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchPool {
+    /// rayon's global pool, one worker per thread in it.
+    Rayon,
+    /// Threads of its own, one per CPU: a search that may run until a
+    /// deadline does not hold up the searches on the rayon pool.
+    Dedicated,
+}
+
+/// Run `grind` until it finds a result, and return that result.
+///
+/// The parallel engine runs a copy of `grind` on every worker of `pool`;
+/// the first one to stop, with a result or without, raises the flag it is
+/// given, and the others stop at their next check of it. The compact engine
+/// runs `grind` once on the calling thread: a stamp costs the same CPU time
+/// either way, and a small machine's other work keeps the remaining cores.
+/// See docs/engines.md.
+pub(crate) fn search<T, F>(pool: SearchPool, grind: F) -> Option<T>
+where
+    T: Send,
+    F: Fn(&std::sync::atomic::AtomicBool) -> Option<T> + Sync,
+{
+    use std::sync::atomic::AtomicBool;
+
+    #[cfg(feature = "engine-parallel")]
+    {
+        use std::sync::atomic::Ordering;
+        use std::sync::Mutex;
+
+        let stop = AtomicBool::new(false);
+        let result = Mutex::new(None);
+        let work = || {
+            let found = grind(&stop);
+            stop.store(true, Ordering::Relaxed);
+            if let Some(found) = found {
+                let mut slot = result
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if slot.is_none() {
+                    *slot = Some(found);
+                }
+            }
+        };
+        match pool {
+            SearchPool::Rayon => rayon::scope(|scope| {
+                for _ in 0..rayon::current_num_threads() {
+                    scope.spawn(|_| work());
+                }
+            }),
+            SearchPool::Dedicated => {
+                let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+                std::thread::scope(|scope| {
+                    for _ in 0..workers {
+                        scope.spawn(work);
+                    }
+                });
+            }
+        }
+        result
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+    #[cfg(not(feature = "engine-parallel"))]
+    {
+        let _ = pool;
+        grind(&AtomicBool::new(false))
+    }
+}
+
 /// Generate the keys for a stamped link request to `destination_hash`.
 ///
 /// The Ed25519 signing key is generated first because it is part of the stamp
-/// material; the X25519 key is then ground on one thread per core until its
-/// public half carries at least `stamp_cost`, as upstream grinds stamped keys
-/// in a process per core. The threads are dedicated rather than taken from
-/// the rayon pool, so a grind that runs until its deadline cannot hold up
-/// the stamper's announce and path request stamps. Gives up and returns
+/// material; the X25519 key is then ground until its public half carries at
+/// least `stamp_cost`. The parallel engine grinds on one dedicated thread per
+/// core, as upstream grinds stamped keys in a process per core; the threads
+/// are not taken from the rayon pool, so a grind that runs until its deadline
+/// cannot hold up the stamper's announce and path request stamps. The compact
+/// engine grinds on the calling thread (see [`search`]). Gives up and returns
 /// `None` once `deadline` passes, mirroring upstream's `LINK_STAMP_TIMEOUT`
 /// watchdog. This is unbounded work and must not run on the driver thread.
 pub fn generate_stamped_link_keys(
@@ -277,54 +349,30 @@ pub fn generate_stamped_link_keys(
     StampValue,
 )> {
     use rns_crypto::OsRng;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::atomic::Ordering;
 
     let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut OsRng);
     let material =
         link_request_stamp_material(destination_hash, &sig_prv.public_key().public_bytes());
-    let found = AtomicBool::new(false);
-    let result = Mutex::new(None);
-
-    let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            let (found, result, material) = (&found, &result, &material);
-            scope.spawn(move || {
-                let keys = rns_crypto::identity::generate_stamped_key_until(
-                    &mut OsRng,
-                    material,
-                    stamp_cost,
-                    &mut || found.load(Ordering::Relaxed) || std::time::Instant::now() >= deadline,
-                );
-                // Stop the other workers either way: a key was found, or the
-                // deadline passed for all of them.
-                found.store(true, Ordering::Relaxed);
-                if let Some(keys) = keys {
-                    let mut slot = result
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    if slot.is_none() {
-                        *slot = Some(keys);
-                    }
-                }
-            });
-        }
-    });
-
-    let (prv, _public, value) = result
-        .into_inner()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())?;
+    let (prv, _public, value) = search(SearchPool::Dedicated, |stop| {
+        rns_crypto::identity::generate_stamped_key_until(
+            &mut OsRng,
+            &material,
+            stamp_cost,
+            &mut || stop.load(Ordering::Relaxed) || std::time::Instant::now() >= deadline,
+        )
+    })?;
     Some((prv, sig_prv, value))
 }
 
-/// Generate a detached stamp with the given cost using rayon workers.
+/// Generate a detached stamp with the given cost.
 ///
 /// This is the native counterpart of every upstream `Stamps` job runner
 /// (`job_simple`, `job_linux`, `job_linux_managed`, `job_android` and the
 /// persistent Android runner added in `4867e889`): those pick a worker
-/// strategy per platform because of Python's process model, whereas the
-/// rayon pool covers all targets here. The stamp format and the value
+/// strategy per platform because of Python's process model, whereas here the
+/// parallel engine searches on the rayon pool and the compact engine on the
+/// calling thread (see [`search`]). The stamp format and the value
 /// computation are identical.
 ///
 /// Returns `(stamp, value)`, or `None` for a zero stamp size.
@@ -357,8 +405,7 @@ pub fn generate_stamp_until(
     deadline: Option<std::time::Instant>,
 ) -> Option<(Vec<u8>, StampValue)> {
     use rns_crypto::{OsRng, Rng};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::Ordering;
 
     if size == 0 {
         return None;
@@ -368,62 +415,38 @@ pub fn generate_stamp_until(
     }
 
     let workblock = stamp_workblock(material, expand_rounds);
-    let found = Arc::new(AtomicBool::new(false));
-    let result: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
-
-    rayon::scope(|scope| {
-        for _ in 0..rayon::current_num_threads() {
-            let found = Arc::clone(&found);
-            let result = Arc::clone(&result);
-            let workblock = &workblock;
-            scope.spawn(move |_| {
-                let mut rng = OsRng;
-                // Draw OS randomness in batches: one getrandom(2) call per
-                // attempt dominated the grind, well ahead of the hash.
-                let mut pool = vec![0u8; size * NONCES_PER_FILL];
-                let mut next_nonce = pool.len();
-                let mut nonce = vec![0u8; size];
-                let mut until_check = DEADLINE_CHECK_INTERVAL;
-                loop {
-                    if found.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    if let Some(deadline) = deadline {
-                        until_check -= 1;
-                        if until_check == 0 {
-                            until_check = DEADLINE_CHECK_INTERVAL;
-                            if std::time::Instant::now() >= deadline {
-                                // Stop the other workers too; no stamp was found.
-                                found.store(true, Ordering::Relaxed);
-                                return;
-                            }
-                        }
-                    }
-                    if next_nonce + size > pool.len() {
-                        rng.fill_bytes(&mut pool);
-                        next_nonce = 0;
-                    }
-                    nonce.copy_from_slice(&pool[next_nonce..next_nonce + size]);
-                    next_nonce += size;
-                    if stamp_valid(&nonce, stamp_cost, workblock) {
-                        let mut slot = result
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        if slot.is_none() {
-                            *slot = Some(nonce.clone());
-                        }
-                        found.store(true, Ordering::Relaxed);
-                        return;
+    let stamp = search(SearchPool::Rayon, |stop| {
+        let mut rng = OsRng;
+        // Draw OS randomness in batches: one getrandom(2) call per attempt
+        // dominated the grind, well ahead of the hash.
+        let mut pool = vec![0u8; size * NONCES_PER_FILL];
+        let mut next_nonce = pool.len();
+        let mut nonce = vec![0u8; size];
+        let mut until_check = DEADLINE_CHECK_INTERVAL;
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Some(deadline) = deadline {
+                until_check -= 1;
+                if until_check == 0 {
+                    until_check = DEADLINE_CHECK_INTERVAL;
+                    if std::time::Instant::now() >= deadline {
+                        return None;
                     }
                 }
-            });
+            }
+            if next_nonce + size > pool.len() {
+                rng.fill_bytes(&mut pool);
+                next_nonce = 0;
+            }
+            nonce.copy_from_slice(&pool[next_nonce..next_nonce + size]);
+            next_nonce += size;
+            if stamp_valid(&nonce, stamp_cost, &workblock) {
+                return Some(nonce);
+            }
         }
-    });
-
-    let stamp = result
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .take()?;
+    })?;
     let value = stamp_value(&workblock, &stamp);
     Some((stamp, value))
 }
@@ -431,6 +454,37 @@ pub fn generate_stamp_until(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The threads `search` ran `grind` on, for `pool`.
+    fn search_threads(pool: SearchPool) -> Vec<std::thread::ThreadId> {
+        let threads = std::sync::Mutex::new(Vec::new());
+        let found = search(pool, |_| {
+            threads.lock().unwrap().push(std::thread::current().id());
+            Some(())
+        });
+        assert_eq!(found, Some(()));
+        threads.into_inner().unwrap()
+    }
+
+    #[cfg(not(feature = "engine-parallel"))]
+    #[test]
+    fn compact_engine_searches_on_the_calling_thread() {
+        let caller = std::thread::current().id();
+        for pool in [SearchPool::Rayon, SearchPool::Dedicated] {
+            assert_eq!(search_threads(pool), vec![caller], "{pool:?}");
+        }
+    }
+
+    #[cfg(feature = "engine-parallel")]
+    #[test]
+    fn parallel_engine_searches_on_every_core() {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(search_threads(SearchPool::Dedicated).len(), cores);
+        assert_eq!(
+            search_threads(SearchPool::Rayon).len(),
+            rayon::current_num_threads()
+        );
+    }
 
     #[test]
     fn stamp_generation_gives_up_at_the_deadline() {

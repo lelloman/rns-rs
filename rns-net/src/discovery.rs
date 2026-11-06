@@ -482,66 +482,35 @@ fn discovery_storage_guard() -> MutexGuard<'static, ()> {
 // Stamp Generation (parallel PoW search)
 // ============================================================================
 
-/// Generate a discovery stamp with the given cost using rayon parallel iterators.
+/// Generate a discovery stamp with the given cost: on the rayon pool on the
+/// parallel engine, on the calling thread on the compact one
+/// (see [`crate::stamps::search`]).
 ///
 /// Returns `(stamp, value)` on success. This is a blocking, CPU-intensive operation.
 pub fn generate_discovery_stamp(
     packed_data: &[u8],
     stamp_cost: StampCost,
 ) -> ([u8; STAMP_SIZE], StampValue) {
+    use crate::stamps::{search, SearchPool};
     use rns_crypto::{OsRng, Rng};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::Ordering;
 
     let infohash = sha256(packed_data);
     let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
 
-    let found: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-    let result: Arc<Mutex<Option<[u8; STAMP_SIZE]>>> = Arc::new(Mutex::new(None));
-
-    let num_threads = rayon::current_num_threads();
-
-    rayon::scope(|s| {
-        for _ in 0..num_threads {
-            let found = found.clone();
-            let result = result.clone();
-            let workblock = &workblock;
-            s.spawn(move |_| {
-                let mut rng = OsRng;
-                let mut nonce = [0u8; STAMP_SIZE];
-                loop {
-                    if found.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    rng.fill_bytes(&mut nonce);
-                    if stamp_valid(&nonce, stamp_cost, workblock) {
-                        let mut r = match result.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => {
-                                log::error!(
-                                    "recovering from poisoned discovery stamp result buffer"
-                                );
-                                poisoned.into_inner()
-                            }
-                        };
-                        if r.is_none() {
-                            *r = Some(nonce);
-                        }
-                        found.store(true, Ordering::Relaxed);
-                        return;
-                    }
-                }
-            });
+    let stamp = search(SearchPool::Rayon, |stop| {
+        let mut rng = OsRng;
+        let mut nonce = [0u8; STAMP_SIZE];
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return None;
+            }
+            rng.fill_bytes(&mut nonce);
+            if stamp_valid(&nonce, stamp_cost, &workblock) {
+                return Some(nonce);
+            }
         }
-    });
-
-    let stamp = match result.lock() {
-        Ok(mut guard) => guard.take(),
-        Err(poisoned) => {
-            log::error!("recovering from poisoned discovery stamp result buffer");
-            poisoned.into_inner().take()
-        }
-    }
+    })
     .unwrap_or_else(|| {
         log::error!("parallel discovery stamp search returned no result; retrying synchronously");
         let mut rng = OsRng;
