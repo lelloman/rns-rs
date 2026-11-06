@@ -945,7 +945,7 @@ pub struct RnsNode {
     tx: EventSender,
     driver_handle: Option<JoinHandle<()>>,
     verify_handle: Option<JoinHandle<()>>,
-    verify_shutdown: Arc<AtomicBool>,
+    verify_shutdown: Arc<crate::driver::WorkSignal>,
     persist_handle: Option<JoinHandle<()>>,
     persist_stop: Option<std::sync::mpsc::Sender<()>>,
     rpc_server: Option<crate::rpc::RpcServer>,
@@ -2501,7 +2501,7 @@ impl RnsNode {
         };
 
         let announce_verify_queue = Arc::clone(&driver.announce_verify_queue);
-        let verify_shutdown = Arc::new(AtomicBool::new(false));
+        let verify_shutdown = Arc::clone(&driver.announce_verify_signal);
         let verify_shutdown_thread = Arc::clone(&verify_shutdown);
         let verify_tx = tx.clone();
         // The verification thread, unless the compact engine verifies
@@ -2520,7 +2520,7 @@ impl RnsNode {
                             }
                         }
 
-                        while !verify_shutdown_thread.load(Ordering::Relaxed) {
+                        while !verify_shutdown_thread.stopped() {
                             let batch = {
                                 let mut queue = announce_verify_queue
                                     .lock()
@@ -2529,12 +2529,13 @@ impl RnsNode {
                             };
 
                             if batch.is_empty() {
-                                thread::sleep(Duration::from_millis(50));
+                                // Until the driver queues an announce.
+                                verify_shutdown_thread.wait();
                                 continue;
                             }
 
                             for (key, pending) in batch {
-                                if verify_shutdown_thread.load(Ordering::Relaxed) {
+                                if verify_shutdown_thread.stopped() {
                                     break;
                                 }
                                 let event = match crate::driver::check_pending_announce(&pending) {
@@ -4210,7 +4211,7 @@ impl RnsNode {
             tx,
             driver_handle: Some(driver_handle),
             verify_handle: None,
-            verify_shutdown: Arc::new(AtomicBool::new(false)),
+            verify_shutdown: Arc::default(),
             persist_handle: None,
             persist_stop: None,
             rpc_server,
@@ -4301,7 +4302,7 @@ impl RnsNode {
         if let Some(handle) = self.persist_handle.take() {
             let _ = handle.join();
         }
-        self.verify_shutdown.store(true, Ordering::Relaxed);
+        self.verify_shutdown.stop();
         let _ = self.tx.send(Event::Shutdown);
         if let Some(handle) = self.driver_handle.take() {
             let _ = handle.join();
@@ -4973,7 +4974,7 @@ mod tests {
             tx,
             driver_handle: None,
             verify_handle: None,
-            verify_shutdown: Arc::new(AtomicBool::new(false)),
+            verify_shutdown: Arc::default(),
             persist_handle: None,
             persist_stop: None,
             rpc_server: None,
