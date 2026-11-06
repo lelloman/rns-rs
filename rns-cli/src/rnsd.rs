@@ -1,7 +1,6 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 
 use crate::args::Args;
 use rns_net::storage;
@@ -203,7 +202,13 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         }
     };
 
-    let (stop_tx, stop_rx) = channel::<()>();
+    let stop_rx = match StopPipe::open() {
+        Ok(pipe) => pipe,
+        Err(e) => {
+            log::error!("Failed to set up signal handling: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     unsafe {
         libc::signal(
@@ -215,17 +220,10 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
             signal_handler as *const () as libc::sighandler_t,
         );
     }
-    lock_stop_tx().replace(stop_tx);
-
     log::info!("rnsd started");
 
-    loop {
-        match stop_rx.recv_timeout(std::time::Duration::from_secs(1)) {
-            Ok(()) => break,
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(_) => break,
-        }
-    }
+    // Until SIGINT or SIGTERM.
+    stop_rx.wait();
 
     log::info!("Shutting down...");
     node.shutdown();
@@ -286,22 +284,58 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-static STOP_TX: std::sync::Mutex<Option<Sender<()>>> = std::sync::Mutex::new(None);
+/// The write end of the pipe that wakes the main thread on SIGINT or
+/// SIGTERM; -1 until it is set up.
+static STOP_WRITE_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
-fn lock_stop_tx() -> std::sync::MutexGuard<'static, Option<Sender<()>>> {
-    match STOP_TX.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            log::warn!("recovering poisoned rnsd stop channel mutex");
-            poisoned.into_inner()
+/// A pipe a signal handler writes to and the main thread waits on. Writing
+/// to a pipe is async-signal-safe, unlike sending on a channel, whose wake
+/// can be lost when the handler interrupts the thread waiting on it.
+struct StopPipe {
+    read_fd: libc::c_int,
+}
+
+impl StopPipe {
+    fn open() -> std::io::Result<Self> {
+        let mut fds = [0 as libc::c_int; 2];
+        // SAFETY: `fds` has room for the two descriptors.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        for fd in fds {
+            // SAFETY: `fd` was just opened; children must not inherit it.
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+        }
+        STOP_WRITE_FD.store(fds[1], std::sync::atomic::Ordering::SeqCst);
+        Ok(Self { read_fd: fds[0] })
+    }
+
+    /// Block until a signal handler wrote to the pipe.
+    fn wait(&self) {
+        let mut byte = 0u8;
+        loop {
+            // SAFETY: one byte into a valid buffer.
+            let n = unsafe { libc::read(self.read_fd, (&mut byte as *mut u8).cast(), 1) };
+            if n > 0 {
+                return;
+            }
+            let error = std::io::Error::last_os_error();
+            if n < 0 && error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            log::warn!("signal pipe failed: {}; shutting down", error);
+            return;
         }
     }
 }
 
 extern "C" fn signal_handler(_sig: libc::c_int) {
-    let guard = lock_stop_tx();
-    if let Some(ref tx) = *guard {
-        let _ = tx.send(());
+    let fd = STOP_WRITE_FD.load(std::sync::atomic::Ordering::SeqCst);
+    if fd >= 0 {
+        let byte = 1u8;
+        // SAFETY: `write` is async-signal-safe; the descriptor stays open
+        // for the life of the process.
+        unsafe { libc::write(fd, (&byte as *const u8).cast(), 1) };
     }
 }
 
