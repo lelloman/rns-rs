@@ -5,6 +5,11 @@
 //! thread, and each client's writer is written by the driver directly (see
 //! `loop_writer`), as the TCP server's clients are. No thread is started.
 //!
+//! A shared-instance client is folded the same way: its connection is a loop
+//! source and its writer is written by the driver; only after the connection
+//! is lost does a thread run, to reconnect, and it exits once the new
+//! connection is served.
+//!
 //! Where clients may sleep (Android), a client's writer has to drop frames
 //! while the client is paused, which a driver-written socket cannot do, so
 //! there the writer keeps its worker thread; reading is folded either way.
@@ -18,8 +23,8 @@ use std::sync::Arc;
 use rns_core::transport::types::InterfaceId;
 
 use super::{
-    android_client_sleep_hold, frame_decoder, make_local_interface_info, ClientSleepHold,
-    LocalWriter,
+    android_client_sleep_hold, frame_decoder, make_local_interface_info, reconnect_local_client,
+    ClientSleepHold, LocalClientConfig, LocalClientStream, LocalWriter,
 };
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
@@ -336,6 +341,133 @@ impl LoopSource for ClientSource {
             StreamRead::Failed(e) => {
                 log::warn!("Local client {} read error: {}", self.id.0, e);
                 let _ = self.tx.push_from_loop([Event::InterfaceDown(self.id)]);
+                SourceStatus::Remove
+            }
+            StreamRead::DriverGone => SourceStatus::Remove,
+        }
+    }
+}
+
+// ==================== CLIENT ====================
+
+fn client_stream(stream: &LocalClientStream) -> io::Result<Stream> {
+    #[cfg(target_os = "linux")]
+    {
+        match stream {
+            LocalClientStream::Unix(stream) => stream.try_clone().map(Stream::Unix),
+            LocalClientStream::Tcp(stream) => stream.try_clone().map(Stream::Tcp),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        stream.try_clone().map(Stream::Tcp)
+    }
+}
+
+/// The writer of a shared-instance client's connection, written by the
+/// driver.
+pub(super) fn client_writer(stream: &LocalClientStream) -> io::Result<Box<dyn Writer>> {
+    Ok(Box::new(ClientWriter {
+        stream: client_stream(stream)?,
+        scratch: Vec::new(),
+    }))
+}
+
+/// Read a shared-instance client's connection on the driver loop from now
+/// on, reconnecting when it is lost.
+pub(super) fn serve_client(
+    stream: LocalClientStream,
+    config: LocalClientConfig,
+    tx: EventSender,
+) -> io::Result<()> {
+    Arc::new(ClientLink { config, tx }).serve(stream)
+}
+
+/// What a client connection needs across reconnects.
+struct ClientLink {
+    config: LocalClientConfig,
+    tx: EventSender,
+}
+
+impl ClientLink {
+    fn serve(self: &Arc<Self>, stream: LocalClientStream) -> io::Result<()> {
+        let stream = client_stream(&stream)?;
+        self.tx.register_source(
+            crate::interface::loop_writer::read_key(self.config.interface_id),
+            Box::new(SharedConnection {
+                stream,
+                decoder: frame_decoder(0),
+                link: Arc::clone(self),
+            }),
+        )
+    }
+
+    /// Report the connection down and reconnect on a thread of its own,
+    /// which exits once the new connection is served on the driver.
+    fn connection_lost(self: &Arc<Self>) {
+        let id = self.config.interface_id;
+        let _ = self.tx.push_from_loop([Event::InterfaceDown(id)]);
+        let link = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name(format!("local-reconn-{}", id.0))
+            .spawn(move || loop {
+                let stream = reconnect_local_client(&link.config, &link.tx);
+                match link.serve(stream) {
+                    Ok(()) => return,
+                    Err(e) => {
+                        log::warn!(
+                            "[{}] cannot read the new shared connection: {}",
+                            link.config.name,
+                            e
+                        );
+                        let _ = link.tx.send(Event::InterfaceDown(id));
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            log::error!(
+                "[{}] cannot start reconnecting to the shared instance: {}",
+                self.config.name,
+                e
+            );
+        }
+    }
+}
+
+/// A shared-instance client's connection, read on the driver thread.
+struct SharedConnection {
+    stream: Stream,
+    decoder: hdlc::Decoder,
+    link: Arc<ClientLink>,
+}
+
+impl LoopSource for SharedConnection {
+    fn fd(&self) -> RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        let link = &self.link;
+        let name = &link.config.name;
+        match read_stream_frames(
+            self.stream.as_raw_fd(),
+            &mut self.decoder,
+            cx,
+            &link.tx,
+            link.config.interface_id,
+            name,
+            |_, _| {},
+        ) {
+            StreamRead::Rearm => SourceStatus::Rearm,
+            StreamRead::Suspend => SourceStatus::Suspend,
+            StreamRead::Closed => {
+                log::warn!("[{}] shared connection closed", name);
+                link.connection_lost();
+                SourceStatus::Remove
+            }
+            StreamRead::Failed(e) => {
+                log::warn!("[{}] shared read error: {}", name, e);
+                link.connection_lost();
                 SourceStatus::Remove
             }
             StreamRead::DriverGone => SourceStatus::Remove,
