@@ -323,7 +323,7 @@ pub struct LinkManager {
     /// Whether starting the pool was settled, either way.
     proof_pool_settled: bool,
     /// Reused buffer for the pool's verdicts.
-    proof_verdicts: Vec<proof_pool::Verdict>,
+    proof_outcomes: Vec<proof_pool::Outcome>,
     /// The authoritative O(1) link-id index for pending, active, and closing
     /// links. Link state lives in each `ManagedLink`, so lifecycle transitions
     /// cannot desynchronise separate list and lookup-map representations.
@@ -470,7 +470,7 @@ impl LinkManager {
             proof_verify_threads: ProofVerifyThreads::Fixed(0),
             proof_pool: None,
             proof_pool_settled: false,
-            proof_verdicts: Vec::new(),
+            proof_outcomes: Vec::new(),
             links: Default::default(),
             link_destinations: Default::default(),
             request_handlers: Vec::new(),
@@ -519,22 +519,33 @@ impl LinkManager {
         self.proof_pool.as_ref()
     }
 
-    /// Apply the verdicts the proof pool has ready; `None` without a pool.
+    /// Apply what the proof pool has ready: verified proofs, and signed ones
+    /// to send. `None` without a pool.
     pub(crate) fn poll_proof_pool(&mut self, rng: &mut dyn Rng) -> Option<Vec<LinkManagerAction>> {
         let pool = self.proof_pool.as_ref()?;
-        let mut verdicts = core::mem::take(&mut self.proof_verdicts);
-        pool.drain(&mut verdicts);
+        let mut outcomes = core::mem::take(&mut self.proof_outcomes);
+        pool.drain(&mut outcomes);
         let mut actions = Vec::new();
-        for verdict in verdicts.drain(..) {
-            if verdict.valid {
-                actions.extend(self.link_proof_verified(
-                    &verdict.link_id,
-                    &verdict.packet_hash,
-                    rng,
-                ));
+        for outcome in outcomes.drain(..) {
+            match outcome {
+                proof_pool::Outcome::Verified {
+                    link_id,
+                    packet_hash,
+                    valid: true,
+                } => actions.extend(self.link_proof_verified(&link_id, &packet_hash, rng)),
+                proof_pool::Outcome::Verified { .. } => {}
+                proof_pool::Outcome::Signed {
+                    link_id,
+                    packet_hash,
+                    signature,
+                } => {
+                    if self.links.contains_key(&link_id) {
+                        actions.extend(Self::link_proof_packet(&link_id, &packet_hash, &signature));
+                    }
+                }
             }
         }
-        self.proof_verdicts = verdicts;
+        self.proof_outcomes = outcomes;
         Some(actions)
     }
 
@@ -1097,7 +1108,7 @@ impl LinkManager {
             return Vec::new();
         };
         if let Some(pool) = self.proof_pool() {
-            if pool.submit(*link_id, tracked_hash, signature, key.clone()) {
+            if pool.submit_verify(*link_id, tracked_hash, signature, key.clone()) {
                 return Vec::new();
             }
         }
@@ -1150,16 +1161,31 @@ impl LinkManager {
         link_id: &LinkId,
         packet_hash: &[u8; 32],
     ) -> Vec<LinkManagerAction> {
-        let signature = match self.links.get_mut(link_id) {
-            Some(link) => {
-                link.channel_proofs_sent += 1;
-                link.engine.sign_packet_hash(packet_hash)
-            }
-            None => return Vec::new(),
+        let Some(key) = self.links.get_mut(link_id).map(|link| {
+            link.channel_proofs_sent += 1;
+            link.engine.signing_key().clone()
+        }) else {
+            return Vec::new();
         };
+        // Signed on the pool when there is one: the proof goes out once the
+        // driver takes the signature back.
+        if let Some(pool) = self.proof_pool() {
+            if pool.submit_sign(*link_id, *packet_hash, key.clone()) {
+                return Vec::new();
+            }
+        }
+        Self::link_proof_packet(link_id, packet_hash, &key.sign(packet_hash))
+    }
+
+    /// The proof packet of a packet received on `link_id`.
+    fn link_proof_packet(
+        link_id: &LinkId,
+        packet_hash: &[u8; 32],
+        signature: &[u8; 64],
+    ) -> Vec<LinkManagerAction> {
         let mut proof_data = Vec::with_capacity(96);
         proof_data.extend_from_slice(packet_hash);
-        proof_data.extend_from_slice(&signature);
+        proof_data.extend_from_slice(signature);
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,

@@ -4275,6 +4275,67 @@ fn link_proofs_verified_on_the_pool_reopen_the_window_and_bad_ones_do_not() {
         .expect("the verified proof frees one channel slot");
 }
 
+#[cfg(feature = "proof-pool")]
+#[test]
+fn link_proofs_signed_on_the_pool_go_out_once_signed_and_verify() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let (wake, events) = crate::event::channel();
+    resp_mgr.set_receive_worker_wake(wake);
+    resp_mgr.set_proof_verify_threads(ProofVerifyThreads::Fixed(1));
+
+    let sent = init_mgr
+        .send_channel_message(&link_id, 42, b"signed elsewhere", &mut rng)
+        .unwrap();
+    let raw = extract_any_send_packet(&sent);
+    let packet = RawPacket::unpack(&raw).unwrap();
+    let received = resp_mgr.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    let is_proof = |action: &LinkManagerAction| {
+        matches!(action, LinkManagerAction::SendPacket { raw, .. }
+            if RawPacket::unpack(raw).is_ok_and(|p| p.flags.packet_type == constants::PACKET_TYPE_PROOF))
+    };
+    assert!(received
+        .iter()
+        .any(|a| matches!(a, LinkManagerAction::ChannelMessageReceived { .. })));
+    assert!(
+        !received.iter().any(is_proof),
+        "the proof waits for the pool's signature"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let proof_raw = loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no signature from the pool"
+        );
+        let _ = events.recv_timeout(std::time::Duration::from_millis(50));
+        let actions = resp_mgr
+            .poll_proof_pool(&mut rng)
+            .expect("the pool is running");
+        if let Some(LinkManagerAction::SendPacket { raw, .. }) =
+            actions.iter().find(|a| is_proof(a))
+        {
+            break raw.clone();
+        }
+    };
+    let proof = RawPacket::unpack(&proof_raw).unwrap();
+    init_mgr.handle_local_delivery(
+        proof.destination_hash,
+        &proof_raw,
+        proof.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    assert_eq!(init_mgr.links[&link_id].channel_proofs_received, 1);
+    assert!(init_mgr.links[&link_id].pending_channel_packets.is_empty());
+}
+
 #[test]
 fn responder_channel_message_receives_initiator_delivery_proof() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
