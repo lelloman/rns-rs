@@ -26,6 +26,13 @@ pub(crate) const FOLD_WORK: bool =
 pub(crate) const FOLD_SERVICES: bool =
     !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-services");
 
+/// Whether interface I/O (UDP, so far) runs on the driver loop instead of
+/// reader and writer threads: in the compact engine unless
+/// `compact-threads-io` keeps the threads. TCP runs on the driver loop in
+/// both engines.
+pub(crate) const FOLD_IO: bool =
+    !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-io");
+
 /// The driver poller's keys for folded services' sockets: above every
 /// interface's keys (an interface id shifted left by one) and below the
 /// tick source's.

@@ -303,6 +303,14 @@ pub trait Writer: Send {
         None
     }
 
+    /// Whether the driver calls this writer directly, without a worker
+    /// thread: its sends never block (a datagram the socket cannot take is
+    /// dropped, as the network may drop it), and it settles confirmed sends
+    /// itself through [`Writer::enqueue_confirmed`].
+    fn sends_inline(&self) -> bool {
+        false
+    }
+
     /// A stream socket the driver may write directly, without a worker
     /// thread (see `loop_writer`). Writers returning one must only frame
     /// with HDLC and write the result to this descriptor.
@@ -1141,6 +1149,16 @@ fn wrap_async_writer_with_wait(
 ) -> (Box<dyn Writer>, AsyncWriterMetrics) {
     if let Some(fd) = writer.loop_socket() {
         return loop_writer::wrap(writer, fd, interface_id, interface_name, event_tx);
+    }
+    if writer.sends_inline() {
+        let metrics = AsyncWriterMetrics {
+            queued_frames: Arc::default(),
+            worker_alive: Arc::new(AtomicBool::new(true)),
+            egress_control: None,
+            space: Arc::default(),
+            space_waiters: Arc::default(),
+        };
+        return (writer, metrics);
     }
     let egress_control = writer.egress_control();
     let queue = WriterQueue::new(queue_capacity);

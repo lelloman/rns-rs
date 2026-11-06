@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use rns_core::transport::types::InterfaceId;
 
-use crate::event::{Event, EventSender};
+use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
 /// Configuration for a UDP interface.
@@ -69,27 +69,75 @@ impl Default for UdpConfig {
     }
 }
 
+/// Datagrams read per wake-up by a reader on the driver loop, so that one
+/// busy interface cannot hold the loop; the rest are read on the next pass.
+const LOOP_READ_BUDGET: usize = 64;
+
+/// The largest datagram read, as the reader thread reads.
+const MAX_DATAGRAM: usize = 2048;
+
 /// Writer that sends raw data via UDP to a target address.
 struct UdpWriter {
     socket: UdpSocket,
     runtime: Arc<Mutex<UdpRuntime>>,
+    /// Called by the driver directly, on a non-blocking socket.
+    inline: bool,
+}
+
+impl UdpWriter {
+    fn target(&self) -> io::Result<SocketAddr> {
+        let runtime = lock_or_recover(&self.runtime, "udp runtime");
+        match (runtime.forward_ip.as_deref(), runtime.forward_port) {
+            (Some(ip), Some(port)) => ip
+                .parse::<std::net::IpAddr>()
+                .map(|ip| SocketAddr::new(ip, port))
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e)),
+            _ => Err(io::Error::other(
+                "UDP interface has no forward target configured",
+            )),
+        }
+    }
+
+    fn send(&mut self, data: &[u8]) -> io::Result<()> {
+        let target = self.target()?;
+        self.socket.send_to(data, target)?;
+        Ok(())
+    }
 }
 
 impl Writer for UdpWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        let runtime = lock_or_recover(&self.runtime, "udp runtime").clone();
-        let target = match (runtime.forward_ip, runtime.forward_port) {
-            (Some(ip), Some(port)) => format!("{}:{}", ip, port)
-                .parse::<SocketAddr>()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
-            _ => {
-                return Err(io::Error::other(
-                    "UDP interface has no forward target configured",
-                ))
+        match self.send(data) {
+            // The socket's buffer is full: the datagram is dropped, as the
+            // network may drop it, rather than blocking the driver.
+            Err(e) if self.inline && e.kind() == io::ErrorKind::WouldBlock => {
+                log::debug!("UDP send buffer full, datagram dropped");
+                Ok(())
             }
-        };
-        self.socket.send_to(data, target)?;
+            result => result,
+        }
+    }
+
+    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        self.send(data)
+    }
+
+    fn enqueue_confirmed(
+        &mut self,
+        data: &[u8],
+        completion: &mut Option<crate::link_send::Completion>,
+    ) -> io::Result<()> {
+        // A full buffer returns WouldBlock with the completion untouched,
+        // and the driver retries the frame.
+        self.send(data)?;
+        if let Some(completion) = completion.take() {
+            completion.finish(Ok(()));
+        }
         Ok(())
+    }
+
+    fn sends_inline(&self) -> bool {
+        self.inline
     }
 }
 
@@ -110,12 +158,15 @@ fn start_with_mark(
         let startup = UdpRuntime::from_config(&config);
         *lock_or_recover(&config.runtime, "udp runtime") = startup;
     }
+    let inline = crate::engine::FOLD_IO;
     let send_socket = UdpSocket::bind("0.0.0.0:0")?;
     super::apply_underlay_mark(send_socket.as_raw_fd(), underlay_mark)?;
     send_socket.set_broadcast(true)?;
+    send_socket.set_nonblocking(inline)?;
     let writer: Option<Box<dyn Writer>> = Some(Box::new(UdpWriter {
         socket: send_socket,
         runtime: Arc::clone(&config.runtime),
+        inline,
     }));
 
     // Create reader socket if listen params are set
@@ -123,12 +174,27 @@ fn start_with_mark(
         let bind_addr = format!("{}:{}", bind_ip, bind_port);
         let recv_socket = UdpSocket::bind(&bind_addr)?;
         super::apply_underlay_mark(recv_socket.as_raw_fd(), underlay_mark)?;
-        recv_socket.set_read_timeout(Some(Duration::from_millis(200)))?;
-
         log::info!("[{}] UDP listening on {}", config.name, bind_addr);
 
         // Signal interface is up
         let _ = tx.send(Event::InterfaceUp(id, None, None));
+
+        if inline {
+            recv_socket.set_nonblocking(true)?;
+            let source = UdpSource {
+                socket: recv_socket,
+                id,
+                name: config.name.clone(),
+                tx: tx.clone(),
+                control: control.clone(),
+            };
+            tx.register_source(
+                crate::interface::loop_writer::read_key(id),
+                Box::new(source),
+            )?;
+            return Ok((writer, control));
+        }
+        recv_socket.set_read_timeout(Some(Duration::from_millis(200)))?;
 
         let name = config.name.clone();
         let reader_control = control.clone();
@@ -190,6 +256,63 @@ fn udp_reader_loop(
                 let _ = tx.send(Event::InterfaceDown(id));
                 return;
             }
+        }
+    }
+}
+
+/// The listening socket, read on the driver loop (see
+/// [`crate::engine::FOLD_IO`]).
+struct UdpSource {
+    socket: UdpSocket,
+    id: InterfaceId,
+    name: String,
+    tx: EventSender,
+    control: ListenerControl,
+}
+
+impl LoopSource for UdpSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.socket.as_raw_fd()
+    }
+
+    fn stopped(&self) -> bool {
+        self.control.should_stop()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        if self.control.should_stop() {
+            return SourceStatus::Remove;
+        }
+        if !self.tx.inbound_data_has_room() {
+            return SourceStatus::Suspend;
+        }
+        let buf = &mut cx.buf[..MAX_DATAGRAM];
+        let mut frames = Vec::new();
+        let mut status = SourceStatus::Rearm;
+        for _ in 0..LOOP_READ_BUDGET {
+            match self.socket.recv_from(buf) {
+                Ok((0, _)) => {}
+                Ok((n, _)) => frames.push(Event::Frame {
+                    interface_id: self.id,
+                    data: buf[..n].into(),
+                    rssi: None,
+                    snr: None,
+                }),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => {
+                    log::warn!("[{}] recv error: {}", self.name, e);
+                    frames.push(Event::InterfaceDown(self.id));
+                    status = SourceStatus::Remove;
+                    break;
+                }
+            }
+        }
+        match self.tx.push_from_loop(frames) {
+            Ok(true) => status,
+            Ok(false) if status == SourceStatus::Rearm => SourceStatus::Suspend,
+            Ok(false) => status,
+            Err(_) => SourceStatus::Remove,
         }
     }
 }
@@ -540,6 +663,7 @@ mod tests {
                 forward_ip: Some("127.0.0.1".into()),
                 forward_port: Some(recv_port),
             })),
+            inline: false,
         };
 
         let payload = vec![0xAA, 0xBB, 0xCC];
@@ -548,5 +672,88 @@ mod tests {
         let mut buf = [0u8; 256];
         let (n, _) = receiver.recv_from(&mut buf).unwrap();
         assert_eq!(&buf[..n], &payload);
+    }
+
+    fn thread_named(name: &str) -> bool {
+        std::fs::read_dir("/proc/self/task").unwrap().any(|task| {
+            let comm = task.unwrap().path().join("comm");
+            std::fs::read_to_string(comm).is_ok_and(|comm| comm.trim() == name)
+        })
+    }
+
+    #[test]
+    fn folded_udp_interface_runs_on_the_driver_loop() {
+        if !crate::engine::FOLD_IO {
+            return;
+        }
+        let listen_port = find_free_port();
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let (tx, rx) = crate::event::channel();
+        let config = UdpConfig {
+            name: "test-udp-folded".into(),
+            listen_ip: Some("127.0.0.1".into()),
+            listen_port: Some(listen_port),
+            forward_ip: Some("127.0.0.1".into()),
+            forward_port: Some(receiver.local_addr().unwrap().port()),
+            interface_id: InterfaceId(77),
+            ..UdpConfig::default()
+        };
+        let writer = start(config, tx.clone()).unwrap().unwrap();
+        assert!(writer.sends_inline());
+        let (mut writer, _) =
+            crate::interface::wrap_async_writer(writer, InterfaceId(77), "folded", tx, 16);
+        assert!(!thread_named("udp-reader-77"));
+        assert!(!thread_named("iface-writer-77"));
+
+        // Inbound, read by the receiver's wait.
+        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender
+            .send_to(b"in", format!("127.0.0.1:{listen_port}"))
+            .unwrap();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame { data, .. } => assert_eq!(&*data, b"in"),
+            other => panic!("expected Frame, got {other:?}"),
+        }
+
+        // Outbound, plain and confirmed.
+        let mut buf = [0u8; 64];
+        writer.send_frame(b"plain").unwrap();
+        let (n, _) = receiver.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"plain");
+
+        let pool = crate::link_send::SendPool::new(1);
+        let (completion, receipt) = crate::link_send::Completion::new(pool.try_acquire().unwrap());
+        let mut completion = Some(completion);
+        writer
+            .enqueue_confirmed(b"confirmed", &mut completion)
+            .unwrap();
+        assert!(completion.is_none());
+        receipt.wait().unwrap();
+        let (n, _) = receiver.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"confirmed");
+    }
+
+    #[test]
+    fn writer_sends_to_an_ipv6_target() {
+        let receiver = UdpSocket::bind("[::1]:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut writer = UdpWriter {
+            socket: UdpSocket::bind("[::1]:0").unwrap(),
+            runtime: Arc::new(Mutex::new(UdpRuntime {
+                forward_ip: Some("::1".into()),
+                forward_port: Some(receiver.local_addr().unwrap().port()),
+            })),
+            inline: false,
+        };
+        writer.send_frame(b"v6").unwrap();
+        let mut buf = [0u8; 16];
+        let (n, _) = receiver.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"v6");
     }
 }
