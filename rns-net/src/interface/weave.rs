@@ -14,7 +14,11 @@ use rns_crypto::sha256::sha256;
 use rns_crypto::OsRng;
 
 use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer};
-use crate::event::{DynamicInterfaceRegistration, Event, EventSender, InterfaceTelemetry};
+use crate::event::{
+    DynamicInterfaceRegistration, Event, EventSender, InterfaceTelemetry, LoopContext, LoopSource,
+    SourceStatus,
+};
+use crate::interface::device_writer::DeviceWriter;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
 pub const WDCL_T_DISCOVER: u8 = 0x00;
@@ -296,7 +300,7 @@ struct WeaveSession {
     host_identity: Arc<Ed25519PrivateKey>,
     host_public: [u8; 32],
     host_switch_id: [u8; 4],
-    writer: Arc<Mutex<Option<std::fs::File>>>,
+    writer: Arc<Mutex<Option<DeviceWriter<std::fs::File>>>>,
     remote_switch_id: Arc<Mutex<Option<[u8; 4]>>>,
     peer_interfaces: Arc<Mutex<HashMap<[u8; 8], InterfaceId>>>,
 }
@@ -327,6 +331,12 @@ impl WeaveSession {
 
     fn spawn(self: &Arc<Self>) -> io::Result<()> {
         let session = Arc::clone(self);
+        if crate::engine::FOLD_IO {
+            thread::Builder::new()
+                .name(format!("weave-connect-{}", self.config.interface_id.0))
+                .spawn(move || session.connect_folded(false))?;
+            return Ok(());
+        }
         thread::Builder::new()
             .name(format!("weave-session-{}", self.config.interface_id.0))
             .spawn(move || session.reconnect_loop())?;
@@ -356,7 +366,8 @@ impl WeaveSession {
             stop_bits: 1,
         })?;
         let mut reader = port.reader()?;
-        *super::lock_or_recover(&self.writer, "weave writer") = Some(port.writer()?);
+        *super::lock_or_recover(&self.writer, "weave writer") =
+            Some(DeviceWriter::new(port.writer()?));
         *super::lock_or_recover(&self.remote_switch_id, "weave remote switch") = None;
         {
             let mut state = super::lock_or_recover(&self.config.state, "weave state");
@@ -411,6 +422,98 @@ impl WeaveSession {
         }
     }
 
+    /// Queue an event for the driver: from the driver thread itself when
+    /// the device is read there (see [`crate::engine::FOLD_IO`]).
+    fn emit(&self, event: Event) {
+        if crate::engine::FOLD_IO {
+            let _ = self.tx.push_from_loop([event]);
+        } else {
+            let _ = self.tx.send(event);
+        }
+    }
+
+    /// Open the device and serve it on the driver loop, retrying every
+    /// five seconds (and first, when `wait_first`). Runs on a thread of its
+    /// own, which exits once the device is served.
+    fn connect_folded(self: Arc<Self>, wait_first: bool) {
+        let mut wait = wait_first;
+        loop {
+            if wait {
+                thread::sleep(Duration::from_secs(5));
+            }
+            wait = true;
+            match self.open_folded() {
+                Ok(()) => return,
+                Err(error) => log::warn!(
+                    "[{}] Weave connection failed: {}; retrying in five seconds",
+                    self.config.name,
+                    error
+                ),
+            }
+        }
+    }
+
+    fn open_folded(self: &Arc<Self>) -> io::Result<()> {
+        let port = SerialPort::open(&SerialConfig {
+            path: self.config.port.clone(),
+            baud: 3_000_000,
+            data_bits: 8,
+            parity: Parity::None,
+            stop_bits: 1,
+        })?;
+        let reader = port.reader()?;
+        *super::lock_or_recover(&self.writer, "weave writer") = Some(DeviceWriter::driven(
+            port.writer()?,
+            Arc::clone(self.tx.poller()),
+            super::loop_writer::write_key(self.config.interface_id),
+            &self.config.name,
+        ));
+        *super::lock_or_recover(&self.remote_switch_id, "weave remote switch") = None;
+        {
+            let mut state = super::lock_or_recover(&self.config.state, "weave state");
+            state.connected = false;
+            state.switch_id = None;
+        }
+        // Reader and writer share one open file: this makes both
+        // non-blocking.
+        super::stream_read::set_nonblocking(reader.as_raw_fd())?;
+        self.send_frame(&WdclFrame {
+            destination: WDCL_BROADCAST,
+            frame_type: WDCL_T_DISCOVER,
+            payload: self.host_switch_id.to_vec(),
+        })?;
+        self.tx.register_source(
+            super::loop_writer::read_key(self.config.interface_id),
+            Box::new(WeaveSource {
+                reader,
+                decoder: crate::hdlc::Decoder::with_limits(5, 128 * 1024),
+                handshake_deadline: Instant::now() + Duration::from_secs(2),
+                session: Arc::clone(self),
+            }),
+        )
+    }
+
+    /// The device was lost: bring everything down and reopen it.
+    fn connection_lost(self: &Arc<Self>, error: &io::Error) {
+        log::warn!(
+            "[{}] Weave connection failed: {}; retrying in five seconds",
+            self.config.name,
+            error
+        );
+        self.disconnect_all();
+        let session = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name(format!("weave-connect-{}", self.config.interface_id.0))
+            .spawn(move || session.connect_folded(true));
+        if let Err(e) = spawned {
+            log::error!(
+                "[{}] cannot start reconnecting, giving up: {}",
+                self.config.name,
+                e
+            );
+        }
+    }
+
     fn send_frame(&self, frame: &WdclFrame) -> io::Result<()> {
         let encoded = crate::hdlc::frame(&frame.encode());
         let mut writer = super::lock_or_recover(&self.writer, "weave writer");
@@ -459,7 +562,7 @@ impl WeaveSession {
                     }
                 }
                 let interface_id = self.ensure_peer(source, now);
-                let _ = self.tx.send(Event::Frame {
+                self.emit(Event::Frame {
                     interface_id,
                     data: packet.into(),
                     rssi: None,
@@ -488,9 +591,7 @@ impl WeaveSession {
 
         match event {
             ET_PROTO_WDCL_CONNECTION => {
-                let _ = self
-                    .tx
-                    .send(Event::InterfaceUp(self.config.interface_id, None, None));
+                self.emit(Event::InterfaceUp(self.config.interface_id, None, None));
                 self.publish_parent_telemetry();
             }
             ET_PROTO_WEAVE_EP_ALIVE if data.len() == 8 => {
@@ -509,7 +610,7 @@ impl WeaveSession {
                         .get(&endpoint)
                         .copied()
                 {
-                    let _ = self.tx.send(Event::InterfaceTelemetry {
+                    self.emit(Event::InterfaceTelemetry {
                         interface_id,
                         telemetry: Box::new(InterfaceTelemetry {
                             via_switch_id: Some(via),
@@ -567,7 +668,7 @@ impl WeaveSession {
             started: now,
             ingress_control: self.ingress_control,
         };
-        let _ = self.tx.send(Event::DynamicInterfaceUp {
+        self.emit(Event::DynamicInterfaceUp {
             id,
             writer: Box::new(WeavePeerWriter {
                 session: Arc::clone(self),
@@ -595,7 +696,7 @@ impl WeaveSession {
             super::lock_or_recover(&self.config.state, "weave state")
                 .peers
                 .remove(&endpoint);
-            let _ = self.tx.send(Event::InterfaceDown(id));
+            self.emit(Event::InterfaceDown(id));
             self.publish_parent_telemetry();
         }
     }
@@ -606,7 +707,7 @@ impl WeaveSession {
             if let Some(id) =
                 super::lock_or_recover(&self.peer_interfaces, "weave peers").remove(endpoint)
             {
-                let _ = self.tx.send(Event::InterfaceDown(id));
+                self.emit(Event::InterfaceDown(id));
             }
         }
         if !super::lock_or_recover(&self.peer_interfaces, "weave peers").is_empty()
@@ -618,7 +719,7 @@ impl WeaveSession {
 
     fn publish_parent_telemetry(&self) {
         let state = super::lock_or_recover(&self.config.state, "weave state");
-        let _ = self.tx.send(Event::InterfaceTelemetry {
+        self.emit(Event::InterfaceTelemetry {
             interface_id: self.config.interface_id,
             telemetry: Box::new(InterfaceTelemetry {
                 cpu_load: state.cpu_load.map(f64::from),
@@ -646,9 +747,9 @@ impl WeaveSession {
             .map(|(_, id)| id)
             .collect();
         for id in peers {
-            let _ = self.tx.send(Event::InterfaceDown(id));
+            self.emit(Event::InterfaceDown(id));
         }
-        let _ = self.tx.send(Event::InterfaceDown(self.config.interface_id));
+        self.emit(Event::InterfaceDown(self.config.interface_id));
         self.publish_parent_telemetry();
     }
 }
@@ -665,6 +766,141 @@ impl Writer for WeavePeerWriter {
         self.session
             .send_frame(&WdclFrame::endpoint_packet(remote, self.endpoint, data))
     }
+
+    fn enqueue_confirmed(
+        &mut self,
+        data: &[u8],
+        completion: &mut Option<crate::link_send::Completion>,
+    ) -> io::Result<()> {
+        // Driver-run (see `sends_inline`): a full device buffer returns
+        // WouldBlock with the completion untouched, and the driver retries.
+        self.send_frame(data)?;
+        if let Some(completion) = completion.take() {
+            completion.finish(Ok(()));
+        }
+        Ok(())
+    }
+
+    fn sends_inline(&self) -> bool {
+        // With interface I/O folded the shared device writer never blocks.
+        crate::engine::FOLD_IO
+    }
+
+    fn flush_pending(&mut self) {
+        if let Some(writer) = super::lock_or_recover(&self.session.writer, "weave writer").as_mut()
+        {
+            writer.drain();
+        }
+    }
+}
+
+/// A Weave device, read on the driver thread (see
+/// [`WeaveSession::open_folded`]).
+struct WeaveSource {
+    reader: std::fs::File,
+    decoder: crate::hdlc::Decoder,
+    handshake_deadline: Instant,
+    session: Arc<WeaveSession>,
+}
+
+impl WeaveSource {
+    fn connected(&self) -> bool {
+        super::lock_or_recover(&self.session.config.state, "weave state").connected
+    }
+
+    /// Fail the handshake once its deadline passed unanswered.
+    fn check_handshake(&self) -> io::Result<()> {
+        if !self.connected() && Instant::now() >= self.handshake_deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "WDCL connection handshake timed out",
+            ));
+        }
+        Ok(())
+    }
+
+    fn read(&mut self, cx: &mut LoopContext<'_>) -> io::Result<SourceStatus> {
+        let mut read = 0;
+        while read < super::stream_read::STREAM_READ_BUDGET {
+            if !self.session.tx.inbound_data_has_room() {
+                return Ok(SourceStatus::Suspend);
+            }
+            // SAFETY: `cx.buf` is a valid writable buffer for the call; the
+            // device is non-blocking.
+            let n = unsafe {
+                libc::read(
+                    self.reader.as_raw_fd(),
+                    cx.buf.as_mut_ptr().cast(),
+                    cx.buf.len(),
+                )
+            };
+            if n < 0 {
+                let error = io::Error::last_os_error();
+                match error.kind() {
+                    io::ErrorKind::WouldBlock => break,
+                    io::ErrorKind::Interrupted => continue,
+                    _ => return Err(error),
+                }
+            }
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "serial port closed",
+                ));
+            }
+            let n = n as usize;
+            read += n;
+            for frame in self.decoder.feed(&cx.buf[..n]) {
+                self.session.process_frame(&frame)?;
+            }
+            if n < cx.buf.len() {
+                break;
+            }
+        }
+        self.check_handshake()?;
+        Ok(SourceStatus::Rearm)
+    }
+}
+
+impl LoopSource for WeaveSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.reader.as_raw_fd()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        match self.read(cx) {
+            Ok(status) => status,
+            Err(error) => {
+                self.session.connection_lost(&error);
+                SourceStatus::Remove
+            }
+        }
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        // The handshake's deadline until it completes, then the next peer
+        // to time out, if any.
+        if !self.connected() {
+            return Some(self.handshake_deadline);
+        }
+        let state = super::lock_or_recover(&self.session.config.state, "weave state");
+        let oldest = state
+            .peers
+            .values()
+            .map(|peer| peer.last_heard)
+            .min_by(f64::total_cmp)?;
+        let wait = (oldest + WEAVE_PEERING_TIMEOUT - crate::time::now()).max(0.0);
+        Some(Instant::now() + Duration::from_secs_f64(wait))
+    }
+
+    fn on_timer(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
+        if let Err(error) = self.check_handshake() {
+            self.session.connection_lost(&error);
+            return SourceStatus::Remove;
+        }
+        self.session.expire_peers(crate::time::now());
+        SourceStatus::Rearm
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -672,7 +908,12 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 pub struct WeaveFactory;
-struct ParentWriter;
+/// The parent interface's writer: it transmits nothing, but the driver
+/// reports the device writable under the parent's id, so it writes out
+/// what the peers' writers left buffered.
+struct ParentWriter {
+    session: Arc<WeaveSession>,
+}
 impl Writer for ParentWriter {
     fn send_frame_confirmed(&mut self, _data: &[u8]) -> io::Result<()> {
         Err(io::Error::new(
@@ -682,6 +923,19 @@ impl Writer for ParentWriter {
     }
     fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
         Ok(())
+    }
+
+    fn flush_pending(&mut self) {
+        if let Some(writer) = super::lock_or_recover(&self.session.writer, "weave writer").as_mut()
+        {
+            writer.drain();
+        }
+    }
+
+    fn sends_inline(&self) -> bool {
+        // Nothing to send, so no worker thread is needed when the driver
+        // runs device I/O.
+        crate::engine::FOLD_IO
     }
 }
 
@@ -759,7 +1013,7 @@ impl InterfaceFactory for WeaveFactory {
             control: None,
             id: config.interface_id,
             info,
-            writer: Box::new(ParentWriter),
+            writer: Box::new(ParentWriter { session }),
             interface_type_name: "WeaveInterface".into(),
         })
     }
@@ -860,7 +1114,7 @@ mod tests {
         };
         let session = WeaveSession::new(config, &context);
         *super::super::lock_or_recover(&session.writer, "test writer") =
-            Some(tempfile::tempfile().unwrap());
+            Some(DeviceWriter::new(tempfile::tempfile().unwrap()));
 
         let remote = Ed25519PrivateKey::generate(&mut FixedRng::new(&[0x44; 64]));
         let remote_public = remote.public_key().public_bytes();
@@ -938,5 +1192,160 @@ mod tests {
                 break id == peer_id;
             }
         });
+    }
+
+    #[test]
+    fn folded_weave_device_runs_on_the_driver_loop() {
+        use std::os::fd::FromRawFd;
+        if !crate::engine::FOLD_IO {
+            return;
+        }
+        let tempdir = tempfile::tempdir().unwrap();
+        let port_path = tempdir.path().join("weave-port");
+        let (master_fd, slave_fd) = crate::serial::open_pty_pair().unwrap();
+        std::os::unix::fs::symlink(
+            std::fs::read_link(format!("/proc/self/fd/{slave_fd}")).unwrap(),
+            &port_path,
+        )
+        .unwrap();
+        let mut device = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let _slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+
+        let (tx, rx) = crate::event::channel();
+        let config = WeaveConfig {
+            name: "weave-folded".into(),
+            port: port_path.display().to_string(),
+            configured_bitrate: WEAVE_DEFAULT_BITRATE,
+            interface_id: InterfaceId(56),
+            state: Arc::new(Mutex::new(WeaveState::default())),
+        };
+        let context = StartContext {
+            tx: tx.clone(),
+            next_dynamic_id: Arc::new(AtomicU64::new(11_000)),
+            mode: rns_core::constants::MODE_GATEWAY,
+            gravity: 0,
+            recursive_prs: true,
+            announces_from_internal: false,
+            announces_to_internal: None,
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+            stamp_costs: Default::default(),
+            ifac: None,
+            underlay_mark: None,
+        };
+        let session = WeaveSession::new(config, &context);
+        session.open_folded().unwrap();
+        let host = session.host_switch_id;
+
+        // The device reads the host's discovery frames, and answers.
+        let mut decoder = crate::hdlc::Decoder::with_limits(5, 128 * 1024);
+        let mut device_reads = |device: &mut std::fs::File| -> Vec<Vec<u8>> {
+            let mut buf = [0u8; 4096];
+            let mut pfd = libc::pollfd {
+                fd: device.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut pfd, 1, 2000) } <= 0 {
+                return Vec::new();
+            }
+            let n = device.read(&mut buf).unwrap();
+            decoder.feed(&buf[..n])
+        };
+        let discover = WdclFrame::decode(&device_reads(&mut device)[0]).unwrap();
+        assert_eq!(discover.frame_type, WDCL_T_DISCOVER);
+        let remote = Ed25519PrivateKey::generate(&mut FixedRng::new(&[0x45; 64]));
+        let remote_public = remote.public_key().public_bytes();
+        let mut payload = remote_public.to_vec();
+        payload.extend_from_slice(&remote.sign(&host));
+        let mut wire = crate::hdlc::frame(
+            &WdclFrame {
+                destination: host,
+                frame_type: WDCL_T_DISCOVER,
+                payload,
+            }
+            .encode(),
+        );
+        wire.extend_from_slice(&crate::hdlc::frame(&log_frame(
+            host,
+            ET_PROTO_WDCL_CONNECTION,
+            &[1],
+        )));
+        let endpoint = [0x78; 8];
+        wire.extend_from_slice(&crate::hdlc::frame(&log_frame(
+            host,
+            ET_PROTO_WEAVE_EP_ALIVE,
+            &endpoint,
+        )));
+        device.write_all(&wire).unwrap();
+
+        // Read by the driver loop: the parent comes up, then the peer.
+        let mut peer = None;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut parent_up = false;
+        while peer.is_none() && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(Event::InterfaceUp(InterfaceId(56), None, None)) => parent_up = true,
+                Ok(Event::DynamicInterfaceUp { id, writer, .. }) => peer = Some((id, writer)),
+                _ => {}
+            }
+        }
+        assert!(parent_up);
+        let (peer_id, writer) = peer.expect("peer came up");
+        assert!(writer.sends_inline());
+        let (mut writer, _) = crate::interface::wrap_async_writer(writer, peer_id, "weave", tx, 16);
+
+        // The host answered the discovery with a connect request.
+        let connect = device_reads(&mut device)
+            .into_iter()
+            .map(|raw| WdclFrame::decode(&raw).unwrap())
+            .find(|frame| frame.frame_type == WDCL_T_CONNECT)
+            .expect("connect request");
+        assert_eq!(connect.destination, remote_public[28..]);
+
+        // Outbound through the peer's writer, inbound from the peer.
+        writer.send_frame(b"to the peer").unwrap();
+        writer.flush_pending();
+        let sent = WdclFrame::decode(&device_reads(&mut device)[0]).unwrap();
+        assert_eq!(
+            sent,
+            WdclFrame::endpoint_packet(
+                remote_public[28..].try_into().unwrap(),
+                endpoint,
+                b"to the peer"
+            )
+        );
+        let mut endpoint_payload = b"from the peer".to_vec();
+        endpoint_payload.extend_from_slice(&endpoint);
+        device
+            .write_all(&crate::hdlc::frame(
+                &WdclFrame {
+                    destination: host,
+                    frame_type: WDCL_T_ENDPOINT_PKT,
+                    payload: endpoint_payload,
+                }
+                .encode(),
+            ))
+            .unwrap();
+        let received = loop {
+            match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+                Event::Frame {
+                    interface_id, data, ..
+                } => break (interface_id, data),
+                _ => continue,
+            }
+        };
+        assert_eq!(received.0, peer_id);
+        assert_eq!(&*received.1, b"from the peer");
+
+        // Losing the device brings the peer and the parent down.
+        drop(device);
+        let mut down = Vec::new();
+        while let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) {
+            if let Event::InterfaceDown(id) = event {
+                down.push(id);
+            }
+        }
+        assert!(down.contains(&peer_id));
+        assert!(down.contains(&InterfaceId(56)));
     }
 }

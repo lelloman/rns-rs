@@ -6,6 +6,8 @@ pub mod auto;
 pub mod ax25_kiss;
 #[cfg(feature = "iface-backbone")]
 pub mod backbone;
+#[cfg(any(feature = "iface-rnode", feature = "iface-weave"))]
+pub(crate) mod device_writer;
 #[cfg(feature = "iface-i2p")]
 pub mod i2p;
 #[cfg(feature = "iface-kiss")]

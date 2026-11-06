@@ -15,7 +15,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use transport::{DeviceWriter, Transport};
+use transport::Transport;
+
+/// The shared write side of an RNode connection.
+pub type DeviceWriter = crate::interface::device_writer::DeviceWriter<Transport>;
 
 use rns_core::transport::types::{AirtimeProfile, InterfaceId};
 
