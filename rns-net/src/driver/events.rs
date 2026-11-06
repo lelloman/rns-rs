@@ -1068,9 +1068,30 @@ impl Driver {
             self.poll_resource_preparations();
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
             self.dispatch_link_actions(actions);
-            if let Some(actions) = self.link_manager.poll_proof_pool(&mut self.rng) {
+            let mut packet_verdicts = core::mem::take(&mut self.packet_proof_verdicts);
+            if let Some(actions) = self
+                .link_manager
+                .poll_proof_pool(&mut self.rng, &mut packet_verdicts)
+            {
                 self.dispatch_link_actions(actions);
             }
+            for verdict in packet_verdicts.drain(..) {
+                if let crate::common::link_manager::ProofSubject::Packet {
+                    destination,
+                    sent_at,
+                } = verdict.subject
+                {
+                    if verdict.valid {
+                        self.packet_proof_verified(destination, verdict.packet_hash, sent_at, true);
+                    } else {
+                        log::debug!(
+                            "Proof signature invalid for {:02x?}",
+                            &verdict.packet_hash[..4]
+                        );
+                    }
+                }
+            }
+            self.packet_proof_verdicts = packet_verdicts;
             self.flush_pending_link_frames();
             if self
                 .state_snapshot_schedule

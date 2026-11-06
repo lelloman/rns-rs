@@ -339,36 +339,36 @@ impl Driver {
         if let Some((tracked_dest, sent_time)) = self.sent_packets.remove(&tracked_hash) {
             // Validate the proof signature using the destination's public key
             // (matches Python's PacketReceipt.validate_proof behavior)
-            if let Some(announced) = self.known_destination_announced(&tracked_dest) {
-                let identity =
-                    rns_crypto::identity::Identity::from_public_key(&announced.public_key).ok();
-                let mut sig = [0u8; 64];
-                sig.copy_from_slice(signature);
-                if !identity.is_some_and(|identity| identity.verify(&sig, &tracked_hash)) {
-                    log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4],);
-                    return;
+            let mut sig = [0u8; 64];
+            sig.copy_from_slice(signature);
+            match self.proof_key(&tracked_dest) {
+                Some(Some(key)) => {
+                    if self.link_manager.submit_packet_proof(
+                        tracked_dest,
+                        sent_time,
+                        tracked_hash,
+                        sig,
+                        &key,
+                    ) {
+                        return;
+                    }
+                    if !key.verify(&sig, &tracked_hash) {
+                        log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
+                        return;
+                    }
+                    self.packet_proof_verified(tracked_dest, tracked_hash, sent_time, true);
                 }
-                let _ = self.mark_known_destination_used(&tracked_dest);
-            } else {
-                log::debug!(
-                    "No known identity for dest {:02x?}, accepting proof without signature check",
-                    &tracked_dest[..4],
-                );
+                Some(None) => {
+                    log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
+                }
+                None => {
+                    log::debug!(
+                        "No known identity for dest {:02x?}, accepting proof without signature check",
+                        &tracked_dest[..4],
+                    );
+                    self.packet_proof_verified(tracked_dest, tracked_hash, sent_time, false);
+                }
             }
-
-            let now = time::now();
-            let rtt = now - sent_time;
-            log::debug!(
-                "Proof received for {:02x?} rtt={:.3}s",
-                &tracked_hash[..4],
-                rtt,
-            );
-            self.completed_proofs.insert(tracked_hash, (rtt, now));
-            self.callbacks.on_proof(
-                rns_core::types::DestHash(tracked_dest),
-                rns_core::types::PacketHash(tracked_hash),
-                rtt,
-            );
         } else {
             log::debug!(
                 "Proof for unknown packet {:02x?} on dest {:02x?}",
@@ -376,6 +376,60 @@ impl Driver {
                 &dest_hash[..4],
             );
         }
+    }
+
+    /// The signing key a proof for a packet sent to `destination` is checked
+    /// with: `None` when the destination's identity is unknown, `Some(None)`
+    /// when its announced key does not parse.
+    fn proof_key(
+        &mut self,
+        destination: &[u8; 16],
+    ) -> Option<Option<rns_crypto::ed25519::Ed25519PublicKey>> {
+        let public_key = self
+            .known_destinations
+            .get(destination)?
+            .announced
+            .public_key;
+        if let Some(key) = self.proof_keys.get(destination) {
+            return Some(Some(key.clone()));
+        }
+        let ed_bytes: [u8; 32] = public_key[32..].try_into().unwrap();
+        let Ok(key) = rns_crypto::ed25519::Ed25519PublicKey::from_bytes(&ed_bytes) else {
+            return Some(None);
+        };
+        // Bounded like a cache: refilled from the known destinations.
+        if self.proof_keys.len() >= 4096 {
+            self.proof_keys.clear();
+        }
+        self.proof_keys.insert(*destination, key.clone());
+        Some(Some(key))
+    }
+
+    /// Complete a packet's proof whose signature checked out, or that came
+    /// from a destination of unknown identity (`known_identity` false).
+    pub(crate) fn packet_proof_verified(
+        &mut self,
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        sent_time: f64,
+        known_identity: bool,
+    ) {
+        if known_identity {
+            let _ = self.mark_known_destination_used(&destination);
+        }
+        let now = time::now();
+        let rtt = now - sent_time;
+        log::debug!(
+            "Proof received for {:02x?} rtt={:.3}s",
+            &packet_hash[..4],
+            rtt,
+        );
+        self.completed_proofs.insert(packet_hash, (rtt, now));
+        self.callbacks.on_proof(
+            rns_core::types::DestHash(destination),
+            rns_core::types::PacketHash(packet_hash),
+            rtt,
+        );
     }
 
     /// Serve sockets the driver poller reported ready: loop sources read
