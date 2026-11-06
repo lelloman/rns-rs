@@ -1,8 +1,9 @@
 # Engines: compact and parallel
 
-Status: in progress. The engine switch, the folded timers group, and folded
-announce verification, resource compression and resource assembly are in;
-the rest is design. Nothing here changes the wire protocol.
+Status: in progress. The engine switch, the folded timers group, folded
+announce verification, resource compression and resource assembly, and
+single-core stamp generation are in; the rest is design. Nothing here
+changes the wire protocol.
 
 ## Purpose
 
@@ -163,9 +164,25 @@ established:
 | Group | Helpers today | Folded form | Effort |
 |---|---|---|---|
 | Timers and housekeeping (`compact-threads-timers` keeps the threads) | `rns-timer` (sends `Tick` every N ms), `rns-persist` (transport state snapshot every 12 h), `rns-destination-cleanup` (stale ratchet removal) | the tick comes from a periodic timerfd watched by the loop on Linux and Android (a timed wait would make the kernel arm and cancel a timer on every wait), and from a deadline the loop checks elsewhere; persistence and ratchet cleanup become idle jobs, and queued ones complete at shutdown as a joined thread would. The snapshot is written as one job; slicing it is left for a measured stall on a large path table | small (done) |
-| CPU work (`compact-threads-work` keeps the threads) | `rns-verify` (announce signatures), `rns-resource-prepare` (compression of outgoing resources), `rns-resource-receive` (assembly of incoming ones), `rns-stamper` and `rns-link-stamp` (stamp generation), `rns-proof-N` (link proof pool) | idle jobs, and one unit every 64 events when the driver never goes idle. Announce verification (done): one announce per slice, through the same bounded queue. Resource compression (done): bzip2 one block per slice at level 1 (100 kB blocks, about 10 ms each on a desktop core), within the worker's job and byte budget; bzip2 sorts a block in one call, so a block is the smallest slice. Split resources and stream segments are compressed inline when built, in both engines, as before. Assembly of incoming compressed resources (done): decompressed and hashed 256 KiB of output per slice, within the worker's output bound and job limit; a slice that reaches a new bzip2 block also decodes that block, whose size the sender chose (up to 900 kB). Stamp generation as a resumable search of a fixed number of candidates per slice; link proofs verified inline | medium: stamping remains |
+| CPU work (`compact-threads-work` keeps the threads) | `rns-verify` (announce signatures), `rns-resource-prepare` (compression of outgoing resources), `rns-resource-receive` (assembly of incoming ones), `rns-stamper` and `rns-link-stamp` (stamp generation), `rns-proof-N` (link proof pool) | idle jobs, and one unit every 64 events when the driver never goes idle. Announce verification (done): one announce per slice, through the same bounded queue. Resource compression (done): bzip2 one block per slice at level 1 (100 kB blocks, about 10 ms each on a desktop core), within the worker's job and byte budget; bzip2 sorts a block in one call, so a block is the smallest slice. Split resources and stream segments are compressed inline when built, in both engines, as before. Assembly of incoming compressed resources (done): decompressed and hashed 256 KiB of output per slice, within the worker's output bound and job limit; a slice that reaches a new bzip2 block also decodes that block, whose size the sender chose (up to 900 kB). Stamp generation (done, deliberately not folded): see below; link proofs verified inline | medium (done) |
 | Interface I/O (`compact-threads-io` keeps the threads) | readers for UDP, serial, KISS, RNode, pipe, local, Auto, I2P and Weave; `iface-writer-N`; reconnect threads for TCP, Backbone, serial and KISS | non-blocking, pollable sources and writers in the loop (TCP already works this way); reconnects as non-blocking connects with timers | large: one interface type at a time |
 | Services (`compact-threads-services` keeps the threads) | RPC servers and clients, the shared-instance server, the provider bridge, hole-punch probes | pollable listeners and connections in the loop | medium |
+
+Stamp generation is the one CPU job the compact engine keeps on a thread
+in every build. Stamps are off by default; when on, a node grinds them for
+its own announces, its own path requests, the link requests it starts and
+its own discovery announces, and checks the stamps of others with one hash,
+inline. A grind runs for seconds and one attempt can hash several hundred
+kB, so folding it would take a resumable search with the hash state kept
+between slices, and moving every caller's completion onto the loop, for work
+that is rare and costs the same CPU either way. The compact engine therefore
+keeps the existing threads (the lazily started `rns-stamper`, and one
+`rns-link-stamp` or discovery thread per request) but each searches on that
+thread alone, where the parallel engine spreads a search over every core.
+The compact engine has no rayon pool at all. One case makes stamping transit
+work: a transport node with `STAMP_PRS` grinds a stamp, per egress
+interface, for every unstamped path request it forwards. A router in that
+role should run the parallel engine.
 
 Interface I/O folds one interface type at a time. Until an interface type has
 a pollable form, it keeps its threads even without `compact-threads-io`, and the
