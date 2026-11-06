@@ -2414,7 +2414,11 @@ impl RnsNode {
             let local_server_config = LocalServerConfig {
                 instance_name: config.instance_name.clone(),
                 port: config.shared_instance_port,
-                interface_id: rns_core::transport::types::InterfaceId(0), // Not used for server
+                // Keys the listener on the driver loop when interface I/O is
+                // folded; clients get ids of their own.
+                interface_id: rns_core::transport::types::InterfaceId(
+                    next_dynamic_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                ),
             };
             match crate::interface::local::start_server(
                 local_server_config,
