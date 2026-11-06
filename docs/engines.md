@@ -3,8 +3,8 @@
 Status: in progress. The engine switch, the folded timers group, folded
 announce verification, resource compression and resource assembly, and
 single-core stamp generation, and the services group (RPC servers,
-provider bridge, probe server) on the driver loop are in; the rest is
-design. Nothing here changes the wire
+provider bridge, probe server) and UDP interfaces on the driver loop are
+in; the rest is design. Nothing here changes the wire
 protocol.
 
 ## Purpose
@@ -167,7 +167,7 @@ established:
 |---|---|---|---|
 | Timers and housekeeping (`compact-threads-timers` keeps the threads) | `rns-timer` (sends `Tick` every N ms), `rns-persist` (transport state snapshot every 12 h), `rns-destination-cleanup` (stale ratchet removal) | the tick comes from a periodic timerfd watched by the loop on Linux and Android (a timed wait would make the kernel arm and cancel a timer on every wait), and from a deadline the loop checks elsewhere; persistence and ratchet cleanup become idle jobs, and queued ones complete at shutdown as a joined thread would. The snapshot is written as one job; slicing it is left for a measured stall on a large path table | small (done) |
 | CPU work (`compact-threads-work` keeps the threads) | `rns-verify` (announce signatures), `rns-resource-prepare` (compression of outgoing resources), `rns-resource-receive` (assembly of incoming ones), `rns-stamper` and `rns-link-stamp` (stamp generation), `rns-proof-N` (link proof pool) | idle jobs, and one unit every 64 events when the driver never goes idle. Announce verification (done): one announce per slice, through the same bounded queue. Resource compression (done): bzip2 one block per slice at level 1 (100 kB blocks, about 10 ms each on a desktop core), within the worker's job and byte budget; bzip2 sorts a block in one call, so a block is the smallest slice. Split resources and stream segments are compressed inline when built, in both engines, as before. Assembly of incoming compressed resources (done): decompressed and hashed 256 KiB of output per slice, within the worker's output bound and job limit; a slice that reaches a new bzip2 block also decodes that block, whose size the sender chose (up to 900 kB). Stamp generation (done, deliberately not folded): see below; link proofs verified inline | medium (done) |
-| Interface I/O (`compact-threads-io` keeps the threads) | readers for UDP, serial, KISS, RNode, pipe, local, Auto, I2P and Weave; `iface-writer-N`; reconnect threads for TCP, Backbone, serial and KISS | non-blocking, pollable sources and writers in the loop (TCP already works this way); reconnects as non-blocking connects with timers | large: one interface type at a time |
+| Interface I/O (`compact-threads-io` keeps the threads) | readers for UDP, serial, KISS, RNode, pipe, local, Auto, I2P and Weave; `iface-writer-N`; reconnect threads for TCP, Backbone, serial and KISS | non-blocking, pollable sources and writers in the loop (TCP already works this way); reconnects as non-blocking connects with timers. UDP (done): the listening socket is a loop source reading at most 64 datagrams per wake-up, and the writer is called by the driver directly on a non-blocking socket, with no worker thread; a datagram the socket buffer cannot take is dropped, as the network may drop it, while a confirmed link send is retried by the driver | large: one interface type at a time |
 | Services (`compact-threads-services` keeps the threads) | `rpc-server` and `rpc-unix-server` with an `rpc-client` thread per connection, the provider bridge, hole-punch probes | pollable listeners and connections in the loop. RPC servers (done): the listeners and connections are watched by the driver's poller under keys of their own, each connection runs the same exchange as a server thread (challenge both ways, one request, one answer) as a non-blocking state machine, and the driver answers the request itself, with no event queue in between; at most 32 connections, each closed after 10 s without progress, as the threads' socket timeouts close it. Provider bridge (done): its socket and consumer connections are on the driver's poller too, and the driver writes each consumer's queue right after queueing an event and again when the socket can take more; queues, limits and overflow are the threaded bridge's, but a consumer that stops reading keeps its connection and its queue overflows, where a consumer thread drops it after a write blocks for a second, and a consumer that hangs up is noticed at once rather than at the next write. Probe server (done): its UDP socket is on the driver's poller, answering at most 64 requests per wake-up so a flood cannot hold the loop, where the thread woke every second on a read timeout. Hole-punch probe workers and punchers stay threads: they live only for the seconds of one hole-punch attempt, block on purpose with their own timing, and are gone after it; the direct UDP interface a punch opens belongs to interface I/O | done |
 
 Stamp generation is the one CPU job the compact engine keeps on a thread
@@ -196,7 +196,7 @@ with interface I/O.
 Interface I/O folds one interface type at a time. Until an interface type has
 a pollable form, it keeps its threads even without `compact-threads-io`, and the
 documentation lists which types are folded. The order follows deployment:
-TCP (done), UDP, local/shared instance, serial and KISS, RNode, Backbone,
+TCP (done), UDP (done), local/shared instance, serial and KISS, RNode, Backbone,
 Auto, pipe, I2P, Weave.
 
 Shared-instance clients (`shared_client.rs`, the `rns-driver-client` and
