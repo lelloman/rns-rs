@@ -27,6 +27,11 @@ iface-rnode = []
 iface-backbone = []
 iface-i2p = []
 iface-weave = []
+# The parallel engine (docs/engines.md): without it, the compact engine.
+engine-parallel = ["low-latency-flush", "proof-pool"]
+# Compact engine: keep the timer and housekeeping threads instead of running
+# that work on the driver loop.
+compact-threads-timers = []
 # TCP interfaces write a buffered frame once it has waited 25 µs, instead of
 # at the end of the driver's pass, unless `flush_after_us` says otherwise:
 # more writes, less latency.

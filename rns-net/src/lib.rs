@@ -69,6 +69,7 @@ pub mod storage;
 pub mod storage_sqlite;
 pub use common::compressor;
 pub use common::link_manager;
+pub mod engine;
 pub use common::link_manager::ProofVerifyThreads;
 pub use local_ratchet::{FileRatchetStore, LocalRatchetStore, LocalRatchets, MemoryRatchetStore};
 pub mod management;

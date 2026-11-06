@@ -258,6 +258,11 @@ impl Driver {
         if let Some(handle) = self.ratchet_cleanup_handle.take() {
             let _ = handle.join();
         }
+        // Folded housekeeping still queued completes, as a helper thread's
+        // work is joined above.
+        while let Some(job) = self.folded.jobs.pop_front() {
+            self.run_folded_job(job);
+        }
 
         self.link_manager.stop_receive_worker();
         self.lifecycle_state = LifecycleState::Stopped;

@@ -13465,3 +13465,52 @@ fn plain_link_packets_are_proved_by_the_destination_strategy() {
         );
     }
 }
+
+/// A compact driver with folded timers ticks by itself, with no timer thread
+/// sending `Tick` events.
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-timers")))]
+#[test]
+fn folded_timers_tick_without_a_timer_thread() {
+    let mut driver = new_test_driver();
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(10)));
+    driver.folded.next_tick = Instant::now();
+    let tx = driver.event_tx.clone();
+    let handle = std::thread::spawn(move || {
+        driver.run();
+        driver
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    tx.send(Event::Shutdown).unwrap();
+    let driver = handle.join().unwrap();
+    // About twenty ticks; a loaded test host may manage fewer.
+    assert!(
+        driver.cache_cleanup_counter >= 3,
+        "ticks counted: {}",
+        driver.cache_cleanup_counter
+    );
+}
+
+/// A compact driver with folded timers writes the transport-state snapshot
+/// itself when it is due, and finishes a pending write at shutdown.
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-timers")))]
+#[test]
+fn folded_timers_persist_transport_state() {
+    let dir = std::env::temp_dir().join(format!(
+        "rns-folded-persist-{}-{}",
+        std::process::id(),
+        time::now().to_bits()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut driver = new_test_driver();
+    driver.folded.persist_dir = Some(dir.clone());
+    driver.folded.next_persist = Instant::now();
+    driver.event_tx.send(Event::Shutdown).unwrap();
+    driver.run();
+    assert!(driver.folded.jobs.is_empty());
+    assert!(
+        std::fs::read_dir(&dir).unwrap().next().is_some(),
+        "the snapshot was written"
+    );
+    crate::storage::load_transport_state(&dir).expect("the snapshot loads back");
+    let _ = std::fs::remove_dir_all(&dir);
+}

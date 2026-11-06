@@ -9,7 +9,9 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["iface-tcp", "iface-udp", "iface-auto", "iface-serial", "iface-kiss", "iface-ax25-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p", "iface-weave"]
+default = ["engine-parallel", "iface-tcp", "iface-udp", "iface-auto", "iface-serial", "iface-kiss", "iface-ax25-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p", "iface-weave"]
+# The node's parallel engine (rns-net docs/engines.md); without it, compact.
+engine-parallel = ["rns-net/engine-parallel"]
 iface-tcp = ["rns-net/iface-tcp"]
 iface-udp = ["rns-net/iface-udp"]
 iface-auto = ["rns-net/iface-auto"]
