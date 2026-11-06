@@ -1910,12 +1910,10 @@ audit rechecks it (still present at `eb826cde`; `Link.py` is unchanged). If upst
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
-  `d3874dde`, `ecd677ba` and `53dc223a` (4/4 and 12/12 with commits 41 to 45
-  integrated). Not yet rerun at `3305fc1c` or the current tip `eb826cde`,
-  which change Python log levels, the startup ratchet directory walk and
-  constructor arguments that default to off.
+  `d3874dde`, `ecd677ba`, `53dc223a` and the current tip `eb826cde` (4/4 and
+  12/12 with commits 46 to 48 integrated).
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -2178,3 +2176,25 @@ checkout.
 Mapping check: `git log --grep='Upstream-Commit: <hash>' origin/master..999141c`
 for each of `git rev-list ecd677ba..53dc223a` finds exactly one local
 commit: `9e1d1c5`, `3beba6c`, `fd50c86`, `0ca01da` and `999141c`.
+
+### Commits 46 to 48 (rgit tip `eb826cde`)
+
+Run on 2026-11-06 at `53e35280` (`origin/dev`: `origin/master` `a029386e`
+plus the mapping commits `124d2870` and `e8cfe134` and four performance
+commits from another session), same host. Interop against `eb826cde` used a
+disposable export of that commit (`import RNS` reports 1.6.0 from it); the
+baseline `5d38ce30` was exercised from the configured checkout. Commit 46 had
+no run of its own; this one covers it.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | `start_applies_the_node_config_stamps`, `from_config_applies_the_stamps_section_and_hop_limiter`, `runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag` and `runtime_config_stamps_enforced_keeps_the_configured_costs`, within the workspace run | Passed (at `e8cfe134`) |
+| Formatting, lint | `cargo fmt --all --check`; `bash scripts/lint-host.sh` | Clean (at `e8cfe134`) |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,128 passed, 0 failed, 13 ignored (at `e8cfe134`) |
+| CI | GitHub Actions on `53e35280` | Passed |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4; 12/12 |
+| Interop, target `eb826cde` | the same against the `eb826cde` export | 4/4; 12/12 |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+Mapping check: the `Upstream-Commit` trailers map `3305fc1c` to `0abfc4a9`,
+`e9d82e69` to `124d2870` and `eb826cde` to `e8cfe134`, one local commit each.
