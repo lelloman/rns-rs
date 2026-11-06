@@ -8,11 +8,15 @@
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
+use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+use crate::engine::service_keys::PROBE_SERVER as PROBE_SERVER_KEY;
+use crate::poll::{Event as Interest, Events, Poller};
 
 const PROBE_MAGIC: &[u8; 4] = b"RNSP";
 const PROBE_VERSION: u8 = 1;
@@ -66,21 +70,104 @@ fn run_probe_server(socket: UdpSocket, running: Arc<AtomicBool>) {
             }
         };
 
-        if len != PROBE_REQUEST_LEN {
-            continue;
+        if let Some(response) = answer_probe(&buf[..len], &src) {
+            if let Err(e) = socket.send_to(&response, src) {
+                log::debug!("Probe server send error: {}", e);
+            }
         }
-        if &buf[..4] != PROBE_MAGIC {
-            continue;
-        }
-        if buf[4] != PROBE_VERSION {
-            continue;
-        }
+    }
+}
 
-        let nonce = &buf[5..21];
-        let response = build_probe_response(nonce, &src);
-        if let Err(e) = socket.send_to(&response, src) {
-            log::debug!("Probe server send error: {}", e);
+/// The response to a probe request from `src`, or `None` if `request` is
+/// not one.
+fn answer_probe(request: &[u8], src: &SocketAddr) -> Option<Vec<u8>> {
+    if request.len() != PROBE_REQUEST_LEN
+        || &request[..4] != PROBE_MAGIC
+        || request[4] != PROBE_VERSION
+    {
+        return None;
+    }
+    Some(build_probe_response(&request[5..21], src))
+}
+
+/// Datagrams answered per wake-up, so that a flood of probes cannot hold
+/// the driver loop; the rest are answered on the next pass.
+const FOLDED_PROBES_PER_WAKE: usize = 64;
+
+/// The probe server on the compact engine's driver loop (see
+/// [`crate::engine::FOLD_SERVICES`]): its socket is watched by the driver's
+/// poller and requests are answered when they arrive, with no thread.
+pub(crate) struct FoldedProbeServer {
+    socket: UdpSocket,
+    poller: Arc<Poller>,
+}
+
+impl FoldedProbeServer {
+    pub(crate) fn bind(
+        listen_addr: SocketAddr,
+        underlay_mark: Option<u32>,
+        poller: Arc<Poller>,
+    ) -> io::Result<Self> {
+        let socket = UdpSocket::bind(listen_addr)?;
+        crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+        socket.set_nonblocking(true)?;
+        // SAFETY: the socket is kept, open, until `Drop` removes the
+        // registration.
+        unsafe { poller.add(socket.as_raw_fd(), Interest::readable(PROBE_SERVER_KEY))? };
+        Ok(Self { socket, poller })
+    }
+
+    /// Answer pending requests if `ready` holds the server's key.
+    pub(crate) fn serve(&self, ready: &Events) {
+        if !ready.iter().any(|event| event.key == PROBE_SERVER_KEY) {
+            return;
         }
+        let mut buf = [0u8; 64];
+        for _ in 0..FOLDED_PROBES_PER_WAKE {
+            let (len, src) = match self.socket.recv_from(&mut buf) {
+                Ok(received) => received,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                // An ICMP error for an earlier response, or a signal.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::ConnectionRefused
+                            | io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue
+                }
+                Err(e) => {
+                    log::warn!("Probe server recv error: {}", e);
+                    break;
+                }
+            };
+            if let Some(response) = answer_probe(&buf[..len], &src) {
+                // A response the socket cannot take now is dropped, as a
+                // lost datagram would be; the client asks again.
+                if let Err(e) = self.socket.send_to(&response, src) {
+                    log::debug!("Probe server send error: {}", e);
+                }
+            }
+        }
+        if let Err(e) = self
+            .poller
+            .modify(self.socket.as_fd(), Interest::readable(PROBE_SERVER_KEY))
+        {
+            log::error!("Probe server cannot watch its socket again: {}", e);
+        }
+    }
+
+    #[cfg(test)]
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+}
+
+impl Drop for FoldedProbeServer {
+    fn drop(&mut self) {
+        let _ = self.poller.delete(self.socket.as_fd());
     }
 }
 
@@ -576,6 +663,39 @@ mod tests {
         // Stop server
         running.store(false, Ordering::Relaxed);
         let _ = server_thread.join();
+    }
+
+    #[test]
+    fn folded_probe_server_answers_on_its_poller_and_ignores_junk() {
+        let poller = Arc::new(Poller::new().unwrap());
+        let server =
+            FoldedProbeServer::bind("127.0.0.1:0".parse().unwrap(), None, poller.clone()).unwrap();
+        let addr = server.local_addr().unwrap();
+
+        let client = thread::spawn(move || {
+            let junk = UdpSocket::bind("127.0.0.1:0").unwrap();
+            junk.send_to(b"not a probe", addr).unwrap();
+            let first = probe_endpoint(addr, None, Duration::from_secs(3), None).unwrap();
+            let second = probe_endpoint(addr, None, Duration::from_secs(3), None).unwrap();
+            (first.0, second.0)
+        });
+        let mut ready = Events::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !client.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "client did not finish"
+            );
+            ready.clear();
+            poller
+                .wait(&mut ready, Some(Duration::from_millis(10)))
+                .unwrap();
+            server.serve(&ready);
+        }
+        let (first, second) = client.join().unwrap();
+        assert_eq!(first.ip(), std::net::Ipv4Addr::new(127, 0, 0, 1));
+        assert_eq!(second.ip(), std::net::Ipv4Addr::new(127, 0, 0, 1));
+        assert_ne!(first.port(), second.port());
     }
 
     #[test]

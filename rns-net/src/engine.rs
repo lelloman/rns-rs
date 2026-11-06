@@ -20,8 +20,24 @@ pub(crate) const FOLD_TIMERS: bool =
 pub(crate) const FOLD_WORK: bool =
     !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-work");
 
-/// Whether services (the RPC servers, so far) run on the driver loop
-/// instead of their own threads: in the compact engine unless
-/// `compact-threads-services` keeps the threads.
+/// Whether services (the RPC servers, the provider bridge and the probe
+/// server) run on the driver loop instead of their own threads: in the
+/// compact engine unless `compact-threads-services` keeps the threads.
 pub(crate) const FOLD_SERVICES: bool =
     !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-services");
+
+/// The driver poller's keys for folded services' sockets: above every
+/// interface's keys (an interface id shifted left by one) and below the
+/// tick source's.
+pub(crate) mod service_keys {
+    use std::ops::Range;
+
+    const BASE: usize = 1 << (usize::BITS - 2);
+
+    /// RPC listeners and connections.
+    pub(crate) const RPC: Range<usize> = BASE..BASE + (1 << 30);
+    /// The provider bridge's socket and consumers.
+    pub(crate) const PROVIDER_BRIDGE: Range<usize> = RPC.end..RPC.end + (1 << 20);
+    /// The probe server's socket.
+    pub(crate) const PROBE_SERVER: usize = PROVIDER_BRIDGE.end;
+}

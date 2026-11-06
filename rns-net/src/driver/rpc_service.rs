@@ -20,10 +20,7 @@ use super::*;
 use crate::poll::{Event as Interest, Poller};
 use crate::rpc::{RpcDriver, ServerSession};
 
-/// Poller keys for RPC listeners and connections: above every interface's
-/// keys (an interface id shifted left by one) and below the tick source's.
-const RPC_KEY_BASE: usize = 1 << (usize::BITS - 2);
-const RPC_KEY_SPAN: usize = 1 << 30;
+const RPC_KEYS: std::ops::Range<usize> = crate::engine::service_keys::RPC;
 
 /// Connections served at once, as the server threads allow.
 const MAX_CONNECTIONS: usize = 32;
@@ -137,20 +134,20 @@ impl RpcService {
             poller,
             listeners: Vec::new(),
             connections: HashMap::new(),
-            next_key: RPC_KEY_BASE,
+            next_key: RPC_KEYS.start,
         }
     }
 
     /// Whether `key` is one of this service's poller keys.
     pub(crate) fn owns(key: usize) -> bool {
-        (RPC_KEY_BASE..RPC_KEY_BASE + RPC_KEY_SPAN).contains(&key)
+        RPC_KEYS.contains(&key)
     }
 
     fn allocate_key(&mut self) -> usize {
         loop {
             let key = self.next_key;
-            self.next_key = if key + 1 >= RPC_KEY_BASE + RPC_KEY_SPAN {
-                RPC_KEY_BASE
+            self.next_key = if key + 1 >= RPC_KEYS.end {
+                RPC_KEYS.start
             } else {
                 key + 1
             };

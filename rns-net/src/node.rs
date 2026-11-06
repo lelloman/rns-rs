@@ -1767,17 +1767,32 @@ impl RnsNode {
         // Start probe server if configured
         let probe_server = if let Some(port) = config.probe_port {
             let listen_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
-            match crate::holepunch::probe::start_probe_server_with_mark(
-                listen_addr,
-                config.underlay_mark,
-            ) {
-                Ok(handle) => {
-                    log::info!("Probe server started on 0.0.0.0:{}", port);
-                    Some(handle)
+            if crate::engine::FOLD_SERVICES {
+                match crate::holepunch::probe::FoldedProbeServer::bind(
+                    listen_addr,
+                    config.underlay_mark,
+                    Arc::clone(tx.poller()),
+                ) {
+                    Ok(server) => {
+                        log::info!("Probe server started on 0.0.0.0:{}", port);
+                        driver.probe_server = Some(server);
+                    }
+                    Err(e) => log::error!("Failed to start probe server on port {}: {}", port, e),
                 }
-                Err(e) => {
-                    log::error!("Failed to start probe server on port {}: {}", port, e);
-                    None
+                None
+            } else {
+                match crate::holepunch::probe::start_probe_server_with_mark(
+                    listen_addr,
+                    config.underlay_mark,
+                ) {
+                    Ok(handle) => {
+                        log::info!("Probe server started on 0.0.0.0:{}", port);
+                        Some(handle)
+                    }
+                    Err(e) => {
+                        log::error!("Failed to start probe server on port {}: {}", port, e);
+                        None
+                    }
                 }
             }
         } else {

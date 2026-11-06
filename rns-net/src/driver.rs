@@ -976,6 +976,9 @@ pub struct Driver {
     /// The RPC servers, when the driver serves them itself (see
     /// [`crate::engine::FOLD_SERVICES`]).
     pub(crate) rpc_service: Option<rpc_service::RpcService>,
+    /// The probe server, when it runs on the driver loop (with services
+    /// folded); otherwise the node runs it on a thread of its own.
+    pub(crate) probe_server: Option<crate::holepunch::probe::FoldedProbeServer>,
     /// Count of known-destination cap evictions since start.
     pub(crate) known_destinations_cap_evict_count: usize,
     /// Runtime-configurable interval for starting announce cache cleanup.
@@ -1178,6 +1181,7 @@ impl Driver {
             ratchet_cleanup_handle: None,
             folded: FoldedTimers::new(),
             rpc_service: None,
+            probe_server: None,
             resource_preparation: None,
             known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults
