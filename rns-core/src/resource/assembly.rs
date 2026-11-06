@@ -37,9 +37,51 @@ pub struct AssemblyResult {
     pub(super) id: AssemblyId,
     pub(super) result: Result<Vec<ResourceAction>, ResourceError>,
 }
+fn decompress_error(error: DecompressError) -> ResourceError {
+    match error {
+        DecompressError::TooLarge => ResourceError::TooLarge,
+        DecompressError::InvalidData => ResourceError::DecompressionFailed,
+    }
+}
+
 impl ResourceAssembly {
     pub fn id(&self) -> &AssemblyId {
         &self.id
+    }
+    /// Whether the data is compressed and must be decompressed to assemble.
+    pub fn is_compressed(&self) -> bool {
+        self.data.compressed
+    }
+    /// Take the authenticated data still to be decompressed, for a caller
+    /// that decompresses it in pieces and then calls
+    /// [`Self::finish_decompressed`] or [`Self::decompression_failed`].
+    pub fn take_compressed_data(&mut self) -> Vec<u8> {
+        core::mem::take(&mut self.data.plaintext)
+    }
+    /// [`Self::run`] for data the caller decompressed itself, within
+    /// [`Self::max_output_size`]; `data_state`, when given, is SHA-256 over
+    /// `decompressed`.
+    pub fn finish_decompressed(
+        self,
+        decompressed: Vec<u8>,
+        data_state: Option<Sha256>,
+    ) -> AssemblyResult {
+        AssemblyResult {
+            id: self.id,
+            result: self.data.finish(decompressed, data_state),
+        }
+    }
+    /// The result of an assembly whose decompression failed: `too_large`
+    /// when the output exceeded [`Self::max_output_size`].
+    pub fn decompression_failed(self, too_large: bool) -> AssemblyResult {
+        AssemblyResult {
+            id: self.id,
+            result: Err(decompress_error(if too_large {
+                DecompressError::TooLarge
+            } else {
+                DecompressError::InvalidData
+            })),
+        }
     }
     /// Owned plaintext capacity retained while the attempt is queued.
     pub fn input_capacity(&self) -> usize {
@@ -69,22 +111,31 @@ pub(super) struct AssemblyData {
     pub limit: usize,
 }
 impl AssemblyData {
-    pub fn run(self, compressor: &dyn Compressor) -> Result<Vec<ResourceAction>, ResourceError> {
+    pub fn run(
+        mut self,
+        compressor: &dyn Compressor,
+    ) -> Result<Vec<ResourceAction>, ResourceError> {
         // The receiver already dropped the random prefix.
-        let plaintext = self.plaintext;
-        let mut data_state = self.data_state;
-        let decompressed = if self.compressed {
-            data_state = None;
-            compressor
+        let plaintext = core::mem::take(&mut self.plaintext);
+        let (decompressed, data_state) = if self.compressed {
+            let decompressed = compressor
                 .decompress_bounded(&plaintext, self.limit)
-                .map_err(|error| match error {
-                    DecompressError::TooLarge => ResourceError::TooLarge,
-                    DecompressError::InvalidData => ResourceError::DecompressionFailed,
-                })?
+                .map_err(decompress_error)?;
+            (decompressed, None)
         } else {
-            plaintext
+            (plaintext, self.data_state.take().map(|state| *state))
         };
-        let data_state = data_state.map_or_else(|| data_hash_state(&decompressed), |state| *state);
+        self.finish(decompressed, data_state)
+    }
+
+    /// Check `decompressed` against the resource hash and build the proof and
+    /// delivery. `data_state`, when given, is SHA-256 over `decompressed`.
+    fn finish(
+        self,
+        decompressed: Vec<u8>,
+        data_state: Option<Sha256>,
+    ) -> Result<Vec<ResourceAction>, ResourceError> {
+        let data_state = data_state.unwrap_or_else(|| data_hash_state(&decompressed));
         let hash = finish_with(&data_state, &self.random_hash);
         if hash != self.resource_hash {
             return Err(ResourceError::HashMismatch);

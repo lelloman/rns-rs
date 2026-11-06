@@ -22,30 +22,62 @@ impl Compressor for Bzip2Compressor {
         data: &[u8],
         max_output_size: usize,
     ) -> Result<Vec<u8>, DecompressError> {
-        use bzip2::read::BzDecoder;
-        use std::io::Read;
-        let mut decoder = BzDecoder::new(data);
-        let mut decompressed = Vec::new();
-        let mut buf = [0u8; 8192];
-
+        let mut decoder = BoundedDecompression::new(data, max_output_size);
         loop {
-            let remaining = max_output_size.saturating_sub(decompressed.len());
-            if remaining == 0 {
-                let mut extra = [0u8; 1];
-                return match decoder.read(&mut extra) {
-                    Ok(0) => Ok(decompressed),
-                    Ok(_) => Err(DecompressError::TooLarge),
-                    Err(_) => Err(DecompressError::InvalidData),
-                };
-            }
-
-            let read_len = remaining.min(buf.len());
-            match decoder.read(&mut buf[..read_len]) {
-                Ok(0) => return Ok(decompressed),
-                Ok(n) => decompressed.extend_from_slice(&buf[..n]),
-                Err(_) => return Err(DecompressError::InvalidData),
+            if let Some(result) = decoder.step(usize::MAX) {
+                return result;
             }
         }
+    }
+}
+
+/// A bounded bzip2 decompression that can be run in pieces: each
+/// [`Self::step`] decodes at most a given number of bytes. Its results are
+/// those of [`Bzip2Compressor::decompress_bounded`], which runs it to the end.
+pub(crate) struct BoundedDecompression<R: std::io::Read> {
+    decoder: bzip2::read::BzDecoder<R>,
+    output: Vec<u8>,
+    limit: usize,
+}
+
+impl<R: std::io::Read> BoundedDecompression<R> {
+    pub(crate) fn new(input: R, limit: usize) -> Self {
+        BoundedDecompression {
+            decoder: bzip2::read::BzDecoder::new(input),
+            output: Vec::new(),
+            limit,
+        }
+    }
+
+    /// The output decoded so far.
+    pub(crate) fn output(&self) -> &[u8] {
+        &self.output
+    }
+
+    /// Decode up to `max_bytes` more. Returns the result once the stream is
+    /// complete or fails, `None` while more remains.
+    pub(crate) fn step(&mut self, max_bytes: usize) -> Option<Result<Vec<u8>, DecompressError>> {
+        use std::io::Read;
+        let mut buf = [0u8; 8192];
+        let stop = self.output.len().saturating_add(max_bytes);
+        while self.output.len() < stop {
+            let remaining = self.limit.saturating_sub(self.output.len());
+            if remaining == 0 {
+                let mut extra = [0u8; 1];
+                return Some(match self.decoder.read(&mut extra) {
+                    Ok(0) => Ok(core::mem::take(&mut self.output)),
+                    Ok(_) => Err(DecompressError::TooLarge),
+                    Err(_) => Err(DecompressError::InvalidData),
+                });
+            }
+            let read_len = remaining.min(buf.len());
+            match self.decoder.read(&mut buf[..read_len]) {
+                Ok(0) => return Some(Ok(core::mem::take(&mut self.output))),
+                Ok(n) => self.output.extend_from_slice(&buf[..n]),
+                Err(_) => return Some(Err(DecompressError::InvalidData)),
+            }
+        }
+        None
     }
 }
 

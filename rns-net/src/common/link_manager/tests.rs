@@ -2622,6 +2622,70 @@ fn test_resource_accept_app_reject() {
     }
 }
 
+/// With CPU work folded, a compressed resource is assembled on the driver
+/// loop without a receive worker, and an uncompressed resource completing
+/// after it on the same link is delivered after it.
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+#[test]
+fn folded_assembly_keeps_resource_order_on_the_link() {
+    use std::collections::VecDeque;
+    let (mut sender, mut receiver, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    receiver.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    let (wake, _events) = crate::event::channel();
+    receiver.set_receive_worker_wake(wake);
+    let compressible = vec![0x42; 32 * 1024];
+    let plain: Vec<u8> = (0..32 * 1024).map(|i| (i * 131 + 7) as u8).collect();
+    let mut queue: VecDeque<(bool, LinkManagerAction)> = VecDeque::new();
+    for (data, compress) in [(&compressible, true), (&plain, false)] {
+        let actions =
+            sender.send_resource_with_auto_compress(&link_id, data, None, compress, &mut rng);
+        queue.extend(actions.into_iter().map(|a| (true, a)));
+    }
+    let mut received = Vec::new();
+    let mut saw_folded = false;
+    for _ in 0..5000 {
+        let Some((from_sender, action)) = queue.pop_front() else {
+            if !receiver.has_idle_work() {
+                break;
+            }
+            let actions = receiver.run_idle_work(&mut rng);
+            queue.extend(actions.into_iter().map(|a| (false, a)));
+            continue;
+        };
+        saw_folded |= receiver.has_folded_assembly();
+        match action {
+            LinkManagerAction::SendPacket { raw, .. } => {
+                let packet = RawPacket::unpack(&raw).unwrap();
+                let target = if from_sender {
+                    &mut receiver
+                } else {
+                    &mut sender
+                };
+                let actions = target.handle_local_delivery(
+                    packet.destination_hash,
+                    &raw,
+                    packet.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
+                );
+                queue.extend(actions.into_iter().map(|a| (!from_sender, a)));
+            }
+            LinkManagerAction::ResourceReceived { data, .. } if !from_sender => received.push(data),
+            _ => {}
+        }
+    }
+    assert!(
+        saw_folded,
+        "the compressed resource was assembled on the loop"
+    );
+    assert!(
+        receiver.receive_worker.is_none(),
+        "no receive worker thread"
+    );
+    assert_eq!(received, vec![compressible, plain]);
+}
+
 #[test]
 fn retried_resource_advertisements_deliver_once() {
     use std::collections::VecDeque;
