@@ -413,6 +413,10 @@ impl Driver {
         if self.rpc_service.is_some() {
             self.serve_rpc(ready);
         }
+        #[cfg(feature = "hooks")]
+        if let Some(bridge) = &self.provider_bridge {
+            bridge.serve(ready);
+        }
         for event in ready.iter() {
             let (interface, is_write) = crate::interface::loop_writer::key_target(event.key);
             if is_write && event.writable {
