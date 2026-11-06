@@ -5,13 +5,15 @@
 
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use rns_core::transport::types::InterfaceId;
 
-use crate::event::{Event, EventSender};
+use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
+use crate::interface::stream_read::{read_device_frames, StreamRead};
 use crate::interface::{
     poll_readable, wait_while_active, ListenerControl, UnavailableWriter, Writer,
 };
@@ -60,6 +62,11 @@ impl Writer for SerialWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.file.write_all(&hdlc::frame(data))
     }
+
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
+        // With interface I/O folded the driver writes the port itself.
+        crate::engine::FOLD_IO.then(|| self.file.as_raw_fd())
+    }
 }
 
 /// Start the serial interface. Opens the port, spawns reader thread.
@@ -96,6 +103,16 @@ fn start_with_control(
                 .name(format!("serial-reconnect-{}", config.interface_id.0))
                 .spawn(move || {
                     if let Some(reader) = reconnect(&config, &tx, &retry_control) {
+                        if crate::engine::FOLD_IO {
+                            let link = Arc::new(SerialLink {
+                                config,
+                                tx,
+                                control: retry_control,
+                                ifac_size,
+                            });
+                            link.serve_or_retry(reader);
+                            return;
+                        }
                         let id = config.interface_id;
                         reader_loop(reader, id, config, tx, retry_control, ifac_size);
                     }
@@ -113,6 +130,17 @@ fn start_with_control(
 
     // Short delay matching Python's configure_device sleep
     thread::sleep(Duration::from_millis(500));
+
+    if crate::engine::FOLD_IO {
+        let link = Arc::new(SerialLink {
+            config,
+            tx,
+            control: control.clone(),
+            ifac_size,
+        });
+        link.serve(reader_file)?;
+        return Ok((Box::new(SerialWriter { file: writer_file }), control));
+    }
 
     // Spawn reader thread
     let reader_control = control.clone();
@@ -207,6 +235,122 @@ fn reader_loop(
                     None => return,
                 }
             }
+        }
+    }
+}
+
+/// What a serial port read on the driver loop needs across reconnects (see
+/// [`crate::engine::FOLD_IO`]).
+struct SerialLink {
+    config: SerialIfaceConfig,
+    tx: EventSender,
+    control: ListenerControl,
+    ifac_size: usize,
+}
+
+impl SerialLink {
+    /// Read `reader` on the driver thread from now on.
+    fn serve(self: &Arc<Self>, reader: std::fs::File) -> io::Result<()> {
+        crate::interface::stream_read::set_nonblocking(reader.as_raw_fd())?;
+        self.tx.register_source(
+            crate::interface::loop_writer::read_key(self.config.interface_id),
+            Box::new(SerialSource {
+                reader,
+                decoder: frame_decoder(self.ifac_size),
+                link: Arc::clone(self),
+            }),
+        )
+    }
+
+    /// [`SerialLink::serve`] a reopened port, reopening it again if that
+    /// fails. Runs on a reconnect thread.
+    fn serve_or_retry(self: &Arc<Self>, mut reader: std::fs::File) {
+        loop {
+            match self.serve(reader) {
+                Ok(()) => return,
+                Err(e) => {
+                    log::warn!(
+                        "[{}] cannot read the reopened port: {}",
+                        self.config.name,
+                        e
+                    );
+                    let _ = self.tx.send(Event::InterfaceDown(self.config.interface_id));
+                }
+            }
+            match reconnect(&self.config, &self.tx, &self.control) {
+                Some(new_reader) => reader = new_reader,
+                None => return,
+            }
+        }
+    }
+
+    /// Report the port down and reopen it on a thread of its own, which
+    /// exits once the reopened port is served on the driver.
+    fn connection_lost(self: &Arc<Self>) {
+        let id = self.config.interface_id;
+        let _ = self.tx.push_from_loop([Event::InterfaceDown(id)]);
+        let link = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name(format!("serial-reconnect-{}", id.0))
+            .spawn(move || {
+                if let Some(reader) = reconnect(&link.config, &link.tx, &link.control) {
+                    link.serve_or_retry(reader);
+                }
+            });
+        if let Err(e) = spawned {
+            log::error!(
+                "[{}] cannot start reconnecting, giving up: {}",
+                self.config.name,
+                e
+            );
+        }
+    }
+}
+
+/// The serial port, read on the driver thread.
+struct SerialSource {
+    reader: std::fs::File,
+    decoder: hdlc::Decoder,
+    link: Arc<SerialLink>,
+}
+
+impl LoopSource for SerialSource {
+    fn fd(&self) -> std::os::fd::RawFd {
+        self.reader.as_raw_fd()
+    }
+
+    fn stopped(&self) -> bool {
+        self.link.control.should_stop()
+    }
+
+    fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
+        let link = &self.link;
+        if link.control.should_stop() {
+            return SourceStatus::Remove;
+        }
+        let name = &link.config.name;
+        match read_device_frames(
+            self.reader.as_raw_fd(),
+            &mut self.decoder,
+            cx,
+            &link.tx,
+            link.config.interface_id,
+            name,
+            |_, _| {},
+        ) {
+            StreamRead::Rearm => SourceStatus::Rearm,
+            StreamRead::Suspend => SourceStatus::Suspend,
+            StreamRead::Closed => {
+                log::warn!("[{}] serial port closed", name);
+                link.connection_lost();
+                SourceStatus::Remove
+            }
+            StreamRead::Failed(e) => {
+                log::warn!("[{}] serial read error: {}", name, e);
+                link.connection_lost();
+                SourceStatus::Remove
+            }
+            StreamRead::DriverGone => SourceStatus::Remove,
         }
     }
 }
@@ -608,6 +752,78 @@ mod tests {
         control.request_stop();
         drop(slave);
         drop(master);
+    }
+
+    fn thread_named(prefix: &str) -> bool {
+        std::fs::read_dir("/proc/self/task").unwrap().any(|task| {
+            let comm = task.unwrap().path().join("comm");
+            std::fs::read_to_string(comm).is_ok_and(|comm| comm.trim().starts_with(prefix))
+        })
+    }
+
+    #[test]
+    fn folded_serial_port_runs_on_the_driver_loop() {
+        if !crate::engine::FOLD_IO {
+            return;
+        }
+        let tempdir = tempfile::tempdir().unwrap();
+        let port_path = tempdir.path().join("serial-port");
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let slave_path = std::fs::read_link(format!("/proc/self/fd/{slave_fd}")).unwrap();
+        std::os::unix::fs::symlink(slave_path, &port_path).unwrap();
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+
+        let (tx, rx) = crate::event::channel();
+        let config = SerialIfaceConfig {
+            name: "folded-serial".into(),
+            port: port_path.display().to_string(),
+            interface_id: InterfaceId(74),
+            ..Default::default()
+        };
+        let (writer, control) = start_with_control(config, tx.clone(), 0).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(74), None, None)
+        ));
+        assert!(writer.loop_socket().is_some());
+        let (mut writer, _) =
+            crate::interface::wrap_async_writer(writer, InterfaceId(74), "serial", tx, 16);
+        assert!(!thread_named("serial-reader-7"));
+        assert!(!thread_named("iface-writer-74"));
+
+        // Inbound, in two pieces, read by the receiver's wait.
+        let payload: Vec<u8> = (0..32).collect();
+        let framed = hdlc::frame(&payload);
+        master.write_all(&framed[..10]).unwrap();
+        master.write_all(&framed[10..]).unwrap();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame {
+                interface_id, data, ..
+            } => {
+                assert_eq!(interface_id, InterfaceId(74));
+                assert_eq!(&*data, &payload[..]);
+            }
+            other => panic!("expected Frame, got {other:?}"),
+        }
+
+        // Outbound, written by the driver.
+        let outbound: Vec<u8> = (100..140).collect();
+        writer.send_frame(&outbound).unwrap();
+        writer.flush_pending();
+        assert!(poll_read(master.as_raw_fd(), 2000));
+        let mut buf = [0u8; 256];
+        let n = master.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], &hdlc::frame(&outbound)[..]);
+
+        // The port going away is reported, and reopening starts.
+        drop(master);
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::InterfaceDown(id) => assert_eq!(id, InterfaceId(74)),
+            other => panic!("expected InterfaceDown, got {other:?}"),
+        }
+        control.request_stop();
+        drop(slave);
     }
 
     #[test]

@@ -33,6 +33,12 @@ const EAGER_WRITE_BYTES: usize = crate::hdlc::WRITE_BATCH_BYTES;
 /// A frame is always admitted into an empty buffer, whatever its size.
 pub(crate) const LOOP_WRITER_BUFFER_LIMIT: usize = 1024 * 1024;
 
+/// [`LOOP_WRITER_BUFFER_LIMIT`] for a device such as a serial port, which
+/// may drain at a few hundred bytes a second: about what the threaded
+/// writer's queue of [`super::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY`] frames
+/// holds, so frames do not wait minutes behind a backlog.
+const DEVICE_BUFFER_LIMIT: usize = 128 * 1024;
+
 /// Poller key for a writer's writable interest. Keys of even value are left
 /// for read interest on the same interface.
 pub(crate) fn write_key(id: InterfaceId) -> usize {
@@ -103,6 +109,8 @@ pub(crate) struct LoopWriter {
     /// Owns the socket (and anything else the concrete writer holds).
     inner: Box<dyn Writer>,
     fd: RawFd,
+    /// Whether `fd` is a socket; otherwise a non-blocking device.
+    socket: bool,
     out: Vec<u8>,
     /// Bytes of `out` already written to the socket.
     head: usize,
@@ -153,6 +161,19 @@ pub(crate) fn wrap(
         space: Arc::default(),
         space_waiters: Arc::default(),
     };
+    // A writer for a device rather than a socket (a serial port) writes
+    // with `write`, on a descriptor made non-blocking here.
+    let socket = super::stream_read::is_socket(fd);
+    if !socket {
+        if let Err(error) = super::stream_read::set_nonblocking(fd) {
+            log::warn!(
+                "[{}:{}] cannot make the device non-blocking: {}",
+                interface_name,
+                interface_id.0,
+                error
+            );
+        }
+    }
     let poller = Arc::clone(event_tx.poller());
     let key = write_key(interface_id);
     // SAFETY: `fd` is owned by `inner`, which outlives the registration:
@@ -172,6 +193,7 @@ pub(crate) fn wrap(
     let writer = LoopWriter {
         inner,
         fd,
+        socket,
         out: Vec::new(),
         head: 0,
         appended: 0,
@@ -209,8 +231,10 @@ impl LoopWriter {
     fn fits(&self, bytes: usize) -> bool {
         let limit = if self.egress.is_some() {
             EGRESS_HIGH_WATERMARK
-        } else {
+        } else if self.socket {
             LOOP_WRITER_BUFFER_LIMIT
+        } else {
+            DEVICE_BUFFER_LIMIT
         };
         self.buffered() == 0 || self.buffered() + bytes <= limit
     }
@@ -322,14 +346,19 @@ impl LoopWriter {
             let pending = &self.out[self.head..];
             // SAFETY: `pending` is a valid initialized slice; MSG_DONTWAIT
             // makes this call nonblocking without changing the socket's mode,
-            // which a reader on a duplicate of the descriptor may rely on.
+            // which a reader on a duplicate of the descriptor may rely on. A
+            // device was made non-blocking in `wrap`.
             let written = unsafe {
-                libc::send(
-                    self.fd,
-                    pending.as_ptr().cast(),
-                    pending.len(),
-                    libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
-                )
+                if self.socket {
+                    libc::send(
+                        self.fd,
+                        pending.as_ptr().cast(),
+                        pending.len(),
+                        libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+                    )
+                } else {
+                    libc::write(self.fd, pending.as_ptr().cast(), pending.len())
+                }
             };
             if written < 0 {
                 let error = io::Error::last_os_error();
@@ -1129,5 +1158,52 @@ mod tests {
             .unwrap();
         let mut sink = Vec::new();
         f.peer.read_to_end(&mut sink).unwrap();
+    }
+
+    /// Keeps the device open for the loop writer, which writes it itself.
+    struct Device(#[allow(dead_code)] std::fs::File);
+
+    impl Writer for Device {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            unreachable!("the loop writer writes the descriptor itself")
+        }
+    }
+
+    #[test]
+    fn a_device_is_written_without_blocking_and_buffers_less() {
+        use std::os::fd::FromRawFd;
+        let (master_fd, slave_fd) = crate::serial::open_pty_pair().unwrap();
+        // SAFETY: both descriptors were just opened and are owned here.
+        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let (tx, _rx) = crate::event::channel();
+        let (mut writer, _) = wrap(Box::new(Device(slave)), slave_fd, InterfaceId(5), "pty", tx);
+
+        // Nobody reads the far end: the pty fills, then the buffer, and
+        // frames are refused well below a socket writer's limit.
+        let frame = vec![0x42u8; 500];
+        let mut accepted = 0;
+        for _ in 0..1000 {
+            match writer.send_frame(&frame) {
+                Ok(()) => accepted += 1,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        writer.flush_pending();
+        let accepted_bytes = accepted * crate::hdlc::framed_len(&frame);
+        assert!(accepted > 0);
+        assert!(
+            accepted_bytes < DEVICE_BUFFER_LIMIT + 64 * 1024,
+            "{accepted_bytes} bytes accepted"
+        );
+
+        // What was written arrives framed.
+        let mut buf = vec![0u8; 4096];
+        let n = master.read(&mut buf).unwrap();
+        assert_eq!(
+            &buf[..crate::hdlc::framed_len(&frame).min(n)],
+            &crate::hdlc::frame(&frame)[..crate::hdlc::framed_len(&frame).min(n)]
+        );
     }
 }
