@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use rns_core::transport::types::InterfaceId;
 
-use super::transport::{DeviceWriter, Transport};
+use super::transport::Transport;
+use super::DeviceWriter;
 use super::{
     clear_pending_rx_metadata, detect_and_configure, phy_telemetry, process_flow_queue,
     reopen_connection, reset_flow_states, signal_interface_up, update_pending_rx_metadata,
