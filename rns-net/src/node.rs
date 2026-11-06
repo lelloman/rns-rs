@@ -1730,7 +1730,15 @@ impl RnsNode {
             driver.runtime_config_defaults.provider_queue_max_bytes =
                 provider_config.queue_max_bytes;
             if provider_config.enabled {
-                match crate::provider_bridge::ProviderBridge::start(provider_config) {
+                let started = if crate::engine::FOLD_SERVICES {
+                    crate::provider_bridge::ProviderBridge::start_folded(
+                        provider_config,
+                        Arc::clone(tx.poller()),
+                    )
+                } else {
+                    crate::provider_bridge::ProviderBridge::start(provider_config)
+                };
+                match started {
                     Ok(bridge) => driver.provider_bridge = Some(bridge),
                     Err(err) => log::warn!("failed to start provider bridge: {}", err),
                 }

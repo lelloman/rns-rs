@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::event::{ProviderBridgeConsumerStats, ProviderBridgeStats};
 
+mod folded;
+
 fn lock_bridge_state<'a>(shared: &'a Arc<BridgeShared>) -> std::sync::MutexGuard<'a, BridgeState> {
     match shared.state.lock() {
         Ok(guard) => guard,
@@ -164,40 +166,21 @@ impl ConsumerShared {
 
 pub struct ProviderBridge {
     shared: Arc<BridgeShared>,
-    thread: Option<thread::JoinHandle<()>>,
+    io: BridgeIo,
+}
+
+/// Who accepts consumers and writes to them.
+enum BridgeIo {
+    /// A listener thread, and a thread per consumer.
+    Threaded(Option<thread::JoinHandle<()>>),
+    /// The driver loop, through its poller (see [`folded`]).
+    Folded(Mutex<folded::FoldedIo>),
 }
 
 impl ProviderBridge {
+    /// Start the bridge with threads of its own.
     pub fn start(config: ProviderBridgeConfig) -> io::Result<Self> {
-        if let Some(parent) = config.socket_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        remove_stale_socket(&config.socket_path)?;
-        let listener = UnixListener::bind(&config.socket_path)?;
-        listener.set_nonblocking(true)?;
-
-        let queue_max_events = config.queue_max_events;
-        let queue_max_bytes = config.queue_max_bytes;
-        let shared = Arc::new(BridgeShared {
-            config,
-            state: Mutex::new(BridgeState {
-                next_seq: 1,
-                next_consumer_id: 1,
-                connected: false,
-                accepting: true,
-                shutdown: false,
-                queue_max_events,
-                queue_max_bytes,
-                consumers: Vec::new(),
-                backlog: VecDeque::new(),
-                backlog_bytes: 0,
-                backlog_dropped_count: 0,
-                backlog_dropped_total: 0,
-                total_disconnect_count: 0,
-            }),
-            condvar: Condvar::new(),
-        });
-
+        let (listener, shared) = bind(config)?;
         let thread_shared = shared.clone();
         let thread = thread::Builder::new()
             .name("provider-bridge".into())
@@ -206,10 +189,81 @@ impl ProviderBridge {
 
         Ok(Self {
             shared,
-            thread: Some(thread),
+            io: BridgeIo::Threaded(Some(thread)),
         })
     }
 
+    /// Start the bridge on the driver loop that waits in `poller`, which
+    /// passes it the keys it owns through [`ProviderBridge::serve`].
+    pub(crate) fn start_folded(
+        config: ProviderBridgeConfig,
+        poller: Arc<crate::poll::Poller>,
+    ) -> io::Result<Self> {
+        let (listener, shared) = bind(config)?;
+        let io = folded::FoldedIo::new(listener, poller)?;
+        Ok(Self {
+            shared,
+            io: BridgeIo::Folded(Mutex::new(io)),
+        })
+    }
+
+    /// Serve the bridge's keys among `ready`, when it runs on the driver loop.
+    pub(crate) fn serve(&self, ready: &crate::poll::Events) {
+        if let BridgeIo::Folded(io) = &self.io {
+            let mut io = lock_folded(io);
+            for event in ready.iter() {
+                if folded::owns(event.key) {
+                    io.ready(&self.shared, event);
+                }
+            }
+        }
+    }
+
+    fn flush_folded(&self) {
+        if let BridgeIo::Folded(io) = &self.io {
+            lock_folded(io).flush_all(&self.shared);
+        }
+    }
+}
+
+fn lock_folded(io: &Mutex<folded::FoldedIo>) -> std::sync::MutexGuard<'_, folded::FoldedIo> {
+    io.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Bind the bridge's socket and set up its state.
+fn bind(config: ProviderBridgeConfig) -> io::Result<(UnixListener, Arc<BridgeShared>)> {
+    if let Some(parent) = config.socket_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    remove_stale_socket(&config.socket_path)?;
+    let listener = UnixListener::bind(&config.socket_path)?;
+    listener.set_nonblocking(true)?;
+
+    let queue_max_events = config.queue_max_events;
+    let queue_max_bytes = config.queue_max_bytes;
+    let shared = Arc::new(BridgeShared {
+        config,
+        state: Mutex::new(BridgeState {
+            next_seq: 1,
+            next_consumer_id: 1,
+            connected: false,
+            accepting: true,
+            shutdown: false,
+            queue_max_events,
+            queue_max_bytes,
+            consumers: Vec::new(),
+            backlog: VecDeque::new(),
+            backlog_bytes: 0,
+            backlog_dropped_count: 0,
+            backlog_dropped_total: 0,
+            total_disconnect_count: 0,
+        }),
+        condvar: Condvar::new(),
+    });
+    Ok((listener, shared))
+}
+
+impl ProviderBridge {
     pub fn emit_event(
         &self,
         attach_point: &str,
@@ -255,6 +309,7 @@ impl ProviderBridge {
         for consumer in consumers {
             enqueue_consumer_frame(&self.shared.config, &consumer, encoded.clone());
         }
+        self.flush_folded();
     }
 
     pub fn queue_max_events(&self) -> usize {
@@ -377,8 +432,10 @@ impl Drop for ProviderBridge {
             state.accepting = false;
             self.shared.condvar.notify_all();
         }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if let BridgeIo::Threaded(thread) = &mut self.io {
+            if let Some(thread) = thread.take() {
+                let _ = thread.join();
+            }
         }
 
         let handles = {
@@ -429,61 +486,9 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
                         log::debug!("provider bridge consumer timeout setup failed: {}", err);
                     }
 
-                    let (consumer_shared, backlog_seed) = {
-                        let mut state = lock_bridge_state(&shared);
-                        let consumer_id = state.next_consumer_id;
-                        state.next_consumer_id += 1;
-
-                        let consumer_shared = Arc::new(ConsumerShared::new(
-                            consumer_id,
-                            state.queue_max_events,
-                            state.queue_max_bytes,
-                        ));
-
-                        let backlog_seed = if state.consumers.is_empty() {
-                            Some((
-                                state.backlog_dropped_count,
-                                state.backlog.iter().cloned().collect::<Vec<_>>(),
-                            ))
-                        } else {
-                            None
-                        };
-
-                        if backlog_seed.is_some() {
-                            state.backlog.clear();
-                            state.backlog_bytes = 0;
-                            state.backlog_dropped_count = 0;
-                        }
-
-                        (consumer_shared, backlog_seed)
-                    };
-
-                    if let Some((dropped_count, queued)) = backlog_seed {
-                        let mut consumer_state = lock_consumer_state(&consumer_shared);
-                        consumer_state.dropped_count = dropped_count;
-                        for frame in queued {
-                            consumer_state.queued_bytes += frame.encoded.len();
-                            consumer_state.queue.push_back(frame);
-                        }
-                    }
-
+                    let consumer_shared = admit_consumer(&shared);
                     match spawn_consumer_thread(shared.clone(), consumer_shared.clone(), accepted) {
-                        Ok(thread) => {
-                            let total = {
-                                let mut state = lock_bridge_state(&shared);
-                                state.consumers.push(ConsumerEntry {
-                                    shared: consumer_shared,
-                                    thread: Some(thread),
-                                });
-                                let was_connected = state.connected;
-                                state.connected = !state.consumers.is_empty();
-                                if state.connected && !was_connected {
-                                    shared.condvar.notify_all();
-                                }
-                                state.consumers.len()
-                            };
-                            log::info!("provider bridge consumer connected (total: {})", total);
-                        }
+                        Ok(thread) => add_consumer(&shared, consumer_shared, Some(thread)),
                         Err(err) => {
                             log::warn!("provider bridge failed to spawn consumer thread: {}", err);
                         }
@@ -511,6 +516,91 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
     prune_disconnected_consumers(&shared);
 }
 
+/// Give a new consumer its queue, seeded with the backlog if it is the only
+/// consumer.
+fn admit_consumer(shared: &Arc<BridgeShared>) -> Arc<ConsumerShared> {
+    let (consumer_shared, backlog_seed) = {
+        let mut state = lock_bridge_state(shared);
+        let consumer_id = state.next_consumer_id;
+        state.next_consumer_id += 1;
+
+        let consumer_shared = Arc::new(ConsumerShared::new(
+            consumer_id,
+            state.queue_max_events,
+            state.queue_max_bytes,
+        ));
+
+        let backlog_seed = if state.consumers.is_empty() {
+            Some((
+                state.backlog_dropped_count,
+                state.backlog.iter().cloned().collect::<Vec<_>>(),
+            ))
+        } else {
+            None
+        };
+
+        if backlog_seed.is_some() {
+            state.backlog.clear();
+            state.backlog_bytes = 0;
+            state.backlog_dropped_count = 0;
+        }
+
+        (consumer_shared, backlog_seed)
+    };
+
+    if let Some((dropped_count, queued)) = backlog_seed {
+        let mut consumer_state = lock_consumer_state(&consumer_shared);
+        consumer_state.dropped_count = dropped_count;
+        for frame in queued {
+            consumer_state.queued_bytes += frame.encoded.len();
+            consumer_state.queue.push_back(frame);
+        }
+    }
+    consumer_shared
+}
+
+/// Start sending events to an admitted consumer.
+fn add_consumer(
+    shared: &Arc<BridgeShared>,
+    consumer_shared: Arc<ConsumerShared>,
+    thread: Option<thread::JoinHandle<()>>,
+) {
+    let total = {
+        let mut state = lock_bridge_state(shared);
+        state.consumers.push(ConsumerEntry {
+            shared: consumer_shared,
+            thread,
+        });
+        let was_connected = state.connected;
+        state.connected = !state.consumers.is_empty();
+        if state.connected && !was_connected {
+            shared.condvar.notify_all();
+        }
+        state.consumers.len()
+    };
+    log::info!("provider bridge consumer connected (total: {})", total);
+}
+
+/// Record that a consumer went away; it is removed on the next prune.
+fn mark_disconnected(
+    bridge_shared: &Arc<BridgeShared>,
+    consumer_shared: &Arc<ConsumerShared>,
+    err: &io::Error,
+) {
+    log::info!(
+        "provider bridge consumer {} disconnected: {}",
+        consumer_shared.id,
+        err
+    );
+    let mut state = lock_consumer_state(consumer_shared);
+    state.connected = false;
+    state.shutdown = true;
+    drop(state);
+    let mut bridge_state = lock_bridge_state(bridge_shared);
+    bridge_state.total_disconnect_count = bridge_state.total_disconnect_count.saturating_add(1);
+    bridge_shared.condvar.notify_all();
+}
+
 fn spawn_consumer_thread(
     bridge_shared: Arc<BridgeShared>,
     consumer_shared: Arc<ConsumerShared>,
@@ -522,19 +612,7 @@ fn spawn_consumer_thread(
             match next_consumer_frame(&bridge_shared, &consumer_shared) {
                 Some(frame) => {
                     if let Err(err) = write_frame(&mut stream, &frame) {
-                        log::info!(
-                            "provider bridge consumer {} disconnected: {}",
-                            consumer_shared.id,
-                            err
-                        );
-                        let mut state = lock_consumer_state(&consumer_shared);
-                        state.connected = false;
-                        state.shutdown = true;
-                        drop(state);
-                        let mut bridge_state = lock_bridge_state(&bridge_shared);
-                        bridge_state.total_disconnect_count =
-                            bridge_state.total_disconnect_count.saturating_add(1);
-                        bridge_shared.condvar.notify_all();
+                        mark_disconnected(&bridge_shared, &consumer_shared, &err);
                         break;
                     }
                 }
@@ -773,6 +851,60 @@ fn remove_stale_socket(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::io::Read;
+    use std::ops::Deref;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::poll::{Events, Poller};
+
+    /// A bridge, and in folded mode a thread standing in for the driver loop.
+    struct Running {
+        bridge: Arc<ProviderBridge>,
+        serving: Option<(Arc<Poller>, Arc<AtomicBool>, thread::JoinHandle<()>)>,
+    }
+
+    impl Deref for Running {
+        type Target = ProviderBridge;
+        fn deref(&self) -> &ProviderBridge {
+            &self.bridge
+        }
+    }
+
+    impl Drop for Running {
+        fn drop(&mut self) {
+            if let Some((poller, stop, thread)) = self.serving.take() {
+                stop.store(true, Ordering::SeqCst);
+                poller.notify().unwrap();
+                thread.join().unwrap();
+            }
+        }
+    }
+
+    fn start_bridge(config: ProviderBridgeConfig, folded: bool) -> Running {
+        if !folded {
+            return Running {
+                bridge: Arc::new(ProviderBridge::start(config).unwrap()),
+                serving: None,
+            };
+        }
+        let poller = Arc::new(Poller::new().unwrap());
+        let bridge = Arc::new(ProviderBridge::start_folded(config, poller.clone()).unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (poller, bridge, stop) = (poller.clone(), bridge.clone(), stop.clone());
+            thread::spawn(move || {
+                let mut events = Events::new();
+                while !stop.load(Ordering::SeqCst) {
+                    events.clear();
+                    poller.wait(&mut events, None).unwrap();
+                    bridge.serve(&events);
+                }
+            })
+        };
+        Running {
+            bridge,
+            serving: Some((poller, stop, thread)),
+        }
+    }
 
     fn read_frame(stream: &mut UnixStream) -> ProviderEnvelope {
         let mut len_buf = [0u8; 4];
@@ -790,19 +922,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bridge_delivers_events_and_dropped_notice() {
+    fn bridge_delivers_events_and_dropped_notice(folded: bool) {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("provider.sock");
-        let bridge = ProviderBridge::start(ProviderBridgeConfig {
-            enabled: true,
-            socket_path: socket_path.clone(),
-            queue_max_events: 1,
-            queue_max_bytes: 4096,
-            overflow_policy: OverflowPolicy::DropNewest,
-            node_instance: "node-a".into(),
-        })
-        .unwrap();
+        let bridge = start_bridge(
+            ProviderBridgeConfig {
+                enabled: true,
+                socket_path: socket_path.clone(),
+                queue_max_events: 1,
+                queue_max_bytes: 4096,
+                overflow_policy: OverflowPolicy::DropNewest,
+                node_instance: "node-a".into(),
+            },
+            folded,
+        );
 
         bridge.emit_event(
             "PreIngress",
@@ -835,19 +968,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bridge_fans_out_to_multiple_consumers() {
+    fn bridge_fans_out_to_multiple_consumers(folded: bool) {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("provider.sock");
-        let bridge = ProviderBridge::start(ProviderBridgeConfig {
-            enabled: true,
-            socket_path: socket_path.clone(),
-            queue_max_events: 64,
-            queue_max_bytes: 65536,
-            overflow_policy: OverflowPolicy::DropNewest,
-            node_instance: "node-b".into(),
-        })
-        .unwrap();
+        let bridge = start_bridge(
+            ProviderBridgeConfig {
+                enabled: true,
+                socket_path: socket_path.clone(),
+                queue_max_events: 64,
+                queue_max_bytes: 65536,
+                overflow_policy: OverflowPolicy::DropNewest,
+                node_instance: "node-b".into(),
+            },
+            folded,
+        );
 
         let mut stream_a = UnixStream::connect(&socket_path).unwrap();
         wait_for_consumer(&bridge);
@@ -867,19 +1001,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn consumer_disconnect_does_not_block_other_consumers() {
+    fn consumer_disconnect_does_not_block_other_consumers(folded: bool) {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("provider.sock");
-        let bridge = ProviderBridge::start(ProviderBridgeConfig {
-            enabled: true,
-            socket_path: socket_path.clone(),
-            queue_max_events: 64,
-            queue_max_bytes: 65536,
-            overflow_policy: OverflowPolicy::DropNewest,
-            node_instance: "node-c".into(),
-        })
-        .unwrap();
+        let bridge = start_bridge(
+            ProviderBridgeConfig {
+                enabled: true,
+                socket_path: socket_path.clone(),
+                queue_max_events: 64,
+                queue_max_bytes: 65536,
+                overflow_policy: OverflowPolicy::DropNewest,
+                node_instance: "node-c".into(),
+            },
+            folded,
+        );
 
         let mut stream_a = UnixStream::connect(&socket_path).unwrap();
         wait_for_consumer(&bridge);
@@ -901,19 +1036,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stats_expose_queue_depth_drop_totals_and_disconnects() {
+    fn stats_expose_queue_depth_drop_totals_and_disconnects(folded: bool) {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("provider.sock");
-        let bridge = ProviderBridge::start(ProviderBridgeConfig {
-            enabled: true,
-            socket_path: socket_path.clone(),
-            queue_max_events: 1,
-            queue_max_bytes: 4096,
-            overflow_policy: OverflowPolicy::DropNewest,
-            node_instance: "node-d".into(),
-        })
-        .unwrap();
+        let bridge = start_bridge(
+            ProviderBridgeConfig {
+                enabled: true,
+                socket_path: socket_path.clone(),
+                queue_max_events: 1,
+                queue_max_bytes: 4096,
+                overflow_policy: OverflowPolicy::DropNewest,
+                node_instance: "node-d".into(),
+            },
+            folded,
+        );
 
         bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![1]);
         bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![2]);
@@ -950,5 +1086,122 @@ mod tests {
 
         let stats = bridge.stats();
         assert!(stats.total_disconnect_count >= 1);
+    }
+
+    #[test]
+    fn bridge_delivers_events_and_dropped_notice_threaded() {
+        bridge_delivers_events_and_dropped_notice(false);
+    }
+
+    #[test]
+    fn bridge_delivers_events_and_dropped_notice_folded() {
+        bridge_delivers_events_and_dropped_notice(true);
+    }
+
+    #[test]
+    fn bridge_fans_out_to_multiple_consumers_threaded() {
+        bridge_fans_out_to_multiple_consumers(false);
+    }
+
+    #[test]
+    fn bridge_fans_out_to_multiple_consumers_folded() {
+        bridge_fans_out_to_multiple_consumers(true);
+    }
+
+    #[test]
+    fn consumer_disconnect_does_not_block_other_consumers_threaded() {
+        consumer_disconnect_does_not_block_other_consumers(false);
+    }
+
+    #[test]
+    fn consumer_disconnect_does_not_block_other_consumers_folded() {
+        consumer_disconnect_does_not_block_other_consumers(true);
+    }
+
+    #[test]
+    fn stats_expose_queue_depth_drop_totals_and_disconnects_threaded() {
+        stats_expose_queue_depth_drop_totals_and_disconnects(false);
+    }
+
+    #[test]
+    fn stats_expose_queue_depth_drop_totals_and_disconnects_folded() {
+        stats_expose_queue_depth_drop_totals_and_disconnects(true);
+    }
+
+    fn folded_config(socket_path: PathBuf, queue_max_events: usize) -> ProviderBridgeConfig {
+        ProviderBridgeConfig {
+            enabled: true,
+            socket_path,
+            queue_max_events,
+            queue_max_bytes: 64 * 1024 * 1024,
+            overflow_policy: OverflowPolicy::DropNewest,
+            node_instance: "node-f".into(),
+        }
+    }
+
+    fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn folded_stalled_consumer_neither_blocks_emits_nor_other_consumers() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("provider.sock");
+        let bridge = start_bridge(folded_config(socket_path.clone(), 4), true);
+
+        let _stalled = UnixStream::connect(&socket_path).unwrap();
+        wait_for_consumer(&bridge);
+        let mut reader = UnixStream::connect(&socket_path).unwrap();
+        eventually("second consumer", || bridge.stats().consumer_count == 2);
+
+        // Far more than a socket buffer holds: the stalled consumer's socket
+        // fills, then its queue, and the rest is dropped for it.
+        let started = std::time::Instant::now();
+        for i in 0..64u8 {
+            bridge.emit_event(
+                "PreIngress",
+                "hook".into(),
+                "packet".into(),
+                vec![i; 64 * 1024],
+            );
+        }
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let first = read_frame(&mut reader);
+        assert!(matches!(first.message, ProviderMessage::Event(_)));
+        let stats = bridge.stats();
+        assert_eq!(stats.consumer_count, 2);
+        assert!(stats.consumers.iter().any(|c| c.dropped_total > 0));
+    }
+
+    #[test]
+    fn folded_bridge_notices_a_hang_up_with_nothing_to_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("provider.sock");
+        let bridge = start_bridge(folded_config(socket_path.clone(), 8), true);
+
+        let stream = UnixStream::connect(&socket_path).unwrap();
+        wait_for_consumer(&bridge);
+        drop(stream);
+        eventually("hang-up noticed", || {
+            let stats = bridge.stats();
+            stats.consumer_count == 0 && stats.total_disconnect_count == 1
+        });
+    }
+
+    #[test]
+    fn folded_bridge_stops_accepting() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("provider.sock");
+        let bridge = start_bridge(folded_config(socket_path.clone(), 8), true);
+
+        bridge.stop_accepting();
+        let _stream = UnixStream::connect(&socket_path);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(bridge.stats().consumer_count, 0);
     }
 }
