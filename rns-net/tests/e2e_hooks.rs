@@ -220,6 +220,7 @@ fn start_transport_node(port: u16) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
+            link_proof_verify_threads: Default::default(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -304,6 +305,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
+            link_proof_verify_threads: Default::default(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
