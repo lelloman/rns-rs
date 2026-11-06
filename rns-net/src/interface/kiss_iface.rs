@@ -20,6 +20,8 @@ use crate::interface::{
 use crate::kiss;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
+mod folded;
+
 /// Configuration for a KISS interface.
 #[derive(Debug, Clone)]
 pub struct KissIfaceConfig {
@@ -198,6 +200,12 @@ fn start_with_control(
 
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
+    if crate::engine::FOLD_IO {
+        drop(flow_writer_file);
+        let link = folded::KissLink::new(config, tx, control.clone());
+        return Ok((link.serve(reader_file, writer_file)?, control));
+    }
+
     let reader_flow_state = flow_state.clone();
 
     // Spawn reader thread
@@ -235,6 +243,9 @@ fn spawn_initial_reconnect(
     flow_state: Arc<Mutex<FlowState>>,
     control: ListenerControl,
 ) -> io::Result<()> {
+    if crate::engine::FOLD_IO {
+        return folded::KissLink::new(config, tx, control).reopen();
+    }
     thread::Builder::new()
         .name(format!("kiss-reconnect-{}", config.interface_id.0))
         .spawn(move || {
@@ -428,11 +439,55 @@ fn process_queue(
     }
 }
 
-/// Attempt to reconnect the serial port.
+/// Attempt to reconnect the serial port: reopen it, reconfigure the TNC,
+/// and hand the driver a new writer.
 fn reconnect(
     config: &KissIfaceConfig,
     tx: &EventSender,
     flow_state: &Arc<Mutex<FlowState>>,
+    control: &ListenerControl,
+) -> Option<(std::fs::File, std::fs::File)> {
+    loop {
+        let (reader, cfg_writer) = reopen_port(config, control)?;
+        let flow_writer = match cfg_writer.try_clone() {
+            Ok(flow_writer) => flow_writer,
+            Err(e) => {
+                log::warn!(
+                    "[{}] failed to get handles from serial port: {}",
+                    config.name,
+                    e
+                );
+                continue;
+            }
+        };
+        // Reset flow state
+        let mut state = lock_or_recover(flow_state, "kiss flow state");
+        state.ready = true;
+        state.queue.clear();
+        drop(state);
+
+        let new_writer: Box<dyn Writer> = Box::new(KissWriter {
+            confirmed_pending: None,
+            file: cfg_writer,
+            flow_control: config.flow_control,
+            flow_state: flow_state.clone(),
+            ax25_source: config.ax25_source.clone(),
+        });
+        let _ = tx.send(Event::InterfaceUp(
+            config.interface_id,
+            Some(new_writer),
+            None,
+        ));
+        log::info!("[{}] KISS port reconnected", config.name);
+        return Some((reader, flow_writer));
+    }
+}
+
+/// Reopen the serial port every 5 seconds until it opens and the TNC takes
+/// its configuration. Returns a reader and a writer on the port, or `None`
+/// once the interface is stopped.
+fn reopen_port(
+    config: &KissIfaceConfig,
     control: &ListenerControl,
 ) -> Option<(std::fs::File, std::fs::File)> {
     loop {
@@ -454,43 +509,22 @@ fn reconnect(
         };
 
         match SerialPort::open(&serial_config) {
-            Ok(port) => {
-                match (port.reader(), port.writer(), port.writer()) {
-                    (Ok(reader), Ok(mut cfg_writer), Ok(flow_writer)) => {
-                        // 2-second init delay
-                        if !wait_while_active(control, Duration::from_secs(2)) {
-                            return None;
-                        }
-                        if let Err(e) = configure_tnc(&mut cfg_writer, config) {
-                            log::warn!("[{}] TNC config failed: {}", config.name, e);
-                            continue;
-                        }
-                        // Reset flow state
-                        let mut state = lock_or_recover(flow_state, "kiss flow state");
-                        state.ready = true;
-                        state.queue.clear();
-                        drop(state);
-
-                        let new_writer: Box<dyn Writer> = Box::new(KissWriter {
-                            confirmed_pending: None,
-                            file: cfg_writer,
-                            flow_control: config.flow_control,
-                            flow_state: flow_state.clone(),
-                            ax25_source: config.ax25_source.clone(),
-                        });
-                        let _ = tx.send(Event::InterfaceUp(
-                            config.interface_id,
-                            Some(new_writer),
-                            None,
-                        ));
-                        log::info!("[{}] KISS port reconnected", config.name);
-                        return Some((reader, flow_writer));
+            Ok(port) => match (port.reader(), port.writer()) {
+                (Ok(reader), Ok(mut cfg_writer)) => {
+                    // 2-second init delay
+                    if !wait_while_active(control, Duration::from_secs(2)) {
+                        return None;
                     }
-                    _ => {
-                        log::warn!("[{}] failed to get handles from serial port", config.name);
+                    if let Err(e) = configure_tnc(&mut cfg_writer, config) {
+                        log::warn!("[{}] TNC config failed: {}", config.name, e);
+                        continue;
                     }
+                    return Some((reader, cfg_writer));
                 }
-            }
+                _ => {
+                    log::warn!("[{}] failed to get handles from serial port", config.name);
+                }
+            },
             Err(e) => {
                 log::warn!("[{}] KISS reconnect failed: {}", config.name, e);
             }
@@ -679,6 +713,111 @@ mod tests {
         };
         let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
         ret > 0
+    }
+
+    fn thread_named(prefix: &str) -> bool {
+        std::fs::read_dir("/proc/self/task").unwrap().any(|task| {
+            let comm = task.unwrap().path().join("comm");
+            std::fs::read_to_string(comm).is_ok_and(|comm| comm.trim().starts_with(prefix))
+        })
+    }
+
+    /// Data frames the TNC side reads within `timeout`, past any
+    /// configuration commands.
+    fn tnc_reads(master: &mut std::fs::File, want: usize, timeout_ms: i32) -> Vec<Vec<u8>> {
+        let mut decoder = kiss::Decoder::new();
+        let mut frames = Vec::new();
+        let mut buf = [0u8; 1024];
+        while frames.len() < want && poll_read(master.as_raw_fd(), timeout_ms) {
+            let n = master.read(&mut buf).unwrap();
+            for event in decoder.feed(&buf[..n]) {
+                if let kiss::KissEvent::DataFrame(data) = event {
+                    frames.push(data);
+                }
+            }
+        }
+        frames
+    }
+
+    #[test]
+    fn folded_kiss_port_runs_on_the_driver_loop() {
+        if !crate::engine::FOLD_IO {
+            return;
+        }
+        let tempdir = tempfile::tempdir().unwrap();
+        let port_path = tempdir.path().join("kiss-port");
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let slave_path = std::fs::read_link(format!("/proc/self/fd/{slave_fd}")).unwrap();
+        std::os::unix::fs::symlink(slave_path, &port_path).unwrap();
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+
+        let (tx, rx) = crate::event::channel();
+        let config = KissIfaceConfig {
+            name: "folded-kiss".into(),
+            port: port_path.display().to_string(),
+            interface_id: InterfaceId(75),
+            flow_control: true,
+            ax25_source: Some(Ax25Address {
+                callsign: "N0CALL".into(),
+                ssid: 1,
+            }),
+            ..Default::default()
+        };
+        let (writer, control) = start_with_control(config, tx.clone()).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(75), None, None)
+        ));
+        assert!(writer.sends_inline());
+        let (mut writer, _) =
+            crate::interface::wrap_async_writer(writer, InterfaceId(75), "kiss", tx, 16);
+        assert!(!thread_named("kiss-reader-75"));
+        assert!(!thread_named("iface-writer-75"));
+
+        // Inbound, in two pieces, read by the receiver's wait.
+        let source = Ax25Address {
+            callsign: "N0PEER".into(),
+            ssid: 0,
+        };
+        let payload: Vec<u8> = (0..32).collect();
+        let framed = kiss::frame(&super::super::ax25_kiss::encode_ui_frame(&source, &payload));
+        master.write_all(&framed[..10]).unwrap();
+        master.write_all(&framed[10..]).unwrap();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame {
+                interface_id, data, ..
+            } => {
+                assert_eq!(interface_id, InterfaceId(75));
+                assert_eq!(&*data, &payload[..]);
+            }
+            other => panic!("expected Frame, got {other:?}"),
+        }
+
+        // Outbound: the first frame goes out and locks flow control, the
+        // second waits for the TNC to report ready.
+        writer.send_frame(b"first frame").unwrap();
+        writer.send_frame(b"second frame").unwrap();
+        let sent = tnc_reads(&mut master, 2, 200);
+        assert_eq!(sent.len(), 1);
+        let decoded = super::super::ax25_kiss::decode_ui_frame(&sent[0]).unwrap();
+        assert_eq!(decoded, b"first frame");
+        master
+            .write_all(&kiss::command_frame(kiss::CMD_READY, &[0x01]))
+            .unwrap();
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        let sent = tnc_reads(&mut master, 1, 2000);
+        let decoded = super::super::ax25_kiss::decode_ui_frame(&sent[0]).unwrap();
+        assert_eq!(decoded, b"second frame");
+
+        // The port going away is reported, and reopening starts.
+        drop(master);
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::InterfaceDown(id) => assert_eq!(id, InterfaceId(75)),
+            other => panic!("expected InterfaceDown, got {other:?}"),
+        }
+        control.request_stop();
+        drop(slave);
     }
 
     #[test]
