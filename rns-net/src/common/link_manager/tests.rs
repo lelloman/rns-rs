@@ -4076,12 +4076,12 @@ fn link_proofs_verified_on_the_pool_reopen_the_window_and_bad_ones_do_not() {
             wakes += 1;
         }
         init_mgr
-            .poll_proof_pool(&mut rng, &mut Vec::new())
+            .poll_proof_pool(&mut rng)
             .expect("the pool is running");
     }
     // Let the bad proof's verdict arrive too.
     std::thread::sleep(std::time::Duration::from_millis(100));
-    init_mgr.poll_proof_pool(&mut rng, &mut Vec::new());
+    init_mgr.poll_proof_pool(&mut rng);
     assert!(wakes >= 1);
     let link = &init_mgr.links[&link_id];
     assert_eq!(link.channel_proofs_received, 1);

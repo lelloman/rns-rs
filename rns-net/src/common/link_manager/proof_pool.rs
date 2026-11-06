@@ -1,7 +1,7 @@
-//! Verification of packet proofs on worker threads.
+//! Verification of link packet proofs on worker threads.
 //!
-//! Checking a proof's Ed25519 signature is most of what a link message or a
-//! proved single packet costs its sender once it is out. With threads to spare, the driver
+//! Checking a proof's Ed25519 signature is most of what a link message costs
+//! its sender once the message is out. With threads to spare, the driver
 //! hands each check to a small pool and goes on with the next event; the
 //! verdicts come back through a mailbox the driver drains on every turn.
 //! Without them (one CPU, or none configured) proofs are checked inline as
@@ -46,26 +46,17 @@ impl ProofVerifyThreads {
     }
 }
 
-/// What a proof proves delivery of.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum ProofSubject {
-    /// A packet sent on this link.
-    Link(LinkId),
-    /// A packet sent to this destination at this time.
-    Packet { destination: [u8; 16], sent_at: f64 },
-}
-
 struct Job {
-    subject: ProofSubject,
+    link_id: LinkId,
     packet_hash: [u8; 32],
     signature: [u8; 64],
     key: Ed25519PublicKey,
 }
 
-pub(crate) struct Verdict {
-    pub(crate) subject: ProofSubject,
-    pub(crate) packet_hash: [u8; 32],
-    pub(crate) valid: bool,
+pub(super) struct Verdict {
+    pub(super) link_id: LinkId,
+    pub(super) packet_hash: [u8; 32],
+    pub(super) valid: bool,
 }
 
 pub(super) struct ProofPool {
@@ -101,7 +92,7 @@ impl ProofPool {
                     };
                     let valid = job.key.verify(&job.signature, &job.packet_hash);
                     let verdict = Verdict {
-                        subject: job.subject,
+                        link_id: job.link_id,
                         packet_hash: job.packet_hash,
                         valid,
                     };
@@ -133,7 +124,7 @@ impl ProofPool {
     /// for the caller to check it inline.
     pub(super) fn submit(
         &self,
-        subject: ProofSubject,
+        link_id: LinkId,
         packet_hash: [u8; 32],
         signature: [u8; 64],
         key: Ed25519PublicKey,
@@ -142,7 +133,7 @@ impl ProofPool {
             return false;
         };
         jobs.try_send(Job {
-            subject,
+            link_id,
             packet_hash,
             signature,
             key,
