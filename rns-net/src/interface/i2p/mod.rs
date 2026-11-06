@@ -7,6 +7,7 @@
 //!
 //! Matches Python `I2PInterface` from `I2PInterface.py`.
 
+mod folded;
 pub mod sam;
 
 use std::io::{self, Read, Write};
@@ -106,6 +107,65 @@ impl Writer for I2pWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         self.stream.write_all(&hdlc::frame(data))
     }
+
+    fn loop_socket(&self) -> Option<std::os::fd::RawFd> {
+        // With interface I/O folded the driver writes the stream itself.
+        use std::os::fd::AsRawFd;
+        crate::engine::FOLD_IO.then(|| self.stream.as_raw_fd())
+    }
+}
+
+/// The interface a connected peer gets, named after `remote`.
+fn peer_info(
+    client_id: InterfaceId,
+    remote: &str,
+    ingress_control: rns_core::transport::types::IngressControlConfig,
+) -> InterfaceInfo {
+    InterfaceInfo {
+        stamp_costs: Default::default(),
+        id: client_id,
+        name: format!("I2PInterface/{}", remote),
+        mode: constants::MODE_FULL,
+        gravity: 0,
+        recursive_prs: false,
+        announces_from_internal: true,
+        announces_to_internal: None,
+        out_capable: true,
+        in_capable: true,
+        bitrate: Some(BITRATE_GUESS),
+        airtime_profile: None,
+        announce_rate_target: None,
+        announce_rate_grace: 0,
+        announce_rate_penalty: 0.0,
+        announce_cap: constants::ANNOUNCE_CAP,
+        is_local_client: false,
+        wants_tunnel: false,
+        tunnel_id: None,
+        mtu: 65535,
+        ia_freq: 0.0,
+        ip_freq: 0.0,
+        op_freq: 0.0,
+        op_samples: 0,
+        started: 0.0,
+        ingress_control,
+    }
+}
+
+/// The event that brings up a connected peer's interface.
+fn peer_up(
+    client_id: InterfaceId,
+    writer: Box<dyn Writer>,
+    info: InterfaceInfo,
+    template: Option<&super::DynamicInterfaceTemplate>,
+) -> Event {
+    match template {
+        Some(template) => Event::DynamicInterfaceUp {
+            id: client_id,
+            writer,
+            registration: Box::new(template.registration(info)),
+        },
+        None => Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info))),
+    }
 }
 
 /// Sanitize a name for use in filenames and SAM session IDs.
@@ -191,6 +251,17 @@ fn start_with_template(
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) -> io::Result<()> {
     let name = config.name.clone();
+
+    if crate::engine::FOLD_IO {
+        thread::Builder::new()
+            .name(format!("i2p-setup-{}", config.interface_id.0))
+            .spawn(move || {
+                if let Err(e) = folded::setup(config, tx, next_id, dynamic_template) {
+                    log::error!("[{}] I2P setup failed: {}", name, e);
+                }
+            })?;
+        return Ok(());
+    }
 
     thread::Builder::new()
         .name(format!("i2p-coord-{}", config.interface_id.0))
@@ -384,45 +455,12 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                     stream: writer_stream,
                 });
 
-                let info = InterfaceInfo {
-                    stamp_costs: Default::default(),
-                    id: client_id,
-                    name: format!("I2PInterface/{}", peer_addr),
-                    mode: constants::MODE_FULL,
-                    gravity: 0,
-                    recursive_prs: false,
-                    announces_from_internal: true,
-                    announces_to_internal: None,
-                    out_capable: true,
-                    in_capable: true,
-                    bitrate: Some(BITRATE_GUESS),
-                    airtime_profile: None,
-                    announce_rate_target: None,
-                    announce_rate_grace: 0,
-                    announce_rate_penalty: 0.0,
-                    announce_cap: constants::ANNOUNCE_CAP,
-                    is_local_client: false,
-                    wants_tunnel: false,
-                    tunnel_id: None,
-                    mtu: 65535,
-                    ia_freq: 0.0,
-                    ip_freq: 0.0,
-                    op_freq: 0.0,
-                    op_samples: 0,
-                    started: 0.0,
-                    ingress_control,
-                };
-
-                // Register dynamic interface
-                let event = if let Some(template) = &dynamic_template {
-                    Event::DynamicInterfaceUp {
-                        id: client_id,
-                        writer,
-                        registration: Box::new(template.registration(info)),
-                    }
-                } else {
-                    Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
-                };
+                let event = peer_up(
+                    client_id,
+                    writer,
+                    peer_info(client_id, &peer_addr, ingress_control),
+                    dynamic_template.as_ref(),
+                );
                 if tx.send(event).is_err() {
                     return; // Driver shut down
                 }
@@ -511,45 +549,12 @@ fn acceptor_loop(context: AcceptorContext) {
                     stream: writer_stream,
                 });
 
-                let info = InterfaceInfo {
-                    stamp_costs: Default::default(),
-                    id: client_id,
-                    name: format!("I2PInterface/{}", remote_b32),
-                    mode: constants::MODE_FULL,
-                    gravity: 0,
-                    recursive_prs: false,
-                    announces_from_internal: true,
-                    announces_to_internal: None,
-                    out_capable: true,
-                    in_capable: true,
-                    bitrate: Some(BITRATE_GUESS),
-                    airtime_profile: None,
-                    announce_rate_target: None,
-                    announce_rate_grace: 0,
-                    announce_rate_penalty: 0.0,
-                    announce_cap: constants::ANNOUNCE_CAP,
-                    is_local_client: false,
-                    wants_tunnel: false,
-                    tunnel_id: None,
-                    mtu: 65535,
-                    ia_freq: 0.0,
-                    ip_freq: 0.0,
-                    op_freq: 0.0,
-                    op_samples: 0,
-                    started: 0.0,
-                    ingress_control,
-                };
-
-                // Register dynamic interface
-                let event = if let Some(template) = &dynamic_template {
-                    Event::DynamicInterfaceUp {
-                        id: client_id,
-                        writer,
-                        registration: Box::new(template.registration(info)),
-                    }
-                } else {
-                    Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
-                };
+                let event = peer_up(
+                    client_id,
+                    writer,
+                    peer_info(client_id, &remote_b32, ingress_control),
+                    dynamic_template.as_ref(),
+                );
                 if tx.send(event).is_err() {
                     return; // Driver shut down
                 }

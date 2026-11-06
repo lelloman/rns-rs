@@ -471,6 +471,29 @@ pub(crate) fn stream_accept_with_mark(
     session_id: &str,
     underlay_mark: Option<u32>,
 ) -> Result<(TcpStream, Destination), SamError> {
+    let mut stream = stream_accept_begin(sam_addr, session_id, underlay_mark)?;
+
+    // After RESULT=OK, the remote destination is sent as a line of base64 + newline
+    // before the data phase begins.
+    let dest_line = read_line(&mut stream)?;
+    let remote_dest = Destination::from_i2p_base64(dest_line.trim())?;
+
+    // Clear timeouts for the data phase
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
+
+    Ok((stream, remote_dest))
+}
+
+/// Ask the session to accept the next incoming connection on a fresh SAM
+/// connection, returning it once the bridge agreed. The remote peer's
+/// destination arrives on it as a line when a peer connects, followed by
+/// the data; nothing past the bridge's reply has been read.
+pub(crate) fn stream_accept_begin(
+    sam_addr: &SocketAddr,
+    session_id: &str,
+    underlay_mark: Option<u32>,
+) -> Result<TcpStream, SamError> {
     let mut stream = hello_connect(sam_addr, underlay_mark)?;
 
     writeln!(stream, "STREAM ACCEPT ID={} SILENT=false", session_id,)?;
@@ -486,17 +509,7 @@ pub(crate) fn stream_accept_with_mark(
         )));
     }
     check_result(&resp)?;
-
-    // After RESULT=OK, the remote destination is sent as a line of base64 + newline
-    // before the data phase begins.
-    let dest_line = read_line(&mut stream)?;
-    let remote_dest = Destination::from_i2p_base64(dest_line.trim())?;
-
-    // Clear timeouts for the data phase
-    stream.set_read_timeout(None)?;
-    stream.set_write_timeout(None)?;
-
-    Ok((stream, remote_dest))
+    Ok(stream)
 }
 
 /// Look up a .b32.i2p name (or other I2P name) to a full destination.
