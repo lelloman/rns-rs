@@ -13516,3 +13516,52 @@ fn folded_timers_persist_transport_state() {
     crate::storage::load_transport_state(&dir).expect("the snapshot loads back");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A compact driver with folded CPU work verifies queued announces itself,
+/// with no verification thread: a valid one is delivered and a tampered one
+/// counts as a protocol violation.
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+#[test]
+fn folded_work_verifies_queued_announces() {
+    let (tx, rx) = event::channel();
+    let (cbs, announces, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+    driver.async_announce_verification = true;
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, _sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+    let valid = build_announce_packet(&Identity::new(&mut OsRng));
+    let mut tampered = build_announce_packet(&Identity::new(&mut OsRng));
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+    for raw in [valid, tampered] {
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: raw.into(),
+            rssi: None,
+            snr: None,
+        })
+        .unwrap();
+    }
+    let handle = std::thread::spawn(move || {
+        driver.run();
+        driver
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while announces.lock().unwrap().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    tx.send(Event::Shutdown).unwrap();
+    let driver = handle.join().unwrap();
+    assert_eq!(announces.lock().unwrap().len(), 1);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        1
+    );
+    assert!(driver.folded.announces.is_empty());
+}

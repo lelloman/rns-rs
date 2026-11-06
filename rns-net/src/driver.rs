@@ -111,6 +111,8 @@ impl Default for AnnounceRateDefaults {
     }
 }
 
+mod announce_check;
+pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
 mod dispatch;
 mod events;
 mod interface_management;
@@ -718,6 +720,14 @@ pub(crate) struct FoldedTimers {
     pub(crate) jobs: std::collections::VecDeque<FoldedJob>,
     /// Whether a timerfd loop source delivers the tick.
     pub(crate) ticks_from_source: bool,
+    /// Announces taken from the verification queue, checked one per idle
+    /// turn when CPU work is folded.
+    pub(crate) announces: std::collections::VecDeque<(
+        rns_core::transport::announce_verify_queue::AnnounceVerifyKey,
+        rns_core::transport::announce_verify_queue::PendingAnnounce,
+    )>,
+    /// Whether the verification queue may hold announces not yet taken.
+    pub(crate) announces_queued: bool,
 }
 
 pub(crate) enum FoldedJob {
@@ -738,6 +748,8 @@ impl FoldedTimers {
             persist_dir: None,
             jobs: std::collections::VecDeque::new(),
             ticks_from_source: false,
+            announces: std::collections::VecDeque::new(),
+            announces_queued: false,
         }
     }
 }

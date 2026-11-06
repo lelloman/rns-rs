@@ -7,6 +7,11 @@ use rns_core::transport::{DecodedInboundFrame, DecodedPacket, RxMetadata};
 /// turns' work, which is far below its one-second period.
 const FOLDED_TIMER_CHECK_TURNS: u32 = 32;
 
+/// A driver that never goes idle still runs one unit of folded work (a
+/// queued job, or one announce check) once in this many events, so that work
+/// waits a bounded time under load instead of until the load stops.
+const FOLDED_WORK_BUSY_EVENTS: u32 = 64;
+
 /// Events the driver handles before flushing driver-run writers and polling
 /// its sockets even though its queue has not emptied yet.
 const WRITER_FLUSH_EVENTS: usize = 1024;
@@ -316,12 +321,16 @@ impl Driver {
                 .announce_verify_queue
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let queued = announce_queue.len();
             self.engine.handle_decoded_inbound_into(
                 inbound_frame,
                 &mut self.rng,
                 Some(&mut announce_queue),
                 &mut actions,
             );
+            if crate::engine::FOLD_WORK && announce_queue.len() > queued {
+                self.folded.announces_queued = true;
+            }
         } else {
             self.engine.handle_decoded_inbound_into(
                 inbound_frame,
@@ -397,6 +406,58 @@ impl Driver {
             self.event_tx
                 .set_ingress_bursts(interface_id, bursts.0, bursts.1);
             self.published_ingress_bursts.insert(interface_id, bursts);
+        }
+    }
+
+    pub(crate) fn handle_announce_verify_failed(
+        &mut self,
+        key: rns_core::transport::announce_verify_queue::AnnounceVerifyKey,
+    ) {
+        let mut announce_queue = self
+            .announce_verify_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let interface = announce_queue.pending_interface(&key);
+        let blackholed = announce_queue
+            .pending_identity_hash(&key)
+            .is_some_and(|hash| self.engine.is_blackholed(&hash, time::now()));
+        if announce_queue.complete_failure(&key) {
+            if let Some(entry) = interface.and_then(|id| self.interfaces.get_mut(&id)) {
+                if !blackholed {
+                    entry.stats.protocol_violations += 1;
+                }
+            }
+        }
+    }
+
+    /// Whether the folded CPU work has an announce to check.
+    fn has_folded_announce_work(&self) -> bool {
+        crate::engine::FOLD_WORK
+            && (self.folded.announces_queued || !self.folded.announces.is_empty())
+    }
+
+    /// Check one announce from the verification queue, taking the queued
+    /// ones first if needed, and complete it as the verification thread's
+    /// event would.
+    fn check_folded_announce(&mut self) {
+        if self.folded.announces.is_empty() && self.folded.announces_queued {
+            self.folded.announces_queued = false;
+            let taken = self
+                .announce_verify_queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take_pending(time::now());
+            self.folded.announces.extend(taken);
+        }
+        let Some((key, pending)) = self.folded.announces.pop_front() else {
+            return;
+        };
+        match crate::driver::check_pending_announce(&pending) {
+            crate::driver::AnnounceCheck::Valid {
+                validated,
+                sig_cache_key,
+            } => self.handle_announce_verified_event(key, *validated, sig_cache_key),
+            crate::driver::AnnounceCheck::Invalid { .. } => self.handle_announce_verify_failed(key),
         }
     }
 
@@ -1179,6 +1240,8 @@ impl Driver {
         // Turns since folded timers were last checked: a busy loop checks
         // them every so many turns, an idle one before it waits.
         let mut unchecked_turns = 0u32;
+        // Events handled since folded work last ran on a busy driver.
+        let mut busy_events = 0u32;
         loop {
             // Each turn handles at most one event and reads the clock at most
             // once (see `time::hold`). The scope ends before the loop waits.
@@ -1212,7 +1275,10 @@ impl Driver {
                     // Everything the last poll delivered has been handled:
                     // send this pass's output before waiting for more.
                     self.flush_writers();
-                    if self.link_manager.has_idle_work() || !self.folded.jobs.is_empty() {
+                    if self.link_manager.has_idle_work()
+                        || !self.folded.jobs.is_empty()
+                        || self.has_folded_announce_work()
+                    {
                         // Sources that are ready go before idle work: what
                         // they hold, such as the rest of a window, may be
                         // what a peer waits on.
@@ -1227,6 +1293,8 @@ impl Driver {
                         // One job per turn: events that arrive meanwhile go first.
                         if let Some(job) = self.folded.jobs.pop_front() {
                             self.run_folded_job(job);
+                        } else if self.has_folded_announce_work() {
+                            self.check_folded_announce();
                         } else {
                             let actions = self.link_manager.run_idle_work(&mut self.rng);
                             self.dispatch_link_actions(actions);
@@ -1254,6 +1322,17 @@ impl Driver {
             // Bound output latency, and keep serving sockets, while other
             // threads keep the queue from emptying.
             unflushed += 1;
+            if crate::engine::FOLD_TIMERS || crate::engine::FOLD_WORK {
+                busy_events += 1;
+                if busy_events >= FOLDED_WORK_BUSY_EVENTS {
+                    busy_events = 0;
+                    if let Some(job) = self.folded.jobs.pop_front() {
+                        self.run_folded_job(job);
+                    } else if self.has_folded_announce_work() {
+                        self.check_folded_announce();
+                    }
+                }
+            }
             // A tick queued behind a long backlog would leave the snapshot
             // stale for as long as the backlog takes to drain.
             let tick_interval =
@@ -1293,23 +1372,7 @@ impl Driver {
                 } => {
                     self.handle_announce_verified_event(key, *validated, sig_cache_key);
                 }
-                Event::AnnounceVerifyFailed { key, .. } => {
-                    let mut announce_queue = self
-                        .announce_verify_queue
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let interface = announce_queue.pending_interface(&key);
-                    let blackholed = announce_queue
-                        .pending_identity_hash(&key)
-                        .is_some_and(|hash| self.engine.is_blackholed(&hash, time::now()));
-                    if announce_queue.complete_failure(&key) {
-                        if let Some(entry) = interface.and_then(|id| self.interfaces.get_mut(&id)) {
-                            if !blackholed {
-                                entry.stats.protocol_violations += 1;
-                            }
-                        }
-                    }
-                }
+                Event::AnnounceVerifyFailed { key, .. } => self.handle_announce_verify_failed(key),
                 Event::Tick => self.handle_tick_event(),
                 Event::BeginDrain { timeout } => {
                     self.begin_drain(timeout);

@@ -1,7 +1,7 @@
 # Engines: compact and parallel
 
-Status: in progress. The engine switch and the folded timers group are in;
-the rest is design. Nothing here changes the wire protocol.
+Status: in progress. The engine switch, the folded timers group and folded
+announce verification are in; the rest is design. Nothing here changes the wire protocol.
 
 ## Purpose
 
