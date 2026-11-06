@@ -2369,20 +2369,21 @@ impl RnsNode {
             log::info!("Probe responder enabled on {:02x?}", &probe_dest[..4],);
         }
 
-        // Spawn timer thread with configurable tick interval
-        let timer_tx = tx.clone();
-        let timer_interval = Arc::clone(&tick_interval_ms);
-        thread::Builder::new()
-            .name("rns-timer".into())
-            .spawn(move || {
-                loop {
+        // Spawn timer thread with configurable tick interval, unless the
+        // driver keeps the tick itself (compact engine).
+        if !crate::engine::FOLD_TIMERS {
+            let timer_tx = tx.clone();
+            let timer_interval = Arc::clone(&tick_interval_ms);
+            thread::Builder::new()
+                .name("rns-timer".into())
+                .spawn(move || loop {
                     let ms = timer_interval.load(Ordering::Relaxed);
                     thread::sleep(Duration::from_millis(ms));
                     if timer_tx.send(Event::Tick).is_err() {
                         break; // receiver dropped
                     }
-                }
-            })?;
+                })?;
+        }
 
         // Start LocalServer for shared instance clients if share_instance is enabled
         #[cfg(feature = "iface-local")]
@@ -2537,6 +2538,11 @@ impl RnsNode {
         // Spawn the driver after startup has registered local destinations and static interfaces.
         // Interface readers can enqueue frames before this point; the bounded event queue preserves
         // ordering and backpressures instead of dropping startup traffic.
+        log::info!("rns-net {} engine", crate::engine::ENGINE);
+        // The compact engine persists transport state on the driver loop.
+        if crate::engine::FOLD_TIMERS {
+            driver.folded.persist_dir = transport_state_dir.clone();
+        }
         let driver_handle = thread::Builder::new()
             .name("rns-driver".into())
             .spawn(move || {
@@ -2546,7 +2552,9 @@ impl RnsNode {
         // Match upstream's 12-hour background persistence cadence. The worker
         // performs disk serialization at low priority and never touches engine
         // state directly; it obtains a consistent snapshot through the driver.
-        let (persist_handle, persist_stop) = if let Some(storage_dir) = transport_state_dir.clone()
+        let (persist_handle, persist_stop) = if let Some(storage_dir) = transport_state_dir
+            .clone()
+            .filter(|_| !crate::engine::FOLD_TIMERS)
         {
             let persist_tx = tx.clone();
             let (stop_tx, stop_rx) = std::sync::mpsc::channel();

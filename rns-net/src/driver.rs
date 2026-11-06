@@ -703,6 +703,40 @@ pub(crate) struct ManagedInterface {
     pub(crate) static_ids: Vec<InterfaceId>,
 }
 
+/// Interval of the transport-state snapshot, as the persistence thread keeps.
+pub(crate) const TRANSPORT_STATE_PERSIST_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+
+/// Deadlines and pending jobs of the timer and housekeeping work the driver
+/// runs itself when [`crate::engine::FOLD_TIMERS`] is set.
+pub(crate) struct FoldedTimers {
+    pub(crate) next_tick: Instant,
+    pub(crate) next_persist: Instant,
+    /// Where transport state is persisted, on transport nodes.
+    pub(crate) persist_dir: Option<std::path::PathBuf>,
+    pub(crate) jobs: std::collections::VecDeque<FoldedJob>,
+}
+
+pub(crate) enum FoldedJob {
+    PersistTransportState,
+    CleanRatchets {
+        known_destinations: HashSet<[u8; 16]>,
+        now: f64,
+        expiry: f64,
+    },
+}
+
+impl FoldedTimers {
+    fn new() -> Self {
+        let now = Instant::now();
+        FoldedTimers {
+            next_tick: now + Duration::from_millis(DEFAULT_TICK_INTERVAL_MS),
+            next_persist: now + TRANSPORT_STATE_PERSIST_INTERVAL,
+            persist_dir: None,
+            jobs: std::collections::VecDeque::new(),
+        }
+    }
+}
+
 pub struct Driver {
     resource_preparation: Option<resource_preparation::Worker>,
     pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,
@@ -911,6 +945,9 @@ pub struct Driver {
     known_destination_cleanup: Option<KnownDestinationCleanup>,
     /// Low-priority ratchet filesystem cleanup associated with the last pass.
     ratchet_cleanup_handle: Option<std::thread::JoinHandle<()>>,
+    /// Timers and housekeeping the driver runs itself when they are folded
+    /// (see [`crate::engine::FOLD_TIMERS`]).
+    pub(crate) folded: FoldedTimers,
     /// Count of known-destination cap evictions since start.
     pub(crate) known_destinations_cap_evict_count: usize,
     /// Runtime-configurable interval for starting announce cache cleanup.
@@ -1111,6 +1148,7 @@ impl Driver {
                 .known_destinations_cleanup_interval_ticks,
             known_destination_cleanup: None,
             ratchet_cleanup_handle: None,
+            folded: FoldedTimers::new(),
             resource_preparation: None,
             known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults

@@ -127,6 +127,12 @@ jobs:
 
       - name: Run workspace tests
         run: cargo test --workspace
+      - name: Test the compact engine
+        # The workspace build above runs the parallel engine (rns-cli asks for
+        # it); rns-net built alone runs the compact one.
+        run: |
+          cargo test -p rns-net
+          cargo test -p rns-net --features compact-threads-timers
 
   esp32-lockfile:
     name: ESP32 Lockfile

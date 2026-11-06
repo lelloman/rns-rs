@@ -635,6 +635,67 @@ impl Driver {
         self.start_ratchet_cleanup(now);
     }
 
+    /// Fire the folded timers that are due: the tick, and the transport-state
+    /// snapshot, which is queued as idle work.
+    fn run_folded_timers(&mut self) {
+        let now = Instant::now();
+        if now >= self.folded.next_tick {
+            let interval = Duration::from_millis(self.tick_interval_ms.load(Ordering::Relaxed));
+            self.folded.next_tick = now + interval;
+            self.handle_tick_event();
+        }
+        if self.folded.persist_dir.is_some() && now >= self.folded.next_persist {
+            self.folded.next_persist = now + crate::driver::TRANSPORT_STATE_PERSIST_INTERVAL;
+            self.folded
+                .jobs
+                .push_back(crate::driver::FoldedJob::PersistTransportState);
+        }
+    }
+
+    /// How long the driver may block waiting for events: until the next
+    /// folded timer, when timers are folded.
+    fn folded_wait(&self) -> Option<Duration> {
+        if !crate::engine::FOLD_TIMERS {
+            return None;
+        }
+        let mut next = self.folded.next_tick;
+        if self.folded.persist_dir.is_some() {
+            next = next.min(self.folded.next_persist);
+        }
+        Some(next.saturating_duration_since(Instant::now()))
+    }
+
+    pub(crate) fn run_folded_job(&mut self, job: crate::driver::FoldedJob) {
+        match job {
+            crate::driver::FoldedJob::PersistTransportState => {
+                let Some(dir) = self.folded.persist_dir.clone() else {
+                    return;
+                };
+                let snapshot = self.engine.persistence_snapshot();
+                if let Err(err) = crate::storage::save_transport_state(&snapshot, &dir, true) {
+                    log::warn!("failed to persist transport state: {}", err);
+                }
+            }
+            crate::driver::FoldedJob::CleanRatchets {
+                known_destinations,
+                now,
+                expiry,
+            } => {
+                let Some(store) = self.ratchet_store.clone() else {
+                    return;
+                };
+                match store.cleanup(&known_destinations, now, expiry) {
+                    Ok(stats) if stats.removed > 0 => log::info!(
+                        "Known-destination cleanup removed {} stale ratchets",
+                        stats.removed
+                    ),
+                    Ok(_) => {}
+                    Err(err) => log::warn!("failed to clean ratchets: {}", err),
+                }
+            }
+        }
+    }
+
     fn finish_ratchet_cleanup_if_ready(&mut self) {
         let finished = self
             .ratchet_cleanup_handle
@@ -656,6 +717,23 @@ impl Driver {
         };
         let known_destinations = self.known_destinations.keys().copied().collect();
         let expiry = self.ratchet_expiry_secs;
+        if crate::engine::FOLD_TIMERS {
+            let queued = self
+                .folded
+                .jobs
+                .iter()
+                .any(|job| matches!(job, crate::driver::FoldedJob::CleanRatchets { .. }));
+            if !queued {
+                self.folded
+                    .jobs
+                    .push_back(crate::driver::FoldedJob::CleanRatchets {
+                        known_destinations,
+                        now,
+                        expiry,
+                    });
+            }
+            return;
+        }
         match std::thread::Builder::new()
             .name("rns-destination-cleanup".into())
             .spawn(move || {
@@ -1065,6 +1143,9 @@ impl Driver {
             // Each turn handles at most one event and reads the clock at most
             // once (see `time::hold`). The scope ends before the loop waits.
             let clock = time::hold();
+            if crate::engine::FOLD_TIMERS {
+                self.run_folded_timers();
+            }
             self.poll_resource_preparations();
             let actions = self.link_manager.poll_receive_worker(&mut self.rng);
             self.dispatch_link_actions(actions);
@@ -1087,7 +1168,7 @@ impl Driver {
                     // Everything the last poll delivered has been handled:
                     // send this pass's output before waiting for more.
                     self.flush_writers();
-                    if self.link_manager.has_idle_work() {
+                    if self.link_manager.has_idle_work() || !self.folded.jobs.is_empty() {
                         // Sources that are ready go before idle work: what
                         // they hold, such as the rest of a window, may be
                         // what a peer waits on.
@@ -1100,14 +1181,18 @@ impl Driver {
                             continue;
                         }
                         // One job per turn: events that arrive meanwhile go first.
-                        let actions = self.link_manager.run_idle_work(&mut self.rng);
-                        self.dispatch_link_actions(actions);
+                        if let Some(job) = self.folded.jobs.pop_front() {
+                            self.run_folded_job(job);
+                        } else {
+                            let actions = self.link_manager.run_idle_work(&mut self.rng);
+                            self.dispatch_link_actions(actions);
+                        }
                         continue;
                     }
                     drop(clock);
                     unflushed = 0;
                     ready.clear();
-                    if let Err(error) = self.rx.wait(&mut ready, None) {
+                    if let Err(error) = self.rx.wait(&mut ready, self.folded_wait()) {
                         log::warn!("driver wait failed: {error}");
                     }
                     self.handle_ready_sources(&ready);

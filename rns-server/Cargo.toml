@@ -9,16 +9,32 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = []
+default = ["engine-parallel", "interfaces"]
+# The node's parallel engine (rns-net docs/engines.md); without it, compact.
+engine-parallel = ["rns-cli/engine-parallel", "rns-ctl/engine-parallel", "rns-net/engine-parallel"]
+# Every interface type rns-cli and rns-ctl build by default.
+interfaces = [
+    "rns-cli/iface-tcp", "rns-ctl/iface-tcp",
+    "rns-cli/iface-udp", "rns-ctl/iface-udp",
+    "rns-cli/iface-auto", "rns-ctl/iface-auto",
+    "rns-cli/iface-serial", "rns-ctl/iface-serial",
+    "rns-cli/iface-kiss", "rns-ctl/iface-kiss",
+    "rns-cli/iface-ax25-kiss", "rns-ctl/iface-ax25-kiss",
+    "rns-cli/iface-pipe", "rns-ctl/iface-pipe",
+    "rns-cli/iface-rnode", "rns-ctl/iface-rnode",
+    "rns-cli/iface-backbone", "rns-ctl/iface-backbone",
+    "rns-cli/iface-i2p", "rns-ctl/iface-i2p",
+    "rns-cli/iface-weave", "rns-ctl/iface-weave",
+]
 rns-hooks = ["rns-hooks-native"]
 rns-hooks-wasm = ["rns-cli/rns-hooks-wasm", "rns-net/rns-hooks-wasm", "rns-ctl/rns-hooks-wasm"]
 rns-hooks-native = ["rns-cli/rns-hooks-native", "rns-net/rns-hooks-native", "rns-ctl/rns-hooks-native"]
 rns-hooks-builtin = ["rns-cli/rns-hooks-builtin", "rns-net/rns-hooks-builtin", "rns-ctl/rns-hooks-builtin"]
 
 [dependencies]
-rns-cli = { version = "0.7.1", path = "../rns-cli" }
+rns-cli = { version = "0.7.1", path = "../rns-cli", default-features = false }
 rns-net.workspace = true
-rns-ctl = { version = "0.7.1", path = "../rns-ctl" }
+rns-ctl = { version = "0.7.1", path = "../rns-ctl", default-features = false }
 env_logger = "0.11"
 libc = "0.2"
 log = "0.4"

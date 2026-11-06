@@ -310,18 +310,21 @@ impl RnsNode {
             },
         );
 
-        // Spawn timer thread with configurable tick interval
-        let timer_tx = tx.clone();
-        let timer_interval = Arc::clone(&tick_interval_ms);
-        thread::Builder::new()
-            .name("rns-timer-client".into())
-            .spawn(move || loop {
-                let ms = timer_interval.load(Ordering::Relaxed);
-                thread::sleep(Duration::from_millis(ms));
-                if timer_tx.send(event::Event::Tick).is_err() {
-                    break;
-                }
-            })?;
+        // Spawn timer thread with configurable tick interval, unless the
+        // driver keeps the tick itself (compact engine).
+        if !crate::engine::FOLD_TIMERS {
+            let timer_tx = tx.clone();
+            let timer_interval = Arc::clone(&tick_interval_ms);
+            thread::Builder::new()
+                .name("rns-timer-client".into())
+                .spawn(move || loop {
+                    let ms = timer_interval.load(Ordering::Relaxed);
+                    thread::sleep(Duration::from_millis(ms));
+                    if timer_tx.send(event::Event::Tick).is_err() {
+                        break;
+                    }
+                })?;
+        }
 
         // Spawn driver thread
         let driver_handle = thread::Builder::new()

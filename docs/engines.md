@@ -1,6 +1,7 @@
 # Engines: compact and parallel
 
-Status: design, not yet implemented. Nothing here changes the wire protocol.
+Status: in progress. The engine switch and the folded timers group are in;
+the rest is design. Nothing here changes the wire protocol.
 
 ## Purpose
 
@@ -49,7 +50,7 @@ Non-goals:
  rns-net/common     shared: link manager, interfaces, config, storage, RPC,
                     destinations, events
  ┌──────────────────────────────────┬──────────────────────────────────────┐
- │ engine-compact                    │ engine-parallel                      │
+ │ compact (default)                 │ parallel (`engine-parallel`)         │
  │ driver loop; helpers folded into  │ interface I/O threads, a driver that │
  │ it or kept as threads, per group  │ owns protocol state, a crypto pool   │
  └──────────────────────────────────┴──────────────────────────────────────┘
@@ -62,16 +63,16 @@ driver's job. The split therefore lives in `rns-net`, below `common/`.
 
 ## Build-time selection
 
-`rns-net` gains two mutually exclusive features:
-
-| Feature | Engine |
-|---|---|
-| `engine-compact` | the compact engine |
-| `engine-parallel` | the parallel engine |
-
-Enabling both, or neither, is a compile error with a message naming the two
-features. Crates above `rns-net` forward the choice (`rns-cli`, `rns-ctl`,
-`rns-server`, `rns-tun` gain the same two features and pass them down).
+`rns-net` has one engine feature, `engine-parallel`; without it a build runs
+the compact engine. Cargo merges the features every crate in a build asks of
+`rns-net`, so mutually exclusive engine features would break any build that
+compiles a compact crate and a parallel one together (a workspace build, for
+example). With one additive feature, such a build runs the parallel engine,
+and each crate built on its own gets its own default. The crates above
+`rns-net` that default to parallel (`rns-cli`, `rns-ctl`, `rns-server`) have
+an `engine-parallel` feature of their own, on by default, that passes the
+choice down; building them with it off gives the compact engine. A node logs
+which engine it runs when it starts (`rns_net::engine::ENGINE`).
 
 Defaults:
 
@@ -87,21 +88,22 @@ parallel engine still works (it starts no crypto workers and does the work
 inline) but keeps its interface I/O threads, so the compact build is the
 better choice there, and the operator documentation says so.
 
-The compact engine has four further features, one per group of helpers,
-described below. They are enabled by default and only meaningful with
-`engine-compact`:
+The compact engine folds four groups of helpers into the driver loop by
+default. Each group has a feature that keeps its threads instead, exactly as
+today; the features only matter without `engine-parallel`:
 
-| Feature | Group |
+| Feature | Keeps these threads |
 |---|---|
-| `compact-fold-timers` | timers and housekeeping |
-| `compact-fold-work` | CPU work |
-| `compact-fold-io` | interface I/O |
-| `compact-fold-services` | services off the packet path |
+| `compact-threads-timers` | timers and housekeeping |
+| `compact-threads-work` | CPU work |
+| `compact-threads-io` | interface I/O |
+| `compact-threads-services` | services off the packet path |
 
-With a fold feature on, that group's jobs run on the driver loop. With it off,
-the group keeps its threads, exactly as today. The job code is the same either
-way; only where it runs changes, so every combination is valid. CI builds at
-least: compact fully folded, compact with no folds, and parallel.
+The features are additive for the same reason as the engine feature: one that
+adds threads merges cleanly, one that removes them would not. The job code is
+the same either way; only where it runs changes, so every combination is
+valid. CI tests the workspace (parallel), `rns-net` alone (compact, fully
+folded) and `rns-net` with the thread features (compact, unfolded).
 
 The existing optional features map as follows:
 
@@ -109,7 +111,7 @@ The existing optional features map as follows:
 |---|---|
 | `low-latency-flush` | the parallel engine's normal behaviour; the compact engine flushes at the end of each pass. `flush_after_us` still overrides either |
 | `proof-pool` | replaced by the parallel engine's crypto pool; removed from the compact engine |
-| `x25519-aws-lc` (`rns-crypto`) | stays a `rns-crypto` feature usable with either engine; on by default in `engine-parallel` builds of the CLI crates |
+| `x25519-aws-lc` (`rns-crypto`) | stays a `rns-crypto` feature usable with either engine. It brings a C and CMake build dependency, so it is opt-in even for parallel builds; release builds of `rnsd` and `rns-server` turn it on |
 
 ## What is shared
 
@@ -123,7 +125,7 @@ The existing optional features map as follows:
 - `rns-net/src/common/` (link manager, interfaces, configuration, storage,
   destinations, events) is shared. Interfaces gain a pollable form where the
   compact engine folds their I/O; the threaded form stays for the parallel
-  engine and for compact builds that keep `compact-fold-io` off.
+  engine and for compact builds with `compact-threads-io`.
 - Hooks run where they run today: on the thread that owns protocol state, at
   the same attach points, in the same order. Neither engine moves a hook onto
   a worker.
@@ -159,13 +161,13 @@ established:
 
 | Group | Helpers today | Folded form | Effort |
 |---|---|---|---|
-| Timers and housekeeping (`compact-fold-timers`) | `rns-timer` (sends `Tick` every N ms), `rns-persist` (transport state snapshot every 12 h), `rns-destination-cleanup` (stale ratchet removal) | the tick becomes the loop's timed wait; persistence and cleanup become idle jobs, the snapshot written in slices | small |
-| CPU work (`compact-fold-work`) | `rns-verify` (announce signatures), `rns-resource-prepare` (compression of outgoing resources), `rns-resource-receive` (assembly of incoming ones), `rns-stamper` and `rns-link-stamp` (stamp generation), `rns-proof-N` (link proof pool) | idle jobs; announce verification one announce per slice; compression and assembly in bounded chunks; stamp generation as a resumable search of a fixed number of candidates per slice; link proofs verified inline | medium: compression and stamping need resumable slicing |
-| Interface I/O (`compact-fold-io`) | readers for UDP, serial, KISS, RNode, pipe, local, Auto, I2P and Weave; `iface-writer-N`; reconnect threads for TCP, Backbone, serial and KISS | non-blocking, pollable sources and writers in the loop (TCP already works this way); reconnects as non-blocking connects with timers | large: one interface type at a time |
-| Services (`compact-fold-services`) | RPC servers and clients, the shared-instance server, the provider bridge, hole-punch probes | pollable listeners and connections in the loop | medium |
+| Timers and housekeeping (`compact-threads-timers` keeps the threads) | `rns-timer` (sends `Tick` every N ms), `rns-persist` (transport state snapshot every 12 h), `rns-destination-cleanup` (stale ratchet removal) | the tick becomes a deadline the loop checks every turn and waits for when idle; persistence and ratchet cleanup become idle jobs, and queued ones complete at shutdown as a joined thread would. The snapshot is written as one job; slicing it is left for a measured stall on a large path table | small (done) |
+| CPU work (`compact-threads-work` keeps the threads) | `rns-verify` (announce signatures), `rns-resource-prepare` (compression of outgoing resources), `rns-resource-receive` (assembly of incoming ones), `rns-stamper` and `rns-link-stamp` (stamp generation), `rns-proof-N` (link proof pool) | idle jobs; announce verification one announce per slice; compression and assembly in bounded chunks; stamp generation as a resumable search of a fixed number of candidates per slice; link proofs verified inline | medium: compression and stamping need resumable slicing |
+| Interface I/O (`compact-threads-io` keeps the threads) | readers for UDP, serial, KISS, RNode, pipe, local, Auto, I2P and Weave; `iface-writer-N`; reconnect threads for TCP, Backbone, serial and KISS | non-blocking, pollable sources and writers in the loop (TCP already works this way); reconnects as non-blocking connects with timers | large: one interface type at a time |
+| Services (`compact-threads-services` keeps the threads) | RPC servers and clients, the shared-instance server, the provider bridge, hole-punch probes | pollable listeners and connections in the loop | medium |
 
 Interface I/O folds one interface type at a time. Until an interface type has
-a pollable form, it keeps its threads even with `compact-fold-io` on, and the
+a pollable form, it keeps its threads even without `compact-threads-io`, and the
 documentation lists which types are folded. The order follows deployment:
 TCP (done), UDP, local/shared instance, serial and KISS, RNode, Backbone,
 Auto, pipe, I2P, Weave.
@@ -278,9 +280,8 @@ quiet host:
 ## Rollout
 
 1. **This document.** Agree the shape before code.
-2. **Engine switch and compact engine.** Add `engine-compact` and
-   `engine-parallel` (parallel initially equal to today's driver with its
-   helper threads), then fold the groups into the compact engine in this
+2. **Engine switch and compact engine.** Add the `engine-parallel` switch
+   (parallel initially equal to today's driver with its helper threads), then fold the groups into the compact engine in this
    order: timers, CPU work, services, interface I/O one type at a time. Each
    fold lands with a pinned A/B and a memory comparison; none may regress.
 3. **Parallel version 1.** Crypto pool with per-worker queues, batching and
