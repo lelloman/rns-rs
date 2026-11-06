@@ -5,13 +5,14 @@
 - audit date: `2026-10-29` (commit 5 integrated `2026-10-30`; extended to
   commit 15 on `2026-10-30`, to commit 23 on `2026-10-31`, to commit 31 on
   `2026-11-01`, to commit 36 on `2026-11-02`, to commit 40 on
-  `2026-11-03`, to commit 45 on `2026-11-04` and to commit 46 on
-  `2026-11-05`)
+  `2026-11-03`, to commit 45 on `2026-11-04`, to commit 46 on
+  `2026-11-05` and to commit 48 on `2026-11-06`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `3305fc1cbda16f51c5c1291032183a05823fe420`
-  (extended on 2026-11-05 from `53dc223a031ff46ad311c395ee7a3ee97ebe2aef`,
+- target tag or ref: `rgit:master` tip `eb826cde90e152d167415b42016efb0107c73035`
+  (extended on 2026-11-06 from `3305fc1cbda16f51c5c1291032183a05823fe420`,
+  on 2026-11-05 from `53dc223a031ff46ad311c395ee7a3ee97ebe2aef`,
   on 2026-11-04 from `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`,
   on 2026-11-03 from `d3874ddedbf485db3151be1234d35da10c498ef1`,
   on 2026-11-02 from `6927c3c589683041f027d9a04c598cb257d957a7`,
@@ -19,15 +20,15 @@
   on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
   on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `3305fc1cbda16f51c5c1291032183a05823fe420` (provisional; rgit may advance before promotion)
-- target root tree: `e0a8c3ecb21524358de6961ab7d89dc1325ad181`
-- target `RNS` tree: `663102201bb7173e18602f4ba4004c56300b3a49`
+- target normative commit: `eb826cde90e152d167415b42016efb0107c73035` (provisional; rgit may advance before promotion)
+- target root tree: `be456ce0efaa0fa08a416ccd006caa5e55594a67`
+- target `RNS` tree: `c0912a8cf3f89e7db2d8ff58817b38dfdcc775fb`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..3305fc1cbda16f51c5c1291032183a05823fe420`
-- commits in range: `46` (2 inventoried at the first tip, 3 added when rgit
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..eb826cde90e152d167415b42016efb0107c73035`
+- commits in range: `48` (2 inventoried at the first tip, 3 added when rgit
   advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31, 8
   added on 2026-11-01, 5 added on 2026-11-02, 4 added on 2026-11-03, 5
-  added on 2026-11-04, 1 added on 2026-11-05)
+  added on 2026-11-04, 1 added on 2026-11-05, 2 added on 2026-11-06)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
@@ -37,7 +38,8 @@
   commits 37 to 40 inventoried on `dev` at `1d68ffe` and integrated on `dev`
   from `d4b6527`; commits 41 to 45 inventoried on `dev` at `cdeb528` and
   integrated on `dev` from `b0b793c`; commit 46 inventoried and mapped on
-  `origin/master` `679854d`
+  `origin/master` `679854d`; commits 47 and 48 inventoried on
+  `origin/master` `a029386`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -149,6 +151,14 @@ and `RNS.__version__` is still `1.6.0`. Commit 46 lowers the three
 destination type filter RPC failure logs in `Reticulum.py` from error to
 debug.
 
+The 2026-11-06 refresh (GitHub fetched at 2026-11-06T06:31:14Z, rgit at
+06:31:25Z) found rgit at `eb826cde` (committed 2026-11-05T15:08Z), two
+commits past `3305fc1c`, inventoried as 47 and 48. The GitHub mirror is
+still at `e40191b3` and `RNS.__version__` is still `1.6.0`. Commit 47 skips
+the startup ratchet directory walk when the SQLite known destinations store
+is active and edits the changelog; commit 48 adds `enable_stamping` and
+`enforce_stamps` arguments to the `Reticulum` constructor.
+
 ## Audit Vocabulary
 
 - **Needs port**: compatible behavior is absent or observably different.
@@ -217,6 +227,8 @@ Every commit in the audited range must appear exactly once.
 | 44 | `9b6678b31748ab1597bf0f812b3a395466e568a3` | Cleanup | Non-runtime | Mapping commit; removes a stale locking comment from `remember_ratchet` |
 | 45 | `53dc223a031ff46ad311c395ee7a3ee97ebe2aef` | Fixed RPC error handling | Structurally covered | Mapping commit; the Unix and TCP RPC accept loops log a failed `accept` and continue, and an accepted stream closes on drop, so there is no unset connection to close |
 | 46 | `3305fc1cbda16f51c5c1291032183a05823fe420` | Adjusted loglevels | Structurally covered | Mapping commit; `DestinationTypeRequester::call_shared_instance` already logs a failed destination type filter RPC at debug, with the same message |
+| 47 | `e9d82e698d266b198b5cfc7bb66315e505b0b6c6` | Cleanup | Structurally covered | Mapping commit; with the SQLite known destinations store, startup ratchet cleanup in rns-rs already runs on that store's `ratchets` table and never walks the legacy `storage/ratchets` directory; the changelog lines are non-runtime |
+| 48 | `eb826cde90e152d167415b42016efb0107c73035` | Allow applications to enable stamp generation and stamp enforcement | Needs decision | Config files already reach the same flags through `[stamps]`; the programmatic `RnsNode::start(NodeConfig)` path has no startup stamp settings and no runtime switch for announce and path request enforcement |
 
 ## Per-Commit Analysis
 
@@ -1803,18 +1815,75 @@ is expected there.
 
 **Final disposition:** Structurally covered; mapping only.
 
+### 47. `e9d82e69` — Cleanup
+
+**Upstream change** (`RNS/Identity.py`, `Changelog.md`): `_clean_ratchets`
+returns at once when `Identity.known_destinations_store` is set. That
+function walks the legacy `ratchets` directory at startup and deletes files
+that are corrupt, expired or for unknown destinations. With the SQLite store
+the ratchets live in its table, which `clean_known_destinations` already
+expires through `expire_ratchets`, so the directory walk only touched
+leftover files. The changelog extends the path table sharding paragraph and
+adds "Significantly improved stamper performance on Android".
+
+**Rust applicability:** Structurally covered. `RnsNode::from_config_dirs`
+picks one ratchet store: the SQLite known destinations store when it opens,
+or `FsRatchetStore` over `storage/ratchets` as the fallback. Startup
+`cleanup` runs on whichever store was picked, so with SQLite it never walks
+the legacy directory, which matches upstream now. It does prune the
+`ratchets` table of expired rows and rows for unknown destinations at
+startup, where upstream leaves the table to `expire_ratchets`; that
+difference predates this commit, which does not touch the table. Legacy ratchet files are imported into SQLite when the
+store opens (`sqlite_imports_legacy_ratchets`). The changelog has no
+runtime counterpart.
+
+**Final disposition:** Structurally covered; mapping only.
+
+### 48. `eb826cde` — Allow applications to enable stamp generation and stamp enforcement
+
+**Upstream change** (`RNS/Reticulum.py`): the constructor takes
+`enable_stamping=False` and `enforce_stamps=False`. After the configuration
+is loaded, `enable_stamping` sets `Transport.STAMP_DESTINATIONS`,
+`STAMP_PRS` and `STAMP_LRS` to `True`, and `enforce_stamps` sets
+`STAMPS_ENFORCED` and `LR_STAMPS_ENFORCED` to `True`. Like the `[stamps]`
+options, the arguments only switch flags on; a `False` argument leaves the
+configured value alone. Defaults are unchanged (`STAMP_LRS = True`, the rest
+`False`).
+
+**Rust applicability:** Needs decision. A node started from configuration
+files already reaches the same flags: `[stamps] enforce_stamps` sets
+`stamps_enforced` and `lr_stamps_enforced` in `StampsSection`, and
+`stamp_destinations` and `stamp_prs` set their flags (`STAMP_LRS` is already
+`true`). A node started programmatically with `RnsNode::start(NodeConfig)`
+has no equivalent: `NodeConfig` carries no stamp settings, so it starts with
+the `StampsSection` defaults. At runtime, `global.stamp_destinations`,
+`global.stamp_path_requests`, `global.stamp_link_requests` and
+`global.lr_stamps_enforced` (also `RnsNode::set_link_request_stamps_enforced`)
+can switch generation and link request enforcement on, but nothing switches
+announce and path request enforcement (`stamps_enforced`) on after startup.
+
+The choice is whether to expose stamp settings to programmatic embedders,
+for example a `StampsSection` (or a two-flag form matching upstream) on
+`NodeConfig` applied the way `from_config` applies the parsed section, and
+whether to add a runtime key for `stamps_enforced`. Adding a field to
+`NodeConfig` touches every struct literal in the tests and tools.
+
+**Final disposition:** Needs decision; recorded, not yet implemented.
+
 ## Integration Plan
 
-All forty-six commits have a final disposition. The `Link.py:311` precedence of
-commit 5 was corrected upstream in commit 7 before it was reported. Remaining
+Forty-seven of the forty-eight commits have a final disposition; commit 48
+needs a decision on the programmatic stamp settings (see its analysis). The
+`Link.py:311` precedence of commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it (still present at `3305fc1c`; `Link.py` is unchanged). If upstream confirms that expression as written, the
+audit rechecks it (still present at `eb826cde`; `Link.py` is unchanged). If upstream confirms that expression as written, the
 `LinkManager` responder check must follow it.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
+- [ ] Every upstream commit has a final disposition. Commit 48 needs a
+  decision.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
@@ -1824,8 +1893,9 @@ audit rechecks it (still present at `3305fc1c`; `Link.py` is unchanged). If upst
 - [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
   `d3874dde`, `ecd677ba` and `53dc223a` (4/4 and 12/12 with commits 41 to 45
-  integrated). Not yet rerun at the current tip `3305fc1c`, which changes
-  only Python log levels.
+  integrated). Not yet rerun at `3305fc1c` or the current tip `eb826cde`,
+  which change Python log levels, the startup ratchet directory walk and
+  constructor arguments that default to off.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
