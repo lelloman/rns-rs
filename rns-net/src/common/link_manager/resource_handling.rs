@@ -240,7 +240,9 @@ impl LinkManager {
 
     /// Whether [`Self::run_idle_work`] has anything to do.
     pub fn has_idle_work(&self) -> bool {
-        !self.stream_prebuilds.is_empty() || !self.receive_decrypts.is_empty()
+        !self.stream_prebuilds.is_empty()
+            || !self.folded_assemblies.is_empty()
+            || !self.receive_decrypts.is_empty()
     }
 
     /// Do one piece of work that can wait until no event is waiting; the
@@ -249,6 +251,9 @@ impl LinkManager {
     pub fn run_idle_work(&mut self, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
         if let Some(prebuild) = self.stream_prebuilds.pop() {
             return self.prepare_next_stream_segment(prebuild, rng);
+        }
+        if self.has_folded_assembly() {
+            return self.step_folded_assembly(rng);
         }
         self.decrypt_received_part_ahead();
         Vec::new()
@@ -1022,7 +1027,7 @@ impl LinkManager {
             // Earlier application completions go first, with their final
             // action types.
             out.extend(self.wait_receive_for(link_id, rng));
-            if eligible {
+            if eligible && !crate::engine::FOLD_WORK {
                 self.ensure_receive_worker();
             }
             // A preceding corrupt assembly may have torn down this link, and
@@ -1042,6 +1047,28 @@ impl LinkManager {
             else {
                 return;
             };
+            if eligible && crate::engine::FOLD_WORK {
+                let receiver = &mut link.incoming_resources[idx];
+                let actions = match receiver.prepare_assembly(&|parts, skip| {
+                    link.engine.decrypt_chunks(parts, skip).map_err(|_| ())
+                }) {
+                    Ok(assembly) => {
+                        let generation = link.resource_generation.clone();
+                        match self.queue_folded_assembly(*link_id, generation, assembly) {
+                            Ok(()) => Vec::new(),
+                            Err(assembly) => {
+                                let link = self.links.get_mut(link_id).unwrap();
+                                link.incoming_resources[idx]
+                                    .complete_assembly(assembly.run(&Bzip2Compressor))
+                            }
+                        }
+                    }
+                    Err(actions) => actions,
+                };
+                all_actions.extend(actions);
+                self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
+                return;
+            }
             if eligible && self.receive_worker.is_some() {
                 let receiver = &mut link.incoming_resources[idx];
                 let actions = match receiver.prepare_assembly(&|parts, skip| {

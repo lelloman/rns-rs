@@ -24,6 +24,7 @@ use rns_crypto::{OsRng, Rng};
 use super::time;
 
 mod channel_handling;
+mod folded_assembly;
 mod proof_pool;
 pub use proof_pool::ProofVerifyThreads;
 mod receive_worker;
@@ -293,6 +294,9 @@ pub enum LinkManagerAction {
 pub struct LinkManager {
     receive_worker: Option<receive_worker::Worker>,
     receive_worker_wake: Option<crate::event::EventSender>,
+    /// Incoming compressed resources assembled on the driver loop, oldest
+    /// first, when CPU work is folded.
+    folded_assemblies: std::collections::VecDeque<folded_assembly::FoldedAssembly>,
     /// Threads to verify link proofs on, started with the first proof.
     proof_verify_threads: ProofVerifyThreads,
     proof_pool: Option<proof_pool::ProofPool>,
@@ -441,6 +445,7 @@ impl LinkManager {
         LinkManager {
             receive_worker: None,
             receive_worker_wake: None,
+            folded_assemblies: std::collections::VecDeque::new(),
             proof_verify_threads: ProofVerifyThreads::Fixed(0),
             proof_pool: None,
             proof_pool_settled: false,

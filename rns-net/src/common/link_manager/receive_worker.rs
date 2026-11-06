@@ -211,6 +211,7 @@ impl LinkManager {
     }
     pub(crate) fn stop_receive_worker(&mut self) {
         self.receive_worker.take();
+        self.folded_assemblies.clear();
         self.receive_worker_wake = None;
     }
     fn receive_is_valid(&self, pending: &Pending) -> bool {
@@ -283,6 +284,7 @@ impl LinkManager {
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         let mut actions = self.poll_receive_worker(rng);
+        actions.extend(self.finish_folded_assemblies_for(link, rng));
         // Preserve completion order with unsupported/saturated synchronous work.
         // This can block the driver under same-link overload; there is no new
         // rejection policy, nor a fabricated assembly timeout.
@@ -797,6 +799,7 @@ mod tests {
     /// earlier Resource on the same link: polling the worker prunes the
     /// finished receiver, so the completing receiver must be found again
     /// rather than by its previous index.
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn receive_worker_completion_pruned_during_part_handling_keeps_the_completing_receiver() {
         for compressed in [false, true] {
@@ -862,6 +865,7 @@ mod tests {
                 .all(|r| r.status >= ResourceStatus::Complete));
         }
     }
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     fn deliver(
         manager: &mut LinkManager,
         actions: Vec<LinkManagerAction>,
@@ -881,6 +885,7 @@ mod tests {
         }
         out
     }
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     fn resource_parts(
         sender: &mut LinkManager,
         receiver: &mut LinkManager,
@@ -899,6 +904,7 @@ mod tests {
         let requests = deliver(receiver, adv);
         deliver(sender, requests)
     }
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn receive_worker_same_link_barrier_preserves_supported_and_fallback_order() {
         for compressed in [false, true] {
@@ -950,6 +956,7 @@ mod tests {
             thread.join().unwrap();
         }
     }
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn receive_worker_pending_application_delivery_survives_request_response_conversion() {
         for response in [false, true] {
@@ -1030,6 +1037,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
     #[test]
     fn receive_worker_other_link_saturation_assembles_synchronously_without_dropping() {
         let (mut sender, mut receiver, link) = super::super::tests::setup_active_link();

@@ -440,6 +440,7 @@ impl Driver {
     fn has_folded_work(&self) -> bool {
         !self.folded.jobs.is_empty()
             || !self.folded.compressions.is_empty()
+            || self.link_manager.has_folded_assembly()
             || self.has_folded_announce_work()
     }
 
@@ -450,6 +451,9 @@ impl Driver {
             self.run_folded_job(job);
         } else if !self.folded.compressions.is_empty() {
             self.step_folded_compression();
+        } else if self.link_manager.has_folded_assembly() {
+            let actions = self.link_manager.step_folded_assembly(&mut self.rng);
+            self.dispatch_link_actions(actions);
         } else if self.has_folded_announce_work() {
             self.check_folded_announce();
         }
