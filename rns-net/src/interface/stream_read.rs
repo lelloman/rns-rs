@@ -38,6 +38,35 @@ pub(crate) fn read_stream_frames(
     tx: &EventSender,
     id: InterfaceId,
     name: &str,
+    on_read: impl FnMut(usize, usize),
+) -> StreamRead {
+    read_frames(fd, false, decoder, cx, tx, id, name, on_read)
+}
+
+/// [`read_stream_frames`] for a descriptor that is not a socket, such as a
+/// serial port. It must be non-blocking (see [`set_nonblocking`]).
+#[cfg_attr(not(feature = "iface-serial"), allow(dead_code))]
+pub(crate) fn read_device_frames(
+    fd: std::os::fd::RawFd,
+    decoder: &mut hdlc::Decoder,
+    cx: &mut LoopContext<'_>,
+    tx: &EventSender,
+    id: InterfaceId,
+    name: &str,
+    on_read: impl FnMut(usize, usize),
+) -> StreamRead {
+    read_frames(fd, true, decoder, cx, tx, id, name, on_read)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_frames(
+    fd: std::os::fd::RawFd,
+    device: bool,
+    decoder: &mut hdlc::Decoder,
+    cx: &mut LoopContext<'_>,
+    tx: &EventSender,
+    id: InterfaceId,
+    name: &str,
     mut on_read: impl FnMut(usize, usize),
 ) -> StreamRead {
     if !tx.inbound_data_has_room() {
@@ -46,14 +75,19 @@ pub(crate) fn read_stream_frames(
     let mut read = 0;
     while read < STREAM_READ_BUDGET {
         // SAFETY: `cx.buf` is a valid writable buffer for the call.
-        // MSG_DONTWAIT keeps the socket's own mode untouched.
+        // MSG_DONTWAIT keeps a socket's own mode untouched; a device is
+        // non-blocking already.
         let n = unsafe {
-            libc::recv(
-                fd,
-                cx.buf.as_mut_ptr().cast(),
-                cx.buf.len(),
-                libc::MSG_DONTWAIT,
-            )
+            if device {
+                libc::read(fd, cx.buf.as_mut_ptr().cast(), cx.buf.len())
+            } else {
+                libc::recv(
+                    fd,
+                    cx.buf.as_mut_ptr().cast(),
+                    cx.buf.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            }
         };
         if n < 0 {
             let e = io::Error::last_os_error();
@@ -124,5 +158,31 @@ pub(crate) fn accept_error_step(error: &io::Error) -> AcceptStep {
         // through accept; they concern that connection only.
         _ if error.raw_os_error() == Some(libc::EPROTO) => AcceptStep::Next,
         _ => AcceptStep::Pause,
+    }
+}
+
+/// Make `fd` non-blocking, for the driver loop to read or write it. This
+/// changes the open file, which every duplicate of the descriptor shares.
+pub(crate) fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
+    // SAFETY: fcntl on a descriptor the caller keeps open.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::O_NONBLOCK == 0
+        // SAFETY: as above.
+        && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Whether `fd` is a socket.
+pub(crate) fn is_socket(fd: std::os::fd::RawFd) -> bool {
+    // SAFETY: fstat writes into a zeroed stat the call owns.
+    unsafe {
+        let mut stat: libc::stat = std::mem::zeroed();
+        libc::fstat(fd, &mut stat) == 0 && stat.st_mode & libc::S_IFMT == libc::S_IFSOCK
     }
 }
