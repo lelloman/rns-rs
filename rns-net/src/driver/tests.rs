@@ -6098,6 +6098,7 @@ fn runtime_config_list_contains_global_keys() {
     assert!(keys.contains(&"global.direct_connect_policy".to_string()));
     assert!(keys.contains(&"global.stamp_destinations".to_string()));
     assert!(keys.contains(&"global.stamp_path_requests".to_string()));
+    assert!(keys.contains(&"global.stamps_enforced".to_string()));
     assert!(keys.contains(&"global.lr_stamps_enforced".to_string()));
     assert!(keys.contains(&"global.stamp_link_requests".to_string()));
     assert!(keys.contains(&"global.always_stamp_link_requests".to_string()));
@@ -6109,6 +6110,7 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
     for key in [
         "global.stamp_destinations",
         "global.stamp_path_requests",
+        "global.stamps_enforced",
         "global.lr_stamps_enforced",
         "global.always_stamp_link_requests",
     ] {
@@ -6136,6 +6138,10 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
         (
             "global.stamp_path_requests",
             Box::new(|d: &Driver| d.engine.stamp_prs()),
+        ),
+        (
+            "global.stamps_enforced",
+            Box::new(|d: &Driver| d.engine.stamp_requirements().enforced),
         ),
         (
             // The node API and the announce builder read the same handle.
@@ -6183,6 +6189,35 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
         assert!(!read_back(&driver), "{key} not reset");
     }
     assert!(!shared.load(Ordering::Relaxed));
+}
+
+#[test]
+fn runtime_config_stamps_enforced_keeps_the_configured_costs() {
+    let mut driver = new_test_driver();
+    let stamps = crate::config::StampsSection {
+        destination_cost: StampCost::from_whole(18),
+        pr_cost: StampCost::from_whole(11),
+        ..Default::default()
+    };
+    driver.apply_stamp_config(&stamps, rns_core::constants::HOP_LIMITER);
+    let configured = driver.engine.stamp_requirements();
+    assert!(!configured.enforced);
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "global.stamps_enforced".into(),
+        value: RuntimeConfigValue::Bool(true),
+    });
+    assert!(matches!(response, QueryResponse::RuntimeConfigSet(Ok(_))));
+    let enforced = driver.engine.stamp_requirements();
+    assert!(enforced.enforced);
+    assert_eq!(enforced.destination_cost, configured.destination_cost);
+    assert_eq!(enforced.path_request_cost, configured.path_request_cost);
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+        key: "global.stamps_enforced".into(),
+    });
+    assert!(matches!(response, QueryResponse::RuntimeConfigReset(Ok(_))));
+    assert_eq!(driver.engine.stamp_requirements(), configured);
 }
 
 #[test]

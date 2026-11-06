@@ -1148,6 +1148,13 @@ impl Driver {
                         }
                         Err(err) => Err(err),
                     },
+                    "global.stamps_enforced" => match Self::expect_bool(value, &key) {
+                        Ok(value) => {
+                            self.set_stamps_enforced(value);
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    },
                     "global.lr_stamps_enforced" => match Self::expect_bool(value, &key) {
                         Ok(value) => {
                             self.link_manager.link_request_costs().set_enforced(value);
@@ -1280,6 +1287,10 @@ impl Driver {
                     }
                     "global.stamp_path_requests" => {
                         self.engine.set_stamp_prs(defaults.stamp_path_requests);
+                        Ok(())
+                    }
+                    "global.stamps_enforced" => {
+                        self.set_stamps_enforced(defaults.stamps_enforced);
                         Ok(())
                     }
                     "global.lr_stamps_enforced" => {

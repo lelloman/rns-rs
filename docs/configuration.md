@@ -187,18 +187,30 @@ upstream default.
 The emission switches are also runtime config keys, so a running node can be
 switched to stamped emission without a restart. `global.stamp_link_requests`
 (`Transport.STAMP_LRS`, on by default) has no config option and can only be
-changed at runtime:
+changed at runtime. `enforce_stamps` is split into two keys:
+`global.stamps_enforced` (`Transport.STAMPS_ENFORCED`) drops received announces
+and path requests whose stamp is below the required cost, and
+`global.lr_stamps_enforced` does the same for link requests (see below):
 
 ```bash
 rns-ctl config get global.stamp_destinations         # false by default
 rns-ctl config set global.stamp_path_requests true
 rns-ctl config set global.always_stamp_link_requests true
 rns-ctl config set global.stamp_link_requests false
+rns-ctl config set global.stamps_enforced true
 rns-ctl config reset global.stamp_path_requests
 ```
 
 The keys apply immediately and reset to the value from the `[stamps]`
 section, or to the built-in default when the section does not enable them.
+
+A node started in code with `RnsNode::start` reads no config file and takes
+the same settings from `NodeConfig::stamps`, a `StampsSection` that defaults to
+the values above; `RnsNode::from_config` fills it from the `[stamps]` section.
+The runtime keys of such a node reset to the values in `NodeConfig::stamps`.
+Upstream's `Reticulum(enable_stamping=True)` corresponds to setting
+`stamp_destinations`, `stamp_prs` and `stamp_lrs`, and `enforce_stamps=True`
+to `stamps_enforced` and `lr_stamps_enforced`.
 A valid inbound stamp is observable on the receiving side:
 `/api/identity/<hash>` (and the known-destinations RPC) report the recorded
 `stamp_value` and the announced `lr_cost`, and every interface counts

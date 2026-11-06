@@ -1491,6 +1491,13 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Stamp path requests emitted or forwarded for local clients by this node (Transport.STAMP_PRS).",
             )),
+            "global.stamps_enforced" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Bool(self.engine.stamp_requirements().enforced),
+                RuntimeConfigValue::Bool(defaults.stamps_enforced),
+                RuntimeConfigApplyMode::Immediate,
+                "Drop received announces and path requests whose stamp is below the required cost (Transport.STAMPS_ENFORCED).",
+            )),
             "global.lr_stamps_enforced" => Some(make_entry(
                 key,
                 RuntimeConfigValue::Bool(self.link_manager.link_request_costs().enforced()),
@@ -1570,6 +1577,7 @@ impl Driver {
             "global.management_announce_interval_secs",
             "global.stamp_destinations",
             "global.stamp_path_requests",
+            "global.stamps_enforced",
             "global.lr_stamps_enforced",
             "global.stamp_link_requests",
             "global.always_stamp_link_requests",
