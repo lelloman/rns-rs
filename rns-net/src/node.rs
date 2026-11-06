@@ -2455,85 +2455,60 @@ impl RnsNode {
         let verify_shutdown = Arc::new(AtomicBool::new(false));
         let verify_shutdown_thread = Arc::clone(&verify_shutdown);
         let verify_tx = tx.clone();
-        let verify_handle = thread::Builder::new()
-            .name("rns-verify".into())
-            .spawn(move || {
-                #[cfg(target_family = "unix")]
-                {
-                    unsafe {
-                        libc::nice(5);
-                    }
-                }
-
-                while !verify_shutdown_thread.load(Ordering::Relaxed) {
-                    let batch = {
-                        let mut queue = announce_verify_queue
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        queue.take_pending(time::now())
-                    };
-
-                    if batch.is_empty() {
-                        thread::sleep(Duration::from_millis(50));
-                        continue;
-                    }
-
-                    for (key, pending) in batch {
-                        if verify_shutdown_thread.load(Ordering::Relaxed) {
-                            break;
+        // The verification thread, unless the compact engine verifies
+        // announces on its driver loop.
+        let verify_handle = if crate::engine::FOLD_WORK {
+            None
+        } else {
+            Some(
+                thread::Builder::new()
+                    .name("rns-verify".into())
+                    .spawn(move || {
+                        #[cfg(target_family = "unix")]
+                        {
+                            unsafe {
+                                libc::nice(5);
+                            }
                         }
-                        let has_ratchet =
-                            pending.packet.flags.context_flag == rns_core::constants::FLAG_SET;
-                        let announce = match rns_core::announce::AnnounceData::unpack(
-                            pending.packet.data(),
-                            has_ratchet,
-                        ) {
-                            Ok(announce) => announce,
-                            Err(_) => {
-                                let signature = [0u8; 64];
-                                let sig_cache_key = {
-                                    let mut material = [0u8; 80];
-                                    material[..16]
-                                        .copy_from_slice(&pending.packet.destination_hash);
-                                    material[16..].copy_from_slice(&signature);
-                                    rns_core::hash::full_hash(&material)
-                                };
-                                if verify_tx
-                                    .send(Event::AnnounceVerifyFailed { key, sig_cache_key })
-                                    .is_err()
-                                {
-                                    return;
-                                }
+
+                        while !verify_shutdown_thread.load(Ordering::Relaxed) {
+                            let batch = {
+                                let mut queue = announce_verify_queue
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                queue.take_pending(time::now())
+                            };
+
+                            if batch.is_empty() {
+                                thread::sleep(Duration::from_millis(50));
                                 continue;
                             }
-                        };
-                        let sig_cache_key =
-                            announce.signature_cache_key(&pending.packet.destination_hash);
-                        match announce.validate(&pending.packet.destination_hash) {
-                            Ok(validated) => {
-                                if verify_tx
-                                    .send(Event::AnnounceVerified {
-                                        key,
-                                        validated: Box::new(validated),
-                                        sig_cache_key,
-                                    })
-                                    .is_err()
-                                {
-                                    return;
+
+                            for (key, pending) in batch {
+                                if verify_shutdown_thread.load(Ordering::Relaxed) {
+                                    break;
                                 }
-                            }
-                            Err(_) => {
-                                if verify_tx
-                                    .send(Event::AnnounceVerifyFailed { key, sig_cache_key })
-                                    .is_err()
-                                {
+                                let event = match crate::driver::check_pending_announce(&pending) {
+                                    crate::driver::AnnounceCheck::Valid {
+                                        validated,
+                                        sig_cache_key,
+                                    } => Event::AnnounceVerified {
+                                        key,
+                                        validated,
+                                        sig_cache_key,
+                                    },
+                                    crate::driver::AnnounceCheck::Invalid { sig_cache_key } => {
+                                        Event::AnnounceVerifyFailed { key, sig_cache_key }
+                                    }
+                                };
+                                if verify_tx.send(event).is_err() {
                                     return;
                                 }
                             }
                         }
-                    }
-                }
-            })?;
+                    })?,
+            )
+        };
 
         // Spawn the driver after startup has registered local destinations and static interfaces.
         // Interface readers can enqueue frames before this point; the bounded event queue preserves
@@ -2601,7 +2576,7 @@ impl RnsNode {
         let mut node = RnsNode {
             tx,
             driver_handle: Some(driver_handle),
-            verify_handle: Some(verify_handle),
+            verify_handle,
             verify_shutdown,
             persist_handle,
             persist_stop,

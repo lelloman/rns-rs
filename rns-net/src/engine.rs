@@ -13,3 +13,9 @@ pub const ENGINE: &str = if cfg!(feature = "engine-parallel") {
 /// the compact engine unless `compact-threads-timers` keeps the threads.
 pub(crate) const FOLD_TIMERS: bool =
     !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-timers");
+
+/// Whether CPU work (announce verification, so far) runs on the driver loop
+/// instead of its own threads: in the compact engine unless
+/// `compact-threads-work` keeps the threads.
+pub(crate) const FOLD_WORK: bool =
+    !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-work");

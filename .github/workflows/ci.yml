@@ -132,7 +132,7 @@ jobs:
         # it); rns-net built alone runs the compact one.
         run: |
           cargo test -p rns-net
-          cargo test -p rns-net --features compact-threads-timers
+          cargo test -p rns-net --features compact-threads-timers,compact-threads-work
 
   esp32-lockfile:
     name: ESP32 Lockfile
