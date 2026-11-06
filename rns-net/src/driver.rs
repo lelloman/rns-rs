@@ -1108,11 +1108,12 @@ impl Driver {
             shared_announces: HashMap::new(),
             shared_reconnect_pending: HashMap::new(),
             local_path_responses: HashMap::new(),
-            holepunch_manager: HolePunchManager::new(
-                vec![],
-                rns_core::holepunch::ProbeProtocol::Rnsp,
-                None,
-            ),
+            holepunch_manager: {
+                let mut manager =
+                    HolePunchManager::new(vec![], rns_core::holepunch::ProbeProtocol::Rnsp, None);
+                manager.set_event_sender(tx.clone());
+                manager
+            },
             stamper: Arc::new(crate::stamper::Stamper::new(tx.clone(), None)),
             stamp_destinations: Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS)),
             stamp_settings: crate::config::StampsSection::default(),
@@ -1658,6 +1659,8 @@ impl Driver {
         let policy = self.holepunch_manager.policy();
         let allow_private = self.holepunch_manager.allow_private_endpoints();
         self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
+        self.holepunch_manager
+            .set_event_sender(self.event_tx.clone());
         self.holepunch_manager.set_underlay_mark(self.underlay_mark);
         self.holepunch_manager.set_policy(policy);
         self.holepunch_manager
