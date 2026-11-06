@@ -43,7 +43,7 @@ use crate::pickle::{self, PickleValue};
 const CHALLENGE_PREFIX: &[u8] = b"#CHALLENGE#";
 const WELCOME: &[u8] = b"#WELCOME#";
 const FAILURE: &[u8] = b"#FAILURE#";
-const CHALLENGE_LEN: usize = 40;
+pub(crate) const CHALLENGE_LEN: usize = 40;
 const MAX_CONCURRENT_RPC_CONNECTIONS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +102,7 @@ impl RpcServer {
         auth_key: [u8; 32],
         event_tx: EventSender,
     ) -> io::Result<Self> {
-        let addr = SocketAddr::from_abstract_name(format!("rns/{instance_name}/rpc"))?;
-        let listener = UnixListener::bind_addr(&addr)?;
+        let listener = bind_abstract_unix(instance_name)?;
         listener.set_nonblocking(true)?;
         let (listener, wake) = Listener::new(listener)?;
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -127,6 +126,13 @@ impl RpcServer {
             let _ = handle.join();
         }
     }
+}
+
+/// Bind the abstract socket used by Python Reticulum on Linux.
+#[cfg(target_os = "linux")]
+pub(crate) fn bind_abstract_unix(instance_name: &str) -> io::Result<UnixListener> {
+    let addr = SocketAddr::from_abstract_name(format!("rns/{instance_name}/rpc"))?;
+    UnixListener::bind_addr(&addr)
 }
 
 #[cfg(target_os = "linux")]
@@ -268,16 +274,224 @@ fn handle_connection<S: Read + Write>(
 
     // Read request.
     let request_bytes = recv_bytes(&mut stream)?;
-    let (request, codec) = decode_rpc_payload(&request_bytes)?;
-
-    // Translate request dict to query, send to driver, get response.
-    let response = handle_rpc_request(&request, event_tx)?;
-
-    // Encode response and send
-    let response_bytes = encode_rpc_payload(&response, codec);
+    let response_bytes = answer_request(&request_bytes, &mut event_tx.clone())?;
     send_bytes(&mut stream, &response_bytes)?;
 
     Ok(())
+}
+
+/// Decode a request, have `driver` answer it, and encode the answer in the
+/// request's own codec.
+pub(crate) fn answer_request(
+    request_bytes: &[u8],
+    driver: &mut dyn RpcDriver,
+) -> io::Result<Vec<u8>> {
+    let (request, codec) = decode_rpc_payload(request_bytes)?;
+    let response = handle_rpc_request(&request, driver)?;
+    Ok(encode_rpc_payload(&response, codec))
+}
+
+/// Largest message accepted from an RPC peer, as [`recv_bytes`] allows.
+const MAX_MESSAGE: usize = 64 * 1024 * 1024;
+/// Largest message accepted before the request: challenges and their
+/// answers are tens of bytes.
+const MAX_HANDSHAKE_MESSAGE: usize = 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionPhase {
+    /// Waiting for the answer to our challenge.
+    Auth,
+    /// Waiting for the client's own challenge.
+    ClientChallenge,
+    /// Waiting for the client to accept our answer.
+    ClientWelcome,
+    Request,
+    /// The request was handed out; waiting for [`ServerSession::answer`].
+    Answering,
+    Done,
+}
+
+/// The server side of one RPC connection, without the socket: the same
+/// exchange as [`handle_connection`] (challenge both ways, one request, one
+/// answer), fed bytes as they arrive and leaving bytes to send in a buffer.
+/// The compact engine's driver serves its RPC connections with it.
+pub(crate) struct ServerSession {
+    auth_key: [u8; 32],
+    /// Our challenge as sent, prefix included.
+    challenge: Vec<u8>,
+    phase: SessionPhase,
+    input: Vec<u8>,
+    output: Vec<u8>,
+    sent: usize,
+}
+
+impl ServerSession {
+    /// A session that opens by challenging the client with `random`.
+    pub(crate) fn new(auth_key: [u8; 32], random: [u8; CHALLENGE_LEN]) -> Self {
+        let mut challenge = Vec::with_capacity(CHALLENGE_PREFIX.len() + 8 + CHALLENGE_LEN);
+        challenge.extend_from_slice(CHALLENGE_PREFIX);
+        challenge.extend_from_slice(b"{sha256}");
+        challenge.extend_from_slice(&random);
+        let mut session = Self {
+            auth_key,
+            challenge,
+            phase: SessionPhase::Auth,
+            input: Vec::new(),
+            output: Vec::new(),
+            sent: 0,
+        };
+        let challenge = session.challenge.clone();
+        session.queue(&challenge);
+        session
+    }
+
+    fn queue(&mut self, message: &[u8]) {
+        self.output
+            .extend_from_slice(&(message.len() as i32).to_be_bytes());
+        self.output.extend_from_slice(message);
+    }
+
+    /// Take in `bytes` from the client. Returns the request once it is
+    /// complete; an error ends the session, after [`Self::pending`] has
+    /// been sent if the caller can.
+    pub(crate) fn receive(&mut self, bytes: &[u8]) -> io::Result<Option<Vec<u8>>> {
+        if !self.wants_input() {
+            return Ok(None);
+        }
+        self.input.extend_from_slice(bytes);
+        loop {
+            let max = if self.phase == SessionPhase::Request {
+                MAX_MESSAGE
+            } else {
+                MAX_HANDSHAKE_MESSAGE
+            };
+            let message = match take_message(&mut self.input, max) {
+                Ok(Some(message)) => message,
+                Ok(None) => return Ok(None),
+                Err(error) => {
+                    self.phase = SessionPhase::Done;
+                    return Err(error);
+                }
+            };
+            match self.phase {
+                SessionPhase::Auth => {
+                    let challenged = &self.challenge[CHALLENGE_PREFIX.len()..];
+                    if verify_response(&self.auth_key, challenged, &message) {
+                        self.queue(WELCOME);
+                        self.phase = SessionPhase::ClientChallenge;
+                    } else {
+                        self.queue(FAILURE);
+                        self.phase = SessionPhase::Done;
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "auth failed",
+                        ));
+                    }
+                }
+                SessionPhase::ClientChallenge => {
+                    let Some(challenged) = message.strip_prefix(CHALLENGE_PREFIX) else {
+                        self.phase = SessionPhase::Done;
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "expected challenge",
+                        ));
+                    };
+                    let response = create_response(&self.auth_key, challenged);
+                    self.queue(&response);
+                    self.phase = SessionPhase::ClientWelcome;
+                }
+                SessionPhase::ClientWelcome => {
+                    if message != WELCOME {
+                        self.phase = SessionPhase::Done;
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "authentication failed",
+                        ));
+                    }
+                    self.phase = SessionPhase::Request;
+                }
+                SessionPhase::Request => {
+                    self.input = Vec::new();
+                    self.phase = SessionPhase::Answering;
+                    return Ok(Some(message));
+                }
+                SessionPhase::Answering | SessionPhase::Done => return Ok(None),
+            }
+        }
+    }
+
+    /// Queue the answer to the request [`Self::receive`] returned.
+    pub(crate) fn answer(&mut self, response: &[u8]) {
+        self.queue(response);
+        self.phase = SessionPhase::Done;
+    }
+
+    /// End the session without an answer, as a failed request does.
+    pub(crate) fn fail(&mut self) {
+        self.phase = SessionPhase::Done;
+    }
+
+    /// Bytes waiting to be sent.
+    pub(crate) fn pending(&self) -> &[u8] {
+        &self.output[self.sent..]
+    }
+
+    /// `count` bytes of [`Self::pending`] were sent.
+    pub(crate) fn sent(&mut self, count: usize) {
+        self.sent += count;
+        if self.sent >= self.output.len() {
+            self.output.clear();
+            self.sent = 0;
+        }
+    }
+
+    /// Whether the session is waiting for bytes from the client.
+    pub(crate) fn wants_input(&self) -> bool {
+        !matches!(self.phase, SessionPhase::Answering | SessionPhase::Done)
+    }
+
+    /// Whether the session is over and everything it had to say was sent.
+    pub(crate) fn finished(&self) -> bool {
+        self.phase == SessionPhase::Done && self.pending().is_empty()
+    }
+}
+
+/// Split one length-prefixed message off the front of `input`, as
+/// [`recv_bytes`] reads one, once all of it has arrived.
+fn take_message(input: &mut Vec<u8>, max: usize) -> io::Result<Option<Vec<u8>>> {
+    let Some(prefix) = input.get(..4) else {
+        return Ok(None);
+    };
+    let len = i32::from_be_bytes(prefix.try_into().unwrap());
+    let (header, len) = if len < 0 {
+        let Some(extended) = input.get(4..12) else {
+            return Ok(None);
+        };
+        (12, u64::from_be_bytes(extended.try_into().unwrap()))
+    } else {
+        (4, len as u64)
+    };
+    if len > max as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "message too large",
+        ));
+    }
+    let end = header + len as usize;
+    if input.len() < end {
+        return Ok(None);
+    }
+    let message = input[header..end].to_vec();
+    input.drain(..end);
+    Ok(Some(message))
+}
+
+/// A challenge's random part, from the OS.
+pub(crate) fn challenge_random() -> [u8; CHALLENGE_LEN] {
+    use rns_crypto::Rng;
+    let mut random = [0u8; CHALLENGE_LEN];
+    rns_crypto::OsRng.fill_bytes(&mut random);
+    random
 }
 
 fn decode_rpc_payload(data: &[u8]) -> io::Result<(PickleValue, RpcCodec)> {
@@ -488,7 +702,10 @@ fn destination_type_registration(response: QueryResponse) -> PickleValue {
     ))
 }
 
-fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Result<PickleValue> {
+fn handle_rpc_request(
+    request: &PickleValue,
+    event_tx: &mut dyn RpcDriver,
+) -> io::Result<PickleValue> {
     if let Some(operation) = request.get("manage").and_then(PickleValue::as_str) {
         let operation = match operation {
             "attach_interface" => crate::event::InterfaceManagementOperation::Attach,
@@ -1115,7 +1332,7 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
 fn handle_hook_rpc_request(
     op: &str,
     request: &PickleValue,
-    event_tx: &EventSender,
+    event_tx: &mut dyn RpcDriver,
 ) -> io::Result<PickleValue> {
     match op {
         "load" => {
@@ -1237,16 +1454,52 @@ fn handle_hook_rpc_request(
     }
 }
 
-/// Send a query to the driver and wait for the response.
-fn send_query(event_tx: &EventSender, request: QueryRequest) -> io::Result<QueryResponse> {
-    let (resp_tx, resp_rx) = mpsc::channel();
-    try_send_event(event_tx, Event::query(request, resp_tx))?;
-    resp_rx
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "query timed out"))
+/// What answers an RPC request: the driver, reached through its event queue
+/// from a server thread, or the compact engine's driver itself, which
+/// serves its RPC connections on its own loop.
+pub(crate) trait RpcDriver {
+    /// The driver's answer to `request`.
+    fn query(&mut self, request: QueryRequest) -> io::Result<QueryResponse>;
+    /// Hand the driver `event`. An event carrying a response channel has
+    /// been handled, and its response sent, by the time the driver itself
+    /// returns from this.
+    fn send(&mut self, event: Event) -> io::Result<()>;
+    fn inbound_queue_snapshot(&self) -> crate::event::InboundQueueSnapshot;
+    fn dynamic_burst_stats(&self, parent: InterfaceId) -> Option<DynamicBurstStats>;
 }
 
-fn try_send_event(event_tx: &EventSender, event: Event) -> io::Result<()> {
+impl RpcDriver for EventSender {
+    /// Send a query to the driver and wait for the response.
+    fn query(&mut self, request: QueryRequest) -> io::Result<QueryResponse> {
+        let (resp_tx, resp_rx) = mpsc::channel();
+        self.send(Event::query(request, resp_tx))?;
+        resp_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "query timed out"))
+    }
+
+    fn send(&mut self, event: Event) -> io::Result<()> {
+        send_to_driver(self, event)
+    }
+
+    fn inbound_queue_snapshot(&self) -> crate::event::InboundQueueSnapshot {
+        EventSender::inbound_queue_snapshot(self)
+    }
+
+    fn dynamic_burst_stats(&self, parent: InterfaceId) -> Option<DynamicBurstStats> {
+        EventSender::dynamic_burst_stats(self, parent)
+    }
+}
+
+fn send_query(event_tx: &mut dyn RpcDriver, request: QueryRequest) -> io::Result<QueryResponse> {
+    event_tx.query(request)
+}
+
+fn try_send_event(event_tx: &mut dyn RpcDriver, event: Event) -> io::Result<()> {
+    event_tx.send(event)
+}
+
+pub(crate) fn send_to_driver(event_tx: &EventSender, event: Event) -> io::Result<()> {
     event_tx.try_send(event).map_err(|error| match error {
         mpsc::TrySendError::Full(_) => {
             io::Error::new(io::ErrorKind::WouldBlock, "driver event queue is full")
@@ -1572,7 +1825,7 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
 fn add_inbound_runtime_stats(
     response: &mut PickleValue,
     stats: &InterfaceStatsResponse,
-    event_tx: &EventSender,
+    event_tx: &dyn RpcDriver,
 ) {
     let PickleValue::Dict(dict) = response else {
         return;
@@ -3454,6 +3707,94 @@ pub fn derive_auth_key(private_key: &[u8]) -> [u8; 32] {
 mod tests {
     use super::*;
 
+    /// One message as [`send_bytes`] frames it.
+    fn framed(message: &[u8]) -> Vec<u8> {
+        let mut out = (message.len() as i32).to_be_bytes().to_vec();
+        out.extend_from_slice(message);
+        out
+    }
+
+    /// Take the session's output as messages.
+    fn sent_messages(session: &mut ServerSession) -> Vec<Vec<u8>> {
+        let mut pending = session.pending().to_vec();
+        session.sent(pending.len());
+        let mut messages = Vec::new();
+        while let Some(message) = take_message(&mut pending, MAX_MESSAGE).unwrap() {
+            messages.push(message);
+        }
+        messages
+    }
+
+    #[test]
+    fn server_session_runs_the_exchange_a_server_thread_runs() {
+        let key = derive_auth_key(b"session");
+        let mut session = ServerSession::new(key, [3; CHALLENGE_LEN]);
+        let challenge = sent_messages(&mut session).remove(0);
+        let challenged = challenge.strip_prefix(CHALLENGE_PREFIX).unwrap();
+        assert!(session
+            .receive(&framed(&create_response(&key, challenged)))
+            .unwrap()
+            .is_none());
+        assert_eq!(sent_messages(&mut session), vec![WELCOME.to_vec()]);
+
+        // The client challenges back; the session answers it.
+        let mut client_challenge = CHALLENGE_PREFIX.to_vec();
+        client_challenge.extend_from_slice(b"{sha256}");
+        client_challenge.extend_from_slice(&[9; CHALLENGE_LEN]);
+        session.receive(&framed(&client_challenge)).unwrap();
+        let answer = sent_messages(&mut session).remove(0);
+        assert!(verify_response(
+            &key,
+            &client_challenge[CHALLENGE_PREFIX.len()..],
+            &answer
+        ));
+        session.receive(&framed(WELCOME)).unwrap();
+
+        // The request may arrive a byte at a time.
+        let request = framed(b"request");
+        let (last, head) = request.split_last().unwrap();
+        for byte in head {
+            assert!(session.receive(&[*byte]).unwrap().is_none());
+        }
+        assert_eq!(
+            session.receive(&[*last]).unwrap(),
+            Some(b"request".to_vec())
+        );
+        assert!(!session.wants_input());
+        session.answer(b"answer");
+        assert!(!session.finished());
+        assert_eq!(sent_messages(&mut session), vec![b"answer".to_vec()]);
+        assert!(session.finished());
+    }
+
+    #[test]
+    fn server_session_refuses_a_wrong_answer() {
+        let mut session = ServerSession::new(derive_auth_key(b"right"), [3; CHALLENGE_LEN]);
+        let challenge = sent_messages(&mut session).remove(0);
+        let wrong = create_response(
+            &derive_auth_key(b"wrong"),
+            &challenge[CHALLENGE_PREFIX.len()..],
+        );
+        let refused = session.receive(&framed(&wrong)).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(sent_messages(&mut session), vec![FAILURE.to_vec()]);
+        assert!(session.finished());
+    }
+
+    #[test]
+    fn server_session_bounds_messages_before_the_request() {
+        let mut session = ServerSession::new(derive_auth_key(b"bound"), [3; CHALLENGE_LEN]);
+        let huge = ((MAX_HANDSHAKE_MESSAGE + 1) as i32).to_be_bytes();
+        assert_eq!(
+            session.receive(&huge).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        // The session is over: the connection closes, as a server thread's
+        // does when its read fails.
+        sent_messages(&mut session);
+        assert!(session.finished());
+    }
+
     #[test]
     fn discovered_interface_rpc_includes_operator_lxmf_address() {
         let interface = crate::discovery::DiscoveredInterface {
@@ -3615,7 +3956,7 @@ mod tests {
                     .map(|(key, value)| (PickleValue::String(key.into()), value))
                     .collect(),
             );
-            handle_rpc_request(&request, &event_tx).unwrap()
+            handle_rpc_request(&request, &mut event_tx.clone()).unwrap()
         };
         let requester = PickleValue::Bytes(vec![0x11; 16]);
         assert_eq!(
@@ -3936,7 +4277,7 @@ mod tests {
 
         let (result_tx, result_rx) = mpsc::channel();
         let query_thread = thread::spawn(move || {
-            let _ = result_tx.send(send_query(&event_tx, QueryRequest::LinkCount));
+            let _ = result_tx.send(send_query(&mut event_tx.clone(), QueryRequest::LinkCount));
         });
 
         let completed_promptly = match result_rx.recv_timeout(Duration::from_millis(250)) {
@@ -4114,7 +4455,7 @@ mod tests {
             ),
         ]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::Bool(true));
         driver.join().unwrap();
     }
@@ -4140,7 +4481,7 @@ mod tests {
             PickleValue::String("get".into()),
             PickleValue::String("hooks".into()),
         )]);
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         let hooks = parse_hook_list(&response).unwrap();
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].name, "stats");
@@ -4187,7 +4528,7 @@ mod tests {
                 PickleValue::Bytes(vec![1, 2, 3]),
             ),
         ]);
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(parse_hook_result(&response).unwrap(), Ok(()));
         driver.join().unwrap();
     }
@@ -4559,7 +4900,7 @@ mod tests {
             PickleValue::String("get".into()),
             PickleValue::String("profiling_results".into()),
         )]);
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         let sample = response.get("entry110.rpc").unwrap();
         assert_eq!(
             sample.get("name").and_then(PickleValue::as_str),
@@ -4644,7 +4985,7 @@ mod tests {
             PickleValue::Bytes(vec![0xAA; 16]),
         )]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::None);
         driver.join().unwrap();
     }
@@ -4680,7 +5021,7 @@ mod tests {
             (PickleValue::String("size".into()), PickleValue::Int(32)),
         ]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         let ph = response.get("packet_hash").unwrap().as_bytes().unwrap();
         assert_eq!(ph, &[0xBB; 32]);
         assert_eq!(response.get("hops").unwrap().as_int().unwrap(), 3);
@@ -4719,7 +5060,7 @@ mod tests {
             ),
         ]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::Bool(true));
         driver.join().unwrap();
     }
@@ -4750,7 +5091,7 @@ mod tests {
             (PickleValue::String("size".into()), PickleValue::Int(-1)),
         ]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::None);
         driver.join().unwrap();
     }
@@ -4772,7 +5113,7 @@ mod tests {
             ),
         ]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(
             response.get("error").and_then(|v| v.as_str()),
             Some("payload_too_large")
@@ -4809,7 +5150,7 @@ mod tests {
             ),
         ]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response.get("hops").unwrap().as_int().unwrap(), 2);
         driver.join().unwrap();
     }
@@ -4835,7 +5176,7 @@ mod tests {
             PickleValue::Bytes(vec![0xDD; 16]),
         )]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(
             response.get("error").and_then(|v| v.as_str()),
             Some("payload_too_large")
@@ -4864,7 +5205,7 @@ mod tests {
             PickleValue::Bytes(vec![0xEE; 32]),
         )]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::None);
         driver.join().unwrap();
     }
@@ -4889,7 +5230,7 @@ mod tests {
             PickleValue::Bytes(vec![0xFF; 32]),
         )]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         if let PickleValue::Float(rtt) = response {
             assert!((rtt - 0.352).abs() < 0.001);
         } else {
@@ -4917,7 +5258,7 @@ mod tests {
             PickleValue::Bytes(vec![0x11; 16]),
         )]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::Bool(true));
         driver.join().unwrap();
     }
@@ -4940,7 +5281,7 @@ mod tests {
             PickleValue::Float(1.5),
         )]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::Bool(true));
         driver.join().unwrap();
     }
@@ -4973,7 +5314,7 @@ mod tests {
             PickleValue::String("drain_status".into()),
         )]);
 
-        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response.get("state").unwrap().as_str(), Some("draining"));
         assert_eq!(
             response.get("drain_complete").unwrap().as_bool(),
@@ -5092,7 +5433,7 @@ mod tests {
                 PickleValue::String("global.tick_interval_ms".into()),
             ),
         ]);
-        let get_response = handle_rpc_request(&get_request, &event_tx).unwrap();
+        let get_response = handle_rpc_request(&get_request, &mut event_tx.clone()).unwrap();
         assert_eq!(
             get_response.get("key").and_then(|v| v.as_str()),
             Some("global.tick_interval_ms")
@@ -5109,7 +5450,7 @@ mod tests {
             ),
             (PickleValue::String("value".into()), PickleValue::Int(250)),
         ]);
-        let set_response = handle_rpc_request(&set_request, &event_tx).unwrap();
+        let set_response = handle_rpc_request(&set_request, &mut event_tx.clone()).unwrap();
         assert_eq!(
             set_response.get("value").and_then(|v| v.as_int()),
             Some(250)

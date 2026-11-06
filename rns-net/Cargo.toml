@@ -35,6 +35,9 @@ compact-threads-timers = []
 # Compact engine: keep the CPU-work threads (announce verification) instead
 # of running that work on the driver loop.
 compact-threads-work = []
+# Compact engine: keep the service threads (the RPC servers) instead of
+# serving them on the driver loop.
+compact-threads-services = []
 # TCP interfaces write a buffered frame once it has waited 25 µs, instead of
 # at the end of the driver's pass, unless `flush_after_us` says otherwise:
 # more writes, less latency.

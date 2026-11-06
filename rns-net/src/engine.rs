@@ -19,3 +19,9 @@ pub(crate) const FOLD_TIMERS: bool =
 /// `compact-threads-work` keeps the threads.
 pub(crate) const FOLD_WORK: bool =
     !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-work");
+
+/// Whether services (the RPC servers, so far) run on the driver loop
+/// instead of their own threads: in the compact engine unless
+/// `compact-threads-services` keeps the threads.
+pub(crate) const FOLD_SERVICES: bool =
+    !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-services");

@@ -115,11 +115,14 @@ mod announce_check;
 pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
 mod dispatch;
 mod events;
+mod hook_events;
 mod interface_management;
 mod lifecycle;
 mod link_stamps;
 mod queries;
 mod resource_preparation;
+mod rpc_service;
+pub(crate) use rpc_service::{RpcListener, RpcService};
 mod runtime_config;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod tick_source;
@@ -970,6 +973,9 @@ pub struct Driver {
     /// Timers and housekeeping the driver runs itself when they are folded
     /// (see [`crate::engine::FOLD_TIMERS`]).
     pub(crate) folded: FoldedTimers,
+    /// The RPC servers, when the driver serves them itself (see
+    /// [`crate::engine::FOLD_SERVICES`]).
+    pub(crate) rpc_service: Option<rpc_service::RpcService>,
     /// Count of known-destination cap evictions since start.
     pub(crate) known_destinations_cap_evict_count: usize,
     /// Runtime-configurable interval for starting announce cache cleanup.
@@ -1171,6 +1177,7 @@ impl Driver {
             known_destination_cleanup: None,
             ratchet_cleanup_handle: None,
             folded: FoldedTimers::new(),
+            rpc_service: None,
             resource_preparation: None,
             known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults
