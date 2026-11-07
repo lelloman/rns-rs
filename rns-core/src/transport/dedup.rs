@@ -33,17 +33,19 @@ impl PacketHashlist {
         Self::with_allocation(max_size, PacketHashlistAllocation::Eager)
     }
 
+    /// A table retaining up to `max_size` hashes. Its storage is allocated
+    /// once, at full size, and never moved or freed while the table lives,
+    /// so growth leaves no freed blocks behind for the allocator to keep.
+    /// `Eager` touches every slot up front; `Lazy` leaves the slots to be
+    /// touched as hashes are written, in order, and uses a prefix of the
+    /// index that doubles with occupancy, so a table's resident memory
+    /// follows the hashes it holds.
     pub fn with_allocation(max_size: usize, allocation: PacketHashlistAllocation) -> Self {
         // Index buckets store a 32-bit slot number.
         let max_size = max_size.min(MAX_ENTRIES);
-        let initial = if allocation == PacketHashlistAllocation::Eager {
-            max_size
-        } else {
-            max_size.min(64)
-        };
         Self {
-            queue: PacketHashQueue::new(initial, allocation),
-            set: PacketHashSet::new(initial, None),
+            queue: PacketHashQueue::new(max_size, allocation),
+            set: PacketHashSet::new(max_size, None, allocation),
             max_size,
         }
     }
@@ -88,17 +90,7 @@ impl PacketHashlist {
             debug_assert!(removed, "oldest hash must exist in index");
             self.queue.pop_front();
         }
-        if self.queue.len() == self.queue.capacity() {
-            let capacity = self
-                .queue
-                .capacity()
-                .saturating_mul(2)
-                .max(1)
-                .min(self.max_size);
-            self.queue.grow(capacity);
-            self.set = PacketHashSet::new(capacity, self.set.key_seed);
-            self.set.rebuild(&self.queue);
-        }
+        self.set.make_room(&self.queue);
         let slot = (self.queue.head + self.queue.len) % self.queue.capacity();
         self.queue.push_back(hash);
         self.set.insert(slot, &self.queue);
@@ -275,17 +267,6 @@ impl PacketHashQueue {
         }
     }
 
-    fn grow(&mut self, capacity: usize) {
-        debug_assert!(capacity > self.capacity());
-        let mut entries = RawHashSlots::new(capacity, PacketHashlistAllocation::Lazy);
-        for offset in 0..self.len {
-            let old = (self.head + offset) % self.capacity();
-            entries.write(offset, self.entries.read(old));
-        }
-        self.entries = entries;
-        self.head = 0;
-    }
-
     fn capacity(&self) -> usize {
         self.entries.len()
     }
@@ -349,7 +330,10 @@ impl PacketHashQueue {
 /// key differs, so a miss usually touches only buckets; the displacement
 /// lets deletion find an entry's home bucket without reading its hash.
 struct PacketHashSet {
+    /// Every bucket the table may use; probing uses the first `active`.
     buckets: Box<[u32]>,
+    /// Buckets in use: a power of two, at least twice the entries.
+    active: usize,
     len: usize,
     /// Seed of the keyed bucket hash; `None` uses the hashes' leading bits.
     key_seed: Option<u64>,
@@ -369,12 +353,24 @@ struct PacketHashSet {
 const DISPLACEMENT_BITS: u32 = 4;
 
 impl PacketHashSet {
-    fn new(max_entries: usize, key_seed: Option<u64>) -> Self {
+    fn new(
+        max_entries: usize,
+        key_seed: Option<u64>,
+        allocation: PacketHashlistAllocation,
+    ) -> Self {
         let slot_bits = usize::BITS - max_entries.leading_zeros();
         let displacement_bits = DISPLACEMENT_BITS.min(32 - slot_bits.min(32));
         let low_bits = slot_bits + displacement_bits;
+        let buckets = bucket_capacity(max_entries);
+        let active = match allocation {
+            PacketHashlistAllocation::Eager => buckets,
+            PacketHashlistAllocation::Lazy => buckets.min(INITIAL_BUCKETS),
+        };
         Self {
-            buckets: vec![0; bucket_capacity(max_entries)].into_boxed_slice(),
+            // Zeroed and untouched until used: only the active prefix is
+            // faulted in.
+            buckets: vec![0; buckets].into_boxed_slice(),
+            active,
             len: 0,
             key_seed,
             slot_mask: low_mask(slot_bits),
@@ -418,7 +414,16 @@ impl PacketHashSet {
 
     #[inline]
     fn mask(&self) -> usize {
-        self.buckets.len() - 1
+        self.active - 1
+    }
+
+    /// Double the active buckets before one more entry would fill more than
+    /// half of them.
+    fn make_room(&mut self, queue: &PacketHashQueue) {
+        if self.active < self.buckets.len() && (self.len + 1) * 2 > self.active {
+            self.active *= 2;
+            self.rebuild(queue);
+        }
     }
 
     fn position(&self, hash: &Key, queue: &PacketHashQueue) -> Option<usize> {
@@ -491,7 +496,7 @@ impl PacketHashSet {
     }
 
     fn rebuild(&mut self, queue: &PacketHashQueue) {
-        self.buckets.fill(0);
+        self.buckets[..self.active].fill(0);
         self.len = 0;
         for offset in 0..queue.len {
             self.insert((queue.head + offset) % queue.capacity(), queue);
@@ -558,6 +563,9 @@ fn low_mask(bits: u32) -> u32 {
 
 /// Largest retention the 32-bit index buckets can address.
 const MAX_ENTRIES: usize = u32::MAX as usize - 1;
+
+/// Active buckets of a table that grows with occupancy, at first.
+const INITIAL_BUCKETS: usize = 128;
 
 /// Buckets for `max_entries`: a power of two, at most half full.
 fn bucket_capacity(max_entries: usize) -> usize {
@@ -794,7 +802,7 @@ mod tests {
     #[test]
     fn collision_cluster_removal_preserves_remaining_entries() {
         for policy in policies() {
-            let mut set = PacketHashSet::new(3, None);
+            let mut set = PacketHashSet::new(3, None, PacketHashlistAllocation::Eager);
             let mut queue = PacketHashQueue::new(3, policy);
             let mut colliding = Vec::new();
             for seed in 0..=u8::MAX {
@@ -831,16 +839,14 @@ mod tests {
     #[test]
     fn lazy_storage_grows_with_occupancy_not_retention_limit() {
         let mut table = PacketHashlist::with_allocation(250_000, PacketHashlistAllocation::Lazy);
-        assert_eq!(table.queue.capacity(), 64);
-        assert_eq!(table.set.buckets.len(), 128);
+        assert_eq!(table.set.active, 128);
         for n in 0u64..1000 {
             let mut hash = [0; 32];
             hash[..8].copy_from_slice(&n.to_le_bytes());
             table.add(hash);
         }
         assert_eq!(table.len(), 1000);
-        assert_eq!(table.queue.capacity(), 1024);
-        assert_eq!(table.set.buckets.len(), 2048);
+        assert_eq!(table.set.active, 2048);
         assert_eq!(table.max_size, 250_000);
     }
 
