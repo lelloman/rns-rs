@@ -193,12 +193,19 @@ pub struct DeferredSend {
     /// The destination identity's 64-byte public key.
     pub(crate) public_key: [u8; 64],
     pub(crate) ratchet: Option<[u8; 32]>,
+    /// The plaintext, or the payload when `encrypted`.
     pub(crate) data: Vec<u8>,
+    /// Encrypted already by the caller: on one CPU, handing encryption to
+    /// another thread only adds a context switch.
+    pub(crate) encrypted: bool,
 }
 
 impl DeferredSend {
     /// The encrypted payload, or `None` when it cannot be encrypted.
     pub(crate) fn run(&self) -> Option<Vec<u8>> {
+        if self.encrypted {
+            return Some(self.data.clone());
+        }
         rns_crypto::identity::Identity::encrypt_for_public_key(
             &self.public_key,
             &self.data,

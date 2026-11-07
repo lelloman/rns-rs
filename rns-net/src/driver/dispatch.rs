@@ -299,6 +299,15 @@ impl Driver {
                 .on_packet_sent(crate::SendTicket(encryption.ticket), None);
             return;
         }
+        if encryption.encrypted {
+            let encryption = *encryption;
+            self.send_deferred(
+                encryption.ticket,
+                encryption.destination,
+                Some(encryption.data),
+            );
+            return;
+        }
         if let Err(encryption) = self.link_manager.submit_packet_encrypt(encryption) {
             let payload = encryption.run();
             self.send_deferred(encryption.ticket, encryption.destination, payload);
