@@ -95,6 +95,28 @@ pub trait Callbacks: Send {
     ) {
     }
 
+    /// Called with each verified segment of an incoming Resource received
+    /// in [`ResourceReceiveMode::Stream`](crate::resource::ResourceReceiveMode::Stream),
+    /// in order: `offset` is where `data` starts in the Resource.
+    fn on_resource_segment(
+        &mut self,
+        _link_id: LinkId,
+        _original_hash: [u8; 32],
+        _offset: u64,
+        _data: Vec<u8>,
+    ) {
+    }
+
+    /// Called when an incoming Resource received in
+    /// [`ResourceReceiveMode::Stream`](crate::resource::ResourceReceiveMode::Stream)
+    /// has been delivered in full.
+    fn on_resource_stream_received(
+        &mut self,
+        _link_id: LinkId,
+        _resource: crate::resource::ReceivedResourceStream,
+    ) {
+    }
+
     /// Called when a disk-backed incoming Resource is ready.
     fn on_resource_file_received(
         &mut self,

@@ -477,6 +477,7 @@ impl LinkManager {
             let maximum = match &link.resource_receive_mode {
                 ResourceReceiveMode::Memory { max_bytes } => Some(*max_bytes),
                 ResourceReceiveMode::TemporaryFile { max_bytes, .. } => *max_bytes,
+                ResourceReceiveMode::Stream { max_bytes } => *max_bytes,
             };
             if maximum.is_some_and(|maximum| receiver.data_size > maximum) {
                 let reject_actions = {
@@ -972,6 +973,10 @@ impl LinkManager {
         let mut request_request_id = None;
         let mut response_request_id = None;
         let mut completed_file = None;
+        // Streamed delivery: this segment, and the whole Resource once its
+        // last segment arrived.
+        let mut stream_segment: Option<([u8; 32], u64, Vec<u8>)> = None;
+        let mut completed_stream = None;
         let mut storage_failure = None;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
@@ -1146,7 +1151,7 @@ impl LinkManager {
                     }
                 }
 
-                if let Some(data) = segment_data {
+                if let Some(mut data) = segment_data {
                     if let Some(split) = link.incoming_splits.get_mut(&key) {
                         let write_result = match &mut split.storage {
                             IncomingSplitStorage::Memory(buffer) => {
@@ -1155,6 +1160,12 @@ impl LinkManager {
                             }
                             IncomingSplitStorage::File { file, size, .. } => {
                                 file.write_all(&data).map(|()| *size += data.len() as u64)
+                            }
+                            IncomingSplitStorage::Stream { size } => {
+                                let offset = *size;
+                                *size += data.len() as u64;
+                                stream_segment = Some((key, offset, std::mem::take(&mut data)));
+                                Ok(())
                             }
                         };
                         if let Err(error) = write_result {
@@ -1196,6 +1207,15 @@ impl LinkManager {
                                         Err(error) => storage_failure = Some(error.to_string()),
                                     }
                                 }
+                                IncomingSplitStorage::Stream { size } => {
+                                    completed_stream =
+                                        Some(crate::resource::ReceivedResourceStream {
+                                            original_hash: key,
+                                            size,
+                                            metadata: split.metadata,
+                                            app_flag: segment_app_flag,
+                                        });
+                                }
                             }
                             converted_actions.push(ResourceAction::Completed);
                         }
@@ -1214,12 +1234,40 @@ impl LinkManager {
                 && !split_is_response
                 && matches!(
                     link.resource_receive_mode,
+                    ResourceReceiveMode::Stream { .. }
+                )
+            {
+                // A Resource of one segment streams as that segment.
+                let mut converted_actions = Vec::new();
+                for action in assemble_actions {
+                    match action {
+                        ResourceAction::DataReceived {
+                            data,
+                            metadata,
+                            app_flag,
+                        } => {
+                            completed_stream = Some(crate::resource::ReceivedResourceStream {
+                                original_hash: resource_original_hash,
+                                size: data.len() as u64,
+                                metadata,
+                                app_flag,
+                            });
+                            stream_segment = Some((resource_original_hash, 0, data));
+                        }
+                        other => converted_actions.push(other),
+                    }
+                }
+                assemble_actions = converted_actions;
+            } else if !split_is_request
+                && !split_is_response
+                && matches!(
+                    link.resource_receive_mode,
                     ResourceReceiveMode::TemporaryFile { .. }
                 )
             {
                 let directory = match &link.resource_receive_mode {
                     ResourceReceiveMode::TemporaryFile { directory, .. } => directory.clone(),
-                    ResourceReceiveMode::Memory { .. } => unreachable!(),
+                    _ => unreachable!(),
                 };
                 let mut converted_actions = Vec::new();
                 for action in assemble_actions {
@@ -1276,6 +1324,22 @@ impl LinkManager {
                 link_id: *link_id,
                 resource,
             });
+        }
+        if storage_failure.is_none() {
+            if let Some((original_hash, offset, data)) = stream_segment {
+                out.push(LinkManagerAction::ResourceSegmentReceived {
+                    link_id: *link_id,
+                    original_hash,
+                    offset,
+                    data,
+                });
+            }
+            if let Some(resource) = completed_stream {
+                out.push(LinkManagerAction::ResourceStreamReceived {
+                    link_id: *link_id,
+                    resource,
+                });
+            }
         }
         if let Some(error) = storage_failure {
             out.push(LinkManagerAction::ResourceFailed {

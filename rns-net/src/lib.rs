@@ -153,7 +153,8 @@ pub use provider_bridge::{
     ProviderEnvelope, ProviderMessage,
 };
 pub use resource::{
-    ReceivedResourceFile, ResourceReceiveMode, ResourceTransferError, ResourceTransferId,
+    ReceivedResourceFile, ReceivedResourceStream, ResourceReceiveMode, ResourceTransferError,
+    ResourceTransferId,
 };
 pub use rpc::{RpcAddr, RpcClient, RpcServer};
 pub use serial::Parity;
