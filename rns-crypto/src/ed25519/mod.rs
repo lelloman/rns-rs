@@ -79,9 +79,59 @@ impl Ed25519PublicKey {
     }
 }
 
+/// Check several signatures at once: true only when every one is valid.
+///
+/// One multiscalar multiplication covers the whole batch, so a batch costs
+/// a fraction of checking each signature with [`Ed25519PublicKey::verify`].
+/// A false result does not say which signature failed; check them one by
+/// one to find out. The batch equation is the cofactored one, so a
+/// signature crafted with small-order components can pass here and fail
+/// [`Ed25519PublicKey::verify`]: only its signer can make one, and an honest
+/// signature passes both.
+#[cfg(feature = "ed25519-batch")]
+pub fn verify_batch(items: &[(&Ed25519PublicKey, &[u8; 64], &[u8])]) -> bool {
+    use alloc::vec::Vec;
+    let messages: Vec<&[u8]> = items.iter().map(|(_, _, message)| *message).collect();
+    let signatures: Vec<ed25519_dalek::Signature> = items
+        .iter()
+        .map(|(_, signature, _)| ed25519_dalek::Signature::from_bytes(signature))
+        .collect();
+    let keys: Vec<ed25519_dalek::VerifyingKey> = items.iter().map(|(key, _, _)| key.inner).collect();
+    ed25519_dalek::verify_batch(&messages, &signatures, &keys).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "ed25519-batch")]
+    #[test]
+    fn batch_accepts_valid_signatures_and_rejects_any_bad_one() {
+        let keys: alloc::vec::Vec<Ed25519PrivateKey> = (0u8..8)
+            .map(|i| Ed25519PrivateKey::from_bytes(&[i + 1; 32]))
+            .collect();
+        let messages: alloc::vec::Vec<[u8; 32]> = (0u8..8).map(|i| [i; 32]).collect();
+        let publics: alloc::vec::Vec<Ed25519PublicKey> =
+            keys.iter().map(|key| key.public_key()).collect();
+        let mut signatures: alloc::vec::Vec<[u8; 64]> = keys
+            .iter()
+            .zip(&messages)
+            .map(|(key, message)| key.sign(message))
+            .collect();
+        let items = |signatures: &[[u8; 64]]| -> bool {
+            let batch: alloc::vec::Vec<(&Ed25519PublicKey, &[u8; 64], &[u8])> = publics
+                .iter()
+                .zip(signatures)
+                .zip(&messages)
+                .map(|((key, signature), message)| (key, signature, &message[..]))
+                .collect();
+            verify_batch(&batch)
+        };
+        assert!(items(&signatures));
+        assert!(verify_batch(&[]));
+        signatures[5][0] ^= 1;
+        assert!(!items(&signatures));
+    }
 
     struct Rfc8032Vector {
         seed: &'static str,

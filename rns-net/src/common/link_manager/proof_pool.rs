@@ -15,6 +15,10 @@ use std::sync::{mpsc, Arc, Mutex};
 /// Proofs queued for the pool at most; past that they are checked inline.
 const MAX_QUEUED: usize = 4096;
 
+/// Proofs a worker checks together at most. Past about 16 a batch costs no
+/// less per signature, and verdicts wait on the whole batch.
+const MAX_BATCH: usize = 32;
+
 /// How many threads verify link proofs. Threads start only in builds with the
 /// `proof-pool` feature; other builds verify every proof inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -83,21 +87,33 @@ impl ProofPool {
             let worker = std::thread::Builder::new()
                 .name(format!("rns-proof-{index}"))
                 .spawn(move || loop {
-                    let job = {
+                    // Wait for one proof, then take those already queued
+                    // behind it: proofs come in bursts while a link has
+                    // several packets in flight, and a batch is checked for
+                    // about half the cost of checking each.
+                    let mut batch = Vec::with_capacity(MAX_BATCH);
+                    {
                         let queue = queue.lock().unwrap_or_else(|p| p.into_inner());
-                        queue.recv()
-                    };
-                    let Ok(job) = job else {
-                        return;
-                    };
-                    let valid = job.key.verify(&job.signature, &job.packet_hash);
-                    let verdict = Verdict {
-                        link_id: job.link_id,
-                        packet_hash: job.packet_hash,
-                        valid,
-                    };
-                    if verdict_tx.send(verdict).is_err() {
-                        return;
+                        let Ok(job) = queue.recv() else {
+                            return;
+                        };
+                        batch.push(job);
+                        while batch.len() < MAX_BATCH {
+                            match queue.try_recv() {
+                                Ok(job) => batch.push(job),
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    for (job, valid) in verify_jobs(&batch) {
+                        let verdict = Verdict {
+                            link_id: job.link_id,
+                            packet_hash: job.packet_hash,
+                            valid,
+                        };
+                        if verdict_tx.send(verdict).is_err() {
+                            return;
+                        }
                     }
                     // One wake stands for every verdict until the driver
                     // drains the mailbox.
@@ -156,5 +172,59 @@ impl Drop for ProofPool {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
+    }
+}
+
+/// Check `jobs`, as one batch when there are several: each job with its
+/// verdict. A batch that fails is checked again one proof at a time, to tell
+/// which proofs failed.
+fn verify_jobs(jobs: &[Job]) -> impl Iterator<Item = (&Job, bool)> {
+    // Batches need rns-crypto's `ed25519-batch`, which `proof-pool` (the
+    // only build that starts workers) turns on.
+    #[cfg(feature = "proof-pool")]
+    let batch_valid = jobs.len() > 1 && {
+        let items: Vec<(&Ed25519PublicKey, &[u8; 64], &[u8])> = jobs
+            .iter()
+            .map(|job| (&job.key, &job.signature, &job.packet_hash[..]))
+            .collect();
+        rns_crypto::ed25519::verify_batch(&items)
+    };
+    #[cfg(not(feature = "proof-pool"))]
+    let batch_valid = false;
+    jobs.iter().map(move |job| {
+        let valid = batch_valid || job.key.verify(&job.signature, &job.packet_hash);
+        (job, valid)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rns_crypto::ed25519::Ed25519PrivateKey;
+
+    fn job(index: u8, valid: bool) -> Job {
+        let key = Ed25519PrivateKey::from_bytes(&[index + 1; 32]);
+        let packet_hash = [index; 32];
+        let mut signature = key.sign(&packet_hash);
+        if !valid {
+            signature[0] ^= 1;
+        }
+        Job {
+            link_id: [index; 16],
+            packet_hash,
+            signature,
+            key: key.public_key(),
+        }
+    }
+
+    #[test]
+    fn verdicts_name_each_bad_proof_in_a_batch() {
+        let jobs: Vec<Job> = (0..6).map(|i| job(i, i != 3)).collect();
+        let verdicts: Vec<bool> = verify_jobs(&jobs).map(|(_, valid)| valid).collect();
+        assert_eq!(verdicts, [true, true, true, false, true, true]);
+
+        let jobs: Vec<Job> = (0..6).map(|i| job(i, true)).collect();
+        assert!(verify_jobs(&jobs).all(|(_, valid)| valid));
+        assert!(!verify_jobs(&[job(9, false)]).any(|(_, valid)| valid));
     }
 }

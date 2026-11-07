@@ -15,6 +15,10 @@ espidf = ["esp-idf-sys"]
 # X25519 on aws-lc (BoringSSL's assembly), about twice x25519-dalek's speed
 # on x86_64; x25519-dalek remains for results aws-lc refuses to produce.
 x25519-aws-lc = ["dep:aws-lc-rs", "std"]
+# Ed25519 batch verification (`ed25519::verify_batch`): checking several
+# signatures in one multiscalar multiplication costs a fraction of checking
+# them one by one. Needs an allocator.
+ed25519-batch = ["ed25519-dalek/batch"]
 
 [dependencies]
 esp-idf-sys = { version = "0.37", optional = true }
