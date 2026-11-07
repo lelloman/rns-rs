@@ -2422,7 +2422,7 @@ name = "rns-crypto"
 version = "0.2.1"
 dependencies = [
  "aes",
- "aws-lc-rs",
+ "aws-lc-sys",
  "cbc",
  "cpufeatures 0.3.1",
  "criterion",
