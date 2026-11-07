@@ -1003,9 +1003,11 @@ impl Driver {
                                     Ok(packet) => {
                                         let packet_hash = packet.packet_hash;
                                         let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
-                                        // Track for proof matching
+                                        // Track for proof matching, and record
+                                        // its proof for CheckProof polling.
                                         self.sent_packets
                                             .insert(packet_hash, (dest_hash, time::now()));
+                                        self.pending_probes.insert(packet_hash);
                                         // Send via engine
                                         let actions = self.engine.handle_outbound(
                                             &packet,
