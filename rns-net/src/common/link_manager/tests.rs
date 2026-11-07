@@ -2278,9 +2278,12 @@ fn streaming_resource_prepares_the_next_segment_while_awaiting_the_proof() {
     } else {
         assert_eq!(run.prepared_at_proof, 3);
     }
-    // The compact engine's receiver decrypted parts ahead of each segment's
-    // assembly; the parallel engine's decrypts at assembly.
-    assert_eq!(run.receiver_idle_turns > 0, crate::engine::FOLD_WORK);
+    // Without the decryption thread the receiver decrypted parts ahead of
+    // each segment's assembly in idle slices; with it, the thread did.
+    assert_eq!(
+        run.receiver_idle_turns > 0,
+        !LinkManager::feeds_decryption()
+    );
     // Segments 2, 3 and 4 kept the fast-link window the first one reached,
     // instead of starting slow again.
     assert_eq!(

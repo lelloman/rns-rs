@@ -104,7 +104,7 @@ impl Drop for DecryptFeeder {
 
 impl LinkManager {
     /// Whether incoming resource parts are decrypted on the feeder.
-    fn feeds_decryption() -> bool {
+    pub(super) fn feeds_decryption() -> bool {
         !crate::engine::FOLD_WORK && !proof_pool::one_cpu()
     }
 

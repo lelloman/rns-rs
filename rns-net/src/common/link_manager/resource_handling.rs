@@ -999,11 +999,13 @@ impl LinkManager {
                 accepted = Self::resource_hash_key(&receiver.resource_hash);
                 if receiver.received_count == receiver.total_parts {
                     assemble_idx = Some(idx);
-                } else if crate::engine::FOLD_WORK && receiver.has_parts_to_decrypt() {
-                    // Decrypting ahead in idle slices helps the compact
-                    // engine; in the parallel engine, decrypting a segment
-                    // in one go at assembly measured faster (streams 2-4%,
-                    // at less CPU) than slices taken between reads.
+                } else if !Self::feeds_decryption() && receiver.has_parts_to_decrypt() {
+                    // Without the decryption thread (the compact engine, or
+                    // one CPU), parts are decrypted ahead in idle slices:
+                    // pinned, a single-segment resource ran at 150 MB/s
+                    // decrypted at assembly against 197 decrypted ahead.
+                    // With the thread, it takes resources of 64 KiB and up,
+                    // and smaller ones decrypt at assembly.
                     if let Ok(hash) = <[u8; 32]>::try_from(&receiver.resource_hash[..]) {
                         if !self.receive_decrypts.contains(&(*link_id, hash)) {
                             self.receive_decrypts.push_back((*link_id, hash));
