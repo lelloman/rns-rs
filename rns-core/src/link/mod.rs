@@ -745,6 +745,11 @@ impl LinkEngine {
         self.is_initiator
     }
 
+    /// When the link became active, or `None` if it never did.
+    pub fn activated_at(&self) -> Option<f64> {
+        self.activated_at
+    }
+
     pub fn mode(&self) -> LinkMode {
         self.mode
     }

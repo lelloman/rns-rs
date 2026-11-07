@@ -272,6 +272,12 @@ pub struct TransportEngine {
     /// the requesting interface and when it asked (Transport.py
     /// `pending_local_path_requests`).
     pending_local_path_requests: BTreeMap<[u8; 16], (InterfaceId, f64)>,
+    /// Destinations whose path is being rediscovered, with the interface to
+    /// skip, sent one every `DISCOVERY_PR_TX_THROTTLE` seconds
+    /// (`Transport.pending_discovery_prs`).
+    pending_discovery_prs: VecDeque<([u8; 16], Option<InterfaceId>)>,
+    /// When the next queued rediscovery request may be sent.
+    discovery_pr_next_tx: f64,
     path_destination_cap_evict_count: usize,
     // Job timing
     announces_last_checked: f64,

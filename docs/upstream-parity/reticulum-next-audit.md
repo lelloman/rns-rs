@@ -43,7 +43,7 @@
   integrated on `dev` from `b0b793c`; commit 46 inventoried and mapped on
   `origin/master` `679854d`; commits 47 and 48 inventoried on
   `origin/master` `a029386`; commit 48 integrated on `dev` from `124d287`;
-  commits 49 to 52 inventoried and integrated on `dev` from `2078c21`
+  commits 49 to 52 inventoried and integrated on `dev` from `c27c3cb`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -245,7 +245,7 @@ Every commit in the audited range must appear exactly once.
 | 49 | `f15b34870a12f52b5f22239b69b2b20f9fa069b5` | Tuned stamp worker pooling | Structurally covered | Mapping commit; Python worker pool sizing only, with the same stamps; rns-rs has no pooling threshold (the parallel engine grinds on every core, the compact engine on one) and no per-platform runner |
 | 50 | `426673e97433a95e2baf926b93730d2fdc6e9c69` | Set blackhole updater destination link cost | Integrated | `BLACKHOLE_LINK_COST` (5.25) registered for the published blackhole list destination, which its link responder requires when link request stamps are enforced; docs. Caveat: rns-rs management announces carry no stamp extension, so the cost is not announced (see the analysis) |
 | 51 | `c97e2158f5fb93de73268af93e3f542d72d274ea` | Cleanup | Structurally covered | Mapping commit; moves destination stamp generation behind a per-destination lock; rns-rs grinds announce stamps on the single stamper worker, keyed per destination, which reloads a persisted stamp before grinding |
-| 52 | `acb38a8a1c85affa5ce8138bc6214871aa05b15b` | Pre-generate discovery PR ext_payload | Needs decision | Stamps the path requests of upstream's link-table path rediscovery; rns-rs has no such rediscovery, so there is nothing to stamp |
+| 52 | `acb38a8a1c85affa5ce8138bc6214871aa05b15b` | Pre-generate discovery PR ext_payload | Integrated | Link-table path rediscovery, missing since before the baseline, ported first: the four conditions, `PATH_REQUEST_MI` throttle, unresponsive marking, interface skip, the throttled rediscovery queue, path expiry on non-transport nodes, and rediscovery after own links that never activate; requests that skip an interface share one tag and one stamp across the other interfaces |
 
 ## Per-Commit Analysis
 
@@ -1993,13 +1993,102 @@ matches upstream's earlier behavior.
 
 **Final disposition:** Structurally covered; mapping only.
 
+### 52. `acb38a8a` — Pre-generate discovery PR ext_payload
+
+**Upstream change** (`RNS/Transport.py`): this is about the path requests
+`Transport` sends on its own to rediscover a path, not the relayed requests
+of `path_request_handler`. When a forwarded link request in the link table
+is never proven, the link table job may decide to rediscover the
+destination's path: when the path is gone, when the request came from a
+local client, or when the destination or initiator was one hop away (the
+last two also mark the old path unresponsive and skip the interface the
+request came in on). Those destinations are queued in
+`pending_discovery_prs`, and `handle_disovery_path_requests` sends a path
+request on every interface except the skipped one, with one new tag.
+`stamp_path_request` gains `return_payload` and, when set, returns the tag
+and extension payload instead of sending. With `STAMP_PRS`, the queue now
+grinds one stamp for that tag up front and sends the same stamped request
+on every interface. Before, each `request_path` call found no cached stamp
+and queued one stamper job per interface, so the requests were stamped
+too, but later and through the bounded stamper queue. A request with no
+interface to skip still goes through plain `request_path`.
+
+**Rust applicability:** Needs port, after a prerequisite. rns-rs did not
+rediscover paths from the link table at all, so there was nothing to stamp.
+`cull_link_table` removed an unproven entry at its proof timeout and emitted
+`LinkClosed`, but it sent no path request and marked no path unresponsive
+(`mark_path_unresponsive` had no caller outside tests). The pending link half
+of the same job, which expires and re-requests the path when a link this
+node initiated is never established on a non-transport node (Transport.py
+842-865), was missing too. Both predate the 1.6.0 baseline and are outside
+this audit range, so they were never inventoried. They are ported here,
+followed by this commit's single-stamp emission.
+
+**Implementation:** In `rns-core`, the table cull runs
+`rediscover_unproven_link_paths` on the entries it is about to drop:
+unvalidated, past their proof timeout. As upstream, a destination whose path
+is gone is always rediscovered on every interface. Otherwise, unless this
+node sent or accepted a path request for it within `PATH_REQUEST_MI` (20 s),
+it is rediscovered on every interface when the link request came from a
+local client (no hops taken), and on every interface except the one the
+request arrived on when the destination was one hop away or the initiator
+was one hop away. In those last two cases a transport node also marks the
+path unresponsive (`mark_path_unresponsive`, which skips boundary interfaces
+and fails over to an alternative path where there is one). A non-transport
+node expires the path instead. Requests go to a queue bounded to
+`MAX_QUEUED_DISCOVERY_PRS` (32), one per destination, and the engine tick
+sends one every `DISCOVERY_PR_TX_THROTTLE` (0.5 s), the first one interval
+after queueing, as `TransportAction::RediscoverPath`.
+
+The driver turns that action into a path request. Without an interface to
+skip it is a plain `handle_request_path`, as `Event::RequestPath` sends.
+Otherwise it draws one new tag and sends the same request on every
+out-capable interface except the skipped one. With `STAMP_PRS` the stamper
+grinds one stamp for that tag and the stamped request goes to all of those
+interfaces, as upstream now does. The stamper's path request target became
+an enum, `PathRequestTarget` (`All`, `Interface`, `AllExcept`), in place of
+an optional interface.
+
+For links this node initiates, the link manager reports
+`LinkManagerAction::PendingLinkFailed` when it removes an initiator link
+that never became active. On a non-transport node the driver expires the
+path to its destination and, unless it is a shared instance client
+(`connected_to_shared_instance`, whose instance sends the request) or it
+requested that path within `PATH_REQUEST_MI`, queues a rediscovery request
+with no interface to skip. As upstream, the link table is checked on the
+table cull interval (5 s); the link manager checks its own links every
+tick, where upstream checks `pending_links` every second.
+
+**Evidence:** `rns-core` transport tests
+`unproven_link_to_a_vanished_path_rediscovers_it_everywhere`,
+`unproven_link_to_a_one_hop_destination_skips_its_interface_and_marks_the_path`,
+`unproven_link_from_a_local_initiator_skips_its_interface`,
+`unproven_link_from_a_local_client_rediscovers_everywhere`,
+`unproven_link_on_a_distant_path_is_left_alone`,
+`recent_path_request_throttles_rediscovery_of_a_known_path`,
+`rediscovery_on_a_boundary_interface_does_not_mark_the_path`,
+`non_transport_rediscovery_expires_the_path` and
+`rediscovery_queue_is_throttled_deduplicated_and_bounded`; driver tests
+`rediscovery_skipping_an_interface_sends_one_request_on_the_others`,
+`stamped_rediscovery_grinds_one_stamp_for_every_interface` (one stamp in the
+cache, the same stamped request on both remaining interfaces),
+`rediscovery_without_an_interface_to_skip_is_a_plain_path_request`,
+`failed_own_link_on_a_non_transport_node_rediscovers_the_path` and
+`failed_own_link_rediscovery_is_throttled_and_left_to_transport_and_shared_instances`;
+link manager tests
+`initiated_link_that_never_activates_is_reported_once_on_removal` and
+`closing_an_established_link_is_not_a_failed_pending_link`.
+
+**Final disposition:** Integrated, together with the link-table and pending
+link path rediscovery it depends on.
+
 ## Integration Plan
 
-All forty-eight commits have a final disposition. The
+All fifty-two commits have a final disposition. The
 `Link.py:311` precedence of commit 5 was corrected upstream in commit 7 before it was reported. Remaining
 before promotion: the gates below. The inverted `Link.validate_request`
 stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it (still present at `eb826cde`; `Link.py` is unchanged). If upstream confirms that expression as written, the
+audit rechecks it (still present at `acb38a8a`; `Link.py` is unchanged). If upstream confirms that expression as written, the
 `LinkManager` responder check must follow it.
 
 ## Promotion Gates
@@ -2011,10 +2100,11 @@ audit rechecks it (still present at `eb826cde`; `Link.py` is unchanged). If upst
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
-  `d3874dde`, `ecd677ba`, `53dc223a` and the current tip `eb826cde` (4/4 and
-  12/12 with commits 46 to 48 integrated).
+  `d3874dde`, `ecd677ba`, `53dc223a` and `eb826cde` (4/4 and 12/12 with
+  commits 46 to 48 integrated). Not yet recorded at the current tip
+  `acb38a8a`.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI

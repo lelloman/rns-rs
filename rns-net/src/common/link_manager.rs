@@ -186,6 +186,9 @@ pub enum LinkManagerAction {
         link_id: LinkId,
         reason: Option<TeardownReason>,
     },
+    /// A link this node initiated closed without ever becoming active
+    /// (a closed entry in `Transport.pending_links`).
+    PendingLinkFailed { dest_hash: [u8; 16] },
     /// Remote peer identified — notify callbacks.
     RemoteIdentified {
         link_id: LinkId,
@@ -2205,7 +2208,13 @@ impl LinkManager {
             .map(|(id, _)| *id)
             .collect();
         for id in closed {
-            self.links.remove(&id);
+            if let Some(link) = self.links.remove(&id) {
+                if link.engine.is_initiator() && link.engine.activated_at().is_none() {
+                    all_actions.push(LinkManagerAction::PendingLinkFailed {
+                        dest_hash: *link.engine.destination_hash(),
+                    });
+                }
+            }
             all_actions.push(LinkManagerAction::DeregisterLinkDest { link_id: id });
         }
 

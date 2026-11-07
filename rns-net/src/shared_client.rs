@@ -237,6 +237,7 @@ impl RnsNode {
         let (tx, rx) = event::channel();
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        driver.connected_to_shared_instance = true;
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
         let accepting_work = driver.accepting_work_handle();
 

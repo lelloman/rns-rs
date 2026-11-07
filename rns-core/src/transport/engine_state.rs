@@ -49,6 +49,8 @@ impl TransportEngine {
             discovery_path_requests: BTreeMap::new(),
             discovery_path_request_deadlines: BTreeMap::new(),
             pending_local_path_requests: BTreeMap::new(),
+            pending_discovery_prs: VecDeque::new(),
+            discovery_pr_next_tx: 0.0,
             path_destination_cap_evict_count: 0,
             announces_last_checked: 0.0,
             tables_last_culled: 0.0,

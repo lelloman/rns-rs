@@ -391,6 +391,14 @@ pub const PATH_REQUEST_RG: f64 = 1.5;
 /// Minimum interval for automated path requests (seconds)
 pub const PATH_REQUEST_MI: f64 = 20.0;
 
+/// Seconds between path rediscovery requests sent from the queue
+/// (`Transport.discovery_pr_tx_throttle`).
+pub const DISCOVERY_PR_TX_THROTTLE: f64 = 0.5;
+
+/// Maximum number of queued path rediscovery requests
+/// (`Transport.max_queued_discovery_prs`).
+pub const MAX_QUEUED_DISCOVERY_PRS: usize = 32;
+
 /// Maximum amount of unique path request tags to remember
 pub const MAX_PR_TAGS: usize = 16_000;
 
@@ -763,6 +771,8 @@ mod tests {
         assert_eq!(REVERSE_TIMEOUT, 8.0 * 60.0);
 
         assert_eq!(PATH_REQUEST_GATE_TIMEOUT, 45.0);
+        assert_eq!(DISCOVERY_PR_TX_THROTTLE, 0.5);
+        assert_eq!(MAX_QUEUED_DISCOVERY_PRS, 32);
         assert_eq!(MAX_PR_TAGS, 16_000);
 
         // DESTINATION_TIMEOUT = 7 days

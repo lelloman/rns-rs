@@ -172,6 +172,14 @@ impl TransportEngine {
         self.interfaces.get(id)
     }
 
+    /// The registered interfaces that can send.
+    pub fn out_capable_interfaces(&self) -> impl Iterator<Item = InterfaceId> + '_ {
+        self.interfaces
+            .values()
+            .filter(|info| info.out_capable)
+            .map(|info| info.id)
+    }
+
     pub fn redirect_path(&mut self, dest_hash: &[u8; 16], interface: InterfaceId, now: f64) {
         if let Some(entry) = self
             .path_table

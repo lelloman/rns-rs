@@ -869,6 +869,18 @@ access point, gateway, roaming and internal interfaces. The per-interface
 `recursive_prs` option can enable recursive path discovery regardless of the
 configured mode.
 
+A node also rediscovers paths that appear to have gone stale. When a link
+request it forwarded is never proven, a transport node requests the path
+again: always when the path is gone, and otherwise, at most every 20 seconds
+per destination, when the request came from a local client or when the
+destination or the link initiator was one hop away. In the last two cases it
+skips the interface the link request arrived on and marks the path
+unresponsive. A non-transport node expires the path instead, and also
+expires and re-requests it when a link it initiated is never established,
+unless it is a shared instance client. These requests are queued (at most 32)
+and sent one every half second; a request that skips an interface carries one
+tag, and with `stamp_prs` one stamp, on every other interface.
+
 The per-interface `announces_from_internal` option controls whether announces
 received on an internal-mode interface may propagate out on the interface where
 the option is set. It defaults to enabled. Disabling it only affects announce

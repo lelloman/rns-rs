@@ -1705,7 +1705,17 @@ impl Driver {
                     tag,
                     interface,
                 } => {
-                    self.enqueue_path_request_stamp(destination_hash, tag, Some(interface));
+                    self.enqueue_path_request_stamp(
+                        destination_hash,
+                        tag,
+                        PathRequestTarget::Interface(interface),
+                    );
+                }
+                TransportAction::RediscoverPath {
+                    destination_hash,
+                    skip_interface,
+                } => {
+                    self.rediscover_path(destination_hash, skip_interface);
                 }
             }
         }
@@ -1901,6 +1911,9 @@ impl Driver {
                     self.holepunch_manager.link_closed(&link_id);
                     self.callbacks
                         .on_link_closed(rns_core::types::LinkId(link_id), reason);
+                }
+                LinkManagerAction::PendingLinkFailed { dest_hash } => {
+                    self.rediscover_path_after_failed_link(dest_hash);
                 }
                 LinkManagerAction::RemoteIdentified {
                     link_id,

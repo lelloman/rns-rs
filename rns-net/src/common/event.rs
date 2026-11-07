@@ -1386,7 +1386,7 @@ impl<W: Send> fmt::Debug for Event<W> {
             Event::SendStampedPathRequest(request) => f
                 .debug_struct("SendStampedPathRequest")
                 .field("dest_hash", &request.destination_hash)
-                .field("interface", &request.interface)
+                .field("target", &request.target)
                 .finish(),
             Event::RegisterProofStrategy {
                 dest_hash,

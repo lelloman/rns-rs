@@ -6588,3 +6588,208 @@ fn enforced_path_request_stamps_use_the_configured_cost() {
         .handle_path_request(&stamped, InterfaceId(1), 1000.0)
         .is_empty());
 }
+
+// =========================================================================
+// Path rediscovery after unproven forwarded links (Transport.py 1041-1115)
+// =========================================================================
+
+fn rediscovery_engine(transport_enabled: bool) -> TransportEngine {
+    let mut engine = TransportEngine::new(make_config(transport_enabled));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    engine.register_interface(make_interface(3, constants::MODE_FULL));
+    engine
+}
+
+fn insert_path(engine: &mut TransportEngine, dest: [u8; 16], hops: u8, iface: u64) {
+    engine.path_table.insert(
+        dest,
+        PathSet::from_single(
+            make_path_entry(1000.0, hops, InterfaceId(iface), [0x77; 16]),
+            1,
+        ),
+    );
+}
+
+fn insert_unproven_link(engine: &mut TransportEngine, link: u8, dest: [u8; 16], taken_hops: u8) {
+    engine.link_table.insert(
+        [link; 16],
+        LinkEntry {
+            timestamp: 1000.0,
+            next_hop_transport_id: [0x77; 16],
+            next_hop_interface: InterfaceId(2),
+            remaining_hops: 2,
+            received_interface: InterfaceId(1),
+            taken_hops,
+            destination_hash: dest,
+            validated: false,
+            proof_timeout: 1010.0,
+        },
+    );
+}
+
+fn rediscoveries(actions: &[TransportAction]) -> Vec<([u8; 16], Option<InterfaceId>)> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            TransportAction::RediscoverPath {
+                destination_hash,
+                skip_interface,
+            } => Some((*destination_hash, *skip_interface)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Ticks from `start`, a quarter second apart, until `end`, collecting the
+/// rediscovery requests sent and when.
+fn tick_rediscoveries(
+    engine: &mut TransportEngine,
+    start: f64,
+    end: f64,
+) -> Vec<(f64, [u8; 16], Option<InterfaceId>)> {
+    let mut rng = rns_crypto::FixedRng::new(&[0x5A; 32]);
+    let mut sent = Vec::new();
+    let mut now = start;
+    while now <= end {
+        for (dest, skip) in rediscoveries(&engine.tick(now, &mut rng)) {
+            sent.push((now, dest, skip));
+        }
+        now += 0.25;
+    }
+    sent
+}
+
+#[test]
+fn unproven_link_to_a_vanished_path_rediscovers_it_everywhere() {
+    let mut engine = rediscovery_engine(true);
+    let dest = [0xD1; 16];
+    insert_unproven_link(&mut engine, 0x01, dest, 3);
+
+    let sent = tick_rediscoveries(&mut engine, 1020.0, 1022.0);
+    // Queued at the cull, sent one throttle interval later, on every interface.
+    assert_eq!(sent, vec![(1020.5, dest, None)]);
+    assert!(engine.link_table.is_empty());
+}
+
+#[test]
+fn unproven_link_to_a_one_hop_destination_skips_its_interface_and_marks_the_path() {
+    let mut engine = rediscovery_engine(true);
+    let dest = [0xD2; 16];
+    insert_path(&mut engine, dest, 1, 2);
+    insert_unproven_link(&mut engine, 0x02, dest, 3);
+
+    let sent = tick_rediscoveries(&mut engine, 1020.0, 1022.0);
+    assert_eq!(sent, vec![(1020.5, dest, Some(InterfaceId(1)))]);
+    assert!(engine.path_is_unresponsive(&dest));
+    // A transport node keeps the path.
+    assert!(engine.has_path(&dest));
+}
+
+#[test]
+fn unproven_link_from_a_local_initiator_skips_its_interface() {
+    let mut engine = rediscovery_engine(true);
+    let dest = [0xD3; 16];
+    insert_path(&mut engine, dest, 4, 2);
+    insert_unproven_link(&mut engine, 0x03, dest, 1);
+
+    let sent = tick_rediscoveries(&mut engine, 1020.0, 1022.0);
+    assert_eq!(sent, vec![(1020.5, dest, Some(InterfaceId(1)))]);
+    assert!(engine.path_is_unresponsive(&dest));
+}
+
+#[test]
+fn unproven_link_from_a_local_client_rediscovers_everywhere() {
+    let mut engine = rediscovery_engine(true);
+    let dest = [0xD4; 16];
+    insert_path(&mut engine, dest, 4, 2);
+    insert_unproven_link(&mut engine, 0x04, dest, 0);
+
+    let sent = tick_rediscoveries(&mut engine, 1020.0, 1022.0);
+    assert_eq!(sent, vec![(1020.5, dest, None)]);
+    assert!(!engine.path_is_unresponsive(&dest));
+}
+
+#[test]
+fn unproven_link_on_a_distant_path_is_left_alone() {
+    let mut engine = rediscovery_engine(true);
+    let dest = [0xD5; 16];
+    insert_path(&mut engine, dest, 4, 2);
+    insert_unproven_link(&mut engine, 0x05, dest, 3);
+
+    assert!(tick_rediscoveries(&mut engine, 1020.0, 1022.0).is_empty());
+    assert!(engine.link_table.is_empty());
+    assert!(!engine.path_is_unresponsive(&dest));
+}
+
+#[test]
+fn recent_path_request_throttles_rediscovery_of_a_known_path() {
+    let mut engine = rediscovery_engine(true);
+    let known = [0xD6; 16];
+    let vanished = [0xD7; 16];
+    insert_path(&mut engine, known, 1, 2);
+    insert_unproven_link(&mut engine, 0x06, known, 3);
+    insert_unproven_link(&mut engine, 0x07, vanished, 3);
+    engine.record_outbound_path_request(known, 1005.0);
+    engine.record_outbound_path_request(vanished, 1005.0);
+
+    // Less than PATH_REQUEST_MI after the last request: only the vanished
+    // path, which is rediscovered regardless, goes out.
+    let sent = tick_rediscoveries(&mut engine, 1020.0, 1022.0);
+    assert_eq!(sent, vec![(1020.5, vanished, None)]);
+    assert!(!engine.path_is_unresponsive(&known));
+}
+
+#[test]
+fn rediscovery_on_a_boundary_interface_does_not_mark_the_path() {
+    let mut engine = rediscovery_engine(true);
+    engine.register_interface(make_interface(1, constants::MODE_BOUNDARY));
+    let dest = [0xD8; 16];
+    insert_path(&mut engine, dest, 1, 2);
+    insert_unproven_link(&mut engine, 0x08, dest, 3);
+
+    let sent = tick_rediscoveries(&mut engine, 1020.0, 1022.0);
+    assert_eq!(sent, vec![(1020.5, dest, Some(InterfaceId(1)))]);
+    assert!(!engine.path_is_unresponsive(&dest));
+}
+
+#[test]
+fn non_transport_rediscovery_expires_the_path() {
+    let mut engine = rediscovery_engine(false);
+    let dest = [0xD9; 16];
+    insert_path(&mut engine, dest, 1, 2);
+    insert_unproven_link(&mut engine, 0x09, dest, 3);
+
+    let sent = tick_rediscoveries(&mut engine, 1020.0, 1020.0);
+    assert!(sent.is_empty());
+    // Not marked unresponsive, but expired.
+    assert!(!engine.path_is_unresponsive(&dest));
+    let expires = engine.path_table[&dest].primary().map(|entry| entry.expires);
+    assert_eq!(expires, Some(0.0));
+}
+
+#[test]
+fn rediscovery_queue_is_throttled_deduplicated_and_bounded() {
+    let mut engine = rediscovery_engine(true);
+    let now = 1000.0;
+    engine.queue_path_rediscovery([0xE1; 16], None, now);
+    engine.queue_path_rediscovery([0xE2; 16], Some(InterfaceId(2)), now);
+    // Already queued.
+    engine.queue_path_rediscovery([0xE1; 16], Some(InterfaceId(3)), now);
+    for i in 0..constants::MAX_QUEUED_DISCOVERY_PRS {
+        engine.queue_path_rediscovery([i as u8; 16], None, now);
+    }
+    assert_eq!(
+        engine.pending_discovery_prs.len(),
+        constants::MAX_QUEUED_DISCOVERY_PRS
+    );
+
+    let sent = tick_rediscoveries(&mut engine, now, now + 1.25);
+    assert_eq!(
+        sent,
+        vec![
+            (1000.5, [0xE1; 16], None),
+            (1001.0, [0xE2; 16], Some(InterfaceId(2))),
+        ]
+    );
+}
