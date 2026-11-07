@@ -24,11 +24,12 @@ use rns_crypto::{OsRng, Rng};
 use super::time;
 
 mod channel_handling;
+mod decrypt_feeder;
 mod folded_assembly;
 mod proof_pool;
 pub use proof_pool::ProofVerifyThreads;
 pub(crate) use proof_pool::{
-    Decryption, DecryptionKey, Outcome as ProofOutcome, Owner as ProofOwner,
+    one_cpu, Decryption, DecryptionKey, Outcome as ProofOutcome, Owner as ProofOwner,
 };
 mod receive_worker;
 mod request_handling;
@@ -316,6 +317,11 @@ pub enum LinkManagerAction {
 /// Manages multiple links, link destinations, and request/response.
 pub struct LinkManager {
     receive_worker: Option<receive_worker::Worker>,
+    /// Decrypts incoming resource parts as they arrive in order (parallel
+    /// engine), started with the first.
+    decrypt_feeder: Option<decrypt_feeder::DecryptFeeder>,
+    /// Whether starting the feeder failed; assembly then decrypts.
+    decrypt_feeder_failed: bool,
     receive_worker_wake: Option<crate::event::EventSender>,
     /// Incoming compressed resources assembled on the driver loop, oldest
     /// first, when CPU work is folded.
@@ -469,6 +475,8 @@ impl LinkManager {
     /// Create a new empty link manager.
     pub fn new() -> Self {
         LinkManager {
+            decrypt_feeder: None,
+            decrypt_feeder_failed: false,
             receive_worker: None,
             receive_worker_wake: None,
             folded_assemblies: std::collections::VecDeque::new(),
@@ -2184,6 +2192,7 @@ impl LinkManager {
     /// [`Self::tick`] at an explicit time.
     pub(crate) fn tick_at(&mut self, now: f64, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
         let mut all_actions = Vec::new();
+        self.sweep_decryptions();
 
         // Collect link_ids to avoid borrow issues
         let link_ids: Vec<LinkId> = self.links.keys().copied().collect();

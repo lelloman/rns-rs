@@ -346,6 +346,44 @@ impl ResourceReceiver {
         self.has_parts_to_decrypt()
     }
 
+    /// Whether this receiver's parts are decrypted at assembly, and so could
+    /// be fed to a decryption elsewhere ahead of it.
+    pub fn decrypts(&self) -> bool {
+        self.flags.encrypted && self.status < ResourceStatus::Assembling
+    }
+
+    /// Set up a fresh decryption as [`Self::decrypt_next_part`] would, for
+    /// parts fed to it elsewhere, in order from the first.
+    pub fn prepare_decrypt_stream(&self, stream: &mut TokenDecryptStream) {
+        // The plaintext of an uncompressed resource is the data its hash
+        // covers, hashed alongside the tag's MAC.
+        if !self.flags.compressed {
+            stream.hash_plaintext();
+        }
+    }
+
+    /// The held parts from index `from` up to the first one missing: what a
+    /// decryption fed elsewhere takes next, in order.
+    pub fn parts_in_order_from(&self, from: usize) -> impl Iterator<Item = &[u8]> + '_ {
+        let end = (self.consecutive_completed_height + 1).max(0) as usize;
+        self.part_spans
+            .get(from..end.max(from))
+            .unwrap_or(&[])
+            .iter()
+            .map_while(|span| span.map(|(at, len)| &self.part_data[at..at + len]))
+    }
+
+    /// Hand back a decryption fed the first `parts` held parts elsewhere
+    /// ([`Self::prepare_decrypt_stream`], [`Self::parts_in_order_from`]):
+    /// assembly feeds it only the rest. Ignored if this receiver already
+    /// decrypted ahead itself.
+    pub fn resume_decrypt(&mut self, stream: Box<TokenDecryptStream>, parts: usize) {
+        if self.decrypt.is_none() && self.decrypted_parts == 0 && parts <= self.part_spans.len() {
+            self.decrypt = Some(stream);
+            self.decrypted_parts = parts;
+        }
+    }
+
     /// [`Self::decrypt_next_part`] for held parts until about `budget` bytes
     /// are done; at least one part is. Returns whether more held parts wait.
     pub fn decrypt_held_parts(
@@ -1114,6 +1152,37 @@ mod tests {
                     &NoopCompressor,
                 );
                 assert_eq!(actions, expected, "len {len} sdu {sdu} budget {budget}");
+            }
+        }
+    }
+
+    #[test]
+    fn parts_fed_to_a_decryption_elsewhere_assemble_as_at_once() {
+        let token = rns_crypto::token::Token::new(&[0x5A; 64]).unwrap();
+        let decrypt =
+            |parts: &[&[u8]], skip: usize| token.decrypt_chunks(parts, skip).map_err(|_| ());
+        for (len, sdu) in [(10usize, 100usize), (5000, 100), (5000, 97), (20_000, 464)] {
+            let expected = encrypted_receiver(&token, len, sdu).assemble(&decrypt, &NoopCompressor);
+            let total = encrypted_receiver(&token, len, sdu).total_parts;
+            for fed in [0, 1, total / 2, total] {
+                let mut receiver = encrypted_receiver(&token, len, sdu);
+                assert!(receiver.decrypts());
+                let mut stream = token.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE);
+                receiver.prepare_decrypt_stream(&mut stream);
+                // Fed in order from the first, as a decrypting thread is.
+                let parts: Vec<Vec<u8>> =
+                    receiver.parts_in_order_from(0).map(<[u8]>::to_vec).collect();
+                assert_eq!(parts.len(), total);
+                assert_eq!(receiver.parts_in_order_from(total).count(), 0);
+                for part in &parts[..fed] {
+                    stream.update(part);
+                }
+                receiver.resume_decrypt(Box::new(stream), fed);
+                let actions = receiver.assemble(
+                    &|_, _| panic!("a decryption handed back is finished, not redone"),
+                    &NoopCompressor,
+                );
+                assert_eq!(actions, expected, "len {len} sdu {sdu} fed {fed}");
             }
         }
     }

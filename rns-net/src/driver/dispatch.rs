@@ -2519,12 +2519,7 @@ fn delivered_packet_hash(raw: &[u8], packet_hash: [u8; 32]) -> [u8; 32] {
     packet_hash
 }
 
-/// Whether this process may run on one CPU only, checked once.
-fn one_cpu() -> bool {
-    static ONE_CPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ONE_CPU
-        .get_or_init(|| std::thread::available_parallelism().map_or(true, |cpus| cpus.get() == 1))
-}
+use crate::common::link_manager::one_cpu;
 
 #[cfg(test)]
 mod classification_tests {
