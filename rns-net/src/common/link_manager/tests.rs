@@ -2017,10 +2017,13 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
         &mut rng,
     );
 
+    // One segment, and with a segment builder the next one too, to be built
+    // while the first is transferred: never more.
+    let ahead = if LinkManager::builds_segments() { 2 } else { 1 };
     assert_eq!(
         bytes_read.load(std::sync::atomic::Ordering::Relaxed),
-        constants::RESOURCE_MAX_EFFICIENT_SIZE,
-        "starting a stream must not consume later segments"
+        constants::RESOURCE_MAX_EFFICIENT_SIZE * ahead,
+        "starting a stream must read at most one segment ahead"
     );
     assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 1);
 
@@ -2249,8 +2252,14 @@ fn streaming_resource_prepares_the_next_segment_while_awaiting_the_proof() {
         drive_stream_with_idle_work(&mut init_mgr, &mut resp_mgr, &link_id, initial, &mut rng);
     assert_eq!(run.received, Some(data));
     assert!(run.completed);
-    // Segments 2, 3 and 4 were ready when the proofs of 1, 2 and 3 came.
-    assert_eq!(run.prepared_at_proof, 3);
+    // Segments 2, 3 and 4 were ready when the proofs of 1, 2 and 3 came:
+    // prepared in idle time, or taken from the segment builder.
+    if LinkManager::builds_segments() {
+        assert!(init_mgr.segment_builder.is_some());
+        assert_eq!(run.prepared_at_proof, 0);
+    } else {
+        assert_eq!(run.prepared_at_proof, 3);
+    }
     // The compact engine's receiver decrypted parts ahead of each segment's
     // assembly; the parallel engine's decrypts at assembly.
     assert_eq!(run.receiver_idle_turns > 0, crate::engine::FOLD_WORK);
@@ -2319,7 +2328,14 @@ fn stream_segment_timeout_drops_the_prepared_segment_and_fails_the_stream_once()
     }
     assert!(init_mgr.has_idle_work());
     assert!(init_mgr.run_idle_work(&mut rng).is_empty());
-    assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 2);
+    // The next segment is prepared: among the senders, or on the builder.
+    let original_hash = init_mgr.links[&link_id].outgoing_resources[0].original_hash;
+    if LinkManager::builds_segments() {
+        assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 1);
+        assert!(init_mgr.segment_building(&link_id, &original_hash));
+    } else {
+        assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 2);
+    }
 
     let link = init_mgr.links.get_mut(&link_id).unwrap();
     let in_flight = link
@@ -2350,6 +2366,9 @@ fn stream_segment_timeout_drops_the_prepared_segment_and_fails_the_stream_once()
     assert!(link.outgoing_resources.is_empty());
     assert!(link.outgoing_streams.is_empty());
     assert!(link.outgoing_splits.is_empty());
+    // A segment built for the failed stream goes at the next tick.
+    init_mgr.tick(&mut rng);
+    assert!(!init_mgr.segment_building(&link_id, &original_hash));
 }
 
 #[test]
@@ -2382,9 +2401,17 @@ fn streaming_resource_exact_data_limit_splits_for_first_segment_metadata() {
         advertisement.data_size as usize,
         data.len() + metadata_overhead
     );
+    // With a segment builder, the second (last) segment is read at once,
+    // to be built while the first is transferred.
+    let first = constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead;
+    let expected = if LinkManager::builds_segments() {
+        data.len()
+    } else {
+        first
+    };
     assert_eq!(
         bytes_read.load(std::sync::atomic::Ordering::Relaxed),
-        constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead,
+        expected,
         "metadata must reduce only the first segment's data capacity"
     );
 }

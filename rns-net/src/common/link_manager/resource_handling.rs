@@ -46,7 +46,11 @@ impl LinkManager {
     /// Apply the per-transfer advertisement settings shared by every segment:
     /// the application flag, and the link MDU an advertisement must fit
     /// before its hashmap is deferred.
-    fn configure_sender(link: &ManagedLink, sender: &mut ResourceSender, app_flag: bool) {
+    pub(super) fn configure_sender(
+        link: &ManagedLink,
+        sender: &mut ResourceSender,
+        app_flag: bool,
+    ) {
         sender.flags.app_flag = app_flag;
         sender.advertisement_mdu = link.engine.mdu();
     }
@@ -165,7 +169,7 @@ impl LinkManager {
         Ok(senders)
     }
 
-    fn read_stream_segment(
+    pub(super) fn read_stream_segment(
         stream: &mut OutgoingStreamTransfer,
         capacity: usize,
     ) -> Result<Vec<u8>, ResourceTransferError> {
@@ -294,6 +298,10 @@ impl LinkManager {
         (link_id, original_hash, segment_index): (LinkId, [u8; 32], u64),
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
+        // Built, or being built, on the builder thread.
+        if self.segment_building(&link_id, &original_hash) {
+            return Vec::new();
+        }
         let Some(link) = self
             .links
             .get_mut(&link_id)
@@ -1467,6 +1475,10 @@ impl LinkManager {
         let mut actions = Vec::new();
         let mut advertise_next = None;
         let mut stream_failure = None;
+        // A next segment built on the builder thread, taken once `link` is
+        // released; and the stream whose following segment to build then.
+        let mut take_built = None;
+        let mut schedule_next = None;
         for ra in result_actions {
             match ra {
                 ResourceAction::Completed => {
@@ -1491,6 +1503,13 @@ impl LinkManager {
                                     split.current_total_parts = next.total_parts();
                                 }
                                 advertise_next = Some(next.advertise(now));
+                                schedule_next = Some(original_hash);
+                            } else if self
+                                .segment_builder
+                                .as_ref()
+                                .is_some_and(|b| b.has(&(*link_id, original_hash)))
+                            {
+                                take_built = Some((original_hash, total_parts));
                             } else if let Some(mut stream) =
                                 link.outgoing_streams.remove(&original_hash)
                             {
@@ -1585,6 +1604,53 @@ impl LinkManager {
         let _ = link;
         if let Some(next_actions) = advertise_next {
             actions.extend(self.process_resource_actions(link_id, next_actions, rng));
+        }
+        if let Some((original_hash, _)) = take_built {
+            match self.take_built_segment(link_id, original_hash) {
+                Some(Ok(mut next)) => {
+                    if let Some(link) = self.links.get_mut(link_id) {
+                        if let Some(split) = link.outgoing_splits.get_mut(&original_hash) {
+                            split.current_segment_index = next.segment_index;
+                            split.current_sent_parts = 0;
+                            split.current_total_parts = next.total_parts();
+                        }
+                        let advertisement = next.advertise(now);
+                        link.outgoing_resources.push(next);
+                        actions.extend(self.process_resource_actions(link_id, advertisement, rng));
+                        schedule_next = Some(original_hash);
+                    }
+                }
+                Some(Err(error)) => {
+                    if let Some(link) = self.links.get_mut(link_id) {
+                        link.outgoing_splits.remove(&original_hash);
+                        if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
+                            actions.push(LinkManagerAction::ResourceStreamFailed {
+                                link_id: *link_id,
+                                transfer_id: stream.transfer_id,
+                                error,
+                            });
+                        }
+                    }
+                }
+                // Lost with a failed builder: the stream cannot go on.
+                None => {
+                    if let Some(link) = self.links.get_mut(link_id) {
+                        link.outgoing_splits.remove(&original_hash);
+                        if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
+                            actions.push(LinkManagerAction::ResourceStreamFailed {
+                                link_id: *link_id,
+                                transfer_id: stream.transfer_id,
+                                error: ResourceTransferError::Protocol(
+                                    "stream segment build lost".into(),
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(original_hash) = schedule_next {
+            self.schedule_segment_build(link_id, original_hash);
         }
 
         actions
@@ -2179,7 +2245,11 @@ impl LinkManager {
         link.outgoing_streams.insert(original_hash, stream);
         link.outgoing_resources.push(first);
         let _ = link;
-        self.process_resource_actions(link_id, adv_actions, rng)
+        let actions = self.process_resource_actions(link_id, adv_actions, rng);
+        if total_segments > 1 {
+            self.schedule_segment_build(link_id, original_hash);
+        }
+        actions
     }
 
     /// Set the resource acceptance strategy for a link.
