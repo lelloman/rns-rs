@@ -82,7 +82,12 @@ enum Job {
         packet_hash: [u8; 32],
         key: Ed25519PrivateKey,
     },
+    /// Encrypt a deferred single packet's payload for `destination`.
+    Encrypt(Box<Encryption>),
 }
+
+/// A deferred send's plaintext and what encrypting it takes.
+pub(crate) use crate::common::event::DeferredSend as Encryption;
 
 pub(crate) enum Outcome {
     Verified {
@@ -94,6 +99,12 @@ pub(crate) enum Outcome {
         owner: Owner,
         packet_hash: [u8; 32],
         signature: [u8; 64],
+    },
+    /// A deferred send's encrypted payload, `None` when it failed.
+    Encrypted {
+        ticket: u64,
+        destination: [u8; 16],
+        payload: Option<Vec<u8>>,
     },
 }
 
@@ -118,6 +129,11 @@ impl Job {
                 owner,
                 packet_hash,
                 signature: key.sign(&packet_hash),
+            },
+            Job::Encrypt(encryption) => Outcome::Encrypted {
+                ticket: encryption.ticket,
+                destination: encryption.destination,
+                payload: encryption.run(),
             },
         }
     }
@@ -159,9 +175,9 @@ impl ProofPool {
                         while checking && jobs.len() < MAX_BATCH {
                             match queue.try_recv() {
                                 Ok(job) => {
-                                    let sign = matches!(job, Job::Sign { .. });
+                                    let check = matches!(job, Job::Verify { .. });
                                     jobs.push(job);
-                                    if sign {
+                                    if !check {
                                         break;
                                     }
                                 }
@@ -199,6 +215,23 @@ impl ProofPool {
         self.jobs
             .as_ref()
             .is_some_and(|jobs| jobs.try_send(job).is_ok())
+    }
+
+    /// Queue a deferred send's encryption, or hand it back when the pool is
+    /// full or gone, for the caller to encrypt it inline.
+    pub(super) fn submit_encrypt(
+        &self,
+        encryption: Box<Encryption>,
+    ) -> Result<(), Box<Encryption>> {
+        let Some(jobs) = &self.jobs else {
+            return Err(encryption);
+        };
+        jobs.try_send(Job::Encrypt(encryption))
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(Job::Encrypt(encryption))
+                | mpsc::TrySendError::Disconnected(Job::Encrypt(encryption)) => encryption,
+                _ => unreachable!("handed back the job it was given"),
+            })
     }
 
     /// Queue a proof's check. Returns false when the pool is full or gone,
@@ -272,7 +305,7 @@ fn run_jobs(jobs: Vec<Job>) -> Vec<Outcome> {
                     key,
                     ..
                 } => Some((key, signature, &packet_hash[..])),
-                Job::Sign { .. } => None,
+                Job::Sign { .. } | Job::Encrypt(_) => None,
             })
             .collect();
         rns_crypto::ed25519::verify_batch(&items)
@@ -320,7 +353,7 @@ mod tests {
             .into_iter()
             .map(|outcome| match outcome {
                 Outcome::Verified { valid, .. } => valid,
-                Outcome::Signed { .. } => true,
+                Outcome::Signed { .. } | Outcome::Encrypted { .. } => true,
             })
             .collect()
     }
@@ -354,7 +387,7 @@ mod tests {
                 signature,
                 ..
             } => assert!(key.public_key().verify(signature, packet_hash)),
-            Outcome::Verified { .. } => panic!("expected a signature"),
+            _ => panic!("expected a signature"),
         }
         assert!(matches!(
             outcomes[2],

@@ -952,6 +952,8 @@ pub struct RnsNode {
     #[cfg(target_os = "linux")]
     rpc_unix_server: Option<crate::rpc::RpcServer>,
     tick_interval_ms: Arc<AtomicU64>,
+    /// The next [`SendTicket`](crate::SendTicket) number.
+    next_send_ticket: AtomicU64,
     /// Cleared by the driver when it stops accepting new work.
     accepting_work: Arc<AtomicBool>,
     #[allow(dead_code)]
@@ -2640,6 +2642,7 @@ impl RnsNode {
             #[cfg(target_os = "linux")]
             rpc_unix_server,
             tick_interval_ms,
+            next_send_ticket: AtomicU64::new(0),
             accepting_work,
             probe_server,
             known_destinations_path: None,
@@ -3741,6 +3744,41 @@ impl RnsNode {
         Ok(packet_hash)
     }
 
+    /// Queue a packet for a SINGLE destination without encrypting it on this
+    /// thread, unlike [`send_packet_queued`](Self::send_packet_queued): the
+    /// node encrypts it (on its proof pool when it has one) and reports the
+    /// packet hash through [`Callbacks::on_packet_sent`](crate::Callbacks::on_packet_sent)
+    /// with the returned ticket, before sending it. A sender is then not
+    /// bound by its own thread's encryption, one X25519 key generation and
+    /// exchange per packet.
+    ///
+    /// `dest.public_key` must be set (OUT direction). Like
+    /// `send_packet_queued`, queueing does not mean sent.
+    pub fn send_packet_deferred(
+        &self,
+        dest: &crate::destination::Destination,
+        data: &[u8],
+    ) -> Result<crate::SendTicket, SendError> {
+        self.reject_new_work_if_draining()?;
+        if dest.dest_type != rns_core::types::DestinationType::Single {
+            return Err(SendError);
+        }
+        let public_key = dest.public_key.ok_or(SendError)?;
+        let ticket = self.next_send_ticket.fetch_add(1, Ordering::Relaxed);
+        self.tx
+            .send(Event::SendDeferred(Box::new(
+                crate::common::event::DeferredSend {
+                    ticket,
+                    destination: dest.hash.0,
+                    public_key,
+                    ratchet: self.single_ratchet(dest),
+                    data: data.to_vec(),
+                },
+            )))
+            .map_err(|_| SendError)?;
+        Ok(crate::SendTicket(ticket))
+    }
+
     fn build_packet(
         &self,
         dest: &crate::destination::Destination,
@@ -3781,6 +3819,22 @@ impl RnsNode {
         data: &[u8],
     ) -> Result<Vec<u8>, SendError> {
         let pub_key = dest.public_key.ok_or(SendError)?;
+        let ratchet = self.single_ratchet(dest);
+        // Encrypted straight from the key bytes: building the identity would
+        // decompress its signing key on every send, and encryption does not
+        // use it.
+        rns_crypto::identity::Identity::encrypt_for_public_key(
+            &pub_key,
+            data,
+            ratchet.as_ref(),
+            &mut OsRng,
+        )
+        .map_err(|_| SendError)
+    }
+
+    /// The ratchet to encrypt a packet for `dest` with: this node's own for
+    /// its destinations, else the latest one `dest` announced.
+    fn single_ratchet(&self, dest: &crate::destination::Destination) -> Option<[u8; 32]> {
         let local_ratchet = self
             .tx
             .local_ratchets()
@@ -3788,7 +3842,7 @@ impl RnsNode {
             .unwrap()
             .get(&dest.hash.0)
             .and_then(|owner| owner.current_public());
-        let ratchet = local_ratchet.or_else(|| {
+        local_ratchet.or_else(|| {
             self.ratchet_store.as_ref().and_then(|store| {
                 match store.current(&dest.hash.0, time::now(), self.ratchet_expiry.as_secs_f64()) {
                     Ok(entry) => entry.map(|entry| entry.ratchet),
@@ -3805,17 +3859,7 @@ impl RnsNode {
                     }
                 }
             })
-        });
-        // Encrypted straight from the key bytes: building the identity would
-        // decompress its signing key on every send, and encryption does not
-        // use it.
-        rns_crypto::identity::Identity::encrypt_for_public_key(
-            &pub_key,
-            data,
-            ratchet.as_ref(),
-            &mut OsRng,
-        )
-        .map_err(|_| SendError)
+        })
     }
 
     /// Register a destination with the transport engine and set its proof strategy.
@@ -4229,6 +4273,7 @@ impl RnsNode {
             #[cfg(target_os = "linux")]
             rpc_unix_server: None,
             tick_interval_ms,
+            next_send_ticket: AtomicU64::new(0),
             accepting_work,
             probe_server: None,
             known_destinations_path: None,
@@ -4992,6 +5037,7 @@ mod tests {
             #[cfg(target_os = "linux")]
             rpc_unix_server: None,
             tick_interval_ms: Arc::new(AtomicU64::new(1000)),
+            next_send_ticket: AtomicU64::new(0),
             accepting_work: Arc::new(AtomicBool::new(true)),
             probe_server: None,
             known_destinations_path: None,

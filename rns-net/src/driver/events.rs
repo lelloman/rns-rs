@@ -1418,6 +1418,7 @@ impl Driver {
                     dest_type,
                     attached_interface,
                 } => self.handle_send_outbound_event(raw, dest_type, attached_interface),
+                Event::SendDeferred(encryption) => self.handle_send_deferred(encryption),
                 Event::SendOutboundTracked {
                     raw,
                     dest_type,

@@ -82,6 +82,7 @@ pub mod holepunch;
 #[cfg(feature = "hooks")]
 pub mod provider_bridge;
 
+pub use common::callbacks::SendTicket;
 pub use config::RnsConfig;
 pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
 #[cfg(feature = "iface-backbone")]

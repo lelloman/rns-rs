@@ -564,6 +564,18 @@ impl LinkManager {
         })
     }
 
+    /// Queue a deferred send's encryption on the proof pool, or hand it back
+    /// without a pool or when it is full, for the caller to encrypt inline.
+    pub(crate) fn submit_packet_encrypt(
+        &mut self,
+        encryption: Box<proof_pool::Encryption>,
+    ) -> Result<(), Box<proof_pool::Encryption>> {
+        match self.proof_pool() {
+            Some(pool) => pool.submit_encrypt(encryption),
+            None => Err(encryption),
+        }
+    }
+
     /// Single-packet proofs the pool finished since the last call, taken by
     /// the driver after [`poll_proof_pool`](Self::poll_proof_pool).
     pub(crate) fn take_packet_proofs(&mut self, out: &mut Vec<proof_pool::Outcome>) {
@@ -587,7 +599,8 @@ impl LinkManager {
                 | proof_pool::Outcome::Signed {
                     owner: proof_pool::Owner::Packet { .. },
                     ..
-                } => self.packet_proof_outcomes.push(outcome),
+                }
+                | proof_pool::Outcome::Encrypted { .. } => self.packet_proof_outcomes.push(outcome),
                 proof_pool::Outcome::Verified {
                     owner: proof_pool::Owner::Link(link_id),
                     packet_hash,
