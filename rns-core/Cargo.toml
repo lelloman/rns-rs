@@ -26,3 +26,7 @@ serde_json = "1"
 [[bench]]
 name = "transport_hot_paths"
 harness = false
+
+[[bench]]
+name = "dedup"
+harness = false
