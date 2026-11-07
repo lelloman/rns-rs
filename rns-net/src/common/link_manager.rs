@@ -17,7 +17,7 @@ use rns_core::link::types::{LinkId, LinkState, TeardownReason};
 use rns_core::link::{LinkAction, LinkEngine, LinkMode};
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::resource::{ResourceAction, ResourceReceiver, ResourceSender};
-use rns_crypto::ed25519::Ed25519PrivateKey;
+use rns_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
 use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::{OsRng, Rng};
 
@@ -27,6 +27,7 @@ mod channel_handling;
 mod folded_assembly;
 mod proof_pool;
 pub use proof_pool::ProofVerifyThreads;
+pub(crate) use proof_pool::{Outcome as ProofOutcome, Owner as ProofOwner};
 mod receive_worker;
 mod request_handling;
 mod resource_handling;
@@ -324,6 +325,8 @@ pub struct LinkManager {
     proof_pool_settled: bool,
     /// Reused buffer for the pool's verdicts.
     proof_outcomes: Vec<proof_pool::Outcome>,
+    /// Outcomes for single packets, for the driver to apply.
+    packet_proof_outcomes: Vec<proof_pool::Outcome>,
     /// The authoritative O(1) link-id index for pending, active, and closing
     /// links. Link state lives in each `ManagedLink`, so lifecycle transitions
     /// cannot desynchronise separate list and lookup-map representations.
@@ -471,6 +474,7 @@ impl LinkManager {
             proof_pool: None,
             proof_pool_settled: false,
             proof_outcomes: Vec::new(),
+            packet_proof_outcomes: Vec::new(),
             links: Default::default(),
             link_destinations: Default::default(),
             request_handlers: Vec::new(),
@@ -519,8 +523,56 @@ impl LinkManager {
         self.proof_pool.as_ref()
     }
 
+    /// Queue the check of a single packet's proof on the proof pool. False
+    /// without a pool or when it is full, for the caller to check it inline.
+    pub(crate) fn submit_packet_proof_check(
+        &mut self,
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        signature: [u8; 64],
+        key: Ed25519PublicKey,
+        rtt: f64,
+    ) -> bool {
+        self.proof_pool().is_some_and(|pool| {
+            pool.submit_verify(
+                proof_pool::Owner::Packet { destination, rtt },
+                packet_hash,
+                signature,
+                key,
+            )
+        })
+    }
+
+    /// Queue the signature of a single packet's proof on the proof pool.
+    /// False without a pool or when it is full, for the caller to sign it
+    /// inline.
+    pub(crate) fn submit_packet_proof_sign(
+        &mut self,
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        key: Ed25519PrivateKey,
+    ) -> bool {
+        self.proof_pool().is_some_and(|pool| {
+            pool.submit_sign(
+                proof_pool::Owner::Packet {
+                    destination,
+                    rtt: 0.0,
+                },
+                packet_hash,
+                key,
+            )
+        })
+    }
+
+    /// Single-packet proofs the pool finished since the last call, taken by
+    /// the driver after [`poll_proof_pool`](Self::poll_proof_pool).
+    pub(crate) fn take_packet_proofs(&mut self, out: &mut Vec<proof_pool::Outcome>) {
+        out.append(&mut self.packet_proof_outcomes);
+    }
+
     /// Apply what the proof pool has ready: verified proofs, and signed ones
-    /// to send. `None` without a pool.
+    /// to send; single packets' outcomes wait for
+    /// [`take_packet_proofs`](Self::take_packet_proofs). `None` without a pool.
     pub(crate) fn poll_proof_pool(&mut self, rng: &mut dyn Rng) -> Option<Vec<LinkManagerAction>> {
         let pool = self.proof_pool.as_ref()?;
         let mut outcomes = core::mem::take(&mut self.proof_outcomes);
@@ -529,13 +581,21 @@ impl LinkManager {
         for outcome in outcomes.drain(..) {
             match outcome {
                 proof_pool::Outcome::Verified {
-                    link_id,
+                    owner: proof_pool::Owner::Packet { .. },
+                    ..
+                }
+                | proof_pool::Outcome::Signed {
+                    owner: proof_pool::Owner::Packet { .. },
+                    ..
+                } => self.packet_proof_outcomes.push(outcome),
+                proof_pool::Outcome::Verified {
+                    owner: proof_pool::Owner::Link(link_id),
                     packet_hash,
                     valid: true,
                 } => actions.extend(self.link_proof_verified(&link_id, &packet_hash, rng)),
                 proof_pool::Outcome::Verified { .. } => {}
                 proof_pool::Outcome::Signed {
-                    link_id,
+                    owner: proof_pool::Owner::Link(link_id),
                     packet_hash,
                     signature,
                 } => {
@@ -1108,7 +1168,12 @@ impl LinkManager {
             return Vec::new();
         };
         if let Some(pool) = self.proof_pool() {
-            if pool.submit_verify(*link_id, tracked_hash, signature, key.clone()) {
+            if pool.submit_verify(
+                proof_pool::Owner::Link(*link_id),
+                tracked_hash,
+                signature,
+                key.clone(),
+            ) {
                 return Vec::new();
             }
         }
@@ -1170,7 +1235,7 @@ impl LinkManager {
         // Signed on the pool when there is one: the proof goes out once the
         // driver takes the signature back.
         if let Some(pool) = self.proof_pool() {
-            if pool.submit_sign(*link_id, *packet_hash, key.clone()) {
+            if pool.submit_sign(proof_pool::Owner::Link(*link_id), *packet_hash, key.clone()) {
                 return Vec::new();
             }
         }

@@ -58,30 +58,40 @@ impl ProofVerifyThreads {
     }
 }
 
+/// What a proof belongs to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Owner {
+    /// A packet sent or received on this link.
+    Link(LinkId),
+    /// A single packet sent to or received for `destination`. For a check,
+    /// `rtt` is the round trip measured when the proof arrived.
+    Packet { destination: [u8; 16], rtt: f64 },
+}
+
 enum Job {
-    /// Check a peer's proof of a packet sent on `link_id`.
+    /// Check a peer's proof of a packet `owner` sent.
     Verify {
-        link_id: LinkId,
+        owner: Owner,
         packet_hash: [u8; 32],
         signature: [u8; 64],
         key: Ed25519PublicKey,
     },
-    /// Sign the proof of a packet received on `link_id`.
+    /// Sign the proof of a packet `owner` received.
     Sign {
-        link_id: LinkId,
+        owner: Owner,
         packet_hash: [u8; 32],
         key: Ed25519PrivateKey,
     },
 }
 
-pub(super) enum Outcome {
+pub(crate) enum Outcome {
     Verified {
-        link_id: LinkId,
+        owner: Owner,
         packet_hash: [u8; 32],
         valid: bool,
     },
     Signed {
-        link_id: LinkId,
+        owner: Owner,
         packet_hash: [u8; 32],
         signature: [u8; 64],
     },
@@ -91,21 +101,21 @@ impl Job {
     fn run(self) -> Outcome {
         match self {
             Job::Verify {
-                link_id,
+                owner,
                 packet_hash,
                 signature,
                 key,
             } => Outcome::Verified {
-                link_id,
+                owner,
                 packet_hash,
                 valid: key.verify(&signature, &packet_hash),
             },
             Job::Sign {
-                link_id,
+                owner,
                 packet_hash,
                 key,
             } => Outcome::Signed {
-                link_id,
+                owner,
                 packet_hash,
                 signature: key.sign(&packet_hash),
             },
@@ -195,13 +205,13 @@ impl ProofPool {
     /// for the caller to check it inline.
     pub(super) fn submit_verify(
         &self,
-        link_id: LinkId,
+        owner: Owner,
         packet_hash: [u8; 32],
         signature: [u8; 64],
         key: Ed25519PublicKey,
     ) -> bool {
         self.submit(Job::Verify {
-            link_id,
+            owner,
             packet_hash,
             signature,
             key,
@@ -212,12 +222,12 @@ impl ProofPool {
     /// gone, for the caller to sign inline.
     pub(super) fn submit_sign(
         &self,
-        link_id: LinkId,
+        owner: Owner,
         packet_hash: [u8; 32],
         key: Ed25519PrivateKey,
     ) -> bool {
         self.submit(Job::Sign {
-            link_id,
+            owner,
             packet_hash,
             key,
         })
@@ -275,11 +285,9 @@ fn run_jobs(jobs: Vec<Job>) -> Vec<Outcome> {
     jobs.into_iter()
         .map(|job| match job {
             Job::Verify {
-                link_id,
-                packet_hash,
-                ..
+                owner, packet_hash, ..
             } if batch_valid => Outcome::Verified {
-                link_id,
+                owner,
                 packet_hash,
                 valid: true,
             },
@@ -300,7 +308,7 @@ mod tests {
             signature[0] ^= 1;
         }
         Job::Verify {
-            link_id: [index; 16],
+            owner: Owner::Link([index; 16]),
             packet_hash,
             signature,
             key: key.public_key(),
@@ -332,7 +340,7 @@ mod tests {
         let jobs = vec![
             check(1, true),
             Job::Sign {
-                link_id: [2; 16],
+                owner: Owner::Link([2; 16]),
                 packet_hash: [2; 32],
                 key: Ed25519PrivateKey::from_bytes(&[42; 32]),
             },

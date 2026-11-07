@@ -1289,6 +1289,7 @@ impl Driver {
             self.dispatch_link_actions(actions);
             if let Some(actions) = self.link_manager.poll_proof_pool(&mut self.rng) {
                 self.dispatch_link_actions(actions);
+                self.apply_packet_proofs();
             }
             self.flush_pending_link_frames();
             if self

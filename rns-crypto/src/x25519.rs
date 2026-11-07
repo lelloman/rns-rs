@@ -99,7 +99,8 @@ mod aws_lc {
         let mut shared = zeroize::Zeroizing::new([0u8; 32]);
         // SAFETY: all three pointers address 32-byte arrays, as the function
         // takes.
-        let ok = unsafe { aws_lc_sys::X25519(shared.as_mut_ptr(), private.as_ptr(), peer.as_ptr()) };
+        let ok =
+            unsafe { aws_lc_sys::X25519(shared.as_mut_ptr(), private.as_ptr(), peer.as_ptr()) };
         (ok == 1).then(|| *shared)
     }
 }

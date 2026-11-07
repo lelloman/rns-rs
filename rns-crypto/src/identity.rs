@@ -352,6 +352,11 @@ impl Identity {
             .map_err(CryptoError::TokenError)
     }
 
+    /// The Ed25519 key this identity signs with, when it has its private keys.
+    pub fn signing_key(&self) -> Option<&Ed25519PrivateKey> {
+        self.sig_prv.as_ref()
+    }
+
     pub fn sign(&self, message: &[u8]) -> Result<[u8; 64], CryptoError> {
         let sig_prv = self.sig_prv.as_ref().ok_or(CryptoError::NoPrivateKey)?;
         Ok(sig_prv.sign(message))

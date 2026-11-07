@@ -13838,3 +13838,99 @@ fn management_announces_stay_unstamped_without_stamp_destinations() {
     assert_eq!(announces.len(), 1);
     assert!(announces[0].app_data.is_none());
 }
+
+#[cfg(feature = "proof-pool")]
+#[test]
+fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
+    let (tx, rx) = event::channel();
+    let (mut cbs, ..) = MockCallbacks::new();
+    let proofs = Arc::new(Mutex::new(Vec::new()));
+    cbs.proofs = proofs.clone();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
+    driver.link_manager.set_receive_worker_wake(tx.clone());
+    driver
+        .link_manager
+        .set_proof_verify_threads(crate::ProofVerifyThreads::Fixed(2));
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let identity = Identity::new(&mut OsRng);
+    let public = identity.get_public_key().unwrap();
+    let signing =
+        rns_crypto::ed25519::Ed25519PublicKey::from_bytes(&public[32..].try_into().unwrap())
+            .unwrap();
+    let take_outcomes = |driver: &mut Driver, done: &dyn Fn(&Driver) -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !done(driver) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no outcome from the pool"
+            );
+            thread::sleep(Duration::from_millis(5));
+            let mut rng = OsRng;
+            driver
+                .link_manager
+                .poll_proof_pool(&mut rng)
+                .expect("the pool is running");
+            driver.apply_packet_proofs();
+        }
+    };
+
+    // Proving a received packet: the signature comes from the pool, and the
+    // proof is sent once it is applied.
+    let dest = [0xDD; 16];
+    driver.proof_strategies.insert(
+        dest,
+        (
+            rns_core::types::ProofStrategy::ProveAll,
+            Some(Identity::from_private_key(
+                &identity.get_private_key().unwrap(),
+            )),
+        ),
+    );
+    let received = [0x31; 32];
+    driver.maybe_generate_proof(dest, &received);
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "signed on the pool, not inline"
+    );
+    take_outcomes(&mut driver, &|_| !sent.lock().unwrap().is_empty());
+    let proof = RawPacket::unpack(&sent.lock().unwrap()[0]).unwrap();
+    assert_eq!(proof.flags.packet_type, constants::PACKET_TYPE_PROOF);
+    assert_eq!(&proof.data()[..32], &received);
+    assert!(signing.verify(&proof.data()[32..96].try_into().unwrap(), &received));
+
+    // Checking proofs of sent packets: the good one completes its receipt,
+    // the forged one does not.
+    let peer = [0xD1; 16];
+    let mut known = make_known_destination_state(peer, time::now(), InterfaceId(1));
+    known.announced.public_key = public;
+    driver.known_destinations.insert(peer, known);
+    let (good, forged) = ([0x41; 32], [0x42; 32]);
+    for hash in [good, forged] {
+        driver.sent_packets.insert(hash, (peer, time::now()));
+    }
+    for (hash, signature) in [
+        (good, identity.sign(&good).unwrap()),
+        (forged, identity.sign(&good).unwrap()),
+    ] {
+        let mut data = hash.to_vec();
+        data.extend_from_slice(&signature);
+        driver.handle_inbound_proof(hash[..16].try_into().unwrap(), &data, &[0; 32]);
+    }
+    assert!(
+        proofs.lock().unwrap().is_empty(),
+        "checked on the pool, not inline"
+    );
+    take_outcomes(&mut driver, &|_| !proofs.lock().unwrap().is_empty());
+    // Let the forged proof's verdict arrive too.
+    thread::sleep(Duration::from_millis(100));
+    take_outcomes(&mut driver, &|_| true);
+    let proofs = proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 1);
+    assert_eq!(proofs[0].0, DestHash(peer));
+    assert_eq!(proofs[0].1, PacketHash(good));
+    assert!(driver.sent_packets.is_empty());
+}

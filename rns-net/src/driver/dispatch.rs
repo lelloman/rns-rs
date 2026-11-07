@@ -218,7 +218,16 @@ impl Driver {
             }
         };
 
-        // Sign the packet hash to create the proof
+        // Signed on the proof pool when there is one: the proof goes out once
+        // the driver takes the signature back.
+        if let Some(key) = identity.signing_key() {
+            if self
+                .link_manager
+                .submit_packet_proof_sign(dest_hash, *packet_hash, key.clone())
+            {
+                return;
+            }
+        }
         let signature = match identity.sign(packet_hash) {
             Ok(sig) => sig,
             Err(e) => {
@@ -226,11 +235,20 @@ impl Driver {
                 return;
             }
         };
+        self.send_packet_proof(dest_hash, packet_hash, &signature);
+    }
 
+    /// Send the proof of a packet received for `dest_hash`.
+    fn send_packet_proof(
+        &mut self,
+        dest_hash: [u8; 16],
+        packet_hash: &[u8; 32],
+        signature: &[u8; 64],
+    ) {
         // Build explicit proof: [packet_hash:32][signature:64]
         let mut proof_data = Vec::with_capacity(96);
         proof_data.extend_from_slice(packet_hash);
-        proof_data.extend_from_slice(&signature);
+        proof_data.extend_from_slice(signature);
 
         // Address the proof to the truncated packet hash (first 16 bytes),
         // matching Python's ProofDestination (Packet.py:390-394).
@@ -268,6 +286,38 @@ impl Driver {
                 &dest_hash[..4]
             );
         }
+    }
+
+    /// Apply single-packet proofs the proof pool finished: deliver checked
+    /// proofs, send signed ones.
+    pub(crate) fn apply_packet_proofs(&mut self) {
+        use crate::common::link_manager::{ProofOutcome, ProofOwner};
+        let mut outcomes = core::mem::take(&mut self.packet_proofs);
+        self.link_manager.take_packet_proofs(&mut outcomes);
+        for outcome in outcomes.drain(..) {
+            match outcome {
+                ProofOutcome::Verified {
+                    owner: ProofOwner::Packet { destination, rtt },
+                    packet_hash,
+                    valid,
+                } => {
+                    if valid {
+                        let _ = self.mark_known_destination_used(&destination);
+                        self.packet_proof_accepted(destination, packet_hash, rtt);
+                    } else {
+                        log::debug!("Proof signature invalid for {:02x?}", &packet_hash[..4]);
+                    }
+                }
+                ProofOutcome::Signed {
+                    owner: ProofOwner::Packet { destination, .. },
+                    packet_hash,
+                    signature,
+                } => self.send_packet_proof(destination, &packet_hash, &signature),
+                // Link outcomes are applied by the link manager.
+                ProofOutcome::Verified { .. } | ProofOutcome::Signed { .. } => {}
+            }
+        }
+        self.packet_proofs = outcomes;
     }
 
     /// Handle an inbound proof packet: validate and fire on_proof callback.
@@ -337,38 +387,40 @@ impl Driver {
 
         // Look up the tracked sent packet
         if let Some((tracked_dest, sent_time)) = self.sent_packets.remove(&tracked_hash) {
+            let rtt = time::now() - sent_time;
             // Validate the proof signature using the destination's public key
             // (matches Python's PacketReceipt.validate_proof behavior)
-            if let Some(key) = self.proof_key(&tracked_dest) {
-                let mut sig = [0u8; 64];
-                sig.copy_from_slice(signature);
-                if !key.is_some_and(|key| key.verify(&sig, &tracked_hash)) {
-                    log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4],);
+            match self.proof_key(&tracked_dest) {
+                Some(Some(key)) => {
+                    let mut sig = [0u8; 64];
+                    sig.copy_from_slice(signature);
+                    // Checked on the proof pool when there is one, batched
+                    // with the proofs queued with it.
+                    if self.link_manager.submit_packet_proof_check(
+                        tracked_dest,
+                        tracked_hash,
+                        sig,
+                        key.clone(),
+                        rtt,
+                    ) {
+                        return;
+                    }
+                    if !key.verify(&sig, &tracked_hash) {
+                        log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
+                        return;
+                    }
+                    let _ = self.mark_known_destination_used(&tracked_dest);
+                }
+                Some(None) => {
+                    log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
                     return;
                 }
-                let _ = self.mark_known_destination_used(&tracked_dest);
-            } else {
-                log::debug!(
+                None => log::debug!(
                     "No known identity for dest {:02x?}, accepting proof without signature check",
                     &tracked_dest[..4],
-                );
+                ),
             }
-
-            let now = time::now();
-            let rtt = now - sent_time;
-            log::debug!(
-                "Proof received for {:02x?} rtt={:.3}s",
-                &tracked_hash[..4],
-                rtt,
-            );
-            if self.pending_probes.remove(&tracked_hash) {
-                self.completed_proofs.insert(tracked_hash, (rtt, now));
-            }
-            self.callbacks.on_proof(
-                rns_core::types::DestHash(tracked_dest),
-                rns_core::types::PacketHash(tracked_hash),
-                rtt,
-            );
+            self.packet_proof_accepted(tracked_dest, tracked_hash, rtt);
         } else {
             log::debug!(
                 "Proof for unknown packet {:02x?} on dest {:02x?}",
@@ -378,11 +430,28 @@ impl Driver {
         }
     }
 
+    /// Complete the receipt of a packet sent to `destination` whose proof
+    /// was accepted.
+    fn packet_proof_accepted(&mut self, destination: [u8; 16], packet_hash: [u8; 32], rtt: f64) {
+        log::debug!(
+            "Proof received for {:02x?} rtt={:.3}s",
+            &packet_hash[..4],
+            rtt,
+        );
+        if self.pending_probes.remove(&packet_hash) {
+            self.completed_proofs
+                .insert(packet_hash, (rtt, time::now()));
+        }
+        self.callbacks.on_proof(
+            rns_core::types::DestHash(destination),
+            rns_core::types::PacketHash(packet_hash),
+            rtt,
+        );
+    }
+
     /// The signing key a proof for a packet sent to `destination` is checked
     /// with: `None` when the destination's identity is unknown, `Some(None)`
-    /// when its announced key does not parse. Verified inline: a proof
-    /// completes a receipt the sender may be waiting on to send again, and a
-    /// thread handoff would delay it.
+    /// when its announced key does not parse.
     fn proof_key(
         &mut self,
         destination: &[u8; 16],
