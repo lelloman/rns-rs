@@ -72,6 +72,11 @@ struct IncomingSplitTransfer {
 
 enum IncomingSplitStorage {
     Memory(Vec<u8>),
+    /// Segments are handed to the application as they arrive; only the
+    /// count of bytes delivered so far is kept.
+    Stream {
+        size: u64,
+    },
     File {
         file: File,
         path: PathBuf,
@@ -222,6 +227,18 @@ pub enum LinkManagerAction {
     ResourceFileReceived {
         link_id: LinkId,
         resource: ReceivedResourceFile,
+    },
+    /// A verified segment of a streamed incoming Resource.
+    ResourceSegmentReceived {
+        link_id: LinkId,
+        original_hash: [u8; 32],
+        offset: u64,
+        data: Vec<u8>,
+    },
+    /// Every segment of a streamed incoming Resource has been delivered.
+    ResourceStreamReceived {
+        link_id: LinkId,
+        resource: crate::resource::ReceivedResourceStream,
     },
     /// Resource transfer completed (proof validated on sender side).
     ResourceCompleted { link_id: LinkId },
@@ -420,6 +437,7 @@ impl LinkManager {
                     size: 0,
                 })
             }
+            ResourceReceiveMode::Stream { .. } => Ok(IncomingSplitStorage::Stream { size: 0 }),
         }
     }
 

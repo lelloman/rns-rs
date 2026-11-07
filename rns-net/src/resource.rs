@@ -64,6 +64,19 @@ pub enum ResourceReceiveMode {
         directory: PathBuf,
         max_bytes: Option<u64>,
     },
+    /// Hand each verified segment to the application as it arrives
+    /// ([`Callbacks::on_resource_segment`](crate::Callbacks::on_resource_segment)),
+    /// in order, then report the whole Resource received
+    /// ([`Callbacks::on_resource_stream_received`](crate::Callbacks::on_resource_stream_received)).
+    ///
+    /// Memory stays bounded by about one segment (at most the efficient
+    /// segment size, 1 MiB) whatever the Resource's size. A Resource of one
+    /// segment arrives the same way, as one segment at offset 0. A transfer
+    /// that fails after some segments were delivered is reported through
+    /// [`Callbacks::on_resource_failed`](crate::Callbacks::on_resource_failed);
+    /// the application discards what it received of it. Requests and
+    /// responses are delivered as before.
+    Stream { max_bytes: Option<u64> },
 }
 
 impl Default for ResourceReceiveMode {
@@ -72,6 +85,19 @@ impl Default for ResourceReceiveMode {
             max_bytes: RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64,
         }
     }
+}
+
+/// A streamed incoming Resource that has been received in full: every
+/// segment was delivered to [`Callbacks::on_resource_segment`](crate::Callbacks::on_resource_segment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedResourceStream {
+    /// The Resource's original hash, which its segments were delivered under.
+    pub original_hash: [u8; 32],
+    /// Bytes delivered in all.
+    pub size: u64,
+    pub metadata: Option<Vec<u8>>,
+    /// The application flag the sender set in the advertisement.
+    pub app_flag: bool,
 }
 
 /// A received disk-backed Resource.

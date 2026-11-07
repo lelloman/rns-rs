@@ -1981,6 +1981,23 @@ impl Driver {
                     self.callbacks
                         .on_resource_file_received(rns_core::types::LinkId(link_id), resource);
                 }
+                LinkManagerAction::ResourceSegmentReceived {
+                    link_id,
+                    original_hash,
+                    offset,
+                    data,
+                } => {
+                    self.callbacks.on_resource_segment(
+                        rns_core::types::LinkId(link_id),
+                        original_hash,
+                        offset,
+                        data,
+                    );
+                }
+                LinkManagerAction::ResourceStreamReceived { link_id, resource } => {
+                    self.callbacks
+                        .on_resource_stream_received(rns_core::types::LinkId(link_id), resource);
+                }
                 LinkManagerAction::ResourceCompleted { link_id } => {
                     self.callbacks
                         .on_resource_completed(rns_core::types::LinkId(link_id));

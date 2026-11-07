@@ -1919,6 +1919,75 @@ impl Read for CountingReader {
 }
 
 #[test]
+fn stream_receive_mode_delivers_verified_segments_in_order() {
+    for len in [
+        // One segment, then several with a partial last one.
+        50_000,
+        constants::RESOURCE_MAX_EFFICIENT_SIZE * 2 + 12345,
+    ] {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+        resp_mgr
+            .set_resource_receive_mode(&link_id, ResourceReceiveMode::Stream { max_bytes: None });
+
+        let data = deterministic_bytes(len);
+        let initial = init_mgr.send_resource_stream(
+            &link_id,
+            ResourceTransferId(7),
+            Box::new(std::io::Cursor::new(data.clone())),
+            data.len() as u64,
+            None,
+            false,
+            &mut rng,
+        );
+        let (received, completed, _progress, failures, _rounds) = drive_link_manager_packets(
+            &mut init_mgr,
+            &mut resp_mgr,
+            initial,
+            'i',
+            &mut rng,
+            30_000,
+        );
+        assert!(
+            failures.is_empty(),
+            "streamed transfer failed: {failures:?}"
+        );
+        assert!(completed);
+        assert_eq!(received, Some(data), "Resource of {len} bytes");
+        // Nothing of the Resource is kept once it was handed over.
+        assert!(resp_mgr.links[&link_id].incoming_splits.is_empty());
+    }
+}
+
+#[test]
+fn stream_receive_mode_refuses_a_resource_over_its_limit() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    resp_mgr.set_resource_receive_mode(
+        &link_id,
+        ResourceReceiveMode::Stream {
+            max_bytes: Some(10_000),
+        },
+    );
+    let data = deterministic_bytes(50_000);
+    let initial = init_mgr.send_resource_stream(
+        &link_id,
+        ResourceTransferId(8),
+        Box::new(std::io::Cursor::new(data.clone())),
+        data.len() as u64,
+        None,
+        false,
+        &mut rng,
+    );
+    let (received, completed, _progress, _failures, _rounds) =
+        drive_link_manager_packets(&mut init_mgr, &mut resp_mgr, initial, 'i', &mut rng, 30_000);
+    assert_eq!(received, None);
+    assert!(!completed);
+}
+
+#[test]
 fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
@@ -2311,6 +2380,8 @@ fn drive_link_manager_packets(
     let mut sender_completed = false;
     let mut progress = Vec::new();
     let mut failures = Vec::new();
+    // A streamed Resource, rebuilt from its segments.
+    let mut streamed = Vec::new();
 
     while !pending.is_empty() && rounds < max_rounds {
         rounds += 1;
@@ -2345,6 +2416,17 @@ fn drive_link_manager_packets(
                     }
                     LinkManagerAction::ResourceFileReceived { resource, .. } => {
                         received_data = Some(std::fs::read(resource.path()).unwrap());
+                    }
+                    LinkManagerAction::ResourceSegmentReceived { offset, data, .. } => {
+                        // Segments arrive in order, each at most one
+                        // efficient segment: the mode's memory bound.
+                        assert_eq!(*offset, streamed.len() as u64);
+                        assert!(data.len() <= constants::RESOURCE_MAX_EFFICIENT_SIZE);
+                        streamed.extend_from_slice(data);
+                    }
+                    LinkManagerAction::ResourceStreamReceived { resource, .. } => {
+                        assert_eq!(resource.size, streamed.len() as u64);
+                        received_data = Some(std::mem::take(&mut streamed));
                     }
                     LinkManagerAction::ResourceCompleted { .. } => {
                         sender_completed = true;
@@ -5645,7 +5727,9 @@ fn memory_split_storage_reserves_the_advertised_size_up_to_the_limit() {
                 assert!(buffer.is_empty());
                 buffer.capacity()
             }
-            IncomingSplitStorage::File { .. } => unreachable!(),
+            IncomingSplitStorage::File { .. } | IncomingSplitStorage::Stream { .. } => {
+                unreachable!()
+            }
         };
     assert_eq!(capacity(67_108_800), 67_108_800);
     // A peer's larger claim never reserves past the configured limit.
