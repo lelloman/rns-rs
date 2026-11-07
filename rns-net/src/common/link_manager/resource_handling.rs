@@ -988,7 +988,11 @@ impl LinkManager {
             if all_actions.len() > before {
                 if receiver.received_count == receiver.total_parts {
                     assemble_idx = Some(idx);
-                } else if receiver.has_parts_to_decrypt() {
+                } else if crate::engine::FOLD_WORK && receiver.has_parts_to_decrypt() {
+                    // Decrypting ahead in idle slices helps the compact
+                    // engine; in the parallel engine, decrypting a segment
+                    // in one go at assembly measured faster (streams 2-4%,
+                    // at less CPU) than slices taken between reads.
                     if let Ok(hash) = <[u8; 32]>::try_from(&receiver.resource_hash[..]) {
                         if !self.receive_decrypts.contains(&(*link_id, hash)) {
                             self.receive_decrypts.push_back((*link_id, hash));

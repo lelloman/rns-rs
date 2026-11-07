@@ -2173,9 +2173,9 @@ fn streaming_resource_prepares_the_next_segment_while_awaiting_the_proof() {
     assert!(run.completed);
     // Segments 2, 3 and 4 were ready when the proofs of 1, 2 and 3 came.
     assert_eq!(run.prepared_at_proof, 3);
-    // The receiver decrypted parts ahead of each segment's assembly, and
-    // nothing is left queued.
-    assert!(run.receiver_idle_turns > 0);
+    // The compact engine's receiver decrypted parts ahead of each segment's
+    // assembly; the parallel engine's decrypts at assembly.
+    assert_eq!(run.receiver_idle_turns > 0, crate::engine::FOLD_WORK);
     // Segments 2, 3 and 4 kept the fast-link window the first one reached,
     // instead of starting slow again.
     assert_eq!(
