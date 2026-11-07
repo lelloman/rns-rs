@@ -4,8 +4,10 @@ Status: in progress. The engine switch and the compact engine's folds are
 in: timers and housekeeping, CPU work (announce verification, resource
 compression and assembly, single-core stamp generation), services (RPC
 servers, provider bridge, probe server) and interface I/O for every
-interface type. The parallel engine beyond today's node (the crypto pool and
-its two-phase steps) is design. Nothing here changes the wire protocol.
+interface type. The parallel engine's crypto pool carries link and
+single-packet proofs, batch verification, and the opt-in off-thread single
+packets (see Two-phase steps for what is done and what stays on the driver).
+Nothing here changes the wire protocol.
 
 ## Purpose
 
@@ -219,50 +221,63 @@ build they fold with their groups.
   the link manager, hooks. It does the cheap per-packet work (deduplication,
   routing, window bookkeeping) and hands every expensive cryptographic step to
   the pool.
-- **Crypto pool.** N workers, each with its own lock-free single-producer
-  single-consumer queue for jobs and another for results. The driver assigns
-  jobs round-robin, or by link id where a link's jobs must stay ordered. Jobs
-  move in batches: the driver collects the jobs of one pass and submits them
-  together; a worker returns every result it has ready at once, and one wake
-  event stands for all results until the driver drains them. Pending proof
-  verifications are checked with batch Ed25519 verification.
+- **Crypto pool** (the proof pool, `rns-proof-N`). Workers share one bounded
+  queue; one wake event stands for every result until the driver drains the
+  results. A worker takes one job and the link proof checks queued right
+  behind it, and checks those as one Ed25519 batch (at most 8; a failed batch
+  is checked proof by proof). Its jobs: link proof checks and signatures,
+  single-packet proof checks and signatures, encryption of deferred sends,
+  and decryption for destinations that deliver decrypted (below). A job the
+  full queue refuses is done inline.
 - **Interface I/O.** Each interface reads and writes on its own thread and
   exchanges frames with the driver through lock-free queues, so socket
   syscalls leave the driver.
-- **Defaults.** Flush deadline 25 µs; X25519 on aws-lc where the CLI crates
-  enable it.
-
-Why batching and per-worker queues matter: measured on six cores, a link
-carrying 16 messages in flight spends most of each message's round trip
-queued behind the others on the one thread that receives, decrypts and signs
-them (about 22 µs each). Moving that work to one shared-queue worker, one job
-and one wake per message, made the round trip longer, not shorter: the
-handoff costs more than it saves unless jobs move in batches and run on
-several workers at once.
+- **Defaults.** Flush deadline 25 µs. X25519 and Ed25519 signing on aws-lc's
+  assembly in `rns-cli`, `rns-ctl` and `rns-server` (their default `aws-lc`
+  feature, x86_64 and aarch64 only); Ed25519 verification stays on
+  `ed25519-dalek`, whose batches are faster than aws-lc's single checks.
 
 #### Worker count
 
-Default: the CPUs the process may run on (`available_parallelism`, which
-honours affinity) minus two, at least one. A process confined to one CPU
-runs the parallel engine with zero workers, doing the crypto inline, which is
-correct but pointless: such hosts should use the compact engine. A
-`NodeConfig` setting overrides the count.
+`ProofVerifyThreads::Auto`: half the CPUs the process may run on
+(`available_parallelism`, which honours affinity), at least one and at most
+four. Measured on a 12-CPU host with link messages in flight unpinned, 1 to 8
+threads gave 50.6k, 90.1k, 110.0k, 115.5k (4), 98.6k (6) and 92.3k (8)
+messages a second. Past four, two busy nodes on six physical cores run out
+of cores; a queue per worker instead of the shared one measured no better.
+One thread pays even on a single CPU: only the pool checks queued proofs as a
+batch (pinned, 38.5k a second against 27.0k with none). A `NodeConfig`
+setting (`link_proof_verify_threads`) overrides the count.
 
 #### Ordering
 
-The one-thread engine handles packets strictly in arrival order. The parallel
-engine keeps that order where the protocol and applications depend on it,
-and nowhere else:
+Link data is still decrypted on the driver, in arrival order, so channel
+messages, requests and window updates are applied in the order the link's
+packets arrived. What the pool does for a link has no order to keep: proof
+checks complete receipts, and signed proofs are independent packets.
+Single packets have no ordering promise, as in Reticulum, where they travel
+independent paths: a destination that delivers decrypted may report its
+packets out of arrival order.
 
-- **Within a link, order is kept.** The driver tags each job with a per-link
-  sequence number and holds a result until those before it on the same link
-  are applied, so channel messages, requests, proofs and window updates are
-  applied in the order the link's packets arrived.
-- **Across links, and for single packets, there is no ordering promise.** A
-  message on one link may be delivered before a message that arrived slightly
-  earlier on another link. Reticulum has never promised order across links or
-  for single packets: they travel independent paths and can arrive in any
-  order on the network itself.
+#### Single packets off the application's thread
+
+Two opt-in APIs keep an application's own thread from bounding single-packet
+rates (with them, 43k packets a second unpinned on the benchmark host,
+against 26k for the same node without):
+
+- `RnsNode::send_packet_deferred(dest, data)` returns a `SendTicket` at once;
+  the node encrypts the packet on the pool (on the caller's thread when the
+  process may use one CPU) and reports its hash through
+  `Callbacks::on_packet_sent(ticket, Some(hash))` before sending it, so a
+  proof of it cannot be reported first; `None` reports a packet not sent.
+  `send_packet_queued` encrypts on the caller's thread because it returns the
+  hash, which depends on the ciphertext.
+- `RnsNode::deliver_decrypted(dest, identity)` has the node decrypt a local
+  destination's single packets (on the pool; inline on one CPU or without
+  one), with its attached ratchets or else its identity, and deliver them
+  through `Callbacks::on_packet_received` instead of raw through
+  `on_local_delivery`. As in Python RNS, a packet is proved once it decrypts,
+  and dropped unproved when it does not.
 
 #### Two-phase steps
 
@@ -271,18 +286,19 @@ driver can hand the cryptography to the pool and apply the result later. The
 one-step form stays, and the compact engine keeps using it. The resource
 receiver already works this way (`prepare_assembly` / `complete_assembly`).
 
-| Step | Where today | Crypto | Two-phase form |
+| Step | Where | Crypto | Status |
 |---|---|---|---|
-| Receive link data | `LinkManager::handle_link_data_into` (`engine.decrypt_into`) | token decrypt | begin: hand the ciphertext out; finish: apply the plaintext to the link, channel or request |
-| Send link data and channel messages | `link_manager.rs` (`encrypt_into`), `channel_handling.rs` | token encrypt | encrypt on the pool, then queue the packet |
-| Prove a link packet | `build_link_packet_proof` (`sign_packet_hash`) | Ed25519 sign | done: signed on the proof pool, then the proof is sent |
-| Verify a link proof | `handle_link_proof` | Ed25519 verify | done: proofs queued together are verified as one batch (up to 8) |
-| Prove a single packet | `driver/dispatch.rs` (`identity.sign`) | Ed25519 sign | sign on the pool, then send |
-| Verify a single-packet proof | `driver/dispatch.rs` (cached key) | Ed25519 verify | verify on the pool, batched |
-| Establish a link | `rns-core` link handshake | X25519, HKDF, Ed25519 | handshake crypto on the pool; link state advanced on completion |
-| Verify announces | `rns-verify` thread and queue | Ed25519 verify | moves into the pool, batched |
-| Build and assemble resources | resource prepare and receive workers | AES, HMAC, SHA-256, compression | move into the pool |
-| Encrypt a single packet | `RnsNode::send_packet_queued` on the caller's thread | X25519, token encrypt | stays on the caller's thread (the returned packet hash depends on the ciphertext); a later off-thread send API may move it |
+| Receive link data | `LinkManager::handle_link_data_into` (`engine.decrypt_into`) | token decrypt | on the driver, in order |
+| Send link data and channel messages | `link_manager.rs` (`encrypt_into`), `channel_handling.rs` | token encrypt | on the driver |
+| Prove a link packet | `build_link_packet_proof` | Ed25519 sign | done: signed on the pool, then the proof is sent |
+| Verify a link proof | `handle_link_proof` | Ed25519 verify | done: queued proofs verified as one batch (up to 8) |
+| Prove a single packet | `driver/dispatch.rs` (`maybe_generate_proof`) | Ed25519 sign | done: signed on the pool, then sent |
+| Verify a single-packet proof | `driver/dispatch.rs` (`handle_inbound_proof`) | Ed25519 verify | done: on the pool, batched with link proofs |
+| Encrypt a single packet | `RnsNode::send_packet_deferred` | X25519, token encrypt | done (opt-in): on the pool; `send_packet_queued` stays on the caller's thread |
+| Decrypt a single packet for local delivery | `RnsNode::deliver_decrypted` | X25519, token decrypt | done (opt-in): on the pool |
+| Establish a link | `rns-core` link handshake | X25519, HKDF, Ed25519 | on the driver |
+| Verify announces | `rns-verify` thread and queue | Ed25519 verify | its own thread |
+| Build and assemble resources | resource prepare and receive workers, and the driver | AES, HMAC, SHA-256, compression | whole resources prepared and assembled on workers; stream segments built, and received parts hashed, on the driver (moving either to the pool measured slower: a stream is bound by its window round trips, and a thread hop per segment or per part lengthens each one) |
 
 ### Version 2, only if measured: a sharded transport
 
@@ -310,11 +326,11 @@ quiet host:
    (parallel initially equal to today's driver with its helper threads), then fold the groups into the compact engine in this
    order: timers, CPU work, services, interface I/O one type at a time. Each
    fold lands with a pinned A/B and a memory comparison; none may regress.
-3. **Parallel version 1.** Crypto pool with per-worker queues, batching and
-   batch verification, first carrying the steps that already have two-phase
-   forms (proof verification, resource work, announce verification); then the
-   new two-phase steps one at a time, each with an unpinned A/B; then
-   interface I/O threads.
+3. **Parallel version 1.** Crypto pool with batching and batch verification,
+   carrying proof checks and signatures (done), then the new two-phase steps
+   one at a time, each with an unpinned A/B, kept only where it wins (single
+   packets: done; stream segments and received parts: measured slower, not
+   kept); then interface I/O threads.
 4. **Many-peer benchmark.** Decides whether version 2 is needed.
 5. **`rns-esp32` on the compact engine** (later). The firmware drives
    `rns-core` and `rns-crypto` with its own loop today. It moves onto the
