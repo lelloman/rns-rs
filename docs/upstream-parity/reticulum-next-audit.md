@@ -243,7 +243,7 @@ Every commit in the audited range must appear exactly once.
 | 47 | `e9d82e698d266b198b5cfc7bb66315e505b0b6c6` | Cleanup | Structurally covered | Mapping commit; with the SQLite known destinations store, startup ratchet cleanup in rns-rs already runs on that store's `ratchets` table and never walks the legacy `storage/ratchets` directory; the changelog lines are non-runtime |
 | 48 | `eb826cde90e152d167415b42016efb0107c73035` | Allow applications to enable stamp generation and stamp enforcement | Integrated | `NodeConfig::stamps` (a `StampsSection`) gives nodes started in code the `[stamps]` settings, applied as `from_config` applies the parsed section; new runtime key `global.stamps_enforced` for announce and path request enforcement; docs |
 | 49 | `f15b34870a12f52b5f22239b69b2b20f9fa069b5` | Tuned stamp worker pooling | Structurally covered | Mapping commit; Python worker pool sizing only, with the same stamps; rns-rs has no pooling threshold (the parallel engine grinds on every core, the compact engine on one) and no per-platform runner |
-| 50 | `426673e97433a95e2baf926b93730d2fdc6e9c69` | Set blackhole updater destination link cost | Needs port | The published blackhole list destination uses the default `LR_COST` (12.5) in rns-rs |
+| 50 | `426673e97433a95e2baf926b93730d2fdc6e9c69` | Set blackhole updater destination link cost | Integrated | `BLACKHOLE_LINK_COST` (5.25) registered for the published blackhole list destination, which its link responder requires when link request stamps are enforced; docs. Caveat: rns-rs management announces carry no stamp extension, so the cost is not announced (see the analysis) |
 | 51 | `c97e2158f5fb93de73268af93e3f542d72d274ea` | Cleanup | Structurally covered | Mapping commit; moves destination stamp generation behind a per-destination lock; rns-rs grinds announce stamps on the single stamper worker, keyed per destination, which reloads a persisted stamp before grinding |
 | 52 | `acb38a8a1c85affa5ce8138bc6214871aa05b15b` | Pre-generate discovery PR ext_payload | Needs decision | Stamps the path requests of upstream's link-table path rediscovery; rns-rs has no such rediscovery, so there is nothing to stamp |
 
@@ -1928,6 +1928,47 @@ the compact engine on the calling thread. Nothing selects a runner per
 platform. The workblock expansion already uses 256-byte HKDF chunks.
 
 **Final disposition:** Structurally covered; mapping only.
+
+### 50. `426673e9` — Set blackhole updater destination link cost
+
+**Upstream change** (`RNS/Transport.py`): the published blackhole list
+destination, `rnstransport.info.blackhole`, calls `set_link_cost(5.25)` when
+it is created. Its required link request cost drops from the `LR_COST`
+default of 12.5 to 5.25, so fetching a blackhole list costs less. Like every
+management destination it is announced through `Destination.announce`, so
+with `STAMP_DESTINATIONS` the cost travels in its announce extension, and
+with `LR_STAMPS_ENFORCED` its responder drops link requests stamped below it.
+
+**Rust applicability:** Needs port for the responder; the announce side
+depends on a gap that predates this commit. rns-rs registers the blackhole
+destination with the link manager but kept the default cost.
+
+**Implementation:** `rns_core::constants::BLACKHOLE_LINK_COST` is
+`cost_to_fp(5.25)`. When `publish_blackhole` registers the destination,
+`RnsNode::start` stores that cost in the shared link request cost table, the
+same table `RnsNode::set_link_cost` writes, so the responder requires 5.25
+and `RnsNode::link_cost` reports it. `docs/configuration.md` notes that this
+destination does not use `lr_cost`.
+
+**Caveat:** rns-rs builds its management announces (blackhole list, remote
+management, probe responder) directly in `common::management`, with no
+stamp extension, even when `stamp_destinations` is on. Upstream announces
+them through `Destination.announce`, so it stamps them and announces their
+link cost. An rns-rs node therefore does not announce the 5.25 cost, and
+nodes that enforce announce stamps drop its management announces. This
+gap dates from commit 1 (destination stamping), not from this commit; it is
+recorded here and left for a separate decision. Python initiators that see
+no announced cost send unstamped link requests unless `always_stamp_lrs` is
+on (which stamps at `lr_cost`, 12.5 or more by default), so an rns-rs
+blackhole responder that enforces link request stamps refuses them, as it
+did at 12.5 before this change.
+
+**Evidence:** `published_blackhole_destination_requires_its_link_cost` (a
+node started with `publish_blackhole` reports 5.25 for the blackhole
+destination and the 12.5 default for others); the `BLACKHOLE_LINK_COST`
+assertion in `constants::tests`.
+
+**Final disposition:** Integrated, with the management announce caveat.
 
 ## Integration Plan
 

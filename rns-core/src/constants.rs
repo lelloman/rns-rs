@@ -131,6 +131,11 @@ pub const PATH_REQUEST_STAMP_VALUE: StampCost = StampCost::from_fp(4045);
 /// announced no cost at it.
 pub const LINK_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(3200);
 
+/// Link request stamp cost of the published blackhole list destination,
+/// `rnstransport.info.blackhole` (`blackhole_destination.set_link_cost(5.25)`
+/// since upstream 426673e9; `cost_to_fp(5.25)`).
+pub const BLACKHOLE_LINK_COST: StampCost = StampCost::from_fp(1344);
+
 /// Whether destination announces emitted by this instance are stamped.
 pub const STAMP_DESTINATIONS: bool = false;
 
@@ -808,6 +813,7 @@ mod tests {
         assert_eq!(PATH_REQUEST_STAMP_COST, StampCost::from_f64(15.8));
         assert_eq!(PATH_REQUEST_STAMP_VALUE, StampCost::from_f64(15.8));
         assert_eq!(LINK_REQUEST_STAMP_COST, StampCost::from_f64(12.5));
+        assert_eq!(BLACKHOLE_LINK_COST, StampCost::from_f64(5.25));
         assert_eq!(LINK_COST_CAP, 40);
         assert_eq!(LINK_STAMP_TIMEOUT, 15);
         assert_eq!(PATH_REQUEST_STAMP_TIMEOUT, 15);

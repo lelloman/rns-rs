@@ -154,6 +154,8 @@ already stamped whenever the destination announced a non-zero cost
 are fractional, as upstream reads them with `as_float` since `796ef2d4`. They
 are clamped to 0-100 (`lr_cost` to 0-40), and the timeouts are floored at
 20 ms.
+The published blackhole list destination (`publish_blackhole`) does not use
+`lr_cost`: as upstream since `426673e9`, link requests to it cost 5.25.
 An invalid boolean or number is a configuration error. The defaults are the
 constants in `rns-core/src/constants.rs`, which mirror the upstream
 `Transport` class attributes at the current parity target.
