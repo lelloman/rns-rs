@@ -9,9 +9,11 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["engine-parallel", "interfaces"]
+default = ["engine-parallel", "aws-lc", "interfaces"]
 # The node's parallel engine (rns-net docs/engines.md); without it, compact.
 engine-parallel = ["rns-cli/engine-parallel", "rns-ctl/engine-parallel", "rns-net/engine-parallel"]
+# Cryptography on aws-lc's assembly, as rns-cli's and rns-ctl's `aws-lc`.
+aws-lc = ["rns-cli/aws-lc", "rns-ctl/aws-lc"]
 # Every interface type rns-cli and rns-ctl build by default.
 interfaces = [
     "rns-cli/iface-tcp", "rns-ctl/iface-tcp",

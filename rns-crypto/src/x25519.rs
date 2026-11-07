@@ -39,7 +39,10 @@ impl X25519PrivateKey {
     }
 
     pub fn public_key(&self) -> X25519PublicKey {
-        #[cfg(feature = "x25519-aws-lc")]
+        #[cfg(all(
+            feature = "x25519-aws-lc",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         if let Some(bytes) = aws_lc::public_key(&self.bytes) {
             return X25519PublicKey { bytes };
         }
@@ -51,7 +54,10 @@ impl X25519PrivateKey {
     }
 
     pub fn exchange(&self, peer: &X25519PublicKey) -> [u8; 32] {
-        #[cfg(feature = "x25519-aws-lc")]
+        #[cfg(all(
+            feature = "x25519-aws-lc",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         if let Some(shared) = aws_lc::exchange(&self.bytes, &peer.bytes) {
             return shared;
         }
@@ -78,7 +84,10 @@ impl X25519PublicKey {
 /// aws-lc's raw functions, not its key objects: building a private key
 /// object derives its public key, a second scalar multiplication on every
 /// exchange.
-#[cfg(feature = "x25519-aws-lc")]
+#[cfg(all(
+    feature = "x25519-aws-lc",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod aws_lc {
     use crate::aws_lc_init as init;
 

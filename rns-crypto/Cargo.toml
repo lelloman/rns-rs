@@ -13,7 +13,8 @@ default = ["std"]
 std = []
 espidf = ["esp-idf-sys"]
 # X25519 on aws-lc (BoringSSL's assembly), about twice x25519-dalek's speed
-# on x86_64; x25519-dalek remains for results aws-lc refuses to produce.
+# on x86_64; x25519-dalek remains for results aws-lc refuses to produce. On
+# x86_64 and aarch64 only (see the target dependency below); a no-op elsewhere.
 x25519-aws-lc = ["dep:aws-lc-sys", "std"]
 # Ed25519 signing on aws-lc (verified assembly), about twice
 # ed25519-dalek's speed on x86_64; verification stays on ed25519-dalek,
@@ -26,7 +27,6 @@ ed25519-batch = ["ed25519-dalek/batch"]
 
 [dependencies]
 esp-idf-sys = { version = "0.37", optional = true }
-aws-lc-sys = { version = "0.47", optional = true }
 # `fast` / `precomputed-tables` keep the basepoint tables, so signing and
 # public-key derivation are fixed-base multiplications instead of a full
 # variable-base scalar multiplication per operation.
@@ -38,6 +38,12 @@ aes = { version = "0.9", default-features = false }
 cbc = { version = "0.2", default-features = false, features = ["alloc", "block-padding"] }
 
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
+
+# aws-lc ships pre-generated bindings for these architectures; elsewhere
+# (armv7, 32-bit Android, ...) it would need bindgen and libclang to build,
+# so the aws-lc features leave those targets on the pure-Rust code.
+[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+aws-lc-sys = { version = "0.47", optional = true }
 
 [dev-dependencies]
 hmac = { version = "0.13", default-features = false }

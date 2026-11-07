@@ -9,9 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["engine-parallel", "iface-tcp", "iface-udp", "iface-auto", "iface-serial", "iface-kiss", "iface-ax25-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p", "iface-weave"]
+default = ["engine-parallel", "aws-lc", "iface-tcp", "iface-udp", "iface-auto", "iface-serial", "iface-kiss", "iface-ax25-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p", "iface-weave"]
 # The node's parallel engine (rns-net docs/engines.md); without it, compact.
 engine-parallel = ["rns-net/engine-parallel"]
+# X25519 and Ed25519 signing on aws-lc's assembly: about twice as fast
+# (rns-net's `x25519-aws-lc` and `ed25519-aws-lc`). Needs a C compiler and
+# CMake at build time; on targets other than x86_64 and aarch64 it is a no-op
+# and the pure-Rust code is used.
+aws-lc = ["rns-net/x25519-aws-lc", "rns-net/ed25519-aws-lc"]
 iface-tcp = ["rns-cli/iface-tcp"]
 iface-udp = ["rns-cli/iface-udp"]
 iface-auto = ["rns-cli/iface-auto"]

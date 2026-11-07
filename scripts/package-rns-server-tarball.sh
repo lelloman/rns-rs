@@ -11,7 +11,9 @@ usage() {
   cat <<'EOF'
 Usage: package-rns-server-tarball.sh [--output-name NAME] [--skip-build]
 
-Build a single deployable rns-server binary and bundle it into dist/<name>.tar.gz.
+Build a single deployable rns-server binary (the `dist` profile, into
+target/dist) and bundle it into dist/<name>.tar.gz. With --skip-build, the
+binary must already be at target/dist/rns-server.
 EOF
 }
 
@@ -38,7 +40,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ! $SKIP_BUILD; then
-  cargo build --release \
+  cargo build --profile dist \
     --bin rns-server \
     --features rns-hooks-native
 fi
@@ -46,7 +48,7 @@ fi
 rm -rf "${DIST_DIR:?}/${OUTPUT_NAME}"
 mkdir -p "${DIST_DIR}/${OUTPUT_NAME}/bin" "${DIST_DIR}/${OUTPUT_NAME}/docs"
 
-cp "${REPO_ROOT}/target/release/rns-server" "${DIST_DIR}/${OUTPUT_NAME}/bin/"
+cp "${REPO_ROOT}/target/dist/rns-server" "${DIST_DIR}/${OUTPUT_NAME}/bin/"
 
 cp "${REPO_ROOT}/docs/rns-server-operator-runbook.md" "${DIST_DIR}/${OUTPUT_NAME}/docs/"
 

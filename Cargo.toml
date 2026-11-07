@@ -26,6 +26,15 @@ rns-tun = { version = "0.1.0", path = "rns-tun", default-features = false }
 # which turns the per-packet link proofs in the test suites into a CPU
 # bottleneck, and an unoptimized sha2 makes a stamp grind at the production
 # target (2^25 hashes) take minutes on a four-core CI runner.
+# Shipped binaries (`cargo build --profile dist`, into target/dist): the
+# whole program optimised together, 2-8% faster in the endpoint benchmarks
+# and with less code resident, at a much slower build. Everyday release
+# builds keep the release profile.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
 [profile.dev.package.rns-crypto]
 opt-level = 2
 
