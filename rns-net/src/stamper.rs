@@ -126,6 +126,15 @@ pub struct AnnounceStampJob {
     pub completion: Option<Completion>,
 }
 
+/// A destination stamp to grind and persist before the driver sends the
+/// announce of one of its built-in destinations (remote management,
+/// blackhole list, probe responder), which it builds itself.
+pub struct DestinationStampJob {
+    pub dest: Destination,
+    /// Full private key of the identity owning `dest`.
+    pub identity_prv_key: [u8; 64],
+}
+
 /// A path request stamp ground off the driver thread, ready to be sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StampedPathRequest {
@@ -151,6 +160,7 @@ impl std::error::Error for QueueFull {}
 enum Job {
     PathRequest(PathRequestStampJob),
     Announce(Box<AnnounceStampJob>),
+    DestinationStamp(Box<DestinationStampJob>),
 }
 
 type Key = Vec<u8>;
@@ -392,6 +402,24 @@ impl Stamper {
         self.put(PRIORITY_ANNOUNCE, Some(key), Job::Announce(Box::new(job)))
     }
 
+    /// Queue the stamp of a built-in destination whose announce waits for
+    /// it; the worker posts [`Event::DestinationStampReady`] once the stamp
+    /// is persisted. Shares the announce queue, keyed on the destination
+    /// hash.
+    pub fn enqueue_destination_stamp(&self, job: DestinationStampJob) -> Result<(), QueueFull> {
+        let key = job.dest.hash.0.to_vec();
+        self.put(
+            PRIORITY_ANNOUNCE,
+            Some(key),
+            Job::DestinationStamp(Box::new(job)),
+        )
+    }
+
+    /// The store destination stamps are persisted in, if any.
+    pub fn stamp_store(&self) -> Option<DestinationStampStore> {
+        self.inner.stamp_store()
+    }
+
     /// Jobs waiting in both queues.
     pub fn queued(&self) -> usize {
         let queues = self.inner.lock_queues();
@@ -490,6 +518,7 @@ fn worker_main(inner: Arc<Inner>) {
         match job {
             Job::PathRequest(job) => stamp_path_request(&inner, job),
             Job::Announce(job) => stamp_announce(&inner, *job),
+            Job::DestinationStamp(job) => stamp_destination(&inner, *job),
         }
     }
 }
@@ -545,6 +574,38 @@ fn stamp_path_request(inner: &Inner, job: PathRequestStampJob) {
     }));
     if inner.event_tx.send(event).is_err() {
         log::debug!("Driver is gone, dropping stamped path request");
+    }
+}
+
+/// The stamp half of `stamper_job` for a built-in destination: grind and
+/// persist the stamp, then let the driver send the announce.
+fn stamp_destination(inner: &Inner, job: DestinationStampJob) {
+    let DestinationStampJob {
+        dest,
+        identity_prv_key,
+    } = job;
+    let Some(store) = inner.stamp_store() else {
+        log::warn!(
+            "No stamp store for destination {:02x?}, announce emission cancelled",
+            &dest.hash.0[..4]
+        );
+        return;
+    };
+    let identity = Identity::from_private_key(&identity_prv_key);
+    if let Err(error) =
+        crate::node::ensure_destination_stamp(&store, inner.targets(), &dest, &identity)
+    {
+        log::warn!(
+            "Could not generate destination stamp for {:02x?}, announce emission cancelled: {error}",
+            &dest.hash.0[..4]
+        );
+        return;
+    }
+    let event = Event::DestinationStampReady {
+        dest_hash: dest.hash.0,
+    };
+    if inner.event_tx.send(event).is_err() {
+        log::debug!("Driver is gone, dropping destination stamp notice");
     }
 }
 

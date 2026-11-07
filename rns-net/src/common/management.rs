@@ -115,18 +115,77 @@ fn announce_context(path_response: bool) -> u8 {
     }
 }
 
-/// Build an announce packet for the probe responder destination.
+/// A destination this node announces under its transport identity and
+/// answers itself (`Transport.mgmt_destinations`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinDestination {
+    /// `rnstransport.remote.management`
+    RemoteManagement,
+    /// `rnstransport.info.blackhole`
+    Blackhole,
+    /// `rnstransport.probe`
+    Probe,
+}
+
+impl BuiltinDestination {
+    pub const ALL: [BuiltinDestination; 3] = [
+        BuiltinDestination::RemoteManagement,
+        BuiltinDestination::Blackhole,
+        BuiltinDestination::Probe,
+    ];
+
+    pub fn aspects(self) -> &'static [&'static str] {
+        match self {
+            BuiltinDestination::RemoteManagement => &["remote", "management"],
+            BuiltinDestination::Blackhole => &["info", "blackhole"],
+            BuiltinDestination::Probe => &["probe"],
+        }
+    }
+
+    pub fn dest_hash(self, transport_identity_hash: &[u8; 16]) -> [u8; 16] {
+        destination_hash(
+            "rnstransport",
+            self.aspects(),
+            Some(transport_identity_hash),
+        )
+    }
+
+    pub fn name_hash(self) -> [u8; 10] {
+        rns_core::destination::name_hash("rnstransport", self.aspects())
+    }
+
+    /// The destination as the stamper sees it, for grinding its stamp.
+    pub fn destination(self, transport_identity_hash: [u8; 16]) -> crate::destination::Destination {
+        crate::destination::Destination::single_in(
+            "rnstransport",
+            self.aspects(),
+            rns_core::types::IdentityHash(transport_identity_hash),
+        )
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BuiltinDestination::RemoteManagement => "management destination",
+            BuiltinDestination::Blackhole => "blackhole info",
+            BuiltinDestination::Probe => "probe responder",
+        }
+    }
+}
+
+/// Build an announce packet for a built-in destination, with `app_data`
+/// (the stamp extension, when destinations are stamped) appended.
 ///
 /// Returns raw packet bytes ready for `engine.handle_outbound()`.
-pub fn build_probe_announce(
+pub fn build_builtin_announce(
+    destination: BuiltinDestination,
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
     path_response: bool,
+    app_data: Option<&[u8]>,
 ) -> Option<Vec<u8>> {
-    let identity_hash = *identity.hash();
-    let dest_hash = probe_dest_hash(&identity_hash);
-    let name_hash = rns_core::destination::name_hash("rnstransport", &["probe"]);
+    let dest_hash = destination.dest_hash(identity.hash());
+    let name_hash = destination.name_hash();
     let random_hash = announce_random_blob(rng, now);
 
     let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
@@ -134,8 +193,8 @@ pub fn build_probe_announce(
         &dest_hash,
         &name_hash,
         &random_hash,
-        None,
-        None,
+        None, // no ratchet
+        app_data,
     )
     .ok()?;
 
@@ -158,6 +217,23 @@ pub fn build_probe_announce(
     .ok()?;
 
     Some(packet.raw)
+}
+
+/// Build an unstamped announce packet for the probe responder destination.
+pub fn build_probe_announce(
+    identity: &rns_crypto::identity::Identity,
+    rng: &mut dyn rns_crypto::Rng,
+    now: f64,
+    path_response: bool,
+) -> Option<Vec<u8>> {
+    build_builtin_announce(
+        BuiltinDestination::Probe,
+        identity,
+        rng,
+        now,
+        path_response,
+        None,
+    )
 }
 
 /// Management configuration.
@@ -555,92 +631,36 @@ pub fn handle_blackhole_list_request(engine: &TransportEngine) -> Option<Vec<u8>
     Some(msgpack::pack(&Value::Map(map_entries)))
 }
 
-/// Build an announce packet for the management destination.
-///
-/// Returns raw packet bytes ready for `engine.handle_outbound()`.
+/// Build an unstamped announce packet for the management destination.
 pub fn build_management_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
     path_response: bool,
 ) -> Option<Vec<u8>> {
-    let identity_hash = *identity.hash();
-    let dest_hash = management_dest_hash(&identity_hash);
-    let name_hash = rns_core::destination::name_hash("rnstransport", &["remote", "management"]);
-    let random_hash = announce_random_blob(rng, now);
-
-    let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+    build_builtin_announce(
+        BuiltinDestination::RemoteManagement,
         identity,
-        &dest_hash,
-        &name_hash,
-        &random_hash,
-        None, // no ratchet
-        None, // no app_data
-    )
-    .ok()?;
-
-    let flags = rns_core::packet::PacketFlags {
-        header_type: constants::HEADER_1,
-        context_flag: constants::FLAG_UNSET,
-        transport_type: constants::TRANSPORT_BROADCAST,
-        destination_type: constants::DESTINATION_SINGLE,
-        packet_type: constants::PACKET_TYPE_ANNOUNCE,
-    };
-
-    let packet = rns_core::packet::RawPacket::pack(
-        flags,
-        0,
-        &dest_hash,
+        rng,
+        now,
+        path_response,
         None,
-        announce_context(path_response),
-        &announce_data,
     )
-    .ok()?;
-
-    Some(packet.raw)
 }
 
-/// Build an announce packet for the blackhole info destination.
-///
-/// Returns raw packet bytes ready for `engine.handle_outbound()`.
+/// Build an unstamped announce packet for the blackhole info destination.
 pub fn build_blackhole_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
     path_response: bool,
 ) -> Option<Vec<u8>> {
-    let identity_hash = *identity.hash();
-    let dest_hash = blackhole_dest_hash(&identity_hash);
-    let name_hash = rns_core::destination::name_hash("rnstransport", &["info", "blackhole"]);
-    let random_hash = announce_random_blob(rng, now);
-
-    let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+    build_builtin_announce(
+        BuiltinDestination::Blackhole,
         identity,
-        &dest_hash,
-        &name_hash,
-        &random_hash,
-        None,
+        rng,
+        now,
+        path_response,
         None,
     )
-    .ok()?;
-
-    let flags = rns_core::packet::PacketFlags {
-        header_type: constants::HEADER_1,
-        context_flag: constants::FLAG_UNSET,
-        transport_type: constants::TRANSPORT_BROADCAST,
-        destination_type: constants::DESTINATION_SINGLE,
-        packet_type: constants::PACKET_TYPE_ANNOUNCE,
-    };
-
-    let packet = rns_core::packet::RawPacket::pack(
-        flags,
-        0,
-        &dest_hash,
-        None,
-        announce_context(path_response),
-        &announce_data,
-    )
-    .ok()?;
-
-    Some(packet.raw)
 }

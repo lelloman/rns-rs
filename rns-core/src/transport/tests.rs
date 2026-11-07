@@ -6764,7 +6764,9 @@ fn non_transport_rediscovery_expires_the_path() {
     assert!(sent.is_empty());
     // Not marked unresponsive, but expired.
     assert!(!engine.path_is_unresponsive(&dest));
-    let expires = engine.path_table[&dest].primary().map(|entry| entry.expires);
+    let expires = engine.path_table[&dest]
+        .primary()
+        .map(|entry| entry.expires);
     assert_eq!(expires, Some(0.0));
 }
 

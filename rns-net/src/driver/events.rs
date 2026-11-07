@@ -1532,6 +1532,12 @@ impl Driver {
                     }
                     self.handle_create_link(dest_hash, dest_sig_pub_bytes, response_tx);
                 }
+                Event::DestinationStampReady { dest_hash } => {
+                    if self.is_draining() {
+                        continue;
+                    }
+                    self.emit_builtin_announce_for(dest_hash, time::now());
+                }
                 Event::SendStampedPathRequest(request) => {
                     if self.is_draining() {
                         self.reject_new_work("send stamped path request");
@@ -2603,37 +2609,112 @@ impl Driver {
 
     /// Emit management/blackhole announce packets through the engine outbound path.
     pub(crate) fn emit_management_announces(&mut self, now: f64) {
-        use crate::management;
-
         self.last_management_announce = now;
+        for destination in crate::management::BuiltinDestination::ALL {
+            if self.builtin_destination_enabled(destination) {
+                let raw = self.build_builtin_announce(destination, now, false);
+                self.emit_local_management_announce(raw, now, destination.label());
+            }
+        }
+    }
 
-        let identity = match self.transport_identity {
-            Some(ref id) => id,
-            None => return,
+    /// Whether this node announces and answers `destination`.
+    fn builtin_destination_enabled(
+        &self,
+        destination: crate::management::BuiltinDestination,
+    ) -> bool {
+        use crate::management::BuiltinDestination;
+        match destination {
+            BuiltinDestination::RemoteManagement => self.management_config.enable_remote_management,
+            BuiltinDestination::Blackhole => self.management_config.publish_blackhole,
+            BuiltinDestination::Probe => self.probe_responder_hash.is_some(),
+        }
+    }
+
+    /// Send the announce of the built-in destination whose stamp the
+    /// stamper just persisted.
+    fn emit_builtin_announce_for(&mut self, dest_hash: [u8; 16], now: f64) {
+        let Some(identity_hash) = self.transport_identity.as_ref().map(|id| *id.hash()) else {
+            return;
         };
+        let destination = crate::management::BuiltinDestination::ALL
+            .into_iter()
+            .find(|destination| destination.dest_hash(&identity_hash) == dest_hash);
+        if let Some(destination) = destination {
+            if self.builtin_destination_enabled(destination) {
+                let raw = self.build_builtin_announce(destination, now, false);
+                self.emit_local_management_announce(raw, now, destination.label());
+            }
+        }
+    }
 
-        // Build announce packets first (immutable borrow of identity), then dispatch
-        let mgmt_raw = if self.management_config.enable_remote_management {
-            management::build_management_announce(identity, &mut self.rng, now, false)
-        } else {
-            None
-        };
-
-        let bh_raw = if self.management_config.publish_blackhole {
-            management::build_blackhole_announce(identity, &mut self.rng, now, false)
-        } else {
-            None
-        };
-
-        let probe_raw = if self.probe_responder_hash.is_some() {
-            management::build_probe_announce(identity, &mut self.rng, now, false)
-        } else {
-            None
-        };
-
-        self.emit_local_management_announce(mgmt_raw, now, "management destination");
-        self.emit_local_management_announce(bh_raw, now, "blackhole info");
-        self.emit_local_management_announce(probe_raw, now, "probe responder");
+    /// Build a built-in destination's announce, as `Destination.announce`
+    /// does for upstream's management destinations.
+    ///
+    /// With `STAMP_DESTINATIONS` the announce carries the destination's
+    /// persisted stamp and its link cost (`BLACKHOLE_LINK_COST` for the
+    /// blackhole list, `lr_cost` for the others). Without a persisted stamp
+    /// nothing is sent now: the stamper grinds one and the announce follows
+    /// on `Event::DestinationStampReady`, as upstream queues the announce
+    /// with `enqueue_stamped_announce`.
+    fn build_builtin_announce(
+        &mut self,
+        destination: crate::management::BuiltinDestination,
+        now: f64,
+        path_response: bool,
+    ) -> Option<Vec<u8>> {
+        let identity = self.transport_identity.as_ref()?;
+        let identity_hash = *identity.hash();
+        let dest_hash = destination.dest_hash(&identity_hash);
+        let mut app_data = None;
+        if self.stamp_destinations.load(Ordering::Relaxed) {
+            let Some(store) = self.stamper.stamp_store() else {
+                log::debug!(
+                    "No stamp store, {} announce emission cancelled",
+                    destination.label()
+                );
+                return None;
+            };
+            let public_key = identity.get_public_key()?;
+            let material = crate::stamps::destination_stamp_material(
+                &dest_hash,
+                &public_key,
+                &destination.name_hash(),
+            );
+            let target = self
+                .stamper
+                .targets()
+                .destination_target(&destination.destination(identity_hash));
+            match store.load(&dest_hash, &material, target) {
+                Some((stamp, _value)) => {
+                    let link_cost = self.link_manager.link_request_costs().get(&dest_hash);
+                    app_data = Some(crate::stamps::announce_ext_payload(&stamp, 0, link_cost));
+                }
+                None => {
+                    let identity_prv_key = identity.get_private_key()?;
+                    let job = crate::stamper::DestinationStampJob {
+                        dest: destination.destination(identity_hash),
+                        identity_prv_key,
+                    };
+                    if self.stamper.enqueue_destination_stamp(job).is_err() {
+                        log::debug!(
+                            "Stamp queue full, dropping {} announce",
+                            destination.label()
+                        );
+                    }
+                    return None;
+                }
+            }
+        }
+        let identity = self.transport_identity.as_ref()?;
+        crate::management::build_builtin_announce(
+            destination,
+            identity,
+            &mut self.rng,
+            now,
+            path_response,
+            app_data.as_deref(),
+        )
     }
 
     fn emit_local_management_announce(&mut self, raw: Option<Vec<u8>>, now: f64, label: &str) {
@@ -2728,20 +2809,14 @@ impl Driver {
     fn build_local_path_response(&mut self, dest_hash: &[u8; 16], now: f64) -> Option<Vec<u8>> {
         use crate::management;
 
-        if let Some(identity) = self.transport_identity.as_ref() {
-            let identity_hash = *identity.hash();
-            if self.probe_responder_hash == Some(*dest_hash) {
-                return management::build_probe_announce(identity, &mut self.rng, now, true);
-            }
-            if self.management_config.enable_remote_management
-                && *dest_hash == management::management_dest_hash(&identity_hash)
-            {
-                return management::build_management_announce(identity, &mut self.rng, now, true);
-            }
-            if self.management_config.publish_blackhole
-                && *dest_hash == management::blackhole_dest_hash(&identity_hash)
-            {
-                return management::build_blackhole_announce(identity, &mut self.rng, now, true);
+        if let Some(identity_hash) = self.transport_identity.as_ref().map(|id| *id.hash()) {
+            let destination = management::BuiltinDestination::ALL
+                .into_iter()
+                .find(|destination| destination.dest_hash(&identity_hash) == *dest_hash);
+            if let Some(destination) = destination {
+                if self.builtin_destination_enabled(destination) {
+                    return self.build_builtin_announce(destination, now, true);
+                }
             }
         }
 

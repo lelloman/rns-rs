@@ -302,6 +302,9 @@ pub enum Event<W: Send> {
     /// A path request stamp ground by the stamper worker; the driver builds
     /// and sends the request.
     SendStampedPathRequest(Box<crate::stamper::StampedPathRequest>),
+    /// The stamper persisted the stamp of a built-in destination; the
+    /// driver sends that destination's announce.
+    DestinationStampReady { dest_hash: [u8; 16] },
     /// Send a request on an established link.
     SendRequest {
         link_id: [u8; 16],
@@ -1387,6 +1390,10 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("SendStampedPathRequest")
                 .field("dest_hash", &request.destination_hash)
                 .field("target", &request.target)
+                .finish(),
+            Event::DestinationStampReady { dest_hash } => f
+                .debug_struct("DestinationStampReady")
+                .field("dest_hash", dest_hash)
                 .finish(),
             Event::RegisterProofStrategy {
                 dest_hash,
