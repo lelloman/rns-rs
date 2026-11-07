@@ -97,7 +97,8 @@ pub fn verify_batch(items: &[(&Ed25519PublicKey, &[u8; 64], &[u8])]) -> bool {
         .iter()
         .map(|(_, signature, _)| ed25519_dalek::Signature::from_bytes(signature))
         .collect();
-    let keys: Vec<ed25519_dalek::VerifyingKey> = items.iter().map(|(key, _, _)| key.inner).collect();
+    let keys: Vec<ed25519_dalek::VerifyingKey> =
+        items.iter().map(|(key, _, _)| key.inner).collect();
     ed25519_dalek::verify_batch(&messages, &signatures, &keys).is_ok()
 }
 

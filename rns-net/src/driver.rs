@@ -833,6 +833,8 @@ pub struct Driver {
     >,
     /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
     pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
+    /// Reused buffer for single-packet proofs the proof pool finished.
+    pub(crate) packet_proofs: Vec<crate::common::link_manager::ProofOutcome>,
     /// Reused transport action buffers (see [`crate::action_pool`]).
     pub(crate) transport_actions: crate::action_pool::ActionPool<TransportAction>,
     /// Reused link manager action buffers.
@@ -1111,6 +1113,7 @@ impl Driver {
             path_request_dest,
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
+            packet_proofs: Vec::new(),
             transport_actions: crate::action_pool::ActionPool::new(),
             link_actions: crate::action_pool::ActionPool::new(),
             completed_proofs: HashMap::new(),
