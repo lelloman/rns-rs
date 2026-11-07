@@ -34,6 +34,7 @@ pub(crate) use proof_pool::{
 mod receive_worker;
 mod request_handling;
 mod resource_handling;
+mod segment_builder;
 mod state;
 
 use crate::resource::{
@@ -322,6 +323,11 @@ pub struct LinkManager {
     decrypt_feeder: Option<decrypt_feeder::DecryptFeeder>,
     /// Whether starting the feeder failed; assembly then decrypts.
     decrypt_feeder_failed: bool,
+    /// Builds streams' next segments while their current one is transferred
+    /// (parallel engine), started with the first.
+    segment_builder: Option<segment_builder::SegmentBuilder>,
+    /// Whether the builder failed; segments are then built on the driver.
+    segment_builder_failed: bool,
     receive_worker_wake: Option<crate::event::EventSender>,
     /// Incoming compressed resources assembled on the driver loop, oldest
     /// first, when CPU work is folded.
@@ -477,6 +483,8 @@ impl LinkManager {
         LinkManager {
             decrypt_feeder: None,
             decrypt_feeder_failed: false,
+            segment_builder: None,
+            segment_builder_failed: false,
             receive_worker: None,
             receive_worker_wake: None,
             folded_assemblies: std::collections::VecDeque::new(),
@@ -2193,6 +2201,7 @@ impl LinkManager {
     pub(crate) fn tick_at(&mut self, now: f64, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
         let mut all_actions = Vec::new();
         self.sweep_decryptions();
+        self.sweep_built_segments();
 
         // Collect link_ids to avoid borrow issues
         let link_ids: Vec<LinkId> = self.links.keys().copied().collect();
