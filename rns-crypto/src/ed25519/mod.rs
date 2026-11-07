@@ -55,7 +55,34 @@ impl Ed25519PrivateKey {
     }
 
     pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        #[cfg(feature = "ed25519-aws-lc")]
+        if let Some(signature) = self.sign_aws_lc(message) {
+            return signature;
+        }
         self.inner.sign(message).to_bytes()
+    }
+
+    /// The same signature from aws-lc, which signs in about half the time
+    /// (Ed25519 signatures are deterministic, so the bytes are identical).
+    #[cfg(feature = "ed25519-aws-lc")]
+    fn sign_aws_lc(&self, message: &[u8]) -> Option<[u8; 64]> {
+        crate::aws_lc_init();
+        // aws-lc's private key form: the seed, then the public key.
+        let mut key = zeroize::Zeroizing::new([0u8; 64]);
+        key[..32].copy_from_slice(self.inner.as_bytes());
+        key[32..].copy_from_slice(self.inner.verifying_key().as_bytes());
+        let mut signature = [0u8; 64];
+        // SAFETY: `signature` and `key` are 64 bytes and `message` is
+        // `message.len()` bytes, as the function takes.
+        let ok = unsafe {
+            aws_lc_sys::ED25519_sign(
+                signature.as_mut_ptr(),
+                message.as_ptr(),
+                message.len(),
+                key.as_ptr(),
+            )
+        };
+        (ok == 1).then_some(signature)
     }
 }
 
@@ -104,6 +131,23 @@ pub fn verify_batch(items: &[(&Ed25519PublicKey, &[u8; 64], &[u8])]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(feature = "ed25519-aws-lc")]
+    #[test]
+    fn aws_lc_signs_the_same_bytes_as_dalek() {
+        use ed25519_dalek::Signer;
+        for seed in 0u8..32 {
+            let key = Ed25519PrivateKey::from_bytes(&[seed.wrapping_mul(37).wrapping_add(1); 32]);
+            for len in [0usize, 1, 32, 64, 500] {
+                let message: Vec<u8> = (0..len).map(|i| (i as u8) ^ seed).collect();
+                let expected = key.inner.sign(&message).to_bytes();
+                assert_eq!(key.sign_aws_lc(&message), Some(expected));
+                assert_eq!(key.sign(&message), expected);
+                assert!(key.public_key().verify(&expected, &message));
+            }
+        }
+    }
+
     use super::*;
 
     #[cfg(feature = "ed25519-batch")]

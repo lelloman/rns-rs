@@ -80,11 +80,7 @@ impl X25519PublicKey {
 /// exchange.
 #[cfg(feature = "x25519-aws-lc")]
 mod aws_lc {
-    fn init() {
-        static INIT: std::sync::Once = std::sync::Once::new();
-        // SAFETY: takes no arguments; sets up aws-lc's CPU feature detection.
-        INIT.call_once(|| unsafe { aws_lc_sys::CRYPTO_library_init() });
-    }
+    use crate::aws_lc_init as init;
 
     pub(super) fn public_key(private: &[u8; 32]) -> Option<[u8; 32]> {
         init();

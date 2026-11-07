@@ -137,3 +137,11 @@ mod tests {
         }
     }
 }
+
+/// Set up aws-lc once, before its first use: its CPU feature detection.
+#[cfg(any(feature = "x25519-aws-lc", feature = "ed25519-aws-lc"))]
+pub(crate) fn aws_lc_init() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    // SAFETY: takes no arguments; sets up aws-lc's CPU feature detection.
+    INIT.call_once(|| unsafe { aws_lc_sys::CRYPTO_library_init() });
+}

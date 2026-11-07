@@ -50,6 +50,9 @@ low-latency-flush = []
 proof-pool = ["rns-crypto/ed25519-batch"]
 # X25519 on aws-lc (rns-crypto's `x25519-aws-lc`): about twice as fast.
 x25519-aws-lc = ["rns-crypto/x25519-aws-lc"]
+# Ed25519 signing on aws-lc (rns-crypto's `ed25519-aws-lc`): about twice as
+# fast; signatures are the same bytes (Ed25519 is deterministic).
+ed25519-aws-lc = ["rns-crypto/ed25519-aws-lc"]
 
 [dependencies]
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
