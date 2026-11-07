@@ -13,6 +13,12 @@ use super::*;
 use rns_crypto::token::TokenDecryptStream;
 use std::sync::mpsc;
 
+/// Resources smaller than this decrypt at assembly: a few parts leave no
+/// transfer to overlap with, and the thread's wakeups and the round trip to
+/// take the decryption back cost more than decrypting them. Request
+/// responses of 1-4 KiB lost 13% of their rate fed to the thread.
+const MIN_TRANSFER: u64 = 64 * 1024;
+
 enum Message {
     Start(u64, Box<TokenDecryptStream>),
     Part(u64, Vec<u8>),
@@ -109,6 +115,16 @@ impl LinkManager {
         if !Self::feeds_decryption() {
             return;
         }
+        let worth_feeding = self.links.get(link_id).is_some_and(|link| {
+            link.incoming_resources.iter().any(|r| {
+                r.resource_hash[..] == resource_hash[..]
+                    && r.decrypts()
+                    && r.transfer_size >= MIN_TRANSFER
+            })
+        });
+        if !worth_feeding {
+            return;
+        }
         if self.decrypt_feeder.is_none() {
             if self.decrypt_feeder_failed {
                 return;
@@ -129,7 +145,7 @@ impl LinkManager {
             .incoming_resources
             .iter()
             .find(|r| r.resource_hash[..] == resource_hash[..])
-            .filter(|r| r.decrypts())
+            .filter(|r| r.decrypts() && r.transfer_size >= MIN_TRANSFER)
         else {
             return;
         };
