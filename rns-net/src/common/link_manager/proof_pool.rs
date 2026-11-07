@@ -181,6 +181,14 @@ impl Job {
     }
 }
 
+/// Whether this process may run on one CPU only, checked once: work handed
+/// to another thread would then only share that CPU.
+pub(crate) fn one_cpu() -> bool {
+    static ONE_CPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ONE_CPU
+        .get_or_init(|| std::thread::available_parallelism().map_or(true, |cpus| cpus.get() == 1))
+}
+
 pub(super) struct ProofPool {
     jobs: Option<mpsc::SyncSender<Job>>,
     outcomes: mpsc::Receiver<Outcome>,

@@ -2039,6 +2039,84 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
+#[test]
+fn incoming_parts_are_decrypted_as_they_arrive_and_the_feeds_end() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    resp_mgr.set_resource_receive_mode(&link_id, ResourceReceiveMode::Stream { max_bytes: None });
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 2 + 999);
+    let initial = init_mgr.send_resource_stream(
+        &link_id,
+        ResourceTransferId(5),
+        Box::new(std::io::Cursor::new(data.clone())),
+        data.len() as u64,
+        None,
+        false,
+        &mut rng,
+    );
+    let (received, completed, _progress, failures, _rounds) =
+        drive_link_manager_packets(&mut init_mgr, &mut resp_mgr, initial, 'i', &mut rng, 30_000);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(received, Some(data));
+    assert!(completed);
+    let feeding = !crate::engine::FOLD_WORK && !proof_pool::one_cpu();
+    assert_eq!(resp_mgr.decrypt_feeder.is_some(), feeding);
+    // Every segment took its decryption back at assembly.
+    assert_eq!(resp_mgr.decryptions_fed(), 0);
+}
+
+#[test]
+fn a_decryption_fed_for_a_resource_that_ends_early_is_dropped() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE / 2);
+    let mut pending: Vec<(char, LinkManagerAction)> = init_mgr
+        .send_resource_with_auto_compress(&link_id, &data, None, false, &mut rng)
+        .into_iter()
+        .map(|a| ('i', a))
+        .collect();
+    // Deliver until the receiver holds some parts, but not all of them.
+    let mut rounds = 0;
+    while resp_mgr.decryptions_fed() == 0 && !pending.is_empty() && rounds < 1000 {
+        rounds += 1;
+        let mut next = Vec::new();
+        for (source, action) in pending.drain(..) {
+            let LinkManagerAction::SendPacket { raw, .. } = action else {
+                continue;
+            };
+            let packet = RawPacket::unpack(&raw).unwrap();
+            let (target, target_source) = if source == 'i' {
+                (&mut resp_mgr, 'r')
+            } else {
+                (&mut init_mgr, 'i')
+            };
+            let actions = target.handle_local_delivery(
+                packet.destination_hash,
+                &raw,
+                packet.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            );
+            next.extend(actions.into_iter().map(|a| (target_source, a)));
+            if resp_mgr.decryptions_fed() > 0 {
+                break;
+            }
+        }
+        pending = next;
+    }
+    if crate::engine::FOLD_WORK || proof_pool::one_cpu() {
+        assert_eq!(resp_mgr.decryptions_fed(), 0);
+        return;
+    }
+    assert_eq!(resp_mgr.decryptions_fed(), 1, "a decryption is being fed");
+    // The link closes before the resource assembles: the next tick drops it.
+    resp_mgr.links.remove(&link_id);
+    resp_mgr.tick(&mut rng);
+    assert_eq!(resp_mgr.decryptions_fed(), 0);
+}
+
 /// Pump packets between two managers as the driver does, running the
 /// sender's idle work once the packets of a round are handled. Returns the
 /// received data, whether the sender completed, and how many proofs found

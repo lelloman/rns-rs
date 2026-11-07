@@ -978,6 +978,8 @@ impl LinkManager {
         let mut stream_segment: Option<([u8; 32], u64, Vec<u8>)> = None;
         let mut completed_stream = None;
         let mut storage_failure = None;
+        // The resource that took the part.
+        let mut accepted = None;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
             if receiver.status >= rns_core::resource::ResourceStatus::Assembling {
@@ -986,6 +988,7 @@ impl LinkManager {
             let before = all_actions.len();
             receiver.receive_part_into(raw_data, now, all_actions);
             if all_actions.len() > before {
+                accepted = Self::resource_hash_key(&receiver.resource_hash);
                 if receiver.received_count == receiver.total_parts {
                     assemble_idx = Some(idx);
                 } else if crate::engine::FOLD_WORK && receiver.has_parts_to_decrypt() {
@@ -1025,7 +1028,20 @@ impl LinkManager {
             }
         }
 
+        let _ = link;
+        // Parts held in order go to the decryption feeder as they line up;
+        // a resource about to assemble takes its decryption back.
+        if let Some(hash) = accepted {
+            if assemble_idx.is_some() {
+                self.finish_decryption(link_id, hash);
+            } else {
+                self.feed_decryption(link_id, hash);
+            }
+        }
         if let Some(idx) = assemble_idx {
+            let Some(link) = self.links.get_mut(link_id) else {
+                return;
+            };
             let eligible = Self::receive_offload_eligible(link, &link.incoming_resources[idx]);
             let Some(resource_hash) =
                 Self::resource_hash_key(&link.incoming_resources[idx].resource_hash)
