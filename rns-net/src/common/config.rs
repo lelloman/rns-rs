@@ -221,7 +221,7 @@ impl Default for ReticulumSection {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
-            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
+            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Lazy,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: rns_core::transport::types::DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
@@ -1623,7 +1623,7 @@ mod tests {
         );
         assert_eq!(
             config.reticulum.packet_hashlist_allocation,
-            rns_core::transport::types::PacketHashlistAllocation::Eager
+            rns_core::transport::types::PacketHashlistAllocation::Lazy
         );
         assert_eq!(
             config.reticulum.announce_table_ttl,
