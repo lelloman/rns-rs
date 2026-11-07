@@ -1970,6 +1970,29 @@ assertion in `constants::tests`.
 
 **Final disposition:** Integrated, with the management announce caveat.
 
+### 51. `c97e2158` — Cleanup
+
+**Upstream change** (`RNS/Destination.py`): the stamp half of `_announce`
+moves into a new `_await_stamp` method, guarded by a new per-destination
+`stamp_generation_lock`. The logic is unchanged: reload a persisted stamp,
+else grind one at `target_value` and persist it. Two threads announcing the
+same destination, such as the stamper worker and a direct `_announce` call,
+now grind its stamp once instead of twice. One side effect: when the grind
+fails, `_await_stamp` returns but `_announce` continues, so with no stamp
+held the announce fails on concatenating `None`, where it used to return
+quietly. Either way no announce is sent.
+
+**Rust applicability:** Structurally covered. Announces for a destination
+without a persisted stamp go to the stamper's single worker thread as jobs
+keyed by destination hash; a newer job replaces a queued one, and the
+worker's `ensure_destination_stamp` reloads a persisted stamp before
+grinding, so a destination's stamp is ground once. `build_announce` grinds
+inline only if the stamp disappears between the node API's check and the
+build. A failed grind returns `SendError`, cancelling the announce, which
+matches upstream's earlier behavior.
+
+**Final disposition:** Structurally covered; mapping only.
+
 ## Integration Plan
 
 All forty-eight commits have a final disposition. The
