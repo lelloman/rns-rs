@@ -6,12 +6,14 @@
   commit 15 on `2026-10-30`, to commit 23 on `2026-10-31`, to commit 31 on
   `2026-11-01`, to commit 36 on `2026-11-02`, to commit 40 on
   `2026-11-03`, to commit 45 on `2026-11-04`, to commit 46 on
-  `2026-11-05` and to commit 48 on `2026-11-06`)
+  `2026-11-05`, to commit 48 on `2026-11-06` and to commit 52 on
+  `2026-11-07`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
 - target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `eb826cde90e152d167415b42016efb0107c73035`
-  (extended on 2026-11-06 from `3305fc1cbda16f51c5c1291032183a05823fe420`,
+- target tag or ref: `rgit:master` tip `acb38a8a1c85affa5ce8138bc6214871aa05b15b`
+  (extended on 2026-11-07 from `eb826cde90e152d167415b42016efb0107c73035`,
+  on 2026-11-06 from `3305fc1cbda16f51c5c1291032183a05823fe420`,
   on 2026-11-05 from `53dc223a031ff46ad311c395ee7a3ee97ebe2aef`,
   on 2026-11-04 from `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`,
   on 2026-11-03 from `d3874ddedbf485db3151be1234d35da10c498ef1`,
@@ -20,15 +22,16 @@
   on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
   on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `eb826cde90e152d167415b42016efb0107c73035` (provisional; rgit may advance before promotion)
-- target root tree: `be456ce0efaa0fa08a416ccd006caa5e55594a67`
-- target `RNS` tree: `c0912a8cf3f89e7db2d8ff58817b38dfdcc775fb`
+- target normative commit: `acb38a8a1c85affa5ce8138bc6214871aa05b15b` (provisional; rgit may advance before promotion)
+- target root tree: `a109da80ad72adbd8766a84fcfbf4ef72f58aec0`
+- target `RNS` tree: `840cd22559e5308c765b506768e59ff896f73847`
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..eb826cde90e152d167415b42016efb0107c73035`
-- commits in range: `48` (2 inventoried at the first tip, 3 added when rgit
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..acb38a8a1c85affa5ce8138bc6214871aa05b15b`
+- commits in range: `52` (2 inventoried at the first tip, 3 added when rgit
   advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31, 8
   added on 2026-11-01, 5 added on 2026-11-02, 4 added on 2026-11-03, 5
-  added on 2026-11-04, 1 added on 2026-11-05, 2 added on 2026-11-06)
+  added on 2026-11-04, 1 added on 2026-11-05, 2 added on 2026-11-06, 4
+  added on 2026-11-07)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
@@ -39,7 +42,8 @@
   from `d4b6527`; commits 41 to 45 inventoried on `dev` at `cdeb528` and
   integrated on `dev` from `b0b793c`; commit 46 inventoried and mapped on
   `origin/master` `679854d`; commits 47 and 48 inventoried on
-  `origin/master` `a029386`; commit 48 integrated on `dev` from `124d287`
+  `origin/master` `a029386`; commit 48 integrated on `dev` from `124d287`;
+  commits 49 to 52 inventoried and integrated on `dev` from `2078c21`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -159,6 +163,15 @@ the startup ratchet directory walk when the SQLite known destinations store
 is active and edits the changelog; commit 48 adds `enable_stamping` and
 `enforce_stamps` arguments to the `Reticulum` constructor.
 
+The 2026-11-07 refresh (GitHub fetched at 2026-11-07T06:59:40Z, rgit at
+06:59:54Z) found rgit at `acb38a8a` (committed 2026-11-06T15:20Z), four
+commits past `eb826cde`, inventoried as 49 to 52. The GitHub mirror is
+still at `e40191b3` and `RNS.__version__` is still `1.6.0`. Commit 49 tunes
+the Python stamp worker pools, commit 50 gives the published blackhole list
+destination a 5.25 link cost, commit 51 moves destination stamp generation
+behind a lock, and commit 52 stamps the path requests sent to rediscover a
+path after a forwarded link request goes unanswered.
+
 ## Audit Vocabulary
 
 - **Needs port**: compatible behavior is absent or observably different.
@@ -229,6 +242,10 @@ Every commit in the audited range must appear exactly once.
 | 46 | `3305fc1cbda16f51c5c1291032183a05823fe420` | Adjusted loglevels | Structurally covered | Mapping commit; `DestinationTypeRequester::call_shared_instance` already logs a failed destination type filter RPC at debug, with the same message |
 | 47 | `e9d82e698d266b198b5cfc7bb66315e505b0b6c6` | Cleanup | Structurally covered | Mapping commit; with the SQLite known destinations store, startup ratchet cleanup in rns-rs already runs on that store's `ratchets` table and never walks the legacy `storage/ratchets` directory; the changelog lines are non-runtime |
 | 48 | `eb826cde90e152d167415b42016efb0107c73035` | Allow applications to enable stamp generation and stamp enforcement | Integrated | `NodeConfig::stamps` (a `StampsSection`) gives nodes started in code the `[stamps]` settings, applied as `from_config` applies the parsed section; new runtime key `global.stamps_enforced` for announce and path request enforcement; docs |
+| 49 | `f15b34870a12f52b5f22239b69b2b20f9fa069b5` | Tuned stamp worker pooling | Structurally covered | Mapping commit; Python worker pool sizing only, with the same stamps; rns-rs has no pooling threshold (the parallel engine grinds on every core, the compact engine on one) and no per-platform runner |
+| 50 | `426673e97433a95e2baf926b93730d2fdc6e9c69` | Set blackhole updater destination link cost | Needs port | The published blackhole list destination uses the default `LR_COST` (12.5) in rns-rs |
+| 51 | `c97e2158f5fb93de73268af93e3f542d72d274ea` | Cleanup | Structurally covered | Mapping commit; moves destination stamp generation behind a per-destination lock; rns-rs grinds announce stamps on the single stamper worker, keyed per destination, which reloads a persisted stamp before grinding |
+| 52 | `acb38a8a1c85affa5ce8138bc6214871aa05b15b` | Pre-generate discovery PR ext_payload | Needs decision | Stamps the path requests of upstream's link-table path rediscovery; rns-rs has no such rediscovery, so there is nothing to stamp |
 
 ## Per-Commit Analysis
 
@@ -1891,6 +1908,26 @@ four stamp keys); `runtime_config_stamps_enforced_keeps_the_configured_costs`;
 `from_config_applies_the_stamps_section_and_hop_limiter`.
 
 **Final disposition:** Integrated.
+
+### 49. `f15b3487` — Tuned stamp worker pooling
+
+**Upstream change** (`RNS/Stamps.py`): `POOLING_THRESHOLD_COST` drops from
+15 to 14 and `KEYSTAMP_POOLING_THRESHOLD` from 12 to 10, so the Linux
+runner uses its worker pool for cheaper stamps than before. On Android, the
+persistent runner uses one worker instead of one per core when the workblock
+is at most four 256-byte expansion chunks and the cost is below 8 (stamps)
+or 6 (stamped keys). The workblock chunk length becomes the constant
+`WORKBLOCK_EXPAND_CHUNK`, still 256, and one log line gets plural-aware
+wording. The stamps produced, their values and the workblock are unchanged.
+
+**Rust applicability:** Structurally covered. Like commits 18 and 37, this
+only changes how the Python runners schedule work. rns-rs grinds natively
+with no pooling threshold: with the parallel engine `rns-net::stamps`
+searches on every core (the rayon pool or one thread per core), and with
+the compact engine on the calling thread. Nothing selects a runner per
+platform. The workblock expansion already uses 256-byte HKDF chunks.
+
+**Final disposition:** Structurally covered; mapping only.
 
 ## Integration Plan
 
