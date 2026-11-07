@@ -13703,7 +13703,9 @@ fn failed_own_link_on_a_non_transport_node_rediscovers_the_path() {
     let (mut driver, _sent) = rediscovery_driver(tx, rx, false);
     let dest = [0xB4; 16];
 
-    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed {
+        dest_hash: dest,
+    }]);
     assert_eq!(
         queued_rediscoveries(&mut driver, time::now()),
         vec![(dest, None)]
@@ -13720,19 +13722,116 @@ fn failed_own_link_rediscovery_is_throttled_and_left_to_transport_and_shared_ins
     driver
         .engine
         .record_outbound_path_request(dest, time::now() - 5.0);
-    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed {
+        dest_hash: dest,
+    }]);
     assert!(queued_rediscoveries(&mut driver, time::now()).is_empty());
 
     // A transport node relies on its link table job.
     let (tx, rx) = event::channel();
     let (mut driver, _sent) = rediscovery_driver(tx, rx, true);
-    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed {
+        dest_hash: dest,
+    }]);
     assert!(queued_rediscoveries(&mut driver, time::now()).is_empty());
 
     // A shared instance client leaves the request to the instance.
     let (tx, rx) = event::channel();
     let (mut driver, _sent) = rediscovery_driver(tx, rx, false);
     driver.connected_to_shared_instance = true;
-    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed {
+        dest_hash: dest,
+    }]);
     assert!(queued_rediscoveries(&mut driver, time::now()).is_empty());
+}
+
+/// Built-in destination announces in `sent`, validated, by destination.
+fn sent_builtin_announces(
+    sent: &[Vec<u8>],
+    dest_hash: &[u8; 16],
+) -> Vec<rns_core::announce::ValidatedAnnounce> {
+    sent.iter()
+        .filter_map(|raw| RawPacket::unpack(raw).ok())
+        .filter(|packet| {
+            packet.destination_hash == *dest_hash
+                && packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+        })
+        .map(|packet| {
+            rns_core::announce::AnnounceData::unpack(packet.data(), false)
+                .unwrap()
+                .validate(dest_hash)
+                .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn stamped_management_announces_wait_for_their_stamp_and_announce_their_link_cost() {
+    // Upstream announces management destinations through
+    // `Destination.announce`, so they are stamped like any other.
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = rediscovery_driver(tx.clone(), rx, true);
+    let identity = Identity::new(&mut OsRng);
+    let identity_hash = *identity.hash();
+    driver.transport_identity = Some(identity);
+    driver.management_config.enable_remote_management = true;
+    driver.management_config.publish_blackhole = true;
+    driver.stamp_destinations.store(true, Ordering::Relaxed);
+    let dir = tempfile::tempdir().unwrap();
+    driver
+        .stamper
+        .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
+    let blackhole = crate::management::blackhole_dest_hash(&identity_hash);
+    let management = crate::management::management_dest_hash(&identity_hash);
+    driver
+        .link_manager
+        .link_request_costs()
+        .set(blackhole, rns_core::constants::BLACKHOLE_LINK_COST.as_f64());
+
+    // No stamps yet: nothing goes out until the stamper has ground them.
+    driver.emit_management_announces(time::now());
+    driver.flush_writers();
+    assert!(sent_builtin_announces(&sent[0].lock().unwrap(), &blackhole).is_empty());
+
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_writers();
+    let required = StampCost::from_whole(6);
+    for (dest_hash, link_cost) in [
+        (blackhole, rns_core::constants::BLACKHOLE_LINK_COST),
+        (management, rns_core::constants::LINK_REQUEST_STAMP_COST),
+    ] {
+        let mut announces = sent_builtin_announces(&sent[0].lock().unwrap(), &dest_hash);
+        assert_eq!(announces.len(), 1, "{dest_hash:02x?}");
+        assert_eq!(
+            announces[0].apply_stamp(&dest_hash, required),
+            rns_core::announce::AnnounceStampStatus::Valid
+        );
+        assert_eq!(announces[0].lr_cost, Some(link_cost));
+    }
+
+    // With the stamps persisted, the next announces go out at once.
+    sent[0].lock().unwrap().clear();
+    driver.emit_management_announces(time::now());
+    driver.flush_writers();
+    assert_eq!(
+        sent_builtin_announces(&sent[0].lock().unwrap(), &blackhole).len(),
+        1
+    );
+}
+
+#[test]
+fn management_announces_stay_unstamped_without_stamp_destinations() {
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = rediscovery_driver(tx, rx, true);
+    let identity = Identity::new(&mut OsRng);
+    let blackhole = crate::management::blackhole_dest_hash(identity.hash());
+    driver.transport_identity = Some(identity);
+    driver.management_config.publish_blackhole = true;
+
+    driver.emit_management_announces(time::now());
+    driver.flush_writers();
+    let announces = sent_builtin_announces(&sent[0].lock().unwrap(), &blackhole);
+    assert_eq!(announces.len(), 1);
+    assert!(announces[0].app_data.is_none());
 }

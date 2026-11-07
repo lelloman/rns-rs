@@ -183,8 +183,11 @@ path requests, and unstamped requests forwarded on behalf of local clients,
 wait for the worker; generated path request stamps are cached by destination
 and tag (256 entries) so one grind serves a request relayed on several
 interfaces. A path request whose stamp is not found within `pr_stamp_timeout`
-is not sent. None of this runs while the switches are off, which is the
-upstream default.
+is not sent. With `stamp_destinations` the built-in destinations (remote
+management, the blackhole list and the probe responder) are stamped too,
+and announce their link cost: their stamps are ground on the same worker
+and persisted, and an announce waits for its stamp. None of this runs while
+the switches are off, which is the upstream default.
 
 The emission switches are also runtime config keys, so a running node can be
 switched to stamped emission without a restart. `global.stamp_link_requests`
