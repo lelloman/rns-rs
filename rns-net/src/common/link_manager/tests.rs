@@ -2070,6 +2070,24 @@ fn incoming_parts_are_decrypted_as_they_arrive_and_the_feeds_end() {
 }
 
 #[test]
+fn small_resources_decrypt_at_assembly_without_the_thread() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    let data = deterministic_bytes(4096);
+    let initial = init_mgr.send_resource_with_auto_compress(&link_id, &data, None, false, &mut rng);
+    let (received, completed, _progress, failures, _rounds) =
+        drive_link_manager_packets(&mut init_mgr, &mut resp_mgr, initial, 'i', &mut rng, 1_000);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(received, Some(data));
+    assert!(completed);
+    assert!(
+        resp_mgr.decrypt_feeder.is_none(),
+        "no thread for a small resource"
+    );
+}
+
+#[test]
 fn a_decryption_fed_for_a_resource_that_ends_early_is_dropped() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
