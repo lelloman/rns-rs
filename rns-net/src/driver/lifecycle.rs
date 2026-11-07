@@ -137,6 +137,8 @@ impl Driver {
     }
 
     pub(crate) fn begin_drain(&mut self, timeout: Duration) {
+        // Frames deferred in this pass count as queued: get them moving.
+        self.wake_writers();
         let now = Instant::now();
         let deadline = now + timeout;
         match self.lifecycle_state {
@@ -203,7 +205,9 @@ impl Driver {
             .sum()
     }
 
-    fn wait_for_writer_flush(&self, timeout: Duration) {
+    fn wait_for_writer_flush(&mut self, timeout: Duration) {
+        // Writers owed a wake for deferred frames would never flush.
+        self.wake_writers();
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));

@@ -373,10 +373,6 @@ pub type InterfaceMap<V> =
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
 
-/// Longest a sleeping writer worker goes without rechecking its queue, a
-/// backstop for wakeups postponed by `send_frame_deferred`.
-const WRITER_RECHECK: Duration = Duration::from_millis(5);
-
 /// Longest time a producer waits for a busy async writer to free queue space
 /// or byte budget before treating the frame as undeliverable.
 ///
@@ -779,11 +775,12 @@ impl WriterQueue {
                 return false;
             }
             state.receiver_waiting = true;
-            // Producers may postpone the wakeup (see send_frame_deferred);
-            // the periodic recheck bounds any delay if one is never sent.
-            state = match self.ready.wait_timeout(state, WRITER_RECHECK) {
-                Ok((state, _)) => state,
-                Err(poisoned) => poisoned.into_inner().0,
+            // Sleep until woken. A postponed wakeup (see send_frame_deferred)
+            // comes from the driver before it waits for more input, and its
+            // tick wakes any writer still owed one.
+            state = match self.ready.wait(state) {
+                Ok(state) => state,
+                Err(poisoned) => poisoned.into_inner(),
             };
             state.receiver_waiting = false;
         }
@@ -912,6 +909,16 @@ impl Writer for AsyncWriter {
         if std::mem::take(&mut self.wake_pending) {
             self.tx.0.kick();
         }
+    }
+
+    fn tick(&mut self) {
+        // A backstop: the worker no longer rechecks its queue on a timer.
+        self.wake();
+    }
+
+    fn flush_pending(&mut self) {
+        // The driver's pass is over: nothing it deferred may wait longer.
+        self.wake();
     }
 
     fn enqueue_confirmed(
@@ -1972,7 +1979,7 @@ mod tests {
     }
 
     #[test]
-    fn deferred_sends_are_delivered_on_wake_or_by_the_recheck_backstop() {
+    fn deferred_sends_are_delivered_on_wake_or_by_the_tick_backstop() {
         struct Recorder(mpsc::Sender<Vec<u8>>);
         impl Writer for Recorder {
             fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
@@ -2005,10 +2012,19 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(20));
         writer.send_frame_deferred(&[3]).unwrap();
-        // No wake: the periodic recheck still delivers the frame.
+        // No wake: the worker sleeps rather than polling...
+        assert!(sent_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        // ...until the driver's tick, the backstop, or its end-of-pass flush.
+        writer.tick();
         assert_eq!(
             sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
             vec![3]
+        );
+        writer.send_frame_deferred(&[4]).unwrap();
+        writer.flush_pending();
+        assert_eq!(
+            sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            vec![4]
         );
     }
 

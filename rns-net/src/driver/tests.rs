@@ -2519,6 +2519,7 @@ fn dispatch_send() {
         interface: InterfaceId(1),
         raw: vec![0x01, 0x02, 0x03].into(),
     }]);
+    driver.wake_writers();
 
     assert_eq!(sent.lock().unwrap().len(), 1);
     assert_eq!(sent.lock().unwrap()[0], vec![0x01, 0x02, 0x03]);
@@ -2558,6 +2559,7 @@ fn driver_selects_ifac_handlers_for_outbound_and_inbound_frames() {
         interface: InterfaceId(1),
         raw: raw.clone().into(),
     }]);
+    driver.wake_writers();
 
     let frame = sent.lock().unwrap()[0].clone();
     assert_eq!(crate::ifac::unmask_inbound(&frame, &state), Some(raw));
@@ -3003,11 +3005,13 @@ fn begin_drain_with_queued_writer_frames_reports_incomplete_status() {
         interface: InterfaceId(77),
         raw: vec![0x01].into(),
     }]);
+    driver.wake_writers();
     entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(77),
         raw: vec![0x02].into(),
     }]);
+    driver.wake_writers();
 
     driver.begin_drain(Duration::from_secs(3));
 
@@ -3495,6 +3499,7 @@ fn dispatch_skips_offline_interface() {
         interface: InterfaceId(1),
         raw: vec![0x01].into(),
     }]);
+    driver.wake_writers();
     assert_eq!(sent1.lock().unwrap().len(), 0);
 
     // Broadcast: only online interface should receive
@@ -3562,6 +3567,7 @@ fn interface_up_refreshes_writer() {
         interface: InterfaceId(1),
         raw: vec![0xFF].into(),
     }]);
+    driver.wake_writers();
 
     // Old writer should not have received anything
     assert_eq!(sent_old.lock().unwrap().len(), 0);
@@ -3605,6 +3611,8 @@ fn dynamic_interface_register() {
         interface: InterfaceId(100),
         raw: vec![0x42].into(),
     }]);
+    // As the driver loop does at the end of its pass.
+    driver.wake_writers();
     wait_for_sent_len(&sent, 1);
 
     drop(tx);
@@ -4554,6 +4562,7 @@ fn send_updates_tx_stats() {
         interface: InterfaceId(1),
         raw: vec![0x01, 0x02, 0x03].into(),
     }]);
+    driver.wake_writers();
 
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
     assert_eq!(stats.txb, 3);
@@ -7836,6 +7845,7 @@ fn disabled_interface_drops_ingress_and_egress() {
         interface: InterfaceId(1),
         raw: vec![0x00, 0x01, 0x42].into(),
     }]);
+    driver.wake_writers();
     assert!(sent.lock().unwrap().is_empty());
 
     tx.send(Event::Frame {
