@@ -11343,10 +11343,12 @@ fn inbound_proof_populates_completed_proofs() {
         .interfaces
         .insert(InterfaceId(1), make_entry(1, Box::new(writer2), true));
 
-    // Track the original sent packet in driver2 so it recognizes the proof
+    // Track the original sent packet in driver2 so it recognizes the proof,
+    // as a probe (SendProbe), whose proof is kept for CheckProof polling.
     driver2
         .sent_packets
         .insert(data_packet_hash, (dest, time::now()));
+    driver2.pending_probes.insert(data_packet_hash);
 
     // Feed the proof frame without shutting down, since shutdown now clears
     // completed proof state.
@@ -11368,6 +11370,7 @@ fn inbound_proof_populates_completed_proofs() {
     );
     let (rtt, _received) = driver2.completed_proofs[&data_packet_hash];
     assert!(rtt >= 0.0, "RTT should be non-negative");
+    assert!(driver2.pending_probes.is_empty());
 }
 
 #[test]

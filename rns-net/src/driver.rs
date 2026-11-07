@@ -838,7 +838,12 @@ pub struct Driver {
     /// Reused link manager action buffers.
     pub(crate) link_actions: crate::action_pool::ActionPool<LinkManagerAction>,
     /// Completed proofs for probe polling: packet_hash → (rtt_seconds, received_time).
+    /// Only probes ([`QueryRequest::SendProbe`]) are recorded: a proof for
+    /// every other packet would be kept two minutes for nobody to poll.
     pub(crate) completed_proofs: HashMap<[u8; 32], (f64, f64)>,
+    /// Probes sent and not yet proved, whose proofs `completed_proofs`
+    /// records.
+    pub(crate) pending_probes: std::collections::HashSet<[u8; 32]>,
     /// Parsed signing keys of destinations whose packet proofs were checked.
     /// A destination's hash follows from its identity, so its key never
     /// changes.
@@ -1109,6 +1114,7 @@ impl Driver {
             transport_actions: crate::action_pool::ActionPool::new(),
             link_actions: crate::action_pool::ActionPool::new(),
             completed_proofs: HashMap::new(),
+            pending_probes: std::collections::HashSet::new(),
             proof_keys: HashMap::new(),
             local_destinations,
             shared_announces: HashMap::new(),

@@ -259,6 +259,7 @@ impl Driver {
             .clear();
         self.sent_packets.clear();
         self.completed_proofs.clear();
+        self.pending_probes.clear();
         if let Some(handle) = self.ratchet_cleanup_handle.take() {
             let _ = handle.join();
         }

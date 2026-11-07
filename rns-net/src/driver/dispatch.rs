@@ -361,7 +361,9 @@ impl Driver {
                 &tracked_hash[..4],
                 rtt,
             );
-            self.completed_proofs.insert(tracked_hash, (rtt, now));
+            if self.pending_probes.remove(&tracked_hash) {
+                self.completed_proofs.insert(tracked_hash, (rtt, now));
+            }
             self.callbacks.on_proof(
                 rns_core::types::DestHash(tracked_dest),
                 rns_core::types::PacketHash(tracked_hash),

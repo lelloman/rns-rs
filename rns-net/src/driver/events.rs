@@ -586,6 +586,9 @@ impl Driver {
         self.tick_management_announces(now);
         self.sent_packets
             .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
+        let sent_packets = &self.sent_packets;
+        self.pending_probes
+            .retain(|hash| sent_packets.contains_key(hash));
         self.completed_proofs
             .retain(|_, (_, received)| now - *received < 120.0);
         self.expire_local_path_responses(now);
