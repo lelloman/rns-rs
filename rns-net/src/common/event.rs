@@ -274,6 +274,12 @@ pub enum Event<W: Send> {
     /// A single packet to encrypt off the caller's thread and send
     /// (`RnsNode::send_packet_deferred`).
     SendDeferred(Box<DeferredSend>),
+    /// Deliver single packets for `dest_hash` decrypted with `identity`
+    /// (`RnsNode::deliver_decrypted`).
+    DeliverDecrypted {
+        dest_hash: [u8; 16],
+        identity: Box<rns_crypto::identity::Identity>,
+    },
     /// A locally originated packet with transmission completion tracking.
     SendOutboundTracked {
         raw: Vec<u8>,
@@ -1268,6 +1274,10 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("timeout", timeout)
                 .finish(),
             Event::Shutdown => write!(f, "Shutdown"),
+            Event::DeliverDecrypted { dest_hash, .. } => f
+                .debug_struct("DeliverDecrypted")
+                .field("dest_hash", dest_hash)
+                .finish(),
             Event::SendDeferred(encryption) => f
                 .debug_struct("SendDeferred")
                 .field("ticket", &encryption.ticket)

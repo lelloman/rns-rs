@@ -353,6 +353,68 @@ impl Driver {
         self.handle_send_outbound_event(packet.raw, rns_core::constants::DESTINATION_SINGLE, None);
     }
 
+    /// Decrypt a packet for a destination that delivers decrypted: on the
+    /// proof pool when there is one, here without.
+    fn decrypt_for_delivery(
+        &mut self,
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        ciphertext: Vec<u8>,
+        identity: Arc<rns_crypto::identity::Identity>,
+    ) {
+        use crate::common::link_manager::{Decryption, DecryptionKey};
+        // Ratchets attached by the application decrypt as its owner does.
+        let ratchets = self
+            .event_tx
+            .local_ratchets()
+            .lock()
+            .unwrap()
+            .get(&destination)
+            .cloned();
+        let key = match ratchets {
+            Some(owner) => DecryptionKey::Ratchets(owner),
+            None => DecryptionKey::Identity(identity),
+        };
+        let decryption = Box::new(Decryption {
+            destination,
+            packet_hash,
+            ciphertext,
+            key,
+        });
+        // On one CPU a pool thread would only share it: decrypt here.
+        let submitted = if one_cpu() {
+            Err(decryption)
+        } else {
+            self.link_manager.submit_packet_decrypt(decryption)
+        };
+        if let Err(decryption) = submitted {
+            let plaintext = decryption.run();
+            self.deliver_decrypted(destination, packet_hash, plaintext);
+        }
+    }
+
+    /// Prove and deliver a decrypted packet; drop one that did not decrypt.
+    fn deliver_decrypted(
+        &mut self,
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        plaintext: Option<Vec<u8>>,
+    ) {
+        let Some(plaintext) = plaintext else {
+            log::debug!(
+                "Dropped a packet for {:02x?} that did not decrypt",
+                &destination[..4]
+            );
+            return;
+        };
+        self.maybe_generate_proof(destination, &packet_hash);
+        self.callbacks.on_packet_received(
+            rns_core::types::DestHash(destination),
+            plaintext,
+            rns_core::types::PacketHash(packet_hash),
+        );
+    }
+
     /// Apply single-packet proofs the proof pool finished: deliver checked
     /// proofs, send signed ones.
     pub(crate) fn apply_packet_proofs(&mut self) {
@@ -383,6 +445,11 @@ impl Driver {
                     destination,
                     payload,
                 } => self.send_deferred(ticket, destination, payload),
+                ProofOutcome::Decrypted {
+                    destination,
+                    packet_hash,
+                    plaintext,
+                } => self.deliver_decrypted(destination, packet_hash, plaintext),
                 // Link outcomes are applied by the link manager.
                 ProofOutcome::Verified { .. } | ProofOutcome::Signed { .. } => {}
             }
@@ -1208,6 +1275,21 @@ impl Driver {
                 if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
                     self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
                     return;
+                }
+                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
+                    && packet.flags.destination_type == rns_core::constants::DESTINATION_SINGLE
+                {
+                    if let Some(identity) = self.decrypted_destinations.get(&destination_hash) {
+                        let identity = Arc::clone(identity);
+                        let ciphertext = packet.data.to_vec();
+                        self.decrypt_for_delivery(
+                            destination_hash,
+                            packet_hash,
+                            ciphertext,
+                            identity,
+                        );
+                        return;
+                    }
                 }
             }
             self.maybe_generate_proof(destination_hash, &packet_hash);
@@ -2439,6 +2521,13 @@ fn delivered_packet_hash(raw: &[u8], packet_hash: [u8; 32]) -> [u8; 32] {
         }
     }
     packet_hash
+}
+
+/// Whether this process may run on one CPU only, checked once.
+fn one_cpu() -> bool {
+    static ONE_CPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ONE_CPU
+        .get_or_init(|| std::thread::available_parallelism().map_or(true, |cpus| cpus.get() == 1))
 }
 
 #[cfg(test)]

@@ -192,6 +192,19 @@ pub trait Callbacks: Send {
     /// shutting down, and it was not sent.
     fn on_packet_sent(&mut self, _ticket: SendTicket, _packet_hash: Option<PacketHash>) {}
 
+    /// Called with the plaintext of a single packet for a destination that
+    /// delivers decrypted (`RnsNode::deliver_decrypted`), in place of
+    /// [`on_local_delivery`](Self::on_local_delivery). Packets that do not
+    /// decrypt are dropped, and not proved. Decrypted on several threads,
+    /// packets may be reported out of arrival order.
+    fn on_packet_received(
+        &mut self,
+        _dest_hash: DestHash,
+        _data: Vec<u8>,
+        _packet_hash: PacketHash,
+    ) {
+    }
+
     /// Called when a delivery proof is received for a packet we sent.
     /// `rtt` is the round-trip time in seconds.
     fn on_proof(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash, _rtt: f64) {}

@@ -84,6 +84,37 @@ enum Job {
     },
     /// Encrypt a deferred single packet's payload for `destination`.
     Encrypt(Box<Encryption>),
+    /// Decrypt a single packet delivered to a local destination.
+    Decrypt(Box<Decryption>),
+}
+
+/// A single packet for a local destination that delivers decrypted.
+pub(crate) struct Decryption {
+    pub(crate) destination: [u8; 16],
+    pub(crate) packet_hash: [u8; 32],
+    pub(crate) ciphertext: Vec<u8>,
+    pub(crate) key: DecryptionKey,
+}
+
+/// What a delivered packet is decrypted with.
+pub(crate) enum DecryptionKey {
+    /// The destination's ratchets, then its identity, as its owner decrypts.
+    Ratchets(std::sync::Arc<crate::LocalRatchets>),
+    /// The destination's identity.
+    Identity(std::sync::Arc<rns_crypto::identity::Identity>),
+}
+
+impl Decryption {
+    /// The plaintext, or `None` when the packet does not decrypt.
+    pub(crate) fn run(&self) -> Option<Vec<u8>> {
+        match &self.key {
+            DecryptionKey::Ratchets(owner) => owner
+                .decrypt(&self.ciphertext)
+                .ok()
+                .map(|decrypted| decrypted.plaintext),
+            DecryptionKey::Identity(identity) => identity.decrypt(&self.ciphertext).ok(),
+        }
+    }
 }
 
 /// A deferred send's plaintext and what encrypting it takes.
@@ -105,6 +136,12 @@ pub(crate) enum Outcome {
         ticket: u64,
         destination: [u8; 16],
         payload: Option<Vec<u8>>,
+    },
+    /// A delivered packet's plaintext, `None` when it did not decrypt.
+    Decrypted {
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        plaintext: Option<Vec<u8>>,
     },
 }
 
@@ -134,6 +171,11 @@ impl Job {
                 ticket: encryption.ticket,
                 destination: encryption.destination,
                 payload: encryption.run(),
+            },
+            Job::Decrypt(decryption) => Outcome::Decrypted {
+                destination: decryption.destination,
+                packet_hash: decryption.packet_hash,
+                plaintext: decryption.run(),
             },
         }
     }
@@ -234,6 +276,23 @@ impl ProofPool {
             })
     }
 
+    /// Queue a delivered packet's decryption, or hand it back when the pool
+    /// is full or gone, for the caller to decrypt it inline.
+    pub(super) fn submit_decrypt(
+        &self,
+        decryption: Box<Decryption>,
+    ) -> Result<(), Box<Decryption>> {
+        let Some(jobs) = &self.jobs else {
+            return Err(decryption);
+        };
+        jobs.try_send(Job::Decrypt(decryption))
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(Job::Decrypt(decryption))
+                | mpsc::TrySendError::Disconnected(Job::Decrypt(decryption)) => decryption,
+                _ => unreachable!("handed back the job it was given"),
+            })
+    }
+
     /// Queue a proof's check. Returns false when the pool is full or gone,
     /// for the caller to check it inline.
     pub(super) fn submit_verify(
@@ -305,7 +364,7 @@ fn run_jobs(jobs: Vec<Job>) -> Vec<Outcome> {
                     key,
                     ..
                 } => Some((key, signature, &packet_hash[..])),
-                Job::Sign { .. } | Job::Encrypt(_) => None,
+                Job::Sign { .. } | Job::Encrypt(_) | Job::Decrypt(_) => None,
             })
             .collect();
         rns_crypto::ed25519::verify_batch(&items)
@@ -353,7 +412,9 @@ mod tests {
             .into_iter()
             .map(|outcome| match outcome {
                 Outcome::Verified { valid, .. } => valid,
-                Outcome::Signed { .. } | Outcome::Encrypted { .. } => true,
+                Outcome::Signed { .. } | Outcome::Encrypted { .. } | Outcome::Decrypted { .. } => {
+                    true
+                }
             })
             .collect()
     }

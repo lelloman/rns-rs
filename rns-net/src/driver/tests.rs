@@ -14059,3 +14059,188 @@ fn a_deferred_send_encrypted_by_the_caller_is_sent_as_given() {
     assert_eq!(packet.packet_hash, hash.0);
     assert_eq!(identity.decrypt(packet.data()).unwrap(), b"ready");
 }
+
+/// Decrypted deliveries: destination, plaintext, packet hash.
+type DecryptedDeliveries = Arc<Mutex<Vec<(DestHash, Vec<u8>, PacketHash)>>>;
+
+/// Records decrypted and raw deliveries.
+#[derive(Default, Clone)]
+struct DeliveryRecord {
+    decrypted: DecryptedDeliveries,
+    raw: Arc<Mutex<Vec<DestHash>>>,
+}
+
+impl Callbacks for DeliveryRecord {
+    fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
+    fn on_local_delivery(&mut self, dest: DestHash, _: Vec<u8>, _: PacketHash) {
+        self.raw.lock().unwrap().push(dest);
+    }
+    fn on_packet_received(&mut self, dest: DestHash, data: Vec<u8>, hash: PacketHash) {
+        self.decrypted.lock().unwrap().push((dest, data, hash));
+    }
+}
+
+fn single_data_packet(dest: [u8; 16], payload: &[u8]) -> RawPacket {
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, payload).unwrap()
+}
+
+#[test]
+fn a_destination_that_delivers_decrypted_proves_only_what_decrypts() {
+    let identity = Identity::new(&mut OsRng);
+    let threads = if cfg!(feature = "proof-pool") {
+        [0, 2].as_slice()
+    } else {
+        &[0]
+    };
+    for &threads in threads {
+        let (tx, rx) = event::channel();
+        let record = DeliveryRecord::default();
+        let mut driver = Driver::new(
+            make_transport_config(false),
+            rx,
+            tx.clone(),
+            Box::new(record.clone()),
+        );
+        driver.link_manager.set_receive_worker_wake(tx);
+        driver
+            .link_manager
+            .set_proof_verify_threads(crate::ProofVerifyThreads::Fixed(threads));
+        driver.engine.register_interface(make_interface_info(1));
+        let (writer, sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        let dest = [0xDE; 16];
+        driver.proof_strategies.insert(
+            dest,
+            (
+                rns_core::types::ProofStrategy::ProveAll,
+                Some(Identity::from_private_key(
+                    &identity.get_private_key().unwrap(),
+                )),
+            ),
+        );
+        driver.decrypted_destinations.insert(
+            dest,
+            Arc::new(Identity::from_private_key(
+                &identity.get_private_key().unwrap(),
+            )),
+        );
+
+        let good = single_data_packet(dest, &identity.encrypt(b"secret", &mut OsRng).unwrap());
+        let other = Identity::new(&mut OsRng);
+        let bad = single_data_packet(dest, &other.encrypt(b"not ours", &mut OsRng).unwrap());
+        for packet in [&good, &bad] {
+            driver.dispatch_deliver_local_action(
+                dest,
+                packet.raw.clone().into(),
+                packet.packet_hash,
+                InterfaceId(1),
+                false,
+                &mut Vec::new(),
+                false,
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while record.decrypted.lock().unwrap().is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "nothing delivered ({threads} threads)"
+            );
+            thread::sleep(Duration::from_millis(5));
+            if driver.link_manager.poll_proof_pool(&mut OsRng).is_some() {
+                driver.apply_packet_proofs();
+            }
+        }
+        // Let the bad packet's outcome arrive too.
+        thread::sleep(Duration::from_millis(100));
+        if driver.link_manager.poll_proof_pool(&mut OsRng).is_some() {
+            driver.apply_packet_proofs();
+        }
+        let decrypted = record.decrypted.lock().unwrap();
+        assert_eq!(
+            decrypted.as_slice(),
+            &[(
+                DestHash(dest),
+                b"secret".to_vec(),
+                PacketHash(good.packet_hash)
+            )]
+        );
+        assert!(record.raw.lock().unwrap().is_empty(), "not delivered raw");
+        // One proof, for the packet that decrypted.
+        let proofs: Vec<RawPacket> = sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|raw| RawPacket::unpack(raw).unwrap())
+            .filter(|packet| packet.flags.packet_type == constants::PACKET_TYPE_PROOF)
+            .collect();
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(&proofs[0].data()[..32], &good.packet_hash);
+    }
+}
+
+#[test]
+fn a_destination_that_delivers_decrypted_uses_its_attached_ratchets() {
+    let identity = Identity::from_private_key(&[31; 64]);
+    let destination = crate::Destination::single_in(
+        "test",
+        &["decrypted"],
+        rns_core::types::IdentityHash(*identity.hash()),
+    );
+    let owner = crate::LocalRatchets::with_store(
+        &destination,
+        Identity::from_private_key(&[31; 64]),
+        Arc::new(crate::MemoryRatchetStore::default()),
+    )
+    .unwrap();
+    owner.enforce();
+    let ratchet = owner.public_for_announce(100).unwrap();
+    let (tx, rx) = event::channel();
+    let record = DeliveryRecord::default();
+    let mut driver = Driver::new(
+        make_transport_config(false),
+        rx,
+        tx.clone(),
+        Box::new(record.clone()),
+    );
+    tx.local_ratchets()
+        .lock()
+        .unwrap()
+        .insert(destination.hash.0, owner);
+    let dest = destination.hash.0;
+    driver
+        .decrypted_destinations
+        .insert(dest, Arc::new(Identity::from_private_key(&[31; 64])));
+    // Enforced ratchets refuse the identity key: only the ratcheted packet
+    // decrypts.
+    let ratcheted = single_data_packet(
+        dest,
+        &identity
+            .encrypt_with_ratchet(b"ratcheted", Some(&ratchet), &mut OsRng)
+            .unwrap(),
+    );
+    let plain = single_data_packet(dest, &identity.encrypt(b"identity", &mut OsRng).unwrap());
+    for packet in [&ratcheted, &plain] {
+        driver.dispatch_deliver_local_action(
+            dest,
+            packet.raw.clone().into(),
+            packet.packet_hash,
+            InterfaceId(1),
+            false,
+            &mut Vec::new(),
+            false,
+        );
+    }
+    let decrypted = record.decrypted.lock().unwrap();
+    assert_eq!(decrypted.len(), 1);
+    assert_eq!(decrypted[0].1, b"ratcheted");
+}
