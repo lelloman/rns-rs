@@ -2354,6 +2354,12 @@ impl RnsNode {
                 driver
                     .link_manager
                     .register_management_path(crate::management::list_path_hash());
+                // Upstream 426673e9: requesting the list costs a 5.25 stamp,
+                // below the `LR_COST` default.
+                driver
+                    .link_manager
+                    .link_request_costs()
+                    .set(bh_dest, rns_core::constants::BLACKHOLE_LINK_COST.as_f64());
 
                 log::info!(
                     "Blackhole list publishing enabled on {:02x?}",
@@ -7507,6 +7513,31 @@ enable_transport = False
                 "{key}"
             );
         }
+        node.shutdown();
+    }
+
+    #[test]
+    fn published_blackhole_destination_requires_its_link_cost() {
+        let identity = Identity::new(&mut OsRng);
+        let blackhole = crate::management::blackhole_dest_hash(identity.hash());
+        let node = RnsNode::start(
+            NodeConfig {
+                identity: Some(Identity::from_private_key(
+                    &identity.get_private_key().unwrap(),
+                )),
+                management: crate::ManagementConfig {
+                    publish_blackhole: true,
+                    ..Default::default()
+                },
+                ..NodeConfig::default()
+            },
+            Box::new(NoopCallbacks),
+        )
+        .unwrap();
+
+        assert_eq!(node.link_cost(&blackhole), 5.25);
+        // Other destinations keep the `LR_COST` default.
+        assert_eq!(node.link_cost(&[0u8; 16]), 12.5);
         node.shutdown();
     }
 }
