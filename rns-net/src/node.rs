@@ -3781,8 +3781,6 @@ impl RnsNode {
         data: &[u8],
     ) -> Result<Vec<u8>, SendError> {
         let pub_key = dest.public_key.ok_or(SendError)?;
-        let remote_id =
-            rns_crypto::identity::Identity::from_public_key(&pub_key).map_err(|_| SendError)?;
         let local_ratchet = self
             .tx
             .local_ratchets()
@@ -3808,9 +3806,16 @@ impl RnsNode {
                 }
             })
         });
-        remote_id
-            .encrypt_with_ratchet(data, ratchet.as_ref(), &mut OsRng)
-            .map_err(|_| SendError)
+        // Encrypted straight from the key bytes: building the identity would
+        // decompress its signing key on every send, and encryption does not
+        // use it.
+        rns_crypto::identity::Identity::encrypt_for_public_key(
+            &pub_key,
+            data,
+            ratchet.as_ref(),
+            &mut OsRng,
+        )
+        .map_err(|_| SendError)
     }
 
     /// Register a destination with the transport engine and set its proof strategy.

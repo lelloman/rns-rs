@@ -249,20 +249,22 @@ impl Identity {
         target_public_key: &X25519PublicKey,
         rng: &mut dyn Rng,
     ) -> Result<Vec<u8>, CryptoError> {
-        let ephemeral = X25519PrivateKey::generate(rng);
-        let ephemeral_pub_bytes = ephemeral.public_key().public_bytes();
-        let shared_key = ephemeral.exchange(target_public_key);
+        encrypt_to(&self.hash, target_public_key, plaintext, rng)
+    }
 
-        let derived_key = hkdf::hkdf(DERIVED_KEY_LENGTH, &shared_key, Some(&self.hash), None)
-            .map_err(CryptoError::HkdfError)?;
-
-        let token = Token::new(&derived_key).map_err(CryptoError::TokenError)?;
-        let ciphertext = token.encrypt(plaintext, rng);
-
-        let mut result = Vec::with_capacity(32 + ciphertext.len());
-        result.extend_from_slice(&ephemeral_pub_bytes);
-        result.extend_from_slice(&ciphertext);
-        Ok(result)
+    /// [`encrypt_with_ratchet`](Self::encrypt_with_ratchet) for the identity
+    /// whose 64-byte public key is `public`, without building the identity:
+    /// encrypting needs only the X25519 half and the identity hash, so the
+    /// Ed25519 half is not decompressed.
+    pub fn encrypt_for_public_key(
+        public: &[u8; 64],
+        plaintext: &[u8],
+        ratchet: Option<&[u8; 32]>,
+        rng: &mut dyn Rng,
+    ) -> Result<Vec<u8>, CryptoError> {
+        let x_pub: [u8; 32] = public[..32].try_into().unwrap();
+        let target = X25519PublicKey::from_bytes(ratchet.unwrap_or(&x_pub));
+        encrypt_to(&truncated_hash(public), &target, plaintext, rng)
     }
 
     /// Encrypt with a specific ephemeral key and IV for deterministic testing
@@ -370,6 +372,30 @@ impl Identity {
     }
 }
 
+/// Encrypt `plaintext` for `target`, salting the key derivation with the
+/// receiving identity's `hash`: an ephemeral public key, then the token.
+fn encrypt_to(
+    hash: &[u8; 16],
+    target: &X25519PublicKey,
+    plaintext: &[u8],
+    rng: &mut dyn Rng,
+) -> Result<Vec<u8>, CryptoError> {
+    let ephemeral = X25519PrivateKey::generate(rng);
+    let ephemeral_pub_bytes = ephemeral.public_key().public_bytes();
+    let shared_key = ephemeral.exchange(target);
+
+    let derived_key = hkdf::hkdf(DERIVED_KEY_LENGTH, &shared_key, Some(hash), None)
+        .map_err(CryptoError::HkdfError)?;
+
+    let token = Token::new(&derived_key).map_err(CryptoError::TokenError)?;
+    let ciphertext = token.encrypt(plaintext, rng);
+
+    let mut result = Vec::with_capacity(32 + ciphertext.len());
+    result.extend_from_slice(&ephemeral_pub_bytes);
+    result.extend_from_slice(&ciphertext);
+    Ok(result)
+}
+
 fn truncated_hash(data: &[u8]) -> [u8; 16] {
     let full = sha256::sha256(data);
     let mut result = [0u8; 16];
@@ -393,6 +419,34 @@ mod tests {
             Identity::from_public_key(&public_key),
             Err(CryptoError::InvalidPublicKey)
         ));
+    }
+
+    #[test]
+    fn encrypting_from_key_bytes_matches_the_identity() {
+        let identity = Identity::from_private_key(&[0x37; 64]);
+        let public_key = identity.get_public_key().unwrap();
+        let public = Identity::from_public_key(&public_key).unwrap();
+        let ratchet = crate::ratchet::RatchetRing::from_keys(vec![[0x42; 32]]).unwrap();
+        let ratchet_public = ratchet.current_public().unwrap();
+        for ratchet_key in [None, Some(&ratchet_public)] {
+            let seed = [0x63; 64];
+            let expected = public
+                .encrypt_with_ratchet(b"payload", ratchet_key, &mut FixedRng::new(&seed))
+                .unwrap();
+            let actual = Identity::encrypt_for_public_key(
+                &public_key,
+                b"payload",
+                ratchet_key,
+                &mut FixedRng::new(&seed),
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+            let plaintext = identity
+                .decrypt_with_ratchets(&actual, &ratchet, false)
+                .unwrap()
+                .plaintext;
+            assert_eq!(plaintext, b"payload");
+        }
     }
 
     #[test]
