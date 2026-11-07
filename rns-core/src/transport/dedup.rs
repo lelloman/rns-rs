@@ -339,26 +339,48 @@ impl PacketHashQueue {
     }
 }
 
-/// Open-addressed lookup of queue slots. Zero is empty. Otherwise the low 32
-/// bits are the physical queue slot + 1 and the high 32 bits are the low 32
-/// bits of the hash's bucket key. At most half the buckets are occupied.
+/// Open-addressed lookup of queue slots, in 32-bit buckets at most half
+/// full. Zero is empty. Otherwise an entry holds, from its low bits: the
+/// queue slot + 1, its distance from its home bucket (saturating), and in
+/// the remaining high bits a tag, the same bits of the bucket key's high
+/// half. Placement uses the key's low bits.
 ///
-/// The key bits let lookups skip the queue entry of every bucket whose key
-/// differs, so a miss usually touches only buckets, and let deletion find an
-/// entry's home bucket without reading its hash.
+/// The tag lets lookups skip the queue entry of nearly every bucket whose
+/// key differs, so a miss usually touches only buckets; the displacement
+/// lets deletion find an entry's home bucket without reading its hash.
 struct PacketHashSet {
-    buckets: Box<[u64]>,
+    buckets: Box<[u32]>,
     len: usize,
     /// Seed of the keyed bucket hash; `None` uses the hashes' leading bits.
     key_seed: Option<u64>,
+    /// Entry bits holding the queue slot + 1.
+    slot_mask: u32,
+    /// Where the displacement starts, and its largest value, which means
+    /// "at least this far": the home is then found from the queued hash.
+    displacement_shift: u32,
+    max_displacement: u32,
+    /// Entry bits holding the tag; zero when the slot and displacement
+    /// leave none.
+    tag_mask: u32,
 }
+
+/// Displacement bits an entry carries when the slot leaves room. At half
+/// load nearly every entry sits within 15 buckets of its home.
+const DISPLACEMENT_BITS: u32 = 4;
 
 impl PacketHashSet {
     fn new(max_entries: usize, key_seed: Option<u64>) -> Self {
+        let slot_bits = usize::BITS - max_entries.leading_zeros();
+        let displacement_bits = DISPLACEMENT_BITS.min(32 - slot_bits.min(32));
+        let low_bits = slot_bits + displacement_bits;
         Self {
             buckets: vec![0; bucket_capacity(max_entries)].into_boxed_slice(),
             len: 0,
             key_seed,
+            slot_mask: low_mask(slot_bits),
+            displacement_shift: slot_bits.min(31),
+            max_displacement: low_mask(displacement_bits),
+            tag_mask: !low_mask(low_bits),
         }
     }
 
@@ -378,22 +400,43 @@ impl PacketHashSet {
         self.len
     }
 
+    #[inline]
+    fn tag(&self, key: u64) -> u32 {
+        (key >> 32) as u32 & self.tag_mask
+    }
+
+    #[inline]
+    fn entry_slot(&self, entry: u32) -> usize {
+        (entry & self.slot_mask) as usize - 1
+    }
+
+    #[inline]
+    fn entry(&self, tag: u32, displacement: usize, slot_plus_one: u32) -> u32 {
+        let displacement = displacement.min(self.max_displacement as usize) as u32;
+        tag | (displacement << self.displacement_shift) | slot_plus_one
+    }
+
+    #[inline]
+    fn mask(&self) -> usize {
+        self.buckets.len() - 1
+    }
+
     fn position(&self, hash: &Key, queue: &PacketHashQueue) -> Option<usize> {
         if self.buckets.is_empty() {
             return None;
         }
         let key = self.key(hash);
-        let tag = key as u32;
+        let tag = self.tag(key);
         let mut idx = self.bucket_index(key);
         loop {
             let entry = self.buckets[idx];
             if entry == 0 {
                 return None;
             }
-            if bucket_tag(entry) == tag && queue.entries.get(bucket_slot(entry)) == hash {
+            if entry & self.tag_mask == tag && queue.entries.get(self.entry_slot(entry)) == hash {
                 return Some(idx);
             }
-            idx = (idx + 1) & (self.buckets.len() - 1);
+            idx = (idx + 1) & self.mask();
         }
     }
 
@@ -403,11 +446,13 @@ impl PacketHashSet {
 
     fn insert(&mut self, slot: usize, queue: &PacketHashQueue) {
         let key = self.key(queue.entries.get(slot));
-        let mut idx = self.bucket_index(key);
+        let home = self.bucket_index(key);
+        let mut idx = home;
         while self.buckets[idx] != 0 {
-            idx = (idx + 1) & (self.buckets.len() - 1);
+            idx = (idx + 1) & self.mask();
         }
-        self.buckets[idx] = (u64::from(key as u32) << 32) | (slot as u64 + 1);
+        let displacement = idx.wrapping_sub(home) & self.mask();
+        self.buckets[idx] = self.entry(self.tag(key), displacement, slot as u32 + 1);
         self.len += 1;
     }
 
@@ -422,18 +467,21 @@ impl PacketHashSet {
         // each entry whose home bucket does not lie cyclically in
         // (hole, current] back into the hole. Every remaining entry stays
         // reachable from its home bucket, and each moves at most once.
-        let mask = self.buckets.len() - 1;
+        let mask = self.mask();
         let mut hole = idx;
         let mut next = (idx + 1) & mask;
         while self.buckets[next] != 0 {
-            let home = self.home(self.buckets[next], queue);
+            let entry = self.buckets[next];
+            let home = self.home(entry, next, queue);
             let reachable_without_hole = if hole <= next {
                 hole < home && home <= next
             } else {
                 hole < home || home <= next
             };
             if !reachable_without_hole {
-                self.buckets[hole] = self.buckets[next];
+                let displacement = hole.wrapping_sub(home) & mask;
+                self.buckets[hole] =
+                    self.entry(entry & self.tag_mask, displacement, entry & self.slot_mask);
                 self.buckets[next] = 0;
                 hole = next;
             }
@@ -456,18 +504,20 @@ impl PacketHashSet {
         }
     }
 
+    #[inline]
     fn bucket_index(&self, key: u64) -> usize {
         debug_assert!(!self.buckets.is_empty());
-        (key as usize) & (self.buckets.len() - 1)
+        (key as usize) & self.mask()
     }
 
-    /// Home bucket of an occupied entry. The stored key bits cover every
-    /// table of up to 2^32 buckets; larger tables read the queued hash.
-    fn home(&self, entry: u64, queue: &PacketHashQueue) -> usize {
-        if self.buckets.len() as u64 <= 1 << 32 {
-            self.bucket_index(u64::from(bucket_tag(entry)))
+    /// Home bucket of the entry at `index`: from its displacement, or from
+    /// its queued hash when the displacement saturated.
+    fn home(&self, entry: u32, index: usize, queue: &PacketHashQueue) -> usize {
+        let displacement = (entry >> self.displacement_shift) & self.max_displacement;
+        if displacement < self.max_displacement {
+            index.wrapping_sub(displacement as usize) & self.mask()
         } else {
-            self.bucket_index(self.key(queue.entries.get(bucket_slot(entry))))
+            self.bucket_index(self.key(queue.entries.get(self.entry_slot(entry))))
         }
     }
 }
@@ -475,13 +525,13 @@ impl PacketHashSet {
 /// Hint the CPU to load the cache line holding `value`. It has no effect on
 /// program state, and is a no-op on architectures without a stable hint.
 #[inline(always)]
-fn prefetch_read(value: &u64) {
+fn prefetch_read(value: &u32) {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: SSE is part of the x86_64 baseline, and a prefetch never faults
     // or changes memory.
     unsafe {
         core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
-            (value as *const u64).cast(),
+            (value as *const u32).cast(),
         );
     }
     #[cfg(target_arch = "aarch64")]
@@ -489,7 +539,7 @@ fn prefetch_read(value: &u64) {
     unsafe {
         core::arch::asm!(
             "prfm pldl1keep, [{0}]",
-            in(reg) value as *const u64,
+            in(reg) value as *const u32,
             options(nostack, readonly, preserves_flags)
         );
     }
@@ -497,24 +547,24 @@ fn prefetch_read(value: &u64) {
     let _ = value;
 }
 
-fn bucket_slot(entry: u64) -> usize {
-    (entry as u32) as usize - 1
-}
-
-fn bucket_tag(entry: u64) -> u32 {
-    (entry >> 32) as u32
+/// The low `bits` bits set.
+fn low_mask(bits: u32) -> u32 {
+    if bits >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << bits) - 1
+    }
 }
 
 /// Largest retention the 32-bit index buckets can address.
 const MAX_ENTRIES: usize = u32::MAX as usize - 1;
 
+/// Buckets for `max_entries`: a power of two, at most half full.
 fn bucket_capacity(max_entries: usize) -> usize {
     if max_entries == 0 {
         return 0;
     }
-
-    let min_capacity = max_entries.saturating_mul(2).max(1);
-    min_capacity.next_power_of_two()
+    max_entries.saturating_mul(2).max(1).next_power_of_two()
 }
 
 /// Leading 64 bits of a packet hash. Packet hashes are SHA-256 digests,
