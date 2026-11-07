@@ -24,13 +24,16 @@ const MAX_QUEUED: usize = 4096;
 /// the others.
 const MAX_BATCH: usize = 8;
 
-/// How many threads verify link proofs. Threads start only in builds with the
+/// How many threads verify and sign link proofs. Threads start only in builds with the
 /// `proof-pool` feature; other builds verify every proof inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProofVerifyThreads {
-    /// One thread when this process may run on more than one CPU, none on
-    /// one. A single worker keeps up with a link at full rate; more add
-    /// wake-ups and contention on the shared queue and cost throughput.
+    /// Half the CPUs this process may run on, at least one and at most four.
+    /// One thread pays off even on a single CPU: proofs queued behind each
+    /// other are verified as one batch, which inline checking cannot do, and
+    /// the driver keeps reading while proofs are signed. Signing scales
+    /// with threads up to about four; past that, contention on the shared
+    /// queue costs more than the extra threads add.
     #[default]
     Auto,
     /// Exactly this many; 0 checks every proof on the driver thread.
@@ -49,7 +52,7 @@ impl ProofVerifyThreads {
         match self {
             ProofVerifyThreads::Fixed(n) => n,
             ProofVerifyThreads::Auto => {
-                std::thread::available_parallelism().map_or(0, |n| usize::from(n.get() > 1))
+                std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).clamp(1, 4))
             }
         }
     }

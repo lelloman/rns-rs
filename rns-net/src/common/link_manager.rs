@@ -317,7 +317,7 @@ pub struct LinkManager {
     /// Incoming compressed resources assembled on the driver loop, oldest
     /// first, when CPU work is folded.
     folded_assemblies: std::collections::VecDeque<folded_assembly::FoldedAssembly>,
-    /// Threads to verify link proofs on, started with the first proof.
+    /// Threads to verify and sign link proofs on, started with the first proof.
     proof_verify_threads: ProofVerifyThreads,
     proof_pool: Option<proof_pool::ProofPool>,
     /// Whether starting the pool was settled, either way.
