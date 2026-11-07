@@ -27,7 +27,9 @@ mod channel_handling;
 mod folded_assembly;
 mod proof_pool;
 pub use proof_pool::ProofVerifyThreads;
-pub(crate) use proof_pool::{Outcome as ProofOutcome, Owner as ProofOwner};
+pub(crate) use proof_pool::{
+    Decryption, DecryptionKey, Outcome as ProofOutcome, Owner as ProofOwner,
+};
 mod receive_worker;
 mod request_handling;
 mod resource_handling;
@@ -576,6 +578,18 @@ impl LinkManager {
         }
     }
 
+    /// Queue a delivered packet's decryption on the proof pool, or hand it
+    /// back without a pool or when it is full, to decrypt inline.
+    pub(crate) fn submit_packet_decrypt(
+        &mut self,
+        decryption: Box<proof_pool::Decryption>,
+    ) -> Result<(), Box<proof_pool::Decryption>> {
+        match self.proof_pool() {
+            Some(pool) => pool.submit_decrypt(decryption),
+            None => Err(decryption),
+        }
+    }
+
     /// Single-packet proofs the pool finished since the last call, taken by
     /// the driver after [`poll_proof_pool`](Self::poll_proof_pool).
     pub(crate) fn take_packet_proofs(&mut self, out: &mut Vec<proof_pool::Outcome>) {
@@ -600,7 +614,8 @@ impl LinkManager {
                     owner: proof_pool::Owner::Packet { .. },
                     ..
                 }
-                | proof_pool::Outcome::Encrypted { .. } => self.packet_proof_outcomes.push(outcome),
+                | proof_pool::Outcome::Encrypted { .. }
+                | proof_pool::Outcome::Decrypted { .. } => self.packet_proof_outcomes.push(outcome),
                 proof_pool::Outcome::Verified {
                     owner: proof_pool::Owner::Link(link_id),
                     packet_hash,

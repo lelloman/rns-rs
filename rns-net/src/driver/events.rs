@@ -1419,6 +1419,13 @@ impl Driver {
                     attached_interface,
                 } => self.handle_send_outbound_event(raw, dest_type, attached_interface),
                 Event::SendDeferred(encryption) => self.handle_send_deferred(encryption),
+                Event::DeliverDecrypted {
+                    dest_hash,
+                    identity,
+                } => {
+                    self.decrypted_destinations
+                        .insert(dest_hash, Arc::from(identity));
+                }
                 Event::SendOutboundTracked {
                     raw,
                     dest_type,
@@ -1450,6 +1457,7 @@ impl Driver {
                     );
                 }
                 Event::DeregisterDestination { dest_hash } => {
+                    self.decrypted_destinations.remove(&dest_hash);
                     self.engine.deregister_destination(&dest_hash);
                     self.local_destinations.remove(&dest_hash);
                     self.shared_announces.remove(&dest_hash);

@@ -3749,6 +3749,29 @@ impl RnsNode {
         Ok(packet_hash)
     }
 
+    /// Deliver single packets addressed to `dest`, a local destination,
+    /// decrypted: through [`Callbacks::on_packet_received`](crate::Callbacks::on_packet_received)
+    /// in place of `on_local_delivery`, decrypted on the node's proof pool
+    /// when it has one, so a receiver is not bound by decrypting on its own
+    /// thread. They are decrypted with the destination's attached ratchets
+    /// ([`attach_local_ratchets`](Self::attach_local_ratchets)) when it has
+    /// them, else with `identity`, which must hold its private keys. Packets
+    /// that do not decrypt are dropped and not proved. Deregistering the
+    /// destination ends it.
+    pub fn deliver_decrypted(
+        &self,
+        dest: &crate::destination::Destination,
+        identity: &rns_crypto::identity::Identity,
+    ) -> Result<(), SendError> {
+        let private = identity.get_private_key().ok_or(SendError)?;
+        self.tx
+            .send(Event::DeliverDecrypted {
+                dest_hash: dest.hash.0,
+                identity: Box::new(rns_crypto::identity::Identity::from_private_key(&private)),
+            })
+            .map_err(|_| SendError)
+    }
+
     /// Queue a packet for a SINGLE destination without encrypting it on this
     /// thread, unlike [`send_packet_queued`](Self::send_packet_queued): the
     /// node encrypts it (on its proof pool when it has one; on this thread
