@@ -3,7 +3,12 @@
 ```bash
 cargo build                   # default workspace members, debug profile
 cargo build --release         # same, optimised
+cargo build --profile dist    # shipped binaries: fat LTO, one codegen unit, into target/dist
 ```
+
+The `dist` profile optimises the whole program together: 2-8% faster in the
+endpoint benchmarks and with less code resident, at a much slower build. The
+release tarball (`scripts/package-rns-server-tarball.sh`) uses it.
 
 The pinned toolchain is Rust 1.96.0 with `clippy`, `rustfmt`, and the
 `wasm32-unknown-unknown` target (see `rust-toolchain.toml`). `rustup` installs
@@ -14,6 +19,21 @@ Default workspace members: `rns-crypto`, `rns-core`, `rns-net`, `rns-cli`,
 `rns-tun-android`, and `rns-bench` build only when named with `-p` or when
 `--workspace` is passed. `rns-esp32` is excluded entirely and has its own
 [README](../rns-esp32/README.md).
+
+## Cryptography backend
+
+`rns-cli`, `rns-ctl` and `rns-server` build with the `aws-lc` feature by
+default: X25519 and Ed25519 signing run on aws-lc's assembly (formally
+verified s2n-bignum code), about twice as fast as the pure-Rust code, with the
+same results; Ed25519 verification stays on `ed25519-dalek`, whose batches are
+faster. Building it needs a C compiler and CMake. On targets other than x86_64
+and aarch64 (armv7, 32-bit Android) aws-lc has no pre-generated bindings, so
+the feature is a no-op there and those builds stay pure Rust. To build pure
+Rust everywhere, leave the feature out:
+
+```bash
+cargo build --release -p rns-cli --bin rnsd --no-default-features --features engine-parallel,iface-tcp
+```
 
 ## Selecting interfaces
 

@@ -55,7 +55,10 @@ impl Ed25519PrivateKey {
     }
 
     pub fn sign(&self, message: &[u8]) -> [u8; 64] {
-        #[cfg(feature = "ed25519-aws-lc")]
+        #[cfg(all(
+            feature = "ed25519-aws-lc",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         if let Some(signature) = self.sign_aws_lc(message) {
             return signature;
         }
@@ -64,7 +67,10 @@ impl Ed25519PrivateKey {
 
     /// The same signature from aws-lc, which signs in about half the time
     /// (Ed25519 signatures are deterministic, so the bytes are identical).
-    #[cfg(feature = "ed25519-aws-lc")]
+    #[cfg(all(
+        feature = "ed25519-aws-lc",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     fn sign_aws_lc(&self, message: &[u8]) -> Option<[u8; 64]> {
         crate::aws_lc_init();
         // aws-lc's private key form: the seed, then the public key.
@@ -132,7 +138,10 @@ pub fn verify_batch(items: &[(&Ed25519PublicKey, &[u8; 64], &[u8])]) -> bool {
 #[cfg(test)]
 mod tests {
 
-    #[cfg(feature = "ed25519-aws-lc")]
+    #[cfg(all(
+        feature = "ed25519-aws-lc",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     #[test]
     fn aws_lc_signs_the_same_bytes_as_dalek() {
         use ed25519_dalek::Signer;
