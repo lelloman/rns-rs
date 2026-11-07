@@ -2110,11 +2110,10 @@ audit rechecks it (still present at `acb38a8a`; `Link.py` is unchanged). If upst
   its two trailing bytes are pinned to the bytes upstream builds for 12.5 and
   14.2 (`link_cost_ext_bytes_round_trip_like_upstream`), and live interop
   covers both formats.
-- [ ] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
+- [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
-  `d3874dde`, `ecd677ba`, `53dc223a` and `eb826cde` (4/4 and 12/12 with
-  commits 46 to 48 integrated). Not yet recorded at the current tip
-  `acb38a8a`.
+  `d3874dde`, `ecd677ba`, `53dc223a`, `eb826cde` and the current tip
+  `acb38a8a` (4/4 and 12/12 with commits 49 to 52 integrated).
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -2399,3 +2398,30 @@ no run of its own; this one covers it.
 
 Mapping check: the `Upstream-Commit` trailers map `3305fc1c` to `0abfc4a9`,
 `e9d82e69` to `124d2870` and `eb826cde` to `e8cfe134`, one local commit each.
+
+### Commits 49 to 52 (rgit tip `acb38a8a`)
+
+Run on 2026-11-07 at `28ffb507`: `origin/dev` `397089a2` plus the
+`eb826cde` interop record `c27c3cb5`, the four mapping commits and
+`28ffb507`, which stamps built-in destination announces (commit 50's
+announced cost). Same host. Interop against `acb38a8a` used a disposable
+export of that commit (`import RNS` reports 1.6.0 from it); the baseline
+`5d38ce30` was exercised from the configured checkout. The workspace,
+hooks and interop runs were made one commit earlier, before a test helper's
+return type was given an alias for clippy; lint and the new tests were
+rerun after it.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | the tests named in the analyses of commits 50 and 52 | Passed |
+| Formatting, lint | `cargo fmt --all --check`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,184 passed, 0 failed, 13 ignored |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,250 passed, 0 failed, 13 ignored |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4; 12/12 |
+| Interop, target `acb38a8a` | the same against the `acb38a8a` export | 4/4; 12/12 |
+| Drift | `python3 scripts/check_upstream_drift.py --json` (fetched 2026-11-07T06:59Z) | rgit `acb38a8a` ahead by the 52 audited commits; GitHub `e40191b3` behind |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+Mapping check: the `Upstream-Commit` trailers map `f15b3487` to `eac35991`,
+`426673e9` to `395bf7d2`, `c97e2158` to `b99fe100` and `acb38a8a` to
+`9c573ff8`, one local commit each.
