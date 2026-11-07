@@ -358,46 +358,86 @@ fn ctrlc_handler<F: FnOnce() + Send + 'static>(handler: F) {
     });
 }
 
-/// Register a SIGINT and SIGTERM handler using libc, polling in a background
-/// thread. SIGTERM is what `docker stop`, `systemctl stop` and `kill` send;
-/// without it the process ran until the supervisor's kill timeout.
+/// Register a SIGINT and SIGTERM handler, run on a background thread. SIGTERM
+/// is what `docker stop`, `systemctl stop` and `kill` send; without it the
+/// process ran until the supervisor's kill timeout.
+///
+/// The handler writes a byte to a pipe, which is async-signal-safe, and the
+/// thread sleeps reading it, rather than checking a flag every 100 ms.
+#[cfg(unix)]
 fn libc_signal<F: FnMut() + Send + 'static>(mut callback: F) {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    static WRITE_FD: AtomicI32 = AtomicI32::new(-1);
+
+    extern "C" fn sig_handler(_: libc::c_int) {
+        let fd = WRITE_FD.load(Ordering::SeqCst);
+        if fd >= 0 {
+            let byte = 1u8;
+            // SAFETY: `write` is async-signal-safe; the descriptor stays
+            // open for the life of the process.
+            unsafe { libc::write(fd, (&byte as *const u8).cast(), 1) };
+        }
+    }
+
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: `fds` has room for the two descriptors.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        log::error!(
+            "cannot set up signal handling: {}",
+            std::io::Error::last_os_error()
+        );
+        return;
+    }
+    for fd in fds {
+        // SAFETY: a descriptor just opened; children must not inherit it.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+    if WRITE_FD
+        .compare_exchange(-1, fds[1], Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // Already registered in this process.
+        // SAFETY: both descriptors were opened above and are unused.
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        return;
+    }
+    let read_fd = fds[0];
+    // SAFETY: the handler only performs async-signal-safe calls.
+    unsafe {
+        libc::signal(libc::SIGINT, sig_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            sig_handler as *const () as libc::sighandler_t,
+        );
+    }
     std::thread::Builder::new()
         .name("signal-handler".into())
         .spawn(move || {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static SIGNALED: AtomicBool = AtomicBool::new(false);
-
-            #[cfg(unix)]
-            {
-                extern "C" fn sig_handler(_: i32) {
-                    SIGNALED.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-                unsafe {
-                    libc_ffi::signal(libc_ffi::SIGINT, sig_handler as *const () as usize);
-                    libc_ffi::signal(libc_ffi::SIGTERM, sig_handler as *const () as usize);
-                }
-            }
-
+            let mut byte = 0u8;
             loop {
-                std::thread::sleep(Duration::from_millis(100));
-                if SIGNALED.swap(false, Ordering::SeqCst) {
+                // SAFETY: one byte into a valid buffer.
+                let n = unsafe { libc::read(read_fd, (&mut byte as *mut u8).cast(), 1) };
+                if n > 0 {
                     callback();
-                    break;
+                    return;
                 }
+                if n < 0
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                {
+                    continue;
+                }
+                log::warn!("signal pipe closed; not waiting for signals any more");
+                return;
             }
         })
         .ok();
 }
 
-#[cfg(unix)]
-mod libc_ffi {
-    extern "C" {
-        pub fn signal(sig: i32, handler: usize) -> usize;
-    }
-    pub const SIGINT: i32 = 2;
-    pub const SIGTERM: i32 = 15;
-}
+#[cfg(not(unix))]
+fn libc_signal<F: FnMut() + Send + 'static>(_callback: F) {}
 
 fn print_help() {
     println!(
