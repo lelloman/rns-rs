@@ -14100,7 +14100,12 @@ fn a_destination_that_delivers_decrypted_proves_only_what_decrypts() {
     } else {
         &[0]
     };
-    for &threads in threads {
+    // Also a link destination, as a destination accepting links is: its
+    // packets take the link manager's delivery path first.
+    let cases = threads
+        .iter()
+        .flat_map(|&threads| [(threads, false), (threads, true)]);
+    for (threads, links_too) in cases {
         let (tx, rx) = event::channel();
         let record = DeliveryRecord::default();
         let mut driver = Driver::new(
@@ -14134,6 +14139,16 @@ fn a_destination_that_delivers_decrypted_proves_only_what_decrypts() {
                 &identity.get_private_key().unwrap(),
             )),
         );
+        if links_too {
+            let key = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&[9; 32]);
+            let public = key.public_key().public_bytes();
+            driver.link_manager.register_link_destination(
+                dest,
+                key,
+                public,
+                crate::link_manager::ResourceStrategy::AcceptNone,
+            );
+        }
 
         let good = single_data_packet(dest, &identity.encrypt(b"secret", &mut OsRng).unwrap());
         let other = Identity::new(&mut OsRng);

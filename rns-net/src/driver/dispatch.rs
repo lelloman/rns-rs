@@ -1252,53 +1252,49 @@ impl Driver {
             if link_actions.is_empty() {
                 self.link_actions.give(link_actions);
                 let packet_hash = delivered_packet_hash(&raw, packet_hash);
-                if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
-                    if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                        self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
-                        return;
-                    }
-                }
-                self.maybe_generate_proof(destination_hash, &packet_hash);
-                self.callbacks.on_local_delivery(
-                    rns_core::types::DestHash(destination_hash),
-                    raw.to_vec(),
-                    rns_core::types::PacketHash(packet_hash),
-                );
+                self.deliver_to_destination(destination_hash, &raw, packet_hash);
             } else {
                 self.dispatch_link_actions(link_actions);
             }
         } else {
             let packet_hash = delivered_packet_hash(&raw, packet_hash);
-            // Every transported proof is also offered to local receipts. The
-            // header carries all the check needs; the packet hash is known.
-            if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
-                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                    self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
+            self.deliver_to_destination(destination_hash, &raw, packet_hash);
+        }
+    }
+
+    /// Hand a packet for a local destination to its receipts (a proof), or
+    /// prove it as configured and deliver it: decrypted for destinations
+    /// that asked for it, raw otherwise.
+    fn deliver_to_destination(
+        &mut self,
+        destination_hash: [u8; 16],
+        raw: &[u8],
+        packet_hash: [u8; 32],
+    ) {
+        // Every transported proof is also offered to local receipts. The
+        // header carries all the check needs; the packet hash is known.
+        if let Some(packet) = crate::packet_header::PacketHeader::unpack(raw) {
+            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
+                self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
+                return;
+            }
+            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
+                && packet.flags.destination_type == rns_core::constants::DESTINATION_SINGLE
+            {
+                if let Some(identity) = self.decrypted_destinations.get(&destination_hash) {
+                    let identity = Arc::clone(identity);
+                    let ciphertext = packet.data.to_vec();
+                    self.decrypt_for_delivery(destination_hash, packet_hash, ciphertext, identity);
                     return;
                 }
-                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
-                    && packet.flags.destination_type == rns_core::constants::DESTINATION_SINGLE
-                {
-                    if let Some(identity) = self.decrypted_destinations.get(&destination_hash) {
-                        let identity = Arc::clone(identity);
-                        let ciphertext = packet.data.to_vec();
-                        self.decrypt_for_delivery(
-                            destination_hash,
-                            packet_hash,
-                            ciphertext,
-                            identity,
-                        );
-                        return;
-                    }
-                }
             }
-            self.maybe_generate_proof(destination_hash, &packet_hash);
-            self.callbacks.on_local_delivery(
-                rns_core::types::DestHash(destination_hash),
-                raw.to_vec(),
-                rns_core::types::PacketHash(packet_hash),
-            );
         }
+        self.maybe_generate_proof(destination_hash, &packet_hash);
+        self.callbacks.on_local_delivery(
+            rns_core::types::DestHash(destination_hash),
+            raw.to_vec(),
+            rns_core::types::PacketHash(packet_hash),
+        );
     }
 
     /// Dispatch a list of transport actions.
