@@ -275,8 +275,8 @@ receiver already works this way (`prepare_assembly` / `complete_assembly`).
 |---|---|---|---|
 | Receive link data | `LinkManager::handle_link_data_into` (`engine.decrypt_into`) | token decrypt | begin: hand the ciphertext out; finish: apply the plaintext to the link, channel or request |
 | Send link data and channel messages | `link_manager.rs` (`encrypt_into`), `channel_handling.rs` | token encrypt | encrypt on the pool, then queue the packet |
-| Prove a link packet | `build_link_packet_proof` (`sign_packet_hash`) | Ed25519 sign | sign on the pool, then send the proof |
-| Verify a link proof | `handle_link_proof` | Ed25519 verify | exists (proof pool), moves to batched verification |
+| Prove a link packet | `build_link_packet_proof` (`sign_packet_hash`) | Ed25519 sign | done: signed on the proof pool, then the proof is sent |
+| Verify a link proof | `handle_link_proof` | Ed25519 verify | done: proofs queued together are verified as one batch (up to 8) |
 | Prove a single packet | `driver/dispatch.rs` (`identity.sign`) | Ed25519 sign | sign on the pool, then send |
 | Verify a single-packet proof | `driver/dispatch.rs` (cached key) | Ed25519 verify | verify on the pool, batched |
 | Establish a link | `rns-core` link handshake | X25519, HKDF, Ed25519 | handshake crypto on the pool; link state advanced on completion |

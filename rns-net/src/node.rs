@@ -653,8 +653,8 @@ pub struct NodeConfig {
     /// If true, a single interface failing to start will abort the entire node.
     /// If false (default), the error is logged and remaining interfaces continue.
     pub panic_on_interface_error: bool,
-    /// Threads that verify link packet proofs off the driver thread
-    /// (`Auto`: one when the process may use more than one CPU, else none).
+    /// Threads that verify and sign link packet proofs off the driver thread
+    /// (`Auto`: half the CPUs the process may use, from one to four).
     pub link_proof_verify_threads: crate::ProofVerifyThreads,
     /// Stamp generation, enforcement, costs and timeouts: the `[stamps]`
     /// section, which [`RnsNode::from_config`] reads from the config file.
