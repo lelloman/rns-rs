@@ -6,6 +6,17 @@ use core::mem::MaybeUninit;
 
 use super::types::PacketHashlistAllocation;
 
+/// What the table stores of a packet hash: its first 16 bytes. Two distinct
+/// packets share a prefix with probability 2^-128, so a prefix decides
+/// duplicates as the full hash would, in half the memory.
+type Key = [u8; 16];
+
+fn key_of(hash: &[u8; 32]) -> Key {
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&hash[..16]);
+    key
+}
+
 /// Bounded FIFO packet-hash deduplication.
 ///
 /// Retains at most `max_size` unique packet hashes. New unique hashes are
@@ -55,18 +66,19 @@ impl PacketHashlist {
 
     /// Check if a hash is currently retained.
     pub fn is_duplicate(&self, hash: &[u8; 32]) -> bool {
-        self.set.contains(hash, &self.queue)
+        self.set.contains(&key_of(hash), &self.queue)
     }
 
     /// Start loading the bucket a lookup of `hash` probes first, so a later
     /// [`is_duplicate`](Self::is_duplicate) or [`add`](Self::add) for it can
     /// overlap that cache miss with other work.
     pub fn prefetch(&self, hash: &[u8; 32]) {
-        self.set.prefetch(self.set.key(hash));
+        self.set.prefetch(self.set.key(&key_of(hash)));
     }
 
     /// Retain a hash. If the dedup table is full, evict the oldest unique hash.
     pub fn add(&mut self, hash: [u8; 32]) {
+        let hash = key_of(&hash);
         if self.max_size == 0 || self.set.contains(&hash, &self.queue) {
             return;
         }
@@ -100,6 +112,7 @@ impl PacketHashlist {
 
     /// Stop retaining a hash, preserving the FIFO order of all other entries.
     pub fn remove(&mut self, hash: &[u8; 32]) -> bool {
+        let hash = &key_of(hash);
         if !self.set.contains(hash, &self.queue) {
             return false;
         }
@@ -120,11 +133,15 @@ impl PacketHashlist {
         self.len() == 0
     }
 
-    /// Iterate retained hashes from oldest to newest.
-    pub fn iter(&self) -> impl Iterator<Item = &[u8; 32]> {
+    /// Iterate retained hashes from oldest to newest, as stored: the first
+    /// 16 bytes of each, the rest zero. [`add`](Self::add) takes them back
+    /// unchanged.
+    pub fn iter(&self) -> impl Iterator<Item = [u8; 32]> + '_ {
         (0..self.queue.len).map(|offset| {
             let index = (self.queue.head + offset) % self.queue.capacity();
-            self.queue.entries.get(index)
+            let mut hash = [0u8; 32];
+            hash[..16].copy_from_slice(self.queue.entries.get(index));
+            hash
         })
     }
 }
@@ -132,17 +149,17 @@ impl PacketHashlist {
 /// Hash payload slots initialized only within the queue's logical FIFO range.
 /// The index stores queue offsets, never a second copy of a full hash.
 struct RawHashSlots {
-    slots: Box<[MaybeUninit<[u8; 32]>]>,
+    slots: Box<[MaybeUninit<Key>]>,
 }
 
 impl RawHashSlots {
     fn new(capacity: usize, allocation: PacketHashlistAllocation) -> Self {
-        let mut slots = Box::<[[u8; 32]]>::new_uninit_slice(capacity);
+        let mut slots = Box::<[Key]>::new_uninit_slice(capacity);
         if allocation == PacketHashlistAllocation::Eager {
             for slot in &mut slots {
                 // Volatile writes make eager page prefaulting an observable side
                 // effect that release-mode optimization cannot remove.
-                unsafe { core::ptr::write_volatile(slot.as_mut_ptr(), [0; 32]) };
+                unsafe { core::ptr::write_volatile(slot.as_mut_ptr(), [0; 16]) };
             }
         }
         Self { slots }
@@ -152,17 +169,17 @@ impl RawHashSlots {
         self.slots.len()
     }
 
-    fn write(&mut self, index: usize, hash: [u8; 32]) {
+    fn write(&mut self, index: usize, hash: Key) {
         self.slots[index].write(hash);
     }
 
-    fn read(&self, index: usize) -> [u8; 32] {
+    fn read(&self, index: usize) -> Key {
         // SAFETY: callers establish initialization through the queue's logical
         // range before calling this method.
         unsafe { self.slots[index].assume_init_read() }
     }
 
-    fn get(&self, index: usize) -> &[u8; 32] {
+    fn get(&self, index: usize) -> &Key {
         // SAFETY: callers establish initialization through the queue's logical
         // range before calling this method.
         unsafe { self.slots[index].assume_init_ref() }
@@ -277,7 +294,7 @@ impl PacketHashQueue {
         self.len
     }
 
-    fn push_back(&mut self, hash: [u8; 32]) {
+    fn push_back(&mut self, hash: Key) {
         debug_assert!(self.len < self.capacity());
         if self.capacity() == 0 {
             return;
@@ -287,7 +304,7 @@ impl PacketHashQueue {
         self.len += 1;
     }
 
-    fn pop_front(&mut self) -> Option<[u8; 32]> {
+    fn pop_front(&mut self) -> Option<Key> {
         if self.len == 0 || self.capacity() == 0 {
             return None;
         }
@@ -300,7 +317,7 @@ impl PacketHashQueue {
         Some(hash)
     }
 
-    fn remove(&mut self, hash: &[u8; 32]) -> bool {
+    fn remove(&mut self, hash: &Key) -> bool {
         let Some(offset) = (0..self.len).find(|offset| {
             let index = (self.head + offset) % self.capacity();
             self.entries.get(index) == hash
@@ -346,7 +363,7 @@ impl PacketHashSet {
     }
 
     /// Bucket key of a packet hash.
-    fn key(&self, hash: &[u8; 32]) -> u64 {
+    fn key(&self, hash: &Key) -> u64 {
         let leading = leading_bits(hash);
         match self.key_seed {
             None => leading,
@@ -361,7 +378,7 @@ impl PacketHashSet {
         self.len
     }
 
-    fn position(&self, hash: &[u8; 32], queue: &PacketHashQueue) -> Option<usize> {
+    fn position(&self, hash: &Key, queue: &PacketHashQueue) -> Option<usize> {
         if self.buckets.is_empty() {
             return None;
         }
@@ -380,7 +397,7 @@ impl PacketHashSet {
         }
     }
 
-    fn contains(&self, hash: &[u8; 32], queue: &PacketHashQueue) -> bool {
+    fn contains(&self, hash: &Key, queue: &PacketHashQueue) -> bool {
         self.position(hash, queue).is_some()
     }
 
@@ -394,7 +411,7 @@ impl PacketHashSet {
         self.len += 1;
     }
 
-    fn remove(&mut self, hash: &[u8; 32], queue: &PacketHashQueue) -> bool {
+    fn remove(&mut self, hash: &Key, queue: &PacketHashQueue) -> bool {
         let Some(idx) = self.position(hash, queue) else {
             return false;
         };
@@ -503,7 +520,7 @@ fn bucket_capacity(max_entries: usize) -> usize {
 /// Leading 64 bits of a packet hash. Packet hashes are SHA-256 digests,
 /// already uniformly distributed for packets nobody chose, so an unseeded
 /// table indexes buckets with these bits directly.
-fn leading_bits(hash: &[u8; 32]) -> u64 {
+fn leading_bits(hash: &Key) -> u64 {
     let mut leading = [0u8; 8];
     leading.copy_from_slice(&hash[..8]);
     u64::from_le_bytes(leading)
@@ -512,6 +529,13 @@ fn leading_bits(hash: &[u8; 32]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hash as the table stores and iterates it.
+    fn stored(hash: [u8; 32]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[..16].copy_from_slice(&hash[..16]);
+        out
+    }
 
     fn make_hash(seed: u8) -> [u8; 32] {
         let mut h = [0u8; 32];
@@ -536,7 +560,7 @@ mod tests {
             }
             list.seed_hashing(0x0123_4567_89ab_cdef);
             assert!(hashes.iter().all(|hash| list.is_duplicate(hash)));
-            assert!(list.iter().eq(hashes.iter()));
+            assert!(list.iter().eq(hashes.iter().copied().map(stored)));
             assert!(!list.is_duplicate(&make_hash(200)));
         }
     }
@@ -620,14 +644,16 @@ mod tests {
             assert!(hl.remove(&make_hash(3)));
             assert!(!hl.remove(&make_hash(1)));
             assert_eq!(
-                hl.iter().copied().collect::<Vec<_>>(),
-                vec![make_hash(2), make_hash(4)]
+                hl.iter().collect::<Vec<_>>(),
+                [make_hash(2), make_hash(4)].map(stored).to_vec()
             );
 
             hl.add(make_hash(5));
             assert_eq!(
-                hl.iter().copied().collect::<Vec<_>>(),
-                vec![make_hash(2), make_hash(4), make_hash(5)]
+                hl.iter().collect::<Vec<_>>(),
+                [make_hash(2), make_hash(4), make_hash(5)]
+                    .map(stored)
+                    .to_vec()
             );
         }
     }
@@ -640,8 +666,10 @@ mod tests {
                 hl.add(make_hash(seed));
             }
             assert_eq!(
-                hl.iter().copied().collect::<Vec<_>>(),
-                vec![make_hash(7), make_hash(8), make_hash(9)]
+                hl.iter().collect::<Vec<_>>(),
+                [make_hash(7), make_hash(8), make_hash(9)]
+                    .map(stored)
+                    .to_vec()
             );
         }
     }
@@ -706,7 +734,7 @@ mod tests {
                         for retained in &model {
                             assert!(list.is_duplicate(retained));
                         }
-                        assert!(list.iter().eq(model.iter()));
+                        assert!(list.iter().eq(model.iter().copied().map(stored)));
                     }
                 }
             }
@@ -720,7 +748,7 @@ mod tests {
             let mut queue = PacketHashQueue::new(3, policy);
             let mut colliding = Vec::new();
             for seed in 0..=u8::MAX {
-                let hash = make_hash(seed);
+                let hash = key_of(&make_hash(seed));
                 if leading_bits(&hash) & 7 == 0 {
                     colliding.push(hash);
                     if colliding.len() == 3 {
@@ -743,8 +771,8 @@ mod tests {
     fn raw_slots_read_only_after_write() {
         for policy in policies() {
             let mut slots = RawHashSlots::new(2, policy);
-            slots.write(1, make_hash(42));
-            assert_eq!(slots.read(1), make_hash(42));
+            slots.write(1, key_of(&make_hash(42)));
+            assert_eq!(slots.read(1), key_of(&make_hash(42)));
         }
     }
 
@@ -801,7 +829,7 @@ mod tests {
                     }
                     assert_eq!(table.len(), model.len());
                     assert_eq!(table.is_duplicate(&hash), model.contains(&hash));
-                    assert!(table.iter().eq(model.iter()));
+                    assert!(table.iter().eq(model.iter().copied().map(stored)));
                     if step % 100 == 0 {
                         for id in 0u64..400 {
                             let mut hash = [0; 32];
