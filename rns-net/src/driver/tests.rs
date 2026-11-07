@@ -13992,6 +13992,7 @@ fn deferred_send(
         public_key: identity.get_public_key().unwrap(),
         ratchet: None,
         data: data.to_vec(),
+        encrypted: false,
     })
 }
 
@@ -14042,4 +14043,19 @@ fn a_deferred_send_while_draining_is_reported_unsent() {
         &[(crate::SendTicket(3), None, 0)]
     );
     assert!(sent.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_deferred_send_encrypted_by_the_caller_is_sent_as_given() {
+    let identity = Identity::new(&mut OsRng);
+    let (mut driver, reports, sent) = deferred_send_driver(0);
+    let mut send = deferred_send(&identity, 5, b"");
+    send.data = identity.encrypt(b"ready", &mut OsRng).unwrap();
+    send.encrypted = true;
+    driver.handle_send_deferred(send);
+    let hash = reports.lock().unwrap()[0].1.expect("sent");
+    let sent = sent.lock().unwrap();
+    let packet = RawPacket::unpack(&sent[0]).unwrap();
+    assert_eq!(packet.packet_hash, hash.0);
+    assert_eq!(identity.decrypt(packet.data()).unwrap(), b"ready");
 }

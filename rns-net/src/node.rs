@@ -954,6 +954,9 @@ pub struct RnsNode {
     tick_interval_ms: Arc<AtomicU64>,
     /// The next [`SendTicket`](crate::SendTicket) number.
     next_send_ticket: AtomicU64,
+    /// Whether deferred sends are encrypted on the caller's thread: when
+    /// this process may run on one CPU only, another thread would share it.
+    encrypt_deferred_inline: bool,
     /// Cleared by the driver when it stops accepting new work.
     accepting_work: Arc<AtomicBool>,
     #[allow(dead_code)]
@@ -2643,6 +2646,8 @@ impl RnsNode {
             rpc_unix_server,
             tick_interval_ms,
             next_send_ticket: AtomicU64::new(0),
+            encrypt_deferred_inline: std::thread::available_parallelism()
+                .map_or(true, |cpus| cpus.get() == 1),
             accepting_work,
             probe_server,
             known_destinations_path: None,
@@ -3746,7 +3751,8 @@ impl RnsNode {
 
     /// Queue a packet for a SINGLE destination without encrypting it on this
     /// thread, unlike [`send_packet_queued`](Self::send_packet_queued): the
-    /// node encrypts it (on its proof pool when it has one) and reports the
+    /// node encrypts it (on its proof pool when it has one; on this thread
+    /// when the process may use one CPU only) and reports the
     /// packet hash through [`Callbacks::on_packet_sent`](crate::Callbacks::on_packet_sent)
     /// with the returned ticket, before sending it. A sender is then not
     /// bound by its own thread's encryption, one X25519 key generation and
@@ -3765,14 +3771,28 @@ impl RnsNode {
         }
         let public_key = dest.public_key.ok_or(SendError)?;
         let ticket = self.next_send_ticket.fetch_add(1, Ordering::Relaxed);
+        let ratchet = self.single_ratchet(dest);
+        let (data, encrypted) = if self.encrypt_deferred_inline {
+            let payload = rns_crypto::identity::Identity::encrypt_for_public_key(
+                &public_key,
+                data,
+                ratchet.as_ref(),
+                &mut OsRng,
+            )
+            .map_err(|_| SendError)?;
+            (payload, true)
+        } else {
+            (data.to_vec(), false)
+        };
         self.tx
             .send(Event::SendDeferred(Box::new(
                 crate::common::event::DeferredSend {
                     ticket,
                     destination: dest.hash.0,
                     public_key,
-                    ratchet: self.single_ratchet(dest),
-                    data: data.to_vec(),
+                    ratchet,
+                    data,
+                    encrypted,
                 },
             )))
             .map_err(|_| SendError)?;
@@ -4274,6 +4294,8 @@ impl RnsNode {
             rpc_unix_server: None,
             tick_interval_ms,
             next_send_ticket: AtomicU64::new(0),
+            encrypt_deferred_inline: std::thread::available_parallelism()
+                .map_or(true, |cpus| cpus.get() == 1),
             accepting_work,
             probe_server: None,
             known_destinations_path: None,
@@ -5038,6 +5060,8 @@ mod tests {
             rpc_unix_server: None,
             tick_interval_ms: Arc::new(AtomicU64::new(1000)),
             next_send_ticket: AtomicU64::new(0),
+            encrypt_deferred_inline: std::thread::available_parallelism()
+                .map_or(true, |cpus| cpus.get() == 1),
             accepting_work: Arc::new(AtomicBool::new(true)),
             probe_server: None,
             known_destinations_path: None,
