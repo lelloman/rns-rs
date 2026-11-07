@@ -72,23 +72,35 @@ impl X25519PublicKey {
 }
 
 /// X25519 on aws-lc. It refuses an all-zero shared secret (a low-order
-/// peer key), where x25519-dalek returns zeros; `None` leaves such a result,
-/// and any other refusal, to x25519-dalek, so both builds agree.
+/// peer key), where x25519-dalek returns zeros; `None` leaves such a result
+/// to x25519-dalek, so both builds agree.
+///
+/// aws-lc's raw functions, not its key objects: building a private key
+/// object derives its public key, a second scalar multiplication on every
+/// exchange.
 #[cfg(feature = "x25519-aws-lc")]
 mod aws_lc {
-    use aws_lc_rs::agreement::{agree, PrivateKey, UnparsedPublicKey, X25519};
+    fn init() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        // SAFETY: takes no arguments; sets up aws-lc's CPU feature detection.
+        INIT.call_once(|| unsafe { aws_lc_sys::CRYPTO_library_init() });
+    }
 
     pub(super) fn public_key(private: &[u8; 32]) -> Option<[u8; 32]> {
-        let key = PrivateKey::from_private_key(&X25519, private).ok()?;
-        key.compute_public_key().ok()?.as_ref().try_into().ok()
+        init();
+        let mut public = [0u8; 32];
+        // SAFETY: both pointers address 32-byte arrays, as the function takes.
+        unsafe { aws_lc_sys::X25519_public_from_private(public.as_mut_ptr(), private.as_ptr()) };
+        Some(public)
     }
 
     pub(super) fn exchange(private: &[u8; 32], peer: &[u8; 32]) -> Option<[u8; 32]> {
-        let key = PrivateKey::from_private_key(&X25519, private).ok()?;
-        agree(&key, UnparsedPublicKey::new(&X25519, peer), (), |shared| {
-            shared.try_into().map_err(|_| ())
-        })
-        .ok()
+        init();
+        let mut shared = zeroize::Zeroizing::new([0u8; 32]);
+        // SAFETY: all three pointers address 32-byte arrays, as the function
+        // takes.
+        let ok = unsafe { aws_lc_sys::X25519(shared.as_mut_ptr(), private.as_ptr(), peer.as_ptr()) };
+        (ok == 1).then(|| *shared)
     }
 }
 
