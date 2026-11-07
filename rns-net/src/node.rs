@@ -5418,7 +5418,13 @@ share_instance = False
         else {
             panic!("unexpected transport snapshot response");
         };
-        assert_eq!(restored.packet_hashes, vec![[0x61; 32], [0x62; 32]]);
+        // Upstream's full hashes load; the table keeps their first 16 bytes.
+        let stored = |byte: u8| {
+            let mut hash = [0u8; 32];
+            hash[..16].fill(byte);
+            hash
+        };
+        assert_eq!(restored.packet_hashes, vec![stored(0x61), stored(0x62)]);
         assert_eq!(restored.paths.len(), 1);
         assert_eq!(restored.paths[0].destination_hash, destination_hash);
         assert_eq!(restored.paths[0].received_from, [0x41; 16]);

@@ -58,7 +58,7 @@ impl TransportEngine {
             return TransportStateSnapshot::default();
         }
 
-        let packet_hashes = self.packet_hashlist.iter().copied().collect();
+        let packet_hashes = self.packet_hashlist.iter().collect();
         let mut paths = Vec::new();
         for (destination_hash, path_set) in &self.path_table {
             for entry in path_set.iter() {
@@ -249,6 +249,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `[byte; 32]` as the packet hashlist stores and snapshots it: the
+    /// first 16 bytes, the rest zero.
+    fn stored(byte: u8) -> [u8; 32] {
+        let mut hash = [0u8; 32];
+        hash[..16].fill(byte);
+        hash
+    }
     use crate::constants;
     use crate::hash;
     use crate::packet::{PacketFlags, RawPacket};
@@ -307,7 +315,7 @@ mod tests {
         assert_eq!(stats.packet_hashes, 3);
         assert_eq!(
             engine.persistence_snapshot().packet_hashes,
-            vec![[3; 32], [4; 32], [5; 32]]
+            vec![stored(3), stored(4), stored(5)]
         );
     }
 
@@ -399,7 +407,10 @@ mod tests {
         );
 
         let snapshot = engine.persistence_snapshot();
-        assert_eq!(snapshot.packet_hashes, vec![[2; 32], [3; 32], [4; 32]]);
+        assert_eq!(
+            snapshot.packet_hashes,
+            vec![stored(2), stored(3), stored(4)]
+        );
         assert_eq!(snapshot.paths[0].random_blobs.len(), 32);
         assert_eq!(snapshot.paths[0].random_blobs[0], [8; 10]);
         assert_eq!(
@@ -461,7 +472,7 @@ mod tests {
         assert!(!engine.has_path(&[2; 16]));
         assert_eq!(
             engine.persistence_snapshot().packet_hashes,
-            vec![[2; 32], [3; 32]]
+            vec![stored(2), stored(3)]
         );
     }
 
