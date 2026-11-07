@@ -183,6 +183,8 @@ pub(crate) fn is_socket(fd: std::os::fd::RawFd) -> bool {
     // SAFETY: fstat writes into a zeroed stat the call owns.
     unsafe {
         let mut stat: libc::stat = std::mem::zeroed();
-        libc::fstat(fd, &mut stat) == 0 && stat.st_mode & libc::S_IFMT == libc::S_IFSOCK
+        // 32-bit Android stores `st_mode` wider than `mode_t`; the type bits fit either way.
+        libc::fstat(fd, &mut stat) == 0
+            && (stat.st_mode as libc::mode_t) & libc::S_IFMT == libc::S_IFSOCK
     }
 }
