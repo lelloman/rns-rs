@@ -13934,3 +13934,112 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     assert_eq!(proofs[0].1, PacketHash(good));
     assert!(driver.sent_packets.is_empty());
 }
+
+/// Deferred-send reports, with how many frames were written when each came.
+type DeferredSendReports = Arc<Mutex<Vec<(crate::SendTicket, Option<PacketHash>, usize)>>>;
+
+/// Records deferred-send reports.
+struct DeferredSendCallbacks {
+    reports: DeferredSendReports,
+    sent: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+impl Callbacks for DeferredSendCallbacks {
+    fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
+    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
+    fn on_packet_sent(&mut self, ticket: crate::SendTicket, packet_hash: Option<PacketHash>) {
+        let written = self.sent.lock().unwrap().len();
+        self.reports
+            .lock()
+            .unwrap()
+            .push((ticket, packet_hash, written));
+    }
+}
+
+fn deferred_send_driver(threads: usize) -> (Driver, DeferredSendReports, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let (tx, rx) = event::channel();
+    let (writer, sent) = MockWriter::new();
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let mut driver = Driver::new(
+        make_transport_config(false),
+        rx,
+        tx.clone(),
+        Box::new(DeferredSendCallbacks {
+            reports: reports.clone(),
+            sent: sent.clone(),
+        }),
+    );
+    driver.link_manager.set_receive_worker_wake(tx);
+    driver
+        .link_manager
+        .set_proof_verify_threads(crate::ProofVerifyThreads::Fixed(threads));
+    driver.engine.register_interface(make_interface_info(1));
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    (driver, reports, sent)
+}
+
+fn deferred_send(
+    identity: &Identity,
+    ticket: u64,
+    data: &[u8],
+) -> Box<crate::common::event::DeferredSend> {
+    Box::new(crate::common::event::DeferredSend {
+        ticket,
+        destination: [0x7D; 16],
+        public_key: identity.get_public_key().unwrap(),
+        ratchet: None,
+        data: data.to_vec(),
+    })
+}
+
+#[test]
+fn a_deferred_send_reports_its_hash_before_it_is_written() {
+    let identity = Identity::new(&mut OsRng);
+    // No pool: encrypted on the driver.
+    let threads = if cfg!(feature = "proof-pool") {
+        [0, 2].as_slice()
+    } else {
+        &[0]
+    };
+    for &threads in threads {
+        let (mut driver, reports, sent) = deferred_send_driver(threads);
+        driver.handle_send_deferred(deferred_send(&identity, 7, b"hello"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while reports.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "no report ({threads} threads)");
+            thread::sleep(Duration::from_millis(5));
+            if driver.link_manager.poll_proof_pool(&mut OsRng).is_some() {
+                driver.apply_packet_proofs();
+            }
+        }
+        let reports = reports.lock().unwrap();
+        let (ticket, hash, written) = reports[0];
+        assert_eq!(ticket, crate::SendTicket(7));
+        assert_eq!(written, 0, "reported before the packet is written");
+        let hash = hash.expect("sent");
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        let packet = RawPacket::unpack(&sent[0]).unwrap();
+        assert_eq!(packet.packet_hash, hash.0);
+        assert_eq!(packet.destination_hash, [0x7D; 16]);
+        assert_eq!(identity.decrypt(packet.data()).unwrap(), b"hello");
+        // Tracked for its proof, as any sent packet.
+        assert!(driver.sent_packets.contains_key(&hash.0));
+    }
+}
+
+#[test]
+fn a_deferred_send_while_draining_is_reported_unsent() {
+    let identity = Identity::new(&mut OsRng);
+    let (mut driver, reports, sent) = deferred_send_driver(0);
+    driver.begin_drain(Duration::from_secs(1));
+    driver.handle_send_deferred(deferred_send(&identity, 3, b"late"));
+    assert_eq!(
+        reports.lock().unwrap().as_slice(),
+        &[(crate::SendTicket(3), None, 0)]
+    );
+    assert!(sent.lock().unwrap().is_empty());
+}

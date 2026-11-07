@@ -2,6 +2,11 @@
 
 use crate::{DestHash, IdentityHash, InterfaceId, LinkId, PacketHash, TeardownReason};
 
+/// Names a packet queued with `RnsNode::send_packet_deferred` until
+/// [`Callbacks::on_packet_sent`] reports its hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SendTicket(pub u64);
+
 pub trait Callbacks: Send {
     fn on_announce(&mut self, announced: crate::common::destination::AnnouncedIdentity);
 
@@ -180,6 +185,12 @@ pub trait Callbacks: Send {
         _reason: crate::link_manager::RequestFailure,
     ) {
     }
+
+    /// Called for a packet queued with `RnsNode::send_packet_deferred` once it
+    /// is encrypted, before it is sent: its hash, which a proof of it will
+    /// carry, or `None` when it could not be encrypted or the node is
+    /// shutting down, and it was not sent.
+    fn on_packet_sent(&mut self, _ticket: SendTicket, _packet_hash: Option<PacketHash>) {}
 
     /// Called when a delivery proof is received for a packet we sent.
     /// `rtt` is the round-trip time in seconds.

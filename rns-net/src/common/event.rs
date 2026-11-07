@@ -186,6 +186,29 @@ pub struct AnnounceReplay {
     pub app_data: Option<Vec<u8>>,
 }
 
+/// A single packet queued to be encrypted off the caller's thread.
+pub struct DeferredSend {
+    pub(crate) ticket: u64,
+    pub(crate) destination: [u8; 16],
+    /// The destination identity's 64-byte public key.
+    pub(crate) public_key: [u8; 64],
+    pub(crate) ratchet: Option<[u8; 32]>,
+    pub(crate) data: Vec<u8>,
+}
+
+impl DeferredSend {
+    /// The encrypted payload, or `None` when it cannot be encrypted.
+    pub(crate) fn run(&self) -> Option<Vec<u8>> {
+        rns_crypto::identity::Identity::encrypt_for_public_key(
+            &self.public_key,
+            &self.data,
+            self.ratchet.as_ref(),
+            &mut rns_crypto::OsRng,
+        )
+        .ok()
+    }
+}
+
 /// Events sent to the driver thread.
 ///
 /// `W` is the writer type (e.g. `Box<dyn Writer>` for sync,
@@ -241,6 +264,9 @@ pub enum Event<W: Send> {
         dest_type: u8,
         attached_interface: Option<InterfaceId>,
     },
+    /// A single packet to encrypt off the caller's thread and send
+    /// (`RnsNode::send_packet_deferred`).
+    SendDeferred(Box<DeferredSend>),
     /// A locally originated packet with transmission completion tracking.
     SendOutboundTracked {
         raw: Vec<u8>,
@@ -1235,6 +1261,11 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("timeout", timeout)
                 .finish(),
             Event::Shutdown => write!(f, "Shutdown"),
+            Event::SendDeferred(encryption) => f
+                .debug_struct("SendDeferred")
+                .field("ticket", &encryption.ticket)
+                .field("data_len", &encryption.data.len())
+                .finish(),
             Event::SendOutbound { raw, dest_type, .. }
             | Event::SendOutboundTracked { raw, dest_type, .. } => f
                 .debug_struct("SendOutbound")

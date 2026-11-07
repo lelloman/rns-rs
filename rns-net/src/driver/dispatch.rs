@@ -288,6 +288,62 @@ impl Driver {
         }
     }
 
+    /// Encrypt a deferred send on the proof pool, or here without one.
+    pub(crate) fn handle_send_deferred(
+        &mut self,
+        encryption: Box<crate::common::event::DeferredSend>,
+    ) {
+        if self.is_draining() {
+            self.reject_new_work("send deferred packet");
+            self.callbacks
+                .on_packet_sent(crate::SendTicket(encryption.ticket), None);
+            return;
+        }
+        if let Err(encryption) = self.link_manager.submit_packet_encrypt(encryption) {
+            let payload = encryption.run();
+            self.send_deferred(encryption.ticket, encryption.destination, payload);
+        }
+    }
+
+    /// Send a deferred packet once its payload is encrypted, reporting its
+    /// hash first: a proof of it cannot arrive before the report.
+    fn send_deferred(&mut self, ticket: u64, destination: [u8; 16], payload: Option<Vec<u8>>) {
+        let ticket = crate::SendTicket(ticket);
+        // Encrypted on the pool while a drain began: not sent.
+        if self.is_draining() {
+            self.reject_new_work("send deferred packet");
+            self.callbacks.on_packet_sent(ticket, None);
+            return;
+        }
+        let flags = rns_core::packet::PacketFlags {
+            header_type: rns_core::constants::HEADER_1,
+            context_flag: rns_core::constants::FLAG_UNSET,
+            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+            destination_type: rns_core::constants::DESTINATION_SINGLE,
+            packet_type: rns_core::constants::PACKET_TYPE_DATA,
+        };
+        let packet = payload.and_then(|payload| {
+            RawPacket::pack(
+                flags,
+                0,
+                &destination,
+                None,
+                rns_core::constants::CONTEXT_NONE,
+                &payload,
+            )
+            .ok()
+        });
+        let Some(packet) = packet else {
+            self.callbacks.on_packet_sent(ticket, None);
+            return;
+        };
+        self.callbacks.on_packet_sent(
+            ticket,
+            Some(rns_core::types::PacketHash(packet.packet_hash)),
+        );
+        self.handle_send_outbound_event(packet.raw, rns_core::constants::DESTINATION_SINGLE, None);
+    }
+
     /// Apply single-packet proofs the proof pool finished: deliver checked
     /// proofs, send signed ones.
     pub(crate) fn apply_packet_proofs(&mut self) {
@@ -313,6 +369,11 @@ impl Driver {
                     packet_hash,
                     signature,
                 } => self.send_packet_proof(destination, &packet_hash, &signature),
+                ProofOutcome::Encrypted {
+                    ticket,
+                    destination,
+                    payload,
+                } => self.send_deferred(ticket, destination, payload),
                 // Link outcomes are applied by the link manager.
                 ProofOutcome::Verified { .. } | ProofOutcome::Signed { .. } => {}
             }
