@@ -15,7 +15,135 @@ impl TransportEngine {
 
         self.process_tick_ingress_release(&mut ctx);
         self.cull_tick_tables(&mut ctx);
+        self.process_tick_rediscovery(&mut ctx);
         ctx.actions
+    }
+
+    /// Queue a path rediscovery request for `destination_hash`, skipping
+    /// `skip_interface`, unless one is already queued or the queue is full.
+    pub fn queue_path_rediscovery(
+        &mut self,
+        destination_hash: [u8; 16],
+        skip_interface: Option<InterfaceId>,
+        now: f64,
+    ) {
+        if self
+            .pending_discovery_prs
+            .iter()
+            .any(|(queued, _)| *queued == destination_hash)
+            || self.pending_discovery_prs.len() >= constants::MAX_QUEUED_DISCOVERY_PRS
+        {
+            return;
+        }
+        // Upstream's sender thread sleeps one throttle interval before each
+        // request, the first included.
+        if self.pending_discovery_prs.is_empty() {
+            self.discovery_pr_next_tx = self
+                .discovery_pr_next_tx
+                .max(now + constants::DISCOVERY_PR_TX_THROTTLE);
+        }
+        self.pending_discovery_prs
+            .push_back((destination_hash, skip_interface));
+    }
+
+    /// When this node last sent or accepted a path request for
+    /// `destination_hash`, if within `PATH_REQUEST_GATE_TIMEOUT`.
+    pub fn last_path_request(&self, destination_hash: &[u8; 16]) -> Option<f64> {
+        self.path_requests.get(destination_hash).copied()
+    }
+
+    /// `Transport.handle_disovery_path_requests`: send the oldest queued
+    /// rediscovery request once its throttle interval has passed.
+    fn process_tick_rediscovery(&mut self, ctx: &mut TickCtx<'_>) {
+        if ctx.now < self.discovery_pr_next_tx {
+            return;
+        }
+        if let Some((destination_hash, skip_interface)) = self.pending_discovery_prs.pop_front() {
+            ctx.actions.push(TransportAction::RediscoverPath {
+                destination_hash,
+                skip_interface,
+            });
+            self.discovery_pr_next_tx = ctx.now + constants::DISCOVERY_PR_TX_THROTTLE;
+        }
+    }
+
+    /// The path rediscovery half of the link table job (Transport.py
+    /// 1041-1115): a forwarded link request that was never proven may mean
+    /// the path to its destination went stale.
+    fn rediscover_unproven_link_paths(&mut self, now: f64) {
+        let mut requests: Vec<([u8; 16], Option<InterfaceId>)> = Vec::new();
+        let unproven: Vec<LinkEntry> = self
+            .link_table
+            .values()
+            .filter(|entry| !entry.validated && now > entry.proof_timeout)
+            .cloned()
+            .collect();
+        for entry in unproven {
+            let destination_hash = entry.destination_hash;
+            let throttled = self
+                .last_path_request(&destination_hash)
+                .is_some_and(|requested_at| now - requested_at < constants::PATH_REQUEST_MI);
+            let mut skip_interface = None;
+            let mut mark_unresponsive = false;
+            let rediscover = if !self.has_path(&destination_hash) {
+                // The path was dropped after the link request went out.
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Trying to rediscover path for {:02x?} since an attempted link was never established, and path is now missing",
+                    &destination_hash[..4],
+                );
+                true
+            } else if throttled {
+                false
+            } else if entry.taken_hops == 0 {
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Trying to rediscover path for {:02x?} since an attempted local client link was never established",
+                    &destination_hash[..4],
+                );
+                true
+            } else if self.hops_to(&destination_hash) == Some(1) {
+                // The destination was local to one of our interfaces and
+                // probably roamed.
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Trying to rediscover path for {:02x?} since an attempted link was never established, and destination was previously local to an interface on this instance",
+                    &destination_hash[..4],
+                );
+                skip_interface = Some(entry.received_interface);
+                mark_unresponsive = true;
+                true
+            } else if entry.taken_hops == 1 {
+                // The initiator is local, so the topology probably changed.
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Trying to rediscover path for {:02x?} since an attempted link was never established, and link initiator is local to an interface on this instance",
+                    &destination_hash[..4],
+                );
+                skip_interface = Some(entry.received_interface);
+                mark_unresponsive = true;
+                true
+            } else {
+                false
+            };
+            if !rediscover {
+                continue;
+            }
+            if mark_unresponsive && self.config.transport_enabled {
+                // Skipped when the request came in on a boundary interface.
+                self.mark_path_unresponsive(&destination_hash, Some(entry.received_interface));
+            }
+            if !requests
+                .iter()
+                .any(|(queued, _)| *queued == destination_hash)
+            {
+                requests.push((destination_hash, skip_interface));
+            }
+            if !self.config.transport_enabled {
+                // Let a non-transport node take a longer path or a path from
+                // a newly adjacent transport instance.
+                self.expire_path(&destination_hash);
+            }
+        }
+        for (destination_hash, skip_interface) in requests {
+            self.queue_path_rediscovery(destination_hash, skip_interface, now);
+        }
     }
 
     fn process_tick_pending_announces(&mut self, ctx: &mut TickCtx<'_>) {
@@ -85,6 +213,7 @@ impl TransportEngine {
             constants::PATH_POOL_UNUSED_TARGET,
         );
         jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
+        self.rediscover_unproven_link_paths(ctx.now);
         let (_culled, link_closed_actions) =
             jobs::cull_link_table(&mut self.link_table, &self.interfaces, ctx.now);
         ctx.actions.extend(link_closed_actions);

@@ -938,6 +938,43 @@ fn establishment_timeout_closes_without_linkclose() {
     assert!(linkclose_packets(&actions).is_empty());
 }
 
+fn failed_pending_links(actions: &[LinkManagerAction]) -> Vec<[u8; 16]> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            LinkManagerAction::PendingLinkFailed { dest_hash } => Some(*dest_hash),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn initiated_link_that_never_activates_is_reported_once_on_removal() {
+    // Transport.py 842-865: a closed link in `pending_links`.
+    let mut rng = OsRng;
+    let mut mgr = LinkManager::new();
+    let dest_hash = [0xDE; 16];
+    mgr.create_link(&dest_hash, &[0xAA; 32], 1, constants::MTU as u32, &mut rng);
+
+    let at = time::now() + 100_000.0;
+    let actions = mgr.tick_at(at, &mut rng);
+    assert_eq!(failed_pending_links(&actions), vec![dest_hash]);
+    assert_eq!(mgr.link_count(), 0);
+    assert!(failed_pending_links(&mgr.tick_at(at + 1.0, &mut rng)).is_empty());
+}
+
+#[test]
+fn closing_an_established_link_is_not_a_failed_pending_link() {
+    let (mut initiator, mut responder, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let at = time::now() + 100_000.0;
+    initiator.teardown_link(&link_id);
+    assert!(failed_pending_links(&initiator.tick_at(at, &mut rng)).is_empty());
+    // The responder never initiated the link.
+    responder.teardown_link(&link_id);
+    assert!(failed_pending_links(&responder.tick_at(at, &mut rng)).is_empty());
+}
+
 /// Python `LinkChannelOutlet.timed_out` calls `Link.teardown()`, which sends
 /// LINKCLOSE and closes the local link.
 #[test]

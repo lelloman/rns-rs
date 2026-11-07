@@ -99,9 +99,19 @@ pub struct PathRequestStampJob {
     /// 1..=16 bytes: the request's own random tag, or the tag of the local
     /// client request being forwarded.
     pub tag: Vec<u8>,
-    /// `None` broadcasts the request as `Event::RequestPath` would have;
-    /// `Some` sends it on that interface only, as a forwarded request.
-    pub interface: Option<InterfaceId>,
+    pub target: PathRequestTarget,
+}
+
+/// Where a path request goes once it is stamped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathRequestTarget {
+    /// Broadcast, as `Event::RequestPath` sends.
+    All,
+    /// This interface only, as a forwarded request.
+    Interface(InterfaceId),
+    /// Every interface except this one, as a path rediscovery request
+    /// (`Transport.handle_disovery_path_requests`, upstream acb38a8a).
+    AllExcept(InterfaceId),
 }
 
 /// An announce waiting for its destination stamp.
@@ -122,7 +132,7 @@ pub struct StampedPathRequest {
     pub destination_hash: [u8; 16],
     pub tag: Vec<u8>,
     pub ext_payload: [u8; constants::PR_EXT_PAYLOAD_LENGTH],
-    pub interface: Option<InterfaceId>,
+    pub target: PathRequestTarget,
 }
 
 /// The queue for `priority` is at capacity; upstream drops the job with a
@@ -354,12 +364,19 @@ impl Stamper {
 
     /// Queue a path request for stamping (`Transport.enqueue_stamped_pr`).
     ///
-    /// Keyed on the destination hash plus the interface, so a newer request
-    /// for the same destination on the same interface replaces a queued one.
+    /// Keyed on the destination hash plus the target, so a newer request
+    /// for the same destination and target replaces a queued one.
     pub fn enqueue_path_request(&self, job: PathRequestStampJob) -> Result<(), QueueFull> {
         let mut key = job.destination_hash.to_vec();
-        if let Some(interface) = job.interface {
-            key.extend_from_slice(&interface.0.to_be_bytes());
+        match job.target {
+            PathRequestTarget::All => {}
+            PathRequestTarget::Interface(interface) => {
+                key.extend_from_slice(&interface.0.to_be_bytes());
+            }
+            PathRequestTarget::AllExcept(interface) => {
+                key.push(0xFF);
+                key.extend_from_slice(&interface.0.to_be_bytes());
+            }
         }
         self.put(PRIORITY_PATH_REQUEST, Some(key), Job::PathRequest(job))
     }
@@ -524,7 +541,7 @@ fn stamp_path_request(inner: &Inner, job: PathRequestStampJob) {
         destination_hash: job.destination_hash,
         tag: job.tag,
         ext_payload,
-        interface: job.interface,
+        target: job.target,
     }));
     if inner.event_tx.send(event).is_err() {
         log::debug!("Driver is gone, dropping stamped path request");
@@ -629,7 +646,9 @@ mod tests {
         PathRequestStampJob {
             destination_hash: [dest; 16],
             tag: vec![tag; 16],
-            interface: interface.map(InterfaceId),
+            target: interface.map_or(PathRequestTarget::All, |id| {
+                PathRequestTarget::Interface(InterfaceId(id))
+            }),
         }
     }
 
@@ -781,7 +800,7 @@ mod tests {
         };
         assert_eq!(stamped.destination_hash, [0xAB; 16]);
         assert_eq!(stamped.tag, vec![0x01; 16]);
-        assert_eq!(stamped.interface, Some(InterfaceId(4)));
+        assert_eq!(stamped.target, PathRequestTarget::Interface(InterfaceId(4)));
         assert_eq!(stamped.ext_payload[0], constants::EXT_PAYLOAD_MARKER);
         assert_eq!(stamped.ext_payload[1], 0x00);
         let material = Stamper::path_request_stamp_material(&[0xAB; 16], &[0x01; 16]);
@@ -806,7 +825,7 @@ mod tests {
             panic!("unexpected event {event:?}");
         };
         assert_eq!(again.ext_payload, stamped.ext_payload);
-        assert_eq!(again.interface, Some(InterfaceId(5)));
+        assert_eq!(again.target, PathRequestTarget::Interface(InterfaceId(5)));
         assert_eq!(stamper.cached_path_request_stamps(), 1);
     }
 

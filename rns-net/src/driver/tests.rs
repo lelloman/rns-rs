@@ -13575,3 +13575,164 @@ fn folded_work_verifies_queued_announces() {
     );
     assert!(driver.folded.announces.is_empty());
 }
+
+/// The frames a `MockWriter` recorded.
+type SentFrames = Arc<Mutex<Vec<Vec<u8>>>>;
+
+/// A driver with three online interfaces, each with its own writer.
+fn rediscovery_driver(
+    tx: event::EventSender,
+    rx: event::EventReceiver,
+    transport_enabled: bool,
+) -> (Driver, Vec<SentFrames>) {
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut config = make_transport_config(transport_enabled);
+    config.identity_hash = Some([0x42; 16]);
+    let mut driver = Driver::new(config, rx, tx.clone(), Box::new(cbs));
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+    driver.set_stamper(Arc::new(crate::stamper::Stamper::with_targets(
+        tx,
+        None,
+        crate::stamper::StampTargets {
+            destination_value: StampCost::from_whole(6),
+            path_request_value: StampCost::from_whole(6),
+        },
+    )));
+    let mut sent = Vec::new();
+    for id in 1..=3 {
+        driver.engine.register_interface(make_interface_info(id));
+        let (writer, interface_sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
+        sent.push(interface_sent);
+    }
+    (driver, sent)
+}
+
+#[test]
+fn rediscovery_skipping_an_interface_sends_one_request_on_the_others() {
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = rediscovery_driver(tx, rx, true);
+    let dest = [0xB1; 16];
+
+    driver.dispatch_all(vec![TransportAction::RediscoverPath {
+        destination_hash: dest,
+        skip_interface: Some(InterfaceId(2)),
+    }]);
+    driver.flush_writers();
+
+    let first = sent_path_requests(&sent[0].lock().unwrap(), &dest);
+    let skipped = sent_path_requests(&sent[1].lock().unwrap(), &dest);
+    let third = sent_path_requests(&sent[2].lock().unwrap(), &dest);
+    assert!(skipped.is_empty());
+    assert_eq!(first.len(), 1);
+    // One request with one tag, unstamped.
+    assert_eq!(first, third);
+    assert_eq!(first[0].len(), 48);
+    assert!(driver.engine.last_path_request(&dest).is_some());
+}
+
+#[test]
+fn stamped_rediscovery_grinds_one_stamp_for_every_interface() {
+    // Upstream acb38a8a: one stamp, computed up front, on every interface.
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = rediscovery_driver(tx.clone(), rx, true);
+    driver.engine.set_stamp_prs(true);
+    let dest = [0xB2; 16];
+
+    driver.dispatch_all(vec![TransportAction::RediscoverPath {
+        destination_hash: dest,
+        skip_interface: Some(InterfaceId(1)),
+    }]);
+    driver.flush_writers();
+    assert!(sent_path_requests(&sent[1].lock().unwrap(), &dest).is_empty());
+
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_writers();
+    assert!(sent_path_requests(&sent[0].lock().unwrap(), &dest).is_empty());
+    let second = sent_path_requests(&sent[1].lock().unwrap(), &dest);
+    let third = sent_path_requests(&sent[2].lock().unwrap(), &dest);
+    assert_eq!(second.len(), 1);
+    assert_eq!(second, third);
+    let tag = second[0][32..48].to_vec();
+    assert_valid_path_request_stamp(&second[0], &dest, &tag);
+    assert_eq!(driver.stamper.cached_path_request_stamps(), 1);
+}
+
+#[test]
+fn rediscovery_without_an_interface_to_skip_is_a_plain_path_request() {
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = rediscovery_driver(tx, rx, true);
+    let dest = [0xB3; 16];
+
+    driver.dispatch_all(vec![TransportAction::RediscoverPath {
+        destination_hash: dest,
+        skip_interface: None,
+    }]);
+    driver.flush_writers();
+    for interface_sent in &sent {
+        assert_eq!(
+            sent_path_requests(&interface_sent.lock().unwrap(), &dest).len(),
+            1
+        );
+    }
+}
+
+fn queued_rediscoveries(driver: &mut Driver, now: f64) -> Vec<([u8; 16], Option<InterfaceId>)> {
+    let mut rng = rns_crypto::OsRng;
+    let mut found = Vec::new();
+    for step in 0..8 {
+        for action in driver.engine.tick(now + f64::from(step) * 0.25, &mut rng) {
+            if let TransportAction::RediscoverPath {
+                destination_hash,
+                skip_interface,
+            } = action
+            {
+                found.push((destination_hash, skip_interface));
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn failed_own_link_on_a_non_transport_node_rediscovers_the_path() {
+    let (tx, rx) = event::channel();
+    let (mut driver, _sent) = rediscovery_driver(tx, rx, false);
+    let dest = [0xB4; 16];
+
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    assert_eq!(
+        queued_rediscoveries(&mut driver, time::now()),
+        vec![(dest, None)]
+    );
+}
+
+#[test]
+fn failed_own_link_rediscovery_is_throttled_and_left_to_transport_and_shared_instances() {
+    let dest = [0xB5; 16];
+
+    // A recent path request for the destination.
+    let (tx, rx) = event::channel();
+    let (mut driver, _sent) = rediscovery_driver(tx, rx, false);
+    driver
+        .engine
+        .record_outbound_path_request(dest, time::now() - 5.0);
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    assert!(queued_rediscoveries(&mut driver, time::now()).is_empty());
+
+    // A transport node relies on its link table job.
+    let (tx, rx) = event::channel();
+    let (mut driver, _sent) = rediscovery_driver(tx, rx, true);
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    assert!(queued_rediscoveries(&mut driver, time::now()).is_empty());
+
+    // A shared instance client leaves the request to the instance.
+    let (tx, rx) = event::channel();
+    let (mut driver, _sent) = rediscovery_driver(tx, rx, false);
+    driver.connected_to_shared_instance = true;
+    driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed { dest_hash: dest }]);
+    assert!(queued_rediscoveries(&mut driver, time::now()).is_empty());
+}

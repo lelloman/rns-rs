@@ -1541,9 +1541,9 @@ impl Driver {
                         destination_hash,
                         tag,
                         ext_payload,
-                        interface,
+                        target,
                     } = *request;
-                    self.send_path_request(destination_hash, &tag, Some(&ext_payload), interface);
+                    self.send_path_request(destination_hash, &tag, Some(&ext_payload), target);
                 }
                 Event::CompleteStampedLink(keys) => {
                     let crate::common::event::StampedLinkKeys {
@@ -2139,17 +2139,95 @@ impl Driver {
                     let payload = crate::stamps::path_request_ext_payload(&stamp, 0);
                     let mut ext_payload = [0u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH];
                     ext_payload.copy_from_slice(&payload);
-                    self.send_path_request(dest_hash, &tag, Some(&ext_payload), None);
+                    self.send_path_request(
+                        dest_hash,
+                        &tag,
+                        Some(&ext_payload),
+                        PathRequestTarget::All,
+                    );
                 }
                 None => {
                     self.engine
                         .record_outbound_path_request(dest_hash, time::now());
-                    self.enqueue_path_request_stamp(dest_hash, tag.to_vec(), None);
+                    self.enqueue_path_request_stamp(
+                        dest_hash,
+                        tag.to_vec(),
+                        PathRequestTarget::All,
+                    );
                 }
             }
             return;
         }
-        self.send_path_request(dest_hash, &tag, None, None);
+        self.send_path_request(dest_hash, &tag, None, PathRequestTarget::All);
+    }
+
+    /// A link this node initiated was never established (Transport.py
+    /// 842-862). A transport node leaves its path alone: the link table job
+    /// rediscovers paths for the links it forwards. Any other node expires
+    /// the path, and unless a shared instance will send the request for it,
+    /// queues a new path request at most every `PATH_REQUEST_MI` seconds.
+    pub(crate) fn rediscover_path_after_failed_link(&mut self, dest_hash: [u8; 16]) {
+        if self.engine.transport_enabled() {
+            return;
+        }
+        self.engine.expire_path(&dest_hash);
+        if self.connected_to_shared_instance {
+            return;
+        }
+        let now = time::now();
+        let throttled = self
+            .engine
+            .last_path_request(&dest_hash)
+            .is_some_and(|requested_at| now - requested_at <= rns_core::constants::PATH_REQUEST_MI);
+        if !throttled {
+            log::trace!(target: rns_core::logging::PATHING_LOG_TARGET,
+                "Trying to rediscover path for {:02x?} since an attempted link was never established",
+                &dest_hash[..4]
+            );
+            self.engine.queue_path_rediscovery(dest_hash, None, now);
+        }
+    }
+
+    /// `Transport.handle_disovery_path_requests` for one queued destination.
+    ///
+    /// Without an interface to skip this is a plain path request. Otherwise
+    /// one request with a new tag goes out on every other interface; with
+    /// `STAMP_PRS` its stamp is ground once and the same stamped request is
+    /// sent everywhere (upstream acb38a8a). Like `stamp_path_request`, the
+    /// stamp cache is checked first, though a fresh tag never hits it.
+    pub(crate) fn rediscover_path(
+        &mut self,
+        dest_hash: [u8; 16],
+        skip_interface: Option<InterfaceId>,
+    ) {
+        let Some(skip_interface) = skip_interface else {
+            self.handle_request_path(dest_hash);
+            return;
+        };
+        let target = PathRequestTarget::AllExcept(skip_interface);
+        let mut tag = [0u8; 16];
+        self.rng.fill_bytes(&mut tag);
+        if self.engine.stamp_prs() {
+            log::trace!(target: rns_core::logging::PATHING_LOG_TARGET,
+                "Stamping discovery path request for {:02x?}",
+                &dest_hash[..4]
+            );
+            match self.stamper.cached_path_request_stamp(&dest_hash, &tag) {
+                Some(stamp) => {
+                    let payload = crate::stamps::path_request_ext_payload(&stamp, 0);
+                    let mut ext_payload = [0u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH];
+                    ext_payload.copy_from_slice(&payload);
+                    self.send_path_request(dest_hash, &tag, Some(&ext_payload), target);
+                }
+                None => {
+                    self.engine
+                        .record_outbound_path_request(dest_hash, time::now());
+                    self.enqueue_path_request_stamp(dest_hash, tag.to_vec(), target);
+                }
+            }
+            return;
+        }
+        self.send_path_request(dest_hash, &tag, None, target);
     }
 
     /// `Transport.enqueue_stamped_pr`: a full queue drops the request.
@@ -2157,12 +2235,12 @@ impl Driver {
         &mut self,
         dest_hash: [u8; 16],
         tag: Vec<u8>,
-        interface: Option<InterfaceId>,
+        target: PathRequestTarget,
     ) {
         let job = crate::stamper::PathRequestStampJob {
             destination_hash: dest_hash,
             tag,
-            interface,
+            target,
         };
         if self.stamper.enqueue_path_request(job).is_err() {
             log::debug!(
@@ -2172,28 +2250,42 @@ impl Driver {
         }
     }
 
-    /// Build and send a path request frame, broadcast when `interface` is
-    /// `None` or on that interface alone when forwarding a local client's
-    /// request.
+    /// Build and send a path request frame: broadcast, on one interface
+    /// alone when forwarding a local client's request, or on every interface
+    /// but one when rediscovering a path.
     pub(crate) fn send_path_request(
         &mut self,
         dest_hash: [u8; 16],
         tag: &[u8],
         ext_payload: Option<&[u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH]>,
-        interface: Option<InterfaceId>,
+        target: PathRequestTarget,
     ) {
         let Some(raw) = self.engine.build_path_request(&dest_hash, tag, ext_payload) else {
             return;
         };
         let now = time::now();
-        match interface {
-            Some(interface) => {
+        match target {
+            PathRequestTarget::Interface(interface) => {
                 self.dispatch_all(vec![TransportAction::SendOnInterface {
                     interface,
                     raw: raw.into(),
                 }]);
             }
-            None => {
+            PathRequestTarget::AllExcept(skip_interface) => {
+                self.engine.record_outbound_path_request(dest_hash, now);
+                let raw: PacketBytes = raw.into();
+                let actions = self
+                    .engine
+                    .out_capable_interfaces()
+                    .filter(|interface| *interface != skip_interface)
+                    .map(|interface| TransportAction::SendOnInterface {
+                        interface,
+                        raw: raw.clone(),
+                    })
+                    .collect();
+                self.dispatch_all(actions);
+            }
+            PathRequestTarget::All => {
                 let Ok(packet) = RawPacket::unpack(&raw) else {
                     return;
                 };

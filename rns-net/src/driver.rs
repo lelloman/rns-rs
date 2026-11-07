@@ -27,6 +27,7 @@ use rns_crypto::{OsRng, Rng};
 
 #[cfg(feature = "hooks")]
 use crate::provider_bridge::ProviderBridge;
+use crate::stamper::PathRequestTarget;
 #[cfg(feature = "hooks")]
 use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot};
 
@@ -780,6 +781,10 @@ pub struct Driver {
     /// Whether `lifecycle_state` is still `Active`, shared with the node
     /// handle so that each API call can check it without a driver query.
     pub(crate) accepting_work: Arc<AtomicBool>,
+    /// This node is a client of a shared instance, which sends the path
+    /// requests that rediscover paths for it
+    /// (`Transport.owner.is_connected_to_shared_instance`).
+    pub(crate) connected_to_shared_instance: bool,
     pub(crate) drain_started_at: Option<Instant>,
     pub(crate) drain_deadline: Option<Instant>,
     pub(crate) listener_controls: Vec<crate::interface::ListenerControl>,
@@ -1072,6 +1077,7 @@ impl Driver {
             started: time::now(),
             lifecycle_state: LifecycleState::Active,
             accepting_work: Arc::new(AtomicBool::new(true)),
+            connected_to_shared_instance: false,
             drain_started_at: None,
             drain_deadline: None,
             listener_controls: Vec::new(),

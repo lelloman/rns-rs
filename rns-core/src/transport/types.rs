@@ -336,6 +336,17 @@ pub enum TransportAction {
         tag: Vec<u8>,
         interface: InterfaceId,
     },
+    /// Send a path request to rediscover `destination_hash`, taken from the
+    /// rediscovery queue (`Transport.handle_disovery_path_requests`).
+    ///
+    /// With no `skip_interface` this is a plain `Transport.request_path`, as
+    /// `Event::RequestPath` sends. Otherwise one request with a new tag goes
+    /// out on every interface except `skip_interface`, stamped once when
+    /// path request stamping is on (upstream acb38a8a).
+    RediscoverPath {
+        destination_hash: [u8; 16],
+        skip_interface: Option<InterfaceId>,
+    },
 }
 
 /// A blackholed identity entry.
