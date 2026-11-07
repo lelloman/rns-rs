@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::logs::{LogPolicy, LogStore};
 use crate::self_exec::{resolve_self_exec, self_exec_display};
@@ -21,6 +21,7 @@ use rns_net::{event::DrainStatus, HookInfo, RpcAddr, RpcClient};
 mod drain;
 mod process;
 mod readiness;
+mod wake;
 
 use self::process::{
     check_exits, exit_code, role_from_name, spawn_child, terminate_child, terminate_children,
@@ -94,7 +95,8 @@ pub struct SupervisorConfig {
 pub struct Supervisor {
     specs: Vec<ProcessSpec>,
     shared_state: Option<SharedState>,
-    control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
+    /// Taken by a run, which forwards commands to its loop.
+    control_rx: std::sync::Mutex<Option<mpsc::Receiver<ProcessControlCommand>>>,
     readiness: Vec<ProcessReadiness>,
     log_store: Option<LogStore>,
     rnsd_drain: Option<RnsdDrainConfig>,
@@ -125,7 +127,7 @@ impl Supervisor {
         Self {
             specs: config.specs,
             shared_state: config.shared_state,
-            control_rx: config.control_rx,
+            control_rx: std::sync::Mutex::new(config.control_rx),
             readiness: config.readiness,
             log_store: config
                 .log_dir
@@ -155,21 +157,34 @@ impl Supervisor {
 
         on_started()?;
 
-        let stop_rx = install_signal_handlers();
+        let wake = wake::Wake::new().map_err(|e| format!("cannot set up the supervisor: {}", e))?;
+        wake.install_signal_handlers();
+        let control = self.forward_control_commands(wake.waker());
+        let mut exit_watches: HashMap<u32, std::os::fd::OwnedFd> = HashMap::new();
+        let mut next_probe = Instant::now();
+        let mut stop = false;
 
         loop {
-            if stop_rx.try_recv().is_ok() {
+            if stop {
                 log::info!("shutdown requested");
                 self.drain_rnsd(&children, "supervisor shutdown");
                 terminate_children(&mut children, self.shared_state.as_ref(), &self.readiness);
                 return Ok(0);
             }
 
-            if let Some(command) = self.next_control_command() {
+            while let Some(command) = control.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 self.handle_control_command(command, &mut children)?;
             }
 
-            self.refresh_readiness();
+            if Instant::now() >= next_probe {
+                // Often while a process is starting, then as a health check.
+                let interval = if self.refresh_readiness() {
+                    READINESS_HEALTH_INTERVAL
+                } else {
+                    READINESS_STARTUP_INTERVAL
+                };
+                next_probe = Instant::now() + interval;
+            }
 
             if let Some((role, status)) = check_exits(&mut children)? {
                 log::warn!("{} exited with status {}", role.display_name(), status);
@@ -188,10 +203,72 @@ impl Supervisor {
                 return Ok(exit_code(status));
             }
 
-            std::thread::sleep(Duration::from_millis(200));
+            // Sleep until a child exits, a command or signal arrives, or the
+            // next probe is due. Without a way to watch a child's exit, check
+            // as often as the threads before did.
+            exit_watches.retain(|pid, _| children.iter().any(|c| c.child.id() == *pid));
+            let mut watched = true;
+            for managed in &children {
+                let pid = managed.child.id();
+                if let std::collections::hash_map::Entry::Vacant(entry) = exit_watches.entry(pid) {
+                    match wake::exit_watch(pid) {
+                        Some(fd) => {
+                            entry.insert(fd);
+                        }
+                        None => watched = false,
+                    }
+                }
+            }
+            let mut timeout = next_probe
+                .saturating_duration_since(Instant::now())
+                .min(READINESS_HEALTH_INTERVAL);
+            if !watched {
+                timeout = timeout.min(UNWATCHED_EXIT_CHECK);
+            }
+            let fds: Vec<_> = exit_watches
+                .values()
+                .map(std::os::fd::AsRawFd::as_raw_fd)
+                .collect();
+            stop = wake.wait(&fds, timeout);
         }
     }
+
+    /// Hand control commands to the loop through a channel of the run's
+    /// own, waking it for each.
+    fn forward_control_commands(
+        &self,
+        waker: wake::Waker,
+    ) -> Option<mpsc::Receiver<ProcessControlCommand>> {
+        let commands = self
+            .control_rx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()?;
+        let (tx, rx) = mpsc::channel();
+        let spawned = thread::Builder::new()
+            .name("supervisor-ctl".into())
+            .spawn(move || {
+                while let Ok(command) = commands.recv() {
+                    if tx.send(command).is_err() {
+                        return;
+                    }
+                    waker.wake();
+                }
+            });
+        if let Err(e) = spawned {
+            log::error!("cannot take process control commands: {}", e);
+            return None;
+        }
+        Some(rx)
+    }
 }
+
+/// How often readiness is probed while some process is not ready.
+const READINESS_STARTUP_INTERVAL: Duration = Duration::from_millis(200);
+/// How often readiness is probed once every process is ready.
+const READINESS_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
+/// How often children are checked for an exit when it cannot be watched.
+const UNWATCHED_EXIT_CHECK: Duration = Duration::from_millis(200);
 
 impl Supervisor {
     fn restart_unexpected_exit(
@@ -236,10 +313,6 @@ impl Supervisor {
         thread::sleep(UNEXPECTED_RESTART_BACKOFF);
         children[index] = spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone())?;
         Ok(true)
-    }
-
-    fn next_control_command(&self) -> Option<ProcessControlCommand> {
-        self.control_rx.as_ref().and_then(|rx| rx.try_recv().ok())
     }
 
     fn handle_control_command(
@@ -340,45 +413,20 @@ impl Supervisor {
         Ok(())
     }
 
-    fn refresh_readiness(&self) {
+    /// Probe every process's readiness, returning whether all are ready.
+    fn refresh_readiness(&self) -> bool {
         let Some(state) = self.shared_state.as_ref() else {
-            return;
+            return true;
         };
 
+        let mut all_ready = true;
         for readiness in &self.readiness {
             let (ready, ready_state, detail) = readiness.probe(state);
+            all_ready &= ready;
             set_process_readiness(state, readiness.name(), ready, ready_state, detail);
         }
+        all_ready
     }
-}
-
-static STOP_TX: std::sync::Mutex<Option<mpsc::Sender<()>>> = std::sync::Mutex::new(None);
-
-extern "C" fn signal_handler(_sig: libc::c_int) {
-    if let Ok(guard) = STOP_TX.lock() {
-        if let Some(ref tx) = *guard {
-            let _ = tx.send(());
-        }
-    }
-}
-
-fn install_signal_handlers() -> mpsc::Receiver<()> {
-    let (stop_tx, stop_rx) = mpsc::channel();
-    match STOP_TX.lock() {
-        Ok(mut guard) => {
-            guard.replace(stop_tx);
-        }
-        Err(poisoned) => {
-            log::error!("recovering from poisoned supervisor stop-channel lock");
-            poisoned.into_inner().replace(stop_tx);
-        }
-    }
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGINT, signal_handler as *const () as usize);
-        libc::signal(libc::SIGTERM, signal_handler as *const () as usize);
-    }
-    stop_rx
 }
 
 #[cfg(test)]
@@ -394,7 +442,7 @@ mod tests {
     };
     use super::{
         ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role,
-        Supervisor, SupervisorConfig, STOP_TX,
+        Supervisor, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::{
@@ -1052,6 +1100,9 @@ mod tests {
 
     #[test]
     fn supervisor_restarts_unexpectedly_exited_child_instead_of_exiting() {
+        let _stops = STOP_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp_root = std::env::temp_dir().join(format!(
             "rns-server-supervisor-test-{}-{}",
             std::process::id(),
@@ -1114,7 +1165,7 @@ mod tests {
         assert_eq!(restart_count, 1);
         assert_eq!(std::fs::read_to_string(&count_path).unwrap(), "2");
 
-        STOP_TX.lock().unwrap().as_ref().unwrap().send(()).unwrap();
+        super::wake::request_stop();
         let result = result_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(result.unwrap(), 0);
         handle.join().unwrap();
@@ -1143,5 +1194,84 @@ mod tests {
         }
 
         panic!("failed to allocate rpc server address for test");
+    }
+
+    /// Stopping reaches the latest run only, so tests that stop a run take
+    /// turns.
+    static STOP_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn voluntary_switches(tid: i64) -> u64 {
+        let status = std::fs::read_to_string(format!("/proc/self/task/{tid}/status")).unwrap();
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("voluntary_ctxt_switches:"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    #[test]
+    fn supervisor_sleeps_until_a_command_or_a_child_exit_needs_it() {
+        let _stops = STOP_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rns-sentineld");
+        let (control_tx, control_rx) = mpsc::channel();
+        let supervisor = Supervisor::new(SupervisorConfig {
+            specs: vec![ProcessSpec {
+                role: Role::Sentineld,
+                command: ProcessCommand::External(PathBuf::from("/bin/sleep")),
+                args: vec!["30".into()],
+            }],
+            shared_state: Some(state.clone()),
+            control_rx: Some(control_rx),
+            readiness: Vec::new(),
+            log_dir: None,
+            rnsd_drain: None,
+        });
+        let (tid_tx, tid_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            // SAFETY: gettid has no preconditions.
+            let _ = tid_tx.send(unsafe { libc::gettid() } as i64);
+            let _ = result_tx.send(supervisor.run());
+        });
+        let tid = tid_rx.recv().unwrap();
+
+        // Idle: a child running, nothing to do. The loop used to wake five
+        // times a second.
+        std::thread::sleep(Duration::from_millis(300));
+        let before = voluntary_switches(tid);
+        std::thread::sleep(Duration::from_secs(1));
+        let woke = voluntary_switches(tid) - before;
+        assert!(
+            woke <= 2,
+            "supervisor woke {woke} times in a second while idle"
+        );
+
+        // A command is handled as soon as it arrives.
+        let sent = std::time::Instant::now();
+        control_tx
+            .send(rns_ctl::state::ProcessControlCommand::Stop(
+                "rns-sentineld".into(),
+            ))
+            .unwrap();
+        while state.read().unwrap().processes["rns-sentineld"]
+            .pid
+            .is_some()
+        {
+            assert!(
+                sent.elapsed() < Duration::from_secs(2),
+                "stop command not handled"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        super::wake::request_stop();
+        let result = result_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(result.unwrap(), 0);
+        handle.join().unwrap();
     }
 }
