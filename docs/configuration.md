@@ -42,7 +42,7 @@ error; see [Building](building.md#selecting-interfaces).
 | `enable_interface_management` | `true` | Set to `false` to block `rnstatus --attach/--detach/--reload` |
 | `panic_on_interface_error` | `false` | Abort instead of continuing when an interface fails |
 | `packet_hashlist_max_entries` | `250000` | Size of the bounded dedup table |
-| `packet_hashlist_allocation` | `eager` | `eager` prefaults the table at startup; `lazy` grows it |
+| `packet_hashlist_allocation` | `lazy` | `lazy` grows the table with the packets seen, up to `packet_hashlist_max_entries`; `eager` holds the full table's memory from startup |
 | `link_mtu_discovery` | `yes` | Set to `no` to omit MTU signalling from outbound link requests |
 | `hop_limiter` | `128` | Drop inbound packets whose hop count reaches this limit, counted per interface as `hop_limiter_hits` (`rnstatus` "Hop Limit"); clamped to 1-128 |
 | `underlay_mark` | unset | Linux `SO_MARK` for owned IP sockets, see below |

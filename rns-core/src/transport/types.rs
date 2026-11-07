@@ -390,10 +390,12 @@ impl Default for StampRequirements {
 /// Configuration for TransportEngine.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PacketHashlistAllocation {
-    /// Touch every payload slot during construction.
-    #[default]
+    /// Touch every payload slot during construction: the full table's
+    /// memory from the start.
     Eager,
-    /// Grow payload storage and its index with occupancy, up to the retention limit.
+    /// Grow payload storage and its index with occupancy, up to the
+    /// retention limit: a node holds memory for the packets it has seen.
+    #[default]
     Lazy,
 }
 
