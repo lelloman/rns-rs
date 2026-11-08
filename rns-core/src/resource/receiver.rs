@@ -1170,8 +1170,10 @@ mod tests {
                 let mut stream = token.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE);
                 receiver.prepare_decrypt_stream(&mut stream);
                 // Fed in order from the first, as a decrypting thread is.
-                let parts: Vec<Vec<u8>> =
-                    receiver.parts_in_order_from(0).map(<[u8]>::to_vec).collect();
+                let parts: Vec<Vec<u8>> = receiver
+                    .parts_in_order_from(0)
+                    .map(<[u8]>::to_vec)
+                    .collect();
                 assert_eq!(parts.len(), total);
                 assert_eq!(receiver.parts_in_order_from(total).count(), 0);
                 for part in &parts[..fed] {
