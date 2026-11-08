@@ -1,7 +1,7 @@
 [package]
 name = "rns-server"
 description = "Batteries-included Reticulum node server"
-version = "0.6.1"
+version = "0.6.2"
 edition.workspace = true
 license-file.workspace = true
 publish = ["crates-io"]
@@ -34,9 +34,9 @@ rns-hooks-native = ["rns-cli/rns-hooks-native", "rns-net/rns-hooks-native", "rns
 rns-hooks-builtin = ["rns-cli/rns-hooks-builtin", "rns-net/rns-hooks-builtin", "rns-ctl/rns-hooks-builtin"]
 
 [dependencies]
-rns-cli = { version = "0.7.1", path = "../rns-cli", default-features = false }
+rns-cli = { version = "0.8.0", path = "../rns-cli", default-features = false }
 rns-net.workspace = true
-rns-ctl = { version = "0.7.1", path = "../rns-ctl", default-features = false }
+rns-ctl = { version = "0.8.0", path = "../rns-ctl", default-features = false }
 env_logger = "0.11"
 libc = "0.2"
 log = "0.4"
