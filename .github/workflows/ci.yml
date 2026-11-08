@@ -43,6 +43,18 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      # The wrapper downloads Gradle once and does not retry, so fetch it here
+      # with retries before the build needs it.
+      - name: Download Gradle
+        working-directory: rns-tun-android
+        run: |
+          for attempt in 1 2 3 4 5; do
+            ./gradlew --version && exit 0
+            echo "Gradle download attempt $attempt failed; retrying"
+            sleep $((attempt * 15))
+          done
+          exit 1
+
       - name: Test and assemble Android client
         working-directory: rns-tun-android
         run: ./gradlew testDebugUnitTest assembleDebug
