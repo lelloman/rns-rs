@@ -9460,6 +9460,95 @@ fn prove_all_generates_proof_on_delivery() {
 }
 
 #[test]
+fn proofs_go_back_only_on_the_receiving_interface() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(
+        TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            local_hops_delta: 0,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
+        },
+        rx,
+        tx.clone(),
+        Box::new(cbs),
+    );
+    let mut sent = Vec::new();
+    for id in [1, 2] {
+        driver.engine.register_interface(make_interface_info(id));
+        let (writer, frames) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
+        sent.push(frames);
+    }
+
+    // Register a destination with ProveAll
+    let dest = [0xDD; 16];
+    let identity = Identity::new(&mut OsRng);
+    let prv_key = identity.get_private_key().unwrap();
+    driver
+        .engine
+        .register_destination(dest, constants::DESTINATION_SINGLE);
+    driver.proof_strategies.insert(
+        dest,
+        (
+            rns_core::types::ProofStrategy::ProveAll,
+            Some(Identity::from_private_key(&prv_key)),
+        ),
+    );
+
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+    tx.send(Event::Frame {
+        interface_id: InterfaceId(2),
+        data: packet.raw.into(),
+        rssi: None,
+        snr: None,
+    })
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    assert_eq!(deliveries.lock().unwrap().len(), 1);
+    let proofs = |frames: &Arc<Mutex<Vec<Vec<u8>>>>| {
+        frames
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|raw| {
+                PacketFlags::unpack(raw[0] & 0x7F).packet_type == constants::PACKET_TYPE_PROOF
+            })
+            .count()
+    };
+    // As upstream attaches a proof to the proved packet's interface, rather
+    // than broadcasting it on every interface.
+    assert_eq!(proofs(&sent[1]), 1, "proved on the receiving interface");
+    assert_eq!(proofs(&sent[0]), 0, "not sent on other interfaces");
+}
+
+#[test]
 fn prove_none_does_not_generate_proof() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
@@ -13891,7 +13980,7 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
         ),
     );
     let received = [0x31; 32];
-    driver.maybe_generate_proof(dest, &received);
+    driver.maybe_generate_proof(dest, &received, None);
     assert!(
         sent.lock().unwrap().is_empty(),
         "signed on the pool, not inline"

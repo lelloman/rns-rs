@@ -553,7 +553,11 @@ impl LinkManager {
     ) -> bool {
         self.proof_pool().is_some_and(|pool| {
             pool.submit_verify(
-                proof_pool::Owner::Packet { destination, rtt },
+                proof_pool::Owner::Packet {
+                    destination,
+                    rtt,
+                    interface: None,
+                },
                 packet_hash,
                 signature,
                 key,
@@ -561,13 +565,14 @@ impl LinkManager {
         })
     }
 
-    /// Queue the signature of a single packet's proof on the proof pool.
-    /// False without a pool or when it is full, for the caller to sign it
-    /// inline.
+    /// Queue the signature of a single packet's proof on the proof pool;
+    /// the proof goes back on `interface`, where the packet arrived. False
+    /// without a pool or when it is full, for the caller to sign it inline.
     pub(crate) fn submit_packet_proof_sign(
         &mut self,
         destination: [u8; 16],
         packet_hash: [u8; 32],
+        interface: Option<rns_core::transport::types::InterfaceId>,
         key: Ed25519PrivateKey,
     ) -> bool {
         self.proof_pool().is_some_and(|pool| {
@@ -575,6 +580,7 @@ impl LinkManager {
                 proof_pool::Owner::Packet {
                     destination,
                     rtt: 0.0,
+                    interface,
                 },
                 packet_hash,
                 key,

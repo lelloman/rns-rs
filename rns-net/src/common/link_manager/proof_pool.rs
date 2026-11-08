@@ -64,8 +64,14 @@ pub(crate) enum Owner {
     /// A packet sent or received on this link.
     Link(LinkId),
     /// A single packet sent to or received for `destination`. For a check,
-    /// `rtt` is the round trip measured when the proof arrived.
-    Packet { destination: [u8; 16], rtt: f64 },
+    /// `rtt` is the round trip measured when the proof arrived; for a
+    /// signature, `interface` is where the proved packet arrived, which its
+    /// proof goes back on.
+    Packet {
+        destination: [u8; 16],
+        rtt: f64,
+        interface: Option<rns_core::transport::types::InterfaceId>,
+    },
 }
 
 enum Job {
@@ -92,6 +98,8 @@ enum Job {
 pub(crate) struct Decryption {
     pub(crate) destination: [u8; 16],
     pub(crate) packet_hash: [u8; 32],
+    /// Where the packet arrived, which its proof goes back on.
+    pub(crate) interface: rns_core::transport::types::InterfaceId,
     pub(crate) ciphertext: Vec<u8>,
     pub(crate) key: DecryptionKey,
 }
@@ -141,6 +149,7 @@ pub(crate) enum Outcome {
     Decrypted {
         destination: [u8; 16],
         packet_hash: [u8; 32],
+        interface: rns_core::transport::types::InterfaceId,
         plaintext: Option<Vec<u8>>,
     },
 }
@@ -175,6 +184,7 @@ impl Job {
             Job::Decrypt(decryption) => Outcome::Decrypted {
                 destination: decryption.destination,
                 packet_hash: decryption.packet_hash,
+                interface: decryption.interface,
                 plaintext: decryption.run(),
             },
         }

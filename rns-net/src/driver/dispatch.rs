@@ -186,7 +186,15 @@ impl Driver {
         }
     }
 
-    pub(crate) fn maybe_generate_proof(&mut self, dest_hash: [u8; 16], packet_hash: &[u8; 32]) {
+    /// Prove a packet received for `dest_hash` as its proof strategy says.
+    /// The proof goes back on `interface`, where the packet arrived, as
+    /// upstream attaches it; without one it is sent as transport routes it.
+    pub(crate) fn maybe_generate_proof(
+        &mut self,
+        dest_hash: [u8; 16],
+        packet_hash: &[u8; 32],
+        interface: Option<InterfaceId>,
+    ) {
         use rns_core::types::ProofStrategy;
 
         let (strategy, identity) = match self.proof_strategies.get(&dest_hash) {
@@ -221,10 +229,12 @@ impl Driver {
         // Signed on the proof pool when there is one: the proof goes out once
         // the driver takes the signature back.
         if let Some(key) = identity.signing_key() {
-            if self
-                .link_manager
-                .submit_packet_proof_sign(dest_hash, *packet_hash, key.clone())
-            {
+            if self.link_manager.submit_packet_proof_sign(
+                dest_hash,
+                *packet_hash,
+                interface,
+                key.clone(),
+            ) {
                 return;
             }
         }
@@ -235,15 +245,17 @@ impl Driver {
                 return;
             }
         };
-        self.send_packet_proof(dest_hash, packet_hash, &signature);
+        self.send_packet_proof(dest_hash, packet_hash, &signature, interface);
     }
 
-    /// Send the proof of a packet received for `dest_hash`.
+    /// Send the proof of a packet received for `dest_hash` on `interface`,
+    /// where the packet arrived.
     fn send_packet_proof(
         &mut self,
         dest_hash: [u8; 16],
         packet_hash: &[u8; 32],
         signature: &[u8; 64],
+        interface: Option<InterfaceId>,
     ) {
         // Build explicit proof: [packet_hash:32][signature:64]
         let mut proof_data = Vec::with_capacity(96);
@@ -277,7 +289,7 @@ impl Driver {
             let actions = self.engine.handle_outbound(
                 &packet,
                 rns_core::constants::DESTINATION_SINGLE,
-                None,
+                interface,
                 time::now(),
             );
             self.dispatch_all(actions);
@@ -359,6 +371,7 @@ impl Driver {
         &mut self,
         destination: [u8; 16],
         packet_hash: [u8; 32],
+        interface: InterfaceId,
         ciphertext: Vec<u8>,
         identity: Arc<rns_crypto::identity::Identity>,
     ) {
@@ -378,6 +391,7 @@ impl Driver {
         let decryption = Box::new(Decryption {
             destination,
             packet_hash,
+            interface,
             ciphertext,
             key,
         });
@@ -389,7 +403,7 @@ impl Driver {
         };
         if let Err(decryption) = submitted {
             let plaintext = decryption.run();
-            self.deliver_decrypted(destination, packet_hash, plaintext);
+            self.deliver_decrypted(destination, packet_hash, interface, plaintext);
         }
     }
 
@@ -398,6 +412,7 @@ impl Driver {
         &mut self,
         destination: [u8; 16],
         packet_hash: [u8; 32],
+        interface: InterfaceId,
         plaintext: Option<Vec<u8>>,
     ) {
         let Some(plaintext) = plaintext else {
@@ -407,7 +422,7 @@ impl Driver {
             );
             return;
         };
-        self.maybe_generate_proof(destination, &packet_hash);
+        self.maybe_generate_proof(destination, &packet_hash, Some(interface));
         self.callbacks.on_packet_received(
             rns_core::types::DestHash(destination),
             plaintext,
@@ -424,7 +439,10 @@ impl Driver {
         for outcome in outcomes.drain(..) {
             match outcome {
                 ProofOutcome::Verified {
-                    owner: ProofOwner::Packet { destination, rtt },
+                    owner:
+                        ProofOwner::Packet {
+                            destination, rtt, ..
+                        },
                     packet_hash,
                     valid,
                 } => {
@@ -436,10 +454,15 @@ impl Driver {
                     }
                 }
                 ProofOutcome::Signed {
-                    owner: ProofOwner::Packet { destination, .. },
+                    owner:
+                        ProofOwner::Packet {
+                            destination,
+                            interface,
+                            ..
+                        },
                     packet_hash,
                     signature,
-                } => self.send_packet_proof(destination, &packet_hash, &signature),
+                } => self.send_packet_proof(destination, &packet_hash, &signature, interface),
                 ProofOutcome::Encrypted {
                     ticket,
                     destination,
@@ -448,8 +471,9 @@ impl Driver {
                 ProofOutcome::Decrypted {
                     destination,
                     packet_hash,
+                    interface,
                     plaintext,
-                } => self.deliver_decrypted(destination, packet_hash, plaintext),
+                } => self.deliver_decrypted(destination, packet_hash, interface, plaintext),
                 // Link outcomes are applied by the link manager.
                 ProofOutcome::Verified { .. } | ProofOutcome::Signed { .. } => {}
             }
@@ -1252,13 +1276,18 @@ impl Driver {
             if link_actions.is_empty() {
                 self.link_actions.give(link_actions);
                 let packet_hash = delivered_packet_hash(&raw, packet_hash);
-                self.deliver_to_destination(destination_hash, &raw, packet_hash);
+                self.deliver_to_destination(
+                    destination_hash,
+                    &raw,
+                    packet_hash,
+                    receiving_interface,
+                );
             } else {
                 self.dispatch_link_actions(link_actions);
             }
         } else {
             let packet_hash = delivered_packet_hash(&raw, packet_hash);
-            self.deliver_to_destination(destination_hash, &raw, packet_hash);
+            self.deliver_to_destination(destination_hash, &raw, packet_hash, receiving_interface);
         }
     }
 
@@ -1270,6 +1299,7 @@ impl Driver {
         destination_hash: [u8; 16],
         raw: &[u8],
         packet_hash: [u8; 32],
+        receiving_interface: InterfaceId,
     ) {
         // Every transported proof is also offered to local receipts. The
         // header carries all the check needs; the packet hash is known.
@@ -1284,12 +1314,18 @@ impl Driver {
                 if let Some(identity) = self.decrypted_destinations.get(&destination_hash) {
                     let identity = Arc::clone(identity);
                     let ciphertext = packet.data.to_vec();
-                    self.decrypt_for_delivery(destination_hash, packet_hash, ciphertext, identity);
+                    self.decrypt_for_delivery(
+                        destination_hash,
+                        packet_hash,
+                        receiving_interface,
+                        ciphertext,
+                        identity,
+                    );
                     return;
                 }
             }
         }
-        self.maybe_generate_proof(destination_hash, &packet_hash);
+        self.maybe_generate_proof(destination_hash, &packet_hash, Some(receiving_interface));
         self.callbacks.on_local_delivery(
             rns_core::types::DestHash(destination_hash),
             raw.to_vec(),
