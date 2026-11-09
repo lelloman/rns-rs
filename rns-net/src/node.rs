@@ -4062,6 +4062,36 @@ impl RnsNode {
         }
     }
 
+    /// The RSSI a received packet arrived with, when its interface reports
+    /// it (`Reticulum.get_packet_rssi`). The latest 512 such packets are
+    /// remembered.
+    pub fn packet_rssi(&self, packet_hash: &[u8; 32]) -> Result<Option<i16>, SendError> {
+        Ok(self.packet_signal(packet_hash)?.and_then(|s| s.rssi))
+    }
+
+    /// The SNR a received packet arrived with (`Reticulum.get_packet_snr`).
+    pub fn packet_snr(&self, packet_hash: &[u8; 32]) -> Result<Option<f32>, SendError> {
+        Ok(self.packet_signal(packet_hash)?.and_then(|s| s.snr))
+    }
+
+    /// The link quality, in percent, its interface reported when a packet
+    /// arrived (`Reticulum.get_packet_q`).
+    pub fn packet_q(&self, packet_hash: &[u8; 32]) -> Result<Option<f64>, SendError> {
+        Ok(self.packet_signal(packet_hash)?.and_then(|s| s.q))
+    }
+
+    fn packet_signal(
+        &self,
+        packet_hash: &[u8; 32],
+    ) -> Result<Option<crate::event::PacketSignal>, SendError> {
+        match self.query(QueryRequest::PacketSignal {
+            packet_hash: *packet_hash,
+        })? {
+            QueryResponse::PacketSignal(signal) => Ok(signal),
+            _ => Ok(None),
+        }
+    }
+
     /// Get hop count to a destination (synchronous query).
     pub fn hops_to(&self, dest_hash: &rns_core::types::DestHash) -> Result<Option<u8>, SendError> {
         match self.query(QueryRequest::HopsTo {

@@ -14,11 +14,11 @@ pub use crate::common::event::{
     DrainStatus, DynamicInterfaceRegistration, HolePunchPolicy, HookInfo,
     InterfaceManagementOperation, InterfaceStatsResponse, InterfaceTelemetry,
     KnownDestinationEntry, LifecycleState, LinkDatagramError, LinkDistributionEntry, LinkInfoEntry,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats,
-    ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry,
-    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
-    RuntimeConfigSource, RuntimeConfigValue, SendProbeError, SingleInterfaceStat, TrafficDetail,
-    MAX_PROBE_PAYLOAD_SIZE,
+    LocalDestinationEntry, NextHopResponse, PacketSignal, PathTableEntry,
+    ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
+    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SendProbeError,
+    SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
 };
 
 /// Concrete Event type using boxed sync Writer.
