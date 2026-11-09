@@ -596,6 +596,7 @@ impl Driver {
             self.dispatch_holepunch_actions(hp_actions);
         }
         self.tick_management_announces(now);
+        self.tick_blackhole_updater(now);
         self.sent_packets
             .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
         let sent_packets = &self.sent_packets;

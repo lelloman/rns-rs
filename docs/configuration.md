@@ -392,6 +392,26 @@ With `publish_blackhole = yes` the node publishes its list on the
 `rnstransport.info.blackhole` destination, in upstream's format, for other
 nodes to read with `rnpath -R <transport identity> -p` or subscribe to.
 
+To subscribe, list the transport identities whose published lists this node
+should apply:
+
+```ini
+[reticulum]
+  blackhole_sources = 521c87a83afb8f29e4455e77930b973b, 9fd2e0d1d4e5a8f3b6c7d8e9f0a1b2c3
+  # Minutes between fetches from each source; at least 2, default 60.
+  blackhole_update_interval = 60
+```
+
+As upstream's blackhole updater does, a shared or standalone instance with
+sources checks them every minute, starting 20 seconds after startup. For a
+source whose list is due, it waits for a path to the source's
+`rnstransport.info.blackhole` destination, links to it and requests `/list`.
+Entries this node does not have yet are added with the source recorded,
+paths to their identities are dropped, and the list is saved to
+`storage/blackhole/<source identity hash>`. At startup the node loads the
+saved lists of the sources still configured; the list of a source removed
+from `blackhole_sources` is kept on disk but no longer applied.
+
 ## Ingress control
 
 The upstream manual's "Protecting Open Networks" page (renamed from the

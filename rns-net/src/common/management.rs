@@ -245,6 +245,10 @@ pub struct ManagementConfig {
     pub remote_management_allowed: Vec<[u8; 16]>,
     /// Enable blackhole list publication.
     pub publish_blackhole: bool,
+    /// Transport identities whose published blackhole lists are fetched.
+    pub blackhole_sources: Vec<[u8; 16]>,
+    /// Seconds between fetches from each source; `None` for an hour.
+    pub blackhole_update_interval: Option<f64>,
 }
 
 /// Handle a `/status` request.

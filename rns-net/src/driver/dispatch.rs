@@ -2129,6 +2129,10 @@ impl Driver {
                         rtt,
                         is_initiator,
                     );
+                    if is_initiator && self.blackhole_update_source(&link_id).is_some() {
+                        self.blackhole_update_link_established(link_id);
+                        continue;
+                    }
                     self.callbacks.on_link_established(
                         rns_core::types::LinkId(link_id),
                         rns_core::types::DestHash(dest_hash),
@@ -2164,6 +2168,10 @@ impl Driver {
                     }
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
                     self.holepunch_manager.link_closed(&link_id);
+                    if self.blackhole_update_source(&link_id).is_some() {
+                        self.blackhole_update_link_closed(&link_id);
+                        continue;
+                    }
                     self.callbacks
                         .on_link_closed(rns_core::types::LinkId(link_id), reason);
                 }
@@ -2398,6 +2406,10 @@ impl Driver {
                     data,
                     metadata,
                 } => {
+                    if let Some(source) = self.blackhole_update_source(&link_id) {
+                        self.blackhole_update_response(link_id, source, Some(&data));
+                        continue;
+                    }
                     self.callbacks.on_response_with_metadata(
                         rns_core::types::LinkId(link_id),
                         request_id,
@@ -2410,6 +2422,11 @@ impl Driver {
                     request_id,
                     reason,
                 } => {
+                    if let Some(source) = self.blackhole_update_source(&link_id) {
+                        log::debug!("Blackhole list request failed: {reason:?}");
+                        self.blackhole_update_response(link_id, source, None);
+                        continue;
+                    }
                     self.callbacks.on_request_failed(
                         rns_core::types::LinkId(link_id),
                         request_id,

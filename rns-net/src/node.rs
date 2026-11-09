@@ -1521,6 +1521,8 @@ impl RnsNode {
                     enable_remote_management: rns_config.reticulum.enable_remote_management,
                     remote_management_allowed: mgmt_allowed,
                     publish_blackhole: rns_config.reticulum.publish_blackhole,
+                    blackhole_sources: rns_config.reticulum.blackhole_sources.clone(),
+                    blackhole_update_interval: rns_config.reticulum.blackhole_update_interval,
                 }
             },
             probe_port: rns_config.reticulum.probe_port,
@@ -2360,7 +2362,9 @@ impl RnsNode {
                 .join("storage")
                 .join("blackhole");
             let _ = std::fs::create_dir_all(&blackhole_path);
+            driver.blackhole_sources = config.management.blackhole_sources.clone();
             driver.load_blackhole(blackhole_path);
+            driver.enable_blackhole_updater(config.management.blackhole_update_interval);
         }
 
         // Restore after static interfaces and the announce cache are available,

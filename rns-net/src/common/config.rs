@@ -57,6 +57,13 @@ pub struct ReticulumSection {
     pub enable_remote_management: bool,
     pub remote_management_allowed: Vec<String>,
     pub publish_blackhole: bool,
+    /// Transport identity hashes whose published blackhole lists this
+    /// instance fetches and applies (`blackhole_sources`).
+    pub blackhole_sources: Vec<[u8; 16]>,
+    /// How often each blackhole source is fetched, in seconds; upstream's
+    /// `blackhole_update_interval` is given in minutes, at least 2. `None`
+    /// keeps upstream's default of an hour.
+    pub blackhole_update_interval: Option<f64>,
     pub probe_port: Option<u16>,
     pub probe_addr: Option<String>,
     /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
@@ -204,6 +211,8 @@ impl Default for ReticulumSection {
             enable_remote_management: false,
             remote_management_allowed: Vec::new(),
             publish_blackhole: false,
+            blackhole_sources: Vec::new(),
+            blackhole_update_interval: None,
             probe_port: None,
             probe_addr: None,
             probe_protocol: None,
@@ -935,6 +944,30 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             value: v.clone(),
         })?;
     }
+    if let Some(v) = kvs.get("blackhole_sources") {
+        for hexhash in v.split(',').map(str::trim).filter(|h| !h.is_empty()) {
+            let source =
+                parse_identity_hash_hex(hexhash).ok_or_else(|| ConfigError::InvalidValue {
+                    key: "blackhole_sources".into(),
+                    value: hexhash.to_string(),
+                })?;
+            if !section.blackhole_sources.contains(&source) {
+                section.blackhole_sources.push(source);
+            }
+        }
+    }
+    if let Some(v) = kvs.get("blackhole_update_interval") {
+        let minutes = v
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|m| m.is_finite())
+            .ok_or_else(|| ConfigError::InvalidValue {
+                key: "blackhole_update_interval".into(),
+                value: v.clone(),
+            })?;
+        section.blackhole_update_interval = Some(minutes.max(2.0) * 60.0);
+    }
     if let Some(v) = kvs.get("probe_port") {
         section.probe_port = Some(v.parse::<u16>().map_err(|_| ConfigError::InvalidValue {
             key: "probe_port".into(),
@@ -1615,6 +1648,18 @@ fn build_logging_section(kvs: &HashMap<String, String>) -> Result<LoggingSection
     }
 
     Ok(section)
+}
+
+/// A 16-byte identity hash written as 32 hexadecimal characters.
+fn parse_identity_hash_hex(hexhash: &str) -> Option<[u8; 16]> {
+    if hexhash.len() != 32 {
+        return None;
+    }
+    let mut hash = [0u8; 16];
+    for (i, byte) in hash.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hexhash.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(hash)
 }
 
 #[cfg(test)]
@@ -2563,6 +2608,44 @@ publish_blackhole = Yes
             config.reticulum.remote_management_allowed[1],
             "11223344556677881122334455667788"
         );
+    }
+
+    #[test]
+    fn parse_blackhole_sources_and_update_interval() {
+        let config = parse(
+            "[reticulum]\n\
+             blackhole_sources = aabbccdd00112233aabbccdd00112233, 11223344556677881122334455667788, aabbccdd00112233aabbccdd00112233\n\
+             blackhole_update_interval = 90\n",
+        )
+        .unwrap();
+        // Duplicates are listed once, as upstream does.
+        assert_eq!(
+            config.reticulum.blackhole_sources,
+            vec![
+                [
+                    0xaa, 0xbb, 0xcc, 0xdd, 0x00, 0x11, 0x22, 0x33, 0xaa, 0xbb, 0xcc, 0xdd, 0x00,
+                    0x11, 0x22, 0x33
+                ],
+                [
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x11, 0x22, 0x33, 0x44, 0x55,
+                    0x66, 0x77, 0x88
+                ],
+            ]
+        );
+        // Minutes, stored as seconds.
+        assert_eq!(config.reticulum.blackhole_update_interval, Some(5400.0));
+
+        // Upstream raises an interval under two minutes to two.
+        let config = parse("[reticulum]\nblackhole_update_interval = 0.5\n").unwrap();
+        assert_eq!(config.reticulum.blackhole_update_interval, Some(120.0));
+
+        let defaults = parse("[reticulum]\n").unwrap();
+        assert!(defaults.reticulum.blackhole_sources.is_empty());
+        assert_eq!(defaults.reticulum.blackhole_update_interval, None);
+
+        // A hash of the wrong length, as upstream, is a config error.
+        assert!(parse("[reticulum]\nblackhole_sources = aabbccdd\n").is_err());
+        assert!(parse("[reticulum]\nblackhole_update_interval = soon\n").is_err());
     }
 
     #[test]
