@@ -1310,6 +1310,200 @@ fn rust_rnstatus_reaches_python_instance_on_unix_sockets() {
     );
 }
 
+/// Wait until a Linux abstract socket named `name` is listening.
+#[cfg(target_os = "linux")]
+fn wait_for_abstract_socket(name: &str, process: &mut ProcessGuard, description: &str) {
+    let needle = format!("@{name}");
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        process.assert_running(description);
+        let listening = fs::read_to_string("/proc/net/unix")
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line.split_whitespace().last() == Some(needle.as_str()));
+        if listening {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{description} did not open {needle}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq)]
+enum Daemon {
+    Python,
+    Rust,
+}
+
+#[cfg(target_os = "linux")]
+/// Fetch a blackhole list from a publisher run by one implementation into
+/// a node with `blackhole_sources` run by the other, over TCP. The fetcher
+/// starts 20 seconds after startup, as upstream's does.
+fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
+    let root = tempfile::tempdir().unwrap();
+    let publisher_dir = root.path().join("publisher");
+    let fetcher_dir = root.path().join("fetcher");
+    fs::create_dir_all(publisher_dir.join("storage/identities")).unwrap();
+    fs::create_dir_all(&fetcher_dir).unwrap();
+    let blackholed = "0123456789abcdef0123456789abcdef";
+
+    // The publisher's identity, where each implementation reads it, and a
+    // blackhole list of one entry in upstream's format.
+    let identity_file = match publisher {
+        Daemon::Python => "storage/transport_identity",
+        Daemon::Rust => "storage/identities/identity",
+    };
+    let mut prepare = Command::new("python3");
+    prepare.args([
+        "-c",
+        "import RNS, os, sys; from RNS.vendor import umsgpack; \
+         i = RNS.Identity(); i.to_file(os.path.join(sys.argv[1], sys.argv[2])); \
+         os.makedirs(os.path.join(sys.argv[1], 'storage', 'blackhole'), exist_ok=True); \
+         open(os.path.join(sys.argv[1], 'storage', 'blackhole', 'local'), 'wb').write(\
+         umsgpack.packb({bytes.fromhex(sys.argv[3]): \
+         {'source': i.hash, 'until': None, 'reason': 'interop'}})); \
+         print(i.hash.hex())",
+        publisher_dir.to_str().unwrap(),
+        identity_file,
+        blackholed,
+    ]);
+    let prepared = run(prepare);
+    assert_success(&prepared, "prepare blackhole publisher");
+    let source = String::from_utf8_lossy(&prepared.stdout)
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    assert_eq!(source.len(), 32, "publisher identity hash: {source:?}");
+
+    let ports: Vec<TcpPortReservation> = (0..5).map(|_| TcpPortReservation::new()).collect();
+    let port = |i: usize| ports[i].port();
+    let (transport_port, pub_shared, pub_control, fetch_shared, fetch_control) =
+        (port(0), port(1), port(2), port(3), port(4));
+    let pid = std::process::id();
+    let label = if publisher == Daemon::Python {
+        "py-rs"
+    } else {
+        "rs-py"
+    };
+    fs::write(
+        publisher_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+             instance_name = bh-publisher-{label}-{pid}\n  shared_instance_port = {pub_shared}\n  \
+             instance_control_port = {pub_control}\n  publish_blackhole = Yes\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[publisher server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        fetcher_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = bh-fetcher-{label}-{pid}\n  shared_instance_port = {fetch_shared}\n  \
+             instance_control_port = {fetch_control}\n  blackhole_sources = {source}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[fetcher client]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    drop(ports);
+
+    let daemon = |implementation: Daemon, dir: &Path, log: &str| {
+        let config = dir.to_str().unwrap().to_string();
+        let command = match implementation {
+            Daemon::Python => {
+                let mut command = Command::new("python3");
+                command
+                    .args(["-m", "RNS.Utilities.rnsd", "--config", &config])
+                    .env("PYTHONUNBUFFERED", "1");
+                command
+            }
+            Daemon::Rust => {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_rnsd"));
+                command.args(["--config", &config]);
+                command
+            }
+        };
+        spawn_logged(command, &root.path().join(log))
+    };
+    let mut publisher_daemon = daemon(publisher, &publisher_dir, "publisher.log");
+    wait_for_port(
+        transport_port,
+        &mut publisher_daemon,
+        "publisher TCP server",
+    );
+    let mut fetcher_daemon = daemon(fetcher, &fetcher_dir, "fetcher.log");
+    // A Python utility started before the daemon is up would become the
+    // shared instance itself and leave the daemon a client of it.
+    wait_for_abstract_socket(
+        &format!("rns/bh-fetcher-{label}-{pid}"),
+        &mut fetcher_daemon,
+        "fetcher shared instance",
+    );
+
+    // Each implementation's rnpath lists the fetcher's blackhole entries.
+    let fetcher_config = fetcher_dir.to_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        publisher_daemon.assert_running("publisher");
+        fetcher_daemon.assert_running("fetcher");
+        let mut rnpath = match fetcher {
+            Daemon::Python => {
+                let mut command = Command::new("python3");
+                command.args(["-m", "RNS.Utilities.rnpath"]);
+                command
+            }
+            Daemon::Rust => Command::new(env!("CARGO_BIN_EXE_rnpath")),
+        };
+        rnpath.args(["--config", &fetcher_config, "-b"]);
+        let listed = run(rnpath);
+        let stdout = String::from_utf8_lossy(&listed.stdout);
+        if let Some(line) = stdout.lines().find(|line| line.contains(blackholed)) {
+            assert!(line.contains("(interop)"), "{line}");
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "the fetcher never listed the blackholed identity:\n{stdout}\n\
+                 publisher log:\n{}\nfetcher log:\n{}",
+                fs::read_to_string(root.path().join("publisher.log")).unwrap_or_default(),
+                fs::read_to_string(root.path().join("fetcher.log")).unwrap_or_default()
+            );
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+    // The source's list is saved where the next start loads it from.
+    let saved = fetcher_dir.join("storage/blackhole").join(&source);
+    let deadline = Instant::now() + FILE_SETTLE_TIMEOUT;
+    while !saved.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(saved.exists(), "{} was not written", saved.display());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rust_instance_fetches_python_blackhole_source() {
+    blackhole_source_fetch(Daemon::Python, Daemon::Rust);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_instance_fetches_rust_blackhole_source() {
+    blackhole_source_fetch(Daemon::Rust, Daemon::Python);
+}
+
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_client_retains_destination_data_on_rust_instance() {

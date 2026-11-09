@@ -5320,6 +5320,7 @@ fn start_managed_transport_client(
         enable_remote_management: true,
         remote_management_allowed: vec![allowed_identity],
         publish_blackhole: true,
+        ..Default::default()
     };
     management.remote_management_allowed = vec![allowed_identity];
 

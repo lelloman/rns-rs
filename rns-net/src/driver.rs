@@ -114,6 +114,7 @@ impl Default for AnnounceRateDefaults {
 
 mod announce_check;
 mod blackhole;
+mod blackhole_updater;
 pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
 mod dispatch;
 mod events;
@@ -824,6 +825,8 @@ pub struct Driver {
     pub(crate) blackhole_dir: Option<std::path::PathBuf>,
     /// Identity hashes of the remote blackhole lists this node subscribes to.
     pub(crate) blackhole_sources: Vec<[u8; 16]>,
+    /// Fetches the lists of `blackhole_sources`, when enabled.
+    pub(crate) blackhole_updater: Option<blackhole_updater::BlackholeUpdater>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -1128,6 +1131,7 @@ impl Driver {
             packet_signals: std::collections::VecDeque::new(),
             blackhole_dir: None,
             blackhole_sources: Vec::new(),
+            blackhole_updater: None,
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,

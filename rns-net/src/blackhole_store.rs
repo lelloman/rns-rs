@@ -72,34 +72,55 @@ pub(crate) fn load(
             );
             continue;
         };
-        for (key, value) in map {
-            let Some(identity_hash) = key.as_bin().and_then(|b| <[u8; 16]>::try_from(b).ok())
-            else {
-                continue;
-            };
-            if entries.contains_key(&identity_hash) {
-                continue;
-            }
-            let until = value.get_field("until").and_then(time_value);
-            if until.is_some_and(|until| now >= until) {
-                continue;
-            }
-            let reason = value
-                .get_field("reason")
-                .and_then(|reason| reason.as_str())
-                .map(str::to_string);
-            entries.insert(
-                identity_hash,
-                BlackholeEntry {
-                    created: now,
-                    expires: until.unwrap_or(0.0),
-                    reason,
-                    source,
-                },
-            );
+        for (identity_hash, entry) in list_entries(map, source, now) {
+            entries.entry(identity_hash).or_insert(entry);
         }
     }
     entries.into_iter().collect()
+}
+
+/// The entries of one blackhole list, a msgpack map from identity hash to
+/// `{"source", "until", "reason"}`, recorded as coming from `source`.
+/// Entries whose `until` has passed are left out.
+pub(crate) fn list_entries(
+    map: &[(Value, Value)],
+    source: Option<[u8; 16]>,
+    now: f64,
+) -> Vec<([u8; 16], BlackholeEntry)> {
+    let mut entries = Vec::new();
+    for (key, value) in map {
+        let Some(identity_hash) = key.as_bin().and_then(|b| <[u8; 16]>::try_from(b).ok()) else {
+            continue;
+        };
+        let until = value.get_field("until").and_then(time_value);
+        if until.is_some_and(|until| now >= until) {
+            continue;
+        }
+        let reason = value
+            .get_field("reason")
+            .and_then(|reason| reason.as_str())
+            .map(str::to_string);
+        entries.push((
+            identity_hash,
+            BlackholeEntry {
+                created: now,
+                expires: until.unwrap_or(0.0),
+                reason,
+                source,
+            },
+        ));
+    }
+    entries
+}
+
+/// Write a source's list, as fetched, to `<dir>/<source identity hash>`, as
+/// upstream's `BlackholeUpdater` does.
+pub(crate) fn save_source(dir: &Path, source: &[u8; 16], list: &Value) -> io::Result<()> {
+    let name: String = source.iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!("{name}.tmp"));
+    std::fs::write(&tmp, msgpack::pack(list))?;
+    std::fs::rename(&tmp, dir.join(name))
 }
 
 /// Write the entries made on this node to the local file, as
