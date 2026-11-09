@@ -49,6 +49,14 @@ fn hex_bytes(bytes: &[u8]) -> String {
 }
 
 impl Driver {
+    /// Whether interfaces discovered from the network identity
+    /// `network_id` are accepted: any are without
+    /// `interface_discovery_sources`.
+    pub(crate) fn discovery_source_allowed(&self, network_id: &[u8; 16]) -> bool {
+        self.interface_discovery_sources.is_empty()
+            || self.interface_discovery_sources.contains(network_id)
+    }
+
     /// Remember a received packet's readings, keeping the newest
     /// `PACKET_SIGNAL_CACHE_MAXSIZE`.
     pub(crate) fn record_packet_signal(
@@ -871,6 +879,9 @@ impl Driver {
                 only_transport,
             } => {
                 let mut interfaces = self.discovered_interfaces.list().unwrap_or_default();
+                // Upstream's list_discovered_interfaces leaves out the
+                // interfaces of networks that are not discovery sources.
+                interfaces.retain(|iface| self.discovery_source_allowed(&iface.network_id));
                 crate::discovery::filter_and_sort_interfaces(
                     &mut interfaces,
                     only_available,

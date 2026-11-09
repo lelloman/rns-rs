@@ -157,9 +157,24 @@ impl DiscoveredInterfaceStorage {
     }
 
     /// Clean up stale, invalid, or blackholed discovery records.
-    pub fn cleanup_with_blackholes<F>(&self, mut is_blackholed: F) -> io::Result<usize>
+    pub fn cleanup_with_blackholes<F>(&self, is_blackholed: F) -> io::Result<usize>
     where
         F: FnMut(&[u8; 16]) -> bool,
+    {
+        self.cleanup_with_filters(is_blackholed, |_| true)
+    }
+
+    /// Clean up stale, invalid or blackholed discovery records, and those of
+    /// networks `allowed_network` rejects (upstream's
+    /// `interface_discovery_sources`).
+    pub fn cleanup_with_filters<F, A>(
+        &self,
+        mut is_blackholed: F,
+        mut allowed_network: A,
+    ) -> io::Result<usize>
+    where
+        F: FnMut(&[u8; 16]) -> bool,
+        A: FnMut(&[u8; 16]) -> bool,
     {
         let _guard = discovery_storage_guard();
         let mut removed = 0;
@@ -200,6 +215,7 @@ impl DiscoveredInterfaceStorage {
                 || now - iface.last_heard > THRESHOLD_REMOVE
                 || is_blackholed(&iface.network_id)
                 || is_blackholed(&iface.transport_id)
+                || !allowed_network(&iface.network_id)
             {
                 fs::remove_file(&path)?;
                 removed += 1;
@@ -1738,6 +1754,30 @@ mod tests {
         let listed = storage.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "Retained");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_removes_discoveries_of_networks_that_are_not_sources() {
+        let dir = discovery_test_dir("sources-cleanup");
+        fs::create_dir_all(&dir).unwrap();
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+        let now = time::now();
+        for (name, network_id) in [("FromSource", [0x31; 16]), ("FromOther", [0x42; 16])] {
+            let mut iface = test_discovered_interface(name);
+            iface.last_heard = now;
+            iface.network_id = network_id;
+            storage.store(&iface).unwrap();
+        }
+
+        let removed = storage
+            .cleanup_with_filters(|_| false, |network_id| network_id == &[0x31; 16])
+            .unwrap();
+
+        assert_eq!(removed, 1);
+        let listed = storage.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "FromSource");
         let _ = fs::remove_dir_all(&dir);
     }
 

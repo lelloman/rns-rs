@@ -1,5 +1,23 @@
 # Interface discovery locations
 
+## Discovery sources
+
+By default a node with `discover_interfaces = yes` accepts interfaces
+discovered from any network. `interface_discovery_sources` limits it to the
+network identities listed, as upstream does:
+
+```ini
+[reticulum]
+  discover_interfaces = yes
+  interface_discovery_sources = 521c87a83afb8f29e4455e77930b973b
+```
+
+Discovery announces from other network identities are ignored. Interfaces
+already stored from a network that is not a source are left out of the
+discovered interface list (`rnstatus -d` and `-D`, and the `discovered_interfaces` RPC
+call) and removed by the periodic discovery cleanup, so they are no longer
+auto-connected.
+
 ## Auto-connect policy
 
 Discovery-origin Backbone peer-pool connections normally use gateway mode when

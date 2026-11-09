@@ -552,6 +552,15 @@ pub(crate) struct InterfaceManagementConfig {
     pub(crate) underlay_mark: Option<u32>,
 }
 
+/// Interface discovery settings of a node, from the `[reticulum]` keys
+/// upstream reads for discovery.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoverySettings {
+    /// Network identities whose discovered interfaces are accepted
+    /// (`interface_discovery_sources`); empty accepts any.
+    pub interface_discovery_sources: Vec<[u8; 16]>,
+}
+
 /// Top-level node configuration.
 pub struct NodeConfig {
     pub transport_enabled: bool,
@@ -595,6 +604,8 @@ pub struct NodeConfig {
     pub hooks: Vec<config::ParsedHook>,
     /// Enable interface discovery.
     pub discover_interfaces: bool,
+    /// Interface discovery settings beyond turning it on.
+    pub discovery: DiscoverySettings,
     /// Mode assigned to auto-connected discovered interfaces, when configured.
     pub autoconnect_interface_mode: Option<u8>,
     /// Gravity assigned to auto-connected discovered interfaces.
@@ -725,6 +736,7 @@ impl Default for NodeConfig {
             underlay_mark: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery: Default::default(),
             autoconnect_interface_mode: None,
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
@@ -1540,6 +1552,12 @@ impl RnsNode {
                 rns_config.hooks.clone()
             },
             discover_interfaces: rns_config.reticulum.discover_interfaces,
+            discovery: DiscoverySettings {
+                interface_discovery_sources: rns_config
+                    .reticulum
+                    .interface_discovery_sources
+                    .clone(),
+            },
             autoconnect_interface_mode: rns_config
                 .reticulum
                 .autoconnect_interface_mode
@@ -1997,6 +2015,7 @@ impl RnsNode {
 
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
+        driver.interface_discovery_sources = config.discovery.interface_discovery_sources.clone();
         driver.autoconnect_interface_mode = config.autoconnect_interface_mode;
         driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
         driver.autoconnect_announces_to_internal =
@@ -5597,6 +5616,7 @@ mod tests {
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -5954,6 +5974,7 @@ share_instance = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -6028,6 +6049,7 @@ share_instance = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -6937,6 +6959,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7020,6 +7043,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7099,6 +7123,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7175,6 +7200,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7291,6 +7317,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7375,6 +7402,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7457,6 +7485,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7552,6 +7581,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7637,6 +7667,7 @@ enable_transport = False
                 underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,

@@ -64,6 +64,9 @@ pub struct ReticulumSection {
     /// `blackhole_update_interval` is given in minutes, at least 2. `None`
     /// keeps upstream's default of an hour.
     pub blackhole_update_interval: Option<f64>,
+    /// Network identities whose discovered interfaces are accepted
+    /// (`interface_discovery_sources`); empty accepts any.
+    pub interface_discovery_sources: Vec<[u8; 16]>,
     pub probe_port: Option<u16>,
     pub probe_addr: Option<String>,
     /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
@@ -213,6 +216,7 @@ impl Default for ReticulumSection {
             publish_blackhole: false,
             blackhole_sources: Vec::new(),
             blackhole_update_interval: None,
+            interface_discovery_sources: Vec::new(),
             probe_port: None,
             probe_addr: None,
             probe_protocol: None,
@@ -953,6 +957,18 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 })?;
             if !section.blackhole_sources.contains(&source) {
                 section.blackhole_sources.push(source);
+            }
+        }
+    }
+    if let Some(v) = kvs.get("interface_discovery_sources") {
+        for hexhash in v.split(',').map(str::trim).filter(|h| !h.is_empty()) {
+            let source =
+                parse_identity_hash_hex(hexhash).ok_or_else(|| ConfigError::InvalidValue {
+                    key: "interface_discovery_sources".into(),
+                    value: hexhash.to_string(),
+                })?;
+            if !section.interface_discovery_sources.contains(&source) {
+                section.interface_discovery_sources.push(source);
             }
         }
     }
@@ -2639,8 +2655,16 @@ publish_blackhole = Yes
         let config = parse("[reticulum]\nblackhole_update_interval = 0.5\n").unwrap();
         assert_eq!(config.reticulum.blackhole_update_interval, Some(120.0));
 
+        let config =
+            parse("[reticulum]\ninterface_discovery_sources = 521c87a83afb8f29e4455e77930b973b\n")
+                .unwrap();
+        assert_eq!(config.reticulum.interface_discovery_sources.len(), 1);
+        assert_eq!(config.reticulum.interface_discovery_sources[0][0], 0x52);
+        assert!(parse("[reticulum]\ninterface_discovery_sources = 52\n").is_err());
+
         let defaults = parse("[reticulum]\n").unwrap();
         assert!(defaults.reticulum.blackhole_sources.is_empty());
+        assert!(defaults.reticulum.interface_discovery_sources.is_empty());
         assert_eq!(defaults.reticulum.blackhole_update_interval, None);
 
         // A hash of the wrong length, as upstream, is a config error.

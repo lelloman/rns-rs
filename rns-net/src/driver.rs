@@ -827,6 +827,9 @@ pub struct Driver {
     pub(crate) blackhole_sources: Vec<[u8; 16]>,
     /// Fetches the lists of `blackhole_sources`, when enabled.
     pub(crate) blackhole_updater: Option<blackhole_updater::BlackholeUpdater>,
+    /// Network identities whose discovered interfaces are accepted; empty
+    /// accepts any (`interface_discovery_sources`).
+    pub(crate) interface_discovery_sources: Vec<[u8; 16]>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -1132,6 +1135,7 @@ impl Driver {
             blackhole_dir: None,
             blackhole_sources: Vec::new(),
             blackhole_updater: None,
+            interface_discovery_sources: Vec::new(),
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
