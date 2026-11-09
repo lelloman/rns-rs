@@ -1480,12 +1480,13 @@ impl Driver {
                             );
                         } else if let Some(ref app_data) = app_data {
                             if let Some(mut discovered) =
-                                crate::discovery::parse_interface_announce_with_cache(
+                                crate::discovery::parse_interface_announce_with_identity(
                                     app_data,
                                     &identity_hash,
                                     hops,
                                     self.discovery_required_value,
                                     &mut self.discovery_stamp_cache,
+                                    self.discovery_network_identity.as_ref(),
                                 )
                             {
                                 crate::discovery::apply_transport_autoconnect_mode(

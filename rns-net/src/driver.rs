@@ -830,6 +830,9 @@ pub struct Driver {
     /// Network identities whose discovered interfaces are accepted; empty
     /// accepts any (`interface_discovery_sources`).
     pub(crate) interface_discovery_sources: Vec<[u8; 16]>,
+    /// The network identity, when one is configured: it decrypts
+    /// `discovery_encrypt` announces and their own are encrypted to it.
+    pub(crate) discovery_network_identity: Option<rns_crypto::identity::Identity>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -1136,6 +1139,7 @@ impl Driver {
             blackhole_sources: Vec::new(),
             blackhole_updater: None,
             interface_discovery_sources: Vec::new(),
+            discovery_network_identity: None,
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
@@ -1468,10 +1472,8 @@ impl Driver {
             if let Some(announcer) = self.interface_announcer.as_mut() {
                 announcer.upsert_interface(iface);
             } else if let Some(identity) = self.transport_identity.as_ref() {
-                self.interface_announcer = Some(crate::discovery::InterfaceAnnouncer::new(
-                    *identity.hash(),
-                    vec![iface],
-                ));
+                self.interface_announcer =
+                    Some(self.new_interface_announcer(*identity.hash(), vec![iface]));
             }
         } else if let Some(announcer) = self.interface_announcer.as_mut() {
             announcer.remove_interface(interface_name);
@@ -1515,10 +1517,8 @@ impl Driver {
             if let Some(announcer) = self.interface_announcer.as_mut() {
                 announcer.upsert_interface(iface);
             } else if let Some(identity) = self.transport_identity.as_ref() {
-                self.interface_announcer = Some(crate::discovery::InterfaceAnnouncer::new(
-                    *identity.hash(),
-                    vec![iface],
-                ));
+                self.interface_announcer =
+                    Some(self.new_interface_announcer(*identity.hash(), vec![iface]));
             }
         } else if let Some(announcer) = self.interface_announcer.as_mut() {
             announcer.remove_interface(interface_name);

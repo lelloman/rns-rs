@@ -44,6 +44,9 @@ pub const MODULATION: u8 = 0x0D;
 pub const CHANNEL: u8 = 0x0E;
 pub const OP_ADDR: u8 = 0xF0;
 
+/// Flag of an announce whose payload is encrypted to the network identity.
+pub const FLAG_ENCRYPTED: u8 = 0b0000_0010;
+
 /// Short, implementation-specific identity advertised by this transport.
 pub const TRANSPORT_IMPLEMENTATION_NAME: &str = "rns-rs";
 
@@ -121,6 +124,26 @@ pub struct DiscoveryConfig {
     /// The interface's own `destination_cost` / `pr_cost`, announced as
     /// `DST_COST` / `PR_COST` (9b464382).
     pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
+    /// Announce the interface's IFAC network name and passphrase
+    /// (`publish_ifac`); upstream publishes them only when asked to.
+    pub publish_ifac: bool,
+    /// Encrypt the announce to the network identity (`discovery_encrypt`),
+    /// so only nodes holding that identity can read it.
+    pub encrypt: bool,
+    /// Radio parameters announced for radio interfaces.
+    pub radio: DiscoveryRadio,
+}
+
+/// Radio parameters a discovery announce carries: an RNode's own settings,
+/// or the `discovery_frequency`, `discovery_bandwidth` and
+/// `discovery_modulation` of a KISS or Weave interface.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DiscoveryRadio {
+    pub frequency: Option<u64>,
+    pub bandwidth: Option<u64>,
+    pub spreading_factor: Option<u64>,
+    pub coding_rate: Option<u64>,
+    pub modulation: Option<String>,
 }
 
 // ============================================================================
@@ -377,6 +400,28 @@ pub fn parse_interface_announce_with_cache(
     required_stamp_value: StampCost,
     cache: &mut DiscoveryStampCache,
 ) -> Option<DiscoveredInterface> {
+    parse_interface_announce_with_identity(
+        app_data,
+        announced_identity_hash,
+        hops,
+        required_stamp_value,
+        cache,
+        None,
+    )
+}
+
+/// Parse an interface discovery announcement, decrypting an encrypted one
+/// with `network_identity`, as upstream's `InterfaceAnnounceHandler` does
+/// with `Transport.network_identity`. An encrypted announce is ignored
+/// without one, or when it does not decrypt.
+pub fn parse_interface_announce_with_identity(
+    app_data: &[u8],
+    announced_identity_hash: &[u8; 16],
+    hops: u8,
+    required_stamp_value: StampCost,
+    cache: &mut DiscoveryStampCache,
+    network_identity: Option<&rns_crypto::identity::Identity>,
+) -> Option<DiscoveredInterface> {
     // Need at least: 1 byte flags + some data + STAMP_SIZE
     if app_data.len() <= STAMP_SIZE + 1 {
         return None;
@@ -403,12 +448,7 @@ pub fn parse_interface_announce_with_cache(
         return None;
     }
 
-    // Check encryption flag (we don't support encrypted discovery yet)
-    let encrypted = (flags & 0x02) != 0;
-    if encrypted {
-        log::debug!("Ignoring encrypted discovered interface (not supported)");
-        return None;
-    }
+    let encrypted = (flags & FLAG_ENCRYPTED) != 0;
 
     let (stamp, packed, stamp_value) =
         if let Some(entry) = cache.valid_entry(&payload_hash).cloned() {
@@ -422,6 +462,17 @@ pub fn parse_interface_announce_with_cache(
             }
             (entry.stamp, entry.packed, entry.value)
         } else {
+            let decrypted;
+            let payload = if encrypted {
+                let identity = network_identity?;
+                decrypted = identity.decrypt(payload).ok()?;
+                if decrypted.len() <= STAMP_SIZE {
+                    return None;
+                }
+                &decrypted[..]
+            } else {
+                payload
+            };
             // The driver owns this cache and processes events sequentially, so the
             // upstream validation lock is implicit in Rust's ownership model.
             let stamp = payload[payload.len() - STAMP_SIZE..].to_vec();

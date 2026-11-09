@@ -1687,6 +1687,9 @@ fn register_test_backbone_discovery(driver: &mut Driver, name: &str, discoverabl
     let startup = BackboneDiscoveryRuntime {
         discoverable,
         config: crate::discovery::DiscoveryConfig {
+            publish_ifac: false,
+            encrypt: false,
+            radio: Default::default(),
             stamp_costs: Default::default(),
             discovery_name: name.to_string(),
             announce_interval: 3600,
@@ -1728,6 +1731,9 @@ fn register_test_tcp_server_discovery(driver: &mut Driver, name: &str, discovera
     let startup = TcpServerDiscoveryRuntime {
         discoverable,
         config: crate::discovery::DiscoveryConfig {
+            publish_ifac: false,
+            encrypt: false,
+            radio: Default::default(),
             stamp_costs: Default::default(),
             discovery_name: name.to_string(),
             announce_interval: 3600,
@@ -6097,6 +6103,9 @@ fn discovery_announcer_emits_local_synthetic_announce() {
         vec![crate::discovery::DiscoverableInterface {
             interface_name: "public".into(),
             config: crate::discovery::DiscoveryConfig {
+                publish_ifac: false,
+                encrypt: false,
+                radio: Default::default(),
                 stamp_costs: Default::default(),
                 discovery_name: "Public Test".into(),
                 announce_interval: 1,

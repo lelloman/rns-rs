@@ -590,6 +590,8 @@ pub struct InterfaceAnnouncer {
     /// Node-wide stamp costs, behind the per-interface costs announced as
     /// `DST_COST` / `PR_COST`.
     stamp_requirements: rns_core::transport::types::StampRequirements,
+    /// Public key of the network identity, for `discovery_encrypt`.
+    network_public_key: Option<[u8; 64]>,
 }
 
 const LOCATION_CMD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -755,7 +757,14 @@ impl InterfaceAnnouncer {
             stamp_tx,
             stamp_pending: false,
             stamp_requirements: Default::default(),
+            network_public_key: None,
         }
+    }
+
+    /// Encrypt the announces of interfaces with `discovery_encrypt` to the
+    /// network identity with this public key.
+    pub fn set_network_public_key(&mut self, public_key: Option<[u8; 64]>) {
+        self.network_public_key = public_key;
     }
 
     /// Track the node-wide stamp costs (`[stamps] destination_cost` and
@@ -794,6 +803,7 @@ impl InterfaceAnnouncer {
             let interface_name = iface.interface_name.clone();
             let tx = self.stamp_tx.clone();
             let requirements = self.stamp_requirements;
+            let network_public_key = self.network_public_key;
 
             log::info!(
                 "Spawning discovery stamp generation (cost={}) for '{}'...",
@@ -818,11 +828,39 @@ impl InterfaceAnnouncer {
                 let (stamp, value) = generate_discovery_stamp(&packed, stamp_cost);
                 log::info!("Discovery stamp generated (value={}) for '{}'", value, name,);
 
-                let flags: u8 = 0x00; // no encryption
-                let mut app_data = Vec::with_capacity(1 + packed.len() + STAMP_SIZE);
+                let mut payload = Vec::with_capacity(packed.len() + STAMP_SIZE);
+                payload.extend_from_slice(&packed);
+                payload.extend_from_slice(&stamp);
+                let mut flags: u8 = 0x00;
+                if iface.config.encrypt {
+                    // Upstream encrypts to the network identity, which
+                    // every node of the network holds.
+                    let Some(public_key) = network_public_key else {
+                        let _ = tx.send(AnnounceResult {
+                            interface_name,
+                            app_data: Err(format!(
+                                "Discovery encryption requested for {name}, but no network identity configured"
+                            )),
+                        });
+                        return;
+                    };
+                    let encrypted = rns_crypto::identity::Identity::from_public_key(&public_key)
+                        .and_then(|identity| identity.encrypt(&payload, &mut rns_crypto::OsRng));
+                    match encrypted {
+                        Ok(ciphertext) => payload = ciphertext,
+                        Err(error) => {
+                            let _ = tx.send(AnnounceResult {
+                                interface_name,
+                                app_data: Err(format!("Discovery encryption failed: {error:?}")),
+                            });
+                            return;
+                        }
+                    }
+                    flags |= FLAG_ENCRYPTED;
+                }
+                let mut app_data = Vec::with_capacity(1 + payload.len());
                 app_data.push(flags);
-                app_data.extend_from_slice(&packed);
-                app_data.extend_from_slice(&stamp);
+                app_data.extend_from_slice(&payload);
 
                 let _ = tx.send(AnnounceResult {
                     interface_name,
@@ -954,22 +992,16 @@ impl InterfaceAnnouncer {
                 msgpack::Value::UInt(port as u64),
             ));
         }
-        if let Some(lat) = iface.config.latitude {
+        // Upstream always sends the location, nil when unknown, and its
+        // receivers reject an announce without these keys.
+        for (key, value) in [
+            (LATITUDE, iface.config.latitude),
+            (LONGITUDE, iface.config.longitude),
+            (HEIGHT, iface.config.height),
+        ] {
             entries.push((
-                msgpack::Value::UInt(LATITUDE as u64),
-                msgpack::Value::Float(lat),
-            ));
-        }
-        if let Some(lon) = iface.config.longitude {
-            entries.push((
-                msgpack::Value::UInt(LONGITUDE as u64),
-                msgpack::Value::Float(lon),
-            ));
-        }
-        if let Some(h) = iface.config.height {
-            entries.push((
-                msgpack::Value::UInt(HEIGHT as u64),
-                msgpack::Value::Float(h),
+                msgpack::Value::UInt(key as u64),
+                value.map_or(msgpack::Value::Nil, msgpack::Value::Float),
             ));
         }
         if let Some(address) = iface.config.operator_lxmf_address {
@@ -978,10 +1010,32 @@ impl InterfaceAnnouncer {
                 msgpack::Value::Bin(address.to_vec()),
             ));
         }
+        let radio = &iface.config.radio;
+        for (key, value) in [
+            (FREQUENCY, radio.frequency),
+            (BANDWIDTH, radio.bandwidth),
+            (SPREADINGFACTOR, radio.spreading_factor),
+            (CODINGRATE, radio.coding_rate),
+        ] {
+            if let Some(value) = value {
+                entries.push((
+                    msgpack::Value::UInt(key as u64),
+                    msgpack::Value::UInt(value),
+                ));
+            }
+        }
+        if let Some(modulation) = radio.modulation.as_deref().filter(|m| !m.is_empty()) {
+            entries.push((
+                msgpack::Value::UInt(MODULATION as u64),
+                msgpack::Value::Str(modulation.to_string()),
+            ));
+        }
+        // Upstream announces IFAC credentials only with `publish_ifac`.
+        let publish_ifac = iface.config.publish_ifac;
         if let Some(netname) = iface
             .ifac_netname
             .as_deref()
-            .filter(|v| !v.is_empty() && *v != "None")
+            .filter(|v| publish_ifac && !v.is_empty() && *v != "None")
         {
             entries.push((
                 msgpack::Value::UInt(IFAC_NETNAME as u64),
@@ -991,7 +1045,7 @@ impl InterfaceAnnouncer {
         if let Some(netkey) = iface
             .ifac_netkey
             .as_deref()
-            .filter(|v| !v.is_empty() && *v != "None")
+            .filter(|v| publish_ifac && !v.is_empty() && *v != "None")
         {
             entries.push((
                 msgpack::Value::UInt(IFAC_NETKEY as u64),
@@ -1026,6 +1080,9 @@ mod tests {
             interface_name: name.to_string(),
             config: DiscoveryConfig {
                 stamp_costs: Default::default(),
+                publish_ifac: true,
+                encrypt: false,
+                radio: Default::default(),
                 discovery_name: format!("Discovery {name}"),
                 announce_interval: interval,
                 stamp_value: rns_core::stamp::StampCost::ZERO,
@@ -1052,6 +1109,112 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         panic!("background discovery job did not complete");
+    }
+
+    fn packed_keys(iface: &DiscoverableInterface) -> Vec<(u8, msgpack::Value)> {
+        let packed =
+            InterfaceAnnouncer::pack_interface_info(&[0x77; 16], iface, &Default::default())
+                .unwrap();
+        msgpack::unpack_exact(&packed)
+            .unwrap()
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.as_uint().unwrap() as u8, v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn ifac_credentials_are_announced_only_with_publish_ifac() {
+        let mut iface = test_announce_interface("ifac", 10);
+        iface.config.publish_ifac = false;
+        let keys = packed_keys(&iface);
+        assert!(!keys
+            .iter()
+            .any(|(k, _)| *k == IFAC_NETNAME || *k == IFAC_NETKEY));
+
+        iface.config.publish_ifac = true;
+        let keys = packed_keys(&iface);
+        let value = |key| keys.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert_eq!(
+            value(IFAC_NETNAME),
+            Some(msgpack::Value::Str("testnet".into()))
+        );
+        assert_eq!(
+            value(IFAC_NETKEY),
+            Some(msgpack::Value::Str("secret".into()))
+        );
+    }
+
+    #[test]
+    fn location_is_always_announced_as_upstream_requires() {
+        let mut iface = test_announce_interface("nowhere", 10);
+        iface.config.latitude = None;
+        iface.config.longitude = None;
+        iface.config.height = None;
+        let keys = packed_keys(&iface);
+        for key in [LATITUDE, LONGITUDE, HEIGHT] {
+            assert_eq!(
+                keys.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone()),
+                Some(msgpack::Value::Nil),
+                "key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn radio_parameters_are_announced() {
+        let mut iface = test_announce_interface("radio", 10);
+        iface.config.interface_type = "RNodeInterface".into();
+        iface.config.radio = DiscoveryRadio {
+            frequency: Some(868_000_000),
+            bandwidth: Some(125_000),
+            spreading_factor: Some(8),
+            coding_rate: Some(5),
+            modulation: Some("lora".into()),
+        };
+        let keys = packed_keys(&iface);
+        let value = |key| keys.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert_eq!(value(FREQUENCY), Some(msgpack::Value::UInt(868_000_000)));
+        assert_eq!(value(BANDWIDTH), Some(msgpack::Value::UInt(125_000)));
+        assert_eq!(value(SPREADINGFACTOR), Some(msgpack::Value::UInt(8)));
+        assert_eq!(value(CODINGRATE), Some(msgpack::Value::UInt(5)));
+        assert_eq!(value(MODULATION), Some(msgpack::Value::Str("lora".into())));
+    }
+
+    #[test]
+    fn encrypted_announces_are_read_only_with_the_network_identity() {
+        let network = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let mut iface = test_announce_interface("encrypted", 10);
+        iface.config.encrypt = true;
+
+        // Without a network identity the announce is not sent.
+        let mut announcer = InterfaceAnnouncer::new([0x77; 16], vec![iface.clone()]);
+        announcer.maybe_start(10.0);
+        let error = wait_for_announce(&mut announcer).app_data.unwrap_err();
+        assert!(error.contains("no network identity"), "{error}");
+
+        let mut announcer = InterfaceAnnouncer::new([0x77; 16], vec![iface]);
+        announcer.set_network_public_key(network.get_public_key());
+        announcer.maybe_start(10.0);
+        let app_data = wait_for_announce(&mut announcer).app_data.unwrap();
+        assert_ne!(app_data[0] & FLAG_ENCRYPTED, 0);
+
+        let parse = |identity: Option<&rns_crypto::identity::Identity>| {
+            parse_interface_announce_with_identity(
+                &app_data,
+                &[0x77; 16],
+                1,
+                rns_core::stamp::StampCost::ZERO,
+                &mut DiscoveryStampCache::with_capacity(8),
+                identity,
+            )
+        };
+        let discovered = parse(Some(&network)).expect("the network identity reads it");
+        assert_eq!(discovered.name, "Discovery encrypted");
+        assert!(parse(None).is_none());
+        let other = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        assert!(parse(Some(&other)).is_none());
     }
 
     #[test]

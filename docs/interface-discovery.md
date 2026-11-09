@@ -18,6 +18,39 @@ discovered interface list (`rnstatus -d` and `-D`, and the `discovered_interface
 call) and removed by the periodic discovery cleanup, so they are no longer
 auto-connected.
 
+## What a discoverable interface announces
+
+These per-interface keys work as upstream's:
+
+```ini
+[interfaces]
+  [[Public Backbone]]
+    type = BackboneInterface
+    discoverable = yes
+    reachable_on = node.example.com
+    network_name = mynet
+    passphrase = secret
+    publish_ifac = yes
+    discovery_encrypt = no
+```
+
+- `publish_ifac = yes` puts the interface's IFAC network name and passphrase
+  in its discovery announces, so nodes that discover it can join. Without it
+  they are left out, as upstream does; before this, rns-rs announced them
+  whenever the interface had IFAC configured.
+- `discovery_encrypt = yes` encrypts the announce to the `network_identity`
+  set in `[reticulum]`, so only nodes holding that identity can read it. A
+  node with a `network_identity` decrypts such announces from its network and
+  ignores the ones it cannot decrypt. Without a `network_identity`, an
+  interface with `discovery_encrypt` sends no announce and logs an error.
+- An RNode announces its own `frequency`, `bandwidth`, `spreadingfactor` and
+  `codingrate`. A KISS or Weave interface announces `discovery_frequency`,
+  `discovery_bandwidth` and `discovery_modulation` instead.
+
+Announces always carry the latitude, longitude and height fields, empty when
+no location is configured: upstream discards discovery announces without
+them.
+
 ## Auto-connect policy
 
 Discovery-origin Backbone peer-pool connections normally use gateway mode when
