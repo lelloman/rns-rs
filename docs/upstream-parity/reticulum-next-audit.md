@@ -6,13 +6,15 @@
   commit 15 on `2026-10-30`, to commit 23 on `2026-10-31`, to commit 31 on
   `2026-11-01`, to commit 36 on `2026-11-02`, to commit 40 on
   `2026-11-03`, to commit 45 on `2026-11-04`, to commit 46 on
-  `2026-11-05`, to commit 48 on `2026-11-06` and to commit 52 on
-  `2026-11-07`)
+  `2026-11-05`, to commit 48 on `2026-11-06`, to commit 52 on
+  `2026-11-07` and to commit 65 on `2026-11-09`)
 - previous accepted version: `1.6.0`
 - previous normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
-- target version: `1.6.0` (unchanged; no version bump yet)
-- target tag or ref: `rgit:master` tip `acb38a8a1c85affa5ce8138bc6214871aa05b15b`
-  (extended on 2026-11-07 from `eb826cde90e152d167415b42016efb0107c73035`,
+- target version: `1.6.0` (unchanged; upstream signed the `1.6.0` tag on
+  `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4`, commit 62)
+- target tag or ref: `rgit:master` tip `c5d205ffea16ef4519150745edf644dd03e48e5f`
+  (extended on 2026-11-09 from `acb38a8a1c85affa5ce8138bc6214871aa05b15b`,
+  on 2026-11-07 from `eb826cde90e152d167415b42016efb0107c73035`,
   on 2026-11-06 from `3305fc1cbda16f51c5c1291032183a05823fe420`,
   on 2026-11-05 from `53dc223a031ff46ad311c395ee7a3ee97ebe2aef`,
   on 2026-11-04 from `ecd677ba7fe6ac0ad0bcc7ee8f33e84b2c725d15`,
@@ -22,16 +24,17 @@
   on 2026-10-31 from `5b2b8afbdf0b71dc704515bec0d640be29ee4dfd`,
   on 2026-10-30 from `a8cc6cb239a3e9c44183b28eb1eaa1f88601e00b`,
   and on 2026-10-29 from the first tip `c0fe08c08d75ffbcc8ef34bd7ad90636954b4738`)
-- target normative commit: `acb38a8a1c85affa5ce8138bc6214871aa05b15b` (provisional; rgit may advance before promotion)
-- target root tree: `a109da80ad72adbd8766a84fcfbf4ef72f58aec0`
-- target `RNS` tree: `840cd22559e5308c765b506768e59ff896f73847`
+- target normative commit: `c5d205ffea16ef4519150745edf644dd03e48e5f` (provisional; rgit may advance before promotion)
+- target root tree: `3fff894a0f6a2c273cc1b03c7c884ca17bb48684`
+- target `RNS` tree: `3448fb48deaf018bbe6e8a04795fa085bef2f2b9` (identical at
+  the signed `1.6.0` tag `cb126089`; commits 63 to 65 change documentation only)
 - version assertion: `RNS.__version__ == "1.6.0"`
-- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..acb38a8a1c85affa5ce8138bc6214871aa05b15b`
-- commits in range: `52` (2 inventoried at the first tip, 3 added when rgit
+- audited range: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5..c5d205ffea16ef4519150745edf644dd03e48e5f`
+- commits in range: `65` (2 inventoried at the first tip, 3 added when rgit
   advanced the same day, 10 added on 2026-10-30, 8 added on 2026-10-31, 8
   added on 2026-11-01, 5 added on 2026-11-02, 4 added on 2026-11-03, 5
   added on 2026-11-04, 1 added on 2026-11-05, 2 added on 2026-11-06, 4
-  added on 2026-11-07)
+  added on 2026-11-07, 13 added on 2026-11-09)
 - repositories checked: rgit (normative) and GitHub mirror
 - local branch and revision inspected: local `dev` at `cbcce2e`; integrated
   on `worktree-agent-a301172e8aa4682a6` from `a2b603d`; commits 6 to 15
@@ -43,7 +46,9 @@
   integrated on `dev` from `b0b793c`; commit 46 inventoried and mapped on
   `origin/master` `679854d`; commits 47 and 48 inventoried on
   `origin/master` `a029386`; commit 48 integrated on `dev` from `124d287`;
-  commits 49 to 52 inventoried and integrated on `dev` from `c27c3cb`
+  commits 49 to 52 inventoried and integrated on `dev` from `c27c3cb`;
+  commits 53 to 65 inventoried on `parity-53-65` from `origin/master`
+  `32f6970`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -172,6 +177,20 @@ destination a 5.25 link cost, commit 51 moves destination stamp generation
 behind a lock, and commit 52 stamps the path requests sent to rediscover a
 path after a forwarded link request goes unanswered.
 
+The 2026-11-08 daily refresh found rgit at `d4af18fd` and the 2026-11-09
+refresh (GitHub fetched at 2026-11-09T08:12:05Z, rgit at 08:12:10Z) at
+`c5d205ff` (committed 2026-11-08T13:17Z), thirteen commits past `acb38a8a`,
+inventoried as 53 to 65. The GitHub mirror caught up and now agrees with
+rgit. Upstream released 1.6.0: commit 62 ("Prepare release") carries the
+annotated, signed `1.6.0` tag, and `RNS.__version__` is still `1.6.0`. Only
+three of the thirteen commits change code: commit 54 reads `hop_limiter`
+from the `[filter]` section instead of `[reticulum]` and allows `0`, commit
+56 restores the missing `not` in `Link.validate_request` (the divergence
+recorded at commit 1), and commit 60 cancels an announce whose destination
+stamp generation fails or is aborted. The other ten add and revise the
+manual's stamps page, renamed "Protecting" in commit 57, update the
+changelog, and prepare the release.
+
 ## Audit Vocabulary
 
 - **Needs port**: compatible behavior is absent or observably different.
@@ -246,6 +265,19 @@ Every commit in the audited range must appear exactly once.
 | 50 | `426673e97433a95e2baf926b93730d2fdc6e9c69` | Set blackhole updater destination link cost | Integrated | `BLACKHOLE_LINK_COST` (5.25) registered for the published blackhole list destination, which its link responder requires when link request stamps are enforced, and announced since built-in destination announces are stamped (a gap from commit 1, fixed with it); docs |
 | 51 | `c97e2158f5fb93de73268af93e3f542d72d274ea` | Cleanup | Structurally covered | Mapping commit; moves destination stamp generation behind a per-destination lock; rns-rs grinds announce stamps on the single stamper worker, keyed per destination, which reloads a persisted stamp before grinding |
 | 52 | `acb38a8a1c85affa5ce8138bc6214871aa05b15b` | Pre-generate discovery PR ext_payload | Integrated | Link-table path rediscovery, missing since before the baseline, ported first: the four conditions, `PATH_REQUEST_MI` throttle, unresponsive marking, interface skip, the throttled rediscovery queue, path expiry on non-transport nodes, and rediscovery after own links that never activate; requests that skip an interface share one tag and one stamp across the other interfaces |
+| 53 | `65a7208a9d6b956a4b30dcf36b4e42f804b7581f` | Updated documentation | Non-runtime | Pending mapping; new manual page on stamps (`stamps.rst`), reference and usage updates |
+| 54 | `01aef5bc2a722984a8c56080fa5bc5e57dc22034` | Moved hop_limiter option to filter section | Needs port | `hop_limiter` is read from `[filter]` only, clamped to `0..=PATHFINDER_M`; rns-rs still reads `[reticulum] hop_limiter` clamped to `1..=PATHFINDER_M` |
+| 55 | `29e5a997ace2cfe7e058c9111860b29bfd448a86` | Updated documentation | Non-runtime | Pending mapping; stamps page additions |
+| 56 | `50e939ab0e1deb04c23813157360d22926bba6e4` | Fixed logic inversion | Structurally covered | Pending mapping; rns-rs drops requests whose stamp is not valid since commit 1 and recorded upstream's inverted expression as a divergence; the divergence ends |
+| 57 | `9d67be9acb74e1039cd36fbd615ed2f270fbe547` | Updated documentation | Non-runtime | Pending mapping; stamps page renamed "Protecting", with filtering and QoS sections |
+| 58 | `dad1302b1ec82177d56c310b915a1a12c287806c` | Updated changelog | Non-runtime | Pending mapping; 1.6.0 changelog |
+| 59 | `1fee7af7f28e435421dbebd2cf4bd5257172bb58` | Bad at head math | Non-runtime | Pending mapping; one figure in `protecting.md` |
+| 60 | `baccc6d8a2cc38e0885869c2802aa0f32a32014a` | Cleanup | Structurally covered | Pending mapping; an announce whose destination stamp fails or is aborted is cancelled with a warning; rns-rs's stamper and inline path already send nothing on failure |
+| 61 | `2960e6a41d8436a4d4306f81f02f542bd06aee49` | Cleanup | Non-runtime | Pending mapping; one line in the Protecting page |
+| 62 | `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4` | Prepare release | Non-runtime | Pending mapping; signed `1.6.0` tag, generated manual |
+| 63 | `d4af18fd6fa3f1fe1c1676fee09e6fa7af22c8d6` | Fixed typos | Non-runtime | Pending mapping; Protecting page typos |
+| 64 | `e0da9c381e361ad61cbfd63c72c59afb93584274` | Updated docs | Non-runtime | Pending mapping; Protecting page and a history note |
+| 65 | `c5d205ffea16ef4519150745edf644dd03e48e5f` | Updated docs | Non-runtime | Pending mapping; generated manual for 64 |
 
 ## Per-Commit Analysis
 
@@ -2094,16 +2126,17 @@ link path rediscovery it depends on.
 
 ## Integration Plan
 
-All fifty-two commits have a final disposition. The
-`Link.py:311` precedence of commit 5 was corrected upstream in commit 7 before it was reported. Remaining
-before promotion: the gates below. The inverted `Link.validate_request`
-stamp check of commit 9 is not reported upstream (see its analysis); each
-audit rechecks it (still present at `acb38a8a`; `Link.py` is unchanged). If upstream confirms that expression as written, the
-`LinkManager` responder check must follow it.
+Commits 1 to 52 have a final disposition; commits 53 to 65 are inventoried
+and are being mapped in order. The `Link.py:311` precedence of commit 5 was
+corrected upstream in commit 7 before it was reported. The inverted
+`Link.validate_request` stamp check of commit 9 was never reported upstream;
+upstream corrected it itself in commit 56, which ends the divergence. Remaining
+before promotion: the mappings for 53 to 65 and the gates below.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
+- [ ] Every upstream commit has a final disposition. Commits 53 to 65 are
+  inventoried and not yet mapped.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
@@ -2112,8 +2145,9 @@ audit rechecks it (still present at `acb38a8a`; `Link.py` is unchanged). If upst
   covers both formats.
 - [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
-  `d3874dde`, `ecd677ba`, `53dc223a`, `eb826cde` and the current tip
-  `acb38a8a` (4/4 and 12/12 with commits 49 to 52 integrated).
+  `d3874dde`, `ecd677ba`, `53dc223a`, `eb826cde` and `acb38a8a` (4/4 and
+  12/12 with commits 49 to 52 integrated). Not yet run at the current tip
+  `c5d205ff`.
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -2128,8 +2162,9 @@ audit rechecks it (still present at `acb38a8a`; `Link.py` is unchanged). If upst
 - [x] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`. Per the
   README workflow the parity record is written at promotion, after the
-  target version is known and this file is renamed; rgit announces 1.6.1,
-  so the records may become `reticulum-1.6.1-{audit,parity}.md` rather than
+  target version is known and this file is renamed. Upstream released the
+  signed `1.6.0` tag on commit 62 instead of a 1.6.1, and 1.6.0 already has
+  signed-release and `-rgit` records, so this audit becomes
   `reticulum-1.6.0-rgit-2-{audit,parity}.md`.
 
 ## Acceptance Record
