@@ -1022,6 +1022,44 @@ fn handle_rpc_request(
         return Ok(PickleValue::Bool(true));
     }
 
+    // Upstream's `destination_data` call: "used", "retain" or "unretain" a
+    // known destination, answering whether it was known.
+    if let Some(operation) = request.get("destination_data").and_then(|v| v.as_str()) {
+        let dest_hash = extract_dest_hash(request, "destination_hash")?;
+        let resp = match operation {
+            "used" => send_query(
+                event_tx,
+                QueryRequest::MarkKnownDestinationUsed { dest_hash },
+            )?,
+            "retain" => send_query(event_tx, QueryRequest::RetainKnownDestination { dest_hash })?,
+            "unretain" => send_query(
+                event_tx,
+                QueryRequest::UnretainKnownDestination { dest_hash },
+            )?,
+            _ => return Ok(PickleValue::None),
+        };
+        return Ok(match resp {
+            QueryResponse::MarkKnownDestinationUsed(ok)
+            | QueryResponse::RetainKnownDestination(ok)
+            | QueryResponse::UnretainKnownDestination(ok) => PickleValue::Bool(ok),
+            _ => PickleValue::None,
+        });
+    }
+
+    // Upstream's `identity_data` call: "retain" every known destination of
+    // an identity.
+    if let Some(operation) = request.get("identity_data").and_then(|v| v.as_str()) {
+        if operation != "retain" {
+            return Ok(PickleValue::None);
+        }
+        let identity_hash = extract_dest_hash(request, "identity_hash")?;
+        let resp = send_query(event_tx, QueryRequest::RetainIdentity { identity_hash })?;
+        return Ok(match resp {
+            QueryResponse::RetainIdentity(ok) => PickleValue::Bool(ok),
+            _ => PickleValue::None,
+        });
+    }
+
     if let Some(set_val) = request.get("set").and_then(|v| v.as_str()) {
         if set_val == "known_destination_retained" {
             let dest_hash = extract_dest_hash(request, "dest_hash")?;
