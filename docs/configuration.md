@@ -312,7 +312,8 @@ read and logs a warning.
 
 Applications ask for the types they need with
 `RnsNode::wants_destination_type` (upstream
-`Reticulum.wants_destination_type`). A shared instance client also registers
+`Reticulum.wants_destination_type`) and can drop one again with
+`unwants_destination_type`. A shared instance client also registers
 them with its shared instance over RPC, using the shared instance's RPC key
 from `storage/transport_identity`, and withdraws them when it shuts down.
 The rns-rs RPC client uses TCP on `instance_control_port`, so it cannot
@@ -324,6 +325,12 @@ Python clients from `825c2e19` on register theirs with an rns-rs shared
 instance the same way. `RnsNode::required_announces_only` applies
 `required_only` to a single client's own transport; it does nothing on a node
 that is not a shared instance client.
+
+The upstream manual describes these modes in the "Filtering & QoS" section of
+its "Protecting Open Networks" page (since `29e5a997`). It states that some
+1.6.x release will make `required_only` the default for non-transport
+instances, so applications should register the types they need now; the
+default here stays off until upstream makes that change.
 
 ## Ingress control
 
