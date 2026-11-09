@@ -277,7 +277,7 @@ Every commit in the audited range must appear exactly once.
 | 62 | `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4` | Prepare release | Non-runtime | Mapping commit; the signed `1.6.0` release tag; the `RNS` tree at the tag equals the audit tip's |
 | 63 | `d4af18fd6fa3f1fe1c1676fee09e6fa7af22c8d6` | Fixed typos | Non-runtime | Mapping commit; Protecting page typos |
 | 64 | `e0da9c381e361ad61cbfd63c72c59afb93584274` | Updated docs | Non-runtime | Mapping commit; Protecting page wording and a history note |
-| 65 | `c5d205ffea16ef4519150745edf644dd03e48e5f` | Updated docs | Non-runtime | Pending mapping; generated manual for 64 |
+| 65 | `c5d205ffea16ef4519150745edf644dd03e48e5f` | Updated docs | Non-runtime | Mapping commit; generated manual and markdown for 64's wording |
 
 ## Per-Commit Analysis
 
@@ -2195,6 +2195,12 @@ link path rediscovery it depends on.
   third-party project's licensing; it is not Reticulum documentation.
 - No runtime file changes. Disposition: **Non-runtime**. This analysis is
   the mapping.
+
+### 65. `c5d205ff` — Updated docs
+
+- The same three wording changes as 64, in `docs/markdown/protecting.md`
+  and the generated manual. No runtime file changes.
+- Disposition: **Non-runtime**. This analysis is the mapping.
 
 ## Integration Plan
 
