@@ -276,7 +276,7 @@ Every commit in the audited range must appear exactly once.
 | 61 | `2960e6a41d8436a4d4306f81f02f542bd06aee49` | Cleanup | Non-runtime | Mapping commit; flips the per-step figure in the markdown and reStructuredText sources, made consistent at 0.27% by 62 |
 | 62 | `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4` | Prepare release | Non-runtime | Mapping commit; the signed `1.6.0` release tag; the `RNS` tree at the tag equals the audit tip's |
 | 63 | `d4af18fd6fa3f1fe1c1676fee09e6fa7af22c8d6` | Fixed typos | Non-runtime | Mapping commit; Protecting page typos |
-| 64 | `e0da9c381e361ad61cbfd63c72c59afb93584274` | Updated docs | Non-runtime | Pending mapping; Protecting page and a history note |
+| 64 | `e0da9c381e361ad61cbfd63c72c59afb93584274` | Updated docs | Non-runtime | Mapping commit; Protecting page wording and a history note |
 | 65 | `c5d205ffea16ef4519150745edf644dd03e48e5f` | Updated docs | Non-runtime | Pending mapping; generated manual for 64 |
 
 ## Per-Commit Analysis
@@ -2183,6 +2183,18 @@ link path rediscovery it depends on.
   configuration might look something like", and `1.6.0` set as code. No
   runtime file changes and no changed claim.
 - Disposition: **Non-runtime**. This analysis is the mapping.
+
+### 64. `e0da9c38` — Updated docs
+
+- `docs/source/protecting.rst`: "only using" for "using only using", "a
+  few lines" for "one line" of code to receive only required announces
+  (the example takes three), and "The grace option" for "A grace period"
+  in the announce rate control paragraph, which names the existing
+  `announce_rate_grace` interface option. No changed behavior.
+- `docs/history/2026_09_18_Yes_I_am_Angry.md` gains a dated note about a
+  third-party project's licensing; it is not Reticulum documentation.
+- No runtime file changes. Disposition: **Non-runtime**. This analysis is
+  the mapping.
 
 ## Integration Plan
 
