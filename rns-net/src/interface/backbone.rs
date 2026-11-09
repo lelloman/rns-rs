@@ -1987,9 +1987,11 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&client)));
             Ok(Box::new(BackboneMode::Client(client, priority)))
         } else {
-            // Server mode
+            // Server mode. `listen_on` replaces `listen_ip`, as upstream
+            // copies it over for Backbone interfaces.
             let listen_ip = params
-                .get("listen_ip")
+                .get("listen_on")
+                .or_else(|| params.get("listen_ip"))
                 .or_else(|| params.get("device"))
                 .cloned()
                 .unwrap_or_else(|| "0.0.0.0".into());
@@ -3626,6 +3628,30 @@ mod tests {
                 .reject_count,
             1
         );
+    }
+
+    #[test]
+    fn backbone_listen_on_replaces_listen_ip() {
+        let factory = BackboneInterfaceFactory;
+        let listen_ip = |pairs: &[(&str, &str)]| {
+            let params: HashMap<String, String> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let config = factory
+                .parse_config("test-backbone", InterfaceId(96), &params)
+                .unwrap();
+            match *config.into_any().downcast::<BackboneMode>().unwrap() {
+                BackboneMode::Server(config) => config.listen_ip,
+                BackboneMode::Client(_, _) => panic!("expected server config"),
+            }
+        };
+        assert_eq!(listen_ip(&[("listen_on", "10.0.0.1")]), "10.0.0.1");
+        assert_eq!(
+            listen_ip(&[("listen_on", "10.0.0.1"), ("listen_ip", "10.0.0.2")]),
+            "10.0.0.1"
+        );
+        assert_eq!(listen_ip(&[("listen_ip", "10.0.0.2")]), "10.0.0.2");
     }
 
     #[test]
