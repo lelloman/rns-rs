@@ -13,7 +13,7 @@ use std::net::{IpAddr, TcpListener, TcpStream};
 #[cfg(target_os = "linux")]
 use std::os::linux::net::SocketAddrExt;
 #[cfg(target_os = "linux")]
-use std::os::unix::net::{SocketAddr, UnixListener};
+use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -56,6 +56,26 @@ enum RpcCodec {
 #[derive(Debug, Clone)]
 pub enum RpcAddr {
     Tcp(String, u16),
+    /// The RPC server of the local shared instance named `instance_name`.
+    /// A client reaches it as upstream's do on Linux, on the abstract socket
+    /// `\0rns/<instance_name>/rpc`; where that socket is not there (another
+    /// platform, or a Python instance with `shared_instance_type = tcp`), it
+    /// uses TCP on 127.0.0.1 and `port`. A server listens on TCP; the
+    /// abstract socket has its own `RpcServer::start_abstract_unix`.
+    Local {
+        instance_name: String,
+        port: u16,
+    },
+}
+
+impl RpcAddr {
+    /// The RPC server of the local shared instance; see [`RpcAddr::Local`].
+    pub fn local(instance_name: impl Into<String>, port: u16) -> Self {
+        RpcAddr::Local {
+            instance_name: instance_name.into(),
+            port,
+        }
+    }
 }
 
 /// RPC server that listens for incoming connections and handles queries.
@@ -74,6 +94,12 @@ impl RpcServer {
         let listener = match addr {
             RpcAddr::Tcp(host, port) => {
                 let l = TcpListener::bind((host.as_str(), *port))?;
+                // Non-blocking: the thread waits in its poller, then accepts.
+                l.set_nonblocking(true)?;
+                l
+            }
+            RpcAddr::Local { port, .. } => {
+                let l = TcpListener::bind(("127.0.0.1", *port))?;
                 // Non-blocking: the thread waits in its poller, then accepts.
                 l.set_nonblocking(true)?;
                 l
@@ -3383,18 +3409,90 @@ fn parse_known_destination_list(value: &PickleValue) -> io::Result<Vec<KnownDest
 
 /// RPC client for connecting to a running daemon.
 pub struct RpcClient {
-    stream: TcpStream,
+    stream: ClientStream,
+}
+
+/// The connection an `RpcClient` talks over.
+enum ClientStream {
+    Tcp(TcpStream),
+    #[cfg(target_os = "linux")]
+    Unix(UnixStream),
+}
+
+impl ClientStream {
+    fn connect(addr: &RpcAddr) -> io::Result<Self> {
+        match addr {
+            RpcAddr::Tcp(host, port) => Ok(Self::Tcp(TcpStream::connect((host.as_str(), *port))?)),
+            RpcAddr::Local {
+                instance_name,
+                port,
+            } => {
+                #[cfg(target_os = "linux")]
+                {
+                    let unix = SocketAddr::from_abstract_name(format!("rns/{instance_name}/rpc"))
+                        .and_then(|addr| UnixStream::connect_addr(&addr));
+                    match unix {
+                        Ok(stream) => return Ok(Self::Unix(stream)),
+                        Err(e) => log::debug!(
+                            "No RPC socket for instance {instance_name} ({e}), using TCP port {port}"
+                        ),
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                let _ = instance_name;
+                Ok(Self::Tcp(TcpStream::connect(("127.0.0.1", *port))?))
+            }
+        }
+    }
+
+    fn set_timeouts(&self, timeout: Duration) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => {
+                stream.set_read_timeout(Some(timeout))?;
+                stream.set_write_timeout(Some(timeout))
+            }
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => {
+                stream.set_read_timeout(Some(timeout))?;
+                stream.set_write_timeout(Some(timeout))
+            }
+        }
+    }
+}
+
+impl Read for ClientStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => stream.read(buf),
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl Write for ClientStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => stream.write(buf),
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.flush(),
+            #[cfg(target_os = "linux")]
+            Self::Unix(stream) => stream.flush(),
+        }
+    }
 }
 
 impl RpcClient {
     /// Connect to an RPC server and authenticate.
     pub fn connect(addr: &RpcAddr, auth_key: &[u8; 32]) -> io::Result<Self> {
-        let mut stream = match addr {
-            RpcAddr::Tcp(host, port) => TcpStream::connect((host.as_str(), *port))?,
-        };
-
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
-        stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+        let mut stream = ClientStream::connect(addr)?;
+        stream.set_timeouts(Duration::from_secs(10))?;
 
         // Client-side authentication
         client_auth(&mut stream, auth_key)?;
@@ -3823,7 +3921,7 @@ fn default_hook_type() -> &'static str {
 }
 
 /// Client-side authentication: answer the server's challenge.
-fn client_auth(stream: &mut TcpStream, auth_key: &[u8; 32]) -> io::Result<()> {
+fn client_auth<S: Read + Write>(stream: &mut S, auth_key: &[u8; 32]) -> io::Result<()> {
     answer_challenge(stream, auth_key)?;
     server_auth(stream, auth_key)
 }
@@ -4673,6 +4771,79 @@ mod tests {
         assert_eq!(get("packet_rssi"), PickleValue::Int(-97));
         assert_eq!(get("packet_snr"), PickleValue::Float(6.5));
         assert_eq!(get("packet_q"), PickleValue::None);
+        driver.join().unwrap();
+    }
+
+    /// A driver stand-in answering `count` link-count queries with 42.
+    fn answer_link_counts(
+        event_rx: crate::event::EventReceiver,
+        count: usize,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            for _ in 0..count {
+                match event_rx.recv() {
+                    Ok(Event::Query(request, resp_tx)) => {
+                        assert!(matches!(*request, QueryRequest::LinkCount));
+                        let _ = resp_tx.send(QueryResponse::LinkCount(42));
+                    }
+                    _ => break,
+                }
+            }
+        })
+    }
+
+    fn link_count(client: &mut RpcClient) -> Option<i64> {
+        client
+            .call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("link_count".into()),
+            )]))
+            .unwrap()
+            .as_int()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn local_rpc_client_uses_the_abstract_socket() {
+        let key = derive_auth_key(b"local-rpc-unix");
+        let instance = crate::test_support::instance_name("local-rpc-unix");
+        let (event_tx, event_rx) = crate::event::channel();
+        let driver = answer_link_counts(event_rx, 1);
+        let mut server = RpcServer::start_abstract_unix(&instance, key, event_tx).unwrap();
+
+        // Nothing listens on the TCP port, so this only works over the socket.
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut client = RpcClient::connect(&RpcAddr::local(instance, port), &key).unwrap();
+        assert!(matches!(client.stream, ClientStream::Unix(_)));
+        assert_eq!(link_count(&mut client), Some(42));
+        drop(client);
+        server.stop();
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn local_rpc_client_falls_back_to_tcp() {
+        let key = derive_auth_key(b"local-rpc-tcp");
+        let instance = crate::test_support::instance_name("local-rpc-tcp");
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let addr = RpcAddr::local(instance, port);
+        let (event_tx, event_rx) = crate::event::channel();
+        let driver = answer_link_counts(event_rx, 1);
+        let mut server = RpcServer::start(&addr, key, event_tx).unwrap();
+
+        let mut client = RpcClient::connect(&addr, &key).unwrap();
+        assert!(matches!(client.stream, ClientStream::Tcp(_)));
+        assert_eq!(link_count(&mut client), Some(42));
+        drop(client);
+        server.stop();
         driver.join().unwrap();
     }
 

@@ -364,10 +364,10 @@ impl RnsNode {
             port: rns_config.reticulum.shared_instance_port,
             rpc_port: rns_config.reticulum.instance_control_port,
         };
-        let rpc_port = shared_config.rpc_port;
+        let rpc_addr = RpcAddr::local(shared_config.instance_name.clone(), shared_config.rpc_port);
 
         let mut node = Self::connect_shared(shared_config, callbacks)?;
-        node.use_shared_instance_rpc(&config_dir, rpc_port);
+        node.use_shared_instance_rpc(&config_dir, rpc_addr);
         Ok(node)
     }
 
@@ -375,13 +375,12 @@ impl RnsNode {
     /// registrations. Its key derives from the shared instance's transport
     /// identity, which clients read from the same storage directory; without
     /// one, registrations stay local.
-    pub(crate) fn use_shared_instance_rpc(&mut self, config_dir: &Path, rpc_port: u16) {
+    pub(crate) fn use_shared_instance_rpc(&mut self, config_dir: &Path, rpc_addr: RpcAddr) {
         match storage::load_identity(&config_dir.join("storage").join("transport_identity")) {
             Ok(identity) => {
                 let auth_key =
                     crate::rpc::derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
-                self.destination_types.shared_rpc =
-                    Some((RpcAddr::Tcp("127.0.0.1".into(), rpc_port), auth_key));
+                self.destination_types.shared_rpc = Some((rpc_addr, auth_key));
             }
             Err(e) => log::debug!("No shared instance RPC key for destination type filters: {e}"),
         }
@@ -729,10 +728,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rpc_port = find_free_port();
         let shared_port = find_free_port();
+        // Its own name, so its RPC socket is not another test's.
+        let instance = crate::test_support::instance_name("test-shared-types");
         std::fs::write(
             dir.path().join("config"),
             format!(
-                "[reticulum]\nshare_instance = yes\ninstance_control_port = {rpc_port}\n\
+                "[reticulum]\nshare_instance = yes\ninstance_name = {instance}\n\
+                 instance_control_port = {rpc_port}\n\
                  shared_instance_port = {shared_port}\n\n[filter]\n\
                  required_only = yes\nignored_types = nomadnetwork.node\n"
             ),

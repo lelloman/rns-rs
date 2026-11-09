@@ -4940,8 +4940,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let rpc_port = crate::test_support::port();
         let shared_port = crate::test_support::port();
+        let instance = crate::test_support::instance_name("test-rpc-manage");
         fs::write(dir.path().join("config"), format!(
-            "[reticulum]\nshare_instance = yes\ninstance_control_port = {rpc_port}\nshared_instance_port = {shared_port}\n\n[interfaces]\n  [[Managed UDP]]\n    type = UDPInterface\n    enabled = no\n    forward_ip = 127.0.0.1\n    forward_port = 9\n"
+            "[reticulum]\nshare_instance = yes\ninstance_name = {instance}\ninstance_control_port = {rpc_port}\nshared_instance_port = {shared_port}\n\n[interfaces]\n  [[Managed UDP]]\n    type = UDPInterface\n    enabled = no\n    forward_ip = 127.0.0.1\n    forward_port = 9\n"
         )).unwrap();
         let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
         let paths = storage::ensure_storage_dirs(dir.path()).unwrap();
