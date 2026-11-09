@@ -77,6 +77,7 @@ fn free_port() -> u16 {
 fn interface(type_name: &str, config: Box<dyn rns_net::InterfaceConfigData>) -> InterfaceConfig {
     InterfaceConfig {
         stamp_costs: Default::default(),
+        announce_limits: Default::default(),
         name: String::new(),
         type_name: type_name.to_string(),
         config_data: config,

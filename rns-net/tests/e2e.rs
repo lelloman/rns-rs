@@ -639,6 +639,7 @@ fn start_transport_node_with_limits(
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -774,6 +775,7 @@ fn start_client_node_with_options(
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -1287,6 +1289,7 @@ fn test_direct_link_no_transport() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -1910,6 +1913,7 @@ fn test_plain_message_delivery() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -2176,6 +2180,7 @@ fn test_group_message_delivery() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -2310,6 +2315,7 @@ fn test_group_wrong_key_fails() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -3675,6 +3681,7 @@ fn test_udp_announce_and_message() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
@@ -3764,6 +3771,7 @@ fn test_udp_announce_and_message() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
@@ -3950,6 +3958,7 @@ fn discovery_announce_received_by_client() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -4058,6 +4067,7 @@ fn discovery_announce_received_by_client() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -4200,6 +4210,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -4301,6 +4312,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -4659,6 +4671,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -4830,6 +4843,7 @@ fn discovery_announce_through_relay() {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -4932,6 +4946,7 @@ fn discovery_announce_through_relay() {
             interfaces: vec![
                 InterfaceConfig {
                     stamp_costs: Default::default(),
+                    announce_limits: Default::default(),
                     name: String::new(),
                     type_name: "TCPClientInterface".to_string(),
                     config_data: Box::new(TcpClientConfig {
@@ -4952,6 +4967,7 @@ fn discovery_announce_through_relay() {
                 },
                 InterfaceConfig {
                     stamp_costs: Default::default(),
+                    announce_limits: Default::default(),
                     name: String::new(),
                     type_name: "TCPServerInterface".to_string(),
                     config_data: Box::new(TcpServerConfig {
@@ -5046,6 +5062,7 @@ fn discovery_announce_through_relay() {
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -5179,6 +5196,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -5318,6 +5336,7 @@ fn start_managed_transport_client(
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
@@ -5935,6 +5954,7 @@ fn local_ratchets_survive_shared_daemon_restart() {
         NodeConfig {
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: "ratchet-remote".into(),
                 type_name: "TCPClientInterface".into(),
                 config_data: Box::new(TcpClientConfig {

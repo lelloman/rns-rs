@@ -512,6 +512,7 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
         stamp_costs,
     } = params;
     info.stamp_costs = stamp_costs;
+    driver.apply_interface_announce_limits(&mut info);
     driver.apply_announce_rate_defaults(&mut info);
     driver.apply_ingress_control_defaults(&mut info);
     let (writer, async_writer_metrics) =
@@ -782,6 +783,8 @@ pub struct InterfaceConfig {
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     /// Per-interface `destination_cost` and `pr_cost` (upstream 9b464382).
     pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
+    /// Per-interface announce rate controls and announce cap.
+    pub announce_limits: InterfaceAnnounceLimits,
     pub ifac: Option<IfacConfig>,
     pub discovery: Option<crate::discovery::DiscoveryConfig>,
 }
@@ -805,6 +808,83 @@ pub(crate) fn parse_interface_stamp_costs(
     Ok(rns_core::transport::types::InterfaceStampCosts {
         destination_cost: cost("destination_cost")?,
         pr_cost: cost("pr_cost")?,
+    })
+}
+
+/// An interface section's `announce_rate_target`, `announce_rate_grace`,
+/// `announce_rate_penalty` and `announce_cap` (Reticulum.py
+/// `_synthesize_interface`). Unset options leave the interface to the
+/// instance-wide `default_ar_*` values and the default announce cap.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct InterfaceAnnounceLimits {
+    /// Seconds between rebroadcasts of one destination's announces.
+    pub rate_target: Option<f64>,
+    /// Rate violations allowed before the penalty applies.
+    pub rate_grace: Option<u32>,
+    /// Seconds added to the target for a destination over its grace.
+    pub rate_penalty: Option<f64>,
+    /// Fraction of the interface bitrate allocated to announces.
+    pub cap: Option<f64>,
+}
+
+impl InterfaceAnnounceLimits {
+    /// Set the configured values on `info`. With a target set, an unset
+    /// grace or penalty is 0 for this interface rather than the instance
+    /// default, as upstream sets them.
+    pub(crate) fn apply(&self, info: &mut rns_core::transport::types::InterfaceInfo) {
+        if let Some(target) = self.rate_target {
+            info.announce_rate_target = Some(target);
+            info.announce_rate_grace = self.rate_grace.unwrap_or(0);
+            info.announce_rate_penalty = self.rate_penalty.unwrap_or(0.0);
+        } else {
+            if let Some(grace) = self.rate_grace {
+                info.announce_rate_grace = grace;
+            }
+            if let Some(penalty) = self.rate_penalty {
+                info.announce_rate_penalty = penalty;
+            }
+        }
+        if let Some(cap) = self.cap {
+            info.announce_cap = cap;
+        }
+    }
+}
+
+/// Parse an interface section's announce rate and cap options as
+/// Reticulum.py does: `announce_rate_target` with `as_int`, kept when above
+/// 0; `announce_rate_grace` and `announce_rate_penalty` with `as_int`, kept
+/// when 0 or more; `announce_cap` with `as_float`, kept when in `(0, 100]`
+/// and stored as a fraction. A value that is not a number is an error.
+pub(crate) fn parse_interface_announce_limits(
+    params: &HashMap<String, String>,
+) -> Result<InterfaceAnnounceLimits, String> {
+    let int = |key: &str| -> Result<Option<i64>, String> {
+        params
+            .get(key)
+            .map(|value| {
+                config::parse_config_int(value)
+                    .ok_or_else(|| format!("{key} must be an integer, got '{value}'"))
+            })
+            .transpose()
+    };
+    let cap = params
+        .get("announce_cap")
+        .map(|value| {
+            config::parse_config_float(value)
+                .ok_or_else(|| format!("announce_cap must be a number, got '{value}'"))
+        })
+        .transpose()?;
+    Ok(InterfaceAnnounceLimits {
+        rate_target: int("announce_rate_target")?
+            .filter(|v| *v > 0)
+            .map(|v| v as f64),
+        rate_grace: int("announce_rate_grace")?
+            .filter(|v| *v >= 0)
+            .map(|v| u32::try_from(v).unwrap_or(u32::MAX)),
+        rate_penalty: int("announce_rate_penalty")?
+            .filter(|v| *v >= 0)
+            .map(|v| v as f64),
+        cap: cap.filter(|v| *v > 0.0 && *v <= 100.0).map(|v| v / 100.0),
     })
 }
 
@@ -842,6 +922,8 @@ pub(crate) fn parse_managed_interface(
     let ingress_control = parse_ingress_control_config(&iface.interface_type, &iface.params)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let stamp_costs = parse_interface_stamp_costs(&iface.params)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let announce_limits = parse_interface_announce_limits(&iface.params)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let recursive_prs = iface
         .params
@@ -891,6 +973,7 @@ pub(crate) fn parse_managed_interface(
         announces_to_internal,
         ingress_control,
         stamp_costs,
+        announce_limits,
         ifac,
         discovery,
     })
@@ -1166,6 +1249,23 @@ impl RnsNode {
                     continue;
                 }
             };
+            let announce_limits = match parse_interface_announce_limits(&iface.params) {
+                Ok(limits) => limits,
+                Err(e) => {
+                    if private {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid announce limits for '{}': {e}", iface.name),
+                        ));
+                    }
+                    log::warn!(
+                        "Failed to parse announce limits for '{}': {}",
+                        iface.name,
+                        e
+                    );
+                    continue;
+                }
+            };
             let recursive_prs = iface
                 .params
                 .get("recursive_prs")
@@ -1232,6 +1332,7 @@ impl RnsNode {
                 announces_to_internal,
                 ingress_control,
                 stamp_costs,
+                announce_limits,
                 ifac: ifac_config,
                 discovery: discovery_config,
             });
@@ -1924,6 +2025,7 @@ impl RnsNode {
             .registry
             .unwrap_or_else(crate::interface::registry::InterfaceRegistry::with_builtins);
         for iface_config in config.interfaces {
+            driver.set_interface_announce_limits(&iface_config.name, iface_config.announce_limits);
             let managed_id = initial_managed_ids.get(&iface_config.name).copied();
             #[cfg(feature = "iface-backbone")]
             if iface_config.type_name == "BackboneInterface" {
@@ -2100,6 +2202,7 @@ impl RnsNode {
                 announces_to_internal: iface_config.announces_to_internal,
                 ingress_control: iface_config.ingress_control,
                 stamp_costs: iface_config.stamp_costs,
+                announce_limits: iface_config.announce_limits,
                 ifac: ifac_state.clone(),
                 underlay_mark: config.underlay_mark,
             };
@@ -4928,6 +5031,121 @@ mod tests {
         assert_eq!(info.announce_rate_target, Some(7200.0));
         assert_eq!(info.announce_rate_penalty, 15.0);
         assert_eq!(info.announce_rate_grace, 7);
+    }
+
+    #[test]
+    fn interface_announce_limits_parse_like_upstream() {
+        // Reticulum.py `_synthesize_interface`: target `as_int` > 0, grace
+        // and penalty `as_int` >= 0, cap `as_float` in (0, 100] as a fraction.
+        let mut params = std::collections::HashMap::new();
+        assert_eq!(
+            super::parse_interface_announce_limits(&params).unwrap(),
+            Default::default()
+        );
+        for (key, value) in [
+            ("announce_rate_target", "600"),
+            ("announce_rate_grace", "3"),
+            ("announce_rate_penalty", "120"),
+            ("announce_cap", "5"),
+        ] {
+            params.insert(key.to_string(), value.to_string());
+        }
+        let limits = super::parse_interface_announce_limits(&params).unwrap();
+        assert_eq!(limits.rate_target, Some(600.0));
+        assert_eq!(limits.rate_grace, Some(3));
+        assert_eq!(limits.rate_penalty, Some(120.0));
+        assert_eq!(limits.cap, Some(0.05));
+
+        // Out-of-range values are dropped, as upstream leaves them unset.
+        for (key, value) in [
+            ("announce_rate_target", "0"),
+            ("announce_rate_grace", "-1"),
+            ("announce_rate_penalty", "-5"),
+            ("announce_cap", "150"),
+        ] {
+            params.insert(key.to_string(), value.to_string());
+        }
+        assert_eq!(
+            super::parse_interface_announce_limits(&params).unwrap(),
+            Default::default()
+        );
+
+        params.insert("announce_rate_target".to_string(), "4.5".to_string());
+        let err = super::parse_interface_announce_limits(&params).unwrap_err();
+        assert!(err.contains("announce_rate_target"));
+    }
+
+    #[test]
+    fn configured_interface_announce_limits_override_the_defaults() {
+        let (tx, rx) = crate::event::channel();
+        let mut driver = Driver::new(
+            test_transport_config(true),
+            rx,
+            tx.clone(),
+            Box::new(NoopCallbacks),
+        );
+        driver.set_announce_rate_defaults(AnnounceRateDefaults {
+            target: Some(7200.0),
+            penalty: 15.0,
+            grace: 7,
+        });
+        let register = |driver: &mut Driver, id: u64| {
+            let id = rns_core::transport::types::InterfaceId(id);
+            register_started_interface(StartedInterface {
+                driver,
+                tx: &tx,
+                queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                id,
+                info: test_interface_info(id.0),
+                writer: Box::new(TestWriter),
+                interface_type_name: "TestInterface".to_string(),
+                ifac_state: None,
+                ifac_runtime: &IfacRuntimeConfig {
+                    netname: None,
+                    netkey: None,
+                    size: 16,
+                },
+                stamp_costs: Default::default(),
+            });
+            driver.interfaces[&id].info.clone()
+        };
+
+        // A target of its own: grace and penalty default to 0, not to the
+        // instance defaults (upstream sets them when only a target is set).
+        let name = test_interface_info(8).name;
+        driver.set_interface_announce_limits(
+            &name,
+            InterfaceAnnounceLimits {
+                rate_target: Some(600.0),
+                cap: Some(0.05),
+                ..Default::default()
+            },
+        );
+        let info = register(&mut driver, 8);
+        assert_eq!(info.announce_rate_target, Some(600.0));
+        assert_eq!(info.announce_rate_grace, 0);
+        assert_eq!(info.announce_rate_penalty, 0.0);
+        assert_eq!(info.announce_cap, 0.05);
+
+        // Only a grace: the instance default target still applies.
+        let name = test_interface_info(9).name;
+        driver.set_interface_announce_limits(
+            &name,
+            InterfaceAnnounceLimits {
+                rate_grace: Some(2),
+                ..Default::default()
+            },
+        );
+        let info = register(&mut driver, 9);
+        assert_eq!(info.announce_rate_target, Some(7200.0));
+        assert_eq!(info.announce_rate_grace, 2);
+        assert_eq!(info.announce_rate_penalty, 15.0);
+
+        // No options: the defaults, as before.
+        let info = register(&mut driver, 10);
+        assert_eq!(info.announce_rate_target, Some(7200.0));
+        assert_eq!(info.announce_rate_grace, 7);
+        assert_eq!(info.announce_cap, rns_core::constants::ANNOUNCE_CAP);
     }
 
     #[test]

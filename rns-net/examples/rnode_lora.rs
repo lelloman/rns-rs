@@ -113,6 +113,7 @@ fn main() {
             identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "RNodeInterface".to_string(),
                 config_data: Box::new(rnode),

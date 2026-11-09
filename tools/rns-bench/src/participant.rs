@@ -144,6 +144,7 @@ pub fn run(role: &str, port: u16, c: Case) -> Result<()> {
         NodeConfig {
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: role.into(),
                 type_name: if listener {
                     "TCPServerInterface"

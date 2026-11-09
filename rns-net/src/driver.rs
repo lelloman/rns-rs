@@ -889,6 +889,9 @@ pub struct Driver {
     pub(crate) underlay_mark: Option<u32>,
     /// Default announce-rate controls for interfaces on transport nodes.
     pub(crate) announce_rate_defaults: AnnounceRateDefaults,
+    /// Announce rate and cap options from configured interface sections,
+    /// by interface name, applied when the interface registers.
+    pub(crate) interface_announce_limits: HashMap<String, crate::node::InterfaceAnnounceLimits>,
     /// Default ingress/egress controls for interfaces on transport nodes.
     pub(crate) ingress_control_defaults: rns_core::transport::types::IngressControlConfig,
     /// Shared timer interval used by the node timer thread.
@@ -1141,6 +1144,7 @@ impl Driver {
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             underlay_mark: None,
             announce_rate_defaults: AnnounceRateDefaults::default(),
+            interface_announce_limits: HashMap::new(),
             ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
@@ -1249,6 +1253,32 @@ impl Driver {
         defaults: rns_core::transport::types::IngressControlConfig,
     ) {
         self.ingress_control_defaults = defaults;
+    }
+
+    /// Remember a configured interface's announce rate and cap options.
+    pub(crate) fn set_interface_announce_limits(
+        &mut self,
+        name: &str,
+        limits: crate::node::InterfaceAnnounceLimits,
+    ) {
+        if limits == crate::node::InterfaceAnnounceLimits::default() {
+            self.interface_announce_limits.remove(name);
+        } else {
+            self.interface_announce_limits
+                .insert(name.to_string(), limits);
+        }
+    }
+
+    /// Apply the interface's own configured announce options, before the
+    /// instance-wide defaults fill whatever it left unset. Interfaces a
+    /// listener spawns copy their parent's values instead.
+    pub(crate) fn apply_interface_announce_limits(
+        &self,
+        info: &mut rns_core::transport::types::InterfaceInfo,
+    ) {
+        if let Some(limits) = self.interface_announce_limits.get(&info.name) {
+            limits.apply(info);
+        }
     }
 
     pub(crate) fn apply_announce_rate_defaults(

@@ -1109,6 +1109,7 @@ mod tests {
             announces_to_internal: None,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             stamp_costs: Default::default(),
+            announce_limits: Default::default(),
             ifac: None,
             underlay_mark: None,
         };
@@ -1229,6 +1230,7 @@ mod tests {
             announces_to_internal: None,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             stamp_costs: Default::default(),
+            announce_limits: Default::default(),
             ifac: None,
             underlay_mark: None,
         };
