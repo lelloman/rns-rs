@@ -87,10 +87,16 @@ impl Driver {
         entries
     }
 
+    /// `Identity._used_destination_data`: record that a destination was
+    /// used now. A retained destination is left as it is, and like upstream
+    /// this then returns `false`.
     pub(crate) fn mark_known_destination_used(&mut self, dest_hash: &[u8; 16]) -> bool {
         let Some(state) = self.known_destinations.get_mut(dest_hash) else {
             return false;
         };
+        if state.retained {
+            return false;
+        }
         state.was_used = true;
         state.last_used_at = Some(time::now());
         true
@@ -115,11 +121,16 @@ impl Driver {
         retained
     }
 
+    /// `Identity._unretain_destination_data`: stop retaining a destination.
+    /// Like upstream, it counts as used now, so it is not cleaned up before
+    /// it has gone unused for the usual time.
     pub(crate) fn unretain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
         let Some(state) = self.known_destinations.get_mut(dest_hash) else {
             return false;
         };
         state.retained = false;
+        state.was_used = true;
+        state.last_used_at = Some(time::now());
         true
     }
 

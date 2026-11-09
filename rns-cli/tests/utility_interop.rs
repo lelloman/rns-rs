@@ -1252,6 +1252,59 @@ fn python_rnpath_manages_rust_blackhole() {
 
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_client_retains_destination_data_on_rust_instance() {
+    // A client of a shared instance marks known destinations as used,
+    // retained or unretained with the destination_data and identity_data
+    // RPC calls (upstream since 1.1.7).
+    let harness = Harness::start("python-destination-data");
+    let config = harness.client_config.to_str().unwrap().to_string();
+    let mut command = Command::new("python3");
+    command.args([
+        "-c",
+        r#"
+import RNS, sys, time
+r = RNS.Reticulum(sys.argv[1])
+identity = RNS.Identity()
+destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "retain")
+destination.announce()
+deadline = time.time() + 15
+while not r._used_destination_data(destination.hash):
+    if time.time() > deadline: sys.exit("the shared instance never learned the destination")
+    time.sleep(0.2)
+print("retain", r._retain_destination_data(destination.hash))
+print("used-while-retained", r._used_destination_data(destination.hash))
+print("unretain", r._unretain_destination_data(destination.hash))
+print("used", r._used_destination_data(destination.hash))
+print("retain-unknown", r._retain_destination_data(bytes(16)))
+print("retain-identity", r._retain_identity(identity.hash))
+print("retain-unknown-identity", r._retain_identity(bytes(16)))
+"#,
+        &config,
+    ]);
+    let output = run(command);
+    assert_success(&output, "Python destination_data calls");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let results: Vec<&str> = stdout
+        .lines()
+        .filter(|line| !line.starts_with('['))
+        .collect();
+    assert_eq!(
+        results,
+        [
+            "retain True",
+            "used-while-retained False",
+            "unretain True",
+            "used True",
+            "retain-unknown False",
+            "retain-identity True",
+            "retain-unknown-identity False",
+        ],
+        "{stdout}"
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_rnstatus_manages_rust_interface() {
     let mut version_command = Command::new("python3");
     version_command.args(["-c", "import RNS; print(RNS.__version__)"]);
