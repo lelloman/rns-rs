@@ -334,6 +334,13 @@ default here stays off until upstream makes that change.
 
 ## Ingress control
 
+The upstream manual's "Protecting Open Networks" page (renamed from the
+stamps page in `9d67be9a`) explains announce caps, per-destination announce
+rates, held announces for new destinations, blackholes and fast-flap blocking
+together. As it describes, announces held on an interface are dropped when
+that interface goes away, so a client that floods new destinations and
+disconnects gets none of them into the path table.
+
 Any interface section accepts the Python-compatible ingress-control keys.
 This example sets custom thresholds and timings:
 

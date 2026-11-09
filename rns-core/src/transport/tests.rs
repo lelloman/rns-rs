@@ -161,6 +161,37 @@ fn test_deregister_interface_removes_announce_queue_state() {
     assert_eq!(engine.announce_queue_count(), 0);
 }
 
+/// "When the interface they arrived on disappears, the held announces are
+/// simply dropped and forgotten" (the upstream manual's ingress and burst
+/// control section, 9d67be9a): a client that floods new destinations and
+/// disconnects gets none of them into the path table.
+#[test]
+fn test_deregister_interface_drops_its_held_announces() {
+    use crate::transport::ingress_control::HeldAnnounce;
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    let held = |iface: u64| HeldAnnounce {
+        raw: vec![0; 10],
+        hops: 1,
+        receiving_interface: InterfaceId(iface),
+        rx: RxMetadata::default(),
+        timestamp: 0.0,
+    };
+    let config = crate::transport::types::IngressControlConfig::enabled();
+    engine
+        .ingress_control
+        .hold_announce(InterfaceId(1), &config, [0x01; 16], held(1));
+    engine
+        .ingress_control
+        .hold_announce(InterfaceId(2), &config, [0x02; 16], held(2));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+
+    engine.deregister_interface(InterfaceId(1));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
+    assert_eq!(engine.held_announce_count(&InterfaceId(2)), 1);
+}
+
 #[test]
 fn test_deregister_interface_removes_transport_state() {
     let mut engine = TransportEngine::new(make_config(true));
