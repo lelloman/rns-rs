@@ -891,6 +891,32 @@ mod tests {
     }
 
     #[test]
+    fn announce_without_a_destination_stamp_is_cancelled() {
+        // Destination._announce since baccc6d8: when `_await_stamp` reports
+        // that generation failed or was aborted, the announce is cancelled
+        // with a warning instead of going out. Here a stamper with nowhere
+        // to keep the stamp cannot produce one: nothing is emitted.
+        let (tx, rx) = event::channel();
+        let stamper = Stamper::with_targets(tx, None, fast_targets());
+        let (job, _) = announce_job(0x45);
+        stamp_announce(&stamper.inner, job);
+        assert!(
+            rx.try_recv().is_err(),
+            "no announce is emitted without its stamp"
+        );
+
+        // The same job with a stamp store is stamped and emitted.
+        let dir = tempfile::tempdir().unwrap();
+        stamper.set_stamp_store(Some(DestinationStampStore::new(dir.path())));
+        let (job, _) = announce_job(0x45);
+        stamp_announce(&stamper.inner, job);
+        assert!(matches!(
+            rx.recv_timeout(RECV_TIMEOUT).unwrap(),
+            Event::StoreSharedAnnounce { .. }
+        ));
+    }
+
+    #[test]
     fn worker_grinds_persists_and_emits_a_stamped_announce() {
         let dir = tempfile::tempdir().unwrap();
         let store = DestinationStampStore::new(dir.path());
