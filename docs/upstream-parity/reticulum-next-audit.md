@@ -270,7 +270,7 @@ Every commit in the audited range must appear exactly once.
 | 55 | `29e5a997ace2cfe7e058c9111860b29bfd448a86` | Updated documentation | Non-runtime | Pending mapping; stamps page additions |
 | 56 | `50e939ab0e1deb04c23813157360d22926bba6e4` | Fixed logic inversion | Structurally covered | Pending mapping; rns-rs drops requests whose stamp is not valid since commit 1 and recorded upstream's inverted expression as a divergence; the divergence ends |
 | 57 | `9d67be9acb74e1039cd36fbd615ed2f270fbe547` | Updated documentation | Non-runtime | Pending mapping; stamps page renamed "Protecting", with filtering and QoS sections |
-| 58 | `dad1302b1ec82177d56c310b915a1a12c287806c` | Updated changelog | Non-runtime | Pending mapping; 1.6.0 changelog |
+| 58 | `dad1302b1ec82177d56c310b915a1a12c287806c` | Updated changelog | Non-runtime | Mapping commit; every new 1.6.0 changelog entry traced to an audited commit or to the 1.6.0 baseline |
 | 59 | `1fee7af7f28e435421dbebd2cf4bd5257172bb58` | Bad at head math | Non-runtime | Pending mapping; one figure in `protecting.md` |
 | 60 | `baccc6d8a2cc38e0885869c2802aa0f32a32014a` | Cleanup | Structurally covered | Pending mapping; an announce whose destination stamp fails or is aborted is cancelled with a warning; rns-rs's stamper and inline path already send nothing on failure |
 | 61 | `2960e6a41d8436a4d4306f81f02f542bd06aee49` | Cleanup | Non-runtime | Pending mapping; one line in the Protecting page |
@@ -2123,6 +2123,32 @@ link manager tests
 
 **Final disposition:** Integrated, together with the link-table and pending
 link path rediscovery it depends on.
+
+### 58. `dad1302b` — Updated changelog
+
+- `Changelog.md` only: the 1.6.0 "Changes" list gains fifteen entries and
+  rewords two. No runtime file changes.
+- The changelog is not acceptance evidence, so every new entry is traced to
+  the commit that delivers it, each already audited:
+  - memory-density optimized announce rate table and packet hashlist, and
+    the reworded "Optimized ... handling" entries: accepted at the 1.6.0
+    baseline, where the native rate table and hashlist provide the same
+    optimizations with their own data structures
+    (`reticulum-1.6.0-audit.md`);
+  - improved filtering backend, the `[filter]` section, allow and ignore
+    lists and required-only announces: 35 (`825c2e19`), and 54 for
+    `hop_limiter` in `[filter]`;
+  - cost and value display in `rnstatus` and `rnpath`: 27 (`21170877`);
+  - `app_flag` signalling and link MTU aware resource advertisements: 16
+    (`c1472014`, which also packs advertisements over the link MDU without
+    their hashmap) and 17 (`9152bc13`);
+  - inbound announce handling and announce handler callback performance:
+    33 and 34 (`0cc6f5ae`, `ade030ad`) and 41 (`e49fafec`);
+  - early filtering and malformed packet detection, and path request
+    protocol violation handling: 1 (`d7749b0b`, the hop limiter ahead of
+    the packet filter), 39 (`cda4d72b`) and 40 (`ecd677ba`);
+  - invalid RPC error handling: 32 (`263dc6ba`) and 45 (`53dc223a`).
+- Disposition: **Non-runtime**. This analysis is the mapping.
 
 ## Integration Plan
 
