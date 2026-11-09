@@ -41,6 +41,9 @@ error; see [Building](building.md#selecting-interfaces).
 | `local_hops_delta` | `false` | Mask local zero-hop SINGLE/LINK traffic on external interfaces |
 | `enable_interface_management` | `true` | Set to `false` to block `rnstatus --attach/--detach/--reload` |
 | `panic_on_interface_error` | `false` | Abort instead of continuing when an interface fails |
+| `shared_instance_type` | `unix` on Linux | `tcp` serves the shared instance and its RPC only on TCP (`shared_instance_port`, `instance_control_port`), without the abstract Unix sockets; clients with the same setting connect over TCP |
+| `rpc_key` | derived | Hex RPC key shared instance clients authenticate with, in place of the one derived from the transport identity; up to 32 bytes (an invalid or longer key falls back to the derived one) |
+| `force_shared_instance_bitrate` | unset | Bitrate, in bits per second, the shared instance's local interfaces report. Upstream also paces their sends to it; rns-rs only reports it |
 | `packet_hashlist_max_entries` | `250000` | Size of the bounded dedup table |
 | `packet_hashlist_allocation` | `lazy` | `lazy` grows the table with the packets seen, up to `packet_hashlist_max_entries`; `eager` holds the full table's memory from startup |
 | `link_mtu_discovery` | `yes` | Set to `no` to omit MTU signalling from outbound link requests |

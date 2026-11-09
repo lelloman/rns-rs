@@ -833,6 +833,9 @@ pub struct Driver {
     /// The network identity, when one is configured: it decrypts
     /// `discovery_encrypt` announces and their own are encrypted to it.
     pub(crate) discovery_network_identity: Option<rns_crypto::identity::Identity>,
+    /// The bitrate the shared instance's client interfaces report
+    /// (`force_shared_instance_bitrate`).
+    pub(crate) forced_local_bitrate: Option<u64>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -1140,6 +1143,7 @@ impl Driver {
             blackhole_updater: None,
             interface_discovery_sources: Vec::new(),
             discovery_network_identity: None,
+            forced_local_bitrate: None,
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,

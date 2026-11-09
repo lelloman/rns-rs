@@ -67,6 +67,15 @@ pub struct ReticulumSection {
     /// Network identities whose discovered interfaces are accepted
     /// (`interface_discovery_sources`); empty accepts any.
     pub interface_discovery_sources: Vec<[u8; 16]>,
+    /// `shared_instance_type = tcp` keeps the shared instance and its RPC on
+    /// TCP; otherwise Linux uses abstract Unix sockets, as upstream does.
+    pub shared_instance_tcp: bool,
+    /// The shared instance RPC key (`rpc_key`), in place of the one derived
+    /// from the transport identity.
+    pub rpc_key: Option<[u8; 32]>,
+    /// The bitrate the shared instance interface reports
+    /// (`force_shared_instance_bitrate`), in bits per second.
+    pub force_shared_instance_bitrate: Option<u64>,
     pub probe_port: Option<u16>,
     pub probe_addr: Option<String>,
     /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
@@ -217,6 +226,9 @@ impl Default for ReticulumSection {
             blackhole_sources: Vec::new(),
             blackhole_update_interval: None,
             interface_discovery_sources: Vec::new(),
+            shared_instance_tcp: false,
+            rpc_key: None,
+            force_shared_instance_bitrate: None,
             probe_port: None,
             probe_addr: None,
             probe_protocol: None,
@@ -960,6 +972,28 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             }
         }
     }
+    if let Some(v) = kvs.get("shared_instance_type") {
+        // Upstream ignores values other than these two.
+        match v.trim().to_ascii_lowercase().as_str() {
+            "tcp" => section.shared_instance_tcp = true,
+            "unix" => section.shared_instance_tcp = false,
+            _ => {}
+        }
+    }
+    if let Some(v) = kvs.get("rpc_key") {
+        section.rpc_key = parse_rpc_key(v);
+    }
+    if let Some(v) = kvs.get("force_shared_instance_bitrate") {
+        section.force_shared_instance_bitrate =
+            Some(
+                v.trim()
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue {
+                        key: "force_shared_instance_bitrate".into(),
+                        value: v.clone(),
+                    })?,
+            );
+    }
     if let Some(v) = kvs.get("interface_discovery_sources") {
         for hexhash in v.split(',').map(str::trim).filter(|h| !h.is_empty()) {
             let source =
@@ -1664,6 +1698,44 @@ fn build_logging_section(kvs: &HashMap<String, String>) -> Result<LoggingSection
     }
 
     Ok(section)
+}
+
+/// The `rpc_key` hex value as the 32-byte key rns-rs authenticates with.
+///
+/// The key is used as an HMAC key, which is padded with zeros to the hash
+/// block size, so a shorter key authenticates exactly as the same key
+/// padded with zeros to 32 bytes. Like upstream, an invalid key falls back
+/// to the default one; so does a key longer than 32 bytes, which rns-rs does
+/// not support.
+fn parse_rpc_key(value: &str) -> Option<[u8; 32]> {
+    let value = value.trim();
+    let bytes: Option<Vec<u8>> = value
+        .len()
+        .is_multiple_of(2)
+        .then(|| {
+            (0..value.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(value.get(i..i + 2)?, 16).ok())
+                .collect()
+        })
+        .flatten();
+    match bytes {
+        Some(bytes) if !bytes.is_empty() && bytes.len() <= 32 => {
+            let mut key = [0u8; 32];
+            key[..bytes.len()].copy_from_slice(&bytes);
+            Some(key)
+        }
+        Some(bytes) if bytes.len() > 32 => {
+            log::error!(
+                "Shared instance RPC keys longer than 32 bytes are not supported, falling back to default key"
+            );
+            None
+        }
+        _ => {
+            log::error!("Invalid shared instance RPC key specified, falling back to default key");
+            None
+        }
+    }
 }
 
 /// A 16-byte identity hash written as 32 hexadecimal characters.
@@ -2670,6 +2742,48 @@ publish_blackhole = Yes
         // A hash of the wrong length, as upstream, is a config error.
         assert!(parse("[reticulum]\nblackhole_sources = aabbccdd\n").is_err());
         assert!(parse("[reticulum]\nblackhole_update_interval = soon\n").is_err());
+    }
+
+    #[test]
+    fn parse_shared_instance_type_rpc_key_and_forced_bitrate() {
+        let defaults = parse("[reticulum]\n").unwrap().reticulum;
+        assert!(!defaults.shared_instance_tcp);
+        assert_eq!(defaults.rpc_key, None);
+        assert_eq!(defaults.force_shared_instance_bitrate, None);
+
+        let config = parse(
+            "[reticulum]\nshared_instance_type = TCP\nforce_shared_instance_bitrate = 9600\n\
+             rpc_key = 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\n",
+        )
+        .unwrap()
+        .reticulum;
+        assert!(config.shared_instance_tcp);
+        assert_eq!(config.force_shared_instance_bitrate, Some(9600));
+        let key = config.rpc_key.unwrap();
+        assert_eq!(key[0], 0x00);
+        assert_eq!(key[31], 0xff);
+
+        // Unknown types are ignored, as upstream does.
+        assert!(
+            !parse("[reticulum]\nshared_instance_type = pipe\n")
+                .unwrap()
+                .reticulum
+                .shared_instance_tcp
+        );
+        // A short key is the same HMAC key padded with zeros.
+        let short = parse("[reticulum]\nrpc_key = abcd\n")
+            .unwrap()
+            .reticulum
+            .rpc_key
+            .unwrap();
+        assert_eq!(&short[..2], &[0xab, 0xcd]);
+        assert!(short[2..].iter().all(|b| *b == 0));
+        // Invalid or overlong keys fall back to the default key.
+        for invalid in ["zz", "abc", &"ab".repeat(33)] {
+            let config = parse(&format!("[reticulum]\nrpc_key = {invalid}\n")).unwrap();
+            assert_eq!(config.reticulum.rpc_key, None, "{invalid}");
+        }
+        assert!(parse("[reticulum]\nforce_shared_instance_bitrate = fast\n").is_err());
     }
 
     #[test]

@@ -117,7 +117,6 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     };
 
     // Connect to rnsd via RPC
-    let rpc_port = rns_config.reticulum.instance_control_port;
     let paths = match storage::ensure_storage_dirs(&config_dir) {
         Ok(p) => p,
         Err(e) => {
@@ -141,8 +140,11 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         }
     };
 
-    let auth_key = derive_auth_key(&prv_key);
-    let rpc_addr = RpcAddr::local(rns_config.reticulum.instance_name.clone(), rpc_port);
+    let auth_key = rns_config
+        .reticulum
+        .rpc_key
+        .unwrap_or_else(|| derive_auth_key(&prv_key));
+    let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
     // First, ensure we have a path
     let adaptive_timeout = if timeout_arg.is_some() {

@@ -56,6 +56,9 @@ pub struct LocalServerConfig {
     pub instance_name: String,
     pub port: u16,
     pub interface_id: InterfaceId,
+    /// Serve on the abstract Unix socket `\0rns/<instance_name>` on Linux;
+    /// `false` for upstream's `shared_instance_type = tcp`.
+    pub use_af_unix: bool,
 }
 
 impl Default for LocalServerConfig {
@@ -64,6 +67,7 @@ impl Default for LocalServerConfig {
             instance_name: "default".into(),
             port: 37428,
             interface_id: InterfaceId(0),
+            use_af_unix: true,
         }
     }
 }
@@ -76,6 +80,9 @@ pub struct LocalClientConfig {
     pub port: u16,
     pub interface_id: InterfaceId,
     pub reconnect_wait: Duration,
+    /// Try the abstract Unix socket first on Linux; `false` for upstream's
+    /// `shared_instance_type = tcp`.
+    pub use_af_unix: bool,
 }
 
 impl Default for LocalClientConfig {
@@ -86,6 +93,7 @@ impl Default for LocalClientConfig {
             port: 37428,
             interface_id: InterfaceId(0),
             reconnect_wait: Duration::from_secs(8),
+            use_af_unix: true,
         }
     }
 }
@@ -294,7 +302,7 @@ fn start_server_with_template(
     let key = crate::interface::loop_writer::read_key(config.interface_id);
     // Try Unix socket first on Linux
     #[cfg(target_os = "linux")]
-    {
+    if config.use_af_unix {
         match unix_socket::try_bind_unix(&config.instance_name) {
             Ok(listener) => {
                 listener.set_nonblocking(true)?;
@@ -780,6 +788,9 @@ fn try_connect_tcp(config: &LocalClientConfig) -> io::Result<TcpStream> {
 
 #[cfg(target_os = "linux")]
 fn try_connect_local_client(config: &LocalClientConfig) -> io::Result<LocalClientStream> {
+    if !config.use_af_unix {
+        return try_connect_tcp(config).map(LocalClientStream::Tcp);
+    }
     match unix_socket::try_connect_unix(&config.instance_name) {
         Ok(stream) => {
             log::info!(
@@ -928,6 +939,7 @@ impl InterfaceFactory for LocalServerFactory {
             instance_name,
             port,
             interface_id: id,
+            use_af_unix: true,
         }))
     }
 
@@ -1102,6 +1114,7 @@ mod tests {
             instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(70),
+            use_af_unix: true,
         };
 
         // We force TCP by using a unique instance name that won't conflict
@@ -1132,6 +1145,7 @@ mod tests {
             instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(79),
+            use_af_unix: true,
         };
         let control = start_server(config, tx.clone(), next_id).unwrap();
         let mut client = connect_test_client(&instance_name, port);
@@ -1191,6 +1205,7 @@ mod tests {
             instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(71),
+            use_af_unix: true,
         };
 
         start_server(config, tx, next_id).unwrap();
@@ -1220,6 +1235,7 @@ mod tests {
             instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(71),
+            use_af_unix: true,
         };
 
         let control = start_server(config, tx, next_id).unwrap();
@@ -1253,6 +1269,7 @@ mod tests {
             instance_name: crate::test_support::instance_name("test-sr"),
             port,
             interface_id: InterfaceId(72),
+            use_af_unix: true,
         };
 
         start_server(server_config, server_tx, next_id).unwrap();
@@ -1266,6 +1283,7 @@ mod tests {
             port,
             interface_id: InterfaceId(73),
             reconnect_wait: Duration::from_secs(1),
+            use_af_unix: true,
         };
 
         let mut client_writer = start_client(client_config, client_tx).unwrap();
@@ -1470,6 +1488,7 @@ mod tests {
             instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(74),
+            use_af_unix: true,
         };
 
         start_server(config, tx, next_id).unwrap();
@@ -1502,6 +1521,7 @@ mod tests {
             instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(75),
+            use_af_unix: true,
         };
 
         start_server(config, tx, next_id).unwrap();
@@ -1547,6 +1567,7 @@ mod tests {
             port,
             interface_id: InterfaceId(76),
             reconnect_wait: Duration::from_millis(50),
+            use_af_unix: true,
         };
 
         let _writer = start_client(client_config, client_tx).unwrap();
