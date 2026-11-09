@@ -1,4 +1,4 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.6.0 rgit `c5d205ff` Upstream Audit
 
 ## Scope and Baseline
 
@@ -2366,24 +2366,20 @@ discovery features rather than configuration parsing, and remain open.
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
   `d3874dde`, `ecd677ba`, `53dc223a`, `eb826cde`, `acb38a8a` and the current
   tip `c5d205ff` (4/4 and 12/12 with commits 53 to 65 integrated).
-- [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
-  the `rns-hooks` workspace suite, formatting and both lints passed; the
-  `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
-  suites listed in earlier parity records were not run.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-  The rns-server Docker suite passed on the merged tree (see below); the
-  full docker-e2e matrix, release builds, VPS smoke and hardware gates were
-  not run.
-  Not run: release and cross builds, the Docker matrix (notably
-  `21_stamped_emission.sh`, which now expects an `lr_cost` of 12.5), the
-  dual-VPS smoke and hardware validation.
+- [x] Workspace tests, feature suites, formatting, and lint pass. All suites
+  listed in earlier parity records passed on the promoted tree `0a2f98d9`
+  (see "Promotion gates" below).
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+  Release and ARMv7 builds, the tarball and the dual-VPS smoke passed; 8 of
+  10 Docker matrix runs passed locally and the other two could not start on
+  this workstation, so the CI `Docker E2E` job on the promotion pull request
+  is their authority; physical hardware validation is not claimed.
 - [x] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`. Per the
-  README workflow the parity record is written at promotion, after the
-  target version is known and this file is renamed. Upstream released the
-  signed `1.6.0` tag on commit 62 instead of a 1.6.1, and 1.6.0 already has
-  signed-release and `-rgit` records, so this audit becomes
-  `reticulum-1.6.0-rgit-2-{audit,parity}.md`.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`:
+  [reticulum-1.6.0-rgit-2-parity.md](reticulum-1.6.0-rgit-2-parity.md).
+  Upstream released the signed `1.6.0` tag on commit 62 instead of a 1.6.1,
+  and 1.6.0 already has signed-release and `-rgit` records, so this audit
+  became `reticulum-1.6.0-rgit-2-audit.md`.
 
 ## Acceptance Record
 
@@ -2706,3 +2702,28 @@ to `d9d4e51e`, `9d67be9a` to `db1a45cf`, `dad1302b` to `5625be8a`,
 `99819b31`, `cb126089` to `c96197da`, `d4af18fd` to `f1f281b3`, `e0da9c38`
 to `9a1e9110` and `c5d205ff` to `fe5b4a3e`, one local commit each, and no
 upstream hash appears twice in the history.
+
+### Promotion gates (2026-11-09)
+
+Run on the promoted tree `0a2f98d9`: `origin/master` `39357f14` with the
+per-interface announce limits fix `807c62ba` and the `rusqlite` upgrade
+`0a2f98d9`. Same host.
+
+| Gate | Command | Result |
+|---|---|---|
+| Workspace | `cargo test --workspace` | 3,208 passed, 0 failed |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks` | 3,274 passed, 0 failed |
+| Native hooks | `cargo test -p rns-net --features rns-hooks-native --lib` | 1,352 passed, 0 failed |
+| Compact engine threads | `cargo test -p rns-net --features compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io` | 1,408 passed, 0 failed |
+| `rns-ctl` TLS | `cargo test -p rns-ctl --features tls` | 134 passed, 0 failed |
+| Built-in hooks | `e2e_hooks builtin`; `test_hook_api_loads_reloads_lists_and_unloads_builtin_hook` | 4/4; passed (the E2E target first failed to compile: two feature-gated `InterfaceConfig` literals lacked the new field, fixed in `807c62ba`) |
+| No-default-features | the three CI `cargo check` commands | Passed |
+| Formatting, lint | `cargo fmt --all --check`; workspace clippy; `bash scripts/lint-host.sh` | Clean |
+| Python tools, web UI | `compileall`, 19 unit tests; `node --test rns-ctl/assets/app.smoke.test.js` | Passed |
+| RustSec | `cargo audit`; `cargo audit --file rns-esp32/Cargo.lock` | RUSTSEC-2026-0459 in `libsqlite3-sys` 0.38.2, fixed by the `rusqlite` 0.41 upgrade; then clean |
+| Interop, target `c5d205ff` | `python_interop`; `utility_interop -- --include-ignored` | 4/4; 12/12 |
+| Release builds | `cargo build --release -p rns-server -p rns-ctl --features rns-hooks-native` | `rns-server 0.6.1890-0a2f98d9`, `rns-ctl 0.8.1890-0a2f98d9` |
+| ARMv7 | the five CI ARMv7 build-smoke commands | Passed |
+| Tarball | `scripts/package-rns-server-tarball.sh` | `dist/rns-server-linux-x86_64.tar.gz` |
+| Docker | `./tests/docker/run-all.sh` | 8 of 10 runs passed (109 checks passed, 0 failed, 31 skipped); the 30-node scale run could not bind host port 8095 (held by an unrelated service) and the NAT hole punching network's 172.22.0.0/24 overlaps an unrelated Docker network; CI `Docker E2E` covers both |
+| Dual-VPS smoke | `scripts/manual-backbone-smoke.sh --daily` with the release binary | 55 passed, 0 failed |
