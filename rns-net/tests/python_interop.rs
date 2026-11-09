@@ -352,7 +352,7 @@ fn start_rust_node_with_store(
     tx: Sender<RustEvent>,
     ratchet_store: Option<std::sync::Arc<dyn rns_net::storage::RatchetStore>>,
 ) -> RnsNode {
-    start_rust_node_with(port, tx, ratchet_store, None)
+    start_rust_node_with(port, tx, ratchet_store, None, Default::default())
 }
 
 fn start_rust_node_with(
@@ -360,12 +360,13 @@ fn start_rust_node_with(
     tx: Sender<RustEvent>,
     ratchet_store: Option<std::sync::Arc<dyn rns_net::storage::RatchetStore>>,
     cache_dir: Option<std::path::PathBuf>,
+    stamps: rns_net::config::StampsSection,
 ) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps,
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -627,9 +628,14 @@ try:
                 from RNS.Stamps import generate_stamp
                 # Fractional since 796ef2d4; earlier releases apply int().
                 link_cost = float(command.split()[1])
-                # Grind to at least the value the Rust node requires: releases
-                # before a8cc6cb2 target 23, below its 23.5 announce cost.
-                stamp_target = max(RNS.Transport.DESTINATION_VALUE, int(command.split()[2]))
+                # Grind to the value the Rust node requires, which the test
+                # keeps small so the grind is quick.
+                stamp_target = int(command.split()[2])
+                # Lower this instance's own target to match, or since c97e2158
+                # and baccc6d8 the announce grinds a fresh stamp at the default
+                # 25 instead of sending this one.
+                RNS.Transport.DESTINATION_VALUE = stamp_target
+                if hasattr(destination, "set_value"): destination.set_value(stamp_target)
                 RNS.Transport.STAMP_DESTINATIONS = True
                 destination.set_link_cost(link_cost)
                 started = time.time()
@@ -896,11 +902,18 @@ fn python_rns_stamped_link_request_interop() {
     let port = ready["port"].as_u64().unwrap() as u16;
     let python_dest_hash = DestHash(parse_hex_16(ready["python_dest_hash"].as_str().unwrap()));
 
+    // The Rust node requires a modest announce stamp, so Python's grind takes
+    // a moment. At the default 23.5 it takes about a minute on a small CI
+    // runner, using every core, and starves the tests running beside it.
+    let stamps = rns_net::config::StampsSection {
+        destination_cost: rns_core::stamp::StampCost::from_whole(12),
+        ..Default::default()
+    };
+    let required = stamps.destination_cost;
     let (rust_tx, rust_rx) = mpsc::channel();
-    let node = start_rust_node(port, rust_tx);
+    let node = start_rust_node_with(port, rust_tx, None, None, stamps);
 
     // Python stamps its destination and announces a link request cost.
-    let required = rns_core::constants::DESTINATION_STAMP_COST;
     python.command(&format!(
         "stamped_announce_py {LINK_COST} {}",
         required.as_f64().ceil()
@@ -1104,7 +1117,13 @@ fn python_rns_link_cost_announced_by_rust_interop() {
 
     let cache_dir = tempfile::tempdir().unwrap();
     let (rust_tx, rust_rx) = mpsc::channel();
-    let mut node = start_rust_node_with(port, rust_tx, None, Some(cache_dir.path().into()));
+    let mut node = start_rust_node_with(
+        port,
+        rust_tx,
+        None,
+        Some(cache_dir.path().into()),
+        Default::default(),
+    );
     node.set_destination_stamping(true, rns_net::stamper::StampTargets::default());
     node.set_link_request_stamps_enforced(true);
 
