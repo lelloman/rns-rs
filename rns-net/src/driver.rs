@@ -881,7 +881,7 @@ pub struct Driver {
     pub(crate) stamp_settings: crate::config::StampsSection,
     /// Inbound packets whose hop count reaches this limit are dropped and
     /// counted as `hop_limiter_hits` (`Transport.HOP_LIMITER`, set from
-    /// `[reticulum] hop_limiter`).
+    /// `[filter] hop_limiter`).
     pub(crate) hop_limiter: u8,
     /// Maximum queued outbound frames per interface writer worker.
     pub(crate) interface_writer_queue_capacity: usize,
@@ -1506,7 +1506,7 @@ impl Driver {
         self.stamper = stamper;
     }
 
-    /// Apply the `[stamps]` config section and `[reticulum] hop_limiter`,
+    /// Apply the `[stamps]` config section and `[filter] hop_limiter`,
     /// as `Reticulum.__apply_config` sets the `Transport` attributes before
     /// transport starts (Reticulum.py, d7749b0b). The configured flags also
     /// become the defaults the `global.stamp_*` runtime keys reset to.

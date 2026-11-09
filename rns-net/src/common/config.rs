@@ -39,8 +39,8 @@ pub struct ParsedHook {
 pub struct ReticulumSection {
     pub enable_transport: bool,
     /// Inbound packets whose hop count reaches this limit are dropped and
-    /// counted as `hop_limiter_hits` (upstream `hop_limiter`, clamped to
-    /// `1..=PATHFINDER_M`).
+    /// counted as `hop_limiter_hits`: `[filter] hop_limiter`, clamped to
+    /// `0..=PATHFINDER_M` (upstream 01aef5bc), so 0 drops every packet.
     pub hop_limiter: u8,
     pub static_transport_identity: bool,
     pub local_hops_delta: bool,
@@ -620,7 +620,10 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     }
 
     // Build typed sections
-    let reticulum = build_reticulum_section(&reticulum_kvs)?;
+    let mut reticulum = build_reticulum_section(&reticulum_kvs)?;
+    if let Some(hop_limiter) = parse_hop_limiter(&filter_kvs)? {
+        reticulum.hop_limiter = hop_limiter;
+    }
     let logging = build_logging_section(&logging_kvs)?;
     let stamps = build_stamps_section(&stamps_kvs)?;
     let filter = build_filter_section(&filter_kvs)?;
@@ -1031,13 +1034,10 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         section.required_discovery_value =
             (v > 0.0).then(|| rns_core::stamp::clamp_cost(v, rns_core::constants::STAMP_COST_CAP));
     }
-    if let Some(v) = kvs.get("hop_limiter") {
-        // Reticulum.py: `max(1, min(as_int(v), PATHFINDER_M))`.
-        let n = parse_config_int(v).ok_or_else(|| ConfigError::InvalidValue {
-            key: "hop_limiter".into(),
-            value: v.clone(),
-        })?;
-        section.hop_limiter = n.clamp(1, i64::from(rns_core::constants::PATHFINDER_M)) as u8;
+    if kvs.contains_key("hop_limiter") {
+        // Reticulum.py reads it from `[filter]` since 01aef5bc and ignores
+        // this one; say so rather than drop a configured limit silently.
+        log::warn!("[reticulum] hop_limiter is no longer read; set it in the [filter] section");
     }
     if let Some(v) = kvs.get("prefer_shorter_path") {
         section.prefer_shorter_path = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -1469,6 +1469,21 @@ fn parse_config_int(value: &str) -> Option<i64> {
 /// including `inf` and `nan`, which callers clamp.
 pub(crate) fn parse_config_float(value: &str) -> Option<f64> {
     value.trim().parse::<f64>().ok()
+}
+
+/// `[filter] hop_limiter`: `max(0, min(as_int(v), PATHFINDER_M))`
+/// (Reticulum.py since 01aef5bc). A limit of 0 drops every inbound packet.
+fn parse_hop_limiter(kvs: &HashMap<String, String>) -> Result<Option<u8>, ConfigError> {
+    let Some(v) = kvs.get("hop_limiter") else {
+        return Ok(None);
+    };
+    let n = parse_config_int(v).ok_or_else(|| ConfigError::InvalidValue {
+        key: "hop_limiter".into(),
+        value: v.clone(),
+    })?;
+    Ok(Some(
+        n.clamp(0, i64::from(rns_core::constants::PATHFINDER_M)) as u8,
+    ))
 }
 
 fn build_filter_section(kvs: &HashMap<String, String>) -> Result<FilterSection, ConfigError> {
@@ -2976,21 +2991,30 @@ direct_connect_policy = identified_only
     }
 
     #[test]
-    fn hop_limiter_parses_and_clamps_to_pathfinder_range() {
+    fn hop_limiter_is_read_from_the_filter_section() {
+        // Reticulum.py since 01aef5bc: `[filter] hop_limiter`, clamped with
+        // `max(0, min(as_int(v), PATHFINDER_M))`; `[reticulum]` no longer
+        // sets it.
         use rns_core::constants::PATHFINDER_M;
         let limiter = |value: &str| {
-            parse(&format!("[reticulum]\nhop_limiter = {value}\n"))
+            parse(&format!("[filter]\nhop_limiter = {value}\n"))
                 .unwrap()
                 .reticulum
                 .hop_limiter
         };
         assert_eq!(limiter("16"), 16);
         assert_eq!(limiter("1"), 1);
-        assert_eq!(limiter("0"), 1);
-        assert_eq!(limiter("-5"), 1);
+        assert_eq!(limiter("0"), 0);
+        assert_eq!(limiter("-5"), 0);
         assert_eq!(limiter("128"), PATHFINDER_M);
         assert_eq!(limiter("1000"), PATHFINDER_M);
-        assert!(parse("[reticulum]\nhop_limiter = many\n").is_err());
-        assert!(parse("[reticulum]\nhop_limiter = 4.5\n").is_err());
+        assert!(parse("[filter]\nhop_limiter = many\n").is_err());
+        assert!(parse("[filter]\nhop_limiter = 4.5\n").is_err());
+
+        let legacy = parse("[reticulum]\nhop_limiter = 16\n").unwrap();
+        assert_eq!(legacy.reticulum.hop_limiter, PATHFINDER_M);
+        assert!(parse("[reticulum]\nhop_limiter = many\n").is_ok());
+        let both = parse("[reticulum]\nhop_limiter = 9\n[filter]\nhop_limiter = 14\n").unwrap();
+        assert_eq!(both.reticulum.hop_limiter, 14);
     }
 }

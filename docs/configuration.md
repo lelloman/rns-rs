@@ -44,7 +44,6 @@ error; see [Building](building.md#selecting-interfaces).
 | `packet_hashlist_max_entries` | `250000` | Size of the bounded dedup table |
 | `packet_hashlist_allocation` | `lazy` | `lazy` grows the table with the packets seen, up to `packet_hashlist_max_entries`; `eager` holds the full table's memory from startup |
 | `link_mtu_discovery` | `yes` | Set to `no` to omit MTU signalling from outbound link requests |
-| `hop_limiter` | `128` | Drop inbound packets whose hop count reaches this limit, counted per interface as `hop_limiter_hits` (`rnstatus` "Hop Limit"); clamped to 1-128 |
 | `underlay_mark` | unset | Linux `SO_MARK` for owned IP sockets, see below |
 | `probe_port`, `probe_addr`, `direct_connect_policy`, `direct_connect_allow_private_endpoints` | | [Direct Link](direct-link.md) |
 | `default_gravity`, `autoconnect_interface_mode`, `autoconnect_interface_gravity`, `autoconnect_announces_to_internal`, `autoconnect_unverified_implementations` | | [Interface Discovery](interface-discovery.md) |
@@ -298,6 +297,18 @@ responses are announces too. With `required_only`, the announces that get
 through are the allowed types, the types a local application asked for, and
 the destinations of this node's own local clients (or, on a client, of its
 shared instance). Ignored types are dropped in every case.
+
+`hop_limiter` in the same section (default `128`) drops every inbound packet
+whose hop count has reached the limit, before any other check, and counts it
+per interface as `hop_limiter_hits` (`rnstatus` "Hop Limit"). It is clamped to
+0-128, so `0` drops all inbound packets. Upstream moved the option here from
+`[reticulum]` in `01aef5bc`; a `hop_limiter` left in `[reticulum]` is no longer
+read and logs a warning.
+
+```ini
+[filter]
+  hop_limiter = 14
+```
 
 Applications ask for the types they need with
 `RnsNode::wants_destination_type` (upstream

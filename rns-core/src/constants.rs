@@ -262,7 +262,7 @@ pub const PATHFINDER_M: u8 = 128;
 /// Inbound packets whose hop count has reached the node's hop limiter are
 /// dropped before the packet filter and counted per interface as
 /// `hop_limiter_hits`. The limiter is a runtime value configured with
-/// `[reticulum] hop_limiter`, clamped to `1..=PATHFINDER_M`; packets with a
+/// `[filter] hop_limiter`, clamped to `0..=PATHFINDER_M`; packets with a
 /// hop count at or above `PATHFINDER_M` already fail to decode.
 pub const HOP_LIMITER: u8 = PATHFINDER_M;
 

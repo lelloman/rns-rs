@@ -390,10 +390,6 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # implementations. Dangerous; leave disabled unless you understand the risk.
   # autoconnect_unverified_implementations = no
 
-  # You can enable a hop limiter, that will drop all packets
-  # exceeding the specified maximum hop count (1 to 128).
-  # hop_limiter = 16
-
 [stamps]
   # This section configures stamping behaviour and defaults.
   # In most cases, you do not need to change this, but on
@@ -452,6 +448,17 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   # link request and path request stamps, in seconds.
   # lr_stamp_timeout = 15
   # pr_stamp_timeout = 15
+
+[filter]
+  # You can enable a hop limiter, that will drop all packets
+  # exceeding the specified maximum hop count (0 to 128).
+  # hop_limiter = 16
+
+  # Destination types can be ignored instance-wide, or, with
+  # required_only, allowed only when listed in allowed_types.
+  # ignored_types = application.that.spams, traffic.heavy.service
+  # required_only = no
+  # allowed_types = lxst.telephony
 
 [logging]
   # Valid log levels are 0 through 8:
@@ -587,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn example_config_documents_and_parses_the_stamps_section() {
+    fn example_config_documents_and_parses_the_stamps_and_filter_sections() {
         for key in [
             "hop_limiter",
             "stamp_destinations",
@@ -610,6 +617,10 @@ mod tests {
         // Every option is commented out, so the example keeps the defaults.
         let config = rns_net::config::parse(EXAMPLE_CONFIG).unwrap();
         assert_eq!(config.stamps, rns_net::config::StampsSection::default());
+        assert_eq!(config.filter, rns_net::config::FilterSection::default());
+        // `hop_limiter` belongs to `[filter]` (upstream 01aef5bc).
+        let filter = EXAMPLE_CONFIG.find("\n[filter]").unwrap();
+        assert!(EXAMPLE_CONFIG.find("# hop_limiter = ").unwrap() > filter);
         assert_eq!(
             config.reticulum.hop_limiter,
             rns_core::constants::HOP_LIMITER
