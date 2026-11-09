@@ -42,6 +42,25 @@ pub struct SharedClientConfig {
     pub port: u16,
     /// RPC control port for queries (default 37429).
     pub rpc_port: u16,
+    /// Try the abstract Unix socket first on Linux; `false` for upstream's
+    /// `shared_instance_type = tcp`.
+    pub use_af_unix: bool,
+    /// The bitrate the shared instance interface reports
+    /// (`force_shared_instance_bitrate`).
+    pub force_bitrate: Option<u64>,
+}
+
+impl SharedClientConfig {
+    /// The shared instance a config's `[reticulum]` section describes.
+    pub fn from_reticulum(reticulum: &crate::config::ReticulumSection) -> Self {
+        Self {
+            instance_name: reticulum.instance_name.clone(),
+            port: reticulum.shared_instance_port,
+            rpc_port: reticulum.instance_control_port,
+            use_af_unix: !reticulum.shared_instance_tcp,
+            force_bitrate: reticulum.force_shared_instance_bitrate,
+        }
+    }
 }
 
 impl Default for SharedClientConfig {
@@ -50,6 +69,8 @@ impl Default for SharedClientConfig {
             instance_name: "default".into(),
             port: 37428,
             rpc_port: 37429,
+            use_af_unix: true,
+            force_bitrate: None,
         }
     }
 }
@@ -248,6 +269,7 @@ impl RnsNode {
             port: config.port,
             interface_id: rns_core::transport::types::InterfaceId(1),
             reconnect_wait,
+            use_af_unix: config.use_af_unix,
         };
 
         let id = local_config.interface_id;
@@ -262,7 +284,11 @@ impl RnsNode {
             announces_to_internal: None,
             out_capable: true,
             in_capable: true,
-            bitrate: Some(crate::interface::local::BITRATE),
+            bitrate: Some(
+                config
+                    .force_bitrate
+                    .unwrap_or(crate::interface::local::BITRATE),
+            ),
             airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
@@ -359,15 +385,11 @@ impl RnsNode {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
         };
 
-        let shared_config = SharedClientConfig {
-            instance_name: rns_config.reticulum.instance_name.clone(),
-            port: rns_config.reticulum.shared_instance_port,
-            rpc_port: rns_config.reticulum.instance_control_port,
-        };
-        let rpc_addr = RpcAddr::local(shared_config.instance_name.clone(), shared_config.rpc_port);
+        let shared_config = SharedClientConfig::from_reticulum(&rns_config.reticulum);
+        let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
         let mut node = Self::connect_shared(shared_config, callbacks)?;
-        node.use_shared_instance_rpc(&config_dir, rpc_addr);
+        node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
         Ok(node)
     }
 
@@ -375,7 +397,16 @@ impl RnsNode {
     /// registrations. Its key derives from the shared instance's transport
     /// identity, which clients read from the same storage directory; without
     /// one, registrations stay local.
-    pub(crate) fn use_shared_instance_rpc(&mut self, config_dir: &Path, rpc_addr: RpcAddr) {
+    pub(crate) fn use_shared_instance_rpc(
+        &mut self,
+        config_dir: &Path,
+        rpc_addr: RpcAddr,
+        rpc_key: Option<[u8; 32]>,
+    ) {
+        if let Some(auth_key) = rpc_key {
+            self.destination_types.shared_rpc = Some((rpc_addr, auth_key));
+            return;
+        }
         match storage::load_identity(&config_dir.join("storage").join("transport_identity")) {
             Ok(identity) => {
                 let auth_key =
@@ -535,6 +566,7 @@ pub fn bench_shared_client_replay_once(
         port,
         interface_id: rns_core::transport::types::InterfaceId(1),
         reconnect_wait,
+        use_af_unix: true,
     };
 
     let id = local_config.interface_id;
@@ -788,6 +820,7 @@ mod tests {
             instance_name: crate::test_support::instance_name("test-shared-connect"),
             port,
             interface_id: rns_core::transport::types::InterfaceId(99),
+            use_af_unix: true,
         };
 
         crate::interface::local::start_server(server_config, server_tx, next_id).unwrap();
@@ -798,6 +831,8 @@ mod tests {
             instance_name: crate::test_support::instance_name("test-shared-connect"),
             port,
             rpc_port: 0,
+            use_af_unix: true,
+            force_bitrate: None,
         };
 
         let node = RnsNode::connect_shared(config, Box::new(NoopCallbacks)).unwrap();
@@ -819,6 +854,7 @@ mod tests {
             instance_name: crate::test_support::instance_name("test-shared-reg"),
             port,
             interface_id: rns_core::transport::types::InterfaceId(98),
+            use_af_unix: true,
         };
 
         crate::interface::local::start_server(server_config, server_tx, next_id).unwrap();
@@ -828,6 +864,8 @@ mod tests {
             instance_name: crate::test_support::instance_name("test-shared-reg"),
             port,
             rpc_port: 0,
+            use_af_unix: true,
+            force_bitrate: None,
         };
 
         let node = RnsNode::connect_shared(config, Box::new(NoopCallbacks)).unwrap();
@@ -853,6 +891,7 @@ mod tests {
             instance_name: crate::test_support::instance_name("test-shared-send"),
             port,
             interface_id: rns_core::transport::types::InterfaceId(97),
+            use_af_unix: true,
         };
 
         crate::interface::local::start_server(server_config, server_tx, next_id).unwrap();
@@ -862,6 +901,8 @@ mod tests {
             instance_name: crate::test_support::instance_name("test-shared-send"),
             port,
             rpc_port: 0,
+            use_af_unix: true,
+            force_bitrate: None,
         };
 
         let node = RnsNode::connect_shared(config, Box::new(NoopCallbacks)).unwrap();
@@ -906,6 +947,8 @@ mod tests {
                 instance_name,
                 port,
                 rpc_port: 0,
+                use_af_unix: true,
+                force_bitrate: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -969,6 +1012,8 @@ mod tests {
             instance_name: "nonexistent-instance-12345".into(),
             port,
             rpc_port: 0,
+            use_af_unix: true,
+            force_bitrate: None,
         };
 
         // Should fail because no server is running

@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         port,
         interface_id: InterfaceId(9002),
         reconnect_wait: Duration::from_secs(1),
+        use_af_unix: true,
     };
 
     let _writer = start_client(config, tx)?;

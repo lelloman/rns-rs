@@ -14515,3 +14515,26 @@ fn packet_signal_readings_are_cached_per_packet_hash() {
     );
     assert_eq!(query(&mut driver, &with_readings), None);
 }
+
+#[test]
+fn forced_shared_instance_bitrate_applies_to_local_clients() {
+    let mut driver = new_test_driver();
+    driver.forced_local_bitrate = Some(9600);
+    let mut local = make_interface_info(5);
+    local.is_local_client = true;
+    let (writer, _sent) = MockWriter::new();
+    driver.handle_interface_up_event(InterfaceId(5), Some(Box::new(writer)), Some(local));
+    let mut other = make_interface_info(6);
+    other.bitrate = Some(1_000);
+    let (writer, _sent) = MockWriter::new();
+    driver.handle_interface_up_event(InterfaceId(6), Some(Box::new(writer)), Some(other));
+
+    assert_eq!(
+        driver.interfaces.get(&InterfaceId(5)).unwrap().info.bitrate,
+        Some(9600)
+    );
+    assert_eq!(
+        driver.interfaces.get(&InterfaceId(6)).unwrap().info.bitrate,
+        Some(1_000)
+    );
+}

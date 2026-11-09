@@ -188,11 +188,11 @@ fn connect(config_path: Option<&str>) -> RpcClient {
         }
     };
 
-    let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
-    let rpc_addr = RpcAddr::local(
-        rns_config.reticulum.instance_name.clone(),
-        rns_config.reticulum.instance_control_port,
-    );
+    let auth_key = rns_config
+        .reticulum
+        .rpc_key
+        .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
+    let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
     match RpcClient::connect(&rpc_addr, &auth_key) {
         Ok(client) => client,
         Err(e) => {

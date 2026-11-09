@@ -69,6 +69,19 @@ pub enum RpcAddr {
 }
 
 impl RpcAddr {
+    /// The RPC server of the local shared instance a config describes: on
+    /// TCP for `shared_instance_type = tcp`, else as [`RpcAddr::Local`].
+    pub fn for_shared_instance(reticulum: &crate::config::ReticulumSection) -> Self {
+        if reticulum.shared_instance_tcp {
+            RpcAddr::Tcp("127.0.0.1".into(), reticulum.instance_control_port)
+        } else {
+            RpcAddr::local(
+                reticulum.instance_name.clone(),
+                reticulum.instance_control_port,
+            )
+        }
+    }
+
     /// The RPC server of the local shared instance; see [`RpcAddr::Local`].
     pub fn local(instance_name: impl Into<String>, port: u16) -> Self {
         RpcAddr::Local {

@@ -1642,6 +1642,81 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
     }
 }
 
+/// A shared instance with `shared_instance_type = tcp` and an `rpc_key`,
+/// run by one implementation, answers the other's rnstatus over TCP. The
+/// client runs from a copy of the config without the daemon's storage, so
+/// only the configured key, not one derived from the daemon's transport
+/// identity, authenticates it.
+#[cfg(target_os = "linux")]
+fn tcp_shared_instance_with_rpc_key(daemon: Daemon) {
+    let root = tempfile::tempdir().unwrap();
+    let daemon_dir = root.path().join("daemon");
+    let client_dir = root.path().join("client");
+    fs::create_dir_all(&daemon_dir).unwrap();
+    fs::create_dir_all(&client_dir).unwrap();
+    let (shared_port, control_port) = {
+        let shared = TcpPortReservation::new();
+        let control = TcpPortReservation::new();
+        (shared.port(), control.port())
+    };
+    let instance = format!("tcp-rpc-key-{}-{}", daemon as u8, std::process::id());
+    let config = format!(
+        "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+         instance_name = {instance}\n  shared_instance_type = tcp\n  \
+         shared_instance_port = {shared_port}\n  instance_control_port = {control_port}\n  \
+         rpc_key = 5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e\n\
+         [logging]\n  loglevel = 4\n\
+         [interfaces]\n"
+    );
+    fs::write(daemon_dir.join("config"), &config).unwrap();
+    fs::write(client_dir.join("config"), &config).unwrap();
+
+    let mut daemon_process = spawn_daemon(daemon, &daemon_dir, &root.path().join("daemon.log"));
+    wait_for_port(control_port, &mut daemon_process, "TCP RPC port");
+    // No abstract sockets with shared_instance_type = tcp.
+    let unix_sockets = fs::read_to_string("/proc/net/unix").unwrap_or_default();
+    assert!(
+        !unix_sockets.contains(&format!("@rns/{instance}")),
+        "the shared instance opened an abstract socket"
+    );
+
+    let client_config = client_dir.to_str().unwrap().to_string();
+    let mut rnstatus = match daemon {
+        Daemon::Python => Command::new(env!("CARGO_BIN_EXE_rnstatus")),
+        Daemon::Rust => {
+            let mut command = Command::new("python3");
+            command.args(["-m", "RNS.Utilities.rnstatus"]);
+            command
+        }
+    };
+    rnstatus.args(["--config", &client_config]);
+    let output = run(rnstatus);
+    daemon_process.assert_running("daemon");
+    assert_success(
+        &output,
+        "rnstatus against a TCP shared instance with an RPC key",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Could not get") && !stdout.contains("No shared"),
+        "{stdout}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rust_rnstatus_reaches_python_tcp_instance_with_rpc_key() {
+    tcp_shared_instance_with_rpc_key(Daemon::Python);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnstatus_reaches_rust_tcp_instance_with_rpc_key() {
+    tcp_shared_instance_with_rpc_key(Daemon::Rust);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]

@@ -598,6 +598,31 @@ pub(crate) struct InterfaceManagementConfig {
     pub(crate) underlay_mark: Option<u32>,
 }
 
+/// How a shared instance is served, from upstream's `shared_instance_type`,
+/// `rpc_key` and `force_shared_instance_bitrate`.
+#[derive(Debug, Clone)]
+pub struct SharedInstanceSettings {
+    /// Serve the shared instance and its RPC on abstract Unix sockets on
+    /// Linux, besides TCP; `false` for `shared_instance_type = tcp`.
+    pub use_af_unix: bool,
+    /// The RPC key (`rpc_key`), in place of the one derived from the
+    /// transport identity.
+    pub rpc_key: Option<[u8; 32]>,
+    /// The bitrate the shared instance's local interfaces report
+    /// (`force_shared_instance_bitrate`).
+    pub force_bitrate: Option<u64>,
+}
+
+impl Default for SharedInstanceSettings {
+    fn default() -> Self {
+        Self {
+            use_af_unix: true,
+            rpc_key: None,
+            force_bitrate: None,
+        }
+    }
+}
+
 /// Interface discovery settings of a node, from the `[reticulum]` keys
 /// upstream reads for discovery.
 #[derive(Debug, Clone, Default)]
@@ -655,6 +680,8 @@ pub struct NodeConfig {
     pub discover_interfaces: bool,
     /// Interface discovery settings beyond turning it on.
     pub discovery: DiscoverySettings,
+    /// How the shared instance is served, beyond `share_instance`.
+    pub shared_instance: SharedInstanceSettings,
     /// Mode assigned to auto-connected discovered interfaces, when configured.
     pub autoconnect_interface_mode: Option<u8>,
     /// Gravity assigned to auto-connected discovered interfaces.
@@ -786,6 +813,7 @@ impl Default for NodeConfig {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery: Default::default(),
+            shared_instance: Default::default(),
             autoconnect_interface_mode: None,
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
@@ -1608,6 +1636,11 @@ impl RnsNode {
                     .clone(),
                 network_identity: rns_config.reticulum.network_identity.is_some(),
             },
+            shared_instance: SharedInstanceSettings {
+                use_af_unix: !rns_config.reticulum.shared_instance_tcp,
+                rpc_key: rns_config.reticulum.rpc_key,
+                force_bitrate: rns_config.reticulum.force_shared_instance_bitrate,
+            },
             autoconnect_interface_mode: rns_config
                 .reticulum
                 .autoconnect_interface_mode
@@ -1794,13 +1827,17 @@ impl RnsNode {
             None
         };
         let identity = config.identity.unwrap_or_else(|| Identity::new(&mut OsRng));
-        let rpc_auth_key = queue_config.rpc_auth_key.unwrap_or_else(|| {
-            crate::rpc::derive_auth_key(
-                &identity
-                    .get_private_key()
-                    .expect("node identity has private key"),
-            )
-        });
+        let rpc_auth_key = config
+            .shared_instance
+            .rpc_key
+            .or(queue_config.rpc_auth_key)
+            .unwrap_or_else(|| {
+                crate::rpc::derive_auth_key(
+                    &identity
+                        .get_private_key()
+                        .expect("node identity has private key"),
+                )
+            });
         let has_discoverable_interface = config
             .interfaces
             .iter()
@@ -2066,6 +2103,7 @@ impl RnsNode {
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
         driver.interface_discovery_sources = config.discovery.interface_discovery_sources.clone();
+        driver.forced_local_bitrate = config.shared_instance.force_bitrate;
         if config.discovery.network_identity {
             driver.discovery_network_identity = identity
                 .get_private_key()
@@ -2618,6 +2656,7 @@ impl RnsNode {
                 interface_id: rns_core::transport::types::InterfaceId(
                     next_dynamic_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 ),
+                use_af_unix: config.shared_instance.use_af_unix,
             };
             match crate::interface::local::start_server(
                 local_server_config,
@@ -2650,9 +2689,17 @@ impl RnsNode {
                 Err(e) => log::error!("Failed to start RPC server: {}", e),
             }
             #[cfg(target_os = "linux")]
-            match crate::rpc::bind_abstract_unix(&config.instance_name).and_then(|listener| {
-                service.add_listener(crate::driver::RpcListener::Unix(listener))
-            }) {
+            match config
+                .shared_instance
+                .use_af_unix
+                .then(|| crate::rpc::bind_abstract_unix(&config.instance_name))
+                .transpose()
+                .and_then(|listener| {
+                    listener.map_or(Ok(()), |listener| {
+                        service.add_listener(crate::driver::RpcListener::Unix(listener))
+                    })
+                }) {
+                Ok(()) if !config.shared_instance.use_af_unix => {}
                 Ok(()) => log::info!(
                     "RPC server started on abstract Unix socket for {}",
                     config.instance_name
@@ -2677,7 +2724,7 @@ impl RnsNode {
             None
         };
         #[cfg(target_os = "linux")]
-        let rpc_unix_server = if serve_rpc_threads {
+        let rpc_unix_server = if serve_rpc_threads && config.shared_instance.use_af_unix {
             match crate::rpc::RpcServer::start_abstract_unix(
                 &config.instance_name,
                 rpc_auth_key,
@@ -5733,6 +5780,7 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -6091,6 +6139,7 @@ share_instance = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -6166,6 +6215,7 @@ share_instance = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7076,6 +7126,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7160,6 +7211,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7240,6 +7292,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7317,6 +7370,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7434,6 +7488,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7519,6 +7574,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7602,6 +7658,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7698,6 +7755,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
@@ -7784,6 +7842,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery: Default::default(),
+                shared_instance: Default::default(),
                 autoconnect_interface_mode: None,
                 autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
