@@ -165,6 +165,7 @@ impl Driver {
         let ifac_runtime =
             ifac_runtime_from_config(config.ifac.as_ref(), factory.default_ifac_size());
         self.register_managed_runtime(&config, transport_enabled);
+        self.set_interface_announce_limits(&config.name, config.announce_limits);
         let ctx = StartContext {
             tx: self.event_tx.clone(),
             next_dynamic_id: self.next_dynamic_interface_id.clone(),
@@ -175,6 +176,7 @@ impl Driver {
             announces_to_internal: config.announces_to_internal,
             ingress_control: config.ingress_control,
             stamp_costs: config.stamp_costs,
+            announce_limits: config.announce_limits,
             ifac: ifac_state.clone(),
             underlay_mark,
         };

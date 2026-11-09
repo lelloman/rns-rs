@@ -332,6 +332,38 @@ its "Protecting Open Networks" page (since `29e5a997`). It states that some
 instances, so applications should register the types they need now; the
 default here stays off until upstream makes that change.
 
+## Announce rate control
+
+On a transport node, the announces received for one destination are only
+rebroadcast at a target rate. An interface section sets its own controls with
+the same keys as Python Reticulum:
+
+```ini
+  [[Public Gateway]]
+    type = BackboneInterface
+    listen_on = 0.0.0.0
+    port = 4242
+    announce_rate_target = 600
+    announce_rate_grace = 3
+    announce_rate_penalty = 120
+    announce_cap = 5
+```
+
+| Key | Effect |
+|-----|--------|
+| `announce_rate_target` | Seconds between rebroadcasts of one destination's announces; whole seconds above 0 |
+| `announce_rate_grace` | Rate violations allowed before the penalty applies; 0 or more |
+| `announce_rate_penalty` | Seconds added to the target for a destination over its grace; 0 or more |
+| `announce_cap` | Percent of the interface bitrate allocated to announces, above 0 and at most 100 (default 2) |
+
+Out-of-range values are ignored and a value that is not a number is a
+configuration error. When an interface sets a target, its grace and penalty
+are 0 unless it sets them too. An interface without a target uses the
+instance-wide `default_ar_target`, `default_ar_grace` and `default_ar_penalty`
+from `[reticulum]` (a target of 3600 s and a grace of 5 unless set). Clients a
+listener accepts use the listener's values. The same keys can be changed at
+runtime per interface.
+
 ## Ingress control
 
 The upstream manual's "Protecting Open Networks" page (renamed from the

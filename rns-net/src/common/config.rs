@@ -1449,7 +1449,7 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
 
 /// Parse an integer as ConfigObj's `as_int` does, saturating values beyond
 /// the `i64` range instead of rejecting them, since every caller clamps.
-fn parse_config_int(value: &str) -> Option<i64> {
+pub(crate) fn parse_config_int(value: &str) -> Option<i64> {
     let value = value.trim();
     if let Ok(n) = value.parse::<i64>() {
         return Some(n);

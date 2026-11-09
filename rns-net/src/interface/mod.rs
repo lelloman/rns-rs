@@ -1402,6 +1402,9 @@ pub struct StartContext {
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     /// Per-interface stamp costs, inherited by spawned interfaces.
     pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
+    /// Per-interface announce rate and cap options, inherited by spawned
+    /// interfaces.
+    pub announce_limits: crate::node::InterfaceAnnounceLimits,
     pub ifac: Option<IfacState>,
     /// Linux `SO_MARK` value applied to IP underlay sockets before connect.
     pub underlay_mark: Option<u32>,
@@ -1430,6 +1433,7 @@ pub struct DynamicInterfaceTemplate {
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
     pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
+    pub announce_limits: crate::node::InterfaceAnnounceLimits,
 }
 
 impl DynamicInterfaceTemplate {
@@ -1443,6 +1447,7 @@ impl DynamicInterfaceTemplate {
         info.announces_from_internal = self.announces_from_internal;
         info.announces_to_internal = self.announces_to_internal;
         info.stamp_costs = self.stamp_costs;
+        self.announce_limits.apply(&mut info);
         crate::event::DynamicInterfaceRegistration {
             info,
             interface_type: self.interface_type.clone(),
@@ -1744,6 +1749,12 @@ mod tests {
                 destination_cost: Some(rns_core::stamp::StampCost::from_whole(30)),
                 pr_cost: None,
             },
+            announce_limits: crate::node::InterfaceAnnounceLimits {
+                rate_target: Some(600.0),
+                rate_penalty: Some(60.0),
+                cap: Some(0.05),
+                ..Default::default()
+            },
         };
         let info = InterfaceInfo {
             stamp_costs: Default::default(),
@@ -1785,6 +1796,11 @@ mod tests {
             registration.info.stamp_costs.destination_cost,
             Some(rns_core::stamp::StampCost::from_whole(30))
         );
+        // A listener's own announce options reach the clients it spawns.
+        assert_eq!(registration.info.announce_rate_target, Some(600.0));
+        assert_eq!(registration.info.announce_rate_grace, 0);
+        assert_eq!(registration.info.announce_rate_penalty, 60.0);
+        assert_eq!(registration.info.announce_cap, 0.05);
     }
 
     #[test]

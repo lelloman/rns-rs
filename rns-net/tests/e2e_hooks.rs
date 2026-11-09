@@ -228,6 +228,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -316,6 +317,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {

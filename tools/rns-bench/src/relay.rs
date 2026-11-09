@@ -21,6 +21,7 @@ pub fn run(port: u16) -> Result<()> {
             panic_on_interface_error: true,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: "benchmark-relay".into(),
                 type_name: "TCPServerInterface".into(),
                 config_data: Box::new(TcpServerConfig {

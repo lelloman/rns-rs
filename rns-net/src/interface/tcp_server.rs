@@ -509,6 +509,7 @@ impl InterfaceFactory for TcpServerFactory {
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
                 stamp_costs: ctx.stamp_costs,
+                announce_limits: ctx.announce_limits,
             }),
             ctx.underlay_mark,
         )?;
@@ -731,6 +732,7 @@ mod tests {
             announces_from_internal: false,
             announces_to_internal: None,
             stamp_costs: Default::default(),
+            announce_limits: Default::default(),
         };
         start_with_template(
             make_server_config(port, 77, None),

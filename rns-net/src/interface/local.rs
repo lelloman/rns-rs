@@ -958,6 +958,7 @@ impl InterfaceFactory for LocalServerFactory {
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
                 stamp_costs: ctx.stamp_costs,
+                announce_limits: ctx.announce_limits,
             }),
         )?;
         Ok(StartResult::Listener {

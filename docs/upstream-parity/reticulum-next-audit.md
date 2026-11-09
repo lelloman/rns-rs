@@ -2314,9 +2314,9 @@ link path rediscovery it depends on.
   `announce_rate_target`, `announce_rate_grace` and `announce_rate_penalty`
   from each interface section (`Reticulum.py:1022-1031`), but the native
   config path applies only the instance-wide `default_ar_*` values. The
-  three per-interface keys are settable through runtime config and RPC, not
-  read from an interface section. Recorded under the Integration Plan; it
-  does not change this commit's disposition.
+  three per-interface keys were settable through runtime config and RPC, not
+  read from an interface section. Fixed after the range (see the
+  Integration Plan); it does not change this commit's disposition.
 - `docs/history/2026_09_18_Yes_I_am_Angry.md` gains a dated note about a
   third-party project's licensing; it is not Reticulum documentation.
 - No runtime file changes. Disposition: **Non-runtime**. This analysis is
@@ -2336,10 +2336,22 @@ corrected upstream in commit 7 before it was reported. The inverted
 upstream corrected it itself in commit 56, which ends the divergence. Remaining
 before promotion: the gates below.
 
-Open item found during this audit, outside the range: per-interface
-`announce_rate_target`, `announce_rate_grace` and `announce_rate_penalty` are
-not read from interface sections of the configuration file (see 64). It needs
-its own port; it predates the 1.6.0 baseline.
+Gap found during this audit, outside the range and older than the 1.6.0
+baseline: per-interface `announce_rate_target`, `announce_rate_grace` and
+`announce_rate_penalty` (and `announce_cap`) were not read from interface
+sections of the configuration file (see 64). Fixed after the range: the four
+options are parsed as upstream does (`parse_interface_announce_limits`),
+applied to configured interfaces and inherited by the clients a listener
+spawns; with only a target set, grace and penalty are 0 for that interface
+(`interface_announce_limits_parse_like_upstream`,
+`configured_interface_announce_limits_override_the_defaults`, the dynamic
+template test, and a live rnsd check through `rns-ctl status`).
+
+Other interface options upstream reads that have no native equivalent, found
+by the same comparison of `Reticulum.py` with the native interface parser:
+the interface discovery options `publish_ifac`, `discovery_encrypt`,
+`discovery_frequency`, `discovery_bandwidth` and `bootstrap_only`. They are
+discovery features rather than configuration parsing, and remain open.
 
 ## Promotion Gates
 

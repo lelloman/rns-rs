@@ -152,6 +152,7 @@ fn run_burst(async_api: bool) {
             )),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: "Bob TCP".into(),
                 type_name: "TCPServerInterface".into(),
                 config_data: Box::new(TcpServerConfig {
@@ -200,6 +201,7 @@ fn run_burst(async_api: bool) {
             registry: Some(registry),
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
+                announce_limits: Default::default(),
                 name: "Alice paused TCP".into(),
                 type_name: "TCPClientInterface".into(),
                 config_data: Box::new(TcpClientConfig {

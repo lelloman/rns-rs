@@ -1888,6 +1888,7 @@ fn start_test_pair() -> TestPair {
 
     let ifaces_a = vec![InterfaceConfig {
         stamp_costs: Default::default(),
+        announce_limits: Default::default(),
         name: String::new(),
         type_name: "TCPServerInterface".to_string(),
         config_data: Box::new(TcpServerConfig {
@@ -1925,6 +1926,7 @@ fn start_test_pair() -> TestPair {
 
     let ifaces_b = vec![InterfaceConfig {
         stamp_costs: Default::default(),
+        announce_limits: Default::default(),
         name: String::new(),
         type_name: "TCPClientInterface".to_string(),
         config_data: Box::new(TcpClientConfig {
