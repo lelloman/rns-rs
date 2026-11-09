@@ -1,6 +1,6 @@
 # Plan: close the remaining gaps to Reticulum 1.6.0
 
-Status: proposed, 2026-11-09. Baseline: Reticulum 1.6.0, rgit `c5d205ff`
+Status: in progress, 2026-11-09. Baseline: Reticulum 1.6.0, rgit `c5d205ff`
 ([parity record](reticulum-1.6.0-rgit-2-parity.md)).
 
 The per-commit audits only review commits after a baseline, so features that
@@ -10,6 +10,23 @@ configuration key `Reticulum.py` reads, every RPC call it serves, every flag
 of the shared utilities, and the utility list. Every gap below predates the
 earliest audited range (upstream introduced them between 2021 and May 2026),
 which is why no audit caught them.
+
+## Progress
+
+- Phase 1 is done (pull request #231).
+- Phase 2 items 2.1 to 2.5, 2.7 and 2.8 are done; 2.6 lands with 3.1. Notes:
+  - 2.1: like upstream's updater, a fetch only adds entries; one a source
+    drops stays until the next start, which loads the source's saved list
+    afresh. Link request stamps for the 5.25 link cost come from the
+    announced cost, as for any link.
+  - 2.4 fixed a leak: rns-rs announced a discoverable interface's IFAC name
+    and passphrase whenever it had IFAC, not only with `publish_ifac`.
+  - Testing 2.5 found that upstream receivers dropped every rns-rs discovery
+    announce without a configured location, because rns-rs left out the
+    latitude, longitude and height fields upstream requires. They are always
+    sent now.
+  - 2.7: `force_shared_instance_bitrate` is reported, but sends are not
+    paced to it as upstream's local interfaces do.
 
 ## How each item is done
 
