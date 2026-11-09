@@ -614,19 +614,20 @@ pub fn handle_path_request(data: &[u8], engine: &TransportEngine) -> Option<Vec<
 
 /// Handle a `/list` (blackhole list) request.
 ///
-/// Returns the blackholed_identities dict as msgpack.
+/// Returns the blackholed_identities dict as msgpack, in upstream's format
+/// (`Transport.blackhole_list_handler`): identity hash to `{"source",
+/// "until", "reason"}`, with this node's transport identity as the source
+/// of its own entries. `created` is kept as an extra field, which upstream
+/// readers ignore.
 pub fn handle_blackhole_list_request(engine: &TransportEngine) -> Option<Vec<u8>> {
-    let blackholed = engine.get_blackholed();
+    let local = engine.identity_hash();
     let mut map_entries = Vec::new();
-    for (hash, created, expires, reason) in &blackholed {
-        let mut entry = vec![
-            (Value::Str("created".into()), Value::Float(*created)),
-            (Value::Str("expires".into()), Value::Float(*expires)),
-        ];
-        if let Some(r) = reason {
-            entry.push((Value::Str("reason".into()), Value::Str(r.clone())));
-        }
-        map_entries.push((Value::Bin(hash.to_vec()), Value::Map(entry)));
+    for (hash, entry) in engine.blackholed_entries() {
+        let Value::Map(mut fields) = crate::blackhole_store::entry_value(entry, local) else {
+            continue;
+        };
+        fields.push((Value::Str("created".into()), Value::Float(entry.created)));
+        map_entries.push((Value::Bin(hash.to_vec()), Value::Map(fields)));
     }
     Some(msgpack::pack(&Value::Map(map_entries)))
 }

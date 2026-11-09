@@ -303,31 +303,50 @@ impl TransportEngine {
     // Blackhole management
     // =========================================================================
 
-    /// Add an identity hash to the blackhole list.
+    /// Add an identity hash to the blackhole list on this node.
     ///
     /// `identity_hash` is the 16-byte identity hash to blackhole. `now` is the
     /// current Unix timestamp. If `duration_hours` is `Some` and greater than
     /// zero, the entry expires after that many hours; otherwise it does not
     /// expire. `reason` is optional descriptive text retained with the entry.
+    ///
+    /// Returns `false`, leaving the entry as it is, when the identity is
+    /// already blackholed (`Transport.blackhole_identity` returns `None`).
     pub fn blackhole_identity(
         &mut self,
         identity_hash: [u8; 16],
         now: f64,
         duration_hours: Option<f64>,
         reason: Option<String>,
-    ) {
+    ) -> bool {
         let expires = match duration_hours {
             Some(h) if h > 0.0 => now + h * 3600.0,
             _ => 0.0, // never expires
         };
-        self.blackholed_identities.insert(
+        self.insert_blackhole_entry(
             identity_hash,
             BlackholeEntry {
                 created: now,
                 expires,
                 reason,
+                source: None,
             },
-        );
+        )
+    }
+
+    /// Add a blackhole entry unless the identity is already blackholed, as
+    /// `Transport.blackhole_identity` and `reload_blackhole` do. Returns
+    /// whether the entry was added.
+    pub fn insert_blackhole_entry(
+        &mut self,
+        identity_hash: [u8; 16],
+        entry: BlackholeEntry,
+    ) -> bool {
+        if self.blackholed_identities.contains_key(&identity_hash) {
+            return false;
+        }
+        self.blackholed_identities.insert(identity_hash, entry);
+        true
     }
 
     /// Remove an identity hash from the blackhole list.

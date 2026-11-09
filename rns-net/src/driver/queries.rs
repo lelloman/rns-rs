@@ -458,14 +458,11 @@ impl Driver {
                 identity_hash,
                 duration_hours,
                 reason,
-            } => {
-                let now = time::now();
-                self.engine
-                    .blackhole_identity(identity_hash, now, duration_hours, reason);
-                Some(QueryResponse::BlackholeResult(true))
-            }
+            } => Some(QueryResponse::BlackholeResult(
+                self.blackhole_identity_local(identity_hash, duration_hours, reason),
+            )),
             QueryRequest::UnblackholeIdentity { identity_hash } => Some(
-                QueryResponse::UnblackholeResult(self.engine.unblackhole_identity(&identity_hash)),
+                QueryResponse::UnblackholeResult(self.unblackhole_identity_local(&identity_hash)),
             ),
             QueryRequest::DropPath { dest_hash } => {
                 Some(QueryResponse::DropPath(self.engine.drop_path(&dest_hash)))
@@ -791,6 +788,7 @@ impl Driver {
                         created: entry.created,
                         expires: entry.expires,
                         reason: entry.reason.clone(),
+                        source: entry.source.or(self.engine.identity_hash().copied()),
                     })
                     .collect();
                 QueryResponse::Blackholed(entries)

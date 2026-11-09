@@ -14348,3 +14348,54 @@ fn a_destination_that_delivers_decrypted_uses_its_attached_ratchets() {
     assert_eq!(decrypted.len(), 1);
     assert_eq!(decrypted[0].1, b"ratcheted");
 }
+
+#[test]
+fn blackholing_an_identity_drops_its_paths_and_persists_the_list() {
+    // Transport.blackhole_identity: add once (a second call changes nothing),
+    // persist_blackhole, remove_blackholed_paths; reload_blackhole on start.
+    use rns_core::transport::tables::PathEntry;
+    let dir = tempfile::tempdir().unwrap();
+    let mut driver = new_test_driver();
+    driver.engine.register_interface(make_interface_info(1));
+    driver.load_blackhole(dir.path().to_path_buf());
+    let path = || PathEntry {
+        timestamp: 100.0,
+        next_hop: [0x44; 16],
+        hops: 1,
+        expires: f64::MAX,
+        random_blobs: Vec::new(),
+        receiving_interface: InterfaceId(1),
+        packet_hash: [0x55; 32],
+        announce_raw: None,
+        used: 0.0,
+    };
+    // make_announced_identity names the identity after the first byte.
+    let (spammer, neighbour) = ([0xA1; 16], [0xB2; 16]);
+    for dest in [spammer, neighbour] {
+        driver.engine.inject_path(dest, path());
+        driver.upsert_known_destination(dest, make_announced_identity(dest, 10.0, InterfaceId(1)));
+    }
+
+    assert!(driver.blackhole_identity_local([0xA1; 16], None, Some("spam".into())));
+    assert!(!driver.engine.has_path(&spammer), "its path is dropped");
+    assert!(driver.engine.has_path(&neighbour));
+    assert!(
+        !driver.blackhole_identity_local([0xA1; 16], Some(1.0), None),
+        "already blackholed: unchanged"
+    );
+    assert!(dir.path().join("local").is_file());
+
+    // A restarted node loads it back.
+    let mut restarted = new_test_driver();
+    restarted.load_blackhole(dir.path().to_path_buf());
+    let entries: Vec<_> = restarted.engine.blackholed_entries().collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].1.reason.as_deref(), Some("spam"));
+    assert_eq!(entries[0].1.expires, 0.0, "still indefinite");
+
+    assert!(restarted.unblackhole_identity_local(&[0xA1; 16]));
+    assert!(!restarted.unblackhole_identity_local(&[0xA1; 16]));
+    let mut again = new_test_driver();
+    again.load_blackhole(dir.path().to_path_buf());
+    assert_eq!(again.engine.blackholed_entries().count(), 0);
+}
