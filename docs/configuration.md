@@ -111,7 +111,9 @@ The values shown are the defaults. Each must be a positive integer.
 
 Reticulum 1.6.0 adds proof-of-work stamps to destination announces, path
 requests, and link requests. The `[stamps]` section configures them with the
-same keys and semantics as Python Reticulum:
+same keys and semantics as Python Reticulum. The upstream manual's
+"Protecting Open Networks" page (added in `65a7208a`) explains the stamp
+types, values and costs; the keys and defaults below are the ones it lists:
 
 ```ini
 [stamps]

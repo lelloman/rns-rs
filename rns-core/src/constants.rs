@@ -812,6 +812,9 @@ mod tests {
 
     #[test]
     fn stamp_defaults_match_upstream_parameters() {
+        // The `Transport` class attributes, which are also the defaults the
+        // upstream manual lists for the `[stamps]` options (the "Protecting
+        // Open Networks" page, added in 65a7208a).
         assert_eq!(STAMP_LENGTH, 14);
         assert_eq!(EXT_HEADER_LENGTH, 2);
         assert_eq!(EXT_PAYLOAD_LENGTH, 18);
