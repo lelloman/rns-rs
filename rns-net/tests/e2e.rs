@@ -591,6 +591,40 @@ fn wait_for_backbone_pool_member_state(
     None
 }
 
+/// A discoverable TCP server announces once at startup and then every
+/// `announce_interval` (at least five minutes), so a client that connects
+/// after that first announce does not hear it. Wait until `client` has an
+/// interface named `client_interface` up, then make `transport` announce
+/// its TCP server `server` again by turning its discovery off and on.
+fn reannounce_discovery_once_connected(
+    transport: &RnsNode,
+    server: &str,
+    client: &RnsNode,
+    client_interface: &str,
+) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Ok(QueryResponse::InterfaceStats(stats)) = client.query(QueryRequest::InterfaceStats)
+        {
+            if stats
+                .interfaces
+                .iter()
+                .any(|iface| iface.name.contains(client_interface) && iface.status)
+            {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{client_interface} never came up on the client"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let key = format!("tcp_server.{server}.discoverable");
+    set_runtime_bool(transport, &key, false);
+    set_runtime_bool(transport, &key, true);
+}
+
 const TIMEOUT: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_millis(1500);
 const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
@@ -4423,6 +4457,12 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
         matches!(e, TestEvent::InterfaceUp(_)).then_some(())
     })
     .expect("Client discovery listener InterfaceUp timed out");
+    reannounce_discovery_once_connected(
+        &transport,
+        "Discoverable TCP Pool Target",
+        &client,
+        "Discovery Listener TCP",
+    );
 
     let remote = format!("127.0.0.1:{port}");
     let member =
@@ -4831,6 +4871,12 @@ backbone_peer_pool_max_connected = 1
         wait_for_backbone_pool_member(&client, "configured", &configured_remote, TIMEOUT)
             .expect("configured peer should fill the only pool slot before live discovery");
     assert_eq!(configured.priority, 20);
+    reannounce_discovery_once_connected(
+        &discovered_transport,
+        "Discoverable Priority Target",
+        &client,
+        "Discovery Listener",
+    );
 
     let discovered_remote = format!("127.0.0.1:{discovered_port}");
     let discovered = wait_for_backbone_pool_member_state(
