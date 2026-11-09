@@ -121,6 +121,9 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// A shared instance of its own name: the RPC client tries the abstract
+/// socket `\0rns/<instance_name>/rpc` first, so tests running side by side
+/// must not share one.
 fn write_daemon_config(dir: &Path, rpc_port: u16) {
     fs::write(
         dir.join("config"),
@@ -129,11 +132,11 @@ fn write_daemon_config(dir: &Path, rpc_port: u16) {
 [reticulum]
 enable_transport = False
 share_instance = Yes
-instance_control_port = {}
+instance_name = rnid-test-{rpc_port}
+instance_control_port = {rpc_port}
 
 [interfaces]
-"#,
-            rpc_port
+"#
         ),
     )
     .unwrap();
