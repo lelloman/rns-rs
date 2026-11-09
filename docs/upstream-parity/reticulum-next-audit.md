@@ -47,8 +47,8 @@
   `origin/master` `679854d`; commits 47 and 48 inventoried on
   `origin/master` `a029386`; commit 48 integrated on `dev` from `124d287`;
   commits 49 to 52 inventoried and integrated on `dev` from `c27c3cb`;
-  commits 53 to 65 inventoried on `parity-53-65` from `origin/master`
-  `32f6970`
+  commits 53 to 65 inventoried and integrated on `parity-53-65` from
+  `origin/master` `32f6970`
 
 Both refreshes succeeded at 2026-10-29T06:16Z. The GitHub `master` tip is
 `e40191b3d193b46b7f2d8a44424a594cd758839b`, which is `behind` the accepted
@@ -265,14 +265,14 @@ Every commit in the audited range must appear exactly once.
 | 50 | `426673e97433a95e2baf926b93730d2fdc6e9c69` | Set blackhole updater destination link cost | Integrated | `BLACKHOLE_LINK_COST` (5.25) registered for the published blackhole list destination, which its link responder requires when link request stamps are enforced, and announced since built-in destination announces are stamped (a gap from commit 1, fixed with it); docs |
 | 51 | `c97e2158f5fb93de73268af93e3f542d72d274ea` | Cleanup | Structurally covered | Mapping commit; moves destination stamp generation behind a per-destination lock; rns-rs grinds announce stamps on the single stamper worker, keyed per destination, which reloads a persisted stamp before grinding |
 | 52 | `acb38a8a1c85affa5ce8138bc6214871aa05b15b` | Pre-generate discovery PR ext_payload | Integrated | Link-table path rediscovery, missing since before the baseline, ported first: the four conditions, `PATH_REQUEST_MI` throttle, unresponsive marking, interface skip, the throttled rediscovery queue, path expiry on non-transport nodes, and rediscovery after own links that never activate; requests that skip an interface share one tag and one stamp across the other interfaces |
-| 53 | `65a7208a9d6b956a4b30dcf36b4e42f804b7581f` | Updated documentation | Non-runtime | Pending mapping; new manual page on stamps (`stamps.rst`), reference and usage updates |
-| 54 | `01aef5bc2a722984a8c56080fa5bc5e57dc22034` | Moved hop_limiter option to filter section | Needs port | `hop_limiter` is read from `[filter]` only, clamped to `0..=PATHFINDER_M`; rns-rs still reads `[reticulum] hop_limiter` clamped to `1..=PATHFINDER_M` |
-| 55 | `29e5a997ace2cfe7e058c9111860b29bfd448a86` | Updated documentation | Non-runtime | Pending mapping; stamps page additions |
-| 56 | `50e939ab0e1deb04c23813157360d22926bba6e4` | Fixed logic inversion | Structurally covered | Pending mapping; rns-rs drops requests whose stamp is not valid since commit 1 and recorded upstream's inverted expression as a divergence; the divergence ends |
-| 57 | `9d67be9acb74e1039cd36fbd615ed2f270fbe547` | Updated documentation | Non-runtime | Pending mapping; stamps page renamed "Protecting", with filtering and QoS sections |
+| 53 | `65a7208a9d6b956a4b30dcf36b4e42f804b7581f` | Updated documentation | Non-runtime | `566e28db`; every option name and default on the new page is parsed and set the same here (`stamp_defaults_match_upstream_parameters`); docs point at the page |
+| 54 | `01aef5bc2a722984a8c56080fa5bc5e57dc22034` | Moved hop_limiter option to filter section | Integrated | `5fe1e44c`; `[filter] hop_limiter` clamped to `0..=PATHFINDER_M`, `[reticulum] hop_limiter` ignored with a warning, example config and docs; `hop_limiter_is_read_from_the_filter_section` |
+| 55 | `29e5a997ace2cfe7e058c9111860b29bfd448a86` | Updated documentation | Non-runtime | `63c0ad65`; filtering modes and the type registration API exist since 35; docs record the planned `required_only` default |
+| 56 | `50e939ab0e1deb04c23813157360d22926bba6e4` | Fixed logic inversion | Structurally covered | `d9d4e51e`; upstream now matches the native check; the divergence note and the test of the inverted expression are replaced |
+| 57 | `9d67be9acb74e1039cd36fbd615ed2f270fbe547` | Updated documentation | Non-runtime | `db1a45cf`; held announces dropped with their interface, now pinned at the engine level (`test_deregister_interface_drops_its_held_announces`) |
 | 58 | `dad1302b1ec82177d56c310b915a1a12c287806c` | Updated changelog | Non-runtime | Mapping commit; every new 1.6.0 changelog entry traced to an audited commit or to the 1.6.0 baseline |
-| 59 | `1fee7af7f28e435421dbebd2cf4bd5257172bb58` | Bad at head math | Non-runtime | Pending mapping; one figure in `protecting.md` |
-| 60 | `baccc6d8a2cc38e0885869c2802aa0f32a32014a` | Cleanup | Structurally covered | Pending mapping; an announce whose destination stamp fails or is aborted is cancelled with a warning; rns-rs's stamper and inline path already send nothing on failure |
+| 59 | `1fee7af7f28e435421dbebd2cf4bd5257172bb58` | Bad at head math | Non-runtime | `d47ee922`; `one_fraction_step_is_about_0_27_percent_harder` |
+| 60 | `baccc6d8a2cc38e0885869c2802aa0f32a32014a` | Cleanup | Structurally covered | `6335e6b2`; `announce_without_a_destination_stamp_is_cancelled` |
 | 61 | `2960e6a41d8436a4d4306f81f02f542bd06aee49` | Cleanup | Non-runtime | Mapping commit; flips the per-step figure in the markdown and reStructuredText sources, made consistent at 0.27% by 62 |
 | 62 | `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4` | Prepare release | Non-runtime | Mapping commit; the signed `1.6.0` release tag; the `RNS` tree at the tag equals the audit tip's |
 | 63 | `d4af18fd6fa3f1fe1c1676fee09e6fa7af22c8d6` | Fixed typos | Non-runtime | Mapping commit; Protecting page typos |
@@ -2124,6 +2124,98 @@ link manager tests
 **Final disposition:** Integrated, together with the link-table and pending
 link path rediscovery it depends on.
 
+### 53. `65a7208a` — Updated documentation
+
+- New manual page `stamps.rst` ("Protecting Open Networks"), with markdown
+  and generated HTML, plus index, reference and usage updates. No runtime
+  file changes.
+- It documents the stamp types (destination, path request and link request
+  stamps; detached and identity-embedded primitives), the 1.6.0 / 1.6.1 /
+  1.6.2 rollout, the ten `[stamps]` options with their defaults (23.5, 25.0,
+  15.8, 15.8, 12.5, 15 s and 15 s), per-interface `destination_cost` and
+  `pr_cost`, the destination value clamp, and the developer API
+  (`set_value`, `set_link_cost`, `recall_stamp_value`, `recall_link_cost`,
+  `Identity(value=)`).
+- Each claim checked against rns-rs: every option is parsed under the same
+  name (`build_stamps_section`), the defaults are the constants that
+  `stamp_defaults_match_upstream_parameters` pins, the per-interface costs
+  came with 13 (`9b464382`), the clamp is
+  `destination_target_value_is_clamped_between_default_and_cap`, and the
+  API exists (`RnsNode`, `recall_link_cost`, `recall_stamp_value`,
+  `Identity` with a value).
+- Mapping commit: `docs/configuration.md` points at the page and the
+  defaults test cites it. Disposition: **Non-runtime**.
+
+### 54. `01aef5bc` — Moved hop_limiter option to filter section
+
+- `Reticulum.py`: `hop_limiter` is read from `[filter]` instead of
+  `[reticulum]`, and clamped with `max(0, min(v, PATHFINDER_M))` instead of
+  `max(1, ...)`. `Transport` drops a packet when `not packet.hops <
+  HOP_LIMITER`, so `0` drops every inbound packet. A `[reticulum]
+  hop_limiter` is ignored. Upstream's `rnsd` example config still lists the
+  option under `[reticulum]`; its manual shows it under `[filter]`.
+- rns-rs read `[reticulum] hop_limiter` clamped to `1..=PATHFINDER_M`.
+- Ported: `parse_hop_limiter` reads `[filter] hop_limiter` with the new clamp
+  into the same `ReticulumSection::hop_limiter` the driver applies, so
+  `rns-net`'s public API is unchanged. The driver check
+  (`hops >= hop_limiter`) already drops everything at `0`. A
+  `[reticulum] hop_limiter` is no longer read; unlike upstream it logs a
+  warning, so a node does not lose a configured limit silently. The `rnsd`
+  example config gains a commented `[filter]` section with the option, and
+  the configuration and `rnstatus` docs move it there. Neither VPS sets
+  `hop_limiter`.
+- Evidence: `hop_limiter_is_read_from_the_filter_section` (failed before the
+  change: `[filter] hop_limiter = 16` read as 128),
+  `example_config_documents_and_parses_the_stamps_and_filter_sections`.
+- Disposition: **Integrated**.
+
+### 55. `29e5a997` — Updated documentation
+
+- The stamps page gains its "Filtering & QoS" section: ignored and
+  required-only modes, the `[filter]` keys, `wants_destination_type`,
+  `unwants_destination_type` and `required_announces_only`, and the plan to
+  make `required_only` the default for non-transport instances during
+  1.6.x. No runtime file changes.
+- All of it exists here since 35 (`825c2e19`); `RnsNode` has all three
+  calls. The page says a client's types are withdrawn when its shared
+  instance connection is torn down; upstream does it from the client's exit
+  handler (`unwants_all_destination_types` over RPC), as an rns-rs client
+  withdraws its types on shutdown.
+- Mapping commit: the destination type filtering docs point at the section,
+  name `unwants_destination_type` and record the planned default, which
+  stays off here until upstream changes it. Disposition: **Non-runtime**.
+
+### 56. `50e939ab` — Fixed logic inversion
+
+- `Link.validate_request`: `LR_STAMPS_ENFORCED and stamp_valid(...)` becomes
+  `LR_STAMPS_ENFORCED and not stamp_valid(...)`, so with enforcement on, a
+  link request whose stamp is not valid for the destination's link cost is
+  dropped, instead of the valid ones.
+- rns-rs has checked it this way since commit 1's port and kept upstream's
+  inverted expression as a recorded, unreported divergence (commit 9's
+  analysis). Upstream fixed it on its own, which ends the divergence.
+- Mapping commit: the divergence note in `LinkManager` becomes a record of
+  the fix, `upstream_inverted_link_request_check_drops_valid_stamps` (which
+  modelled the removed expression) goes, and
+  `enforced_link_cost_drops_requests_below_the_destination_cost` cites the
+  corrected check. `enforced_link_cost_defaults_to_lr_cost_and_zero_disables`
+  keeps the zero-cost case. Disposition: **Structurally covered**.
+
+### 57. `9d67be9a` — Updated documentation
+
+- The stamps page is renamed "Protecting Open Networks" (`protecting.rst`)
+  and gains sections on ingress and burst control, blackhole management and
+  fast-flap blocking; the interfaces page gets a section anchor. No runtime
+  file changes.
+- The three systems exist here (ingress control and held announces,
+  blackholes with sources and publishing, Backbone fast-flap blocking). The
+  one concrete claim beyond the configuration reference, that announces
+  held for an interface are dropped and forgotten when it goes away, was
+  tested only at the `IngressControl` level.
+- Mapping commit: `test_deregister_interface_drops_its_held_announces` pins
+  it at the engine level, and the ingress control docs point at the page.
+  Disposition: **Non-runtime**.
+
 ### 58. `dad1302b` — Updated changelog
 
 - `Changelog.md` only: the 1.6.0 "Changes" list gains fifteen entries and
@@ -2149,6 +2241,33 @@ link path rediscovery it depends on.
     the packet filter), 39 (`cda4d72b`) and 40 (`ecd677ba`);
   - invalid RPC error handling: 32 (`263dc6ba`) and 45 (`53dc223a`).
 - Disposition: **Non-runtime**. This analysis is the mapping.
+
+### 59. `1fee7af7` — Bad at head math
+
+- One figure on the Protecting page: one quantized fractional step is about
+  0.27% more work, not 0.4%. One step multiplies the expected work by
+  2^(1/256), about 0.271%. No runtime file changes.
+- The native target table `TAB[f] = floor(2^33 · 2^(f/256))` is built on that
+  ratio.
+- Mapping commit: `one_fraction_step_is_about_0_27_percent_harder` checks the
+  ratio between every pair of entries and that a whole point doubles the
+  work (23.5 to 24.5). Disposition: **Non-runtime**.
+
+### 60. `baccc6d8` — Cleanup
+
+- `Destination._announce` checks `_await_stamp()`: when destination stamp
+  generation fails or is aborted, the announce is cancelled with the
+  warning "Could not generate destination stamp ..., announce emission
+  cancelled", and the generation failure itself drops to a debug log.
+  Before, the result was ignored.
+- rns-rs: the stamper's `stamp_announce` already cancels with that warning
+  and sends nothing when no stamp can be produced, and the synchronous path
+  (`build_announce_packet`) returns `SendError` instead of an unstamped
+  announce. Destination targets are clamped below the protocol cap, so the
+  reachable failure is a missing stamp store.
+- Mapping commit: `announce_without_a_destination_stamp_is_cancelled`
+  (nothing emitted without a store; the same job with one is stamped and
+  sent). Disposition: **Structurally covered**.
 
 ### 61. `2960e6a4` — Cleanup
 
@@ -2189,8 +2308,15 @@ link path rediscovery it depends on.
 - `docs/source/protecting.rst`: "only using" for "using only using", "a
   few lines" for "one line" of code to receive only required announces
   (the example takes three), and "The grace option" for "A grace period"
-  in the announce rate control paragraph, which names the existing
+  in the announce rate control paragraph, which names upstream's existing
   `announce_rate_grace` interface option. No changed behavior.
+- Checking that option found a gap older than this range: upstream reads
+  `announce_rate_target`, `announce_rate_grace` and `announce_rate_penalty`
+  from each interface section (`Reticulum.py:1022-1031`), but the native
+  config path applies only the instance-wide `default_ar_*` values. The
+  three per-interface keys are settable through runtime config and RPC, not
+  read from an interface section. Recorded under the Integration Plan; it
+  does not change this commit's disposition.
 - `docs/history/2026_09_18_Yes_I_am_Angry.md` gains a dated note about a
   third-party project's licensing; it is not Reticulum documentation.
 - No runtime file changes. Disposition: **Non-runtime**. This analysis is
@@ -2204,17 +2330,20 @@ link path rediscovery it depends on.
 
 ## Integration Plan
 
-Commits 1 to 52 have a final disposition; commits 53 to 65 are inventoried
-and are being mapped in order. The `Link.py:311` precedence of commit 5 was
+All sixty-five commits have a final disposition. The `Link.py:311` precedence of commit 5 was
 corrected upstream in commit 7 before it was reported. The inverted
 `Link.validate_request` stamp check of commit 9 was never reported upstream;
 upstream corrected it itself in commit 56, which ends the divergence. Remaining
-before promotion: the mappings for 53 to 65 and the gates below.
+before promotion: the gates below.
+
+Open item found during this audit, outside the range: per-interface
+`announce_rate_target`, `announce_rate_grace` and `announce_rate_penalty` are
+not read from interface sections of the configuration file (see 64). It needs
+its own port; it predates the 1.6.0 baseline.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition. Commits 53 to 65 are
-  inventoried and not yet mapped.
+- [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
 - [x] Fixture provenance and byte stability are checked where applicable.
   No pinned fixture changed. Commit 9 changes the announce stamp extension;
@@ -2223,9 +2352,8 @@ before promotion: the mappings for 53 to 65 and the gates below.
   covers both formats.
 - [x] Exact-target live Python/Rust interop passes. Passed at `c0fe08c0`,
   `5f46fc6b`, `a8cc6cb2`, `796ef2d4`, `5b2b8afb`, `fe2fe94d`, `6927c3c5`,
-  `d3874dde`, `ecd677ba`, `53dc223a`, `eb826cde` and `acb38a8a` (4/4 and
-  12/12 with commits 49 to 52 integrated). Not yet run at the current tip
-  `c5d205ff`.
+  `d3874dde`, `ecd677ba`, `53dc223a`, `eb826cde`, `acb38a8a` and the current
+  tip `c5d205ff` (4/4 and 12/12 with commits 53 to 65 integrated).
 - [ ] Workspace tests, feature suites, formatting, and lint pass. Workspace,
   the `rns-hooks` workspace suite, formatting and both lints passed; the
   `rns-hooks-native`, `rns-ctl --features tls`, built-in hook E2E and web UI
@@ -2538,3 +2666,31 @@ rerun after it.
 Mapping check: the `Upstream-Commit` trailers map `f15b3487` to `eac35991`,
 `426673e9` to `395bf7d2`, `c97e2158` to `b99fe100` and `acb38a8a` to
 `9c573ff8`, one local commit each.
+
+### Commits 53 to 65 (rgit tip `c5d205ff`)
+
+Run on 2026-11-09 at `fe5b4a3e`: `origin/master` `32f69705` plus the
+inventory commit `787d26f9` and the thirteen mapping commits. Same host.
+Interop against `c5d205ff` used a disposable export of that commit at
+`/tmp/ret-c5d205ff` (`import RNS` reports 1.6.0 from it); the baseline
+`5d38ce30` was exercised from the configured checkout. The audit text
+written after the run changes no code.
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused regressions | the tests named in the analyses of 53, 54, 56, 57, 59 and 60 | Passed; `hop_limiter_is_read_from_the_filter_section` failed before 54's change |
+| Formatting, lint | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `bash scripts/lint-host.sh` | Clean |
+| Workspace | `cargo test --workspace` | 3,206 passed, 0 failed |
+| Hooks feature suite | `cargo test --workspace --features rns-hooks` | 3,272 passed, 0 failed |
+| Interop, baseline `5d38ce30` | `python_interop`; `utility_interop -- --include-ignored` | 4/4; 12/12 |
+| Interop, target `c5d205ff` | the same against the `c5d205ff` export | 4/4; 12/12 |
+| Drift | `python3 scripts/check_upstream_drift.py --upstream-dir <checkout>` (fetched 2026-11-09T09:01Z) | GitHub and rgit both at `c5d205ff`, ahead by the 65 audited commits |
+| Docker, release builds, VPS smoke, hardware | Not run | Pending for promotion |
+
+Mapping check: the `Upstream-Commit` trailers map `65a7208a` to
+`566e28db`, `01aef5bc` to `5fe1e44c`, `29e5a997` to `63c0ad65`, `50e939ab`
+to `d9d4e51e`, `9d67be9a` to `db1a45cf`, `dad1302b` to `5625be8a`,
+`1fee7af7` to `d47ee922`, `baccc6d8` to `6335e6b2`, `2960e6a4` to
+`99819b31`, `cb126089` to `c96197da`, `d4af18fd` to `f1f281b3`, `e0da9c38`
+to `9a1e9110` and `c5d205ff` to `fe5b4a3e`, one local commit each, and no
+upstream hash appears twice in the history.
