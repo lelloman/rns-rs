@@ -751,6 +751,25 @@ mod tests {
     }
 
     #[test]
+    fn one_fraction_step_is_about_0_27_percent_harder() {
+        // "the fractional part is quantized to 256 different values, giving
+        // an approximately 0.27% difficulty increase per step" (upstream
+        // manual, corrected from 0.4% in 1fee7af7): one step multiplies the
+        // expected work by 2^(1/256), so each target is that much smaller.
+        let step = 2f64.powf(1.0 / 256.0);
+        assert!((step - 1.0 - 0.0027).abs() < 0.0001);
+        for f in 0..255 {
+            let ratio = TAB[f + 1] as f64 / TAB[f] as f64;
+            assert!((ratio - step).abs() < 1e-9, "TAB[{f}] step {ratio}");
+        }
+        // Across a whole point the work doubles: 23.5 to 24.5.
+        let half = StampCost::from_f64(23.5).target().unwrap();
+        let next = StampCost::from_f64(24.5).target().unwrap();
+        let shift = |t: [u8; 32]| u128::from_be_bytes(t[..16].try_into().unwrap());
+        assert_eq!(shift(half), shift(next) * 2);
+    }
+
+    #[test]
     fn target_agrees_with_the_value_off_the_boundary() {
         // A product meets a cost exactly when its value does, except for a
         // product equal to the target itself, which the target admits.
