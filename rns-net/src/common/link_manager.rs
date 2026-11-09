@@ -1048,19 +1048,11 @@ impl LinkManager {
         // `Link.validate_request`: the request's X25519 public key is its
         // stamp over `destination_hash || peer_sig_pub`. With
         // `LR_STAMPS_ENFORCED`, a stamp that is not valid for the
-        // destination's `get_link_cost()` drops the request without a proof.
-        // Upstream 796ef2d4 writes the test as `LR_STAMPS_ENFORCED and
-        // stamp_valid(...)`, which would drop the valid requests instead; this
-        // drops the invalid ones, as the error it raises ("Insufficient link
-        // request stamp value") describes.
-        //
-        // UPSTREAM BUG, NOT REPORTED: we decided not to report this upstream,
-        // because the maintainer has stated they do not want LLM-assisted
-        // reports or contributions. Check `Link.validate_request` at every
-        // audit: if upstream adds the missing `not`, this divergence ends; if
-        // upstream keeps the expression on purpose, follow it here.
-        // `upstream_inverted_link_request_check_drops_valid_stamps` shows what
-        // the upstream expression would do.
+        // destination's `get_link_cost()` drops the request without a proof:
+        // `LR_STAMPS_ENFORCED and not stamp_valid(...)`. Upstream 796ef2d4
+        // wrote the test without the `not`, dropping the valid requests
+        // instead; this always dropped the invalid ones, and upstream
+        // restored the `not` in 50e939ab.
         let stamp_value =
             rns_core::link::handshake::link_request_stamp_value(dest_hash, packet.data());
         if let Some(value) = stamp_value {
