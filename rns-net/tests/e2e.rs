@@ -3985,6 +3985,9 @@ fn discovery_announce_received_by_client() {
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    publish_ifac: false,
+                    encrypt: false,
+                    radio: Default::default(),
                     stamp_costs: Default::default(),
                     discovery_name: "TestBackbone".into(),
                     announce_interval: 300, // minimum
@@ -4239,6 +4242,9 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    publish_ifac: false,
+                    encrypt: false,
+                    radio: Default::default(),
                     stamp_costs: Default::default(),
                     discovery_name: "PoolTargetLive".into(),
                     announce_interval: 300,
@@ -4703,6 +4709,9 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    publish_ifac: false,
+                    encrypt: false,
+                    radio: Default::default(),
                     stamp_costs: Default::default(),
                     discovery_name: "PriorityNoPreempt".into(),
                     announce_interval: 300,
@@ -4876,6 +4885,9 @@ fn discovery_announce_through_relay() {
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    publish_ifac: false,
+                    encrypt: false,
+                    radio: Default::default(),
                     stamp_costs: Default::default(),
                     discovery_name: "RelayedBackbone".into(),
                     announce_interval: 300,

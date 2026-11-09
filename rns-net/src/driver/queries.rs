@@ -49,6 +49,22 @@ fn hex_bytes(bytes: &[u8]) -> String {
 }
 
 impl Driver {
+    /// An interface announcer that encrypts `discovery_encrypt` announces
+    /// to the network identity.
+    pub(crate) fn new_interface_announcer(
+        &self,
+        transport_id: [u8; 16],
+        interfaces: Vec<crate::discovery::DiscoverableInterface>,
+    ) -> crate::discovery::InterfaceAnnouncer {
+        let mut announcer = crate::discovery::InterfaceAnnouncer::new(transport_id, interfaces);
+        announcer.set_network_public_key(
+            self.discovery_network_identity
+                .as_ref()
+                .and_then(|identity| identity.get_public_key()),
+        );
+        announcer
+    }
+
     /// Whether interfaces discovered from the network identity
     /// `network_id` are accepted: any are without
     /// `interface_discovery_sources`.

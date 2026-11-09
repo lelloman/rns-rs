@@ -323,7 +323,43 @@ fn extract_discovery_config(
         parsed
     });
 
+    let flag = |key: &str| {
+        params
+            .get(key)
+            .and_then(|v| config::parse_bool_pub(v))
+            .unwrap_or(false)
+    };
+    let number = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| params.get(*key))
+            .and_then(|v| v.trim().parse::<u64>().ok())
+    };
+    // An RNode announces its own radio settings; a KISS or Weave interface
+    // announces the ones given for discovery.
+    let radio = match iface_type {
+        "RNodeInterface" => crate::discovery::DiscoveryRadio {
+            frequency: number(&["frequency"]),
+            bandwidth: number(&["bandwidth"]),
+            spreading_factor: number(&["spreadingfactor", "spreading_factor"]),
+            coding_rate: number(&["codingrate", "coding_rate"]),
+            modulation: None,
+        },
+        "KISSInterface" | "WeaveInterface" => crate::discovery::DiscoveryRadio {
+            frequency: number(&["discovery_frequency"]),
+            bandwidth: number(&["discovery_bandwidth"]),
+            spreading_factor: None,
+            coding_rate: None,
+            modulation: params
+                .get("discovery_modulation")
+                .map(|v| v.trim().to_string()),
+        },
+        _ => crate::discovery::DiscoveryRadio::default(),
+    };
+
     Some(crate::discovery::DiscoveryConfig {
+        publish_ifac: flag("publish_ifac"),
+        encrypt: flag("discovery_encrypt"),
+        radio,
         discovery_name,
         announce_interval,
         stamp_value,
@@ -347,6 +383,9 @@ fn default_discovery_runtime_config(
 ) -> crate::discovery::DiscoveryConfig {
     crate::discovery::DiscoveryConfig {
         stamp_costs: Default::default(),
+        publish_ifac: false,
+        encrypt: false,
+        radio: Default::default(),
         discovery_name: interface_name.to_string(),
         announce_interval: 21600,
         stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
@@ -455,6 +494,13 @@ pub(crate) fn discoverable_interface_from_config(
     transport_enabled: bool,
     ifac: Option<&IfacConfig>,
 ) -> crate::discovery::DiscoverableInterface {
+    if discovery.publish_ifac
+        && ifac.is_none_or(|cfg| cfg.netname.is_none() && cfg.netkey.is_none())
+    {
+        log::warn!(
+            "IFAC publishing was enabled for discoverable interface {interface_name}, but neither IFAC netname nor passphrase is configured"
+        );
+    }
     crate::discovery::DiscoverableInterface {
         interface_name: interface_name.to_string(),
         config: discovery.clone(),
@@ -559,6 +605,9 @@ pub struct DiscoverySettings {
     /// Network identities whose discovered interfaces are accepted
     /// (`interface_discovery_sources`); empty accepts any.
     pub interface_discovery_sources: Vec<[u8; 16]>,
+    /// The node identity is the configured `network_identity`, which
+    /// encrypts and decrypts `discovery_encrypt` announces.
+    pub network_identity: bool,
 }
 
 /// Top-level node configuration.
@@ -1557,6 +1606,7 @@ impl RnsNode {
                     .reticulum
                     .interface_discovery_sources
                     .clone(),
+                network_identity: rns_config.reticulum.network_identity.is_some(),
             },
             autoconnect_interface_mode: rns_config
                 .reticulum
@@ -2016,6 +2066,11 @@ impl RnsNode {
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
         driver.interface_discovery_sources = config.discovery.interface_discovery_sources.clone();
+        if config.discovery.network_identity {
+            driver.discovery_network_identity = identity
+                .get_private_key()
+                .map(|key| Identity::from_private_key(&key));
+        }
         driver.autoconnect_interface_mode = config.autoconnect_interface_mode;
         driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
         driver.autoconnect_announces_to_internal =
@@ -2357,8 +2412,7 @@ impl RnsNode {
         // Set up interface announcer if we have discoverable interfaces
         if !discoverable_interfaces.is_empty() {
             let transport_id = *identity.hash();
-            let announcer =
-                crate::discovery::InterfaceAnnouncer::new(transport_id, discoverable_interfaces);
+            let announcer = driver.new_interface_announcer(transport_id, discoverable_interfaces);
             log::info!("Interface discovery announcer initialized");
             driver.interface_announcer = Some(announcer);
         }
@@ -5438,6 +5492,68 @@ mod tests {
             discovery.is_none(),
             "TCPClientInterface discovery must be rejected unless KISS framing is supported"
         );
+    }
+
+    #[test]
+    fn discovery_config_parses_ifac_encryption_and_radio_keys() {
+        let params = |pairs: &[(&str, &str)]| {
+            let mut params: std::collections::HashMap<String, String> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            params.insert("discoverable".into(), "yes".into());
+            params
+        };
+
+        let backbone =
+            super::extract_discovery_config("public", "BackboneInterface", &params(&[])).unwrap();
+        assert!(!backbone.publish_ifac);
+        assert!(!backbone.encrypt);
+        assert_eq!(backbone.radio, crate::discovery::DiscoveryRadio::default());
+
+        let backbone = super::extract_discovery_config(
+            "public",
+            "BackboneInterface",
+            &params(&[("publish_ifac", "yes"), ("discovery_encrypt", "yes")]),
+        )
+        .unwrap();
+        assert!(backbone.publish_ifac);
+        assert!(backbone.encrypt);
+
+        // An RNode announces its own radio settings.
+        let rnode = super::extract_discovery_config(
+            "lora",
+            "RNodeInterface",
+            &params(&[
+                ("frequency", "868000000"),
+                ("bandwidth", "125000"),
+                ("spreadingfactor", "8"),
+                ("codingrate", "5"),
+                ("discovery_frequency", "1"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(rnode.radio.frequency, Some(868_000_000));
+        assert_eq!(rnode.radio.bandwidth, Some(125_000));
+        assert_eq!(rnode.radio.spreading_factor, Some(8));
+        assert_eq!(rnode.radio.coding_rate, Some(5));
+
+        // A KISS interface announces the ones given for discovery.
+        let kiss = super::extract_discovery_config(
+            "kiss",
+            "KISSInterface",
+            &params(&[
+                ("frequency", "1"),
+                ("discovery_frequency", "433500000"),
+                ("discovery_bandwidth", "12500"),
+                ("discovery_modulation", "4"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(kiss.radio.frequency, Some(433_500_000));
+        assert_eq!(kiss.radio.bandwidth, Some(12_500));
+        assert_eq!(kiss.radio.modulation.as_deref(), Some("4"));
+        assert_eq!(kiss.radio.spreading_factor, None);
     }
 
     #[test]

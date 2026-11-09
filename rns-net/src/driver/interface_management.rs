@@ -252,10 +252,8 @@ impl Driver {
             if let Some(announcer) = self.interface_announcer.as_mut() {
                 announcer.upsert_interface(discoverable);
             } else if let Some(identity) = self.transport_identity.as_ref() {
-                self.interface_announcer = Some(crate::discovery::InterfaceAnnouncer::new(
-                    *identity.hash(),
-                    vec![discoverable],
-                ));
+                self.interface_announcer =
+                    Some(self.new_interface_announcer(*identity.hash(), vec![discoverable]));
             }
         }
         self.managed_interfaces.insert(

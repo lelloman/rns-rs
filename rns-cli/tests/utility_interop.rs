@@ -1504,6 +1504,158 @@ fn python_instance_fetches_rust_blackhole_source() {
     blackhole_source_fetch(Daemon::Rust, Daemon::Python);
 }
 
+/// Start an rnsd of `implementation` on the config directory `dir`.
+#[cfg(target_os = "linux")]
+fn spawn_daemon(implementation: Daemon, dir: &Path, log: &Path) -> ProcessGuard {
+    let config = dir.to_str().unwrap().to_string();
+    let command = match implementation {
+        Daemon::Python => {
+            let mut command = Command::new("python3");
+            command
+                .args(["-m", "RNS.Utilities.rnsd", "--config", &config])
+                .env("PYTHONUNBUFFERED", "1");
+            command
+        }
+        Daemon::Rust => {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_rnsd"));
+            command.args(["--config", &config]);
+            command
+        }
+    };
+    spawn_logged(command, log)
+}
+
+/// An encrypted discovery announce (`discovery_encrypt`) from a publisher
+/// run by one implementation is read by a receiver run by the other, both
+/// holding the same `network_identity`.
+#[cfg(target_os = "linux")]
+fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
+    let root = tempfile::tempdir().unwrap();
+    let publisher_dir = root.path().join("publisher");
+    let receiver_dir = root.path().join("receiver");
+    fs::create_dir_all(&publisher_dir).unwrap();
+    fs::create_dir_all(&receiver_dir).unwrap();
+    let network_identity = root.path().join("network_identity");
+    let mut prepare = Command::new("python3");
+    prepare.args([
+        "-c",
+        "import RNS, sys; RNS.Identity().to_file(sys.argv[1])",
+        network_identity.to_str().unwrap(),
+    ]);
+    assert_success(&run(prepare), "create network identity");
+
+    let ports: Vec<TcpPortReservation> = (0..5).map(|_| TcpPortReservation::new()).collect();
+    let port = |i: usize| ports[i].port();
+    let (transport_port, pub_shared, pub_control, recv_shared, recv_control) =
+        (port(0), port(1), port(2), port(3), port(4));
+    let pid = std::process::id();
+    let label = if publisher == Daemon::Python {
+        "py-rs"
+    } else {
+        "rs-py"
+    };
+    let identity = network_identity.to_str().unwrap();
+    let name = "Encrypted Discovery Test";
+    fs::write(
+        publisher_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+             instance_name = disc-publisher-{label}-{pid}\n  shared_instance_port = {pub_shared}\n  \
+             instance_control_port = {pub_control}\n  network_identity = {identity}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[discovery server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n    \
+             discoverable = Yes\n    discovery_name = {name}\n    \
+             reachable_on = example.com\n    discovery_stamp_value = 2\n    \
+             discovery_encrypt = Yes\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        receiver_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = disc-receiver-{label}-{pid}\n  shared_instance_port = {recv_shared}\n  \
+             instance_control_port = {recv_control}\n  network_identity = {identity}\n  \
+             discover_interfaces = Yes\n  required_discovery_value = 2\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[discovery client]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    drop(ports);
+
+    let mut publisher_daemon = spawn_daemon(
+        publisher,
+        &publisher_dir,
+        &root.path().join("publisher.log"),
+    );
+    wait_for_port(
+        transport_port,
+        &mut publisher_daemon,
+        "publisher TCP server",
+    );
+    let mut receiver_daemon =
+        spawn_daemon(receiver, &receiver_dir, &root.path().join("receiver.log"));
+    wait_for_abstract_socket(
+        &format!("rns/disc-receiver-{label}-{pid}"),
+        &mut receiver_daemon,
+        "receiver shared instance",
+    );
+
+    // Upstream's announcer waits a minute before its first announce.
+    let receiver_config = receiver_dir.to_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(150);
+    loop {
+        publisher_daemon.assert_running("publisher");
+        receiver_daemon.assert_running("receiver");
+        let mut rnstatus = match receiver {
+            Daemon::Python => {
+                let mut command = Command::new("python3");
+                command.args(["-m", "RNS.Utilities.rnstatus"]);
+                command
+            }
+            Daemon::Rust => {
+                // Releases before upstream sent its implementation in
+                // discovery announces are listed only on request.
+                let mut command = Command::new(env!("CARGO_BIN_EXE_rnstatus"));
+                command.arg("--show-unknown");
+                command
+            }
+        };
+        rnstatus.args(["--config", &receiver_config, "-d"]);
+        let listed = run(rnstatus);
+        let stdout = String::from_utf8_lossy(&listed.stdout);
+        if stdout.contains(name) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "the receiver never listed the encrypted discovered interface:\n{stdout}\n\
+                 publisher log:\n{}\nreceiver log:\n{}",
+                fs::read_to_string(root.path().join("publisher.log")).unwrap_or_default(),
+                fs::read_to_string(root.path().join("receiver.log")).unwrap_or_default()
+            );
+        }
+        thread::sleep(Duration::from_secs(2));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rust_instance_reads_python_encrypted_discovery() {
+    encrypted_discovery(Daemon::Python, Daemon::Rust);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_instance_reads_rust_encrypted_discovery() {
+    encrypted_discovery(Daemon::Rust, Daemon::Python);
+}
+
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_client_retains_destination_data_on_rust_instance() {
