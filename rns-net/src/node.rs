@@ -678,7 +678,7 @@ struct NodeQueueConfig {
     link_mtu_discovery: bool,
     /// The `[filter]` config section.
     filter: config::FilterSection,
-    /// `[reticulum] hop_limiter`.
+    /// `[filter] hop_limiter`.
     hop_limiter: u8,
 }
 
