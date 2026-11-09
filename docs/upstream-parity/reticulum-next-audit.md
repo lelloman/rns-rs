@@ -275,7 +275,7 @@ Every commit in the audited range must appear exactly once.
 | 60 | `baccc6d8a2cc38e0885869c2802aa0f32a32014a` | Cleanup | Structurally covered | Pending mapping; an announce whose destination stamp fails or is aborted is cancelled with a warning; rns-rs's stamper and inline path already send nothing on failure |
 | 61 | `2960e6a41d8436a4d4306f81f02f542bd06aee49` | Cleanup | Non-runtime | Mapping commit; flips the per-step figure in the markdown and reStructuredText sources, made consistent at 0.27% by 62 |
 | 62 | `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4` | Prepare release | Non-runtime | Mapping commit; the signed `1.6.0` release tag; the `RNS` tree at the tag equals the audit tip's |
-| 63 | `d4af18fd6fa3f1fe1c1676fee09e6fa7af22c8d6` | Fixed typos | Non-runtime | Pending mapping; Protecting page typos |
+| 63 | `d4af18fd6fa3f1fe1c1676fee09e6fa7af22c8d6` | Fixed typos | Non-runtime | Mapping commit; Protecting page typos |
 | 64 | `e0da9c381e361ad61cbfd63c72c59afb93584274` | Updated docs | Non-runtime | Pending mapping; Protecting page and a history note |
 | 65 | `c5d205ffea16ef4519150745edf644dd03e48e5f` | Updated docs | Non-runtime | Pending mapping; generated manual for 64 |
 
@@ -2174,6 +2174,14 @@ link path rediscovery it depends on.
   is identical at the audit tip `c5d205ff`: commits 63 to 65 change
   documentation only, so the released runtime and the audit target are the
   same code.
+- Disposition: **Non-runtime**. This analysis is the mapping.
+
+### 63. `d4af18fd` — Fixed typos
+
+- Protecting page wording in all three manual forms: "Link Request Stamps
+  *are* embedded stamps", a sentence that ended in "you" now ends with "a
+  configuration might look something like", and `1.6.0` set as code. No
+  runtime file changes and no changed claim.
 - Disposition: **Non-runtime**. This analysis is the mapping.
 
 ## Integration Plan
