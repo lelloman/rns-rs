@@ -852,6 +852,30 @@ fn handle_rpc_request(
                         Ok(PickleValue::None)
                     }
                 }
+                // Upstream's `get_packet_rssi`, `get_packet_snr` and
+                // `get_packet_q`: the reading a packet arrived with, or None.
+                "packet_rssi" | "packet_snr" | "packet_q" => {
+                    let Some(packet_hash) = request
+                        .get("packet_hash")
+                        .and_then(|v| v.as_bytes())
+                        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                    else {
+                        return Ok(PickleValue::None);
+                    };
+                    let resp = send_query(event_tx, QueryRequest::PacketSignal { packet_hash })?;
+                    let QueryResponse::PacketSignal(Some(signal)) = resp else {
+                        return Ok(PickleValue::None);
+                    };
+                    Ok(match path {
+                        "packet_rssi" => signal
+                            .rssi
+                            .map_or(PickleValue::None, |v| PickleValue::Int(i64::from(v))),
+                        "packet_snr" => signal
+                            .snr
+                            .map_or(PickleValue::None, |v| PickleValue::Float(f64::from(v))),
+                        _ => signal.q.map_or(PickleValue::None, PickleValue::Float),
+                    })
+                }
                 // Upstream's `get_blackholed_identities`: a dict from identity
                 // hash to `{"source", "until", "reason"}`.
                 "blackholed_identities" => {
@@ -4571,6 +4595,46 @@ mod tests {
 
         let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
         assert_eq!(response, PickleValue::Bool(true));
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn packet_signal_requests_return_upstream_values() {
+        let (event_tx, event_rx) = crate::event::channel();
+        let driver = thread::spawn(move || {
+            for _ in 0..3 {
+                if let Ok(Event::Query(request, resp_tx)) = event_rx.recv() {
+                    let QueryRequest::PacketSignal { packet_hash } = *request else {
+                        panic!("unexpected query");
+                    };
+                    assert_eq!(packet_hash, [7u8; 32]);
+                    let _ = resp_tx.send(QueryResponse::PacketSignal(Some(
+                        crate::event::PacketSignal {
+                            rssi: Some(-97),
+                            snr: Some(6.5),
+                            q: None,
+                        },
+                    )));
+                }
+            }
+        });
+
+        let request = |path: &str| {
+            PickleValue::Dict(vec![
+                (
+                    PickleValue::String("get".into()),
+                    PickleValue::String(path.into()),
+                ),
+                (
+                    PickleValue::String("packet_hash".into()),
+                    PickleValue::Bytes(vec![7u8; 32]),
+                ),
+            ])
+        };
+        let get = |path: &str| handle_rpc_request(&request(path), &mut event_tx.clone()).unwrap();
+        assert_eq!(get("packet_rssi"), PickleValue::Int(-97));
+        assert_eq!(get("packet_snr"), PickleValue::Float(6.5));
+        assert_eq!(get("packet_q"), PickleValue::None);
         driver.join().unwrap();
     }
 

@@ -302,6 +302,10 @@ pub struct BackbonePeerPoolSettings {
 
 #[cfg(feature = "iface-backbone")]
 pub(crate) const BACKBONE_PEER_POOL_CONFIGURED_DEFAULT_PRIORITY: u8 = 60;
+
+/// Packets whose physical-layer readings are kept for queries
+/// (`Transport.LOCAL_CLIENT_CACHE_MAXSIZE`).
+pub(crate) const PACKET_SIGNAL_CACHE_MAXSIZE: usize = 512;
 #[cfg(feature = "iface-backbone")]
 pub(crate) const BACKBONE_PEER_POOL_DISCOVERED_PRIORITY: u8 = 40;
 
@@ -811,6 +815,10 @@ pub struct Driver {
     pub(crate) initial_announce_sent: bool,
     /// Cache of known announced identities and lifecycle state, keyed by destination hash.
     pub(crate) known_destinations: HashMap<[u8; 16], KnownDestinationState>,
+    /// RSSI, SNR and link quality of the latest packets received on
+    /// interfaces that report them (`Transport.local_client_rssi_cache` and
+    /// its SNR and Q siblings), oldest first.
+    pub(crate) packet_signals: std::collections::VecDeque<([u8; 32], crate::event::PacketSignal)>,
     /// `storage/blackhole`, where the blackhole lists persist; `None` keeps
     /// them in memory only.
     pub(crate) blackhole_dir: Option<std::path::PathBuf>,
@@ -1117,6 +1125,7 @@ impl Driver {
             last_management_announce: 0.0,
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
+            packet_signals: std::collections::VecDeque::new(),
             blackhole_dir: None,
             blackhole_sources: Vec::new(),
             ratchet_store: None,

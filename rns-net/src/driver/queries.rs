@@ -49,6 +49,19 @@ fn hex_bytes(bytes: &[u8]) -> String {
 }
 
 impl Driver {
+    /// Remember a received packet's readings, keeping the newest
+    /// `PACKET_SIGNAL_CACHE_MAXSIZE`.
+    pub(crate) fn record_packet_signal(
+        &mut self,
+        packet_hash: [u8; 32],
+        signal: crate::event::PacketSignal,
+    ) {
+        self.packet_signals.push_back((packet_hash, signal));
+        while self.packet_signals.len() > super::PACKET_SIGNAL_CACHE_MAXSIZE {
+            self.packet_signals.pop_front();
+        }
+    }
+
     /// `Transport._wants_destination_type`: returns `false` for a blocked
     /// type.
     pub(crate) fn wants_destination_type(&mut self, full_name: &str, requester: &[u8]) -> bool {
@@ -821,6 +834,13 @@ impl Driver {
             QueryRequest::HasPath { dest_hash } => {
                 QueryResponse::HasPath(self.engine.has_path(&dest_hash))
             }
+            // Upstream looks the hash up from the oldest entry.
+            QueryRequest::PacketSignal { packet_hash } => QueryResponse::PacketSignal(
+                self.packet_signals
+                    .iter()
+                    .find(|(hash, _)| *hash == packet_hash)
+                    .map(|(_, signal)| *signal),
+            ),
             QueryRequest::HopsTo { dest_hash } => {
                 QueryResponse::HopsTo(self.engine.hops_to(&dest_hash))
             }

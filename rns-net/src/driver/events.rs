@@ -193,6 +193,18 @@ impl Driver {
         }
         if let Some(packet_hash) = decoded_packet.packet_hash() {
             self.engine.prefetch_packet_hash(packet_hash);
+            // Transport._inbound: remember the readings of a packet from an
+            // interface that reports them, for get_packet_rssi/snr/q.
+            if rssi.is_some() || snr.is_some() {
+                let q = self
+                    .interfaces
+                    .get(&interface_id)
+                    .and_then(|entry| entry.stats.signal_quality);
+                self.record_packet_signal(
+                    *packet_hash,
+                    crate::event::PacketSignal { rssi, snr, q },
+                );
+            }
         }
         let packet_len = decoded_packet.packet().raw.len();
         if !self.admit_decoded_inbound(interface_id, packet_len, &decoded_packet) {

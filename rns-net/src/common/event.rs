@@ -715,6 +715,9 @@ pub enum QueryRequest {
     SetRequiredDestinationsOnly { enabled: bool },
     /// Check if a path exists to a destination.
     HasPath { dest_hash: [u8; 16] },
+    /// RSSI, SNR and link quality a received packet arrived with
+    /// (`Reticulum.get_packet_rssi`, `get_packet_snr`, `get_packet_q`).
+    PacketSignal { packet_hash: [u8; 32] },
     /// Get hop count to a destination.
     HopsTo { dest_hash: [u8; 16] },
     /// Recall identity info for a destination.
@@ -858,6 +861,7 @@ pub enum QueryResponse {
     UnblackholeResult(bool),
     DestinationTypeRegistration(bool),
     HasPath(bool),
+    PacketSignal(Option<PacketSignal>),
     HopsTo(Option<u8>),
     RecallIdentity(Option<crate::common::destination::AnnouncedIdentity>),
     RecallDestinationStamp(Option<DestinationStampInfo>),
@@ -1166,6 +1170,17 @@ pub struct RateTableEntry {
     pub rate_violations: u32,
     pub blocked_until: f64,
     pub timestamps: Vec<f64>,
+}
+
+/// The physical-layer readings a packet arrived with, on an interface that
+/// reports them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PacketSignal {
+    pub rssi: Option<i16>,
+    pub snr: Option<f32>,
+    /// Link quality in percent, the interface's latest reading when the
+    /// packet arrived (upstream's `packet.q`).
+    pub q: Option<f64>,
 }
 
 /// A blackholed identity for query responses.

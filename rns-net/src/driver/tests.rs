@@ -14399,3 +14399,68 @@ fn blackholing_an_identity_drops_its_paths_and_persists_the_list() {
     again.load_blackhole(dir.path().to_path_buf());
     assert_eq!(again.engine.blackholed_entries().count(), 0);
 }
+
+#[test]
+fn packet_signal_readings_are_cached_per_packet_hash() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "radio");
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(1))
+        .unwrap()
+        .stats
+        .signal_quality = Some(88.5);
+
+    let query = |driver: &mut Driver, raw: &[u8]| {
+        let packet = RawPacket::unpack(raw).unwrap();
+        match driver.handle_query(QueryRequest::PacketSignal {
+            packet_hash: packet.packet_hash,
+        }) {
+            QueryResponse::PacketSignal(signal) => signal,
+            other => panic!("unexpected response {other:?}"),
+        }
+    };
+
+    // A packet from an interface that reports readings is remembered with
+    // the interface's current signal quality.
+    let with_readings = build_announce_packet(&Identity::new(&mut OsRng));
+    driver.handle_frame_event(
+        InterfaceId(1),
+        with_readings.clone(),
+        Some(-100),
+        Some(10.5),
+    );
+    assert_eq!(
+        query(&mut driver, &with_readings),
+        Some(event::PacketSignal {
+            rssi: Some(-100),
+            snr: Some(10.5),
+            q: Some(88.5),
+        })
+    );
+
+    // A packet without readings is not.
+    let without = build_announce_packet(&Identity::new(&mut OsRng));
+    driver.handle_frame_event(InterfaceId(1), without.clone(), None, None);
+    assert_eq!(query(&mut driver, &without), None);
+
+    // The cache keeps the newest PACKET_SIGNAL_CACHE_MAXSIZE readings.
+    for i in 0..super::PACKET_SIGNAL_CACHE_MAXSIZE {
+        let mut hash = [0u8; 32];
+        hash[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        hash[31] = 0xee;
+        driver.record_packet_signal(
+            hash,
+            event::PacketSignal {
+                rssi: Some(-1),
+                snr: None,
+                q: None,
+            },
+        );
+    }
+    assert_eq!(
+        driver.packet_signals.len(),
+        super::PACKET_SIGNAL_CACHE_MAXSIZE
+    );
+    assert_eq!(query(&mut driver, &with_readings), None);
+}

@@ -93,7 +93,7 @@ pub use event::{
     BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
     BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo, Event, HookInfo,
     InterfaceStatsResponse, LinkDatagramError, LinkInfoEntry, LocalDestinationEntry,
-    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
+    NextHopResponse, PacketSignal, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
     ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
     RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
     TrafficDetail,
