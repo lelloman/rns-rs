@@ -288,6 +288,48 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
     assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
 }
 
+#[test]
+fn discovery_announces_from_non_source_networks_are_ignored() {
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.discovery_required_value = StampCost::from_whole(100);
+    let mut app_data = vec![0];
+    app_data.extend_from_slice(&rns_core::msgpack::pack(&rns_core::msgpack::Value::Map(
+        vec![(
+            rns_core::msgpack::Value::UInt(crate::discovery::NAME as u64),
+            rns_core::msgpack::Value::Str("from-a-network".into()),
+        )],
+    )));
+    app_data.extend_from_slice(&[0; crate::discovery::STAMP_SIZE]);
+    let announce = |identity_hash: [u8; 16]| {
+        TransportAction::AnnounceReceived(Box::new(rns_core::transport::types::ReceivedAnnounce {
+            destination_hash: [0x31; 16],
+            identity_hash,
+            public_key: [0x33; 64],
+            name_hash: driver.discovery_name_hash,
+            random_hash: [0x34; 10],
+            ratchet: None,
+            app_data: Some(app_data.clone()),
+            stamp: None,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
+            lr_cost: None,
+            hops: 1,
+            receiving_interface: InterfaceId(9),
+            rx: rns_core::transport::RxMetadata::default(),
+        }))
+    };
+    let from_other = announce([0x32; 16]);
+    let from_source = announce([0x55; 16]);
+
+    // An announce that is looked at leaves its insufficient stamp in the
+    // invalid cache; one from a network that is not a source is not looked at.
+    driver.interface_discovery_sources = vec![[0x55; 16]];
+    driver.dispatch_all(vec![from_other]);
+    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 0);
+    driver.dispatch_all(vec![from_source]);
+    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
+}
+
 fn make_announced_identity(
     dest_hash: [u8; 16],
     received_at: f64,

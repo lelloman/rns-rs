@@ -1473,7 +1473,12 @@ impl Driver {
                     // since discovery is a SINGLE destination — its dest hash varies
                     // with the sender's identity).
                     if name_hash == self.discovery_name_hash && self.discover_interfaces {
-                        if let Some(ref app_data) = app_data {
+                        if !self.discovery_source_allowed(&identity_hash) {
+                            log::debug!(
+                                "Interface discovered from non-authorized network identity {:02x?}, ignoring",
+                                &identity_hash[..4]
+                            );
+                        } else if let Some(ref app_data) = app_data {
                             if let Some(mut discovered) =
                                 crate::discovery::parse_interface_announce_with_cache(
                                     app_data,

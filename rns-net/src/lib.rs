@@ -148,7 +148,10 @@ pub use link_send::{
     LinkSendError as TransmissionError, LinkSendReceipt as TransmissionReceipt, PacketSendReceipt,
 };
 pub use management::ManagementConfig;
-pub use node::{ChannelSendError, IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
+pub use node::{
+    ChannelSendError, DiscoverySettings, IfacConfig, InterfaceConfig, NodeConfig, RnsNode,
+    SendError,
+};
 #[cfg(feature = "hooks")]
 pub use provider_bridge::{
     HookProviderEventEnvelope, OverflowPolicy, ProviderBridge, ProviderBridgeConfig,

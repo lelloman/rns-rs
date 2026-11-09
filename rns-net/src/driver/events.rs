@@ -620,10 +620,11 @@ impl Driver {
             self.discovery_cleanup_counter += 1;
             if self.discovery_cleanup_counter >= self.discovery_cleanup_interval_ticks {
                 self.discovery_cleanup_counter = 0;
-                if let Ok(removed) = self
-                    .discovered_interfaces
-                    .cleanup_with_blackholes(|identity| self.engine.is_blackholed(identity, now))
-                {
+                let sources = &self.interface_discovery_sources;
+                if let Ok(removed) = self.discovered_interfaces.cleanup_with_filters(
+                    |identity| self.engine.is_blackholed(identity, now),
+                    |network_id| sources.is_empty() || sources.contains(network_id),
+                ) {
                     if removed > 0 {
                         log::info!("Discovery cleanup: removed {} stale entries", removed);
                     }

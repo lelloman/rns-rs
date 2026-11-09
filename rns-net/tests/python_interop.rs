@@ -411,6 +411,7 @@ fn start_rust_node_with(
             underlay_mark: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery: Default::default(),
             autoconnect_interface_mode: None,
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
