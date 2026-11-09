@@ -273,7 +273,7 @@ Every commit in the audited range must appear exactly once.
 | 58 | `dad1302b1ec82177d56c310b915a1a12c287806c` | Updated changelog | Non-runtime | Mapping commit; every new 1.6.0 changelog entry traced to an audited commit or to the 1.6.0 baseline |
 | 59 | `1fee7af7f28e435421dbebd2cf4bd5257172bb58` | Bad at head math | Non-runtime | Pending mapping; one figure in `protecting.md` |
 | 60 | `baccc6d8a2cc38e0885869c2802aa0f32a32014a` | Cleanup | Structurally covered | Pending mapping; an announce whose destination stamp fails or is aborted is cancelled with a warning; rns-rs's stamper and inline path already send nothing on failure |
-| 61 | `2960e6a41d8436a4d4306f81f02f542bd06aee49` | Cleanup | Non-runtime | Pending mapping; one line in the Protecting page |
+| 61 | `2960e6a41d8436a4d4306f81f02f542bd06aee49` | Cleanup | Non-runtime | Mapping commit; flips the per-step figure in the markdown and reStructuredText sources, made consistent at 0.27% by 62 |
 | 62 | `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4` | Prepare release | Non-runtime | Pending mapping; signed `1.6.0` tag, generated manual |
 | 63 | `d4af18fd6fa3f1fe1c1676fee09e6fa7af22c8d6` | Fixed typos | Non-runtime | Pending mapping; Protecting page typos |
 | 64 | `e0da9c381e361ad61cbfd63c72c59afb93584274` | Updated docs | Non-runtime | Pending mapping; Protecting page and a history note |
@@ -2149,6 +2149,16 @@ link path rediscovery it depends on.
     the packet filter), 39 (`cda4d72b`) and 40 (`ecd677ba`);
   - invalid RPC error handling: 32 (`263dc6ba`) and 45 (`53dc223a`).
 - Disposition: **Non-runtime**. This analysis is the mapping.
+
+### 61. `2960e6a4` — Cleanup
+
+- One sentence of the Protecting page, the per-step difficulty figure, in two
+  sources that end up disagreeing: `docs/markdown/protecting.md` goes back
+  from 0.27% to 0.4% and `docs/source/protecting.rst` changes from 0.4% to
+  0.27%. Commit 62 sets the markdown to 0.27% again, so the released manual
+  says 0.27% everywhere, the figure pinned at commit 59.
+- No runtime file changes. Disposition: **Non-runtime**. This analysis is
+  the mapping.
 
 ## Integration Plan
 
