@@ -419,8 +419,8 @@ impl RuntimeConfig {
             .ok_or_else(|| "provider bridge socket is not configured".to_string())?;
 
         Ok(Self {
-            rpc_addr: RpcAddr::Tcp(
-                "127.0.0.1".into(),
+            rpc_addr: RpcAddr::local(
+                rns_config.reticulum.instance_name.clone(),
                 rns_config.reticulum.instance_control_port,
             ),
             auth_key,

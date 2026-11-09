@@ -358,8 +358,8 @@ fn connect(config_path: Option<&str>) -> RpcClient {
     };
 
     let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
-    let rpc_addr = RpcAddr::Tcp(
-        "127.0.0.1".into(),
+    let rpc_addr = RpcAddr::local(
+        rns_config.reticulum.instance_name.clone(),
         rns_config.reticulum.instance_control_port,
     );
     match RpcClient::connect(&rpc_addr, &auth_key) {

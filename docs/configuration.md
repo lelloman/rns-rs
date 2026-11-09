@@ -316,9 +316,11 @@ Applications ask for the types they need with
 `unwants_destination_type`. A shared instance client also registers
 them with its shared instance over RPC, using the shared instance's RPC key
 from `storage/transport_identity`, and withdraws them when it shuts down.
-The rns-rs RPC client uses TCP on `instance_control_port`, so it cannot
-register with a Python shared instance that serves RPC on its default Linux
-abstract socket.
+Like upstream's on Linux, the rns-rs RPC client reaches a shared instance on
+the abstract socket `\0rns/<instance_name>/rpc`, and uses TCP on
+`instance_control_port` only where that socket is not there. It therefore
+works with a Python shared instance on its Linux default, which serves RPC
+only on that socket, as well as with one set to `shared_instance_type = tcp`.
 `rncp` and `rnx` clients, the `rnsh` initiator and remote management in
 `rnstatus` and `rnpath` register their types, as the Python utilities do.
 Python clients from `825c2e19` on register theirs with an rns-rs shared

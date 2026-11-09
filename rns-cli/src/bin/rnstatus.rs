@@ -152,7 +152,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
 
         let rpc_port = rns_config.reticulum.instance_control_port;
-        let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
+        let rpc_addr = RpcAddr::local(rns_config.reticulum.instance_name.clone(), rpc_port);
 
         let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
             Ok(c) => c,
@@ -215,7 +215,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
 
     let rpc_port = rns_config.reticulum.instance_control_port;
-    let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
+    let rpc_addr = RpcAddr::local(rns_config.reticulum.instance_name.clone(), rpc_port);
 
     if let Some((operation, name)) = management_actions.first().copied() {
         let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {

@@ -142,7 +142,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     };
 
     let auth_key = derive_auth_key(&prv_key);
-    let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
+    let rpc_addr = RpcAddr::local(rns_config.reticulum.instance_name.clone(), rpc_port);
 
     // First, ensure we have a path
     let adaptive_timeout = if timeout_arg.is_some() {

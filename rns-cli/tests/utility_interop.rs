@@ -1250,6 +1250,66 @@ fn python_rnpath_manages_rust_blackhole() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rust_rnstatus_reaches_python_instance_on_unix_sockets() {
+    // On Linux a Python shared instance serves RPC only on the abstract
+    // socket \0rns/<instance>/rpc, with no TCP control port. The Rust
+    // utilities reach it there.
+    let root = tempfile::tempdir().unwrap();
+    let instance = format!("rs-unix-rpc-{}", std::process::id());
+    let (shared_port, control_port) = {
+        let shared = TcpPortReservation::new();
+        let control = TcpPortReservation::new();
+        (shared.port(), control.port())
+    };
+    fs::write(
+        root.path().join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = {instance}\n  shared_instance_port = {shared_port}\n  \
+             instance_control_port = {control_port}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    \
+             enabled = No\n"
+        ),
+    )
+    .unwrap();
+    let config = root.path().to_str().unwrap().to_string();
+    let mut rnsd = Command::new("python3");
+    rnsd.args(["-m", "RNS.Utilities.rnsd", "--config", &config])
+        .env("PYTHONUNBUFFERED", "1");
+    let mut daemon = spawn_logged(rnsd, &root.path().join("python-rnsd.log"));
+
+    let deadline = Instant::now() + START_TIMEOUT;
+    let stdout = loop {
+        daemon.assert_running("Python rnsd");
+        let mut rnstatus = Command::new(env!("CARGO_BIN_EXE_rnstatus"));
+        rnstatus.args(["--config", &config]);
+        let output = run(rnstatus);
+        if output.status.success() {
+            break String::from_utf8_lossy(&output.stdout).into_owned();
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "Rust rnstatus never reached the Python instance:\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(250));
+    };
+    assert!(
+        TcpStream::connect(("127.0.0.1", control_port)).is_err(),
+        "the Python instance unexpectedly serves RPC on TCP"
+    );
+    assert!(
+        stdout.contains(&format!("Shared Instance[rns/{instance}]")),
+        "{stdout}"
+    );
+}
+
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_client_retains_destination_data_on_rust_instance() {
