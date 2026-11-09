@@ -358,6 +358,10 @@ pub struct BlackholeEntry {
     pub expires: f64,
     /// Optional reason for blackholing.
     pub reason: Option<String>,
+    /// Identity hash of the blackhole list this entry came from, or `None`
+    /// for an entry made on this node (upstream records its own transport
+    /// identity hash as the source of local entries).
+    pub source: Option<[u8; 16]>,
 }
 
 /// Stamp requirements applied to received announces and path requests.

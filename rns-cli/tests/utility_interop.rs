@@ -201,6 +201,7 @@ impl Harness {
             "rncp" => env!("CARGO_BIN_EXE_rncp"),
             "rnsh" => env!("CARGO_BIN_EXE_rnsh"),
             "rnx" => env!("CARGO_BIN_EXE_rnx"),
+            "rnpath" => env!("CARGO_BIN_EXE_rnpath"),
             _ => panic!("unknown Rust utility {binary}"),
         };
         let mut command = Command::new(executable);
@@ -1162,6 +1163,91 @@ fn python_rnpath_lists_rust_path_table() {
             "unexpected rnpath line: {line}"
         );
     }
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnpath_manages_rust_blackhole() {
+    // Python's rnpath -B/-b/-U use the blackhole_identity,
+    // blackholed_identities and unblackhole_identity RPC calls (upstream
+    // since 1.1.0). The Rust rnpath lists the same entry.
+    let harness = Harness::start("python-rnpath-blackhole");
+    let identity = "0123456789abcdef0123456789abcdef";
+    let config = harness.client_config.to_str().unwrap().to_string();
+    let python = |args: &[&str]| {
+        let mut command = harness.python_command("rnpath");
+        command.args(["--config", &config]).args(args);
+        let output = run(command);
+        assert_success(&output, &format!("Python rnpath {args:?}"));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let added = python(&["-B", identity, "--duration", "1", "--reason", "spam"]);
+    assert!(
+        added.contains(&format!("Blackholed identity {identity}")),
+        "{added}"
+    );
+    // An application on the shared instance asks with `is_blackholed`.
+    let mut is_blackholed = Command::new("python3");
+    is_blackholed.args([
+        "-c",
+        "import RNS, sys; r = RNS.Reticulum(sys.argv[1]); \
+         print(r.is_blackholed(bytes.fromhex(sys.argv[2])), \
+         r.is_blackholed(bytes(16)))",
+        &config,
+        identity,
+    ]);
+    let is_blackholed = run(is_blackholed);
+    assert_success(&is_blackholed, "Python Reticulum.is_blackholed");
+    assert_eq!(
+        String::from_utf8_lossy(&is_blackholed.stdout)
+            .lines()
+            .last()
+            .unwrap_or(""),
+        "True False"
+    );
+
+    let again = python(&["-B", identity]);
+    assert!(
+        again.contains(&format!("Identity {identity} already blackholed")),
+        "{again}"
+    );
+
+    let listed = python(&["-b"]);
+    let line = listed
+        .lines()
+        .find(|line| line.contains(identity))
+        .unwrap_or_else(|| panic!("Python rnpath -b did not list {identity}:\n{listed}"));
+    // No " by <source>" check: on an instance with transport off, upstream
+    // too records its ephemeral transport identity as the source of local
+    // entries (Transport.py:442), which a client process never matches.
+    assert!(
+        line.contains("blackholed for") && line.contains("(spam)"),
+        "{line}"
+    );
+
+    let mut rust = harness.rust_command("rnpath", Side::Client);
+    rust.args(["--config", &config, "-b"]);
+    let rust_listed = run(rust);
+    assert_success(&rust_listed, "Rust rnpath -b");
+    let rust_listed = String::from_utf8_lossy(&rust_listed.stdout);
+    assert!(
+        rust_listed
+            .lines()
+            .any(|line| line.contains(identity) && line.contains("(spam)")),
+        "{rust_listed}"
+    );
+
+    let lifted = python(&["-U", identity]);
+    assert!(
+        lifted.contains(&format!("Lifted blackhole for identity {identity}")),
+        "{lifted}"
+    );
+    let not_listed = python(&["-U", identity]);
+    assert!(
+        not_listed.contains(&format!("Identity {identity} not blackholed")),
+        "{not_listed}"
+    );
 }
 
 #[test]

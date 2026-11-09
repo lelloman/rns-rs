@@ -2353,6 +2353,14 @@ impl RnsNode {
             let _ = std::fs::create_dir_all(&disc_path);
             driver.discovered_interfaces =
                 crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
+            // Upstream's `storage/blackhole`, beside the discovery storage.
+            let blackhole_path = std::path::PathBuf::from(cache_dir)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("storage")
+                .join("blackhole");
+            let _ = std::fs::create_dir_all(&blackhole_path);
+            driver.load_blackhole(blackhole_path);
         }
 
         // Restore after static interfaces and the announce cache are available,

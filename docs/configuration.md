@@ -364,6 +364,32 @@ from `[reticulum]` (a target of 3600 s and a grace of 5 unless set). Clients a
 listener accepts use the listener's values. The same keys can be changed at
 runtime per interface.
 
+## Blackholes
+
+A blackholed identity's announces are dropped, and the node refuses to
+transport traffic for its destinations or keep links to them. Identities are
+blackholed and lifted with `rnpath`, as upstream:
+
+```text
+rnpath -B <identity hash> [--duration <hours>] [--reason <text>]
+rnpath -U <identity hash>
+rnpath -b
+```
+
+Blackholing an identity that already is blackholed leaves the entry as it is.
+A new entry also drops the paths to that identity's destinations. The entries
+made on this node persist in `storage/blackhole/local`, in upstream's
+msgpack format (identity hash to `source`, `until` and `reason`), so the list
+survives restarts and moves with the configuration directory between
+implementations. Shared instance clients, including Python applications and
+utilities, use upstream's `blackholed_identities`, `is_blackholed`,
+`blackhole_identity` and `unblackhole_identity` calls; older rns-rs clients'
+`blackholed`, `blackhole` and `unblackhole` calls are still served.
+
+With `publish_blackhole = yes` the node publishes its list on the
+`rnstransport.info.blackhole` destination, in upstream's format, for other
+nodes to read with `rnpath -R <transport identity> -p` or subscribe to.
+
 ## Ingress control
 
 The upstream manual's "Protecting Open Networks" page (renamed from the

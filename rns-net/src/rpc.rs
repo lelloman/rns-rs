@@ -852,6 +852,32 @@ fn handle_rpc_request(
                         Ok(PickleValue::None)
                     }
                 }
+                // Upstream's `get_blackholed_identities`: a dict from identity
+                // hash to `{"source", "until", "reason"}`.
+                "blackholed_identities" => {
+                    let resp = send_query(event_tx, QueryRequest::GetBlackholed)?;
+                    if let QueryResponse::Blackholed(entries) = resp {
+                        Ok(blackholed_identities_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
+                // Upstream's `is_blackholed`.
+                "is_blackholed" => {
+                    let Some(identity_hash) = request
+                        .get("identity_hash")
+                        .and_then(|v| v.as_bytes())
+                        .and_then(|b| <[u8; 16]>::try_from(b).ok())
+                    else {
+                        return Ok(PickleValue::Bool(false));
+                    };
+                    let resp = send_query(event_tx, QueryRequest::GetBlackholed)?;
+                    Ok(PickleValue::Bool(matches!(
+                        resp,
+                        QueryResponse::Blackholed(entries)
+                            if entries.iter().any(|e| e.identity_hash == identity_hash)
+                    )))
+                }
                 "discovered_interfaces" => {
                     let only_available = request
                         .get("only_available")
@@ -1189,6 +1215,57 @@ fn handle_rpc_request(
                 }
             }
         }
+    }
+
+    // Upstream's `blackhole_identity`: `until` is an absolute time or nil,
+    // and the answer is True when added, None when the identity already is
+    // blackholed, False for an invalid hash.
+    if let Some(hash_val) = request.get("blackhole_identity") {
+        let Some(identity_hash) = hash_val
+            .as_bytes()
+            .and_then(|b| <[u8; 16]>::try_from(b).ok())
+        else {
+            return Ok(PickleValue::Bool(false));
+        };
+        let duration_hours = request
+            .get("until")
+            .and_then(|v| v.as_float().or_else(|| v.as_int().map(|i| i as f64)))
+            .map(|until| ((until - crate::time::now()) / 3600.0).max(f64::MIN_POSITIVE));
+        let reason = request
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let resp = send_query(
+            event_tx,
+            QueryRequest::BlackholeIdentity {
+                identity_hash,
+                duration_hours,
+                reason,
+            },
+        )?;
+        return Ok(match resp {
+            QueryResponse::BlackholeResult(true) => PickleValue::Bool(true),
+            _ => PickleValue::None,
+        });
+    }
+
+    // Upstream's `unblackhole_identity`: True when lifted, None when the
+    // identity was not blackholed, False for an invalid hash.
+    if let Some(hash_val) = request.get("unblackhole_identity") {
+        let Some(identity_hash) = hash_val
+            .as_bytes()
+            .and_then(|b| <[u8; 16]>::try_from(b).ok())
+        else {
+            return Ok(PickleValue::Bool(false));
+        };
+        let resp = send_query(
+            event_tx,
+            QueryRequest::UnblackholeIdentity { identity_hash },
+        )?;
+        return Ok(match resp {
+            QueryResponse::UnblackholeResult(true) => PickleValue::Bool(true),
+            _ => PickleValue::None,
+        });
     }
 
     // Handle "blackhole" requests
@@ -2436,6 +2513,43 @@ fn rate_table_to_pickle(entries: &[RateTableEntry]) -> PickleValue {
         })
         .collect();
     PickleValue::List(list)
+}
+
+/// Upstream's `Transport.blackholed_identities`: identity hash to
+/// `{"source", "until", "reason"}`, `until` nil for an entry that never
+/// expires.
+fn blackholed_identities_to_pickle(entries: &[BlackholeInfo]) -> PickleValue {
+    PickleValue::Dict(
+        entries
+            .iter()
+            .map(|e| {
+                (
+                    PickleValue::Bytes(e.identity_hash.to_vec()),
+                    PickleValue::Dict(vec![
+                        (
+                            PickleValue::String("source".into()),
+                            e.source
+                                .map_or(PickleValue::None, |s| PickleValue::Bytes(s.to_vec())),
+                        ),
+                        (
+                            PickleValue::String("until".into()),
+                            if e.expires == 0.0 {
+                                PickleValue::None
+                            } else {
+                                PickleValue::Float(e.expires)
+                            },
+                        ),
+                        (
+                            PickleValue::String("reason".into()),
+                            e.reason
+                                .clone()
+                                .map_or(PickleValue::None, PickleValue::String),
+                        ),
+                    ]),
+                )
+            })
+            .collect(),
+    )
 }
 
 fn blackholed_to_pickle(entries: &[BlackholeInfo]) -> PickleValue {

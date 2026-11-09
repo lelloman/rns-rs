@@ -113,6 +113,7 @@ impl Default for AnnounceRateDefaults {
 }
 
 mod announce_check;
+mod blackhole;
 pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
 mod dispatch;
 mod events;
@@ -810,6 +811,11 @@ pub struct Driver {
     pub(crate) initial_announce_sent: bool,
     /// Cache of known announced identities and lifecycle state, keyed by destination hash.
     pub(crate) known_destinations: HashMap<[u8; 16], KnownDestinationState>,
+    /// `storage/blackhole`, where the blackhole lists persist; `None` keeps
+    /// them in memory only.
+    pub(crate) blackhole_dir: Option<std::path::PathBuf>,
+    /// Identity hashes of the remote blackhole lists this node subscribes to.
+    pub(crate) blackhole_sources: Vec<[u8; 16]>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -1111,6 +1117,8 @@ impl Driver {
             last_management_announce: 0.0,
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
+            blackhole_dir: None,
+            blackhole_sources: Vec::new(),
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,

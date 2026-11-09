@@ -1175,6 +1175,10 @@ pub struct BlackholeInfo {
     pub created: f64,
     pub expires: f64,
     pub reason: Option<String>,
+    /// The identity hash of the list the entry came from: this node's
+    /// transport identity for its own entries, as upstream records them, or
+    /// `None` on a node without one.
+    pub source: Option<[u8; 16]>,
 }
 
 /// Keys for a stamped link request, ground off the driver thread, with the

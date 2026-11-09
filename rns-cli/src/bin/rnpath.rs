@@ -51,8 +51,14 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let json_output = args.has("j");
     let max_hops: Option<u8> = args.get("m").and_then(|s| s.parse().ok());
     let show_blackholed = args.has("blackholed") || args.has("b");
-    let blackhole_hash = args.get("B").map(|s| s.to_string());
-    let unblackhole_hash = args.get("U").map(|s| s.to_string());
+    let blackhole_hash = args
+        .get("B")
+        .or_else(|| args.get("blackhole"))
+        .map(|s| s.to_string());
+    let unblackhole_hash = args
+        .get("U")
+        .or_else(|| args.get("unblackhole"))
+        .map(|s| s.to_string());
     let duration_hours: Option<f64> = args.get("duration").and_then(|s| s.parse().ok());
     let reason = args.get("reason").map(|s| s.to_string());
     let remote_blackholed = args.has("p") || args.has("blackholed-list");
@@ -145,7 +151,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     } else if let Some(hash_str) = unblackhole_hash {
         do_unblackhole(&mut client, &hash_str);
     } else if show_blackholed {
-        show_blackholed_list(&mut client);
+        show_blackholed_list(&mut client, identity.hash());
     } else if let Some(hash_str) = drop_hash {
         drop_path(&mut client, &hash_str);
     } else if let Some(hash_str) = drop_via {
@@ -404,63 +410,120 @@ fn pretty_date_elapsed(seconds: u64) -> String {
     format!("{} years", days / 365)
 }
 
-fn show_blackholed_list(client: &mut RpcClient) {
+fn show_blackholed_list(client: &mut RpcClient, local_identity: &[u8; 16]) {
+    // Upstream's call first; an older rns-rs instance only knows `blackholed`.
     let response = match client.call(&PickleValue::Dict(vec![(
         PickleValue::String("get".into()),
-        PickleValue::String("blackholed".into()),
+        PickleValue::String("blackholed_identities".into()),
     )])) {
-        Ok(r) => r,
+        Ok(PickleValue::None) | Err(_) => client.call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("blackholed".into()),
+        )])),
+        Ok(response) => Ok(response),
+    };
+    match response {
+        Ok(response) => render_blackholed_list(&response, Some(local_identity)),
         Err(e) => {
             eprintln!("RPC error: {}", e);
             process::exit(1);
         }
-    };
-
-    render_blackholed_list(&response);
+    }
 }
 
-fn render_blackholed_list(response: &PickleValue) {
-    if let Some(entries) = response.as_list() {
-        if entries.is_empty() {
-            println!("Blackhole list is empty");
-            return;
-        }
-        println!("{:<34} {:<16} Reason", "Identity Hash", "Expires");
-        println!("{}", "-".repeat(70));
-        for entry in entries {
-            let hash = entry
-                .get("identity_hash")
-                .and_then(|v| v.as_bytes())
-                .map(prettyhexrep)
-                .unwrap_or_default();
-            let expires = entry
+/// One blackhole entry, from either upstream's dict (`hash -> {"source",
+/// "until", "reason"}`) or the list of dicts older rns-rs instances and the
+/// remote list reader produce.
+struct BlackholeLine {
+    identity_hash: Vec<u8>,
+    until: Option<f64>,
+    reason: Option<String>,
+    source: Option<Vec<u8>>,
+}
+
+fn blackhole_line(identity_hash: Vec<u8>, fields: &PickleValue) -> BlackholeLine {
+    let until = fields
+        .get("until")
+        .and_then(|v| v.as_float().or_else(|| v.as_int().map(|i| i as f64)))
+        .or_else(|| {
+            fields
                 .get("expires")
                 .and_then(|v| v.as_float())
-                .map(|e| {
-                    if e == 0.0 {
-                        "never".into()
-                    } else {
-                        let remaining = e - rns_net::time::now();
-                        if remaining > 0.0 {
-                            prettytime(remaining)
-                        } else {
-                            "expired".into()
-                        }
-                    }
-                })
-                .unwrap_or_default();
-            let reason = entry.get("reason").and_then(|v| v.as_str()).unwrap_or("-");
-
-            println!(
-                "{:<34} {:<16} {}",
-                &hash[..hash.len().min(32)],
-                expires,
-                reason,
-            );
-        }
-    } else {
-        eprintln!("Unexpected response format");
+                .filter(|e| *e != 0.0)
+        });
+    BlackholeLine {
+        identity_hash,
+        until,
+        reason: fields
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        source: fields
+            .get("source")
+            .and_then(|v| v.as_bytes())
+            .map(<[u8]>::to_vec),
     }
+}
+
+/// Print a blackhole list as upstream's `rnpath -b` does: `<hash>
+/// blackholed for <time>|indefinitely (<reason>) by <source>`, naming the
+/// source only when it is not this node.
+fn render_blackholed_list(response: &PickleValue, local_identity: Option<&[u8; 16]>) {
+    let lines: Vec<BlackholeLine> = match response {
+        PickleValue::Dict(entries) => entries
+            .iter()
+            .filter_map(|(k, v)| k.as_bytes().map(|h| blackhole_line(h.to_vec(), v)))
+            .collect(),
+        PickleValue::List(entries) => entries
+            .iter()
+            .filter_map(|v| {
+                v.get("identity_hash")
+                    .and_then(|h| h.as_bytes())
+                    .map(|h| blackhole_line(h.to_vec(), v))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    if lines.is_empty() {
+        println!("No blackholed identity data available");
+        process::exit(20);
+    }
+    let now = rns_net::time::now();
+    for line in lines {
+        let until = match line.until {
+            Some(until) => format!("for {}", prettytime((until - now).max(0.0))),
+            None => "indefinitely".into(),
+        };
+        let reason = match line.reason {
+            Some(reason) if !reason.is_empty() => {
+                let reason: String = if reason.chars().count() > 64 {
+                    reason
+                        .chars()
+                        .take(63)
+                        .chain(std::iter::once('…'))
+                        .collect()
+                } else {
+                    reason
+                };
+                format!(" ({reason})")
+            }
+            _ => String::new(),
+        };
+        let by = match (&line.source, local_identity) {
+            (Some(source), Some(local)) if source.as_slice() == local.as_slice() => String::new(),
+            (Some(source), _) => format!(" by {}", prettyhexrep(source)),
+            (None, _) => String::new(),
+        };
+        println!(
+            "{} blackholed {until}{reason}{by}",
+            prettyhexrep(&line.identity_hash)
+        );
+    }
+}
+
+/// The hash as plain hex, as upstream prints it in blackhole messages.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn do_blackhole(
@@ -470,35 +533,37 @@ fn do_blackhole(
     reason: Option<String>,
 ) {
     let hash_bytes = match parse_hex_hash(hash_str) {
-        Some(b) if b.len() >= 16 => b,
+        Some(b) if b.len() == 16 => b,
         _ => {
             eprintln!("Invalid identity hash: {}", hash_str);
             process::exit(1);
         }
     };
-
-    let mut dict = vec![(
-        PickleValue::String("blackhole".into()),
-        PickleValue::Bytes(hash_bytes[..16].to_vec()),
-    )];
-    if let Some(d) = duration_hours {
-        dict.push((
-            PickleValue::String("duration".into()),
-            PickleValue::Float(d),
-        ));
-    }
-    if let Some(r) = reason {
-        dict.push((PickleValue::String("reason".into()), PickleValue::String(r)));
-    }
-
-    match client.call(&PickleValue::Dict(dict)) {
-        Ok(r) => {
-            if r.as_bool() == Some(true) {
-                println!("Blackholed identity {}", prettyhexrep(&hash_bytes[..16]));
-            } else {
-                eprintln!("Failed to blackhole identity");
-            }
+    // Upstream's `blackhole_identity`, with an absolute expiry time.
+    let until = duration_hours
+        .filter(|hours| *hours > 0.0)
+        .map_or(PickleValue::None, |hours| {
+            PickleValue::Float(rns_net::time::now() + hours * 3600.0)
+        });
+    let request = PickleValue::Dict(vec![
+        (
+            PickleValue::String("blackhole_identity".into()),
+            PickleValue::Bytes(hash_bytes.clone()),
+        ),
+        (PickleValue::String("until".into()), until),
+        (
+            PickleValue::String("reason".into()),
+            reason.map_or(PickleValue::None, PickleValue::String),
+        ),
+    ]);
+    match client.call(&request) {
+        Ok(PickleValue::Bool(true)) => {
+            println!("Blackholed identity {}", hex(&hash_bytes))
         }
+        Ok(PickleValue::None) => {
+            println!("Identity {} already blackholed", hex(&hash_bytes))
+        }
+        Ok(_) => println!("Could not blackhole identity {}", hex(&hash_bytes)),
         Err(e) => {
             eprintln!("RPC error: {}", e);
             process::exit(1);
@@ -508,30 +573,23 @@ fn do_blackhole(
 
 fn do_unblackhole(client: &mut RpcClient, hash_str: &str) {
     let hash_bytes = match parse_hex_hash(hash_str) {
-        Some(b) if b.len() >= 16 => b,
+        Some(b) if b.len() == 16 => b,
         _ => {
             eprintln!("Invalid identity hash: {}", hash_str);
             process::exit(1);
         }
     };
-
     match client.call(&PickleValue::Dict(vec![(
-        PickleValue::String("unblackhole".into()),
-        PickleValue::Bytes(hash_bytes[..16].to_vec()),
+        PickleValue::String("unblackhole_identity".into()),
+        PickleValue::Bytes(hash_bytes.clone()),
     )])) {
-        Ok(r) => {
-            if r.as_bool() == Some(true) {
-                println!(
-                    "Removed {} from blackhole list",
-                    prettyhexrep(&hash_bytes[..16])
-                );
-            } else {
-                println!(
-                    "Identity {} was not blackholed",
-                    prettyhexrep(&hash_bytes[..16])
-                );
-            }
+        Ok(PickleValue::Bool(true)) => {
+            println!("Lifted blackhole for identity {}", hex(&hash_bytes))
         }
+        Ok(PickleValue::None) => {
+            println!("Identity {} not blackholed", hex(&hash_bytes))
+        }
+        Ok(_) => println!("Could not unblackhole identity {}", hex(&hash_bytes)),
         Err(e) => {
             eprintln!("RPC error: {}", e);
             process::exit(1);
@@ -743,7 +801,7 @@ fn remote_path(
 
     match result {
         Ok(response) if show_rates => render_rate_table(&response),
-        Ok(response) if remote_blackholed => render_blackholed_list(&response),
+        Ok(response) if remote_blackholed => render_blackholed_list(&response, None),
         Ok(response) => render_path_table(&response, show_usage),
         Err(e) => {
             eprintln!("Remote path error: {e}");
