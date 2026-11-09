@@ -10,11 +10,34 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.6.0`
 - Version metadata commit: `af8d05819d363240c133e4bc644bfde0d4620a71`
-- Normative commit: `5d38ce3072e3cd9b4d5c05c21bf4940f866dfef5`
-- Commit date: `2026-10-28 15:09:18 +0100`
-- Subject: `Early-phase PR debug logging`
+- Release tag: `1.6.0` on `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4`
+- Normative commit: `c5d205ffea16ef4519150745edf644dd03e48e5f`
+- Commit date: `2026-11-08 14:17:30 +0100`
+- Subject: `Updated docs`
 
-The normative baseline is the canonical `rgit/master` tip `5d38ce30`, accepted
+The normative baseline is the canonical `rgit/master` tip `c5d205ff`, accepted
+on 2026-11-09 as a same-version Reticulum 1.6.0 advancement from `5d38ce30`.
+The 65-commit range contains upstream's 1.6.0 release: the annotated, signed
+`1.6.0` tag is on `cb126089`, and the three commits after it change
+documentation only, so the `RNS` tree `3448fb48deaf018bbe6e8a04795fa085bef2f2b9`
+is the released one (root tree
+`3fff894a0f6a2c273cc1b03c7c884ca17bb48684`). The GitHub mirror now agrees with
+rgit, and CI runs live interop against the tagged release. The range brings
+fractional stamp values with the `[stamps]` configuration and runtime keys,
+per-interface stamp costs, link request cost signalling with the blackhole
+destination's 5.25 cost, path rediscovery with stamped rediscovery requests,
+destination type filtering in a new `[filter]` section that also takes
+`hop_limiter`, resource `app_flag` signalling, storage and RPC fixes, and the
+manual's "Protecting Open Networks" page. Stamp emission and enforcement stay
+off by default, as upstream; upstream plans to enable them in 1.6.1 and 1.6.2.
+The interface discovery options `publish_ifac`, `discovery_encrypt`,
+`discovery_frequency`, `discovery_bandwidth` and `bootstrap_only` remain
+unimplemented natively. Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.0-rgit-2-parity.md`](docs/upstream-parity/reticulum-1.6.0-rgit-2-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.0-rgit-2-audit.md`](docs/upstream-parity/reticulum-1.6.0-rgit-2-audit.md).
+
+The previous baseline was the canonical `rgit/master` tip `5d38ce30`, accepted
 on 2026-10-28 as a same-version Reticulum 1.6.0 advancement from `9a01a20c`.
 No signed 1.6.0 tag is published and upstream still marks the release pending,
 so the version is asserted from `RNS/_version.py` at the target. The
