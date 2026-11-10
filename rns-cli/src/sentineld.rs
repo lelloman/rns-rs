@@ -418,7 +418,13 @@ impl RuntimeConfig {
             .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
         let provider_socket = socket_override
             .map(PathBuf::from)
-            .or_else(|| rns_config.reticulum.provider_socket_path.map(PathBuf::from))
+            .or_else(|| {
+                rns_config
+                    .reticulum
+                    .provider_socket_path
+                    .as_ref()
+                    .map(PathBuf::from)
+            })
             .ok_or_else(|| "provider bridge socket is not configured".to_string())?;
 
         Ok(Self {
