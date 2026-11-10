@@ -914,6 +914,9 @@ fn rust_rncp_client_registers_with_a_filtering_shared_instance() {
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_rncp_client_registers_with_a_filtering_rust_instance() {
     let mut probe = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    probe.env("PYTHONUNBUFFERED", "1");
     probe.args([
         "-c",
         "import RNS; print(hasattr(RNS.Reticulum, 'wants_destination_type'))",
@@ -1108,6 +1111,9 @@ fn rust_rnx_client_executes_on_python_listener() {
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_rns_is_available_for_utility_interop() {
     let mut command = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    command.env("PYTHONUNBUFFERED", "1");
     command.args(["-c", "import RNS, RNS.Utilities.rncp, RNS.Utilities.rnx"]);
     assert_success(&run(command), "import Python RNS utilities");
 }
@@ -1147,6 +1153,9 @@ fn python_rnpath_lists_rust_path_table() {
         .unwrap_or_else(|| panic!("rnpath did not list {destination}:\n{stdout}"));
 
     let mut probe = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    probe.env("PYTHONUNBUFFERED", "1");
     probe.args(["-c", "import RNS; print(hasattr(RNS, 'prettycost'))"]);
     let probe = run(probe);
     assert_success(&probe, "probe RNS.prettycost");
@@ -1189,6 +1198,9 @@ fn python_rnpath_manages_rust_blackhole() {
     );
     // An application on the shared instance asks with `is_blackholed`.
     let mut is_blackholed = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    is_blackholed.env("PYTHONUNBUFFERED", "1");
     is_blackholed.args([
         "-c",
         "import RNS, sys; r = RNS.Reticulum(sys.argv[1]); \
@@ -1358,6 +1370,9 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
         Daemon::Rust => "storage/identities/identity",
     };
     let mut prepare = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    prepare.env("PYTHONUNBUFFERED", "1");
     prepare.args([
         "-c",
         "import RNS, os, sys; from RNS.vendor import umsgpack; \
@@ -1459,6 +1474,9 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
         let mut rnpath = match fetcher {
             Daemon::Python => {
                 let mut command = Command::new("python3");
+                // Reticulum swaps stdout for /dev/null when it exits, which can drop
+                // buffered output; print it as it is written.
+                command.env("PYTHONUNBUFFERED", "1");
                 command.args(["-m", "RNS.Utilities.rnpath"]);
                 command
             }
@@ -1537,6 +1555,9 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
     fs::create_dir_all(&receiver_dir).unwrap();
     let network_identity = root.path().join("network_identity");
     let mut prepare = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    prepare.env("PYTHONUNBUFFERED", "1");
     prepare.args([
         "-c",
         "import RNS, sys; RNS.Identity().to_file(sys.argv[1])",
@@ -1544,10 +1565,10 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
     ]);
     assert_success(&run(prepare), "create network identity");
 
-    let ports: Vec<TcpPortReservation> = (0..5).map(|_| TcpPortReservation::new()).collect();
+    let ports: Vec<TcpPortReservation> = (0..6).map(|_| TcpPortReservation::new()).collect();
     let port = |i: usize| ports[i].port();
-    let (transport_port, pub_shared, pub_control, recv_shared, recv_control) =
-        (port(0), port(1), port(2), port(3), port(4));
+    let (transport_port, pub_shared, pub_control, recv_shared, recv_control, discovery_port) =
+        (port(0), port(1), port(2), port(3), port(4), port(5));
     let pid = std::process::id();
     let label = if publisher == Daemon::Python {
         "py-rs"
@@ -1564,10 +1585,12 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
              instance_control_port = {pub_control}\n  network_identity = {identity}\n\
              [logging]\n  loglevel = 4\n\
              [interfaces]\n  [[discovery server]]\n    type = TCPServerInterface\n    \
-             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {discovery_port}\n    \
              discoverable = Yes\n    discovery_name = {name}\n    \
              reachable_on = example.com\n    discovery_stamp_value = 2\n    \
-             discovery_encrypt = Yes\n"
+             discovery_encrypt = Yes\n  \
+             [[link to receiver]]\n    type = TCPClientInterface\n    enabled = Yes\n    \
+             target_host = 127.0.0.1\n    target_port = {transport_port}\n"
         ),
     )
     .unwrap();
@@ -1579,29 +1602,28 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
              instance_control_port = {recv_control}\n  network_identity = {identity}\n  \
              discover_interfaces = Yes\n  required_discovery_value = 2\n\
              [logging]\n  loglevel = 4\n\
-             [interfaces]\n  [[discovery client]]\n    type = TCPClientInterface\n    \
-             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {transport_port}\n"
+             [interfaces]\n  [[publisher link]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n"
         ),
     )
     .unwrap();
     drop(ports);
 
-    let mut publisher_daemon = spawn_daemon(
-        publisher,
-        &publisher_dir,
-        &root.path().join("publisher.log"),
-    );
-    wait_for_port(
-        transport_port,
-        &mut publisher_daemon,
-        "publisher TCP server",
-    );
+    // The receiver listens and the publisher connects to it as it starts,
+    // so the link is up before the publisher's first discovery announce,
+    // which comes right after startup and then only every six hours.
     let mut receiver_daemon =
         spawn_daemon(receiver, &receiver_dir, &root.path().join("receiver.log"));
+    wait_for_port(transport_port, &mut receiver_daemon, "receiver TCP server");
     wait_for_abstract_socket(
         &format!("rns/disc-receiver-{label}-{pid}"),
         &mut receiver_daemon,
         "receiver shared instance",
+    );
+    let mut publisher_daemon = spawn_daemon(
+        publisher,
+        &publisher_dir,
+        &root.path().join("publisher.log"),
     );
 
     // Upstream's announcer waits a minute before its first announce.
@@ -1613,6 +1635,9 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
         let mut rnstatus = match receiver {
             Daemon::Python => {
                 let mut command = Command::new("python3");
+                // Reticulum swaps stdout for /dev/null when it exits, which can drop
+                // buffered output; print it as it is written.
+                command.env("PYTHONUNBUFFERED", "1");
                 command.args(["-m", "RNS.Utilities.rnstatus"]);
                 command
             }
@@ -1685,6 +1710,9 @@ fn tcp_shared_instance_with_rpc_key(daemon: Daemon) {
         Daemon::Python => Command::new(env!("CARGO_BIN_EXE_rnstatus")),
         Daemon::Rust => {
             let mut command = Command::new("python3");
+            // Reticulum swaps stdout for /dev/null when it exits, which can drop
+            // buffered output; print it as it is written.
+            command.env("PYTHONUNBUFFERED", "1");
             command.args(["-m", "RNS.Utilities.rnstatus"]);
             command
         }
@@ -1740,6 +1768,9 @@ fn python_client_retains_destination_data_on_rust_instance() {
     let harness = Harness::start("python-destination-data");
     let config = harness.client_config.to_str().unwrap().to_string();
     let mut command = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    command.env("PYTHONUNBUFFERED", "1");
     command.args([
         "-c",
         r#"
@@ -1788,6 +1819,9 @@ print("retain-unknown-identity", r._retain_identity(bytes(16)))
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_rnstatus_manages_rust_interface() {
     let mut version_command = Command::new("python3");
+    // Reticulum swaps stdout for /dev/null when it exits, which can drop
+    // buffered output; print it as it is written.
+    version_command.env("PYTHONUNBUFFERED", "1");
     version_command.args(["-c", "import RNS; print(RNS.__version__)"]);
     let version_output = run(version_command);
     assert_success(&version_output, "read Python Reticulum version");
