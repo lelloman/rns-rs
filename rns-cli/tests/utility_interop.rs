@@ -1199,12 +1199,12 @@ fn python_rnpath_manages_rust_blackhole() {
     ]);
     let is_blackholed = run(is_blackholed);
     assert_success(&is_blackholed, "Python Reticulum.is_blackholed");
-    assert_eq!(
-        String::from_utf8_lossy(&is_blackholed.stdout)
-            .lines()
-            .last()
-            .unwrap_or(""),
-        "True False"
+    // Reticulum logs to stdout as well, so look for the printed line.
+    let stdout = String::from_utf8_lossy(&is_blackholed.stdout);
+    assert!(
+        stdout.lines().any(|line| line.trim() == "True False"),
+        "{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&is_blackholed.stderr)
     );
 
     let again = python(&["-B", identity]);
