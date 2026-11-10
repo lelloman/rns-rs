@@ -198,6 +198,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.96.0
 
+      # Releases before 1.6.0 need LXMF's stamper for interface discovery.
+      # The pinned RNS comes from PYTHONPATH, so LXMF is installed without
+      # its RNS dependency.
+      - name: Install LXMF
+        run: python3 -m pip install --user --no-deps lxmf==1.0.1
+
       - name: Verify upstream version and run live interop
         env:
           PYTHONPATH: ${{ github.workspace }}/reticulum-upstream
