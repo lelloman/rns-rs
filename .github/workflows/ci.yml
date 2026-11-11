@@ -195,8 +195,14 @@ jobs:
           test "$(git -C reticulum-upstream rev-parse HEAD)" = "${{ matrix.reticulum.commit }}"
           test "$(git -C reticulum-upstream rev-parse HEAD:RNS)" = "${{ matrix.reticulum.rns_tree }}"
 
+      # Install what rust-toolchain.toml asks for up front; adding clippy to
+      # the bare toolchain afterwards has failed on some runners with
+      # "detected conflict: 'bin/cargo-clippy'".
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
 
       # Releases before 1.6.0 need LXMF's stamper for interface discovery.
       # The pinned RNS comes from PYTHONPATH, so LXMF is installed without
