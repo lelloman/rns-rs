@@ -14,7 +14,12 @@ which is why no audit caught them.
 ## Progress
 
 - Phase 1 is done (pull request #231).
-- Phase 2 items 2.1 to 2.5, 2.7 and 2.8 are done; 2.6 lands with 3.1. Notes:
+- Phase 3 (3.1 with 2.6) is done: `autoconnect_policy`, defaulting to
+  `upstream`, with `autoconnect_discovered_interfaces` and `bootstrap_only`.
+  A bootstrap interface whose target is unreachable cannot be attached; the
+  monitor retries it every 5 s, where upstream creates it and lets it
+  reconnect.
+- Phase 2 items 2.1 to 2.5, 2.7 and 2.8 are done (pull request #232). Notes:
   - 2.1: like upstream's updater, a fetch only adds entries; one a source
     drops stays until the next start, which loads the source's saved list
     afresh. Link request stamps for the 5.25 link cost come from the
