@@ -633,6 +633,13 @@ pub struct DiscoverySettings {
     /// The node identity is the configured `network_identity`, which
     /// encrypts and decrypts `discovery_encrypt` announces.
     pub network_identity: bool,
+    /// Upstream's `autoconnect_discovered_interfaces` under
+    /// `autoconnect_policy = upstream`: how many discovered interfaces to
+    /// auto-connect; 0 auto-connects none.
+    pub autoconnect_discovered_interfaces: usize,
+    /// Names of the `bootstrap_only` interfaces, detached while enough
+    /// auto-connected interfaces are online.
+    pub bootstrap_interfaces: Vec<String>,
 }
 
 /// Top-level node configuration.
@@ -1591,6 +1598,35 @@ impl RnsNode {
                 underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
             })
         };
+        // `autoconnect_policy` picks which auto-connect settings apply; the
+        // other policy's are read but ignored, with a warning.
+        let upstream_policy =
+            rns_config.reticulum.autoconnect_policy == config::AutoconnectPolicy::Upstream;
+        let bootstrap_interfaces: Vec<String> = rns_config
+            .interfaces
+            .iter()
+            .filter(|iface| {
+                iface
+                    .params
+                    .get("bootstrap_only")
+                    .and_then(|v| config::parse_bool_pub(v))
+                    .unwrap_or(false)
+            })
+            .map(|iface| iface.name.clone())
+            .collect();
+        if upstream_policy && rns_config.reticulum.backbone_peer_pool_max_connected > 0 {
+            log::warn!(
+                "backbone_peer_pool_max_connected applies only with autoconnect_policy = pool; ignoring it"
+            );
+        }
+        if !upstream_policy
+            && (rns_config.reticulum.autoconnect_discovered_interfaces > 0
+                || !bootstrap_interfaces.is_empty())
+        {
+            log::warn!(
+                "autoconnect_discovered_interfaces and bootstrap_only apply only with autoconnect_policy = upstream; ignoring them"
+            );
+        }
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
             static_transport_identity: rns_config.reticulum.static_transport_identity,
@@ -1635,6 +1671,16 @@ impl RnsNode {
                     .interface_discovery_sources
                     .clone(),
                 network_identity: rns_config.reticulum.network_identity.is_some(),
+                autoconnect_discovered_interfaces: if upstream_policy {
+                    rns_config.reticulum.autoconnect_discovered_interfaces
+                } else {
+                    0
+                },
+                bootstrap_interfaces: if upstream_policy {
+                    bootstrap_interfaces
+                } else {
+                    Vec::new()
+                },
             },
             shared_instance: SharedInstanceSettings {
                 use_af_unix: !rns_config.reticulum.shared_instance_tcp,
@@ -1690,7 +1736,9 @@ impl RnsNode {
                 held_release_interval: rns_config.reticulum.default_ic_held_release_interval,
             },
             #[cfg(feature = "iface-backbone")]
-            backbone_peer_pool: if rns_config.reticulum.backbone_peer_pool_max_connected > 0 {
+            backbone_peer_pool: if !upstream_policy
+                && rns_config.reticulum.backbone_peer_pool_max_connected > 0
+            {
                 Some(BackbonePeerPoolSettings {
                     max_connected: rns_config.reticulum.backbone_peer_pool_max_connected,
                     failure_threshold: rns_config.reticulum.backbone_peer_pool_failure_threshold,
@@ -2128,6 +2176,7 @@ impl RnsNode {
         let mut discoverable_interfaces = Vec::new();
         #[cfg(feature = "iface-backbone")]
         let mut backbone_peer_pool_candidates = Vec::new();
+        let mut configured_client_targets: Vec<(String, u16)> = Vec::new();
 
         let initial_managed_ids = interface_management
             .as_ref()
@@ -2249,6 +2298,23 @@ impl RnsNode {
                 {
                     driver.register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
                 }
+            }
+            // An auto-connect must not duplicate a configured client.
+            #[cfg(feature = "iface-tcp")]
+            if let Some(tcp) = iface_config
+                .config_data
+                .as_any()
+                .downcast_ref::<crate::interface::tcp::TcpClientConfig>()
+            {
+                configured_client_targets.push((tcp.target_host.clone(), tcp.target_port));
+            }
+            #[cfg(feature = "iface-backbone")]
+            if let Some(BackboneMode::Client(client, _)) = iface_config
+                .config_data
+                .as_any()
+                .downcast_ref::<BackboneMode>()
+            {
+                configured_client_targets.push((client.target_host.clone(), client.target_port));
             }
 
             let factory = match registry.get(&iface_config.type_name) {
@@ -2510,6 +2576,19 @@ impl RnsNode {
         if let Some(settings) = config.backbone_peer_pool.clone() {
             driver.configure_backbone_peer_pool(settings, backbone_peer_pool_candidates);
             driver.seed_backbone_peer_pool_from_discovery_cache();
+        }
+        // Upstream's auto-connecting of discovered interfaces.
+        if config.discover_interfaces && config.discovery.autoconnect_discovered_interfaces > 0 {
+            driver.enable_upstream_autoconnect(
+                config.discovery.autoconnect_discovered_interfaces,
+                config.discovery.bootstrap_interfaces.clone(),
+                configured_client_targets,
+            );
+            driver.autoconnect_stored_discoveries();
+        } else if !config.discovery.bootstrap_interfaces.is_empty() {
+            log::warn!(
+                "bootstrap_only interfaces stay up: they are only torn down while autoconnect_discovered_interfaces are connected"
+            );
         }
 
         // Set up management destinations if enabled

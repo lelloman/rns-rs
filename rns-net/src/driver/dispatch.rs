@@ -1523,6 +1523,7 @@ impl Driver {
                                         discovered.stamp_value,
                                     );
                                 }
+                                self.autoconnect_discovered(&discovered);
                                 #[cfg(feature = "iface-backbone")]
                                 self.upsert_discovered_backbone_peer_pool_candidate(discovered);
                             }
