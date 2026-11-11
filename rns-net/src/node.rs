@@ -1902,6 +1902,7 @@ impl RnsNode {
         let stamp_destinations = Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS));
         driver.set_stamp_destinations_flag(Arc::clone(&stamp_destinations));
         driver.apply_stamp_config(&config.stamps, queue_config.hop_limiter);
+        crate::stamps::set_worker_limits(config.stamps.max_workers, config.stamps.worker_niceness);
         *driver.engine.destination_filter_mut() = queue_config.filter.destination_filter();
         let stamp_targets = crate::stamper::StampTargets::from(&config.stamps);
         driver.underlay_mark = config.underlay_mark;

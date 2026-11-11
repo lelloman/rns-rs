@@ -335,6 +335,12 @@ pub struct StampsSection {
     pub lr_stamp_timeout: f64,
     /// `Transport.PR_STAMP_TIMEOUT` in seconds (`pr_stamp_timeout`).
     pub pr_stamp_timeout: f64,
+    /// `Stamps.MAX_WORKERS` (`max_workers`, at least 1): the most threads
+    /// one stamp search uses. `None` keeps the default.
+    pub max_workers: Option<usize>,
+    /// `Stamps.NICENESS` (`worker_niceness`, 0 to 20, default 16): the
+    /// scheduling niceness of stamp search threads.
+    pub worker_niceness: i32,
 }
 
 /// The `[filter]` section (upstream 825c2e19): announce filtering by
@@ -388,6 +394,8 @@ impl Default for StampsSection {
             lr_cost: constants::LINK_REQUEST_STAMP_COST,
             lr_stamp_timeout: constants::LINK_STAMP_TIMEOUT as f64,
             pr_stamp_timeout: constants::PATH_REQUEST_STAMP_TIMEOUT as f64,
+            max_workers: None,
+            worker_niceness: crate::stamps::DEFAULT_WORKER_NICENESS,
         }
     }
 }
@@ -1671,6 +1679,25 @@ fn build_stamps_section(kvs: &HashMap<String, String>) -> Result<StampsSection, 
     }
     if let Some(v) = timeout("pr_stamp_timeout")? {
         section.pr_stamp_timeout = v;
+    }
+    // Read with `as_int` (upstream 16621a78).
+    let integer = |key: &str| -> Result<Option<i64>, ConfigError> {
+        kvs.get(key)
+            .map(|v| {
+                v.trim()
+                    .parse::<i64>()
+                    .map_err(|_| ConfigError::InvalidValue {
+                        key: key.into(),
+                        value: v.clone(),
+                    })
+            })
+            .transpose()
+    };
+    if let Some(v) = integer("max_workers")? {
+        section.max_workers = Some(v.max(1) as usize);
+    }
+    if let Some(v) = integer("worker_niceness")? {
+        section.worker_niceness = v.clamp(0, 20) as i32;
     }
     Ok(section)
 }
@@ -3203,6 +3230,30 @@ direct_connect_policy = identified_only
         // `as_float` rejects non-numbers.
         assert!(parse("[stamps]\npr_cost = lots\n").is_err());
         assert!(parse("[stamps]\npr_stamp_timeout = soon\n").is_err());
+    }
+
+    #[test]
+    fn stamps_section_parses_worker_limits() {
+        let defaults = parse("[stamps]\n").unwrap().stamps;
+        assert_eq!(defaults.max_workers, None);
+        assert_eq!(defaults.worker_niceness, 16);
+
+        let stamps = parse("[stamps]\nmax_workers = 3\nworker_niceness = 5\n")
+            .unwrap()
+            .stamps;
+        assert_eq!(stamps.max_workers, Some(3));
+        assert_eq!(stamps.worker_niceness, 5);
+
+        // Upstream clamps both: at least one worker, niceness 0 to 20.
+        let stamps = parse("[stamps]\nmax_workers = 0\nworker_niceness = 40\n")
+            .unwrap()
+            .stamps;
+        assert_eq!(stamps.max_workers, Some(1));
+        assert_eq!(stamps.worker_niceness, 20);
+        let stamps = parse("[stamps]\nworker_niceness = -5\n").unwrap().stamps;
+        assert_eq!(stamps.worker_niceness, 0);
+
+        assert!(parse("[stamps]\nmax_workers = many\n").is_err());
     }
 
     #[test]

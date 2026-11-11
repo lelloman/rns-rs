@@ -133,6 +133,8 @@ types, values and costs; the keys and defaults below are the ones it lists:
   # lr_cost = 12.5
   # lr_stamp_timeout = 15
   # pr_stamp_timeout = 15
+  # max_workers = 4
+  # worker_niceness = 16
 ```
 
 | Key | Default | Effect |
@@ -148,6 +150,8 @@ types, values and costs; the keys and defaults below are the ones it lists:
 | `lr_cost` | `12.5` | Link request cost for local destinations that set none, and the cost `always_stamp_lrs` stamps at |
 | `lr_stamp_timeout` | `15` | Seconds allowed for grinding a stamped link request key before the link fails |
 | `pr_stamp_timeout` | `15` | Seconds allowed for grinding a path request stamp before the request is dropped |
+| `max_workers` | unset | Most threads one stamp search uses, at least 1. Without it a search uses every core up to 12 and half of them beyond, as upstream's stamp jobs do |
+| `worker_niceness` | `16` | Scheduling niceness (0-20) of stamp search threads on Linux, so grinding yields the CPU to the node's own work |
 
 The four switches can only enable a feature: `no` keeps the built-in default
 rather than forcing it off, as upstream applies them. During the 1.6.x
@@ -156,7 +160,10 @@ emission on by default in 1.6.1 and enforcement in 1.6.2. Link requests are
 already stamped whenever the destination announced a non-zero cost
 (`Transport.STAMP_LRS`, on again since upstream `a8cc6cb2`, which removed the
 `stamp_lrs` option; a leftover `stamp_lrs` line is ignored). Costs and values
-are fractional, as upstream reads them with `as_float` since `796ef2d4`. They
+are fractional, as upstream reads them with `as_float` since `796ef2d4`.
+`max_workers` and `worker_niceness` (upstream `16621a78`) apply to builds with
+the parallel engine, which the `rns-server`, `rnsd` and utility binaries use;
+the compact engine grinds on the calling thread. They
 are clamped to 0-100 (`lr_cost` to 0-40), and the timeouts are floored at
 20 ms.
 The published blackhole list destination (`publish_blackhole`) does not use
