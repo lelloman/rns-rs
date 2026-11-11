@@ -2519,6 +2519,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rns-rnodeconf"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "num-bigint",
+ "rns-crypto",
+ "rns-net",
+ "tempfile",
+]
+
+[[package]]
 name = "rns-sentinel-hook"
 version = "0.2.0"
 dependencies = [

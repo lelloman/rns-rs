@@ -92,6 +92,39 @@ to the running node and consumes its events:
 Under `rns-server` both are started automatically by re-executing the server
 binary with hidden role flags, so you rarely run them by hand.
 
+## `rnodeconf`
+
+The `rns-rnodeconf` crate builds `rnodeconf`, a native port of upstream's RNode
+configuration utility. It talks to an RNode over its serial KISS interface,
+prints what upstream prints, and sends the device the same command frames.
+
+```bash
+cargo build --release -p rns-rnodeconf
+target/release/rnodeconf -i /dev/ttyUSB0
+```
+
+Implemented so far:
+
+- `-i` shows the device information: product, model, firmware version,
+  hardware revision, serial number, modem chip, frequency range, maximum TX
+  power, manufacturing date and, for a device in TNC mode, its radio
+  settings. The EEPROM checksum and device signature are checked against
+  upstream's vendor keys, the public half of a local
+  `~/.config/rnodeconf/firmware/signing.key` and any
+  `~/.config/rnodeconf/trusted_keys/*.pubkey`, as upstream does.
+- `-c` shows the device configuration (Bluetooth, WiFi, interference
+  avoidance, display and NeoPixel settings); `--show-psk` shows the WiFi PSK.
+- `-T` switches to TNC mode with `--freq`, `--bw`, `--txp`, `--sf` and `--cr`,
+  asking for any not given; `-N` switches back to normal (host-controlled)
+  mode.
+
+The EEPROM, key, Bluetooth, WiFi, display and firmware options are planned
+(see the [parity gap plan](upstream-parity/parity-gap-plan.md)); for now they
+report that they are not implemented. The crate's tests run the tool against
+a fake RNode on a pseudo-terminal, and the interop CI jobs run upstream's
+Python `rnodeconf` against the same fake device and require the same output
+and the same frames sent.
+
 ## Examples in `rns-net`
 
 The `rns-net` crate has runnable examples that double as API documentation:

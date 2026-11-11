@@ -1,0 +1,23 @@
+[package]
+name = "rns-rnodeconf"
+description = "RNode configuration utility for the Reticulum Network Stack, compatible with upstream rnodeconf"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+publish = false
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rnodeconf"
+path = "src/main.rs"
+
+[dependencies]
+rns-crypto = { workspace = true }
+rns-net = { version = "0.12.0", path = "../rns-net", default-features = false }
+libc = "0.2"
+num-bigint = "0.4"
+
+[dev-dependencies]
+libc = "0.2"
+tempfile = "3"

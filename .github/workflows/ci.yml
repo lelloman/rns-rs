@@ -204,6 +204,10 @@ jobs:
       - name: Install LXMF
         run: python3 -m pip install --user --no-deps lxmf==1.0.1
 
+      # Upstream rnodeconf, which the rnodeconf comparison tests run.
+      - name: Install rnodeconf dependencies
+        run: python3 -m pip install --user pyserial cryptography
+
       - name: Verify upstream version and run live interop
         env:
           PYTHONPATH: ${{ github.workspace }}/reticulum-upstream
@@ -212,6 +216,7 @@ jobs:
           python3 -c 'import RNS; assert RNS.__version__ == "${{ matrix.reticulum.version }}", RNS.__version__'
           cargo test -p rns-net --test python_interop -- --nocapture
           cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
+          cargo test -p rns-rnodeconf --test rnodeconf -- --ignored --nocapture
 
   cargo-test-hooks:
     name: Cargo Test (rns-hooks)

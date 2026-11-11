@@ -14,6 +14,11 @@ which is why no audit caught them.
 ## Progress
 
 - Phase 1 is done (pull request #231).
+- Phase 4.4 (`rnodeconf`), stage 1 is done: the `rns-rnodeconf` crate's
+  `rnodeconf` detects a device and implements `-i`, `-c`, `-T`, `-N` and the
+  TNC radio parameters, checked against upstream's Python `rnodeconf` on a
+  fake RNode. Device signatures are verified natively (RSA-PSS over
+  `num-bigint`), since the `rsa` crate carries an unfixed RustSec advisory.
 - Phase 3 (3.1 with 2.6) is done: `autoconnect_policy`, defaulting to
   `upstream`, with `autoconnect_discovered_interfaces` and `bootstrap_only`.
   A bootstrap interface whose target is unreachable cannot be attached; the
