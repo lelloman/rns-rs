@@ -15,7 +15,7 @@ The pinned toolchain is Rust 1.96.0 with `clippy`, `rustfmt`, and the
 it on first use.
 
 Default workspace members: `rns-crypto`, `rns-core`, `rns-net`, `rns-cli`,
-`rns-ctl`, `rns-server`, `rns-git`, `rns-tun`. The hook crates,
+`rns-ctl`, `rns-server`, `rns-git`, `rns-tun`, `rns-rnodeconf`. The hook crates,
 `rns-tun-android`, and `rns-bench` build only when named with `-p` or when
 `--workspace` is passed. `rns-esp32` is excluded entirely and has its own
 [README](../rns-esp32/README.md).

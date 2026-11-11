@@ -48,6 +48,7 @@ but lives outside the root workspace because it needs the Espressif toolchain.
 | [`rns-git`](https://crates.io/crates/rns-git) | No | Git over Reticulum: `rngit` server and management client, `git-remote-rns` remote helper, `rngcs` signing helper |
 | [`rns-tun`](../rns-tun/README.md) | No | Authenticated IPv4 tunnelling over a Reticulum Link, with the Linux `rntun` CLI |
 | [`rns-tun-android`](../rns-tun-android/README.md) | No | JNI boundary used by the Android VPN client |
+| `rns-rnodeconf` | No | `rnodeconf`, the RNode configuration utility (see [CLI Tools](cli-tools.md#rnodeconf)) |
 | [`rns-bench`](../bench/README.md) | No | Benchmark workloads and measurement tooling under `tools/` |
 | [`rns-esp32`](../rns-esp32/README.md) | n/a | LoRa transport node firmware, excluded from the root workspace |
 

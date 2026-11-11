@@ -28,6 +28,7 @@ COPY rns-sentinel-hook rns-sentinel-hook
 COPY rns-server rns-server
 COPY rns-tun rns-tun
 COPY rns-tun-android rns-tun-android
+COPY rns-rnodeconf rns-rnodeconf
 COPY tools/rns-bench tools/rns-bench
 # Share the registry and target caches with tests/docker/Dockerfile so a
 # rerun only relinks rns-server instead of rebuilding every dependency.
