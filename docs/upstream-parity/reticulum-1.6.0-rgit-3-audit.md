@@ -1,4 +1,4 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.6.0 rgit `16621a78` Upstream Audit
 
 ## Scope and Baseline
 
@@ -131,13 +131,32 @@ priority affects nothing else. Tests: `stamps_section_parses_worker_limits`,
 
 - [x] Every upstream commit has a final disposition.
 - [x] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
 - [x] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
-Pending.
+Gates were run on 2026-11-11 on `upstream-workblock` at `b81a1098`
+(`origin/master` `60ef8b6c` plus the four mapping commits).
+
+- No conformance fixture changed. The default workblock bytes are unchanged
+  upstream, and the transitional discovery check is pinned by
+  `discovery_stamps_against_either_workblock_are_accepted`.
+- Exact-target interop against a disposable export of `16621a78`
+  (`import RNS` reports 1.6.0): `python_interop` 4/4, `utility_interop`
+  21/21.
+- `cargo test --workspace`: 3,230 passed, 0 failed.
+  `cargo test --workspace --features rns-hooks`: 3,296 passed, 0 failed.
+  `rns-net` with the four `compact-threads-*` features passed.
+- `cargo fmt --all --check` and `bash scripts/lint-host.sh` clean.
+- The impaired dual-VPS `--daily` Backbone smoke passed on
+  `rns-server 0.6.1912-b81a1098`: 55 checks, 0 failures.
+- Docker E2E, ARMv7 build smoke and the CI interop matrix are delegated to the
+  promotion pull request's CI. Physical hardware validation is not claimed.
+
+The final record is
+[reticulum-1.6.0-rgit-3-parity.md](reticulum-1.6.0-rgit-3-parity.md).

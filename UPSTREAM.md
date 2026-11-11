@@ -11,11 +11,22 @@ The current upstream reference baseline is:
 - Version: `1.6.0`
 - Version metadata commit: `af8d05819d363240c133e4bc644bfde0d4620a71`
 - Release tag: `1.6.0` on `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4`
-- Normative commit: `c5d205ffea16ef4519150745edf644dd03e48e5f`
-- Commit date: `2026-11-08 14:17:30 +0100`
-- Subject: `Updated docs`
+- Normative commit: `16621a78e35e2ba5156c72af7fe492458ba092d5`
+- Commit date: `2026-11-10 10:49:44 +0100`
+- Subject: `Made max stamp workers and worker niceness configurable`
 
-The normative baseline is the canonical `rgit/master` tip `c5d205ff`, accepted
+The normative baseline is the canonical `rgit/master` tip `16621a78`, accepted
+on 2026-11-11 as a same-version Reticulum 1.6.0 advancement from `c5d205ff`.
+The four-commit range makes discovery receivers accept stamps against either
+the unexpanded or the expanded workblock, ahead of announcers switching, adds
+the `[stamps] max_workers` and `worker_niceness` options, and adds a
+memory-hard workblock expansion that nothing uses yet, which is deferred until
+upstream does. The GitHub mirror agrees with rgit. Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.0-rgit-3-parity.md`](docs/upstream-parity/reticulum-1.6.0-rgit-3-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.0-rgit-3-audit.md`](docs/upstream-parity/reticulum-1.6.0-rgit-3-audit.md).
+
+The previous baseline was the canonical `rgit/master` tip `c5d205ff`, accepted
 on 2026-11-09 as a same-version Reticulum 1.6.0 advancement from `5d38ce30`.
 The 65-commit range contains upstream's 1.6.0 release: the annotated, signed
 `1.6.0` tag is on `cb126089`, and the three commits after it change
@@ -31,8 +42,8 @@ destination type filtering in a new `[filter]` section that also takes
 manual's "Protecting Open Networks" page. Stamp emission and enforcement stay
 off by default, as upstream; upstream plans to enable them in 1.6.1 and 1.6.2.
 The interface discovery options `publish_ifac`, `discovery_encrypt`,
-`discovery_frequency`, `discovery_bandwidth` and `bootstrap_only` remain
-unimplemented natively. Acceptance evidence is in
+`discovery_frequency` and `discovery_bandwidth` were implemented afterwards
+(gap plan phase 2); `bootstrap_only` remains open. Acceptance evidence is in
 [`docs/upstream-parity/reticulum-1.6.0-rgit-2-parity.md`](docs/upstream-parity/reticulum-1.6.0-rgit-2-parity.md)
 and the detailed audit is
 [`docs/upstream-parity/reticulum-1.6.0-rgit-2-audit.md`](docs/upstream-parity/reticulum-1.6.0-rgit-2-audit.md).
