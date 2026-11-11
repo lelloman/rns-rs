@@ -97,8 +97,20 @@ impl FakeRNode {
         }
     }
 
+    /// The frames received once the device has gone quiet: a tool can
+    /// exit right after writing its last frame, before this side has read
+    /// it from the pseudo-terminal.
     pub fn received(&self) -> Vec<Vec<u8>> {
-        self.frames.lock().unwrap().clone()
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = self.frames.lock().unwrap().len();
+        loop {
+            thread::sleep(std::time::Duration::from_millis(300));
+            let now = self.frames.lock().unwrap().len();
+            if now == last || std::time::Instant::now() >= deadline {
+                return self.frames.lock().unwrap().clone();
+            }
+            last = now;
+        }
     }
 }
 
