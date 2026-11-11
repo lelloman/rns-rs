@@ -478,8 +478,19 @@ pub fn parse_interface_announce_with_identity(
             let stamp = payload[payload.len() - STAMP_SIZE..].to_vec();
             let packed = payload[..payload.len() - STAMP_SIZE].to_vec();
             let infohash = sha256(&packed);
-            let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
-            let value = stamp_value(&workblock, &stamp);
+            // Upstream aaf08e61, transitional: a stamp is valid against the
+            // unexpanded workblock (the infohash itself) or, failing that,
+            // the expanded one announcers use today, and its value comes
+            // from whichever it is valid against.
+            let unexpanded = stamp_workblock(&infohash, 0);
+            let (workblock, value) = if stamp_valid(&stamp, required_stamp_value, &unexpanded) {
+                let value = stamp_value(&unexpanded, &stamp);
+                (unexpanded, value)
+            } else {
+                let expanded = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
+                let value = stamp_value(&expanded, &stamp);
+                (expanded, value)
+            };
 
             if !stamp_valid(&stamp, required_stamp_value, &workblock) {
                 log::debug!("{}", insufficient_stamp_diagnostic(value));
@@ -1043,6 +1054,69 @@ mod tests {
 
     fn build_discovery_app_data(interface_type: &str, reachable_on: Option<&str>) -> Vec<u8> {
         pack_discovery_entries(discovery_entries(interface_type, reachable_on))
+    }
+
+    /// A stamp for `packed` worth at least `cost` against `workblock`.
+    fn grind_stamp(workblock: &[u8], cost: StampCost) -> [u8; STAMP_SIZE] {
+        let mut stamp = [0u8; STAMP_SIZE];
+        for counter in 0u64.. {
+            stamp[..8].copy_from_slice(&counter.to_be_bytes());
+            if stamp_valid(&stamp, cost, workblock) {
+                return stamp;
+            }
+        }
+        unreachable!()
+    }
+
+    #[test]
+    fn discovery_stamps_against_either_workblock_are_accepted() {
+        // Upstream aaf08e61 accepts a stamp made against the unexpanded
+        // workblock (the infohash) as well as the expanded one.
+        let packed = msgpack::pack(&Value::Map(discovery_entries(
+            "BackboneInterface",
+            Some("example.com"),
+        )));
+        let infohash = sha256(&packed);
+        let cost = StampCost::from_whole(8);
+        let app_data = |stamp: &[u8]| {
+            let mut app_data = vec![0x00];
+            app_data.extend_from_slice(&packed);
+            app_data.extend_from_slice(stamp);
+            app_data
+        };
+        let parse = |app_data: &[u8]| {
+            parse_interface_announce_with_cache(
+                app_data,
+                &[0x11; 16],
+                1,
+                cost,
+                &mut DiscoveryStampCache::with_capacity(8),
+            )
+        };
+
+        let unexpanded = grind_stamp(&infohash, cost);
+        let discovered = parse(&app_data(&unexpanded)).expect("unexpanded stamp accepted");
+        assert_eq!(
+            discovered.stamp_value,
+            stamp_value(&infohash, &unexpanded),
+            "the value comes from the workblock the stamp is valid against"
+        );
+
+        let expanded_block = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
+        let expanded = grind_stamp(&expanded_block, cost);
+        let discovered = parse(&app_data(&expanded)).expect("expanded stamp accepted");
+        assert_eq!(
+            discovered.stamp_value,
+            stamp_value(&expanded_block, &expanded)
+        );
+
+        // A stamp valid against neither is still rejected.
+        let mut invalid = [0xffu8; STAMP_SIZE];
+        while stamp_valid(&invalid, cost, &infohash) || stamp_valid(&invalid, cost, &expanded_block)
+        {
+            invalid[0] = invalid[0].wrapping_sub(1);
+        }
+        assert!(parse(&app_data(&invalid)).is_none());
     }
 
     #[test]
