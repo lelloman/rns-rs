@@ -25,10 +25,14 @@ pub const CMD_PLATFORM: u8 = 0x48;
 pub const CMD_MCU: u8 = 0x49;
 pub const CMD_FW_VERSION: u8 = 0x50;
 pub const CMD_ROM_READ: u8 = 0x51;
+pub const CMD_ROM_WRITE: u8 = 0x52;
 pub const CMD_CONF_SAVE: u8 = 0x53;
 pub const CMD_CONF_DELETE: u8 = 0x54;
 pub const CMD_RESET: u8 = 0x55;
 pub const CMD_DEV_HASH: u8 = 0x56;
+pub const CMD_DEV_SIG: u8 = 0x57;
+pub const CMD_FW_HASH: u8 = 0x58;
+pub const CMD_ROM_WIPE: u8 = 0x59;
 pub const CMD_HASHES: u8 = 0x60;
 pub const CMD_CFG_READ: u8 = 0x6D;
 
@@ -48,6 +52,8 @@ pub struct FakeRNode {
     pub path: String,
     /// The frames received, unescaped, each as `[command, payload...]`.
     pub frames: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// The device's state, which EEPROM writes and wipes change.
+    pub device: Arc<Mutex<Device>>,
     _slave: std::fs::File,
 }
 
@@ -89,10 +95,13 @@ impl FakeRNode {
         let slave = unsafe { std::fs::File::from_raw_fd(slave) };
         let frames = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&frames);
-        thread::spawn(move || serve(master, device, recorded));
+        let device = Arc::new(Mutex::new(device));
+        let state = Arc::clone(&device);
+        thread::spawn(move || serve(master, state, recorded));
         Self {
             path,
             frames,
+            device,
             _slave: slave,
         }
     }
@@ -133,7 +142,7 @@ fn reply(command: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn serve(mut master: std::fs::File, device: Device, frames: Arc<Mutex<Vec<Vec<u8>>>>) {
+fn serve(mut master: std::fs::File, device: Arc<Mutex<Device>>, frames: Arc<Mutex<Vec<Vec<u8>>>>) {
     let mut writer = master.try_clone().expect("clone master");
     let mut buf = [0u8; 512];
     let mut frame: Vec<u8> = Vec::new();
@@ -153,7 +162,7 @@ fn serve(mut master: std::fs::File, device: Device, frames: Arc<Mutex<Vec<Vec<u8
             if byte == FEND {
                 if in_frame && !frame.is_empty() {
                     let done = std::mem::take(&mut frame);
-                    let response = respond(&device, &done);
+                    let response = respond(&mut device.lock().unwrap(), &done);
                     frames.lock().unwrap().push(done);
                     if !response.is_empty() {
                         let _ = writer.write_all(&response);
@@ -181,7 +190,7 @@ fn serve(mut master: std::fs::File, device: Device, frames: Arc<Mutex<Vec<Vec<u8
     }
 }
 
-fn respond(device: &Device, frame: &[u8]) -> Vec<u8> {
+fn respond(device: &mut Device, frame: &[u8]) -> Vec<u8> {
     let (&command, payload) = frame.split_first().unwrap();
     match command {
         CMD_DETECT => reply(CMD_DETECT, &[0x46]),
@@ -191,12 +200,27 @@ fn respond(device: &Device, frame: &[u8]) -> Vec<u8> {
         CMD_BOARD => reply(CMD_BOARD, &[device.board]),
         CMD_DEV_HASH => reply(CMD_DEV_HASH, &[0x11; 32]),
         CMD_HASHES => {
-            let mut hash = vec![payload.first().copied().unwrap_or(1)];
-            hash.extend_from_slice(&[0x22; 32]);
+            // The target firmware hash (type 1) is all 0x22, the actual
+            // one (type 2) all 0x33.
+            let kind = payload.first().copied().unwrap_or(1);
+            let mut hash = vec![kind];
+            hash.extend_from_slice(&[if kind == 2 { 0x33 } else { 0x22 }; 32]);
             reply(CMD_HASHES, &hash)
         }
         CMD_ROM_READ => reply(CMD_ROM_READ, &device.eeprom),
         CMD_CFG_READ => reply(CMD_CFG_READ, &device.cfg_sector),
+        CMD_ROM_WRITE => {
+            if let [addr, byte] = payload {
+                if let Some(slot) = device.eeprom.get_mut(*addr as usize) {
+                    *slot = *byte;
+                }
+            }
+            Vec::new()
+        }
+        CMD_ROM_WIPE => {
+            device.eeprom.iter_mut().for_each(|b| *b = 0xFF);
+            Vec::new()
+        }
         _ => Vec::new(),
     }
 }
