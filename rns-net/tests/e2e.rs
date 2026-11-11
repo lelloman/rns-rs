@@ -4681,6 +4681,7 @@ fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
 enable_transport = False
 discover_interfaces = Yes
 required_discovery_value = 8
+autoconnect_policy = pool
 backbone_peer_pool_max_connected = 1
 
 [interfaces]
@@ -4843,6 +4844,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
 enable_transport = False
 discover_interfaces = Yes
 required_discovery_value = 8
+autoconnect_policy = pool
 backbone_peer_pool_max_connected = 1
 
 [interfaces]
@@ -6813,4 +6815,172 @@ fn test_shared_instance_stamps_path_requests_forwarded_for_local_clients() {
     client.shutdown();
     uplink.shutdown();
     daemon.shutdown();
+}
+
+/// Whether `node` has an interface named `name`, and whether it is up.
+fn interface_status(node: &RnsNode, name: &str) -> Option<bool> {
+    match node.query(QueryRequest::InterfaceStats) {
+        Ok(QueryResponse::InterfaceStats(stats)) => stats
+            .interfaces
+            .iter()
+            .find(|iface| iface.name == name)
+            .map(|iface| iface.status),
+        _ => None,
+    }
+}
+
+fn wait_for_interface_status(
+    node: &RnsNode,
+    name: &str,
+    expected: Option<bool>,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if interface_status(node, name) == expected {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// `autoconnect_policy = upstream` (the default) with
+/// `autoconnect_discovered_interfaces`: a discovered Backbone interface is
+/// auto-connected, the `bootstrap_only` interface that found it is torn
+/// down once it is online, and when the discovered node goes away the
+/// auto-connected interface is detached after 12 s down and the bootstrap
+/// interface comes back.
+#[test]
+fn upstream_autoconnect_connects_detaches_and_restores_bootstrap() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let backbone_port = find_free_port();
+    let hub_port = find_free_port();
+    let start = |config: String, what: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config"), config).unwrap();
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(TransportCallbacks))
+            .unwrap_or_else(|e| panic!("{what} should start: {e}"));
+        (node, dir)
+    };
+
+    // A transport hub the client bootstraps through, which stays up.
+    let (hub, _hub_dir) = start(
+        format!(
+            r#"
+[reticulum]
+enable_transport = Yes
+share_instance = No
+
+[interfaces]
+  [[Hub Server]]
+    type = TCPServerInterface
+    enabled = yes
+    listen_ip = 127.0.0.1
+    listen_port = {hub_port}
+"#
+        ),
+        "hub",
+    );
+    // The node whose Backbone interface is discovered.
+    let (target, _target_dir) = start(
+        format!(
+            r#"
+[reticulum]
+enable_transport = Yes
+share_instance = No
+
+[interfaces]
+  [[Upstream AC Target]]
+    type = BackboneInterface
+    enabled = yes
+    listen_ip = ::
+    listen_port = {backbone_port}
+    discoverable = yes
+    discovery_name = Upstream AC Target
+    reachable_on = localhost
+    discovery_stamp_value = 8
+
+  [[Hub Link]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 127.0.0.1
+    target_port = {hub_port}
+"#
+        ),
+        "discoverable node",
+    );
+    let (client, _client_dir) = start(
+        format!(
+            r#"
+[reticulum]
+enable_transport = No
+share_instance = No
+discover_interfaces = Yes
+required_discovery_value = 8
+autoconnect_discovered_interfaces = 1
+
+[interfaces]
+  [[Bootstrap Link]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 127.0.0.1
+    target_port = {hub_port}
+    bootstrap_only = yes
+"#
+        ),
+        "auto-connecting client",
+    );
+
+    // The target announces once at startup; announce again once the hub
+    // links it to the client.
+    assert!(wait_for_interface_status(
+        &target,
+        "Hub Link",
+        Some(true),
+        TIMEOUT
+    ));
+    assert!(
+        wait_for_interface_status(&client, "Bootstrap Link", Some(true), TIMEOUT),
+        "the bootstrap link should come up"
+    );
+    let key = "backbone.Upstream AC Target.discoverable";
+    set_runtime_bool(&target, key, false);
+    set_runtime_bool(&target, key, true);
+
+    assert!(
+        wait_for_interface_status(
+            &client,
+            "Upstream AC Target",
+            Some(true),
+            Duration::from_secs(30)
+        ),
+        "the discovered Backbone interface should be auto-connected"
+    );
+    // The monitor (every 5 s) tears the bootstrap interface down once the
+    // one auto-connect slot is online.
+    assert!(
+        wait_for_interface_status(&client, "Bootstrap Link", None, Duration::from_secs(15)),
+        "the bootstrap interface should be torn down"
+    );
+
+    // The discovered node goes away: with no auto-connected interface
+    // online the bootstrap interface comes back, and the auto-connected one
+    // is detached after 12 s down.
+    target.shutdown();
+    assert!(
+        wait_for_interface_status(
+            &client,
+            "Bootstrap Link",
+            Some(true),
+            Duration::from_secs(15)
+        ),
+        "the bootstrap interface should be attached again"
+    );
+    assert!(
+        wait_for_interface_status(&client, "Upstream AC Target", None, Duration::from_secs(30)),
+        "the auto-connected interface should be detached"
+    );
+    client.shutdown();
+    hub.shutdown();
 }

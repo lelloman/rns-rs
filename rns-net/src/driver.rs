@@ -113,6 +113,7 @@ impl Default for AnnounceRateDefaults {
 }
 
 mod announce_check;
+mod autoconnect;
 mod blackhole;
 mod blackhole_updater;
 pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
@@ -311,6 +312,7 @@ pub(crate) const PACKET_SIGNAL_CACHE_MAXSIZE: usize = 512;
 pub(crate) const BACKBONE_PEER_POOL_DISCOVERED_PRIORITY: u8 = 40;
 
 #[cfg(feature = "iface-backbone")]
+#[derive(Clone)]
 pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) client: BackboneClientConfig,
     pub(crate) mode: u8,
@@ -836,6 +838,9 @@ pub struct Driver {
     /// The bitrate the shared instance's client interfaces report
     /// (`force_shared_instance_bitrate`).
     pub(crate) forced_local_bitrate: Option<u64>,
+    /// Upstream's auto-connecting of discovered interfaces, when
+    /// `autoconnect_discovered_interfaces` is set under the upstream policy.
+    pub(crate) upstream_autoconnect: Option<autoconnect::UpstreamAutoconnect>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -1144,6 +1149,7 @@ impl Driver {
             interface_discovery_sources: Vec::new(),
             discovery_network_identity: None,
             forced_local_bitrate: None,
+            upstream_autoconnect: None,
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,

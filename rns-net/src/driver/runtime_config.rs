@@ -600,7 +600,7 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    fn autoconnect_qualified(
+    pub(crate) fn autoconnect_qualified(
         iface: &crate::discovery::DiscoveredInterface,
         allow_unverified: bool,
     ) -> bool {
@@ -644,7 +644,10 @@ impl Driver {
     /// values this node generates (`DESTINATION_VALUE`, `PR_VALUE`). An
     /// interface that announced no cost requires none.
     #[cfg(feature = "iface-backbone")]
-    fn discovered_costs_affordable(&self, iface: &crate::discovery::DiscoveredInterface) -> bool {
+    pub(crate) fn discovered_costs_affordable(
+        &self,
+        iface: &crate::discovery::DiscoveredInterface,
+    ) -> bool {
         let targets = self.stamper.targets();
         let dst_cost = iface.dst_cost.unwrap_or_default();
         let pr_cost = iface.pr_cost.unwrap_or_default();
@@ -928,15 +931,29 @@ impl Driver {
             .enumerate()
             .find(|(_, candidate)| candidate.active_id == Some(id))?;
         candidate.active_id = None;
-        if let Some(control) = candidate.control.take() {
+        let control = candidate.control.take();
+        let candidate_name = candidate.config.client.name.clone();
+        let name = self.stop_dynamic_backbone_client(id, control, candidate_name);
+        Some((index, name))
+    }
+
+    /// Stop the dynamic Backbone client running as interface `id` and
+    /// deregister it. Returns its interface name, or `fallback_name` when
+    /// it is no longer registered.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn stop_dynamic_backbone_client(
+        &mut self,
+        id: InterfaceId,
+        control: Option<crate::interface::ListenerControl>,
+        fallback_name: String,
+    ) -> String {
+        if let Some(control) = control {
             control.request_stop();
         }
-        let candidate_name = candidate.config.client.name.clone();
-
         let name = if let Some(entry) = self.interfaces.remove(&id) {
             entry.info.name
         } else {
-            candidate_name
+            fallback_name
         };
         self.interface_runtime_defaults.remove(&name);
         self.interface_ifac_runtime.remove(&name);
@@ -945,7 +962,7 @@ impl Driver {
         if self.engine.interface_info(&id).is_some() {
             self.engine.deregister_interface(id);
         }
-        Some((index, name))
+        name
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -959,24 +976,48 @@ impl Driver {
         let Some(candidate) = pool.candidates.get(index) else {
             return Ok(());
         };
-        let mut client = candidate.config.client.clone();
-        client.max_reconnect_tries = Some(0);
+        // The pool reconnects its members itself.
+        let config = candidate.config.clone();
+        let control = self.start_dynamic_backbone_client(&config, Some(0))?;
+        if let Some(pool) = self.backbone_peer_pool.as_mut() {
+            if let Some(candidate) = pool.candidates.get_mut(index) {
+                candidate.active_id = Some(config.client.interface_id);
+                candidate.consecutive_failures = 0;
+                candidate.retry_after = None;
+                candidate.last_error = None;
+                candidate.control = Some(control);
+            }
+        }
+        Ok(())
+    }
+
+    /// Start a Backbone client for `config` as a new interface and register
+    /// it. `max_reconnect_tries` overrides the client's own reconnect limit.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn start_dynamic_backbone_client(
+        &mut self,
+        config: &BackbonePeerPoolCandidateConfig,
+        max_reconnect_tries: Option<u32>,
+    ) -> std::io::Result<crate::interface::ListenerControl> {
+        let candidate = config;
+        let mut client = candidate.client.clone();
+        client.max_reconnect_tries = max_reconnect_tries;
         if let Ok(mut runtime) = client.runtime.lock() {
-            runtime.max_reconnect_tries = Some(0);
+            runtime.max_reconnect_tries = max_reconnect_tries;
         }
         let id = client.interface_id;
         let name = client.name.clone();
-        let mode = candidate.config.mode;
-        let gravity = candidate.config.gravity;
-        let recursive_prs = candidate.config.recursive_prs;
-        let announces_from_internal = candidate.config.announces_from_internal;
-        let announces_to_internal = candidate.config.announces_to_internal;
-        let ingress_control = candidate.config.ingress_control;
-        let stamp_costs = candidate.config.stamp_costs;
-        let ifac_runtime = candidate.config.ifac_runtime.clone();
-        let ifac_enabled = candidate.config.ifac_enabled;
-        let interface_type_name = candidate.config.interface_type_name.clone();
-        let is_discovered = candidate.config.source == BackbonePeerPoolCandidateSource::Discovered;
+        let mode = candidate.mode;
+        let gravity = candidate.gravity;
+        let recursive_prs = candidate.recursive_prs;
+        let announces_from_internal = candidate.announces_from_internal;
+        let announces_to_internal = candidate.announces_to_internal;
+        let ingress_control = candidate.ingress_control;
+        let stamp_costs = candidate.stamp_costs;
+        let ifac_runtime = candidate.ifac_runtime.clone();
+        let ifac_enabled = candidate.ifac_enabled;
+        let interface_type_name = candidate.interface_type_name.clone();
+        let is_discovered = candidate.source == BackbonePeerPoolCandidateSource::Discovered;
         let wire_ifac_size = if ifac_enabled { ifac_runtime.size } else { 0 };
         let control = crate::interface::ListenerControl::new();
         let writer = start_client_with_ifac(
@@ -1055,17 +1096,7 @@ impl Driver {
                 send_retry_backoff: Duration::ZERO,
             },
         );
-
-        if let Some(pool) = self.backbone_peer_pool.as_mut() {
-            if let Some(candidate) = pool.candidates.get_mut(index) {
-                candidate.active_id = Some(id);
-                candidate.consecutive_failures = 0;
-                candidate.retry_after = None;
-                candidate.last_error = None;
-                candidate.control = Some(control);
-            }
-        }
-        Ok(())
+        Ok(control)
     }
 
     #[cfg(feature = "iface-backbone")]

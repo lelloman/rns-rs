@@ -1745,6 +1745,102 @@ fn python_rnstatus_reaches_rust_tcp_instance_with_rpc_key() {
     tcp_shared_instance_with_rpc_key(Daemon::Rust);
 }
 
+/// A Rust node with `autoconnect_discovered_interfaces` auto-connects the
+/// Backbone interface a Python node announces, under the default upstream
+/// policy. The Python node listens for the Rust node's link, so the link is
+/// up before Python's first discovery announce a minute after startup.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rust_instance_autoconnects_python_discovered_backbone() {
+    // Upstream auto-connects `RNS` announcers from 1.5.7 on.
+    let mut version = Command::new("python3");
+    version.args(["-c", "import RNS; print(RNS.__version__)"]);
+    let version = run(version);
+    let version: Vec<u32> = String::from_utf8_lossy(&version.stdout)
+        .trim()
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect();
+    if version.as_slice() < [1, 5, 7].as_slice() {
+        eprintln!("Python Reticulum {version:?} predates auto-connect qualification; skipping");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let python_dir = root.path().join("python");
+    let rust_dir = root.path().join("rust");
+    fs::create_dir_all(&python_dir).unwrap();
+    fs::create_dir_all(&rust_dir).unwrap();
+    let ports: Vec<TcpPortReservation> = (0..6).map(|_| TcpPortReservation::new()).collect();
+    let port = |i: usize| ports[i].port();
+    let (link_port, backbone_port, py_shared, py_control, rs_shared, rs_control) =
+        (port(0), port(1), port(2), port(3), port(4), port(5));
+    let pid = std::process::id();
+    let name = "Python Backbone Target";
+    fs::write(
+        python_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+             instance_name = ac-python-{pid}\n  shared_instance_port = {py_shared}\n  \
+             instance_control_port = {py_control}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[python backbone]]\n    type = BackboneInterface\n    \
+             enabled = Yes\n    listen_on = ::\n    port = {backbone_port}\n    \
+             discoverable = Yes\n    discovery_name = {name}\n    \
+             reachable_on = localhost\n    discovery_stamp_value = 2\n  \
+             [[link server]]\n    type = TCPServerInterface\n    enabled = Yes\n    \
+             listen_ip = 127.0.0.1\n    listen_port = {link_port}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        rust_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = ac-rust-{pid}\n  shared_instance_port = {rs_shared}\n  \
+             instance_control_port = {rs_control}\n  discover_interfaces = Yes\n  \
+             required_discovery_value = 2\n  autoconnect_discovered_interfaces = 1\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[link to python]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {link_port}\n"
+        ),
+    )
+    .unwrap();
+    drop(ports);
+
+    let mut python = spawn_daemon(Daemon::Python, &python_dir, &root.path().join("python.log"));
+    wait_for_port(link_port, &mut python, "Python link server");
+    let mut rust = spawn_daemon(Daemon::Rust, &rust_dir, &root.path().join("rust.log"));
+
+    // Upstream's announcer waits a minute before its first announce.
+    let rust_config = rust_dir.to_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(150);
+    loop {
+        python.assert_running("Python rnsd");
+        rust.assert_running("Rust rnsd");
+        let mut rnstatus = Command::new(env!("CARGO_BIN_EXE_rnstatus"));
+        rnstatus.args(["--config", &rust_config]);
+        let output = run(rnstatus);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // The auto-connected interface is up under its discovered name.
+        if stdout
+            .split("\n\n")
+            .any(|block| block.contains(name) && block.contains("Status    : Up"))
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "the Rust node never auto-connected the Python Backbone interface:\n{stdout}\n\
+                 python log:\n{}\nrust log:\n{}",
+                fs::read_to_string(root.path().join("python.log")).unwrap_or_default(),
+                fs::read_to_string(root.path().join("rust.log")).unwrap_or_default()
+            );
+        }
+        thread::sleep(Duration::from_secs(2));
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]

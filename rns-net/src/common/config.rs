@@ -34,6 +34,20 @@ pub struct ParsedHook {
     pub enabled: bool,
 }
 
+/// How a node auto-connects discovered interfaces (`[reticulum]
+/// autoconnect_policy`), chosen at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoconnectPolicy {
+    /// Upstream's behaviour: up to `autoconnect_discovered_interfaces`
+    /// discovered Backbone interfaces, on top of the configured ones, with
+    /// `bootstrap_only` interfaces torn down while enough are online.
+    #[default]
+    Upstream,
+    /// The rns-rs Backbone peer pool (`backbone_peer_pool_*`), which holds
+    /// configured and discovered Backbone peers under one cap.
+    Pool,
+}
+
 /// The `[reticulum]` section.
 #[derive(Debug, Clone)]
 pub struct ReticulumSection {
@@ -102,6 +116,11 @@ pub struct ReticulumSection {
     pub autoconnect_announces_to_internal: bool,
     /// Allow auto-connecting discovered interfaces from unverified implementations.
     pub autoconnect_unverified_implementations: bool,
+    /// How discovered interfaces are auto-connected (`autoconnect_policy`).
+    pub autoconnect_policy: AutoconnectPolicy,
+    /// Upstream's `autoconnect_discovered_interfaces`: how many discovered
+    /// interfaces to auto-connect; 0 auto-connects none.
+    pub autoconnect_discovered_interfaces: usize,
     /// Minimum stamp value for accepting discovered interfaces, fractional
     /// since upstream 796ef2d4. A value of 0 or less leaves the default.
     pub required_discovery_value: Option<StampCost>,
@@ -242,6 +261,8 @@ impl Default for ReticulumSection {
             autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             autoconnect_unverified_implementations: false,
+            autoconnect_policy: AutoconnectPolicy::Upstream,
+            autoconnect_discovered_interfaces: 0,
             required_discovery_value: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -1115,6 +1136,29 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 key: "autoconnect_unverified_implementations".into(),
                 value: v.clone(),
             })?;
+    }
+    if let Some(v) = kvs.get("autoconnect_policy") {
+        section.autoconnect_policy = match v.trim().to_ascii_lowercase().as_str() {
+            "upstream" => AutoconnectPolicy::Upstream,
+            "pool" => AutoconnectPolicy::Pool,
+            _ => {
+                return Err(ConfigError::InvalidValue {
+                    key: "autoconnect_policy".into(),
+                    value: v.clone(),
+                })
+            }
+        };
+    }
+    if let Some(v) = kvs.get("autoconnect_discovered_interfaces") {
+        // Reticulum.py reads it with `as_int` and uses it only when `> 0`.
+        let n = v
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| ConfigError::InvalidValue {
+                key: "autoconnect_discovered_interfaces".into(),
+                value: v.clone(),
+            })?;
+        section.autoconnect_discovered_interfaces = n.max(0) as usize;
     }
     if let Some(v) = kvs.get("required_discovery_value") {
         // Reticulum.py: `v = as_float(option)`, used only when `v > 0`.
@@ -2811,6 +2855,27 @@ publish_blackhole = Yes
             assert_eq!(config.reticulum.rpc_key, None, "{invalid}");
         }
         assert!(parse("[reticulum]\nforce_shared_instance_bitrate = fast\n").is_err());
+    }
+
+    #[test]
+    fn parse_autoconnect_policy_and_count() {
+        let defaults = parse("[reticulum]\n").unwrap().reticulum;
+        assert_eq!(defaults.autoconnect_policy, AutoconnectPolicy::Upstream);
+        assert_eq!(defaults.autoconnect_discovered_interfaces, 0);
+
+        let config = parse(
+            "[reticulum]\nautoconnect_policy = Pool\nautoconnect_discovered_interfaces = 4\n",
+        )
+        .unwrap()
+        .reticulum;
+        assert_eq!(config.autoconnect_policy, AutoconnectPolicy::Pool);
+        assert_eq!(config.autoconnect_discovered_interfaces, 4);
+
+        // Upstream only auto-connects with a count above zero.
+        let config = parse("[reticulum]\nautoconnect_discovered_interfaces = -2\n").unwrap();
+        assert_eq!(config.reticulum.autoconnect_discovered_interfaces, 0);
+        assert!(parse("[reticulum]\nautoconnect_policy = mesh\n").is_err());
+        assert!(parse("[reticulum]\nautoconnect_discovered_interfaces = some\n").is_err());
     }
 
     #[test]

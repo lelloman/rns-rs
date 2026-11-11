@@ -51,11 +51,64 @@ Announces always carry the latitude, longitude and height fields, empty when
 no location is configured: upstream discards discovery announces without
 them.
 
-## Auto-connect policy
+## Auto-connecting discovered interfaces
 
-Discovery-origin Backbone peer-pool connections normally use gateway mode when
-transport is enabled and full mode otherwise. Two optional `[reticulum]`
-settings provide finer control:
+Discovery only listens for and stores discovered interfaces. How they are
+connected is chosen at startup with `[reticulum] autoconnect_policy`; it cannot
+change while the node runs.
+
+### `autoconnect_policy = upstream` (default)
+
+Upstream's behaviour. Nothing is auto-connected unless
+`autoconnect_discovered_interfaces` is set:
+
+```ini
+[reticulum]
+  discover_interfaces = yes
+  autoconnect_discovered_interfaces = 4
+
+[interfaces]
+  [[Bootstrap Hub]]
+    type = TCPClientInterface
+    target_host = hub.example.com
+    target_port = 4242
+    bootstrap_only = yes
+```
+
+- A discovered Backbone interface that qualifies is connected as it is heard,
+  until `autoconnect_discovered_interfaces` auto-connected interfaces exist. At
+  startup the stored discoveries are connected the same way, best first.
+  Interfaces from the configuration file always connect and do not count
+  against the limit.
+- From the first auto-connect on, a monitor runs every 5 seconds. An
+  auto-connected interface that has been down for 12 seconds is detached. When
+  more than a quarter of the slots are free, one random available transport
+  discovery is connected.
+- `bootstrap_only` interfaces are torn down while as many auto-connected
+  interfaces as the limit are online, and attached again when none is. They
+  are reattached from the configuration file, so the node must run from one
+  with interface management enabled.
+- Upstream's address rules apply: only Backbone interfaces are auto-connected,
+  never to `127.0.0.1`, `0.0.0.0`, Yggdrasil or onion addresses, nor to an
+  endpoint a configured client or another auto-connected interface already
+  reaches.
+
+The `backbone_peer_pool_*` settings are ignored under this policy, with a
+warning.
+
+### `autoconnect_policy = pool`
+
+The rns-rs Backbone peer pool. `backbone_peer_pool_max_connected` caps active
+outbound Backbone connections, configured and discovered together
+(configured peers rank higher), and peers that keep failing are cooled down
+for a while. With the pool on, discovered peers are pool candidates as soon
+as `discover_interfaces` is on. `autoconnect_discovered_interfaces` and
+`bootstrap_only` are ignored under this policy, with a warning.
+
+### Mode, gravity and costs
+
+Auto-connected interfaces use gateway mode when transport is enabled and full
+mode otherwise. Two optional `[reticulum]` settings provide finer control:
 
 ```ini
 [reticulum]
@@ -67,16 +120,14 @@ settings provide finer control:
 
 `default_gravity` supplies the gravity for any statically configured interface
 without its own `gravity` option. `autoconnect_interface_mode` selects the mode
-assigned to automatically connected discovered interfaces. It accepts the same mode names and aliases as
-`interface_mode`. `autoconnect_interface_gravity` sets their pathing affinity;
-positive values increase affinity and negative values decrease it.
-`autoconnect_announces_to_internal = yes` allows announces
+assigned to automatically connected discovered interfaces. It accepts the same
+mode names and aliases as `interface_mode`. `autoconnect_interface_gravity`
+sets their pathing affinity; positive values increase affinity and negative
+values decrease it. `autoconnect_announces_to_internal = yes` allows announces
 received through those interfaces to propagate to internal-mode interfaces,
-even when their selected mode would normally block that direction.
-
-In rns-rs these settings apply to discovery-origin members of the bounded
-Backbone peer pool. They do not modify statically configured interfaces or
-configured peer-pool members.
+even when their selected mode would normally block that direction. These
+settings apply to auto-connected interfaces under either policy, not to
+configured interfaces.
 
 Discovery announces carry the announce and path request stamp costs the
 interface requires (its `destination_cost` and `pr_cost`, or the `[stamps]`
