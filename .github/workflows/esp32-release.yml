@@ -82,7 +82,11 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           mkdir dist
+          # The firmware is built for 8 MB flash with its own partition
+          # table (sdkconfig.defaults); without them espflash assumes a 1 MB
+          # app partition, which the firmware outgrew.
           espflash save-image --chip esp32s3 --merge \
+            --partition-table rns-esp32/partitions.csv --flash-size 8mb \
             rns-esp32/target/xtensa-esp32s3-espidf/release/rns-esp32 \
             "dist/${TAG}-esp32s3.bin"
           cd dist
