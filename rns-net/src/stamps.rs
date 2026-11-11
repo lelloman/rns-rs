@@ -257,6 +257,61 @@ pub fn link_request_stamp_material(
     material
 }
 
+/// Default scheduling niceness of stamp search threads (`Stamps.NICENESS`).
+pub const DEFAULT_WORKER_NICENESS: i32 = 16;
+
+/// `[stamps] max_workers`; 0 keeps the default.
+static MAX_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// `[stamps] worker_niceness`.
+static WORKER_NICENESS: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(DEFAULT_WORKER_NICENESS);
+
+/// Apply `[stamps] max_workers` and `worker_niceness` (upstream 16621a78)
+/// to the stamp searches of this process, as upstream's module-wide
+/// `Stamps.MAX_WORKERS` and `Stamps.NICENESS` do.
+pub fn set_worker_limits(max_workers: Option<usize>, niceness: i32) {
+    use std::sync::atomic::Ordering;
+    MAX_WORKERS.store(max_workers.unwrap_or(0), Ordering::Relaxed);
+    WORKER_NICENESS.store(niceness.clamp(0, 20), Ordering::Relaxed);
+}
+
+/// How many workers a search uses out of `available` threads: like
+/// upstream's stamp jobs, every core up to 12 and half of them beyond, at
+/// most `max_workers`.
+#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
+fn search_workers(available: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let max_workers = MAX_WORKERS.load(std::sync::atomic::Ordering::Relaxed);
+    worker_count(cores, available, (max_workers > 0).then_some(max_workers))
+}
+
+/// Upstream's stamp job size for `cores`, capped by `max_workers` and by
+/// the `available` threads of the pool.
+#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
+fn worker_count(cores: usize, available: usize, max_workers: Option<usize>) -> usize {
+    let default = if cores <= 12 { cores } else { cores / 2 };
+    let limit = max_workers.map_or(default, |max| default.min(max));
+    limit.clamp(1, available.max(1))
+}
+
+/// Lower the scheduling priority of the calling search thread to the
+/// configured niceness, as upstream's stamp workers do with `os.nice`. On
+/// Linux this applies to the calling thread only.
+#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
+fn renice_search_thread() {
+    #[cfg(target_os = "linux")]
+    {
+        let niceness = WORKER_NICENESS.load(std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: gettid and setpriority take no pointers. A thread may only
+        // raise its own niceness, so a lower value than the current one
+        // fails harmlessly.
+        unsafe {
+            let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+            let _ = libc::setpriority(libc::PRIO_PROCESS, tid, niceness);
+        }
+    }
+}
+
 /// Where a multi-threaded search runs its workers.
 #[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +346,7 @@ where
         let stop = AtomicBool::new(false);
         let result = Mutex::new(None);
         let work = || {
+            renice_search_thread();
             let found = grind(&stop);
             stop.store(true, Ordering::Relaxed);
             if let Some(found) = found {
@@ -304,12 +360,13 @@ where
         };
         match pool {
             SearchPool::Rayon => rayon::scope(|scope| {
-                for _ in 0..rayon::current_num_threads() {
+                for _ in 0..search_workers(rayon::current_num_threads()) {
                     scope.spawn(|_| work());
                 }
             }),
             SearchPool::Dedicated => {
-                let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+                let workers =
+                    search_workers(std::thread::available_parallelism().map_or(1, |n| n.get()));
                 std::thread::scope(|scope| {
                     for _ in 0..workers {
                         scope.spawn(work);
@@ -477,12 +534,56 @@ mod tests {
 
     #[cfg(feature = "engine-parallel")]
     #[test]
-    fn parallel_engine_searches_on_every_core() {
+    fn parallel_engine_search_workers_follow_upstream_limits() {
+        let distinct = |pool| {
+            let mut threads = search_threads(pool);
+            threads.sort_by_key(|id| format!("{id:?}"));
+            threads.dedup();
+            threads.len()
+        };
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-        assert_eq!(search_threads(SearchPool::Dedicated).len(), cores);
+        let default = if cores <= 12 { cores } else { cores / 2 };
+        assert_eq!(search_threads(SearchPool::Dedicated).len(), default);
         assert_eq!(
             search_threads(SearchPool::Rayon).len(),
-            rayon::current_num_threads()
+            default.min(rayon::current_num_threads())
+        );
+        assert!(distinct(SearchPool::Rayon) <= default);
+    }
+
+    #[test]
+    fn worker_count_follows_upstream_and_max_workers() {
+        // Every core up to 12, half of them beyond.
+        assert_eq!(worker_count(4, 4, None), 4);
+        assert_eq!(worker_count(12, 12, None), 12);
+        assert_eq!(worker_count(32, 32, None), 16);
+        // `max_workers` caps it, and a pool cannot run more than it has.
+        assert_eq!(worker_count(32, 32, Some(3)), 3);
+        assert_eq!(worker_count(32, 32, Some(64)), 16);
+        assert_eq!(worker_count(32, 8, None), 8);
+        assert_eq!(worker_count(1, 1, Some(1)), 1);
+    }
+
+    #[cfg(all(feature = "engine-parallel", target_os = "linux"))]
+    #[test]
+    fn parallel_engine_search_threads_run_at_the_worker_niceness() {
+        let niceness = std::sync::Mutex::new(Vec::new());
+        search(SearchPool::Dedicated, |_| {
+            // SAFETY: no pointers; reads the calling thread's priority.
+            let value = unsafe {
+                let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+                libc::getpriority(libc::PRIO_PROCESS, tid)
+            };
+            niceness.lock().unwrap().push(value);
+            Some(())
+        });
+        let niceness = niceness.into_inner().unwrap();
+        assert!(!niceness.is_empty());
+        // The test process may already run at some niceness; a search
+        // thread runs at least at the default.
+        assert!(
+            niceness.iter().all(|n| *n >= DEFAULT_WORKER_NICENESS),
+            "{niceness:?}"
         );
     }
 

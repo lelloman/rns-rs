@@ -43,6 +43,7 @@ No tag marks the target; `RNS/_version.py` still reads `1.6.0`.
 | 1 | `2c7cf827` | Future workblock generation | Deferred | `_stamp_workblock_future` has no caller at the target; ported when upstream uses it |
 | 2 | `aaf08e61` | Transitionally accept both non-expanded and expanded workblock discovery stamps | Integrated | `discovery_stamps_against_either_workblock_are_accepted` |
 | 3 | `132ec70f` | Cleanup | Non-runtime | Whitespace only |
+| 4 | `16621a78` | Made max stamp workers and worker niceness configurable | Integrated | `stamps_section_parses_worker_limits`, `worker_count_follows_upstream_and_max_workers`, `parallel_engine_search_workers_follow_upstream_limits`, `parallel_engine_search_threads_run_at_the_worker_niceness` |
 
 ## Per-Commit Analysis
 
@@ -98,15 +99,43 @@ upstream's do.
 
 **Final disposition:** Non-runtime.
 
+### 4. `16621a78` — Made max stamp workers and worker niceness configurable
+
+**Upstream change:** `[stamps] max_workers` (`as_int`, at least 1) caps the
+worker processes of a stamp job, which otherwise uses every core up to 12 and
+half of them beyond. `[stamps] worker_niceness` (`as_int`, clamped to 0-20,
+default 16) is applied with `os.nice` in each worker; upstream's workers have
+run at niceness 16 since this commit.
+
+**Rust applicability:** The parallel engine (the engine of the shipped
+binaries) grinds stamps on rayon's pool or on dedicated threads, one per
+core, at normal priority. The compact engine grinds on the calling thread,
+like upstream's single-process `job_simple`, which applies neither setting.
+
+**Local handling and evidence:** `StampsSection` reads both keys with
+upstream's limits, and the node applies them process-wide at startup
+(`stamps::set_worker_limits`), as upstream's module globals are. A parallel
+search uses upstream's worker count, capped by `max_workers` and by the
+threads its pool has, and each search thread sets its own niceness with
+`setpriority` on its thread id, which Linux applies to that thread alone.
+rayon's pool runs only stamp searches in rns-rs, so lowering its threads'
+priority affects nothing else. Tests: `stamps_section_parses_worker_limits`,
+`worker_count_follows_upstream_and_max_workers`,
+`parallel_engine_search_workers_follow_upstream_limits` and
+`parallel_engine_search_threads_run_at_the_worker_niceness`. Documented in
+`docs/configuration.md`.
+
+**Final disposition:** Integrated.
+
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
 - [ ] Fixture provenance and byte stability are checked where applicable.
 - [ ] Exact-target live Python/Rust interop passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
 - [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
+- [x] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
