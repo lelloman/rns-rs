@@ -43,7 +43,8 @@ manual's "Protecting Open Networks" page. Stamp emission and enforcement stay
 off by default, as upstream; upstream plans to enable them in 1.6.1 and 1.6.2.
 The interface discovery options `publish_ifac`, `discovery_encrypt`,
 `discovery_frequency` and `discovery_bandwidth` were implemented afterwards
-(gap plan phase 2); `bootstrap_only` remains open. Acceptance evidence is in
+(gap plan phase 2), and `bootstrap_only` with upstream's auto-connecting (gap
+plan phase 3). Acceptance evidence is in
 [`docs/upstream-parity/reticulum-1.6.0-rgit-2-parity.md`](docs/upstream-parity/reticulum-1.6.0-rgit-2-parity.md)
 and the detailed audit is
 [`docs/upstream-parity/reticulum-1.6.0-rgit-2-audit.md`](docs/upstream-parity/reticulum-1.6.0-rgit-2-audit.md).
