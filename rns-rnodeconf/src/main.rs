@@ -7,6 +7,7 @@
 
 mod device;
 mod eeprom;
+mod keys;
 mod kiss;
 mod rom;
 mod signature;
@@ -128,22 +129,7 @@ const NOT_YET: &[&str] = &[
     "--np",
     "--ia-enable",
     "--ia-disable",
-    "--eeprom-backup",
-    "--eeprom-dump",
-    "--eeprom-wipe",
-    "--public",
-    "--trust-key",
     "--flash",
-    "--rom",
-    "--key",
-    "--sign",
-    "--firmware-hash",
-    "--get-target-firmware-hash",
-    "--get-firmware-hash",
-    "--platform",
-    "--product",
-    "--model",
-    "--hwrev",
 ];
 
 #[derive(Default)]
@@ -362,6 +348,19 @@ fn main() {
         graceful_exit(1);
     }
 
+    if let Some(key) = args.value("--trust-key") {
+        trust_key(key);
+        graceful_exit(0);
+    }
+    if args.has("--public") {
+        show_public_keys();
+        graceful_exit(0);
+    }
+    if args.has("--key") {
+        generate_keys();
+        graceful_exit(0);
+    }
+
     let Some(port) = args.port.clone() else {
         print_help();
         graceful_exit(0);
@@ -398,7 +397,156 @@ fn main() {
         _ => (rom::PLATFORM_AVR, rom::MCU_1284P),
     };
 
+    if args.has("--eeprom-wipe") {
+        log("WARNING: EEPROM is being wiped! Power down device NOW if you do not want this!");
+        let _ = rnode.wipe_eeprom(reported.board);
+        if platform != rom::PLATFORM_NRF52 {
+            let _ = rnode.hard_reset();
+        }
+        graceful_exit(0);
+    }
+
     log("Reading EEPROM...");
+    let (image, info) = read_eeprom(&mut rnode, &port);
+
+    if args.has("--config") {
+        show_config(&mut rnode, &image, platform, args.has("--show-psk"));
+        let _ = rnode.leave();
+        graceful_exit(0);
+    }
+
+    if args.has("--eeprom-dump") {
+        log("EEPROM contents:");
+        log(&hexrep(&image));
+        graceful_exit(0);
+    }
+
+    if args.has("--eeprom-backup") {
+        backup_eeprom(&image);
+        graceful_exit(0);
+    }
+
+    if args.has("--info") {
+        if info.provisioned {
+            show_info(&info, &reported);
+            let _ = rnode.leave();
+            graceful_exit(0);
+        } else {
+            log("EEPROM is invalid, no further information available");
+            graceful_exit(0);
+        }
+    }
+
+    if args.has("--rom") {
+        bootstrap_eeprom(&mut rnode, &args, &info, platform, &port);
+    }
+
+    if args.has("--sign") {
+        if info.provisioned {
+            let device_key = keys::device_key_path(&firmware_dir());
+            let signer = match rns_net::storage::load_identity(&device_key) {
+                Ok(signer) => Some(signer),
+                Err(_) => {
+                    log("Could not load device signing key");
+                    None
+                }
+            };
+            match (rnode.reported().device_hash, signer) {
+                (None, _) => log("No device hash present, skipping device signing"),
+                (Some(_), None) => {
+                    log("No device signer loaded, cannot sign device");
+                    graceful_exit(78);
+                }
+                (Some(hash), Some(signer)) => match signer.sign(&hash) {
+                    Ok(signature) => {
+                        let _ = rnode.store_signature(&signature);
+                        log("Device signed");
+                    }
+                    Err(_) => {
+                        log("No device signer loaded, cannot sign device");
+                        graceful_exit(78);
+                    }
+                },
+            }
+        } else {
+            log("This device has not been provisioned yet, cannot create device signature");
+            graceful_exit(79);
+        }
+    }
+
+    if let Some(hash) = args.value("--firmware-hash") {
+        if info.provisioned {
+            match signature::unhex(hash).filter(|h| h.len() == 32) {
+                Some(hash) => {
+                    let _ = rnode.set_firmware_hash(&hash);
+                    log("Firmware hash set");
+                }
+                None => {
+                    log("The provided value was not a valid SHA256 hash");
+                    graceful_exit(78);
+                }
+            }
+        } else {
+            log("This device has not been provisioned yet, cannot set firmware hash");
+            graceful_exit(77);
+        }
+    }
+
+    for (flag, which) in [
+        ("--get-target-firmware-hash", "target"),
+        ("--get-firmware-hash", "actual"),
+    ] {
+        if args.has(flag) {
+            if info.provisioned {
+                let reported = rnode.reported();
+                let hash = if which == "target" {
+                    reported.firmware_hash_target
+                } else {
+                    reported.firmware_hash
+                };
+                log(&format!(
+                    "The {which} firmware hash is: {}",
+                    hash.map_or_else(|| "None".to_string(), |h| hexstr(&h))
+                ));
+            } else {
+                log("This device has not been provisioned yet, cannot get firmware hash");
+                exit(77);
+            }
+        }
+    }
+
+    if info.provisioned {
+        if args.has("--normal") {
+            if rnode.set_normal_mode().is_err() {
+                graceful_exit(1);
+            }
+            log("Device set to normal (host-controlled) operating mode");
+            graceful_exit(0);
+        }
+        if args.has("--tnc") {
+            set_tnc_mode(&mut rnode, &args, platform);
+            graceful_exit(0);
+        }
+    } else {
+        log("This device contains a valid firmware, but EEPROM is invalid.");
+        log("Probably the device has not been initialised, or the EEPROM has been erased.");
+        log("Please correctly initialise the device and try again!");
+    }
+    graceful_exit(0);
+}
+
+fn firmware_dir() -> PathBuf {
+    config_dir().join("firmware")
+}
+
+/// Lowercase hex without delimiters.
+fn hexstr(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// upstream `download_eeprom` with its `parse_eeprom`: read the EEPROM and
+/// report its checksum and signature.
+fn read_eeprom(rnode: &mut RNode, port: &str) -> (Vec<u8>, eeprom::DeviceInfo) {
     let image = match rnode.download_eeprom() {
         Ok(Some(image)) => image,
         _ => {
@@ -424,43 +572,308 @@ fn main() {
             log("Device signature validated");
         } else {
             log("Device signature validation failed");
-            print_unverified_warning(&port);
+            print_unverified_warning(port);
         }
     }
+    (image, info)
+}
 
-    if args.has("--config") {
-        show_config(&mut rnode, &image, platform, args.has("--show-psk"));
-        let _ = rnode.leave();
+/// `--trust-key`: trust a vendor public key for device verification, stored
+/// as `trusted_keys/<sha256 of the key>.pubkey`.
+fn trust_key(hex: &str) {
+    let Some(public) = signature::unhex(hex) else {
+        log("Invalid key data supplied");
+        return;
+    };
+    if signature::parse_public_key(&public).is_none() {
+        log("Could not create public key from supplied data. Check that the key format is valid.");
+        log("Could not deserialize key data");
+        return;
+    }
+    let key_hash = hexstr(&rns_crypto::sha256::sha256(&public));
+    log(&format!("Trusting key: {key_hash}"));
+    let path = config_dir()
+        .join("trusted_keys")
+        .join(format!("{key_hash}.pubkey"));
+    if let Err(e) = std::fs::write(&path, &public) {
+        log(&format!("Could not write {}: {e}", path.display()));
+    }
+}
+
+/// `-P`: show the public halves of the EEPROM and device signing keys.
+fn show_public_keys() {
+    let firmware = firmware_dir();
+    match std::fs::read(keys::signing_key_path(&firmware)) {
+        Err(_) => {
+            log("Could not load EEPROM signing key");
+            log("Could not deserialize signing key");
+        }
+        Ok(private) => match keys::signing_public_key(&private) {
+            Ok(public) => {
+                log("EEPROM Signing Public key:");
+                log(&hexstr(&public));
+            }
+            Err(e) => {
+                log("Could not deserialize signing key");
+                log(&e);
+            }
+        },
+    }
+    match rns_net::storage::load_identity(&keys::device_key_path(&firmware))
+        .ok()
+        .and_then(|identity| identity.get_public_key())
+    {
+        Some(public) => {
+            log("");
+            log("Device Signing Public key:");
+            log(&hexrep(&public[32..]));
+        }
+        None => log("Could not load device signing key"),
+    }
+}
+
+/// `-k`: create the device signing key and the EEPROM signing key when
+/// missing.
+fn generate_keys() {
+    let firmware = firmware_dir();
+    let device_key = keys::device_key_path(&firmware);
+    if !device_key.is_file() {
+        log("Generating a new device signing key...");
+        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        if let Err(e) = rns_net::storage::save_identity(&identity, &device_key) {
+            log(&format!(
+                "Could not create new device signing key at {}. The contained exception was:",
+                device_key.display()
+            ));
+            log(&e.to_string());
+            log("Please ensure filesystem access and try again.");
+            graceful_exit(81);
+        }
+        log(&format!(
+            "Device signing key written to {}",
+            device_key.display()
+        ));
+    } else if let Err(e) = rns_net::storage::load_identity(&device_key) {
+        log(&format!(
+            "Could not load device signing key from {}. The contained exception was:",
+            device_key.display()
+        ));
+        log(&e.to_string());
+        log("Please restore or clear the key and try again.");
+        graceful_exit(82);
+    }
+
+    let signing_key = keys::signing_key_path(&firmware);
+    if !signing_key.is_file() {
+        log("Generating a new EEPROM signing key...");
+    }
+    let private = match keys::generate_signing_key() {
+        Ok(private) => private,
+        Err(e) => {
+            log(&format!("Could not generate EEPROM signing key: {e}"));
+            graceful_exit(1);
+        }
+    };
+    let _ = std::fs::create_dir_all(&firmware);
+    if signing_key.is_file() {
+        log("EEPROM Signing key already exists, not overwriting!");
+        log("Manually delete this key to create a new one.");
+    } else {
+        if let Err(e) = std::fs::write(&signing_key, &private) {
+            log(&format!("Could not write {}: {e}", signing_key.display()));
+            graceful_exit(1);
+        }
+        log("Wrote signing key");
+        log("Public key:");
+        log(&hexstr(
+            &keys::signing_public_key(&private).unwrap_or_default(),
+        ));
+    }
+}
+
+/// `--eeprom-backup`. Upstream joins its EEPROM directory and the file name
+/// without a separator, so its backups land beside the directory; these go
+/// inside it.
+fn backup_eeprom(image: &[u8]) {
+    let filename = local_time("%Y-%m-%d_%H-%M-%S", now());
+    let path = config_dir()
+        .join("eeprom")
+        .join(format!("{filename}.eeprom"));
+    match std::fs::write(&path, image) {
+        Ok(()) => log(&format!("EEPROM backup written to: {}", path.display())),
+        Err(_) => {
+            log("EEPROM was successfully downloaded from device,");
+            log("but file could not be written to disk.");
+        }
+    }
+}
+
+/// A two-digit hex code from `--product` or `--model`.
+fn hex_code(value: Option<&str>) -> Option<u8> {
+    let value = value?;
+    if value.len() != 2 {
+        return None;
+    }
+    u8::from_str_radix(value, 16).ok()
+}
+
+/// `-r`: write a provisioning record to an unprovisioned device's EEPROM,
+/// signed with the local EEPROM signing key, then read it back.
+fn bootstrap_eeprom(
+    rnode: &mut RNode,
+    args: &Args,
+    info: &eeprom::DeviceInfo,
+    platform: u8,
+    port: &str,
+) {
+    use std::time::Duration;
+    let pause = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
+
+    if info.provisioned || info.signature_valid {
+        log("EEPROM bootstrap was requested, but a valid EEPROM was already present.");
+        log("No changes are being made.");
         graceful_exit(0);
     }
+    match platform {
+        rom::PLATFORM_ESP32 => {
+            log("Waiting for ESP32 reset...");
+            pause(6000);
+        }
+        rom::PLATFORM_NRF52 => {
+            log("Waiting for NRF52 reset...");
+            pause(18000);
+        }
+        _ => pause(3000),
+    }
 
-    if args.has("--info") {
-        if info.provisioned {
-            show_info(&info, &reported);
-            let _ = rnode.leave();
-            graceful_exit(0);
-        } else {
-            log("EEPROM is invalid, no further information available");
-            graceful_exit(0);
+    let firmware = firmware_dir();
+    let counter_path = firmware.join("serial.counter");
+    let counter: u32 = if counter_path.is_file() {
+        match std::fs::read_to_string(&counter_path)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            Some(counter) => counter,
+            None => {
+                log("Could not create device serial number, exiting");
+                graceful_exit(0);
+            }
+        }
+    } else {
+        0
+    };
+    let serialno = counter + 1;
+    let product = hex_code(args.value("--product")).unwrap_or(rom::PRODUCT_RNODE);
+    let model = hex_code(args.value("--model"));
+    let hwrev = args
+        .int("--hwrev")
+        .filter(|v| *v > 0 && *v < 256)
+        .map(|v| v as u8);
+    let (Some(model), Some(hwrev)) = (model, hwrev) else {
+        log("Invalid data specified, cancelling EEPROM write");
+        graceful_exit(0);
+    };
+
+    let time_bytes = (now() as u32).to_be_bytes();
+    let serial_bytes = serialno.to_be_bytes();
+    let _ = std::fs::write(&counter_path, serialno.to_string());
+    let mut info_chunk = vec![product, model, hwrev];
+    info_chunk.extend_from_slice(&serial_bytes);
+    info_chunk.extend_from_slice(&time_bytes);
+    let checksum = rns_net::md5::md5(&info_chunk);
+
+    log("Loading signing key...");
+    let signing_key = keys::signing_key_path(&firmware);
+    if !signing_key.is_file() {
+        log("No signing key found");
+        graceful_exit(0);
+    }
+    let signature = match std::fs::read(&signing_key)
+        .map_err(|e| e.to_string())
+        .and_then(|private| keys::sign_checksum(&private, &checksum))
+    {
+        Ok(signature) => signature,
+        Err(e) => {
+            log("Error while signing EEPROM");
+            log(&e);
+            log("An error occurred while writing EEPROM. The contained exception was:");
+            log("no signature");
+            graceful_exit(1);
+        }
+    };
+
+    log("Bootstrapping device EEPROM...");
+    let mut writes: Vec<(u8, u8)> = vec![
+        (rom::ADDR_PRODUCT, product),
+        (rom::ADDR_MODEL, model),
+        (rom::ADDR_HW_REV, hwrev),
+    ];
+    for (i, byte) in serial_bytes.iter().enumerate() {
+        writes.push((rom::ADDR_SERIAL + i as u8, *byte));
+    }
+    for (i, byte) in time_bytes.iter().enumerate() {
+        writes.push((rom::ADDR_MADE + i as u8, *byte));
+    }
+    for (i, byte) in checksum.iter().enumerate() {
+        writes.push((rom::ADDR_CHKSUM + i as u8, *byte));
+    }
+    for (i, byte) in signature.iter().enumerate() {
+        writes.push((rom::ADDR_SIGNATURE + i as u8, *byte));
+    }
+    for (addr, byte) in writes {
+        if rnode.write_eeprom(addr, byte).is_err() {
+            graceful_exit(1);
+        }
+        pause(6);
+    }
+    let _ = rnode.write_eeprom(rom::ADDR_INFO_LOCK, rom::INFO_LOCK_BYTE);
+    if platform == rom::PLATFORM_NRF52 {
+        pause(3000);
+    }
+    log("EEPROM written! Validating...");
+
+    match platform {
+        rom::PLATFORM_ESP32 => {
+            let _ = rnode.hard_reset();
+            log("Waiting for ESP32 reset...");
+            pause(7000);
+            if [
+                rom::MODEL_AC,
+                rom::MODEL_A6,
+                rom::MODEL_A1,
+                rom::MODEL_AA,
+                rom::MODEL_A5,
+            ]
+            .contains(&model)
+            {
+                pause(5000);
+            }
+        }
+        rom::PLATFORM_NRF52 => {
+            // Upstream finds the board again by its USB serial number,
+            // since the port can change across this reset; this keeps
+            // the same port.
+            let _ = rnode.hard_reset();
+            log("Waiting for NRF52 reset...");
+            pause(20000);
+        }
+        _ => {
+            let _ = rnode.hard_reset();
         }
     }
 
-    if info.provisioned {
-        if args.has("--normal") {
-            if rnode.set_normal_mode().is_err() {
-                graceful_exit(1);
-            }
-            log("Device set to normal (host-controlled) operating mode");
-            graceful_exit(0);
-        }
-        if args.has("--tnc") {
-            set_tnc_mode(&mut rnode, &args, platform);
-            graceful_exit(0);
+    let (image, written) = read_eeprom(rnode, port);
+    if written.provisioned {
+        log("EEPROM Bootstrapping successful!");
+        let _ = rnode.hard_reset();
+        let device_db = firmware.join("device_db");
+        let saved = std::fs::create_dir_all(&device_db)
+            .and_then(|_| std::fs::write(device_db.join(hexstr(&serial_bytes)), &image));
+        if saved.is_err() {
+            log("WARNING: Could not backup device EEPROM to disk");
         }
     } else {
-        log("This device contains a valid firmware, but EEPROM is invalid.");
-        log("Probably the device has not been initialised, or the EEPROM has been erased.");
-        log("Please correctly initialise the device and try again!");
+        log("EEPROM was written, but validation failed. Check your settings.");
     }
     graceful_exit(0);
 }

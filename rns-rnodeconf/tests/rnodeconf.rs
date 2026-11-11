@@ -266,36 +266,55 @@ fn normal_mode_deletes_the_tnc_configuration() {
     assert_eq!(fake.received().last(), Some(&vec![CMD_CONF_DELETE, 0x00]));
 }
 
-/// The same scenario through upstream's `rnodeconf` and ours: the same
-/// output and the same frames sent to the device.
-fn compare_with_python(eeprom: Vec<u8>, home: &Path, args: &[&str]) {
-    let python_fake = FakeRNode::start(device(eeprom.clone()));
+/// Output with timestamps, upstream's closing exit-code line and the port
+/// path normalized away.
+fn normalize(out: &[u8], path: &str) -> Vec<String> {
+    lines(out)
+        .into_iter()
+        .filter(|l| !l.starts_with("Exiting: Code"))
+        .map(|l| l.replace(path, "PORT"))
+        .collect()
+}
+
+/// Run upstream's `rnodeconf` and ours, each against its own fake device
+/// and in its own home.
+fn run_both(
+    device: Device,
+    python_home: &Path,
+    rust_home: &Path,
+    args: &[&str],
+) -> (Vec<String>, FakeRNode, Vec<String>, FakeRNode) {
+    let python_fake = FakeRNode::start(device.clone());
     let mut python_args = args.to_vec();
     python_args.push(&python_fake.path);
-    let python = python_rnodeconf(home, &python_args);
+    let python = python_rnodeconf(python_home, &python_args);
     assert!(
         python.status.success(),
         "python rnodeconf failed: {}",
         String::from_utf8_lossy(&python.stderr)
     );
 
-    let rust_fake = FakeRNode::start(device(eeprom));
+    let rust_fake = FakeRNode::start(device);
     let mut rust_args = args.to_vec();
     rust_args.push(&rust_fake.path);
-    let rust = rust_rnodeconf(home, &rust_args);
-
-    // Upstream's last line logs its exit code.
-    let normalize = |out: &[u8], path: &str| -> Vec<String> {
-        lines(out)
-            .into_iter()
-            .filter(|l| !l.starts_with("Exiting: Code"))
-            .map(|l| l.replace(path, "PORT"))
-            .collect()
-    };
-    assert_eq!(
+    let rust = rust_rnodeconf(rust_home, &rust_args);
+    (
+        normalize(&python.stdout, &python_fake.path),
+        python_fake,
         normalize(&rust.stdout, &rust_fake.path),
-        normalize(&python.stdout, &python_fake.path)
-    );
+        rust_fake,
+    )
+}
+
+/// The same scenario through upstream's `rnodeconf` and ours: the same
+/// output and the same frames sent to the device.
+fn compare_with_python(eeprom: Vec<u8>, home: &Path, args: &[&str]) {
+    compare_device_with_python(device(eeprom), home, args);
+}
+
+fn compare_device_with_python(device: Device, home: &Path, args: &[&str]) {
+    let (python, python_fake, rust, rust_fake) = run_both(device, home, home, args);
+    assert_eq!(rust, python);
     assert_eq!(rust_fake.received(), python_fake.received());
 }
 
@@ -359,4 +378,492 @@ fn python_comparison_tnc_and_normal() {
         ],
     );
     compare_with_python(e, home.path(), &["-N"]);
+}
+
+// Stage 2: keys, EEPROM maintenance, bootstrap and firmware hashes.
+
+const PLATFORM_AVR: u8 = 0x90;
+const MCU_1284P: u8 = 0x91;
+
+/// An AVR board: bootstrapping it skips the ESP32 and NRF52 reset waits.
+fn avr_device(eeprom: Vec<u8>) -> Device {
+    Device {
+        platform: PLATFORM_AVR,
+        mcu: MCU_1284P,
+        board: 0x00,
+        ..device(eeprom)
+    }
+}
+
+fn blank_eeprom() -> Vec<u8> {
+    vec![0xFF; 296]
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    let text = text.trim();
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+fn firmware(home: &Path) -> std::path::PathBuf {
+    home.join(".config/rnodeconf/firmware")
+}
+
+/// A home with both signing keys, made by our `-k`.
+fn keyed_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["-k"]);
+    assert!(out.status.success());
+    home
+}
+
+fn copy_home(from: &Path) -> tempfile::TempDir {
+    let to = tempfile::tempdir().unwrap();
+    let firmware_to = firmware(to.path());
+    std::fs::create_dir_all(&firmware_to).unwrap();
+    for entry in std::fs::read_dir(firmware(from)).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            std::fs::copy(entry.path(), firmware_to.join(entry.file_name())).unwrap();
+        }
+    }
+    to
+}
+
+fn has_line(lines: &[String], expected: &str) -> bool {
+    lines.iter().any(|l| l == expected)
+}
+
+#[test]
+fn trust_key_stores_the_key_under_its_hash() {
+    let home = tempfile::tempdir().unwrap();
+    let key = include_str!("vectors/pss_public_key.hex").trim();
+    let out = rust_rnodeconf(home.path(), &["--trust-key", key]);
+    assert!(out.status.success());
+    let hash: String = rns_crypto::sha256::sha256(&unhex(key))
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert!(has_line(
+        &lines(&out.stdout),
+        &format!("Trusting key: {hash}")
+    ));
+    let stored = home
+        .path()
+        .join(format!(".config/rnodeconf/trusted_keys/{hash}.pubkey"));
+    assert_eq!(std::fs::read(stored).unwrap(), unhex(key));
+
+    let out = rust_rnodeconf(home.path(), &["--trust-key", "zz"]);
+    assert!(has_line(&lines(&out.stdout), "Invalid key data supplied"));
+    let out = rust_rnodeconf(home.path(), &["--trust-key", "0011"]);
+    assert!(has_line(
+        &lines(&out.stdout),
+        "Could not create public key from supplied data. Check that the key format is valid."
+    ));
+}
+
+#[test]
+fn key_generation_and_public_keys() {
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["-k"]);
+    let generated = lines(&out.stdout);
+    let device_key = firmware(home.path()).join("device.key");
+    for expected in [
+        "Generating a new device signing key...",
+        &format!("Device signing key written to {}", device_key.display()),
+        "Generating a new EEPROM signing key...",
+        "Wrote signing key",
+        "Public key:",
+    ] {
+        assert!(has_line(&generated, expected), "missing {expected:?}");
+    }
+    let signing_key = std::fs::read(firmware(home.path()).join("signing.key")).unwrap();
+
+    // A second run keeps both keys.
+    let out = rust_rnodeconf(home.path(), &["-k"]);
+    let again = lines(&out.stdout);
+    assert!(has_line(
+        &again,
+        "EEPROM Signing key already exists, not overwriting!"
+    ));
+    assert_eq!(
+        std::fs::read(firmware(home.path()).join("signing.key")).unwrap(),
+        signing_key
+    );
+
+    let out = rust_rnodeconf(home.path(), &["-P"]);
+    let public = lines(&out.stdout);
+    let at = public
+        .iter()
+        .position(|l| l == "EEPROM Signing Public key:")
+        .unwrap();
+    // The same public key `-k` printed.
+    let printed = generated.iter().position(|l| l == "Public key:").unwrap();
+    assert_eq!(public[at + 1], generated[printed + 1]);
+    let identity = rns_net::storage::load_identity(&device_key).unwrap();
+    let expected: Vec<String> = identity.get_public_key().unwrap()[32..]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert!(has_line(&public, "Device Signing Public key:"));
+    assert!(has_line(&public, &expected.join(":")));
+}
+
+#[test]
+fn public_keys_without_keys() {
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["-P"]);
+    let lines = lines(&out.stdout);
+    assert!(has_line(&lines, "Could not load EEPROM signing key"));
+    assert!(has_line(&lines, "Could not load device signing key"));
+}
+
+#[test]
+fn eeprom_dump_and_backup() {
+    let image = eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None);
+    let fake = FakeRNode::start(device(image.clone()));
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["--eeprom-dump", &fake.path]);
+    let dump = lines(&out.stdout);
+    let at = dump.iter().position(|l| l == "EEPROM contents:").unwrap();
+    let hex: Vec<String> = image.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(dump[at + 1], hex.join(":"));
+
+    let out = rust_rnodeconf(home.path(), &["--eeprom-backup", &fake.path]);
+    let backup = lines(&out.stdout);
+    let line = backup
+        .iter()
+        .find(|l| l.starts_with("EEPROM backup written to: "))
+        .unwrap();
+    let path = line.trim_start_matches("EEPROM backup written to: ");
+    assert!(path.starts_with(
+        &home
+            .path()
+            .join(".config/rnodeconf/eeprom/")
+            .display()
+            .to_string()
+    ));
+    assert!(path.ends_with(".eeprom"));
+    assert_eq!(std::fs::read(path).unwrap(), image);
+}
+
+#[test]
+fn eeprom_wipe_clears_the_device() {
+    let fake = FakeRNode::start(avr_device(eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None)));
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["--eeprom-wipe", &fake.path]);
+    assert!(out.status.success());
+    assert!(has_line(
+        &lines(&out.stdout),
+        "WARNING: EEPROM is being wiped! Power down device NOW if you do not want this!"
+    ));
+    let frames = fake.received();
+    assert!(frames.contains(&vec![CMD_ROM_WIPE, 0xf8]));
+    assert_eq!(frames.last(), Some(&vec![CMD_RESET, 0xf8]));
+    assert_eq!(fake.device.lock().unwrap().eeprom, blank_eeprom());
+}
+
+#[test]
+fn bootstrap_provisions_a_blank_device() {
+    let home = keyed_home();
+    let fake = FakeRNode::start(avr_device(blank_eeprom()));
+    let out = rust_rnodeconf(
+        home.path(),
+        &["-r", "--model", "a9", "--hwrev", "3", &fake.path],
+    );
+    assert!(out.status.success());
+    let lines_out = lines(&out.stdout);
+    for expected in [
+        "Loading signing key...",
+        "Bootstrapping device EEPROM...",
+        "EEPROM written! Validating...",
+        "EEPROM checksum correct",
+        "Device signature validated",
+        "EEPROM Bootstrapping successful!",
+    ] {
+        assert!(
+            has_line(&lines_out, expected),
+            "missing {expected:?} in {lines_out:#?}"
+        );
+    }
+    let written = fake.device.lock().unwrap().eeprom.clone();
+    assert_eq!(&written[0..4], &[0x03, 0xA9, 3, 0]);
+    assert_eq!(&written[3..7], &[0, 0, 0, 1]);
+    assert_eq!(written[0x9B], 0x73);
+    let firmware = firmware(home.path());
+    assert_eq!(
+        std::fs::read_to_string(firmware.join("serial.counter")).unwrap(),
+        "1"
+    );
+    assert_eq!(
+        std::fs::read(firmware.join("device_db/00000001")).unwrap(),
+        written
+    );
+
+    // The device now shows as validated by the local key.
+    let out = rust_rnodeconf(home.path(), &["-i", &fake.path]);
+    assert!(has_line(
+        &lines(&out.stdout),
+        "\tDevice signature   : Validated - Local signature"
+    ));
+
+    // A provisioned device is left alone.
+    let out = rust_rnodeconf(
+        home.path(),
+        &["-r", "--model", "a9", "--hwrev", "3", &fake.path],
+    );
+    assert!(has_line(
+        &lines(&out.stdout),
+        "EEPROM bootstrap was requested, but a valid EEPROM was already present."
+    ));
+}
+
+#[test]
+fn bootstrap_needs_a_model_and_a_key() {
+    let home = keyed_home();
+    let fake = FakeRNode::start(avr_device(blank_eeprom()));
+    let out = rust_rnodeconf(home.path(), &["-r", "--hwrev", "3", &fake.path]);
+    assert!(has_line(
+        &lines(&out.stdout),
+        "Invalid data specified, cancelling EEPROM write"
+    ));
+
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(
+        home.path(),
+        &["-r", "--model", "a9", "--hwrev", "3", &fake.path],
+    );
+    assert!(has_line(&lines(&out.stdout), "No signing key found"));
+    assert_eq!(fake.device.lock().unwrap().eeprom, blank_eeprom());
+}
+
+#[test]
+fn sign_stores_the_device_signature() {
+    let home = keyed_home();
+    let fake = FakeRNode::start(device(eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None)));
+    let out = rust_rnodeconf(home.path(), &["-S", &fake.path]);
+    assert!(out.status.success());
+    assert!(has_line(&lines(&out.stdout), "Device signed"));
+    let identity =
+        rns_net::storage::load_identity(&firmware(home.path()).join("device.key")).unwrap();
+    let mut expected = vec![CMD_DEV_SIG];
+    expected.extend(identity.sign(&[0x11; 32]).unwrap());
+    assert!(fake.received().contains(&expected));
+
+    // Not without provisioning.
+    let fake = FakeRNode::start(device(blank_eeprom()));
+    let out = rust_rnodeconf(home.path(), &["-S", &fake.path]);
+    assert_eq!(out.status.code(), Some(79));
+}
+
+#[test]
+fn firmware_hashes() {
+    let home = tempfile::tempdir().unwrap();
+    let fake = FakeRNode::start(device(eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None)));
+    let hash = "ab".repeat(32);
+    let out = rust_rnodeconf(home.path(), &["-H", &hash, &fake.path]);
+    assert!(has_line(&lines(&out.stdout), "Firmware hash set"));
+    let mut expected = vec![CMD_FW_HASH];
+    expected.extend([0xab; 32]);
+    assert!(fake.received().contains(&expected));
+
+    let out = rust_rnodeconf(home.path(), &["-H", "abcd", &fake.path]);
+    assert_eq!(out.status.code(), Some(78));
+
+    let out = rust_rnodeconf(home.path(), &["-K", "-L", &fake.path]);
+    let lines = lines(&out.stdout);
+    assert!(has_line(
+        &lines,
+        &format!("The target firmware hash is: {}", "22".repeat(32))
+    ));
+    assert!(has_line(
+        &lines,
+        &format!("The actual firmware hash is: {}", "33".repeat(32))
+    ));
+
+    let fake = FakeRNode::start(device(blank_eeprom()));
+    let out = rust_rnodeconf(home.path(), &["-K", &fake.path]);
+    assert_eq!(out.status.code(), Some(77));
+}
+
+/// Run both without a device and compare their output.
+fn compare_offline(python_home: &Path, rust_home: &Path, args: &[&str]) {
+    let python = python_rnodeconf(python_home, args);
+    assert!(
+        python.status.success(),
+        "python rnodeconf failed: {}",
+        String::from_utf8_lossy(&python.stderr)
+    );
+    let rust = rust_rnodeconf(rust_home, args);
+    assert_eq!(normalize(&rust.stdout, "-"), normalize(&python.stdout, "-"));
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_trust_key() {
+    let python_home = tempfile::tempdir().unwrap();
+    let rust_home = tempfile::tempdir().unwrap();
+    let key = include_str!("vectors/pss_public_key.hex").trim();
+    compare_offline(python_home.path(), rust_home.path(), &["--trust-key", key]);
+    let trusted = |home: &Path| {
+        let dir = home.join(".config/rnodeconf/trusted_keys");
+        let mut files: Vec<(std::ffi::OsString, Vec<u8>)> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                (e.file_name(), std::fs::read(e.path()).unwrap())
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    assert_eq!(trusted(rust_home.path()), trusted(python_home.path()));
+    assert_eq!(trusted(rust_home.path()).len(), 1);
+    compare_offline(python_home.path(), rust_home.path(), &["--trust-key", "zz"]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_public_keys() {
+    // Upstream reads the keys our -k writes.
+    let home = keyed_home();
+    compare_offline(home.path(), home.path(), &["-P"]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_key_generation() {
+    // Keys are random, so compare the messages, then check each tool
+    // reads the other's keys.
+    let python_home = tempfile::tempdir().unwrap();
+    let rust_home = tempfile::tempdir().unwrap();
+    let python = python_rnodeconf(python_home.path(), &["-k"]);
+    let rust = rust_rnodeconf(rust_home.path(), &["-k"]);
+    let messages = |out: &[u8], home: &Path| -> Vec<String> {
+        let mut lines = normalize(out, &home.display().to_string());
+        // The line after "Public key:" is the key itself.
+        if let Some(at) = lines.iter().position(|l| l == "Public key:") {
+            lines.remove(at + 1);
+        }
+        lines
+    };
+    assert_eq!(
+        messages(&rust.stdout, rust_home.path()),
+        messages(&python.stdout, python_home.path())
+    );
+    let python_on_rust = python_rnodeconf(rust_home.path(), &["-P"]);
+    let rust_on_python = rust_rnodeconf(python_home.path(), &["-P"]);
+    let rust_on_rust = rust_rnodeconf(rust_home.path(), &["-P"]);
+    let python_on_python = python_rnodeconf(python_home.path(), &["-P"]);
+    assert_eq!(
+        normalize(&rust_on_rust.stdout, "-"),
+        normalize(&python_on_rust.stdout, "-")
+    );
+    assert_eq!(
+        normalize(&rust_on_python.stdout, "-"),
+        normalize(&python_on_python.stdout, "-")
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_eeprom_dump() {
+    let home = tempfile::tempdir().unwrap();
+    compare_with_python(
+        eeprom(
+            0xE0,
+            0xE9,
+            2,
+            [1, 2, 3, 4],
+            MADE,
+            Some((8, 5, 14, 867_200_000, 125_000)),
+        ),
+        home.path(),
+        &["--eeprom-dump"],
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_eeprom_wipe() {
+    let home = tempfile::tempdir().unwrap();
+    let (python, python_fake, rust, rust_fake) = run_both(
+        avr_device(eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None)),
+        home.path(),
+        home.path(),
+        &["--eeprom-wipe"],
+    );
+    assert_eq!(rust, python);
+    assert_eq!(rust_fake.received(), python_fake.received());
+    assert_eq!(rust_fake.device.lock().unwrap().eeprom, blank_eeprom());
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_sign() {
+    // Ed25519 signatures are deterministic, so the frames match too.
+    let home = keyed_home();
+    compare_with_python(
+        eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None),
+        home.path(),
+        &["-S"],
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_firmware_hashes() {
+    let home = tempfile::tempdir().unwrap();
+    let e = eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None);
+    compare_with_python(e.clone(), home.path(), &["-H", &"ab".repeat(32)]);
+    compare_with_python(e, home.path(), &["-K", "-L"]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_bootstrap() {
+    let keys = keyed_home();
+    let python_home = copy_home(keys.path());
+    let rust_home = copy_home(keys.path());
+    let (python, python_fake, rust, rust_fake) = run_both(
+        avr_device(blank_eeprom()),
+        python_home.path(),
+        rust_home.path(),
+        &["-r", "--model", "a9", "--hwrev", "3"],
+    );
+    assert_eq!(rust, python);
+
+    // The same EEPROM writes, in the same order. The values differ only in
+    // the manufacturing time and what depends on it.
+    let writes = |fake: &FakeRNode| -> Vec<u8> {
+        fake.received()
+            .iter()
+            .filter(|f| f[0] == CMD_ROM_WRITE)
+            .map(|f| f[1])
+            .collect()
+    };
+    assert_eq!(writes(&rust_fake), writes(&python_fake));
+    let rust_written = rust_fake.device.lock().unwrap().eeprom.clone();
+    let python_written = python_fake.device.lock().unwrap().eeprom.clone();
+    assert_eq!(rust_written[..7], python_written[..7]);
+    assert_eq!(rust_written[0x9B..], python_written[0x9B..]);
+
+    // Each tool accepts the EEPROM the other wrote.
+    compare_device_with_python(avr_device(rust_written), keys.path(), &["-i"]);
+    compare_device_with_python(avr_device(python_written), keys.path(), &["-i"]);
+    let out = rust_rnodeconf(keys.path(), &["-i", &python_fake.path]);
+    assert!(has_line(
+        &lines(&out.stdout),
+        "\tDevice signature   : Validated - Local signature"
+    ));
+
+    for home in [python_home.path(), rust_home.path()] {
+        assert_eq!(
+            std::fs::read_to_string(firmware(home).join("serial.counter")).unwrap(),
+            "1"
+        );
+        assert!(firmware(home).join("device_db/00000001").is_file());
+    }
 }

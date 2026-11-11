@@ -18,7 +18,11 @@ which is why no audit caught them.
   `rnodeconf` detects a device and implements `-i`, `-c`, `-T`, `-N` and the
   TNC radio parameters, checked against upstream's Python `rnodeconf` on a
   fake RNode. Device signatures are verified natively (RSA-PSS over
-  `num-bigint`), since the `rsa` crate carries an unfixed RustSec advisory.
+  `num-bigint`).
+- `rnodeconf` stage 2 is done: `--eeprom-dump`, `--eeprom-backup`,
+  `--eeprom-wipe`, `-k`, `-P`, `--trust-key`, `-r`, `-S`, `-H`, `-K` and `-L`,
+  each compared with upstream's Python `rnodeconf`. Keys and EEPROM
+  signatures use the `rsa` crate 0.10, which fixes RUSTSEC-2023-0071.
 - Phase 3 (3.1 with 2.6) is done: `autoconnect_policy`, defaulting to
   `upstream`, with `autoconnect_discovered_interfaces` and `bootstrap_only`.
   A bootstrap interface whose target is unreachable cannot be attached; the
@@ -167,10 +171,10 @@ command set the native RNode interface already uses, plus device commands.
    switch between TNC and normal mode (`-T`, `-N`) and set the TNC radio
    parameters (`--freq`, `--bw`, `--txp`, `--sf`, `--cr`).
 2. **EEPROM and keys.** `--eeprom-backup`, `--eeprom-dump`, `--eeprom-wipe`;
-   signing keys (`-k` to generate, `-S` to show the public part,
+   signing keys (`-k` to generate, `-P` to show the public parts,
    `--trust-key`); bootstrapping a device's EEPROM without flashing (`-r`
-   with `--platform`, `--product`, `--model`, `--hwrev`); setting the
-   installed firmware hash (`-H`).
+   with `--product`, `--model`, `--hwrev`); signing the device (`-S`);
+   setting and reading the firmware hash (`-H`, `-K`, `-L`).
 3. **Peripherals.** Bluetooth (`-b`, `-B`, `-p`), Wi-Fi (`-w` with
    `--channel`, `--ssid`, `--psk`, `--show-psk`, `--ip`, `--nm`), display
    (`-D` intensity, `-t` timeout, `--display-addr`, `--recondition-display`),

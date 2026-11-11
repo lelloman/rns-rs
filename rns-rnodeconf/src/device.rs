@@ -196,6 +196,38 @@ impl RNode {
         Ok(())
     }
 
+    /// upstream `wipe_eeprom`, which waits for the device to finish.
+    pub fn wipe_eeprom(&mut self, board: Option<u8>) -> std::io::Result<()> {
+        self.write(&[FEND, CMD_ROM_WIPE, 0xf8, FEND], "wiping EEPROM")?;
+        thread::sleep(Duration::from_secs(13));
+        // The RAK4631's emulated EEPROM needs longer.
+        if board == Some(crate::rom::BOARD_RAK4631) {
+            thread::sleep(Duration::from_secs(10));
+        }
+        Ok(())
+    }
+
+    /// upstream `write_eeprom`: one byte at `addr`.
+    pub fn write_eeprom(&mut self, addr: u8, byte: u8) -> std::io::Result<()> {
+        self.write(&kiss::frame(CMD_ROM_WRITE, &[addr, byte]), "writing EEPROM")
+    }
+
+    /// upstream `store_signature`: the device signature.
+    pub fn store_signature(&mut self, signature: &[u8]) -> std::io::Result<()> {
+        self.write(
+            &kiss::frame(CMD_DEV_SIG, signature),
+            "sending signature to device",
+        )
+    }
+
+    /// upstream `set_firmware_hash`.
+    pub fn set_firmware_hash(&mut self, hash: &[u8]) -> std::io::Result<()> {
+        self.write(
+            &kiss::frame(CMD_FW_HASH, hash),
+            "sending firmware hash to device",
+        )
+    }
+
     /// upstream `hard_reset`.
     pub fn hard_reset(&mut self) -> std::io::Result<()> {
         self.write(&[FEND, CMD_RESET, 0xf8, FEND], "restarting device")?;

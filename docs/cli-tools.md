@@ -117,13 +117,30 @@ Implemented so far:
 - `-T` switches to TNC mode with `--freq`, `--bw`, `--txp`, `--sf` and `--cr`,
   asking for any not given; `-N` switches back to normal (host-controlled)
   mode.
+- `--eeprom-dump` prints the device's EEPROM; `--eeprom-backup` saves it to
+  `~/.config/rnodeconf/eeprom/<date>_<time>.eeprom`; `--eeprom-wipe` erases
+  it. Upstream joins that directory and the file name without a separator,
+  so its backups land beside the `eeprom` directory instead of inside it.
+- `-k` creates the local signing keys if missing:
+  `~/.config/rnodeconf/firmware/device.key` (a Reticulum identity) and
+  `signing.key` (RSA-1024, PKCS#8 DER, readable by upstream). `-P` shows
+  their public halves. `--trust-key <hex>` trusts another public key for
+  device verification.
+- `-r` bootstraps an unprovisioned device's EEPROM with `--model`,
+  `--hwrev` and optionally `--product` (default `03`), signs it with
+  `signing.key`, numbers it from `firmware/serial.counter` and reads it
+  back. Upstream finds an NRF52 board again by its USB serial number after
+  the reset; this keeps the same port.
+- `-S` signs the device hash with `device.key`; `-H <sha256>` stores the
+  expected firmware hash; `-K` and `-L` show the target and actual
+  firmware hashes.
 
-The EEPROM, key, Bluetooth, WiFi, display and firmware options are planned
-(see the [parity gap plan](upstream-parity/parity-gap-plan.md)); for now they
-report that they are not implemented. The crate's tests run the tool against
-a fake RNode on a pseudo-terminal, and the interop CI jobs run upstream's
-Python `rnodeconf` against the same fake device and require the same output
-and the same frames sent.
+The Bluetooth, WiFi, display and firmware options are planned (see the
+[parity gap plan](upstream-parity/parity-gap-plan.md)); for now they report
+that they are not implemented. The crate's tests run the tool against a fake
+RNode on a pseudo-terminal, and the interop CI jobs run upstream's Python
+`rnodeconf` against the same fake device and require the same output and the
+same frames sent.
 
 ## Examples in `rns-net`
 
