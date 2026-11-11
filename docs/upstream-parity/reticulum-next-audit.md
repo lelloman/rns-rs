@@ -42,6 +42,7 @@ No tag marks the target; `RNS/_version.py` still reads `1.6.0`.
 |---:|---|---|---|---|
 | 1 | `2c7cf827` | Future workblock generation | Deferred | `_stamp_workblock_future` has no caller at the target; ported when upstream uses it |
 | 2 | `aaf08e61` | Transitionally accept both non-expanded and expanded workblock discovery stamps | Integrated | `discovery_stamps_against_either_workblock_are_accepted` |
+| 3 | `132ec70f` | Cleanup | Non-runtime | Whitespace only |
 
 ## Per-Commit Analysis
 
@@ -86,6 +87,16 @@ valid against neither. rns-rs announcers keep the expanded workblock, as
 upstream's do.
 
 **Final disposition:** Integrated.
+
+### 3. `132ec70f` — Cleanup
+
+**Upstream change:** Realigns two lines in `job_simple`.
+
+**Rust applicability:** None.
+
+**Local handling and evidence:** None needed.
+
+**Final disposition:** Non-runtime.
 
 ## Promotion Gates
 
