@@ -32,6 +32,7 @@ COPY rns-sentinel-hook rns-sentinel-hook
 COPY rns-server rns-server
 COPY rns-tun rns-tun
 COPY rns-tun-android rns-tun-android
+COPY rns-rnodeconf rns-rnodeconf
 COPY tools/rns-bench tools/rns-bench
 RUN --mount=type=cache,id=rns-docker-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=rns-docker-target,target=/build/target \
