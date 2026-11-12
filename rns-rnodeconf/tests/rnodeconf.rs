@@ -73,9 +73,23 @@ fn run(mut command: Command, input: Option<&str>) -> std::process::Output {
     child.wait_with_output().expect("wait")
 }
 
+/// `PATH` with the home's `bin` directory first, where tests put fake
+/// flashers.
+fn path_for(home: &Path) -> std::ffi::OsString {
+    let mut dirs = vec![home.join("bin")];
+    dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(dirs).unwrap()
+}
+
 fn rust_command(home: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rnodeconf"));
-    command.args(args).env("HOME", home).env("TZ", "UTC");
+    command
+        .args(args)
+        .env("HOME", home)
+        .env("TZ", "UTC")
+        .env("PATH", path_for(home));
     command
 }
 
@@ -90,7 +104,8 @@ fn python_command(home: &Path, args: &[&str]) -> Command {
         ))
         .env("HOME", home)
         .env("TZ", "UTC")
-        .env("PYTHONUNBUFFERED", "1");
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PATH", path_for(home));
     command
 }
 
@@ -324,20 +339,33 @@ fn run_both_with_input(
     let mut python_args = args.to_vec();
     python_args.push(&python_fake.path);
     let python = run(python_command(python_home, &python_args), input);
+    let stderr = String::from_utf8_lossy(&python.stderr);
     assert!(
-        python.status.success(),
-        "python rnodeconf failed: {}",
-        String::from_utf8_lossy(&python.stderr)
+        !stderr.contains("Traceback"),
+        "python rnodeconf failed: {stderr}"
     );
 
     let rust_fake = FakeRNode::start(device);
     let mut rust_args = args.to_vec();
     rust_args.push(&rust_fake.path);
     let rust = run(rust_command(rust_home, &rust_args), input);
+    assert_eq!(
+        rust.status.code(),
+        python.status.code(),
+        "exit codes for {args:?}"
+    );
+    // Each tool's paths under its own home read the same.
+    let homed = |lines: Vec<String>, home: &Path| -> Vec<String> {
+        let home = home.display().to_string();
+        lines
+            .into_iter()
+            .map(|l| l.replace(&home, "HOME"))
+            .collect()
+    };
     (
-        normalize(&python.stdout, &python_fake.path),
+        homed(normalize(&python.stdout, &python_fake.path), python_home),
         python_fake,
-        normalize(&rust.stdout, &rust_fake.path),
+        homed(normalize(&rust.stdout, &rust_fake.path), rust_home),
         rust_fake,
     )
 }
@@ -1212,4 +1240,435 @@ fn python_comparison_wifi() {
     }
     // On an unprovisioned device too: the settings come before the checks.
     compare_with_python(blank_eeprom(), home.path(), &["-w", "sta"]);
+}
+
+// Stage 4: firmware releases, updating and flashing.
+
+/// A firmware release site on localhost, standing in for the RNode
+/// firmware releases: it serves the given paths and 404s the rest.
+struct ReleaseServer {
+    url: String,
+}
+
+impl ReleaseServer {
+    fn start(files: Vec<(String, Vec<u8>)>) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                use std::io::{BufRead, Write};
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                        break;
+                    }
+                }
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let found = files.iter().find(|(p, _)| format!("/{p}") == path);
+                let (status, body): (&str, &[u8]) = match found {
+                    Some((_, body)) => ("200 OK", body),
+                    None => ("404 Not Found", b"not found"),
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+            }
+        });
+        Self { url }
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    rns_crypto::sha256::sha256(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A flasher that records its arguments in `~/flash.log`, one call per
+/// line, each argument followed by 0x1f.
+const FAKE_ESPTOOL: &str = "import os, sys\nwith open(os.path.expanduser('~/flash.log'), 'a') as log:\n    log.write(''.join(a + '\\x1f' for a in sys.argv[1:]) + '\\n')\n";
+const FAKE_FLASHER: &str =
+    "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\037' \"$a\"; done >> \"$HOME/flash.log\"\necho >> \"$HOME/flash.log\"\n";
+
+fn install_fake_flasher(home: &Path, name: &str) {
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let path = bin.join(name);
+    std::fs::write(&path, FAKE_FLASHER).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn flash_log(home: &Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(home.join("flash.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            line.split('\x1f')
+                .filter(|a| !a.is_empty())
+                .map(|a| a.replace(&home.display().to_string(), "HOME"))
+                .collect()
+        })
+        .collect()
+}
+
+/// An application image as ESP32 builds end: the image, then its SHA-256.
+fn esp32_image() -> (Vec<u8>, Vec<u8>) {
+    let mut image = b"rnode firmware image".repeat(40);
+    let hash = rns_crypto::sha256::sha256(&image).to_vec();
+    image.extend_from_slice(&hash);
+    (image, hash)
+}
+
+/// The T-Beam firmware package, with the fake `esptool.py` inside as
+/// upstream's packages carry the real one.
+fn tbeam_package() -> Vec<u8> {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let (image, _) = esp32_image();
+    for (name, data) in [
+        ("rnode_firmware_tbeam.bin", image.as_slice()),
+        ("rnode_firmware_tbeam.bootloader", b"bootloader".as_slice()),
+        ("rnode_firmware_tbeam.boot_app0", b"boot_app0".as_slice()),
+        ("rnode_firmware_tbeam.partitions", b"partitions".as_slice()),
+        ("console_image.bin", b"console".as_slice()),
+        ("esptool.py", FAKE_ESPTOOL.as_bytes()),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// A release site with T-Beam firmware `version`, its release
+/// information giving `hash` (the package's own when `None`).
+fn tbeam_release(version: &str, hash: Option<&str>) -> ReleaseServer {
+    let package = tbeam_package();
+    let hash = hash.map_or_else(|| sha256_hex(&package), str::to_string);
+    let release = format!(
+        "{{\"rnode_firmware_tbeam.zip\": {{\"version\": \"{version}\", \"hash\": \"{hash}\"}}}}"
+    );
+    ReleaseServer::start(vec![
+        (
+            "latest/download/release.json".into(),
+            release.clone().into_bytes(),
+        ),
+        (
+            format!("download/{version}/release.json"),
+            release.into_bytes(),
+        ),
+        (
+            format!("download/{version}/rnode_firmware_tbeam.zip"),
+            package,
+        ),
+    ])
+}
+
+#[test]
+fn update_downloads_verifies_and_flashes() {
+    let server = tbeam_release("1.83", None);
+    let fake = FakeRNode::start(device(provisioned()));
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["-u", "--fw-url", &server.url, &fake.path]);
+    assert!(out.status.success());
+    let lines = lines(&out.stdout);
+    let update = home.path().join(".config/rnodeconf/update");
+    for expected in [
+        "Checking firmware file availability...".to_string(),
+        format!(
+            "Retrieving specified version info from {}latest/download/release.json",
+            server.url
+        ),
+        "The selected firmware for this board is version 1.83".into(),
+        format!(
+            "Retrieving firmware from custom url {}download/1.83/rnode_firmware_tbeam.zip",
+            server.url
+        ),
+        format!(
+            "Firmware {}/1.83/rnode_firmware_tbeam.zip not found.",
+            update.display()
+        ),
+        "Downloading missing firmware file: rnode_firmware_tbeam.zip for version 1.83".into(),
+        "Firmware file downloaded".into(),
+        "Verifying firmware integrity...".into(),
+        "Decompressing firmware...".into(),
+        "Firmware decompressed".into(),
+        format!("Updating RNode firmware for device on {}", fake.path),
+        "Flashing new firmware completed".into(),
+        "Firmware update completed successfully".into(),
+        "\tProduct            : LilyGO T-Beam 850 - 950 MHz (e0:e9:37)".into(),
+    ] {
+        assert!(
+            has_line(&lines, &expected),
+            "missing {expected:?} in {lines:#?}"
+        );
+    }
+    let (_, hash) = esp32_image();
+    let mut set_hash = vec![CMD_FW_HASH];
+    set_hash.extend(&hash);
+    let frames = fake.received();
+    assert!(frames.contains(&vec![CMD_FW_UPD, 0x01]));
+    assert_eq!(frames.iter().filter(|f| **f == set_hash).count(), 2);
+    let version_dir = "HOME/.config/rnodeconf/update/1.83";
+    assert_eq!(
+        flash_log(home.path()),
+        vec![vec![
+            "--chip",
+            "esp32",
+            "--port",
+            &fake.path,
+            "--baud",
+            "921600",
+            "--before",
+            "default_reset",
+            "--after",
+            "hard_reset",
+            "write_flash",
+            "-z",
+            "--flash_mode",
+            "dio",
+            "--flash_freq",
+            "80m",
+            "--flash_size",
+            "4MB",
+            "0xe000",
+            &format!("{version_dir}/rnode_firmware_tbeam.boot_app0"),
+            "0x1000",
+            &format!("{version_dir}/rnode_firmware_tbeam.bootloader"),
+            "0x10000",
+            &format!("{version_dir}/rnode_firmware_tbeam.bin"),
+            "0x210000",
+            &format!("{version_dir}/console_image.bin"),
+            "0x8000",
+            &format!("{version_dir}/rnode_firmware_tbeam.partitions"),
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>()]
+    );
+
+    // A second update finds the cached package, and the version installed.
+    let out = rust_rnodeconf(
+        home.path(),
+        &[
+            "-u",
+            "--fw-url",
+            &server.url,
+            "--fw-version",
+            "1.82",
+            &fake.path,
+        ],
+    );
+    assert!(has_line(
+        &lines_of(&out),
+        "Specified firmware version (1.82) is already installed on this device"
+    ));
+}
+
+#[test]
+fn update_refusals() {
+    let fake = FakeRNode::start(device(provisioned()));
+    let home = tempfile::tempdir().unwrap();
+    let older = tbeam_release("1.80", None);
+    let out = rust_rnodeconf(home.path(), &["-u", "--fw-url", &older.url, &fake.path]);
+    assert!(has_line(
+        &lines_of(&out),
+        "Latest firmware version (1.80) is older than firmware already installed on this device"
+    ));
+    assert!(flash_log(home.path()).is_empty());
+
+    let corrupt = tbeam_release("1.83", Some(&"00".repeat(32)));
+    let out = rust_rnodeconf(home.path(), &["-u", "--fw-url", &corrupt.url, &fake.path]);
+    assert_eq!(out.status.code(), Some(96));
+    assert!(has_line(
+        &lines_of(&out),
+        "Firmware corrupt. Try clearing the local firmware cache with: rnodeconf --clear-cache"
+    ));
+
+    let out = rust_rnodeconf(home.path(), &["-u", "--nocheck", &fake.path]);
+    assert_eq!(out.status.code(), Some(98));
+
+    let missing = ReleaseServer::start(Vec::new());
+    let out = rust_rnodeconf(home.path(), &["-u", "--fw-url", &missing.url, &fake.path]);
+    assert!(has_line(
+        &lines_of(&out),
+        "Failed to retrive version information for your board."
+    ));
+
+    let fake = FakeRNode::start(device(blank_eeprom()));
+    let out = rust_rnodeconf(home.path(), &["-u", "--fw-url", &older.url, &fake.path]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(has_line(
+        &lines_of(&out),
+        "Device not provisioned. Cannot update device firmware."
+    ));
+}
+
+#[test]
+fn clear_cache_and_version_checks() {
+    let home = tempfile::tempdir().unwrap();
+    let cached = home.path().join(".config/rnodeconf/update/1.83");
+    std::fs::create_dir_all(&cached).unwrap();
+    let out = rust_rnodeconf(home.path(), &["-C"]);
+    assert_eq!(
+        lines_of(&out),
+        vec!["Clearing local firmware cache...", "Done"]
+    );
+    assert!(!cached.exists());
+
+    let out = rust_rnodeconf(home.path(), &["--fw-version", "one", "-u", "/dev/null"]);
+    assert_eq!(
+        lines_of(&out),
+        vec!["Selected version \"one\" does not appear to be a number."]
+    );
+}
+
+#[test]
+fn flash_installs_and_bootstraps_an_avr_board() {
+    let home = keyed_home();
+    install_fake_flasher(home.path(), "avrdude");
+    let cached = home.path().join(".config/rnodeconf/update/1.83");
+    std::fs::create_dir_all(&cached).unwrap();
+    std::fs::write(cached.join("rnode_firmware.hex"), ":00000001FF\n").unwrap();
+    let fake = FakeRNode::start(avr_device(blank_eeprom()));
+    let out = rust_rnodeconf(
+        home.path(),
+        &[
+            "-f",
+            "--fw-version",
+            "1.83",
+            "--model",
+            "a9",
+            "--hwrev",
+            "3",
+            &fake.path,
+        ],
+    );
+    let lines = lines(&out.stdout);
+    for expected in [
+        format!("Flashing RNode firmware to device on {}", fake.path),
+        "Done flashing".into(),
+        "EEPROM Bootstrapping successful!".into(),
+    ] {
+        assert!(
+            has_line(&lines, &expected),
+            "missing {expected:?} in {lines:#?}"
+        );
+    }
+    assert_eq!(
+        flash_log(home.path()),
+        vec![[
+            "-P",
+            fake.path.as_str(),
+            "-p",
+            "m1284p",
+            "-c",
+            "arduino",
+            "-b",
+            "115200",
+            "-U",
+            "flash:w:HOME/.config/rnodeconf/update/1.83/rnode_firmware.hex:i",
+        ]
+        .map(String::from)
+        .to_vec()]
+    );
+
+    let out = rust_rnodeconf(home.path(), &["-f", "--fw-version", "1.90", &fake.path]);
+    assert!(has_line(&lines_of(&out), "Firmware file not found"));
+    let out = rust_rnodeconf(home.path(), &["-f", &fake.path]);
+    assert_eq!(out.status.code(), Some(68));
+}
+
+/// The update through both tools, each in a fresh home against the same
+/// release site.
+fn compare_update(server: &ReleaseServer, eeprom: Vec<u8>, extra: &[&str]) {
+    let python_home = tempfile::tempdir().unwrap();
+    let rust_home = tempfile::tempdir().unwrap();
+    let mut args = vec!["-u", "--fw-url", server.url.as_str()];
+    args.extend_from_slice(extra);
+    let (python, python_fake, rust, rust_fake) =
+        run_both(device(eeprom), python_home.path(), rust_home.path(), &args);
+    assert_eq!(rust, python);
+    assert_eq!(rust_fake.received(), python_fake.received());
+    let ported = |home: &Path, port: &str| -> Vec<Vec<String>> {
+        flash_log(home)
+            .into_iter()
+            .map(|call| call.into_iter().map(|a| a.replace(port, "PORT")).collect())
+            .collect()
+    };
+    assert_eq!(
+        ported(rust_home.path(), &rust_fake.path),
+        ported(python_home.path(), &python_fake.path)
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_update() {
+    compare_update(&tbeam_release("1.83", None), provisioned(), &[]);
+    compare_update(
+        &tbeam_release("1.83", None),
+        provisioned(),
+        &["--fw-version", "1.83", "-i"],
+    );
+    compare_update(&tbeam_release("1.82", None), provisioned(), &["-U"]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_update_refusals() {
+    compare_update(&tbeam_release("1.82", None), provisioned(), &[]);
+    compare_update(
+        &tbeam_release("1.80", None),
+        provisioned(),
+        &["--fw-version", "1.80"],
+    );
+    compare_update(
+        &tbeam_release("1.83", Some(&"00".repeat(32))),
+        provisioned(),
+        &[],
+    );
+    compare_update(&ReleaseServer::start(Vec::new()), provisioned(), &[]);
+    compare_update(&tbeam_release("1.83", None), provisioned(), &["--nocheck"]);
+    compare_update(&tbeam_release("1.83", None), blank_eeprom(), &[]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_flash() {
+    // Upstream's -f only gets this far on its own: past the version check
+    // it reads the model the autoinstall wizard selects, and fails.
+    let home = tempfile::tempdir().unwrap();
+    let (python, _, rust, _) = run_both(
+        avr_device(blank_eeprom()),
+        home.path(),
+        home.path(),
+        &["-f"],
+    );
+    assert_eq!(rust, python);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_cache_and_version() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".config/rnodeconf/update/1.83")).unwrap();
+    compare_offline(home.path(), home.path(), &["-C"]);
+    compare_offline(
+        home.path(),
+        home.path(),
+        &["--fw-version", "one", "-u", "/dev/null"],
+    );
 }

@@ -3,6 +3,8 @@
 //! device's replies in the background.
 
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -46,6 +48,7 @@ impl Reported {
 pub struct RNode {
     writer: std::fs::File,
     pub state: Arc<Mutex<Reported>>,
+    stop: Arc<AtomicBool>,
 }
 
 impl RNode {
@@ -53,11 +56,17 @@ impl RNode {
     pub fn new(reader: std::fs::File, writer: std::fs::File) -> Self {
         let state = Arc::new(Mutex::new(Reported::default()));
         let shared = Arc::clone(&state);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
         thread::Builder::new()
             .name("rnode-read".into())
-            .spawn(move || read_loop(reader, shared))
+            .spawn(move || read_loop(reader, shared, stopped))
             .expect("spawn serial reader");
-        Self { writer, state }
+        Self {
+            writer,
+            state,
+            stop,
+        }
     }
 
     pub fn reported(&self) -> Reported {
@@ -228,6 +237,24 @@ impl RNode {
         )
     }
 
+    /// upstream `disconnect`: leave, then close the port. The reader stops
+    /// before the port can be opened again, so it cannot take the next
+    /// connection's replies.
+    pub fn disconnect(mut self) -> std::io::Result<()> {
+        let left = self.leave();
+        self.stop.store(true, Ordering::SeqCst);
+        thread::sleep(READ_POLL * 2);
+        left
+    }
+
+    /// upstream `indicate_firmware_update`.
+    pub fn indicate_firmware_update(&mut self) -> std::io::Result<()> {
+        self.write(
+            &[FEND, CMD_FW_UPD, 0x01, FEND],
+            "sending firmware update command to device",
+        )
+    }
+
     /// A one-command setting. Upstream sends the display, NeoPixel and
     /// WiFi mode values unescaped, which breaks the frame for 0xC0 and
     /// 0xDB; these are escaped.
@@ -256,7 +283,10 @@ pub struct RadioConfig {
 /// Read frames from the device until the port closes, as upstream's
 /// `readLoop` does. A frame is dropped when its bytes stop arriving for
 /// upstream's 100 ms timeout.
-fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>) {
+/// How long the reader waits for bytes before checking whether to stop.
+const READ_POLL: Duration = Duration::from_millis(100);
+
+fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<AtomicBool>) {
     let mut in_frame = false;
     let mut escape = false;
     let mut command = CMD_UNKNOWN;
@@ -284,6 +314,22 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>) {
     };
 
     loop {
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut poll = libc::pollfd {
+            fd: reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd for a descriptor this thread owns.
+        let ready = unsafe { libc::poll(&mut poll, 1, READ_POLL.as_millis() as libc::c_int) };
+        if ready == 0
+            || (ready < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted)
+        {
+            continue;
+        }
         let n = match reader.read(&mut buf) {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
