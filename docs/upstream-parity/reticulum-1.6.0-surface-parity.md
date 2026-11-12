@@ -61,6 +61,7 @@ Two Heltec LoRa32 v3 RNodes (ESP32-S3, 8 MB flash, CP2102), 2026-11-12:
 | `-D`, `-t`, `-x` then `-c`, then restored | The firmware stored and reported each value |
 | `-u -U` | Release information and the 1.86 package fetched from GitHub, byte-identical to upstream's download; flashed with the package's esptool; firmware hash set; target and actual hashes equal the image's |
 | `-a` on the second board | Wizard, firmware check and flash completed; its EEPROM was already valid, so bootstrapping made no changes, as upstream's does |
+| `-i` against the rns-esp32 firmware | rns-esp32 answers the RNode handshake but returns its build version for the EEPROM; the output is identical to upstream's, including "The contained exception was: index out of range", which the hardware run showed was missing and is now reported |
 
 Not in scope, as in the plan: Python-only internals with no observable
 behaviour, and upstream's documentation build.
