@@ -4,6 +4,7 @@ pub mod config;
 pub mod control;
 pub mod identity_store;
 pub mod ifac;
+pub mod modem;
 pub mod protocol;
 pub mod settings_store;
 pub mod util;

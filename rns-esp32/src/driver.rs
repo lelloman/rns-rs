@@ -84,6 +84,8 @@ pub struct Driver {
     active_radio_config: RadioConfig,
     device_settings: DeviceSettings,
     settings_partition: Option<EspDefaultNvsPartition>,
+    /// When the node last announced on its own (`ANNOUNCE_INTERVAL_SECS`).
+    last_auto_announce: Option<f64>,
 }
 
 impl Driver {
@@ -111,6 +113,7 @@ impl Driver {
             },
             device_settings: DeviceSettings::compile_default(),
             settings_partition: None,
+            last_auto_announce: None,
         }
     }
 
@@ -119,8 +122,17 @@ impl Driver {
         self.stats = Some(stats);
     }
 
-    /// Set the node identity (needed for announces).
+    /// Set the node identity (needed for announces). Its `transport`
+    /// destination is registered, as upstream registers a destination on
+    /// creation: the engine only sends announces for registered ones.
     pub fn set_identity(&mut self, identity: Identity) {
+        let transport = rns_core::destination::destination_hash(
+            "rns_esp32",
+            &["transport"],
+            Some(identity.hash()),
+        );
+        self.engine
+            .register_destination(transport, constants::DESTINATION_SINGLE);
         self.control_dest_hash = if compiled_controller_keys().is_empty() {
             None
         } else {
@@ -229,6 +241,7 @@ impl Driver {
                 Event::Tick => {
                     let actions = self.engine.tick(now(), &mut self.rng);
                     self.dispatch_all(actions);
+                    self.announce_if_due();
                 }
                 Event::SendPing => {
                     self.handle_send_ping();
@@ -319,7 +332,7 @@ impl Driver {
                 TransportAction::AnnounceReceived(announce) => {
                     log::info!(
                         "Announce received: dest={} hops={}",
-                        hex(&announce.destination_hash[..4]),
+                        hex(&announce.destination_hash),
                         announce.hops
                     );
                     if let Some(ref stats) = self.stats {
@@ -575,9 +588,27 @@ impl Driver {
         }
     }
 
+    /// Announce when `ANNOUNCE_INTERVAL_SECS` is set and has passed since
+    /// the last one, or at the first tick after boot.
+    fn announce_if_due(&mut self) {
+        let interval = crate::config::ANNOUNCE_INTERVAL_SECS as f64;
+        if interval <= 0.0 || self.identity.is_none() {
+            return;
+        }
+        let now = now();
+        if self
+            .last_auto_announce
+            .is_some_and(|last| now - last < interval)
+        {
+            return;
+        }
+        self.last_auto_announce = Some(now);
+        self.handle_send_announce();
+    }
+
     /// Build and broadcast a Reticulum announce for this node's identity.
     fn handle_send_announce(&mut self) {
-        log::info!("Button: sending announce");
+        log::info!("Sending announce");
         self.send_announce_for_aspects(&["transport"]);
         if self.control_dest_hash.is_some() {
             self.send_announce_for_aspects(&["control"]);
@@ -640,7 +671,7 @@ impl Driver {
                             now(),
                         );
                         self.dispatch_all(actions);
-                        log::info!("Announce broadcast for dest={}", hex(&dest_hash[..4]));
+                        log::info!("Announce broadcast for dest={}", hex(&dest_hash));
                     }
                     Err(err) => log::error!("Failed to pack announce: {:?}", err),
                 }

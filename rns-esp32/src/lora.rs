@@ -17,6 +17,7 @@ use esp_idf_hal::spi::{self, SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::units::Hertz;
 use rns_esp32::airframe::{self, Reassembler};
+use rns_esp32::modem;
 
 use crate::config;
 use rns_esp32::protocol::RadioConfig;
@@ -41,6 +42,17 @@ const OPCODE_GET_RX_BUFFER_STATUS: u8 = 0x13;
 const OPCODE_SET_DIO3_AS_TCXO_CTRL: u8 = 0x97;
 const OPCODE_CALIBRATE: u8 = 0x89;
 const OPCODE_SET_REGULATOR_MODE: u8 = 0x96;
+const OPCODE_WRITE_REGISTER: u8 = 0x0D;
+const OPCODE_READ_REGISTER: u8 = 0x1D;
+
+/// IQ polarity setup; bit 2 must be set again after every SetPacketParams
+/// for standard IQ (SX1262 errata 15.4), as RNode firmware does.
+const REG_IQ_POLARITY: u16 = 0x0736;
+/// LNA gain; RNode firmware sets boosted RX gain (0x96).
+const REG_RX_GAIN: u16 = 0x08AC;
+/// Modulation quality; bit 2 set for every bandwidth but 500 kHz (SX1262
+/// errata 15.1), as RNode firmware does.
+const REG_TX_MODULATION: u16 = 0x0889;
 
 // IRQ masks
 const IRQ_TX_DONE: u16 = 0x0001;
@@ -65,6 +77,8 @@ pub struct Radio {
     busy: PinDriver<'static, Input>,
     /// Rebuilds frames split over two LoRa packets.
     reassembler: Reassembler,
+    /// The preamble for the current channel, in symbols.
+    preamble: u16,
 }
 
 impl Radio {
@@ -106,6 +120,71 @@ impl Radio {
 
         let start = 1 + params.len() + 1;
         rx[start..tx_len].to_vec()
+    }
+
+    fn write_register(&mut self, address: u16, value: u8) {
+        self.cmd(
+            OPCODE_WRITE_REGISTER,
+            &[(address >> 8) as u8, address as u8, value],
+        );
+    }
+
+    fn read_register(&mut self, address: u16) -> u8 {
+        self.cmd_read(
+            OPCODE_READ_REGISTER,
+            &[(address >> 8) as u8, address as u8],
+            1,
+        )[0]
+    }
+
+    /// Modulation, preamble and the bandwidth-dependent errata setting, as
+    /// RNode firmware derives them from the channel.
+    fn set_modulation(&mut self, spreading_factor: u8, bandwidth: u32, coding_rate: u8) {
+        let bw_param = match bandwidth {
+            7_800 => 0x00,
+            10_400 => 0x08,
+            15_600 => 0x01,
+            20_800 => 0x09,
+            31_250 => 0x02,
+            41_700 => 0x0A,
+            62_500 => 0x03,
+            125_000 => 0x04,
+            250_000 => 0x05,
+            500_000 => 0x06,
+            _ => 0x04,
+        };
+        let ldro = modem::low_data_rate(spreading_factor, bandwidth) as u8;
+        self.cmd(
+            OPCODE_SET_MODULATION_PARAMS,
+            &[spreading_factor, bw_param, coding_rate - 4, ldro],
+        );
+        self.preamble = modem::preamble_symbols(spreading_factor, bandwidth, coding_rate);
+        let quality = self.read_register(REG_TX_MODULATION);
+        let quality = if bandwidth == 500_000 {
+            quality & !0x04
+        } else {
+            quality | 0x04
+        };
+        self.write_register(REG_TX_MODULATION, quality);
+    }
+
+    /// Packet params (explicit header, CRC, standard IQ) for a payload of
+    /// `length`, then the IQ errata fix.
+    fn set_packet_params(&mut self, length: u8) {
+        let crc = if config::LORA_CRC_ON { 0x01 } else { 0x00 };
+        self.cmd(
+            OPCODE_SET_PACKET_PARAMS,
+            &[
+                (self.preamble >> 8) as u8,
+                self.preamble as u8,
+                0x00, // explicit header
+                length,
+                crc,
+                0x00, // standard IQ
+            ],
+        );
+        let iq = self.read_register(REG_IQ_POLARITY);
+        self.write_register(REG_IQ_POLARITY, iq | 0x04);
     }
 
     /// Hardware reset the radio.
@@ -167,34 +246,12 @@ impl Radio {
         // TX params: power, rampTime (0x04 = 200us)
         self.cmd(OPCODE_SET_TX_PARAMS, &[config::LORA_TX_POWER as u8, 0x04]);
 
-        // Modulation params: SF, BW, CR, LowDataRateOptimize
-        let bw_param = match config::LORA_BANDWIDTH {
-            7_800 => 0x00,
-            10_400 => 0x08,
-            15_600 => 0x01,
-            20_800 => 0x09,
-            31_250 => 0x02,
-            41_700 => 0x0A,
-            62_500 => 0x03,
-            125_000 => 0x04,
-            250_000 => 0x05,
-            500_000 => 0x06,
-            _ => 0x04, // default 125kHz
-        };
-        let ldro = if config::LORA_SPREADING_FACTOR >= 11 && config::LORA_BANDWIDTH <= 125_000 {
-            0x01
-        } else {
-            0x00
-        };
-        self.cmd(
-            OPCODE_SET_MODULATION_PARAMS,
-            &[
-                config::LORA_SPREADING_FACTOR,
-                bw_param,
-                config::LORA_CODING_RATE - 4, // CR encoding: 1=4/5, 2=4/6, etc.
-                ldro,
-            ],
+        self.set_modulation(
+            config::LORA_SPREADING_FACTOR,
+            config::LORA_BANDWIDTH,
+            config::LORA_CODING_RATE,
         );
+        self.write_register(REG_RX_GAIN, 0x96);
 
         // Buffer base addresses: TX=0, RX=128
         self.cmd(OPCODE_SET_BUFFER_BASE_ADDRESS, &[0x00, 0x80]);
@@ -218,18 +275,7 @@ impl Radio {
 
     /// Set packet params for RX mode (max payload length, explicit header, CRC).
     fn set_rx_packet_params(&mut self) {
-        let crc = if config::LORA_CRC_ON { 0x01 } else { 0x00 };
-        self.cmd(
-            OPCODE_SET_PACKET_PARAMS,
-            &[
-                (config::LORA_PREAMBLE_LENGTH >> 8) as u8,
-                config::LORA_PREAMBLE_LENGTH as u8,
-                0x00,                   // explicit header
-                config::LORA_MTU as u8, // max payload length for RX
-                crc,
-                0x00, // standard IQ
-            ],
-        );
+        self.set_packet_params(config::LORA_MTU as u8);
     }
 
     /// Enter continuous RX mode with proper packet params.
@@ -261,19 +307,7 @@ impl Radio {
 
         self.set_standby();
 
-        // Packet params: preamble(2), header=explicit(0), payloadLen, CRC, invertIQ=standard(0)
-        let crc = if config::LORA_CRC_ON { 0x01 } else { 0x00 };
-        self.cmd(
-            OPCODE_SET_PACKET_PARAMS,
-            &[
-                (config::LORA_PREAMBLE_LENGTH >> 8) as u8,
-                config::LORA_PREAMBLE_LENGTH as u8,
-                0x00, // explicit header
-                data.len() as u8,
-                crc,
-                0x00, // standard IQ
-            ],
-        );
+        self.set_packet_params(data.len() as u8);
 
         // Write data to TX buffer at offset 0
         let mut buf = [0u8; MAX_TX_WRITE_BUFFER];
@@ -338,29 +372,7 @@ impl Radio {
         // TX params
         self.cmd(OPCODE_SET_TX_PARAMS, &[tx_power as u8, 0x04]);
 
-        // Modulation params: SF, BW, CR, LowDataRateOptimize
-        let bw_param = match bandwidth {
-            7_800 => 0x00,
-            10_400 => 0x08,
-            15_600 => 0x01,
-            20_800 => 0x09,
-            31_250 => 0x02,
-            41_700 => 0x0A,
-            62_500 => 0x03,
-            125_000 => 0x04,
-            250_000 => 0x05,
-            500_000 => 0x06,
-            _ => 0x04,
-        };
-        let ldro = if spreading_factor >= 11 && bandwidth <= 125_000 {
-            0x01
-        } else {
-            0x00
-        };
-        self.cmd(
-            OPCODE_SET_MODULATION_PARAMS,
-            &[spreading_factor, bw_param, coding_rate - 4, ldro],
-        );
+        self.set_modulation(spreading_factor, bandwidth, coding_rate);
 
         self.set_rx_continuous();
 
@@ -484,6 +496,11 @@ pub fn init(
         rst,
         busy,
         reassembler: Reassembler::new(),
+        preamble: modem::preamble_symbols(
+            config::LORA_SPREADING_FACTOR,
+            config::LORA_BANDWIDTH,
+            config::LORA_CODING_RATE,
+        ),
     };
 
     radio.reset();

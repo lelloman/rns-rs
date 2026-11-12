@@ -166,16 +166,40 @@ This is intended for bench or lab runners, not always-on CI without dedicated ha
 
 ## Configuration
 
-Edit `src/config.rs` to modify LoRa parameters:
-- Frequency
-- Bandwidth
-- Spreading factor
-- TX power
-- Coding rate
+The LoRa channel defaults to 868 MHz, 125 kHz, SF8, CR 4/5, 14 dBm (`src/config.rs`) and is set at build time with:
+
+- `RNS_ESP32_LORA_FREQUENCY` (Hz), `RNS_ESP32_LORA_BANDWIDTH` (Hz), `RNS_ESP32_LORA_SF`, `RNS_ESP32_LORA_CR` (5 to 8), `RNS_ESP32_LORA_TXPOWER` (dBm)
+- `RNS_ESP32_ANNOUNCE_INTERVAL`: announce the node's destinations every this many seconds from boot; unset or 0 announces only on a long button press
+
+The preamble length and low data rate optimization follow from the channel exactly as RNode firmware derives them (`src/modem.rs`), and the SX1262 is set up as RNode firmware sets it up (sync word `0x1424`, boosted RX gain, the IQ and modulation-quality errata), so the node shares a channel with RNodes and with [creticulum](https://github.com/lelloman/creticulum)'s ESP32 node.
 
 The board pinout and partition table are also part of the firmware configuration.
 
-Build-time environment variables control the authenticated LoRa control plane and the default BLE-open policy.
+Build-time environment variables also control the authenticated LoRa control plane and the default BLE-open policy (below).
+
+### Console Builds
+
+The firmware keeps UART0 (the USB serial port) quiet for RNode bridge mode. For watching a standalone node, a test build can log there instead:
+
+```bash
+ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.console" CARGO_TARGET_DIR=target-console \
+  cargo build --features firmware --target xtensa-esp32s3-espidf --release
+```
+
+A separate target directory inside the crate keeps the console ESP-IDF build apart from the regular one.
+
+### Interop With creticulum
+
+`tools/creticulum_announce.py` checks announces both ways between this firmware and creticulum's `ports/esp-idf/lora-node` on two boards. Build a console image on creticulum's channel that announces on its own:
+
+```bash
+ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.console" CARGO_TARGET_DIR=target-console \
+RNS_ESP32_LORA_FREQUENCY=869525000 RNS_ESP32_LORA_SF=7 RNS_ESP32_LORA_TXPOWER=2 RNS_ESP32_ANNOUNCE_INTERVAL=30 \
+  cargo build --features firmware --target xtensa-esp32s3-espidf --release
+python3 tools/creticulum_announce.py --rns /dev/ttyUSB0 --creticulum /dev/ttyUSB1
+```
+
+It passes when each node has verified the other's announce.
 
 ## Transport Memory Profile
 
