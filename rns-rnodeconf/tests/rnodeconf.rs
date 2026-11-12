@@ -37,17 +37,33 @@ fn device(eeprom: Vec<u8>) -> Device {
     }
 }
 
-/// Lines of output with their `[HH:MM:SS] ` prefixes removed.
+/// Lines of output with their `[HH:MM:SS] ` timestamps removed, wherever
+/// they fall: a log line can follow a prompt on the same line.
 fn lines(stdout: &[u8]) -> Vec<String> {
+    let is_timestamp = |b: &[u8]| {
+        b.len() >= 11
+            && b[0] == b'['
+            && b[3] == b':'
+            && b[6] == b':'
+            && b[9] == b']'
+            && b[10] == b' '
+            && [1, 2, 4, 5, 7, 8].iter().all(|&i| b[i].is_ascii_digit())
+    };
     String::from_utf8_lossy(stdout)
         .lines()
         .map(|line| {
             let bytes = line.as_bytes();
-            if bytes.len() >= 11 && bytes[0] == b'[' && bytes[9] == b']' && bytes[10] == b' ' {
-                line[11..].to_string()
-            } else {
-                line.to_string()
+            let mut out = Vec::with_capacity(bytes.len());
+            let mut i = 0;
+            while i < bytes.len() {
+                if is_timestamp(&bytes[i..]) {
+                    i += 11;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
             }
+            String::from_utf8_lossy(&out).into_owned()
         })
         .collect()
 }
@@ -93,6 +109,10 @@ fn rust_command(home: &Path, args: &[&str]) -> Command {
     command
 }
 
+/// Upstream's autoinstall wizard only takes a port pyserial lists, and a
+/// pseudo-terminal is not one: list `RNODECONF_EXTRA_PORT` too.
+const LIST_EXTRA_PORT: &str = "extra = os.environ.get('RNODECONF_EXTRA_PORT')\nif extra:\n    import serial.tools.list_ports as lp, serial.tools.list_ports_common as lc\n    real = lp.comports\n    lp.comports = lambda *a, **k: real(*a, **k) + [lc.ListPortInfo(extra)]";
+
 fn python_command(home: &Path, args: &[&str]) -> Command {
     let mut argv = vec!["rnodeconf".to_string()];
     argv.extend(args.iter().map(|a| a.to_string()));
@@ -100,7 +120,7 @@ fn python_command(home: &Path, args: &[&str]) -> Command {
     command
         .arg("-c")
         .arg(format!(
-            "import sys; sys.argv={argv:?}; from RNS.Utilities import rnodeconf; rnodeconf.main()"
+            "import os, sys\nsys.argv={argv:?}\n{LIST_EXTRA_PORT}\nfrom RNS.Utilities import rnodeconf\nrnodeconf.main()"
         ))
         .env("HOME", home)
         .env("TZ", "UTC")
@@ -338,7 +358,9 @@ fn run_both_with_input(
     let python_fake = FakeRNode::start(device.clone());
     let mut python_args = args.to_vec();
     python_args.push(&python_fake.path);
-    let python = run(python_command(python_home, &python_args), input);
+    let mut command = python_command(python_home, &python_args);
+    command.env("RNODECONF_EXTRA_PORT", &python_fake.path);
+    let python = run(command, input);
     let stderr = String::from_utf8_lossy(&python.stderr);
     assert!(
         !stderr.contains("Traceback"),
@@ -1848,4 +1870,184 @@ fn python_comparison_use_extracted() {
     };
     assert_eq!(ported(rust_home.path()), ported(python_home.path()));
     assert_eq!(ported(rust_home.path()).len(), 1);
+}
+
+/// A release site with `files` at `version`, its release information
+/// giving each file's version and hash.
+fn release_site(version: &str, files: Vec<(&str, Vec<u8>)>) -> ReleaseServer {
+    let entries: Vec<String> = files
+        .iter()
+        .map(|(name, data)| {
+            format!(
+                "\"{name}\": {{\"version\": \"{version}\", \"hash\": \"{}\"}}",
+                sha256_hex(data)
+            )
+        })
+        .collect();
+    let release = format!("{{{}}}", entries.join(", "));
+    let mut served = vec![
+        (
+            "latest/download/release.json".to_string(),
+            release.clone().into_bytes(),
+        ),
+        (
+            format!("download/{version}/release.json"),
+            release.into_bytes(),
+        ),
+    ];
+    for (name, data) in files {
+        served.push((format!("download/{version}/{name}"), data));
+    }
+    ReleaseServer::start(served)
+}
+
+/// The wizard's answers for a homebrew ATmega1284P board with an SX1276
+/// or SX1278 transceiver.
+const HOMEBREW_AVR: &str = "2\n\n1\n2\ny\n";
+/// The wizard's answers for a LilyGO T-Beam, 850 - 950 MHz.
+const TBEAM_E9: &str = "6\n\n2\ny\n";
+
+#[test]
+fn autoinstall_a_homebrew_avr_board() {
+    let server = release_site(
+        "1.83",
+        vec![("rnode_firmware.hex", b":00000001FF\n".to_vec())],
+    );
+    let home = tempfile::tempdir().unwrap();
+    install_fake_flasher(home.path(), "avrdude");
+    let fake = FakeRNode::start(avr_device(blank_eeprom()));
+    let out = run(
+        rust_command(home.path(), &["-a", "--fw-url", &server.url, &fake.path]),
+        Some(HOMEBREW_AVR),
+    );
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    for expected in [
+        "Device Selection",
+        "Homebrew RNode Installer",
+        "What kind of microcontroller is your board based on?",
+        "Installer Ready",
+        "Device type     : Hombrew RNode (Band capabilities unknown)",
+        "Platform        : AVR",
+        "Device MCU      : ATmega1284P",
+        "Firmware file   : rnode_firmware.hex",
+        "The selected firmware for this board is version 1.83",
+        "Generating a new device signing key...",
+        "Generating a new EEPROM signing key...",
+        "Done flashing",
+        "Clearing old EEPROM, this will take about 15 seconds...",
+        "EEPROM Bootstrapping successful!",
+        "RNode Firmware autoinstallation complete!",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    assert!(!text.contains("Wrote signing key"));
+    let written = fake.device.lock().unwrap().eeprom.clone();
+    assert_eq!(&written[0..3], &[0xF0, 0xFF, 1]);
+    assert_eq!(written[0x9B], 0x73);
+    assert_eq!(flash_log(home.path()).len(), 1);
+}
+
+#[test]
+fn autoinstall_choices_can_be_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let fake = FakeRNode::start(avr_device(blank_eeprom()));
+    let out = run(rust_command(home.path(), &["-a", &fake.path]), Some("99\n"));
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .contains("That device type does not exist, exiting now."));
+    let out = run(
+        rust_command(home.path(), &["-a", &fake.path]),
+        Some("2\n\n1\n2\nn\n"),
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("OK, aborting now."));
+    // A provisioned, validly signed device is left alone.
+    let signed = signed_home();
+    let fake = FakeRNode::start(device(signed_tnc_eeprom()));
+    let out = run(rust_command(signed.path(), &["-a", &fake.path]), Some(""));
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .contains("This device is already installed and provisioned. No further action will"));
+}
+
+/// The wizard through both tools, each in a fresh home, answering
+/// `answers`; the EEPROM writes go to the same addresses.
+fn compare_autoinstall(
+    server: &ReleaseServer,
+    device: Device,
+    answers: &str,
+    flasher: Option<&str>,
+) {
+    let python_home = tempfile::tempdir().unwrap();
+    let rust_home = tempfile::tempdir().unwrap();
+    if let Some(flasher) = flasher {
+        install_fake_flasher(python_home.path(), flasher);
+        install_fake_flasher(rust_home.path(), flasher);
+    }
+    let (python, python_fake, rust, rust_fake) = run_both_with_input(
+        device,
+        python_home.path(),
+        rust_home.path(),
+        &["-a", "--fw-url", &server.url],
+        Some(answers),
+    );
+    assert_eq!(rust, python);
+    let commands = |fake: &FakeRNode| -> Vec<Vec<u8>> {
+        fake.received()
+            .into_iter()
+            .map(|f| {
+                if f[0] == CMD_ROM_WRITE {
+                    f[..2].to_vec()
+                } else {
+                    f
+                }
+            })
+            .collect()
+    };
+    assert_eq!(commands(&rust_fake), commands(&python_fake));
+    let ported = |home: &Path, port: &str| -> Vec<Vec<String>> {
+        flash_log(home)
+            .into_iter()
+            .map(|call| call.into_iter().map(|a| a.replace(port, "PORT")).collect())
+            .collect()
+    };
+    assert_eq!(
+        ported(rust_home.path(), &rust_fake.path),
+        ported(python_home.path(), &python_fake.path)
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_autoinstall_homebrew() {
+    let server = release_site(
+        "1.83",
+        vec![("rnode_firmware.hex", b":00000001FF\n".to_vec())],
+    );
+    compare_autoinstall(
+        &server,
+        avr_device(blank_eeprom()),
+        HOMEBREW_AVR,
+        Some("avrdude"),
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_autoinstall_tbeam() {
+    compare_autoinstall(
+        &tbeam_release("1.83", None),
+        device(blank_eeprom()),
+        TBEAM_E9,
+        None,
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_autoinstall_refusals() {
+    let server = release_site("1.83", Vec::new());
+    for answers in ["99\n", "2\n\n1\n2\nn\n", "6\n\n9\n", "x\n"] {
+        compare_autoinstall(&server, avr_device(blank_eeprom()), answers, None);
+    }
+    // No firmware exists for a homebrew ESP32 board.
+    compare_autoinstall(&server, device(blank_eeprom()), "2\n\n3\n2\n", None);
 }

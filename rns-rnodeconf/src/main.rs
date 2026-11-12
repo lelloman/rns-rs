@@ -1,8 +1,8 @@
 //! `rnodeconf`: configure RNode devices, compatible with upstream
 //! Reticulum's `rnodeconf` utility.
 //!
-//! Implemented so far: everything but installing, updating and extracting
-//! firmware.
+//! Every upstream option is implemented, from device information to the
+//! firmware autoinstall wizard.
 
 mod device;
 mod eeprom;
@@ -12,6 +12,7 @@ mod kiss;
 mod ports;
 mod rom;
 mod signature;
+mod wizard;
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -100,9 +101,6 @@ const VALUE_ALIASES: &[(&str, &str)] = &[
     ("-R", "--rotation"),
     ("-H", "--firmware-hash"),
 ];
-
-/// Options of later implementation stages.
-const NOT_YET: &[&str] = &["--autoinstall"];
 
 /// Options upstream's argument parser reads as integers, rejecting the
 /// command line before doing anything else when one is not.
@@ -384,6 +382,18 @@ fn open_serial(port: &str) -> std::io::Result<(std::fs::File, std::fs::File)> {
     Ok((reader, writer))
 }
 
+/// upstream's `print_donation_block`.
+fn print_donation_block() {
+    println!("  Ethereum  : 0x91C421DdfB8a30a49A71d63447ddb54cEBe3465E");
+    println!("  Bitcoin   : bc1pgqgu8h8xvj4jtafslq396v7ju7hkgymyrzyqft4llfslz5vp99psqfk3a6");
+    println!("  Monero    : 87HcDx6jRSkMQ9nPRd5K9hGGpZLn2s7vWETjMaVM5KfV4TD36NcYa8J8WSxhTSvBzzFpqDwp2fg5GX2moZ7VAP9QMZCZGET");
+    println!("  Ko-Fi     : https://ko-fi.com/markqvist");
+    println!("  LiberaPay : https://liberapay.com/reticulum");
+    println!();
+    println!("  Info      : https://reticulum.network");
+    println!("  Code      : https://github.com/markqvist");
+}
+
 /// upstream's `input()` where only Enter is awaited.
 fn wait_for_enter() {
     let _ = std::io::stdout().flush();
@@ -423,11 +433,6 @@ fn main() {
         graceful_exit(0);
     }
 
-    if let Some(option) = NOT_YET.iter().find(|o| args.has(o)) {
-        println!("The {option} option is not implemented in this version of rnodeconf yet.");
-        graceful_exit(1);
-    }
-
     if args.has("--clear-cache") {
         log("Clearing local firmware cache...");
         let _ = std::fs::remove_dir_all(config_dir().join("update"));
@@ -458,7 +463,8 @@ fn main() {
         graceful_exit(0);
     }
 
-    if use_extracted && args.has("--update") && args.port.is_some() {
+    let autoinstall = args.has("--autoinstall");
+    if use_extracted && ((args.has("--update") && args.port.is_some()) || autoinstall) {
         println!();
         println!("You have specified that rnodeconf should use a firmware extracted");
         println!("from another device. Please note that this *only* works if you are");
@@ -473,16 +479,32 @@ fn main() {
     if args.has("--extract") {
         extract_firmware(&args);
     }
+
+    // The wizard settles the port, the board and its firmware, then hands
+    // on to key generation, flashing and bootstrapping.
+    let mut board: Option<wizard::Board> = None;
+    let mut fw_filename: Option<String> = None;
+    let mut port = args.port.clone();
+    if autoinstall {
+        let (wizard_port, chosen, fw) =
+            wizard::run(args.port.as_deref(), use_extracted, &mut firmware);
+        port = Some(wizard_port);
+        board = Some(chosen);
+        fw_filename = Some(fw);
+    }
+
     if args.has("--public") {
         show_public_keys();
         graceful_exit(0);
     }
-    if args.has("--key") {
-        generate_keys();
-        graceful_exit(0);
+    if args.has("--key") || autoinstall {
+        generate_keys(autoinstall);
+        if !autoinstall {
+            graceful_exit(0);
+        }
     }
 
-    let Some(port) = args.port.clone() else {
+    let Some(port) = port else {
         println!();
         print_help();
         println!();
@@ -496,13 +518,16 @@ fn main() {
     };
     let mut rom_requested = args.has("--rom");
     let mut wants_fw_provision = false;
-    let mut fw_filename: Option<String> = None;
-    if args.has("--flash") {
+    if args.has("--flash") || autoinstall {
         // upstream keeps `--platform` as given, a string no platform code
-        // equals, and flashes an AVR board when it is not given.
-        let platform = match args.value("--platform") {
-            Some(name) => firmware::FlashPlatform::Named(name.to_string()),
-            None => firmware::FlashPlatform::Rom(rom::PLATFORM_AVR),
+        // equals, and flashes an AVR board when it is not given; the
+        // wizard sets the board's.
+        let platform = match (&board, args.value("--platform")) {
+            (Some(board), _) => {
+                firmware::FlashPlatform::Rom(board.platform.unwrap_or(rom::PLATFORM_AVR))
+            }
+            (None, Some(name)) => firmware::FlashPlatform::Named(name.to_string()),
+            (None, None) => firmware::FlashPlatform::Rom(rom::PLATFORM_AVR),
         };
         let fw = fw_filename
             .get_or_insert_with(|| "rnode_firmware.hex".to_string())
@@ -537,7 +562,7 @@ fn main() {
     }
 
     let mut show_device_info = args.has("--info");
-    if args.has("--update") {
+    if args.has("--update") && !autoinstall {
         if !info.provisioned {
             log("Device not provisioned. Cannot update device firmware.");
             graceful_exit(1);
@@ -684,7 +709,30 @@ fn main() {
     if rom_requested {
         let provision =
             wants_fw_provision.then(|| (&firmware, fw_filename.as_deref().unwrap_or_default()));
-        bootstrap_eeprom(&mut rnode, &args, &info, platform, &port, provision);
+        let spec = match &board {
+            // The wizard's board, with upstream's TCXO models stored as
+            // their base models, and hardware revision 1.
+            Some(board) => Bootstrap {
+                product: board.product.unwrap_or(rom::PRODUCT_RNODE),
+                model: board.model.map(|model| match model {
+                    rom::MODEL_B4_TCXO => rom::MODEL_B4,
+                    rom::MODEL_B9_TCXO => rom::MODEL_B9,
+                    model => model,
+                }),
+                hwrev: Some(1),
+                autoinstall: true,
+            },
+            None => Bootstrap {
+                product: hex_code(args.value("--product")).unwrap_or(rom::PRODUCT_RNODE),
+                model: hex_code(args.value("--model")),
+                hwrev: args
+                    .int("--hwrev")
+                    .filter(|v| *v > 0 && *v < 256)
+                    .map(|v| v as u8),
+                autoinstall: false,
+            },
+        };
+        bootstrap_eeprom(&mut rnode, &spec, &info, platform, &port, provision);
     }
 
     if args.has("--sign") {
@@ -1554,7 +1602,10 @@ fn show_public_keys() {
 
 /// `-k`: create the device signing key and the EEPROM signing key when
 /// missing.
-fn generate_keys() {
+/// `-k`, or key generation for the autoinstall wizard, which leaves an
+/// existing EEPROM signing key alone without saying so and does not show a
+/// new one.
+fn generate_keys(autoinstall: bool) {
     let firmware = firmware_dir();
     let device_key = keys::device_key_path(&firmware);
     if !device_key.is_file() {
@@ -1596,18 +1647,22 @@ fn generate_keys() {
     };
     let _ = std::fs::create_dir_all(&firmware);
     if signing_key.is_file() {
-        log("EEPROM Signing key already exists, not overwriting!");
-        log("Manually delete this key to create a new one.");
+        if !autoinstall {
+            log("EEPROM Signing key already exists, not overwriting!");
+            log("Manually delete this key to create a new one.");
+        }
     } else {
         if let Err(e) = std::fs::write(&signing_key, &private) {
             log(&format!("Could not write {}: {e}", signing_key.display()));
             graceful_exit(1);
         }
-        log("Wrote signing key");
-        log("Public key:");
-        log(&hexstr(
-            &keys::signing_public_key(&private).unwrap_or_default(),
-        ));
+        if !autoinstall {
+            log("Wrote signing key");
+            log("Public key:");
+            log(&hexstr(
+                &keys::signing_public_key(&private).unwrap_or_default(),
+            ));
+        }
     }
 }
 
@@ -1639,9 +1694,18 @@ fn hex_code(value: Option<&str>) -> Option<u8> {
 
 /// `-r`: write a provisioning record to an unprovisioned device's EEPROM,
 /// signed with the local EEPROM signing key, then read it back.
+/// What `-r` writes: from the command line, or from the autoinstall
+/// wizard.
+struct Bootstrap {
+    product: u8,
+    model: Option<u8>,
+    hwrev: Option<u8>,
+    autoinstall: bool,
+}
+
 fn bootstrap_eeprom(
     rnode: &mut RNode,
-    args: &Args,
+    spec: &Bootstrap,
     info: &eeprom::DeviceInfo,
     platform: u8,
     port: &str,
@@ -1650,10 +1714,16 @@ fn bootstrap_eeprom(
     use std::time::Duration;
     let pause = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
 
-    if info.provisioned || info.signature_valid {
+    // The wizard reinstalls a provisioned device unless its signature
+    // is valid.
+    if (info.provisioned && !spec.autoinstall) || info.signature_valid {
         log("EEPROM bootstrap was requested, but a valid EEPROM was already present.");
         log("No changes are being made.");
         graceful_exit(0);
+    }
+    if spec.autoinstall {
+        log("Clearing old EEPROM, this will take about 15 seconds...");
+        let _ = rnode.wipe_eeprom(rnode.reported().board);
     }
     match platform {
         rom::PLATFORM_ESP32 => {
@@ -1684,13 +1754,8 @@ fn bootstrap_eeprom(
         0
     };
     let serialno = counter + 1;
-    let product = hex_code(args.value("--product")).unwrap_or(rom::PRODUCT_RNODE);
-    let model = hex_code(args.value("--model"));
-    let hwrev = args
-        .int("--hwrev")
-        .filter(|v| *v > 0 && *v < 256)
-        .map(|v| v as u8);
-    let (Some(model), Some(hwrev)) = (model, hwrev) else {
+    let product = spec.product;
+    let (Some(model), Some(hwrev)) = (spec.model, spec.hwrev) else {
         log("Invalid data specified, cancelling EEPROM write");
         graceful_exit(0);
     };
@@ -1794,6 +1859,9 @@ fn bootstrap_eeprom(
     if written.provisioned {
         log("EEPROM Bootstrapping successful!");
         let _ = rnode.hard_reset();
+        if spec.autoinstall {
+            wizard::print_completion();
+        }
         let device_db = firmware.join("device_db");
         let saved = std::fs::create_dir_all(&device_db)
             .and_then(|_| std::fs::write(device_db.join(hexstr(&serial_bytes)), &image));
