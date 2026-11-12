@@ -1,0 +1,6 @@
+# Test builds only: logs on UART0 (the USB serial port), for watching a
+# node over LoRa. RNode bridge mode shares that port, so a console build
+# is for standalone tests. Use with:
+#   ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.console"
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_NONE is not set
