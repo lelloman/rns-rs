@@ -26,6 +26,12 @@ which is why no audit caught them.
 - `rnodeconf` stage 3 is done: the display, NeoPixel, interference
   avoidance, Bluetooth and WiFi options, and upstream's `--help` text,
   each compared with upstream's Python `rnodeconf`.
+- `rnodeconf` stage 4 is done: firmware updates (`-u`, `-U`), flashing
+  (`-f`), extraction (`-e`, `--use-extracted`) and the autoinstall wizard
+  (`-a`), compared with upstream against a local release site and fake
+  flashers. Upstream's bundled GPL-2.0 esptool is not carried; an
+  installed one stands in where upstream would use it. Stage 5 (checking
+  against real boards) remains.
 - Phase 3 (3.1 with 2.6) is done: `autoconnect_policy`, defaulting to
   `upstream`, with `autoconnect_discovered_interfaces` and `bootstrap_only`.
   A bootstrap interface whose target is unreachable cannot be attached; the

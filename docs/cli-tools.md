@@ -169,9 +169,17 @@ Implemented so far:
   `-e` fails with a Python error on a port it does not list, such as a
   pseudo-terminal; this one uses the port as given.
 
-The autoinstall wizard (`-a`) is planned (see the
-[parity gap plan](upstream-parity/parity-gap-plan.md)); for now it reports
-that it is not implemented. The crate's tests run the tool against a fake
+- `-a` runs upstream's autoinstall wizard: choose the port (from a menu
+  when none is given), the kind of device and its model, confirm, and it
+  fetches the firmware, creates the signing keys if missing, flashes the
+  board and bootstraps its EEPROM. Its menus are translated from
+  upstream's source by `rns-rnodeconf/tools/translate_wizard.py`, so they
+  read exactly as upstream's. Like `-e`, it uses a port upstream does not
+  list (upstream exits) as given.
+
+Every option is implemented and compared with upstream's Python
+`rnodeconf` against fake devices, release sites and flashers; no real
+RNode has been flashed with it yet. The crate's tests run the tool against a fake
 RNode on a pseudo-terminal, and the interop CI jobs run upstream's Python
 `rnodeconf` against the same fake device and require the same output and the
 same frames sent.
