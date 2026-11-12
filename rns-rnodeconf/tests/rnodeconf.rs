@@ -1672,3 +1672,180 @@ fn python_comparison_cache_and_version() {
         &["--fw-version", "one", "-u", "/dev/null"],
     );
 }
+
+/// An esptool that records its arguments, and for `read_flash` writes the
+/// region it was asked for into the output file.
+const FAKE_READING_ESPTOOL: &str = "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\037' \"$a\"; done >> \"$HOME/flash.log\"\necho >> \"$HOME/flash.log\"\nfor last; do :; done\nif [ \"$1\" = --chip ] && echo \"$@\" | grep -q read_flash; then printf 'flash' > \"$last\"; fi\n";
+
+fn install_reading_esptool(home: &Path) {
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let path = bin.join("esptool.py");
+    std::fs::write(&path, FAKE_READING_ESPTOOL).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn extract_copies_the_firmware_off_an_esp32_board() {
+    let home = tempfile::tempdir().unwrap();
+    install_reading_esptool(home.path());
+    let fake = FakeRNode::start(device(provisioned()));
+    let out = run(rust_command(home.path(), &["-e", &fake.path]), Some("\n\n"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    let hash = "33".repeat(32);
+    for expected in [
+        "RNode Firmware Extraction".to_string(),
+        format!("Using device on {}", fake.path),
+        "The device signature in this RNode is unknown and cannot be verified. It is still".into(),
+        format!("Found RNode Firmvare v1.82 {hash}"),
+        "Extracting bootloader...".into(),
+        "Extracting console image...".into(),
+        "Firmware successfully extracted!".into(),
+    ] {
+        assert!(text.contains(&expected), "missing {expected:?} in {text}");
+    }
+    let extracted = home.path().join(".config/rnodeconf/extracted");
+    assert_eq!(
+        std::fs::read_to_string(extracted.join("extracted_rnode_firmware.version")).unwrap(),
+        format!("1.82 {hash}")
+    );
+    let reads = flash_log(home.path());
+    assert_eq!(reads.len(), 5);
+    assert_eq!(
+        reads[0],
+        [
+            "--chip",
+            "esp32",
+            "--port",
+            fake.path.as_str(),
+            "--baud",
+            "921600",
+            "--before",
+            "default_reset",
+            "--after",
+            "hard_reset",
+            "read_flash",
+            "0x1000",
+            "0x4650",
+            "HOME/.config/rnodeconf/extracted/extracted_rnode_firmware.bootloader",
+        ]
+        .map(String::from)
+    );
+    for file in [
+        "extracted_rnode_firmware.bootloader",
+        "extracted_rnode_firmware.partitions",
+        "extracted_rnode_firmware.boot_app0",
+        "extracted_rnode_firmware.bin",
+        "extracted_console_image.bin",
+    ] {
+        assert!(extracted.join(file).is_file(), "{file} missing");
+    }
+
+    // The extracted firmware installs on another board.
+    std::fs::remove_file(home.path().join("flash.log")).unwrap();
+    let other = FakeRNode::start(device(provisioned()));
+    let out = run(
+        rust_command(home.path(), &["-u", "--use-extracted", "-U", &other.path]),
+        Some("\n"),
+    );
+    let lines = lines(&out.stdout);
+    for expected in [
+        "Using existing firmware file: extracted_rnode_firmware.zip for version 1.82",
+        "Flashing new firmware completed",
+        "Firmware update completed successfully",
+    ] {
+        assert!(
+            has_line(&lines, expected),
+            "missing {expected:?} in {lines:#?}"
+        );
+    }
+    let mut set_hash = vec![CMD_FW_HASH];
+    set_hash.extend([0x33; 32]);
+    assert!(other.received().contains(&set_hash));
+    let writes = flash_log(home.path());
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].contains(&"write_flash".to_string()));
+    assert!(writes[0]
+        .contains(&"HOME/.config/rnodeconf/extracted/extracted_console_image.bin".to_string()));
+}
+
+#[test]
+fn extract_needs_a_provisioned_esp32_board() {
+    let home = tempfile::tempdir().unwrap();
+    let fake = FakeRNode::start(avr_device(provisioned()));
+    let out = rust_rnodeconf(home.path(), &["-e", &fake.path]);
+    assert_eq!(out.status.code(), Some(170));
+    let fake = FakeRNode::start(device(blank_eeprom()));
+    let out = rust_rnodeconf(home.path(), &["-e", &fake.path]);
+    assert_eq!(out.status.code(), Some(180));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("RNode firmware extraction failed"));
+    let out = run(rust_command(home.path(), &["-e"]), Some("999\n"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("That port does not exist, exiting now."));
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_use_extracted() {
+    // Upstream flashes an extracted firmware with the recovery esptool its
+    // extraction leaves behind.
+    let python_home = tempfile::tempdir().unwrap();
+    let rust_home = tempfile::tempdir().unwrap();
+    for home in [python_home.path(), rust_home.path()] {
+        let config = home.join(".config/rnodeconf");
+        let extracted = config.join("extracted");
+        std::fs::create_dir_all(&extracted).unwrap();
+        std::fs::write(
+            extracted.join("extracted_rnode_firmware.version"),
+            format!("1.82 {}", "33".repeat(32)),
+        )
+        .unwrap();
+        for file in [
+            "extracted_console_image.bin",
+            "extracted_rnode_firmware.bin",
+            "extracted_rnode_firmware.boot_app0",
+            "extracted_rnode_firmware.bootloader",
+            "extracted_rnode_firmware.partitions",
+        ] {
+            std::fs::write(extracted.join(file), b"image").unwrap();
+        }
+        std::fs::write(config.join("recovery_esptool.py"), FAKE_ESPTOOL).unwrap();
+    }
+    for args in [
+        &["-u", "--use-extracted", "-U"][..],
+        &["-u", "--use-extracted"],
+    ] {
+        let (python, python_fake, rust, rust_fake) = run_both_with_input(
+            device(provisioned()),
+            python_home.path(),
+            rust_home.path(),
+            args,
+            Some("\n"),
+        );
+        assert_eq!(rust, python);
+        assert_eq!(rust_fake.received(), python_fake.received());
+    }
+    let ported = |home: &Path| -> Vec<Vec<String>> {
+        flash_log(home)
+            .into_iter()
+            .map(|call| {
+                call.into_iter()
+                    .map(|a| {
+                        if a.starts_with("/dev/") {
+                            "PORT".into()
+                        } else {
+                            a
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    assert_eq!(ported(rust_home.path()), ported(python_home.path()));
+    assert_eq!(ported(rust_home.path()).len(), 1);
+}

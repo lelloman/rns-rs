@@ -157,9 +157,21 @@ Implemented so far:
   bootstraps its EEPROM; upstream's `-f` fails with a Python error past
   its version check unless the autoinstall wizard runs it.
 
-The autoinstall wizard (`-a`) and firmware extraction (`-e`) are planned
-(see the [parity gap plan](upstream-parity/parity-gap-plan.md)); for now
-those options report that they are not implemented. The crate's tests run the tool against a fake
+- `-e` copies the firmware off a provisioned ESP32 RNode into
+  `~/.config/rnodeconf/extracted/`, and `--use-extracted` installs it on
+  another board of the same type. Upstream reads the flash with a copy of
+  esptool carried inside its own source and written out as
+  `~/.config/rnodeconf/recovery_esptool.py`; that copy is GPL-2.0
+  licensed and not bundled here, so `-e` uses it when an upstream
+  extraction has left it there and otherwise an installed `esptool.py` or
+  `esptool` (`pip3 install esptool`). ESP32 updates fall back to an
+  installed esptool the same way when a package carries none. Upstream's
+  `-e` fails with a Python error on a port it does not list, such as a
+  pseudo-terminal; this one uses the port as given.
+
+The autoinstall wizard (`-a`) is planned (see the
+[parity gap plan](upstream-parity/parity-gap-plan.md)); for now it reports
+that it is not implemented. The crate's tests run the tool against a fake
 RNode on a pseudo-terminal, and the interop CI jobs run upstream's Python
 `rnodeconf` against the same fake device and require the same output and the
 same frames sent.
