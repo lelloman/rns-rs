@@ -1,9 +1,8 @@
 //! `rnodeconf`: configure RNode devices, compatible with upstream
 //! Reticulum's `rnodeconf` utility.
 //!
-//! Implemented so far: detecting a device, showing its information (`-i`)
-//! and configuration (`-c`), and switching between TNC and normal mode
-//! (`-T`, `-N`) with the TNC radio parameters.
+//! Implemented so far: everything but installing, updating and extracting
+//! firmware.
 
 mod device;
 mod eeprom;
@@ -112,24 +111,22 @@ const NOT_YET: &[&str] = &[
     "--use-extracted",
     "--clear-cache",
     "--baud-flash",
-    "--bluetooth-on",
-    "--bluetooth-off",
-    "--bluetooth-pair",
-    "--wifi",
-    "--channel",
-    "--ssid",
-    "--psk",
-    "--ip",
-    "--nm",
+    "--flash",
+];
+
+/// Options upstream's argument parser reads as integers, rejecting the
+/// command line before doing anything else when one is not.
+const INT_OPTIONS: &[&str] = &[
     "--display",
     "--timeout",
     "--rotation",
-    "--display-addr",
-    "--recondition-display",
     "--np",
-    "--ia-enable",
-    "--ia-disable",
-    "--flash",
+    "--freq",
+    "--bw",
+    "--txp",
+    "--sf",
+    "--cr",
+    "--hwrev",
 ];
 
 #[derive(Default)]
@@ -203,10 +200,93 @@ fn parse_args() -> Args {
     args
 }
 
+/// upstream's `--help`, as Python's argparse lays it out at 80 columns.
+const HELP: &str = r#"usage: rnodeconf [-h] [-i] [-a] [-u] [-U] [--fw-version version]
+                 [--fw-url url] [--nocheck] [-e] [-E] [-C]
+                 [--baud-flash baud_flash] [-N] [-T] [-b] [-B] [-p] [-w mode]
+                 [--channel channel] [--ssid ssid] [--psk psk] [--show-psk]
+                 [--ip ip] [--nm nm] [-D i] [-t s] [-R rotation]
+                 [--display-addr byte] [--recondition-display] [--np i]
+                 [--freq Hz] [--bw Hz] [--txp dBm] [--sf factor] [--cr rate]
+                 [-x] [-X] [-c] [--eeprom-backup] [--eeprom-dump]
+                 [--eeprom-wipe] [-P] [--trust-key hexbytes] [--version] [-f]
+                 [-r] [-k] [-S] [-H FIRMWARE_HASH] [--platform platform]
+                 [--product product] [--model model] [--hwrev revision]
+                 [port]
+
+RNode Configuration and firmware utility. This program allows you to change
+various settings and startup modes of RNode. It can also install, flash and
+update the firmware on supported devices.
+
+positional arguments:
+  port                  serial port where RNode is attached
+
+options:
+  -h, --help            show this help message and exit
+  -i, --info            Show device info
+  -a, --autoinstall     Automatic installation on various supported devices
+  -u, --update          Update firmware to the latest version
+  -U, --force-update    Update to specified firmware even if version matches
+                        or is older than installed version
+  --fw-version version  Use a specific firmware version for update or
+                        autoinstall
+  --fw-url url          Use an alternate firmware download URL
+  --nocheck             Don't check for firmware updates online
+  -e, --extract         Extract firmware from connected RNode for later use
+  -E, --use-extracted   Use the extracted firmware for autoinstallation or
+                        update
+  -C, --clear-cache     Clear locally cached firmware files
+  --baud-flash baud_flash
+                        Set specific baud rate when flashing device. Default
+                        is 921600
+  -N, --normal          Switch device to normal mode
+  -T, --tnc             Switch device to TNC mode
+  -b, --bluetooth-on    Turn device bluetooth on
+  -B, --bluetooth-off   Turn device bluetooth off
+  -p, --bluetooth-pair  Put device into bluetooth pairing mode
+  -w mode, --wifi mode  Set WiFi mode (OFF, AP or STATION)
+  --channel channel     Set WiFi channel
+  --ssid ssid           Set WiFi SSID (NONE to delete)
+  --psk psk             Set WiFi PSK (NONE to delete)
+  --show-psk            Display stored WiFi PSK
+  --ip ip               Set static WiFi IP address (NONE for DHCP)
+  --nm nm               Set static WiFi network mask (NONE for DHCP)
+  -D i, --display i     Set display intensity (0-255)
+  -t s, --timeout s     Set display timeout in seconds, 0 to disable
+  -R rotation, --rotation rotation
+                        Set display rotation, valid values are 0 through 3
+  --display-addr byte   Set display address as hex byte (00 - FF)
+  --recondition-display
+                        Start display reconditioning
+  --np i                Set NeoPixel intensity (0-255)
+  --freq Hz             Frequency in Hz for TNC mode
+  --bw Hz               Bandwidth in Hz for TNC mode
+  --txp dBm             TX power in dBm for TNC mode
+  --sf factor           Spreading factor for TNC mode (7 - 12)
+  --cr rate             Coding rate for TNC mode (5 - 8)
+  -x, --ia-enable       Enable interference avoidance
+  -X, --ia-disable      Disable interference avoidance
+  -c, --config          Print device configuration
+  --eeprom-backup       Backup EEPROM to file
+  --eeprom-dump         Dump EEPROM to console
+  --eeprom-wipe         Unlock and wipe EEPROM
+  -P, --public          Display public part of signing key
+  --trust-key hexbytes  Public key to trust for device verification
+  --version             Print program version and exit
+  -f, --flash           Flash firmware and bootstrap EEPROM
+  -r, --rom             Bootstrap EEPROM without flashing firmware
+  -k, --key             Generate a new signing key and exit
+  -S, --sign            Display public part of signing key
+  -H FIRMWARE_HASH, --firmware-hash FIRMWARE_HASH
+                        Set installed firmware hash
+  --platform platform   Platform specification for device bootstrap
+  --product product     Product specification for device bootstrap
+  --model model         Model code for device bootstrap
+  --hwrev revision      Hardware revision for device bootstrap
+"#;
+
 fn print_help() {
-    println!(
-        "\nusage: rnodeconf [-h] [-i] [-a] [-u] [-U] [--fw-version version] [--fw-url url]\n                 [--nocheck] [-e] [-E] [-C] [--baud-flash baud_flash] [-N] [-T]\n                 [-b] [-B] [-p] [-w mode] [--channel channel] [--ssid ssid]\n                 [--psk psk] [--show-psk] [--ip ip] [--nm nm] [-D i] [-t s]\n                 [-R rotation] [--display-addr byte] [--recondition-display]\n                 [--np i] [--freq Hz] [--bw Hz] [--txp dBm] [--sf factor]\n                 [--cr rate] [-x] [-X] [-c] [--eeprom-backup] [--eeprom-dump]\n                 [--eeprom-wipe] [-P] [--trust-key hexbytes] [--version] [-f]\n                 [-r] [-k] [-S] [-H FIRMWARE_HASH] [--platform platform]\n                 [--product product] [--model model] [--hwrev revision]\n                 [port]\n\nRNode Configuration and firmware utility. This program allows you to change\nvarious settings and startup modes of RNode. It can also install, flash and\nupdate the firmware on supported devices.\n\npositional arguments:\n  port                  serial port where RNode is attached\n\noptions:\n  -h, --help            show this help message and exit\n  -i, --info            Show device info\n  -N, --normal          Switch device to normal mode\n  -T, --tnc             Switch device to TNC mode\n  --freq Hz             Frequency in Hz for TNC mode\n  --bw Hz               Bandwidth in Hz for TNC mode\n  --txp dBm             TX power in dBm for TNC mode\n  --sf factor           Spreading factor for TNC mode (7 - 12)\n  --cr rate             Coding rate for TNC mode (5 - 8)\n  -c, --config          Print device configuration\n  --show-psk            Display stored WiFi PSK\n  --version             Print program version and exit\n\nFirmware installation, EEPROM, key, Bluetooth, WiFi, display and\ninterference avoidance options are not implemented in this version yet.\n"
-    );
+    print!("{HELP}");
 }
 
 /// upstream's `RNS.log` as `rnodeconf` sets it up: `[HH:MM:SS] message`, in
@@ -332,6 +412,9 @@ fn prompt_int(prompt: &str) -> i64 {
 
 fn main() {
     let args = parse_args();
+    for option in INT_OPTIONS {
+        args.int(option);
+    }
     if args.has("--help") {
         print_help();
         exit(0);
@@ -362,7 +445,9 @@ fn main() {
     }
 
     let Some(port) = args.port.clone() else {
+        println!();
         print_help();
+        println!();
         graceful_exit(0);
     };
 
@@ -425,6 +510,8 @@ fn main() {
         backup_eeprom(&image);
         graceful_exit(0);
     }
+
+    configure_peripherals(&mut rnode, &args);
 
     if args.has("--info") {
         if info.provisioned {
@@ -533,6 +620,269 @@ fn main() {
         log("Please correctly initialise the device and try again!");
     }
     graceful_exit(0);
+}
+
+/// Python's `int()` on a string: surrounding whitespace, an optional sign,
+/// and digits that single underscores may separate.
+fn py_int(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let valid = !digits.is_empty()
+        && !digits.starts_with('_')
+        && !digits.ends_with('_')
+        && !digits.contains("__")
+        && digits.chars().all(|c| c.is_ascii_digit() || c == '_');
+    if !valid {
+        return None;
+    }
+    text.replace('_', "").parse().ok()
+}
+
+/// upstream `set_wifi_ip` and `set_wifi_nm`: a dotted quad as four bytes.
+fn ip_bytes(text: &str) -> Result<[u8; 4], String> {
+    let octets: Vec<&str> = text.split('.').collect();
+    if octets.len() != 4 {
+        return Err("Invalid IP address length".into());
+    }
+    let mut bytes = [0u8; 4];
+    for (i, octet) in octets.iter().enumerate() {
+        let value = py_int(octet).ok_or_else(|| {
+            format!("Could not decode IP address octet: invalid literal for int() with base 10: '{octet}'")
+        })?;
+        if !(0..=255).contains(&value) {
+            return Err("Could not decode IP address octet: Invalid IP octet value".into());
+        }
+        bytes[i] = value as u8;
+    }
+    Ok(bytes)
+}
+
+/// A WiFi string setting: UTF-8 with a closing NUL, or a lone NUL to
+/// delete it.
+fn wifi_string(value: Option<&str>) -> Vec<u8> {
+    match value {
+        None => vec![0x00],
+        Some(text) => {
+            let mut data = text.as_bytes().to_vec();
+            data.push(0x00);
+            data
+        }
+    }
+}
+
+/// The display, NeoPixel, interference avoidance, Bluetooth and WiFi
+/// settings, in upstream's order. Each is sent to the device as given;
+/// the device stores it.
+fn configure_peripherals(rnode: &mut RNode, args: &Args) {
+    let sent = |result: std::io::Result<()>| {
+        if let Err(e) = result {
+            println!("{e}");
+            graceful_exit(1);
+        }
+    };
+    let byte = |value: i64, max: i64| value.clamp(0, max) as u8;
+
+    if let Some(intensity) = args.int("--display") {
+        let intensity = byte(intensity, 255);
+        log(&format!("Setting display intensity to {intensity}"));
+        sent(rnode.send(
+            kiss::CMD_DISP_INT,
+            &[intensity],
+            "sending display intensity command to device",
+        ));
+    }
+    if let Some(timeout) = args.int("--timeout") {
+        let timeout = byte(timeout, 255);
+        if timeout == 0 {
+            log("Disabling display blanking");
+        } else {
+            log(&format!("Setting display timeout to {timeout}"));
+        }
+        sent(rnode.send(
+            kiss::CMD_DISP_BLNK,
+            &[timeout],
+            "sending display blanking timeout command to device",
+        ));
+    }
+    if let Some(rotation) = args.int("--rotation") {
+        let rotation = byte(rotation, 3);
+        log(&format!("Setting display rotation to {rotation}"));
+        sent(rnode.send(
+            kiss::CMD_DISP_ROT,
+            &[rotation],
+            "sending display rotation command to device",
+        ));
+    }
+    if args.has("--recondition-display") {
+        log("Starting display reconditioning");
+        sent(rnode.send(
+            kiss::CMD_DISP_RCND,
+            &[0x01],
+            "sending display recondition command to device",
+        ));
+    }
+    for (option, disabled, message) in [
+        ("--ia-enable", 0x00, "Enabling interference avoidance"),
+        ("--ia-disable", 0x01, "Disabling interference avoidance"),
+    ] {
+        if args.has(option) {
+            log(message);
+            sent(rnode.send(
+                kiss::CMD_DIS_IA,
+                &[disabled],
+                "sending interference avoidance configuration command to device",
+            ));
+        }
+    }
+    if let Some(intensity) = args.int("--np") {
+        let intensity = byte(intensity, 255);
+        log(&format!("Setting NeoPixel intensity to {intensity}"));
+        sent(rnode.send(
+            kiss::CMD_NP_INT,
+            &[intensity],
+            "sending NeoPixel intensity command to device",
+        ));
+    }
+    if let Some(address) = args.value("--display-addr") {
+        let address = address.strip_prefix("0x").unwrap_or(address);
+        match signature::unhex(address).as_deref() {
+            Some([address]) => {
+                log(&format!("Setting display address to {address:02x}"));
+                sent(rnode.send(
+                    kiss::CMD_DISP_ADR,
+                    &[*address],
+                    "sending display address command to device",
+                ));
+                let _ = rnode.hard_reset();
+                graceful_exit(0);
+            }
+            _ => log("Invalid display address specified"),
+        }
+    }
+
+    for (option, control, message) in [
+        ("--bluetooth-on", 0x01, "Enabling Bluetooth..."),
+        ("--bluetooth-off", 0x00, "Disabling Bluetooth..."),
+        (
+            "--bluetooth-pair",
+            0x02,
+            "Putting device into Bluetooth pairing mode. Press enter to exit when done.",
+        ),
+    ] {
+        if args.has(option) {
+            log(message);
+            sent(rnode.send(
+                kiss::CMD_BT_CTRL,
+                &[control],
+                "sending bluetooth command to device",
+            ));
+            if control == 0x02 {
+                let mut line = String::new();
+                let _ = std::io::stdin().lock().read_line(&mut line);
+            }
+            sent(rnode.leave());
+        }
+    }
+
+    // A WiFi setting the device refuses ends the run, as upstream's does.
+    let refused = |what: &str, error: String| -> ! {
+        println!("Could not set WiFi {what}: {error}");
+        graceful_exit(0);
+    };
+    if let Some(channel) = args.value("--channel").filter(|v| !v.is_empty()) {
+        log(&format!("Setting WiFi channel to {channel}"));
+        match py_int(channel).filter(|ch| (1..=14).contains(ch)) {
+            Some(ch) => sent(rnode.send(
+                kiss::CMD_WIFI_CHN,
+                &[ch as u8],
+                "sending wifi channel to device",
+            )),
+            None => refused("channel", "Invalid WiFi channel".into()),
+        }
+    }
+    if let Some(ssid) = args.value("--ssid").filter(|v| !v.is_empty()) {
+        let ssid = if ssid.to_lowercase() == "none" {
+            log("Deleting WiFi SSID");
+            None
+        } else {
+            log(&format!("Setting WiFi SSID to: {ssid}"));
+            Some(ssid)
+        };
+        let data = wifi_string(ssid);
+        if ssid.is_some() && data.len() > 33 {
+            refused("SSID", "Invalid SSID length".into());
+        }
+        sent(rnode.send(kiss::CMD_WIFI_SSID, &data, "sending wifi SSID to device"));
+    }
+    if let Some(psk) = args.value("--psk").filter(|v| !v.is_empty()) {
+        let psk = if psk.to_lowercase() == "none" {
+            log("Deleting WiFi PSK");
+            None
+        } else {
+            log("Setting WiFi PSK");
+            Some(psk)
+        };
+        let data = wifi_string(psk);
+        // Upstream counts the closing NUL, so a 7-character PSK passes.
+        if psk.is_some() && !(8..=33).contains(&data.len()) {
+            refused("PSK", "Invalid psk length".into());
+        }
+        sent(rnode.send(kiss::CMD_WIFI_PSK, &data, "sending wifi SSID to device"));
+    }
+    for (option, what, command, dhcp, set) in [
+        (
+            "--ip",
+            "IP",
+            kiss::CMD_WIFI_IP,
+            "Setting WiFi IP to DHCP...",
+            "Setting WiFi static IP to: ",
+        ),
+        (
+            "--nm",
+            "netmask",
+            kiss::CMD_WIFI_NM,
+            "Deleting WiFi static netmask configuration...",
+            "Setting WiFi static netmask to: ",
+        ),
+    ] {
+        let Some(value) = args.value(option).filter(|v| !v.is_empty()) else {
+            continue;
+        };
+        let bytes = if value.to_lowercase() == "none" {
+            log(dhcp);
+            [0u8; 4]
+        } else {
+            log(&format!("{set}{value}"));
+            match ip_bytes(value) {
+                Ok(bytes) => bytes,
+                Err(e) => refused(what, e),
+            }
+        };
+        let described = if command == kiss::CMD_WIFI_IP {
+            "sending wifi IP address to device"
+        } else {
+            "sending wifi netmask to device"
+        };
+        sent(rnode.send(command, &bytes, described));
+    }
+    if let Some(mode) = args.value("--wifi").filter(|v| !v.is_empty()) {
+        let mode = mode.to_lowercase();
+        let mode = if mode.starts_with("sta") {
+            log("Setting WiFi to station mode");
+            0x01
+        } else if mode.starts_with("ap") {
+            log("Setting WiFi to AP mode");
+            0x02
+        } else {
+            log("Disabling WiFi...");
+            0x00
+        };
+        sent(rnode.send(
+            kiss::CMD_WIFI_MODE,
+            &[mode],
+            "sending wifi mode command to device",
+        ));
+    }
 }
 
 fn firmware_dir() -> PathBuf {

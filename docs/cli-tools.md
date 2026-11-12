@@ -134,10 +134,20 @@ Implemented so far:
 - `-S` signs the device hash with `device.key`; `-H <sha256>` stores the
   expected firmware hash; `-K` and `-L` show the target and actual
   firmware hashes.
+- Display: `-D` intensity, `-t` blanking timeout (0 disables blanking),
+  `-R` rotation, `--display-addr` (then the device restarts),
+  `--recondition-display`. `--np` sets the NeoPixel intensity; `-x` and
+  `-X` enable and disable interference avoidance. Upstream sends the
+  display, NeoPixel and WiFi mode values without KISS escaping, so a value
+  of 192 or 219 breaks its frame; these are escaped.
+- Bluetooth: `-b` on, `-B` off, `-p` pairing mode until Enter is pressed.
+- WiFi: `-w` mode (`OFF`, `AP` or `STATION`), `--channel`, `--ssid`,
+  `--psk`, `--ip` and `--nm` (`NONE` deletes a value or returns to DHCP).
 
-The Bluetooth, WiFi, display and firmware options are planned (see the
-[parity gap plan](upstream-parity/parity-gap-plan.md)); for now they report
-that they are not implemented. The crate's tests run the tool against a fake
+Installing, updating and extracting firmware (`-a`, `-u`, `-U`, `-f`, `-e`
+and their options) is planned (see the
+[parity gap plan](upstream-parity/parity-gap-plan.md)); for now those
+options report that they are not implemented. The crate's tests run the tool against a fake
 RNode on a pseudo-terminal, and the interop CI jobs run upstream's Python
 `rnodeconf` against the same fake device and require the same output and the
 same frames sent.

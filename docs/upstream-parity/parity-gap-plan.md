@@ -23,6 +23,9 @@ which is why no audit caught them.
   `--eeprom-wipe`, `-k`, `-P`, `--trust-key`, `-r`, `-S`, `-H`, `-K` and `-L`,
   each compared with upstream's Python `rnodeconf`. Keys and EEPROM
   signatures use the `rsa` crate 0.10, which fixes RUSTSEC-2023-0071.
+- `rnodeconf` stage 3 is done: the display, NeoPixel, interference
+  avoidance, Bluetooth and WiFi options, and upstream's `--help` text,
+  each compared with upstream's Python `rnodeconf`.
 - Phase 3 (3.1 with 2.6) is done: `autoconnect_policy`, defaulting to
   `upstream`, with `autoconnect_discovered_interfaces` and `bootstrap_only`.
   A bootstrap interface whose target is unreachable cannot be attached; the
@@ -177,8 +180,9 @@ command set the native RNode interface already uses, plus device commands.
    setting and reading the firmware hash (`-H`, `-K`, `-L`).
 3. **Peripherals.** Bluetooth (`-b`, `-B`, `-p`), Wi-Fi (`-w` with
    `--channel`, `--ssid`, `--psk`, `--show-psk`, `--ip`, `--nm`), display
-   (`-D` intensity, `-t` timeout, `--display-addr`, `--recondition-display`),
-   NeoPixel intensity (`--np`) and interference avoidance (`-x`, `-X`).
+   (`-D` intensity, `-t` timeout, `-R` rotation, `--display-addr`,
+   `--recondition-display`), NeoPixel intensity (`--np`) and interference
+   avoidance (`-x`, `-X`).
 4. **Firmware.** Release discovery from the firmware release feed
    (`--fw-version`, `--fw-url`, `--nocheck`), download and hash check,
    flashing (`-f`, `-u`, `-a` autoinstall, `--baud-flash`) and extracting the
