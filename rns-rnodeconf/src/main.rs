@@ -9,6 +9,7 @@ mod eeprom;
 mod firmware;
 mod keys;
 mod kiss;
+mod ports;
 mod rom;
 mod signature;
 
@@ -101,7 +102,7 @@ const VALUE_ALIASES: &[(&str, &str)] = &[
 ];
 
 /// Options of later implementation stages.
-const NOT_YET: &[&str] = &["--autoinstall", "--extract"];
+const NOT_YET: &[&str] = &["--autoinstall"];
 
 /// Options upstream's argument parser reads as integers, rejecting the
 /// command line before doing anything else when one is not.
@@ -467,6 +468,10 @@ fn main() {
         println!("likely result in it being inoperable until it is updated with the");
         println!("correct firmware. Hit enter to continue.");
         wait_for_enter();
+    }
+
+    if args.has("--extract") {
+        extract_firmware(&args);
     }
     if args.has("--public") {
         show_public_keys();
@@ -1230,6 +1235,224 @@ fn flash_firmware(
             graceful_exit(1);
         }
     }
+}
+
+/// upstream's serial port menu: the detected ports, newest first, and the
+/// one chosen by number, exiting when none is.
+fn select_port() -> ports::PortInfo {
+    let mut ports = ports::comports();
+    ports.reverse();
+    println!("Detected serial ports:");
+    for (i, port) in ports.iter().enumerate() {
+        println!(
+            "  [{}] {} ({}, {})",
+            i + 1,
+            port.device,
+            ports::py_str(&port.product),
+            ports::py_str(&port.serial_number)
+        );
+    }
+    print!("\nEnter the number of the serial port your device is connected to:\n? ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    match py_int(&line) {
+        Some(n) if n >= 1 && (n as usize) <= ports.len() => ports.swap_remove(n as usize - 1),
+        _ => {
+            println!("That port does not exist, exiting now.");
+            graceful_exit(0);
+        }
+    }
+}
+
+/// The parts of an ESP32 RNode's flash `-e` copies: what each is, where it
+/// lies, how long it is, and the file it goes to.
+const EXTRACTION_PARTS: &[(&str, &str, &str, &str)] = &[
+    (
+        "bootloader",
+        "0x1000",
+        "0x4650",
+        "extracted_rnode_firmware.bootloader",
+    ),
+    (
+        "partition table",
+        "0x8000",
+        "0xC00",
+        "extracted_rnode_firmware.partitions",
+    ),
+    (
+        "app boot",
+        "0xe000",
+        "0x2000",
+        "extracted_rnode_firmware.boot_app0",
+    ),
+    (
+        "application image",
+        "0x10000",
+        "0x200000",
+        "extracted_rnode_firmware.bin",
+    ),
+    (
+        "console image",
+        "0x210000",
+        "0x1F0000",
+        "extracted_console_image.bin",
+    ),
+];
+
+/// `-e`: copy the firmware images off an ESP32 RNode into
+/// `~/.config/rnodeconf/extracted/`, for `--use-extracted`.
+fn extract_firmware(args: &Args) -> ! {
+    println!();
+    println!("RNode Firmware Extraction");
+    println!();
+    let port = match &args.port {
+        None => {
+            let port = select_port();
+            println!(
+                "\nOk, using device on {} ({}, {})",
+                port.device,
+                ports::py_str(&port.product),
+                ports::py_str(&port.serial_number)
+            );
+            port.device
+        }
+        // Upstream fails with a Python error on a port it does not list,
+        // such as a pseudo-terminal; it is used as given here.
+        Some(port) => {
+            println!("\nUsing device on {port}");
+            port.clone()
+        }
+    };
+    println!("\nProbing device...");
+    let (reader, writer) = match open_serial(&port) {
+        Ok(handles) => handles,
+        Err(e) => {
+            log("Could not open the specified serial port. The contained exception was:");
+            log(&format!(
+                "[Errno {}] could not open port {port}: {e}",
+                e.raw_os_error().unwrap_or(0)
+            ));
+            graceful_exit(0);
+        }
+    };
+    let mut rnode = RNode::new(reader, writer);
+    if rnode.device_probe().is_err() {
+        log("No answer from device");
+    } else {
+        let reported = rnode.reported();
+        log("Device connected");
+        log(&format!(
+            "Current firmware version: {}",
+            reported.version().unwrap_or_else(|| "None".into())
+        ));
+    }
+    let reported = rnode.reported();
+    let mut info = eeprom::DeviceInfo::default();
+    if reported.detected == Some(true) {
+        log("Trying to read EEPROM...");
+        info = read_eeprom(&mut rnode, &port).1;
+    } else {
+        log("Could not detect a connected RNode");
+    }
+
+    if reported.platform != Some(rom::PLATFORM_ESP32) {
+        println!("\nFirmware extraction is currently only supported on ESP32-based RNodes.");
+        graceful_exit(170);
+    }
+    if info.provisioned {
+        if !info.signature_valid {
+            println!(
+                "\nThe device signature in this RNode is unknown and cannot be verified. It is still"
+            );
+            println!(
+                "possible to extract the firmware from it, but you should make absolutely sure that"
+            );
+            println!(
+                "it comes from a trusted source. It is possible that someone could have modified the"
+            );
+            println!(
+                "firmware. If that is the case, these modifications will propagate to any new RNodes"
+            );
+            println!("descendent from this one!");
+            println!("\nHit enter if you are sure you want to continue.");
+            wait_for_enter();
+        }
+        let Some(hash) = &reported.firmware_hash else {
+            println!("Could not read firmware information from device");
+            println!("\nRNode firmware extraction failed");
+            graceful_exit(180);
+        };
+        let version = format!(
+            "{} {}",
+            reported.version().unwrap_or_else(|| "None".into()),
+            hexstr(hash)
+        );
+        let _ = rnode.disconnect();
+        println!("\nFound RNode Firmvare v{version}");
+        println!("\nReady to extract firmware images from the RNode");
+        println!("Press enter to start the extraction process");
+        wait_for_enter();
+        let Some(esptool) = firmware::extraction_esptool(&config_dir()) else {
+            log("Error: No esptool is available to read the device's flash with.");
+            log("Install it with: pip3 install esptool");
+            graceful_exit(181);
+        };
+        let extracted = config_dir().join("extracted");
+        let _ = std::fs::write(extracted.join("extracted_rnode_firmware.version"), &version);
+        let baud = args.value("--baud-flash").unwrap_or("921600");
+        for (part, offset, size, file) in EXTRACTION_PARTS {
+            println!("Extracting {part}...");
+            let mut command = esptool.clone();
+            command.extend(
+                [
+                    "--chip",
+                    "esp32",
+                    "--port",
+                    &port,
+                    "--baud",
+                    baud,
+                    "--before",
+                    "default_reset",
+                    "--after",
+                    "hard_reset",
+                    "read_flash",
+                    offset,
+                    size,
+                ]
+                .map(str::to_string),
+            );
+            command.push(extracted.join(file).display().to_string());
+            let done = std::process::Command::new(&command[0])
+                .args(&command[1..])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if !done {
+                let shown: Vec<String> = command
+                    .iter()
+                    .map(|a| {
+                        if a.contains('/') {
+                            format!("\"{a}\"")
+                        } else {
+                            a.clone()
+                        }
+                    })
+                    .collect();
+                println!(
+                    "The extraction failed, the following command did not complete successfully:\n{}",
+                    shown.join(" ")
+                );
+                exit(182);
+            }
+        }
+        println!("\nFirmware successfully extracted!");
+        println!("\nYou can now use this firmware to update or autoinstall other RNodes");
+        exit(0);
+    }
+    println!("\nRNode firmware extraction failed");
+    graceful_exit(180);
 }
 
 fn firmware_dir() -> PathBuf {

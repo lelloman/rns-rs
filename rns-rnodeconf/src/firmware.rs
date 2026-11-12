@@ -525,21 +525,25 @@ fn esp32_flasher_call(
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&flasher, std::fs::Permissions::from_mode(0o750));
     }
+    let mut call: Vec<String> = vec![python(), flasher.clone()];
     if which(&flasher).is_none() {
-        log("");
-        log(&format!(
-            "You do not currently have the \"{flasher}\" program installed on your system."
-        ));
-        log("Unfortunately, that means we can't proceed, since it is needed to flash your");
-        log("board. You can install it via your package manager, for example:");
-        log("");
-        log("  sudo apt install esptool");
-        log("");
-        log(&format!("Please install \"{flasher}\" and try again."));
-        graceful_exit(0);
+        // Without a packaged or recovery esptool, an installed one.
+        let Some(installed) = installed_esptool() else {
+            log("");
+            log(&format!(
+                "You do not currently have the \"{flasher}\" program installed on your system."
+            ));
+            log("Unfortunately, that means we can't proceed, since it is needed to flash your");
+            log("board. You can install it via your package manager, for example:");
+            log("");
+            log("  sudo apt install esptool");
+            log("");
+            log(&format!("Please install \"{flasher}\" and try again."));
+            graceful_exit(0);
+        };
+        call = vec![installed.display().to_string()];
     }
 
-    let mut call: Vec<String> = vec![python(), flasher];
     let head = |chip: &str, size: &str| -> Vec<String> {
         [
             "--chip",
@@ -620,6 +624,23 @@ fn esp32_flasher_call(
         call.push(file);
     }
     Some(call)
+}
+
+/// The esptool `-e` reads a device's flash with, as a command prefix:
+/// upstream's recovery esptool if an upstream extraction left it in the
+/// configuration directory, else an installed `esptool.py` or `esptool`.
+/// Upstream carries the recovery esptool inside its own source; it is
+/// GPL-2.0 licensed, so it is not bundled here.
+pub fn extraction_esptool(config_dir: &Path) -> Option<Vec<String>> {
+    let recovery = config_dir.join("recovery_esptool.py");
+    if recovery.is_file() {
+        return Some(vec![python(), recovery.display().to_string()]);
+    }
+    installed_esptool().map(|path| vec![path.display().to_string()])
+}
+
+fn installed_esptool() -> Option<PathBuf> {
+    which("esptool.py").or_else(|| which("esptool"))
 }
 
 /// The Python interpreter that runs a package's `esptool.py`, where
