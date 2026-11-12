@@ -451,7 +451,6 @@ mod tests {
         HookInfo, RpcAddr, RpcServer,
     };
     use std::net::TcpListener;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::mpsc;
@@ -1122,17 +1121,17 @@ mod tests {
             ),
         )
         .unwrap();
-        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).unwrap();
 
         let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
         ensure_process(&state, "rns-sentineld");
+        // bash reads the script rather than executing it: executing a file
+        // just written fails with "Text file busy" when another test thread
+        // forks while the write descriptor is still open.
         let supervisor = Supervisor::new(SupervisorConfig {
             specs: vec![ProcessSpec {
                 role: Role::Sentineld,
-                command: ProcessCommand::External(script_path.clone()),
-                args: Vec::new(),
+                command: ProcessCommand::External(PathBuf::from("bash")),
+                args: vec![script_path.display().to_string()],
             }],
             shared_state: Some(state.clone()),
             control_rx: None,
