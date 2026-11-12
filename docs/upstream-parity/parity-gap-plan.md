@@ -30,8 +30,9 @@ which is why no audit caught them.
   (`-f`), extraction (`-e`, `--use-extracted`) and the autoinstall wizard
   (`-a`), compared with upstream against a local release site and fake
   flashers. Upstream's bundled GPL-2.0 esptool is not carried; an
-  installed one stands in where upstream would use it. Stage 5 (checking
-  against real boards) remains.
+  installed one stands in where upstream would use it. Stage 5: checked on
+  two Heltec LoRa32 v3 boards (see the surface record); writing a new
+  EEPROM has only been checked against fake devices.
 - Phase 4 items 4.1 to 4.3 are done: `rnid -a/--announce`, a working
   `-t`, `-v`/`-q` and upstream's short option names; `rnpath <destination>`
   requests the path and waits up to `-w`, as upstream does; `rnir` and

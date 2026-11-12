@@ -179,8 +179,10 @@ Implemented so far:
   list (upstream exits) as given.
 
 Every option is implemented and compared with upstream's Python
-`rnodeconf` against fake devices, release sites and flashers; no real
-RNode has been flashed with it yet. The crate's tests run the tool against a fake
+`rnodeconf` against fake devices, release sites and flashers, and the
+device information, configuration, settings, update and autoinstall paths
+have been run on real Heltec LoRa32 v3 boards (see the
+[surface record](upstream-parity/reticulum-1.6.0-surface-parity.md)). The crate's tests run the tool against a fake
 RNode on a pseudo-terminal, and the interop CI jobs run upstream's Python
 `rnodeconf` against the same fake device and require the same output and the
 same frames sent.
