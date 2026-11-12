@@ -48,6 +48,7 @@ pub const CMD_DEV_SIG: u8 = 0x57;
 pub const CMD_FW_HASH: u8 = 0x58;
 pub const CMD_ROM_WIPE: u8 = 0x59;
 pub const CMD_HASHES: u8 = 0x60;
+pub const CMD_FW_UPD: u8 = 0x61;
 pub const CMD_CFG_READ: u8 = 0x6D;
 
 /// What the fake device reports.

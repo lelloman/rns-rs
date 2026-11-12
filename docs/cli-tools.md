@@ -144,10 +144,22 @@ Implemented so far:
 - WiFi: `-w` mode (`OFF`, `AP` or `STATION`), `--channel`, `--ssid`,
   `--psk`, `--ip` and `--nm` (`NONE` deletes a value or returns to DHCP).
 
-Installing, updating and extracting firmware (`-a`, `-u`, `-U`, `-f`, `-e`
-and their options) is planned (see the
-[parity gap plan](upstream-parity/parity-gap-plan.md)); for now those
-options report that they are not implemented. The crate's tests run the tool against a fake
+- Firmware: `-u` updates a provisioned device to the latest release (or
+  `--fw-version`), refusing an installed or older version unless `-U`
+  is given. Release information and packages come from the RNode firmware
+  releases or `--fw-url`, are cached in `~/.config/rnodeconf/update/` and
+  checked against the release's SHA-256; `--nocheck` skips the online
+  check, `-C` clears the cache. The board is flashed by the flasher
+  upstream runs: the `esptool.py` inside an ESP32 package (run with
+  `python3`, or the interpreter `RNODECONF_PYTHON` names), `avrdude`, or
+  `adafruit-nrfutil`, at `--baud-flash` for ESP32 boards. `-f` flashes an
+  AVR board with a cached `rnode_firmware.hex` of `--fw-version`, then
+  bootstraps its EEPROM; upstream's `-f` fails with a Python error past
+  its version check unless the autoinstall wizard runs it.
+
+The autoinstall wizard (`-a`) and firmware extraction (`-e`) are planned
+(see the [parity gap plan](upstream-parity/parity-gap-plan.md)); for now
+those options report that they are not implemented. The crate's tests run the tool against a fake
 RNode on a pseudo-terminal, and the interop CI jobs run upstream's Python
 `rnodeconf` against the same fake device and require the same output and the
 same frames sent.

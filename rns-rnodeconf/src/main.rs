@@ -6,13 +6,14 @@
 
 mod device;
 mod eeprom;
+mod firmware;
 mod keys;
 mod kiss;
 mod rom;
 mod signature;
 
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use device::{RNode, RadioConfig};
@@ -100,19 +101,7 @@ const VALUE_ALIASES: &[(&str, &str)] = &[
 ];
 
 /// Options of later implementation stages.
-const NOT_YET: &[&str] = &[
-    "--autoinstall",
-    "--update",
-    "--force-update",
-    "--fw-version",
-    "--fw-url",
-    "--nocheck",
-    "--extract",
-    "--use-extracted",
-    "--clear-cache",
-    "--baud-flash",
-    "--flash",
-];
+const NOT_YET: &[&str] = &["--autoinstall", "--extract"];
 
 /// Options upstream's argument parser reads as integers, rejecting the
 /// command line before doing anything else when one is not.
@@ -394,6 +383,13 @@ fn open_serial(port: &str) -> std::io::Result<(std::fs::File, std::fs::File)> {
     Ok((reader, writer))
 }
 
+/// upstream's `input()` where only Enter is awaited.
+fn wait_for_enter() {
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+}
+
 fn prompt_int(prompt: &str) -> i64 {
     print!("{prompt}");
     let _ = std::io::stdout().flush();
@@ -431,9 +427,46 @@ fn main() {
         graceful_exit(1);
     }
 
+    if args.has("--clear-cache") {
+        log("Clearing local firmware cache...");
+        let _ = std::fs::remove_dir_all(config_dir().join("update"));
+        log("Done");
+        graceful_exit(0);
+    }
+    let mut firmware = firmware::Firmware {
+        config_dir: config_dir(),
+        selected_version: None,
+        selected_hash: None,
+        fw_url: args.value("--fw-url").map(str::to_string),
+        nocheck: args.has("--nocheck"),
+    };
+    if let Some(version) = args.value("--fw-version") {
+        if version.trim().parse::<f64>().is_err() {
+            log(&format!(
+                "Selected version \"{version}\" does not appear to be a number."
+            ));
+            graceful_exit(0);
+        }
+        firmware.selected_version = Some(version.to_string());
+    }
+    let force_update = args.has("--force-update");
+    let use_extracted = args.has("--use-extracted");
+
     if let Some(key) = args.value("--trust-key") {
         trust_key(key);
         graceful_exit(0);
+    }
+
+    if use_extracted && args.has("--update") && args.port.is_some() {
+        println!();
+        println!("You have specified that rnodeconf should use a firmware extracted");
+        println!("from another device. Please note that this *only* works if you are");
+        println!("targeting a device of the same type that the firmware came from!");
+        println!();
+        println!("Flashing this firmware to a device it was not created for will most");
+        println!("likely result in it being inoperable until it is updated with the");
+        println!("correct firmware. Hit enter to continue.");
+        wait_for_enter();
     }
     if args.has("--public") {
         show_public_keys();
@@ -451,37 +484,33 @@ fn main() {
         graceful_exit(0);
     };
 
-    log(&format!("Opening serial port {port}..."));
-    let (reader, writer) = match open_serial(&port) {
-        Ok(handles) => handles,
-        Err(e) => {
-            log("Could not open the specified serial port. The contained exception was:");
-            log(&format!(
-                "[Errno {}] could not open port {port}: {e}",
-                e.raw_os_error().unwrap_or(0)
-            ));
-            graceful_exit(0);
+    let baud_flash = args.value("--baud-flash").unwrap_or("921600").to_string();
+    let target = firmware::FlashTarget {
+        port: &port,
+        baud_flash: &baud_flash,
+    };
+    let mut rom_requested = args.has("--rom");
+    let mut wants_fw_provision = false;
+    let mut fw_filename: Option<String> = None;
+    if args.has("--flash") {
+        // upstream keeps `--platform` as given, a string no platform code
+        // equals, and flashes an AVR board when it is not given.
+        let platform = match args.value("--platform") {
+            Some(name) => firmware::FlashPlatform::Named(name.to_string()),
+            None => firmware::FlashPlatform::Rom(rom::PLATFORM_AVR),
+        };
+        let fw = fw_filename
+            .get_or_insert_with(|| "rnode_firmware.hex".to_string())
+            .clone();
+        if firmware.selected_version.is_none() {
+            log("Missing parameters, cannot continue");
+            graceful_exit(68);
         }
-    };
-    let mut rnode = RNode::new(reader, writer);
-
-    if let Err(e) = rnode.device_probe() {
-        log("Serial port opened, but RNode did not respond. Is a valid firmware installed?");
-        println!("{e}");
-        graceful_exit(0);
+        wants_fw_provision = flash_firmware(&firmware, &platform, &fw, &target);
+        rom_requested = true;
     }
-    let reported = rnode.reported();
-    log("Device connected");
-    log(&format!(
-        "Current firmware version: {}",
-        reported.version().unwrap_or_else(|| "None".into())
-    ));
-    // upstream assumes an AVR board when it does not say.
-    let (platform, _mcu) = match (reported.platform, reported.mcu) {
-        (Some(platform), Some(mcu)) => (platform, mcu),
-        _ => (rom::PLATFORM_AVR, rom::MCU_1284P),
-    };
 
+    let (mut rnode, mut reported, mut platform) = connect(&port);
     if args.has("--eeprom-wipe") {
         log("WARNING: EEPROM is being wiped! Power down device NOW if you do not want this!");
         let _ = rnode.wipe_eeprom(reported.board);
@@ -492,7 +521,130 @@ fn main() {
     }
 
     log("Reading EEPROM...");
-    let (image, info) = read_eeprom(&mut rnode, &port);
+    let (mut image, mut info) = read_eeprom(&mut rnode, &port);
+
+    if info.provisioned {
+        fw_filename = firmware_for(&info, &reported, platform, use_extracted);
+        if fw_filename.is_none() && platform == rom::PLATFORM_NRF52 && args.has("--update") {
+            log("ERROR: No firmware found for this board. Cannot update.");
+            graceful_exit(0);
+        }
+    }
+
+    let mut show_device_info = args.has("--info");
+    if args.has("--update") {
+        if !info.provisioned {
+            log("Device not provisioned. Cannot update device firmware.");
+            graceful_exit(1);
+        }
+        if use_extracted {
+            fw_filename = Some(firmware::EXTRACTED.to_string());
+        }
+        let fw = fw_filename.clone().unwrap_or_else(|| "None".to_string());
+        log("Checking firmware file availability...");
+        let mut ensured = false;
+        if firmware.selected_version.is_none() {
+            firmware.ensure(&fw);
+            ensured = true;
+        }
+        let selected = firmware.selected_version.clone().unwrap_or_default();
+        let installed = reported.version().unwrap_or_default();
+        if !force_update {
+            let which = if args.has("--fw-version") {
+                "Specified"
+            } else {
+                "Latest"
+            };
+            if installed == selected {
+                log(&format!(
+                    "{which} firmware version ({selected}) is already installed on this device"
+                ));
+                log("Override with -U option to install anyway");
+                graceful_exit(0);
+            }
+            // upstream compares the version strings.
+            if installed > selected {
+                log(&format!(
+                    "{which} firmware version ({selected}) is older than firmware already installed on this device"
+                ));
+                log("Override with -U option to install anyway");
+                graceful_exit(0);
+            }
+        }
+        if !ensured {
+            firmware.ensure(&fw);
+        }
+        if fw.ends_with(".zip") && fw != firmware::EXTRACTED {
+            log("Decompressing firmware...");
+            if firmware.decompress(&fw).is_err() {
+                log("Could not decompress firmware from downloaded zip file");
+                graceful_exit(0);
+            }
+            log("Firmware decompressed");
+        }
+
+        let update_file = if fw == firmware::EXTRACTED {
+            firmware
+                .extracted_dir()
+                .join("extracted_rnode_firmware.version")
+        } else {
+            PathBuf::from(format!("{}/{fw}", firmware.version_dir()))
+        };
+        if !update_file.is_file() {
+            log("Firmware update file not found");
+            graceful_exit(0);
+        }
+        show_device_info = false;
+        log(&format!("Updating RNode firmware for device on {port}"));
+        let hash = installed_firmware_hash(&firmware, platform, &fw);
+        if let Some(hash) = &hash {
+            if rnode.indicate_firmware_update().is_err() {
+                log("Error while indicating firmware update start to board, attempting update anyway...");
+            }
+            let _ = rnode.set_firmware_hash(hash);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if platform == rom::PLATFORM_NRF52 {
+                std::thread::sleep(std::time::Duration::from_secs(14));
+            }
+        }
+        if rnode.disconnect().is_err() {
+            log("Error while gracefully disconnecting device before firmware update, attempting update anyway...");
+        }
+        let call = firmware::flasher_call(
+            &firmware,
+            &firmware::FlashPlatform::Rom(platform),
+            &fw,
+            &target,
+        );
+        match run_flasher(call) {
+            Err(e) => {
+                log("Error while updating firmware");
+                log(&e);
+                graceful_exit(0);
+            }
+            Ok(0) => {
+                log("Flashing new firmware completed");
+                (rnode, reported, platform) = connect(&port);
+                log("Reading EEPROM...");
+                (image, info) = read_eeprom(&mut rnode, &port);
+                if info.provisioned {
+                    fw_filename = firmware_for(&info, &reported, platform, false);
+                    show_device_info = true;
+                    if let Some(hash) = &hash {
+                        let _ = rnode.set_firmware_hash(hash);
+                    }
+                }
+                if show_device_info {
+                    log("");
+                    log("Firmware update completed successfully");
+                }
+            }
+            Ok(_) => {
+                log("An error occurred while flashing the new firmware, exiting now.");
+                graceful_exit(0);
+            }
+        }
+    }
 
     if args.has("--config") {
         show_config(&mut rnode, &image, platform, args.has("--show-psk"));
@@ -513,7 +665,7 @@ fn main() {
 
     configure_peripherals(&mut rnode, &args);
 
-    if args.has("--info") {
+    if show_device_info {
         if info.provisioned {
             show_info(&info, &reported);
             let _ = rnode.leave();
@@ -524,8 +676,10 @@ fn main() {
         }
     }
 
-    if args.has("--rom") {
-        bootstrap_eeprom(&mut rnode, &args, &info, platform, &port);
+    if rom_requested {
+        let provision =
+            wants_fw_provision.then(|| (&firmware, fw_filename.as_deref().unwrap_or_default()));
+        bootstrap_eeprom(&mut rnode, &args, &info, platform, &port, provision);
     }
 
     if args.has("--sign") {
@@ -885,6 +1039,199 @@ fn configure_peripherals(rnode: &mut RNode, args: &Args) {
     }
 }
 
+/// Open `port` and probe the device, as upstream does before each use:
+/// the device, what it reported, and its platform (AVR when it does not
+/// say).
+fn connect(port: &str) -> (RNode, device::Reported, u8) {
+    log(&format!("Opening serial port {port}..."));
+    let (reader, writer) = match open_serial(port) {
+        Ok(handles) => handles,
+        Err(e) => {
+            log("Could not open the specified serial port. The contained exception was:");
+            log(&format!(
+                "[Errno {}] could not open port {port}: {e}",
+                e.raw_os_error().unwrap_or(0)
+            ));
+            graceful_exit(0);
+        }
+    };
+    let mut rnode = RNode::new(reader, writer);
+    if let Err(e) = rnode.device_probe() {
+        log("Serial port opened, but RNode did not respond. Is a valid firmware installed?");
+        println!("{e}");
+        graceful_exit(0);
+    }
+    let reported = rnode.reported();
+    log("Device connected");
+    log(&format!(
+        "Current firmware version: {}",
+        reported.version().unwrap_or_else(|| "None".into())
+    ));
+    let platform = match (reported.platform, reported.mcu) {
+        (Some(platform), Some(_)) => platform,
+        _ => rom::PLATFORM_AVR,
+    };
+    (rnode, reported, platform)
+}
+
+/// The firmware package for a provisioned device: its model's, or for a
+/// homebrew model (0xFF) its board's.
+fn firmware_for(
+    info: &eeprom::DeviceInfo,
+    reported: &device::Reported,
+    platform: u8,
+    use_extracted: bool,
+) -> Option<String> {
+    if info.model != rom::MODEL_FF {
+        return rom::model(info.model)
+            .and_then(|m| m.firmware)
+            .map(str::to_string);
+    }
+    if use_extracted {
+        return Some(firmware::EXTRACTED.to_string());
+    }
+    let mcu = reported.mcu.unwrap_or(rom::MCU_1284P);
+    let name = match platform {
+        rom::PLATFORM_AVR if mcu == rom::MCU_1284P => "rnode_firmware.hex",
+        rom::PLATFORM_AVR if mcu == rom::MCU_2560 => "rnode_firmware_m2560.hex",
+        rom::PLATFORM_ESP32 if reported.board == Some(rom::BOARD_HUZZAH32) => {
+            "rnode_firmware_featheresp32.zip"
+        }
+        rom::PLATFORM_ESP32 if reported.board == Some(rom::BOARD_GENERIC_ESP32) => {
+            "rnode_firmware_esp32_generic.zip"
+        }
+        rom::PLATFORM_NRF52 if reported.board == Some(rom::BOARD_RAK4631) => {
+            "rnode_firmware_rak4631.zip"
+        }
+        _ => return None,
+    };
+    Some(name.to_string())
+}
+
+/// The firmware hash a device reports once `fw_filename` is installed:
+/// recorded at extraction for an extracted firmware, computed from the
+/// image otherwise.
+fn installed_firmware_hash(
+    firmware: &firmware::Firmware,
+    platform: u8,
+    fw_filename: &str,
+) -> Option<Vec<u8>> {
+    if fw_filename == firmware::EXTRACTED {
+        let info = std::fs::read_to_string(
+            firmware
+                .extracted_dir()
+                .join("extracted_rnode_firmware.version"),
+        )
+        .ok()?;
+        return signature::unhex(info.split_whitespace().nth(1)?);
+    }
+    let partition = fw_filename.replace(".zip", ".bin");
+    firmware::partition_hash(platform, &format!("{}/{partition}", firmware.version_dir()))
+}
+
+/// Run a flasher as upstream's `subprocess.call` does, with the output
+/// going to the terminal: its exit status, negative for a signal.
+fn run_flasher(call: Option<Vec<String>>) -> Result<i32, String> {
+    let Some(call) = call else {
+        return Err("expected str, bytes or os.PathLike object, not NoneType".into());
+    };
+    let status = std::process::Command::new(&call[0])
+        .args(&call[1..])
+        .status()
+        .map_err(|e| {
+            let errno = e.raw_os_error().unwrap_or(0);
+            // SAFETY: strerror returns a static string for any errno.
+            let reason =
+                unsafe { std::ffi::CStr::from_ptr(libc::strerror(errno)) }.to_string_lossy();
+            format!("[Errno {errno}] {reason}: '{}'", call[0])
+        })?;
+    use std::os::unix::process::ExitStatusExt;
+    Ok(status
+        .code()
+        .unwrap_or_else(|| -status.signal().unwrap_or(0)))
+}
+
+/// `-f`: flash `fw_filename` of the selected version. Returns whether the
+/// device's firmware hash is then set while bootstrapping its EEPROM.
+fn flash_firmware(
+    firmware: &firmware::Firmware,
+    platform: &firmware::FlashPlatform,
+    fw_filename: &str,
+    target: &firmware::FlashTarget,
+) -> bool {
+    use std::time::Duration;
+    let esp32 = *platform == firmware::FlashPlatform::Rom(rom::PLATFORM_ESP32);
+    let nrf52 = *platform == firmware::FlashPlatform::Rom(rom::PLATFORM_NRF52);
+    if fw_filename == firmware::EXTRACTED {
+        log(&format!(
+            "Flashing RNode firmware to device on {}",
+            target.port
+        ));
+        let call = firmware::flasher_call(firmware, platform, fw_filename, target);
+        return match run_flasher(call) {
+            Ok(0) => {
+                log("Done flashing");
+                if esp32 {
+                    log("Waiting for ESP32 reset...");
+                    std::thread::sleep(Duration::from_secs(7));
+                }
+                esp32
+            }
+            Ok(_) => graceful_exit(0),
+            Err(e) => {
+                log("Error while flashing");
+                log(&e);
+                graceful_exit(1);
+            }
+        };
+    }
+
+    let package = format!("{}/{fw_filename}", firmware.version_dir());
+    if !Path::new(&package).is_file() {
+        log("Firmware file not found");
+        graceful_exit(0);
+    }
+    if fw_filename.ends_with(".zip") {
+        log("Decompressing firmware...");
+        if firmware.decompress(fw_filename).is_err() {
+            log("Could not decompress firmware from downloaded zip file");
+            graceful_exit(0);
+        }
+        log("Firmware decompressed");
+    }
+    log(&format!(
+        "Flashing RNode firmware to device on {}",
+        target.port
+    ));
+    let call = firmware::flasher_call(firmware, platform, fw_filename, target);
+    match run_flasher(call) {
+        Ok(0) => {
+            log("Done flashing");
+            if esp32 {
+                log("Waiting for ESP32 reset...");
+                std::thread::sleep(Duration::from_secs(8));
+            }
+            if nrf52 {
+                log("Waiting for NRF52 reset...");
+                std::thread::sleep(Duration::from_secs(6));
+            }
+            esp32 || nrf52
+        }
+        Ok(status) => {
+            log(&format!("Error from flasher ({status}) while writing."));
+            log("Some boards have trouble flashing at high speeds, and you can");
+            log("try flashing with a lower baud rate, as in this example:");
+            log("rnodeconf --autoinstall --baud-flash 115200");
+            graceful_exit(0);
+        }
+        Err(e) => {
+            log("Error while flashing");
+            log(&e);
+            graceful_exit(1);
+        }
+    }
+}
+
 fn firmware_dir() -> PathBuf {
     config_dir().join("firmware")
 }
@@ -1075,6 +1422,7 @@ fn bootstrap_eeprom(
     info: &eeprom::DeviceInfo,
     platform: u8,
     port: &str,
+    provision: Option<(&firmware::Firmware, &str)>,
 ) {
     use std::time::Duration;
     let pause = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
@@ -1181,6 +1529,13 @@ fn bootstrap_eeprom(
         pause(3000);
     }
     log("EEPROM written! Validating...");
+    if let Some((firmware, fw_filename)) = provision {
+        if let Some(hash) = installed_firmware_hash(firmware, platform, fw_filename) {
+            pause(750);
+            log("Setting firmware checksum...");
+            let _ = rnode.set_firmware_hash(&hash);
+        }
+    }
 
     match platform {
         rom::PLATFORM_ESP32 => {
