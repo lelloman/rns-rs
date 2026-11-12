@@ -44,11 +44,23 @@ differs is listed below.
 |---|---|
 | `force_shared_instance_bitrate` | Reported on the shared instance interface, but sends are not paced to it as upstream's local interfaces do. |
 | Bootstrap interfaces | A bootstrap interface whose target is unreachable is not attached and is retried every 5 s; upstream creates it and lets it reconnect. |
-| `rnodeconf` hardware | No real RNode has been flashed or bootstrapped with it yet (plan stage 5). |
+| `rnodeconf` hardware | Checked on two Heltec LoRa32 v3 boards (ESP32-S3, firmware 1.86), see below; writing a new EEPROM (`-r`, `--eeprom-wipe`) has only been checked against fake devices. |
+| `rnodeconf -e` on ESP32-S3 | Fails, as upstream's does: both read the flash as a classic ESP32 (`--chip esp32`, its offsets), and the failed attempt leaves the board in its bootloader until reset. |
 | `rnodeconf` recovery esptool | Upstream carries a GPL-2.0 esptool in its source for `-e` and for packages without one; rns-rs uses the copy an upstream extraction left behind, or an installed `esptool`. |
 | `rnodeconf` fixes | `-f` works without the autoinstall wizard, where upstream fails with a Python error; `-e` and `-a` use a port upstream does not list, where upstream exits; display, NeoPixel and WiFi mode values are KISS-escaped; EEPROM backups go inside the `eeprom` directory. |
 | `rnid -a`, `rnir`, `rnpkg` | Without a running shared instance, `rnid -a` reports that it cannot connect, where upstream starts an instance of its own; `rnir` and `rnpkg` start one. |
 | `rnid` exit codes | Only the announce errors use upstream's codes (4, 9, 254); other failures exit with 1. |
+
+## `rnodeconf` on Hardware
+
+Two Heltec LoRa32 v3 RNodes (ESP32-S3, 8 MB flash, CP2102), 2026-11-12:
+
+| Check | Result |
+|---|---|
+| `-i`, `-c`, `-K -L`, `--eeprom-dump`, `-P` | Output identical to upstream's Python `rnodeconf` on the same board |
+| `-D`, `-t`, `-x` then `-c`, then restored | The firmware stored and reported each value |
+| `-u -U` | Release information and the 1.86 package fetched from GitHub, byte-identical to upstream's download; flashed with the package's esptool; firmware hash set; target and actual hashes equal the image's |
+| `-a` on the second board | Wizard, firmware check and flash completed; its EEPROM was already valid, so bootstrapping made no changes, as upstream's does |
 
 Not in scope, as in the plan: Python-only internals with no observable
 behaviour, and upstream's documentation build.
