@@ -5,6 +5,7 @@ extern crate self as rns_cli;
 pub mod app;
 pub mod args;
 pub mod format;
+pub mod placeholder;
 pub mod readiness;
 pub mod remote;
 pub mod rncp;

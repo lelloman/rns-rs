@@ -2,6 +2,7 @@
 //!
 //! Connects to a running rnsd via RPC to query/modify the path table.
 
+use std::io::Write;
 use std::path::Path;
 use std::process;
 use std::time::Duration;
@@ -161,7 +162,19 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     } else if drop_queues {
         drop_announce_queues(&mut client);
     } else if let Some(hash_str) = args.positional.first() {
-        lookup_path(&mut client, hash_str);
+        let timeout = args
+            .get("w")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(rns_core::constants::PATH_REQUEST_TIMEOUT);
+        drop(client);
+        let connect = || match RpcClient::connect(&rpc_addr, &auth_key) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Could not connect to rnsd: {}", e);
+                process::exit(1);
+            }
+        };
+        lookup_path(&connect, hash_str, timeout);
     } else {
         print_usage(usage_name);
     }
@@ -599,23 +612,13 @@ fn do_unblackhole(client: &mut RpcClient, hash_str: &str) {
     }
 }
 
-fn lookup_path(client: &mut RpcClient, hash_str: &str) {
-    let hash_bytes = match parse_hex_hash(hash_str) {
-        Some(b) if b.len() >= 16 => b,
-        _ => {
-            eprintln!("Invalid destination hash: {}", hash_str);
-            process::exit(1);
-        }
-    };
-
-    let mut dest_hash = [0u8; 16];
-    dest_hash.copy_from_slice(&hash_bytes[..16]);
-
-    // Query next hop
-    let response = match client.call(&PickleValue::Dict(vec![
+/// One RPC `get` for a destination, as upstream's shared-instance clients
+/// make it.
+fn get_for(connect: &dyn Fn() -> RpcClient, what: &str, dest_hash: &[u8; 16]) -> PickleValue {
+    match connect().call(&PickleValue::Dict(vec![
         (
             PickleValue::String("get".into()),
-            PickleValue::String("next_hop".into()),
+            PickleValue::String(what.into()),
         ),
         (
             PickleValue::String("destination_hash".into()),
@@ -627,13 +630,97 @@ fn lookup_path(client: &mut RpcClient, hash_str: &str) {
             eprintln!("RPC error: {}", e);
             process::exit(1);
         }
+    }
+}
+
+fn hops_to(connect: &dyn Fn() -> RpcClient, dest_hash: &[u8; 16]) -> i64 {
+    let table = connect()
+        .call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("get".into()),
+                PickleValue::String("path_table".into()),
+            ),
+            (PickleValue::String("max_hops".into()), PickleValue::None),
+        ]))
+        .unwrap_or(PickleValue::None);
+    table
+        .as_list()
+        .and_then(|entries| {
+            entries.iter().find(|entry| {
+                entry.get("hash").and_then(|v| v.as_bytes()) == Some(dest_hash.as_slice())
+            })
+        })
+        .and_then(|entry| entry.get("hops").and_then(|v| v.as_int()))
+        .unwrap_or(rns_core::constants::PATHFINDER_M as i64)
+}
+
+/// upstream's `rnpath <destination>`: request a path unless one is known,
+/// wait up to `timeout` (at least the instance's medium path timeout) for
+/// it, and show where it leads.
+/// Each RPC connection serves one call, so every query opens one.
+fn lookup_path(connect: &dyn Fn() -> RpcClient, hash_str: &str, timeout: f64) {
+    if hash_str.len() != 32 {
+        println!("Destination length is invalid, must be 32 hexadecimal characters (16 bytes).");
+        process::exit(1);
+    }
+    let Some(hash_bytes) = parse_hex_hash(hash_str) else {
+        println!("Invalid destination entered. Check your input.");
+        process::exit(1);
+    };
+    let mut dest_hash = [0u8; 16];
+    dest_hash.copy_from_slice(&hash_bytes);
+    let pretty = format!("<{}>", prettyhexrep(&dest_hash));
+    let has_path = || {
+        get_for(connect, "next_hop", &dest_hash)
+            .as_bytes()
+            .is_some()
     };
 
-    if let Some(next_hop) = response.as_bytes() {
-        println!("Path to {} found", prettyhexrep(&dest_hash));
-        println!("  Next hop: {}", prettyhexrep(next_hop));
-    } else {
-        println!("No path found for {}", prettyhexrep(&dest_hash));
+    if !has_path() {
+        let _ = connect().call(&PickleValue::Dict(vec![(
+            PickleValue::String("request_path".into()),
+            PickleValue::Bytes(dest_hash.to_vec()),
+        )]));
+        print!("Path to {pretty} requested   ");
+        let _ = std::io::stdout().flush();
+    }
+
+    let medium = connect()
+        .call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("medium_path_timeout".into()),
+        )]))
+        .ok()
+        .and_then(|v| v.as_float().or_else(|| v.as_int().map(|i| i as f64)))
+        .unwrap_or(0.0);
+    let limit = std::time::Instant::now()
+        + std::time::Duration::from_secs_f64(timeout.max(medium).max(0.0));
+    let syms: Vec<char> = "⢄⢂⢁⡁⡈⡐⡠".chars().collect();
+    let mut i = 0;
+    while !has_path() && std::time::Instant::now() < limit {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        print!("\x08\x08{} ", syms[i]);
+        let _ = std::io::stdout().flush();
+        i = (i + 1) % syms.len();
+    }
+
+    match get_for(connect, "next_hop", &dest_hash).as_bytes() {
+        Some(next_hop) => {
+            let next_hop = format!("<{}>", prettyhexrep(next_hop));
+            let interface = get_for(connect, "next_hop_if_name", &dest_hash)
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| "None".into());
+            let hops = hops_to(connect, &dest_hash);
+            let ms = if hops != 1 { "s" } else { "" };
+            println!(
+                "\rPath found, destination {pretty} is {hops} hop{ms} away via {next_hop} on {interface}"
+            );
+        }
+        None => {
+            println!("\r                                                       \rPath not found");
+            process::exit(1);
+        }
     }
 }
 
@@ -842,6 +929,7 @@ fn print_usage(usage_name: &str) {
     println!("  --reason TEXT           Reason for blackholing");
     println!("  -R HASH                 Query remote transport identity via management link");
     println!("  -i PATH                 Identity file for remote management");
+    println!("  -w SECONDS              Path request timeout (default 15)");
     println!("  -W SECONDS              Timeout for remote path queries");
     println!("  -j                      JSON output");
     println!("  -v                      Increase verbosity");

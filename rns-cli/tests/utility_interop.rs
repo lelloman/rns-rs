@@ -1960,3 +1960,83 @@ fn python_rnstatus_manages_rust_interface() {
         );
     }
 }
+
+/// What an `rnpath <destination>` run finally shows: the text after its
+/// last carriage return, past the request spinner.
+fn final_rnpath_line(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .trim_end()
+        .rsplit('\r')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rnpath_looks_up_a_destination_as_python_does() {
+    let harness = Harness::start("rnpath-lookup");
+    let listener_identity = harness.path("listener.identity");
+    let receive = harness.path("receive");
+    fs::create_dir_all(&receive).unwrap();
+    let destination = harness.destination(Implementation::Rust, "rncp", &listener_identity);
+    let listener = harness.listener(
+        Implementation::Rust,
+        "rncp",
+        &listener_identity,
+        &destination,
+        &[
+            "--no-auth".into(),
+            "--save".into(),
+            receive.to_string_lossy().into_owned(),
+            "-b".into(),
+            "1".into(),
+        ],
+    );
+    harness.wait_for_client_path(&destination, &listener);
+    let config = harness.client_config.to_str().unwrap().to_string();
+
+    let lookup = |rust: bool, destination: &str, extra: &[&str]| -> Output {
+        let mut command = if rust {
+            harness.rust_command("rnpath", Side::Client)
+        } else {
+            harness.python_command("rnpath")
+        };
+        command
+            .args(["--config", &config])
+            .args(extra)
+            .arg(destination);
+        command.output().expect("run rnpath")
+    };
+
+    let python = lookup(false, &destination, &["-w", "5"]);
+    let rust = lookup(true, &destination, &["-w", "5"]);
+    for (name, output) in [("Python", &python), ("Rust", &rust)] {
+        assert!(
+            output.status.success(),
+            "{name} rnpath failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let found = final_rnpath_line(&python);
+    assert!(found.starts_with("Path found, destination"), "{found}");
+    assert_eq!(final_rnpath_line(&rust), found);
+
+    let unknown = "0123456789abcdef0123456789abcdef";
+    let python = lookup(false, unknown, &["-w", "1"]);
+    let rust = lookup(true, unknown, &["-w", "1"]);
+    assert_eq!(python.status.code(), Some(1));
+    assert_eq!(rust.status.code(), Some(1));
+    assert_eq!(final_rnpath_line(&rust), final_rnpath_line(&python));
+    assert_eq!(final_rnpath_line(&rust), "Path not found");
+
+    for bad in ["abcd", "zz23456789abcdef0123456789abcdef"] {
+        let python = lookup(false, bad, &[]);
+        let rust = lookup(true, bad, &[]);
+        assert_eq!(rust.status.code(), python.status.code());
+        assert_eq!(rust.stdout, python.stdout);
+    }
+}
