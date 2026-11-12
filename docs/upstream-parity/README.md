@@ -178,6 +178,10 @@ rns-rs commit must contain exactly one `Upstream-Commit` trailer.
 
 ## Records
 
+The [surface record](reticulum-1.6.0-surface-parity.md) closes the
+[gap plan](parity-gap-plan.md): it covers the whole upstream surface, where
+the records below each cover a commit range.
+
 | Version | Audit | Final parity record |
 |---|---|---|
 | 1.6.0 rgit `16621a78` | [Audit](reticulum-1.6.0-rgit-3-audit.md) | [Parity](reticulum-1.6.0-rgit-3-parity.md) |

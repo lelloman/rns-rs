@@ -1,6 +1,6 @@
 # Plan: close the remaining gaps to Reticulum 1.6.0
 
-Status: in progress, 2026-11-09. Baseline: Reticulum 1.6.0, rgit `c5d205ff`
+Status: done, 2026-11-12 ([surface record](reticulum-1.6.0-surface-parity.md)); started 2026-11-09. Baseline: Reticulum 1.6.0, rgit `c5d205ff`
 ([parity record](reticulum-1.6.0-rgit-2-parity.md)).
 
 The per-commit audits only review commits after a baseline, so features that
@@ -32,6 +32,10 @@ which is why no audit caught them.
   flashers. Upstream's bundled GPL-2.0 esptool is not carried; an
   installed one stands in where upstream would use it. Stage 5 (checking
   against real boards) remains.
+- Phase 4 items 4.1 to 4.3 are done: `rnid -a/--announce`, a working
+  `-t`, `-v`/`-q` and upstream's short option names; `rnpath <destination>`
+  requests the path and waits up to `-w`, as upstream does; `rnir` and
+  `rnpkg` placeholders.
 - Phase 3 (3.1 with 2.6) is done: `autoconnect_policy`, defaulting to
   `upstream`, with `autoconnect_discovered_interfaces` and `bootstrap_only`.
   A bootstrap interface whose target is unreachable cannot be attached; the
