@@ -16,6 +16,7 @@ use esp_idf_hal::gpio::{AnyIOPin, Input, InterruptType, Output, PinDriver};
 use esp_idf_hal::spi::{self, SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::units::Hertz;
+use rns_esp32::airframe::{self, Reassembler};
 
 use crate::config;
 use rns_esp32::protocol::RadioConfig;
@@ -62,6 +63,8 @@ pub struct Radio {
     cs: PinDriver<'static, Output>,
     rst: PinDriver<'static, Output>,
     busy: PinDriver<'static, Input>,
+    /// Rebuilds frames split over two LoRa packets.
+    reassembler: Reassembler,
 }
 
 impl Radio {
@@ -371,7 +374,27 @@ impl Radio {
         );
     }
 
-    /// Try to receive a frame. Returns Some(data) if RxDone, None otherwise.
+    /// Send one frame with RNode on-air framing: a header byte, and two
+    /// packets for a frame over 254 bytes.
+    pub fn send(&mut self, frame: &[u8]) -> std::io::Result<()> {
+        // SAFETY: esp_random reads the hardware random number generator.
+        let random = unsafe { esp_idf_sys::esp_random() } as u8;
+        let packets = airframe::packets(frame, random).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "frame exceeds RNode MTU")
+        })?;
+        for packet in packets {
+            self.transmit(&packet)?;
+        }
+        Ok(())
+    }
+
+    /// A received frame, once all of its LoRa packets are in.
+    pub fn receive(&mut self) -> Option<Vec<u8>> {
+        let packet = self.try_receive()?;
+        self.reassembler.feed(&packet)
+    }
+
+    /// Try to receive one LoRa packet. Returns Some(data) if RxDone, None otherwise.
     pub fn try_receive(&mut self) -> Option<Vec<u8>> {
         let irq = self.get_irq_status();
 
@@ -421,7 +444,7 @@ pub struct LoRaWriter {
 impl LoRaWriter {
     pub fn send_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
         let mut radio = self.radio.lock().unwrap();
-        let result = radio.transmit(data);
+        let result = radio.send(data);
         // Return to RX after transmitting
         radio.set_rx_continuous();
         result
@@ -460,6 +483,7 @@ pub fn init(
         cs,
         rst,
         busy,
+        reassembler: Reassembler::new(),
     };
 
     radio.reset();
@@ -513,7 +537,7 @@ pub fn reader_loop(
 
         let frame = {
             let mut r = radio.lock().unwrap();
-            r.try_receive()
+            r.receive()
         };
 
         if let Some(data) = frame {

@@ -100,6 +100,13 @@ fn main() -> io::Result<()> {
     exchange_payload(&mut node_a, &mut node_b, payload_ab)?;
     exchange_payload(&mut node_b, &mut node_a, payload_ba)?;
 
+    // Frames over 254 bytes go out as two LoRa packets (RNode firmware's
+    // split packets); every byte value, KISS escapes included.
+    let long_ab: Vec<u8> = (0..400u32).map(|i| (i * 7) as u8).collect();
+    let long_ba: Vec<u8> = (0..508u32).map(|i| (i * 13 + 5) as u8).collect();
+    exchange_payload(&mut node_a, &mut node_b, &long_ab)?;
+    exchange_payload(&mut node_b, &mut node_a, &long_ba)?;
+
     node_a.leave_and_redetect()?;
     node_b.leave_and_redetect()?;
 
@@ -168,7 +175,11 @@ impl HarnessNode {
                         info.fw_minor = minor;
                         have_fw = true;
                     }
-                    RNodeEvent::FirmwareDetail(detail) => {
+                    // rns-esp32 answers ROM_READ with its build version; an
+                    // RNode with its EEPROM, which is not text.
+                    RNodeEvent::FirmwareDetail(detail)
+                        if detail.chars().all(|c| c.is_ascii_graphic()) =>
+                    {
                         info.fw_detail = detail;
                     }
                     RNodeEvent::Platform(platform) => {
@@ -194,6 +205,9 @@ impl HarnessNode {
         ))
     }
 
+    /// Configure the radio and wait for each setting to be echoed back. A
+    /// READY frame is not awaited: rns-esp32 sends one here, RNode firmware
+    /// does not.
     fn configure_radio(&mut self, frequency: u32) -> io::Result<()> {
         self.drain_input()?;
 
@@ -229,7 +243,6 @@ impl HarnessNode {
         let mut got_sf = false;
         let mut got_cr = false;
         let mut got_radio_state = false;
-        let mut got_ready = false;
 
         while start.elapsed() < CONFIG_TIMEOUT {
             for event in self.read_events(Duration::from_millis(250))? {
@@ -244,19 +257,11 @@ impl HarnessNode {
                     RNodeEvent::RadioState(value) if value == rnode_kiss::RADIO_STATE_ON => {
                         got_radio_state = true
                     }
-                    RNodeEvent::Ready => got_ready = true,
                     _ => {}
                 }
             }
 
-            if got_frequency
-                && got_bandwidth
-                && got_power
-                && got_sf
-                && got_cr
-                && got_radio_state
-                && got_ready
-            {
+            if got_frequency && got_bandwidth && got_power && got_sf && got_cr && got_radio_state {
                 log::info!(
                     "{} configured at {} MHz / BW {} / SF{} / CR 4/{} / {} dBm",
                     self.label,
@@ -279,12 +284,11 @@ impl HarnessNode {
         ))
     }
 
+    /// Hand a frame to the radio. RNode firmware reports no READY after
+    /// transmitting (rns-esp32 does), so delivery is checked at the
+    /// receiver.
     fn send_payload(&mut self, payload: &[u8]) -> io::Result<()> {
-        self.write_frame(&rnode_kiss::rnode_data_frame(0, payload))?;
-        self.wait_for(RF_TIMEOUT, "ready after transmit", |event| {
-            matches!(event, RNodeEvent::Ready)
-        })?;
-        Ok(())
+        self.write_frame(&rnode_kiss::rnode_data_frame(0, payload))
     }
 
     fn expect_payload(&mut self, payload: &[u8]) -> io::Result<()> {

@@ -165,7 +165,9 @@ impl Driver {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
-            mtu: crate::config::LORA_MTU,
+            // A frame of up to 508 bytes, split over two LoRa packets,
+            // as upstream's RNode interface.
+            mtu: rns_esp32::airframe::MTU as u32,
             ingress_control: Default::default(),
             stamp_costs: Default::default(),
             ia_freq: 0.0,

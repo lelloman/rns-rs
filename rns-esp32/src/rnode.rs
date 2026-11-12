@@ -212,7 +212,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
 
             let received = {
                 let mut radio = self.radio.lock().unwrap();
-                radio.try_receive()
+                radio.receive()
             };
             if let Some(data) = received {
                 log::debug!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
@@ -352,7 +352,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     }
                     let result = {
                         let mut radio = self.radio.lock().unwrap();
-                        let r = radio.transmit(&frame.data);
+                        let r = radio.send(&frame.data);
                         radio.set_rx_continuous();
                         r
                     };
