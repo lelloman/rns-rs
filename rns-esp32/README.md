@@ -14,7 +14,7 @@ Reticulum LoRa transport node firmware for **Heltec WiFi LoRa 32 (V3)** with SX1
 - **Dual mode operation**:
   - **Standalone**: Runs a full Reticulum transport node over LoRa
   - **RNode Bridge**: Acts as a KISS interface over USB serial for a PC running `rns-net`
-- LoRa packet transport for Reticulum network
+- LoRa packet transport for Reticulum network, framed on air as RNode firmware frames it (a header byte per packet, frames up to 508 bytes split over two packets), so it interoperates with RNode-based Reticulum nodes
 - OLED display with multiple info pages (cycled via short-press PRG button)
 - Identity persistence via NVS (Non-Volatile Storage)
 - Signed control-plane support over LoRa for up to 3 build-time controller identities
@@ -149,7 +149,7 @@ Use the explicit Xtensa target plus `--features firmware` for firmware-only buil
 
 ## Hardware-In-The-Loop Testing
 
-For real RF regression testing, connect two Heltec V3 boards to the same host and run:
+For real RF regression testing, connect two Heltec V3 boards to the same host and run (either board may run upstream RNode firmware instead, which checks over-the-air compatibility with it):
 
 ```bash
 RUST_LOG=info cargo run -p rns-net --example rnode_hil -- /dev/ttyUSB0 /dev/ttyUSB1 868.0
@@ -159,7 +159,7 @@ The runner will:
 
 - detect both boards over USB serial
 - configure matching LoRa settings on both radios
-- verify packet delivery A -> B and B -> A
+- verify packet delivery A -> B and B -> A, for a short frame and for frames split over two LoRa packets (400 and 508 bytes)
 - send `LEAVE` and verify both boards can be detected again
 
 This is intended for bench or lab runners, not always-on CI without dedicated hardware.
