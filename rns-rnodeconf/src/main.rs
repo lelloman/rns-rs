@@ -1523,14 +1523,21 @@ fn read_eeprom(rnode: &mut RNode, port: &str) -> (Vec<u8>, eeprom::DeviceInfo) {
         }
     };
     let keys = eeprom::known_keys(&config_dir(), &mut |m| log(m));
-    let info = match eeprom::parse(&image, &keys) {
-        Some(info) => info,
-        None => {
+    let parsed = eeprom::parse(&image, &keys);
+    let info = match &parsed {
+        Ok(info) => info.clone(),
+        Err(e) => {
             log("Invalid EEPROM data, could not parse device EEPROM.");
+            log(&format!("The contained exception was: {e}"));
             eeprom::DeviceInfo::default()
         }
     };
-    if image.get(rom::ADDR_INFO_LOCK as usize) == Some(&rom::INFO_LOCK_BYTE) {
+    if info.model_unknown {
+        // upstream's lookup fails with a KeyError naming the model.
+        log("Error: Model band and output power capabilities are unknown!");
+        log(&format!("The contained exception was: {}", info.model));
+    }
+    if parsed.is_ok() && image.get(rom::ADDR_INFO_LOCK as usize) == Some(&rom::INFO_LOCK_BYTE) {
         if !info.checksum_valid {
             log("EEPROM checksum mismatch");
             graceful_exit(0);

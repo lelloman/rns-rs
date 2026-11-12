@@ -2051,3 +2051,64 @@ fn python_comparison_autoinstall_refusals() {
     // No firmware exists for a homebrew ESP32 board.
     compare_autoinstall(&server, device(blank_eeprom()), "2\n\n3\n2\n", None);
 }
+
+/// rns-esp32 answers the RNode handshake but replies to ROM_READ with its
+/// build version, far shorter than an EEPROM.
+fn short_rom_device() -> Device {
+    Device {
+        version: (0, 1),
+        ..device(b"0.1.1915-1570e482".to_vec())
+    }
+}
+
+#[test]
+fn a_short_eeprom_reply_is_reported_as_upstream_does() {
+    let fake = FakeRNode::start(short_rom_device());
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["-i", &fake.path]);
+    let lines = lines(&out.stdout);
+    for expected in [
+        "Current firmware version: 0.01",
+        "Invalid EEPROM data, could not parse device EEPROM.",
+        "The contained exception was: index out of range",
+        "EEPROM is invalid, no further information available",
+    ] {
+        assert!(
+            has_line(&lines, expected),
+            "missing {expected:?} in {lines:#?}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_model_is_reported_as_upstream_does() {
+    let fake = FakeRNode::start(device(eeprom(0x03, 0x77, 1, [0, 0, 0, 9], MADE, None)));
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["--eeprom-dump", &fake.path]);
+    let lines = lines(&out.stdout);
+    assert!(has_line(
+        &lines,
+        "Error: Model band and output power capabilities are unknown!"
+    ));
+    assert!(has_line(&lines, "The contained exception was: 119"));
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_short_eeprom_and_unknown_model() {
+    let home = tempfile::tempdir().unwrap();
+    compare_device_with_python(short_rom_device(), home.path(), &["-i"]);
+
+    // Upstream fails with a KeyError on an unknown model once the EEPROM is
+    // read; up to there it prints what this does.
+    let image = eeprom(0x03, 0x77, 1, [0, 0, 0, 9], MADE, None);
+    let python_fake = FakeRNode::start(device(image.clone()));
+    let python = python_rnodeconf(home.path(), &["--eeprom-dump", &python_fake.path]);
+    assert!(String::from_utf8_lossy(&python.stderr).contains("KeyError: 119"));
+    let rust_fake = FakeRNode::start(device(image));
+    let rust = rust_rnodeconf(home.path(), &["--eeprom-dump", &rust_fake.path]);
+    let python = normalize(&python.stdout, &python_fake.path);
+    let rust = normalize(&rust.stdout, &rust_fake.path);
+    assert!(python.len() > 4);
+    assert_eq!(rust[..python.len()], python[..]);
+}

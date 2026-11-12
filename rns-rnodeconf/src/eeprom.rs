@@ -21,6 +21,9 @@ pub struct DeviceInfo {
     pub signature: Vec<u8>,
     pub signature_valid: bool,
     pub locally_signed: bool,
+    /// The model is not one upstream knows: its band and output power are
+    /// unknown.
+    pub model_unknown: bool,
     pub vendor: Option<String>,
     pub min_freq: u64,
     pub max_freq: u64,
@@ -85,9 +88,13 @@ pub fn known_keys(config_dir: &Path, log: &mut dyn FnMut(&str)) -> Vec<(String, 
         .collect()
 }
 
-/// Parse an EEPROM image. `None` when it is too short to hold the fields
-/// upstream reads, which upstream reports as invalid EEPROM data.
-pub fn parse(eeprom: &[u8], keys: &[(String, PublicKey)]) -> Option<DeviceInfo> {
+/// Parse an EEPROM image. An image too short for the fields upstream reads
+/// is an error, with the message upstream's parser fails with.
+pub fn parse(eeprom: &[u8], keys: &[(String, PublicKey)]) -> Result<DeviceInfo, String> {
+    parse_fields(eeprom, keys).ok_or_else(|| "index out of range".to_string())
+}
+
+fn parse_fields(eeprom: &[u8], keys: &[(String, PublicKey)]) -> Option<DeviceInfo> {
     let mut info = DeviceInfo::default();
     if *eeprom.get(rom::ADDR_INFO_LOCK as usize)? != rom::INFO_LOCK_BYTE {
         return Some(info);
@@ -105,10 +112,13 @@ pub fn parse(eeprom: &[u8], keys: &[(String, PublicKey)]) -> Option<DeviceInfo> 
         .get(rom::ADDR_MADE as usize..rom::ADDR_MADE as usize + 4)?
         .try_into()
         .ok()?;
-    if let Some(model) = rom::model(info.model) {
-        info.min_freq = model.min_freq;
-        info.max_freq = model.max_freq;
-        info.max_output = model.max_output;
+    match rom::model(info.model) {
+        Some(model) => {
+            info.min_freq = model.min_freq;
+            info.max_freq = model.max_freq;
+            info.max_output = model.max_output;
+        }
+        None => info.model_unknown = true,
     }
     info.checksum = eeprom
         .get(rom::ADDR_CHKSUM as usize..rom::ADDR_CHKSUM as usize + 16)?
@@ -198,6 +208,7 @@ mod tests {
         };
         let image = provisioned_image(0x03, 0xA9, 3, [1, 2, 3, 4], [0x66, 0, 0, 0], Some(tnc));
         let info = parse(&image, &[]).unwrap();
+        assert!(!info.model_unknown);
         assert!(info.provisioned && info.checksum_valid);
         assert!(!info.signature_valid);
         assert_eq!(info.tnc, Some(tnc));
