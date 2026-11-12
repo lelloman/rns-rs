@@ -182,6 +182,31 @@ fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Vec<u8> {
         .expect("Rust should decrypt Python packet")
 }
 
+/// Wait until the node's TCP client to the Python instance is connected: an
+/// announce sent once before then is lost, and the stamped tests cannot
+/// simply repeat an announce until it arrives.
+fn wait_for_interop_interface(node: &RnsNode) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) =
+            node.query(rns_net::event::QueryRequest::InterfaceStats)
+        {
+            if stats
+                .interfaces
+                .iter()
+                .any(|iface| iface.name.contains("interop-tcp") && iface.status)
+            {
+                return;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the Rust node's TCP client to Python did not come up"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn request_python_announce(
     python: &mut PythonRns,
     rust_rx: &Receiver<RustEvent>,
@@ -914,6 +939,8 @@ fn python_rns_stamped_link_request_interop() {
     let required = stamps.destination_cost;
     let (rust_tx, rust_rx) = mpsc::channel();
     let node = start_rust_node_with(port, rust_tx, None, None, stamps);
+    // Python announces once, so the Rust node must be connected first.
+    wait_for_interop_interface(&node);
 
     // Python stamps its destination and announces a link request cost.
     python.command(&format!(
@@ -1147,8 +1174,7 @@ fn python_rns_link_cost_announced_by_rust_interop() {
         .expect("Rust link destination registration should succeed");
     assert_eq!(node.set_link_cost(rust_dest.hash.0, LINK_COST), LINK_COST);
 
-    // Wait for the TCP client to come up before announcing.
-    std::thread::sleep(Duration::from_secs(1));
+    wait_for_interop_interface(&node);
     node.announce_queued(&rust_dest, &rust_identity, Some(RUST_APP_DATA))
         .expect("stamped Rust announce should be queued");
     let rust_announce = python.wait_for_event(STAMP_WAIT, |event| {
