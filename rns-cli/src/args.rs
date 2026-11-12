@@ -5,6 +5,16 @@
 
 use std::collections::HashMap;
 
+/// A tool's short options, as its upstream argument parser declares them:
+/// options that take no value, options whose value is optional, and (any
+/// other) options that take one. Long options whose value is optional are
+/// listed too.
+pub struct OptionSpec {
+    pub flags: &'static [char],
+    pub optional: &'static [char],
+    pub long_optional: &'static [&'static str],
+}
+
 /// Parsed command-line arguments.
 pub struct Args {
     pub flags: HashMap<String, String>,
@@ -12,6 +22,41 @@ pub struct Args {
     pub verbosity: u8,
     pub quiet: u8,
 }
+
+/// Long options that never take a value.
+const BOOLEAN_LONG: &[&str] = &[
+    "version",
+    "exampleconfig",
+    "help",
+    "stdin",
+    "stdout",
+    "force",
+    "blackholed",
+    "base256",
+    "base32",
+    "base64",
+    "raw",
+    "request",
+    "no-cache",
+    "print-identity",
+    "print-private",
+    "export-pub",
+    "export-prv",
+    "pr-stats",
+    "burst",
+    "blocked-ips",
+    "queues",
+    "pps",
+    "hex",
+    "meta",
+    "daemon",
+    "disable-auth",
+    "json",
+    "value-only",
+    "keys-only",
+    "show-stale",
+    "show-unknown",
+];
 
 impl Args {
     /// Parse command-line arguments (skipping argv[0]).
@@ -32,6 +77,90 @@ impl Args {
 
     pub fn parse_control_from(args: Vec<String>) -> Self {
         Self::parse_profile(args, true)
+    }
+
+    /// Parse with a tool's own option table.
+    pub fn parse_spec(spec: &OptionSpec) -> Self {
+        Self::parse_spec_from(std::env::args().skip(1).collect(), spec)
+    }
+
+    pub fn parse_spec_from(args: Vec<String>, spec: &OptionSpec) -> Self {
+        let mut flags = HashMap::new();
+        let mut positional = Vec::new();
+        let mut verbosity: u8 = 0;
+        let mut quiet: u8 = 0;
+        let mut iter = args.into_iter().peekable();
+        let is_value = |s: &String| !s.starts_with('-') || s == "-";
+
+        while let Some(arg) = iter.next() {
+            if arg == "--" {
+                positional.extend(iter);
+                break;
+            } else if let Some(key) = arg.strip_prefix("--") {
+                if let Some((k, v)) = key.split_once('=') {
+                    flags.insert(k.to_string(), v.to_string());
+                    continue;
+                }
+                match key {
+                    "verbose" => verbosity = verbosity.saturating_add(1),
+                    "quiet" => quiet = quiet.saturating_add(1),
+                    _ if spec.long_optional.contains(&key) => {
+                        let value = match iter.peek() {
+                            Some(next) if is_value(next) => iter.next().unwrap(),
+                            _ => "true".into(),
+                        };
+                        flags.insert(key.to_string(), value);
+                    }
+                    _ if BOOLEAN_LONG.contains(&key) => {
+                        flags.insert(key.to_string(), "true".into());
+                    }
+                    _ => {
+                        let value = iter.next().unwrap_or_else(|| "true".into());
+                        flags.insert(key.to_string(), value);
+                    }
+                }
+            } else if arg.starts_with('-') && arg.len() > 1 {
+                let chars: Vec<char> = arg[1..].chars().collect();
+                for (i, &c) in chars.iter().enumerate() {
+                    match c {
+                        'v' => verbosity = verbosity.saturating_add(1),
+                        'q' => quiet = quiet.saturating_add(1),
+                        'h' => {
+                            flags.insert("help".into(), "true".into());
+                        }
+                        _ if spec.flags.contains(&c) => {
+                            flags.insert(c.to_string(), "true".into());
+                        }
+                        // A value option ends a group, its value the rest of
+                        // the argument or the next one: `-t5` or `-t 5`.
+                        _ => {
+                            let attached: String = chars[i + 1..].iter().collect();
+                            let value = if !attached.is_empty() {
+                                attached
+                            } else if spec.optional.contains(&c) {
+                                match iter.peek() {
+                                    Some(next) if is_value(next) => iter.next().unwrap(),
+                                    _ => "true".into(),
+                                }
+                            } else {
+                                iter.next().unwrap_or_else(|| "true".into())
+                            };
+                            flags.insert(c.to_string(), value);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                positional.push(arg);
+            }
+        }
+
+        Args {
+            flags,
+            positional,
+            verbosity,
+            quiet,
+        }
     }
 
     fn parse_profile(args: Vec<String>, control: bool) -> Self {
@@ -55,12 +184,9 @@ impl Args {
                 } else {
                     // Boolean flags that don't take values
                     match key.as_str() {
-                        "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
-                        | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
-                        | "no-cache" | "print-identity" | "print-private" | "export-pub"
-                        | "export-prv" | "pr-stats" | "burst" | "blocked-ips" | "queues"
-                        | "pps" | "hex" | "meta" | "daemon" | "disable-auth" | "json"
-                        | "value-only" | "keys-only" | "show-stale" | "show-unknown" => {
+                        "verbose" => verbosity = verbosity.saturating_add(1),
+                        "quiet" => quiet = quiet.saturating_add(1),
+                        k if BOOLEAN_LONG.contains(&k) => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -159,6 +285,35 @@ mod tests {
         assert_eq!(a.config_path(), Some("/path/to/config"));
         assert_eq!(a.verbosity, 2);
         assert!(a.has("s"));
+    }
+
+    #[test]
+    fn long_verbosity_counts() {
+        let a = args(&["--verbose", "--verbose", "--quiet"]);
+        assert_eq!((a.verbosity, a.quiet), (2, 1));
+        assert!(a.positional.is_empty());
+    }
+
+    #[test]
+    fn spec_profile_follows_the_tool_table() {
+        const SPEC: OptionSpec = OptionSpec {
+            flags: &['x', 'p'],
+            optional: &['a'],
+            long_optional: &["announce"],
+        };
+        let parse =
+            |s: &[&str]| Args::parse_spec_from(s.iter().map(|s| s.to_string()).collect(), &SPEC);
+        let a = parse(&["-t", "12", "-xp", "-a", "-i", "id", "file"]);
+        assert_eq!(a.get("t"), Some("12"));
+        assert!(a.has("x") && a.has("p"));
+        assert_eq!(a.get("a"), Some("true"));
+        assert_eq!(a.get("i"), Some("id"));
+        assert_eq!(a.positional, vec!["file"]);
+        let a = parse(&["-a", "app.aspect", "-t5", "--announce", "--verbose"]);
+        assert_eq!(a.get("a"), Some("app.aspect"));
+        assert_eq!(a.get("t"), Some("5"));
+        assert_eq!(a.get("announce"), Some("true"));
+        assert_eq!(a.verbosity, 1);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::process::{self, Command};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rns_cli::args::Args;
+use rns_cli::args::{Args, OptionSpec};
 use rns_cli::format::{
     b256_to_bytes, b256rep, base32_decode, base32_encode, prettyb256rep, prettyhexrep,
 };
@@ -47,12 +47,37 @@ enum RsgOutputFormat {
     Base64,
 }
 
+/// upstream rnid's options: those that take no value, and those whose value
+/// is optional; every other short option takes one.
+pub const OPTIONS: OptionSpec = OptionSpec {
+    flags: &[
+        'x', 'X', 'R', 'N', 'p', 'P', 'B', 'b', 'U', 'F', 'f', 'I', 'O', 'Z',
+    ],
+    optional: &['a', 'S', 'E'],
+    long_optional: &["announce", "sign-message", "embed-meta", "meta-spec"],
+};
+
+/// upstream's short names for options this implementation reads by their
+/// long (or older short) names.
+const ALIASES: &[(&str, &str)] = &[
+    ("U", "base256"),
+    ("F", "hex"),
+    ("I", "stdin"),
+    ("O", "stdout"),
+    ("a", "announce"),
+];
+
 #[allow(dead_code)]
 fn main() {
-    run_with_args(Args::parse(), "rnid", "rnid");
+    run_with_args(Args::parse_spec(&OPTIONS), "rnid", "rnid");
 }
 
-pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
+pub fn run_with_args(mut args: Args, usage_name: &str, version_name: &str) {
+    for (short, long) in ALIASES {
+        if let Some(value) = args.flags.get(*short).cloned() {
+            args.flags.entry(long.to_string()).or_insert(value);
+        }
+    }
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
@@ -65,7 +90,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     validate_args(&args).unwrap_or_else(|e| die(&e, 1));
 
-    let needs_identity = args.has("p")
+    let needs_identity = args.has("announce")
+        || args.has("p")
         || args.has("print-identity")
         || args.has("x")
         || args.has("export-pub")
@@ -114,6 +140,16 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     if args.has("X") || args.has("export-prv") {
         let identity = require_identity(identity_ref.as_ref());
         export_private_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
+    if let Some(aspects) = args.get("announce") {
+        let aspects = if aspects == "true" {
+            DEFAULT_ASPECTS
+        } else {
+            aspects
+        };
+        announce(&args, require_identity(identity_ref.as_ref()), aspects);
         operated = true;
     }
 
@@ -416,6 +452,71 @@ fn request_identity(args: &Args, requested_hash: [u8; 16]) -> Result<Option<Iden
             return Ok(None);
         }
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Exit codes upstream's rnid uses for an announce.
+const R_NO_PRVKEY: i32 = 4;
+const R_INVALID_ASPECTS: i32 = 9;
+const R_UNKNOWN_ERROR: i32 = 254;
+
+struct NoCallbacks;
+
+impl rns_net::Callbacks for NoCallbacks {
+    fn on_announce(&mut self, _announced: rns_net::AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
+    fn on_local_delivery(
+        &mut self,
+        _dest_hash: rns_net::DestHash,
+        _raw: Vec<u8>,
+        _packet_hash: rns_net::PacketHash,
+    ) {
+    }
+}
+
+/// `-a`: announce the identity's inbound destination for `aspects`
+/// (`app.aspect...`) through the shared instance.
+fn announce(args: &Args, identity: &Identity, aspects: &str) {
+    let mut parts = aspects.split('.');
+    let app_name = parts.next().unwrap_or_default();
+    let rest: Vec<&str> = parts.collect();
+    if rest.is_empty() {
+        println!("Invalid destination aspects specified");
+        process::exit(R_INVALID_ASPECTS);
+    }
+    let Some(private_key) = identity.get_private_key() else {
+        println!("Cannot announce this destination, since the private key is not held");
+        process::exit(R_NO_PRVKEY);
+    };
+    let level = (3i16 + args.verbosity as i16 - args.quiet as i16).clamp(0, 5);
+    let filter = ["off", "error", "warn", "info", "debug", "trace"][level as usize];
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
+        .try_init();
+
+    let destination =
+        rns_net::Destination::single_in(app_name, &rest, rns_net::IdentityHash(*identity.hash()));
+    let sent = (|| -> Result<(), String> {
+        let node = rns_net::RnsNode::connect_shared_from_config(
+            Some(&rns_cli::app::rns_config(args.config_path())),
+            Box::new(NoCallbacks),
+        )
+        .map_err(|e| e.to_string())?;
+        node.register_destination_with_proof(&destination, Some(private_key))
+            .map_err(|_| "the shared instance connection closed".to_string())?;
+        println!(
+            "Announcing {aspects} destination <{}> for identity <{}>",
+            prettyhexrep(&destination.hash.0),
+            prettyhexrep(identity.hash())
+        );
+        node.announce_queued(&destination, identity, None)
+            .map_err(|_| "the shared instance connection closed".to_string())?;
+        thread::sleep(Duration::from_millis(250));
+        node.shutdown();
+        Ok(())
+    })();
+    if let Err(e) = sent {
+        println!("An error ocurred while attempting to send the announce: {e}");
+        process::exit(R_UNKNOWN_ERROR);
     }
 }
 
@@ -1171,12 +1272,9 @@ fn meta_node_to_value(node: MetaNode) -> Value {
 }
 
 fn sign_message_read_path(args: &Args) -> Option<&str> {
-    args.get("read").or_else(|| {
-        if args.has("r") {
-            args.positional.first().map(String::as_str)
-        } else {
-            None
-        }
+    args.get("read").or_else(|| match args.get("r") {
+        Some("true") => args.positional.first().map(String::as_str),
+        other => other,
     })
 }
 
@@ -1704,19 +1802,24 @@ fn print_usage(usage_name: &str) {
     println!("  -r, --read FILE    Read embedded signed message content from file");
     println!("  -V FILE[.rsg]...   Validate one or more signatures");
     println!("  --raw              Create legacy raw 64-byte signature");
+    println!("  -a [APP.ASPECT]    Announce the identity's destination (default rns.id)");
     println!("  -R                 Request unknown identity from the local daemon");
+    println!("  -t SECONDS         Identity request timeout");
     println!("  -N                 Do not use cache/network identity resolution");
     println!();
     println!("Formatting and I/O:");
     println!("  -b                 Use base64 for identity import/export");
     println!("  -B                 Use base32 for identity import/export");
-    println!("  --hex              Use hex for RSG signature output");
-    println!("  -Z, --base256      Use base256 for RSG output and hash display");
+    println!("  -F, --hex          Use hex for RSG signature output");
+    println!("  -U, --base256      Use base256 for RSG output and hash display (also -Z)");
     println!("  -f, --force        Force overwrite existing files");
-    println!("  --stdin            Read operation input from stdin");
-    println!("  --stdout           Write operation output to stdout");
+    println!("  -I, --stdin        Read operation input from stdin");
+    println!("  -O, --stdout       Write operation output to stdout");
     println!("  --meta             Show RSM metadata when validating signed messages");
     println!("  --meta-spec FILE   Validate embedded metadata with a ConfigObj-style spec");
+    println!("  --config DIR       Reticulum config directory");
+    println!("  -v, --verbose      Increase verbosity");
+    println!("  -q, --quiet        Decrease verbosity");
     println!("  --version          Print version and exit");
     println!("  --help, -h         Print this help");
 }

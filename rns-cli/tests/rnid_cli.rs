@@ -718,3 +718,114 @@ fn request_identity_over_rpc_validates_required_signer_by_destination_hash() {
 
     node.shutdown();
 }
+
+struct AnnounceRecorder(std::sync::mpsc::Sender<[u8; 16]>);
+
+impl Callbacks for AnnounceRecorder {
+    fn on_announce(&mut self, announced: rns_net::AnnouncedIdentity) {
+        let _ = self.0.send(announced.dest_hash.0);
+    }
+
+    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
+
+    fn on_local_delivery(
+        &mut self,
+        _dest_hash: rns_net::DestHash,
+        _raw: Vec<u8>,
+        _packet_hash: rns_net::PacketHash,
+    ) {
+    }
+}
+
+#[test]
+fn announce_sends_the_identity_destination_through_the_shared_instance() {
+    let dir = tempdir();
+    let rpc_port = free_port();
+    write_daemon_config(dir.path(), rpc_port);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _node = RnsNode::from_config(Some(dir.path()), Box::new(AnnounceRecorder(tx))).unwrap();
+    wait_for_rpc(rpc_port);
+
+    let identity = Identity::new(&mut OsRng);
+    let private_rid = dir.path().join("announcer.rid");
+    write_private_identity(&private_rid, &identity);
+    let config_dir = path_str(dir.path());
+    let private_rid_s = path_str(&private_rid);
+
+    for (aspects, app, rest) in [
+        (None, "rns", vec!["id"]),
+        (Some("example.service.v1"), "example", vec!["service", "v1"]),
+    ] {
+        let mut args = vec!["--config", &config_dir, "-i", &private_rid_s, "-a"];
+        if let Some(aspects) = aspects {
+            args.push(aspects);
+        }
+        let stdout = assert_success(rnid(&args));
+        let dest = destination_hash(app, &rest, Some(identity.hash()));
+        assert!(
+            stdout.contains(&format!(
+                "Announcing {} destination <{}> for identity <{}>",
+                aspects.unwrap_or("rns.id"),
+                hex(&dest),
+                hex(identity.hash())
+            )),
+            "{stdout}"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(announced) if announced == dest => break,
+                Ok(_) => continue,
+                Err(_) => panic!("announce for {} not seen", hex(&dest)),
+            }
+        }
+    }
+}
+
+#[test]
+fn announce_rejects_bad_aspects_and_public_identities() {
+    let dir = tempdir();
+    let identity = Identity::new(&mut OsRng);
+    let private_rid = dir.path().join("announcer.rid");
+    write_private_identity(&private_rid, &identity);
+    let out = rnid(&["-i", &path_str(&private_rid), "-a", "single"]);
+    assert_eq!(out.status.code(), Some(9));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Invalid destination aspects specified"));
+
+    let public = hex(&identity.get_public_key().unwrap());
+    let out = rnid(&["-m", &public, "-a"]);
+    assert_eq!(out.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .contains("Cannot announce this destination, since the private key is not held"));
+}
+
+#[test]
+fn upstream_short_options_are_accepted() {
+    let dir = tempdir();
+    let identity = Identity::new(&mut OsRng);
+    let private_rid = dir.path().join("id.rid");
+    write_private_identity(&private_rid, &identity);
+    let message = dir.path().join("message.txt");
+    fs::write(&message, b"signed").unwrap();
+    // -F (hex) and -U (base256) as upstream names them; -O to stdout.
+    let hex_out = assert_success(rnid(&[
+        "-i",
+        &path_str(&private_rid),
+        "-s",
+        &path_str(&message),
+        "-F",
+        "-O",
+    ]));
+    assert!(hex_out.chars().any(|c| c.is_ascii_hexdigit()));
+    let out = rnid(&[
+        "-i",
+        &path_str(&private_rid),
+        "-p",
+        "-v",
+        "--verbose",
+        "-q",
+        "--quiet",
+    ]);
+    assert!(out.status.success());
+}

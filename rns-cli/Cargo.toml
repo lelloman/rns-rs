@@ -99,6 +99,14 @@ name = "rnx"
 path = "src/bin/rnx.rs"
 
 [[bin]]
+name = "rnir"
+path = "src/bin/rnir.rs"
+
+[[bin]]
+name = "rnpkg"
+path = "src/bin/rnpkg.rs"
+
+[[bin]]
 name = "rns-statsd"
 path = "src/bin/rns-statsd.rs"
 required-features = ["sidecars"]
