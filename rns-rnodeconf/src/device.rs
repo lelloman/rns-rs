@@ -228,6 +228,13 @@ impl RNode {
         )
     }
 
+    /// A one-command setting. Upstream sends the display, NeoPixel and
+    /// WiFi mode values unescaped, which breaks the frame for 0xC0 and
+    /// 0xDB; these are escaped.
+    pub fn send(&mut self, command: u8, payload: &[u8], what: &str) -> std::io::Result<()> {
+        self.write(&kiss::frame(command, payload), what)
+    }
+
     /// upstream `hard_reset`.
     pub fn hard_reset(&mut self) -> std::io::Result<()> {
         self.write(&[FEND, CMD_RESET, 0xf8, FEND], "restarting device")?;

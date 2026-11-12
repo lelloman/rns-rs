@@ -52,28 +52,54 @@ fn lines(stdout: &[u8]) -> Vec<String> {
         .collect()
 }
 
-fn rust_rnodeconf(home: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_rnodeconf"))
-        .args(args)
-        .env("HOME", home)
-        .env("TZ", "UTC")
-        .output()
-        .expect("run rnodeconf")
+/// Run a command, giving it `input` on stdin when there is some.
+fn run(mut command: Command, input: Option<&str>) -> std::process::Output {
+    let Some(input) = input else {
+        return command.output().expect("run");
+    };
+    use std::io::Write;
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().expect("wait")
 }
 
-fn python_rnodeconf(home: &Path, args: &[&str]) -> std::process::Output {
+fn rust_command(home: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rnodeconf"));
+    command.args(args).env("HOME", home).env("TZ", "UTC");
+    command
+}
+
+fn python_command(home: &Path, args: &[&str]) -> Command {
     let mut argv = vec!["rnodeconf".to_string()];
     argv.extend(args.iter().map(|a| a.to_string()));
-    Command::new("python3")
+    let mut command = Command::new("python3");
+    command
         .arg("-c")
         .arg(format!(
             "import sys; sys.argv={argv:?}; from RNS.Utilities import rnodeconf; rnodeconf.main()"
         ))
         .env("HOME", home)
         .env("TZ", "UTC")
-        .env("PYTHONUNBUFFERED", "1")
-        .output()
-        .expect("run python rnodeconf")
+        .env("PYTHONUNBUFFERED", "1");
+    command
+}
+
+fn rust_rnodeconf(home: &Path, args: &[&str]) -> std::process::Output {
+    run(rust_command(home, args), None)
+}
+
+fn python_rnodeconf(home: &Path, args: &[&str]) -> std::process::Output {
+    run(python_command(home, args), None)
 }
 
 /// The `RNS.__version__` of the Python on `PYTHONPATH`.
@@ -284,10 +310,20 @@ fn run_both(
     rust_home: &Path,
     args: &[&str],
 ) -> (Vec<String>, FakeRNode, Vec<String>, FakeRNode) {
+    run_both_with_input(device, python_home, rust_home, args, None)
+}
+
+fn run_both_with_input(
+    device: Device,
+    python_home: &Path,
+    rust_home: &Path,
+    args: &[&str],
+    input: Option<&str>,
+) -> (Vec<String>, FakeRNode, Vec<String>, FakeRNode) {
     let python_fake = FakeRNode::start(device.clone());
     let mut python_args = args.to_vec();
     python_args.push(&python_fake.path);
-    let python = python_rnodeconf(python_home, &python_args);
+    let python = run(python_command(python_home, &python_args), input);
     assert!(
         python.status.success(),
         "python rnodeconf failed: {}",
@@ -297,7 +333,7 @@ fn run_both(
     let rust_fake = FakeRNode::start(device);
     let mut rust_args = args.to_vec();
     rust_args.push(&rust_fake.path);
-    let rust = rust_rnodeconf(rust_home, &rust_args);
+    let rust = run(rust_command(rust_home, &rust_args), input);
     (
         normalize(&python.stdout, &python_fake.path),
         python_fake,
@@ -866,4 +902,314 @@ fn python_comparison_bootstrap() {
         );
         assert!(firmware(home).join("device_db/00000001").is_file());
     }
+}
+
+// Stage 3: display, NeoPixel, interference avoidance, Bluetooth and WiFi.
+
+fn provisioned() -> Vec<u8> {
+    eeprom(0xE0, 0xE9, 2, [1, 2, 3, 4], MADE, None)
+}
+
+/// The frames after the EEPROM read: what the settings sent.
+fn settings_sent(fake: &FakeRNode) -> Vec<Vec<u8>> {
+    let frames = fake.received();
+    let at = frames.iter().position(|f| f[0] == CMD_ROM_READ).unwrap();
+    frames[at + 1..].to_vec()
+}
+
+#[test]
+fn display_neopixel_and_interference_avoidance() {
+    let fake = FakeRNode::start(device(provisioned()));
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(
+        home.path(),
+        &[
+            "-D",
+            "300",
+            "-t",
+            "0",
+            "-R",
+            "2",
+            "--recondition-display",
+            "-x",
+            "-X",
+            "--np",
+            "192",
+            &fake.path,
+        ],
+    );
+    assert!(out.status.success());
+    let lines = lines(&out.stdout);
+    for expected in [
+        "Setting display intensity to 255",
+        "Disabling display blanking",
+        "Setting display rotation to 2",
+        "Starting display reconditioning",
+        "Enabling interference avoidance",
+        "Disabling interference avoidance",
+        "Setting NeoPixel intensity to 192",
+    ] {
+        assert!(has_line(&lines, expected), "missing {expected:?}");
+    }
+    assert_eq!(
+        settings_sent(&fake),
+        vec![
+            vec![CMD_DISP_INT, 255],
+            vec![CMD_DISP_BLNK, 0],
+            vec![CMD_DISP_ROT, 2],
+            vec![CMD_DISP_RCND, 1],
+            vec![CMD_DIS_IA, 0],
+            vec![CMD_DIS_IA, 1],
+            // 0xC0 is escaped, where upstream sends it raw.
+            vec![CMD_NP_INT, 192],
+        ]
+    );
+}
+
+#[test]
+fn display_address_resets_the_device() {
+    let fake = FakeRNode::start(device(provisioned()));
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["--display-addr", "0x3d", "-i", &fake.path]);
+    let lines = lines(&out.stdout);
+    assert!(has_line(&lines, "Setting display address to 3d"));
+    // It exits before showing the information.
+    assert!(!lines.iter().any(|l| l.contains("Device info")));
+    assert_eq!(
+        settings_sent(&fake),
+        vec![vec![CMD_DISP_ADR, 0x3d], vec![CMD_RESET, 0xf8]]
+    );
+
+    let out = rust_rnodeconf(home.path(), &["--display-addr", "3d3d", &fake.path]);
+    assert!(has_line(
+        &lines_of(&out),
+        "Invalid display address specified"
+    ));
+}
+
+fn lines_of(out: &std::process::Output) -> Vec<String> {
+    lines(&out.stdout)
+}
+
+#[test]
+fn bluetooth_controls() {
+    let fake = FakeRNode::start(device(provisioned()));
+    let home = tempfile::tempdir().unwrap();
+    let out = run(
+        rust_command(home.path(), &["-b", "-B", "-p", &fake.path]),
+        Some("\n"),
+    );
+    let lines = lines(&out.stdout);
+    for expected in [
+        "Enabling Bluetooth...",
+        "Disabling Bluetooth...",
+        "Putting device into Bluetooth pairing mode. Press enter to exit when done.",
+    ] {
+        assert!(has_line(&lines, expected), "missing {expected:?}");
+    }
+    assert_eq!(
+        settings_sent(&fake),
+        vec![
+            vec![CMD_BT_CTRL, 1],
+            vec![CMD_LEAVE, 0xFF],
+            vec![CMD_BT_CTRL, 0],
+            vec![CMD_LEAVE, 0xFF],
+            vec![CMD_BT_CTRL, 2],
+            vec![CMD_LEAVE, 0xFF],
+        ]
+    );
+}
+
+#[test]
+fn wifi_settings() {
+    let fake = FakeRNode::start(device(provisioned()));
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(
+        home.path(),
+        &[
+            "--channel",
+            "6",
+            "--ssid",
+            "mesh",
+            "--psk",
+            "s3cretpw",
+            "--ip",
+            "10.0.0.2",
+            "--nm",
+            "NONE",
+            "-w",
+            "STATION",
+            &fake.path,
+        ],
+    );
+    let lines = lines(&out.stdout);
+    for expected in [
+        "Setting WiFi channel to 6",
+        "Setting WiFi SSID to: mesh",
+        "Setting WiFi PSK",
+        "Setting WiFi static IP to: 10.0.0.2",
+        "Deleting WiFi static netmask configuration...",
+        "Setting WiFi to station mode",
+    ] {
+        assert!(has_line(&lines, expected), "missing {expected:?}");
+    }
+    assert_eq!(
+        settings_sent(&fake),
+        vec![
+            vec![CMD_WIFI_CHN, 6],
+            [&[CMD_WIFI_SSID][..], b"mesh\0"].concat(),
+            [&[CMD_WIFI_PSK][..], b"s3cretpw\0"].concat(),
+            vec![CMD_WIFI_IP, 10, 0, 0, 2],
+            vec![CMD_WIFI_NM, 0, 0, 0, 0],
+            vec![CMD_WIFI_MODE, 1],
+        ]
+    );
+}
+
+#[test]
+fn wifi_settings_refused() {
+    let home = tempfile::tempdir().unwrap();
+    for (args, expected) in [
+        (
+            &["--channel", "15"][..],
+            "Could not set WiFi channel: Invalid WiFi channel",
+        ),
+        (&["--psk", "short"], "Could not set WiFi PSK: Invalid psk length"),
+        (
+            &["--ssid", "this-ssid-is-much-too-long-for-wifi"],
+            "Could not set WiFi SSID: Invalid SSID length",
+        ),
+        (
+            &["--ip", "10.0.0"],
+            "Could not set WiFi IP: Invalid IP address length",
+        ),
+        (
+            &["--ip", "10.0.0.256"],
+            "Could not set WiFi IP: Could not decode IP address octet: Invalid IP octet value",
+        ),
+        (
+            &["--nm", "255.x.0.0"],
+            "Could not set WiFi netmask: Could not decode IP address octet: invalid literal for int() with base 10: 'x'",
+        ),
+    ] {
+        let fake = FakeRNode::start(device(provisioned()));
+        let mut argv = args.to_vec();
+        argv.push(&fake.path);
+        let out = rust_rnodeconf(home.path(), &argv);
+        assert!(
+            has_line(&lines_of(&out), expected),
+            "missing {expected:?} for {args:?}"
+        );
+        assert!(settings_sent(&fake).is_empty(), "sent something for {args:?}");
+    }
+}
+
+#[test]
+fn invalid_integer_options_are_rejected_first() {
+    let home = tempfile::tempdir().unwrap();
+    let out = rust_rnodeconf(home.path(), &["-D", "bright", "/dev/null"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_help() {
+    let home = tempfile::tempdir().unwrap();
+    let python = python_command(home.path(), &["-h"])
+        .env("COLUMNS", "80")
+        .output()
+        .unwrap();
+    // Python 3.13 changed how argparse shows short options with values.
+    let text = String::from_utf8_lossy(&python.stdout);
+    if text.contains("-w, --wifi mode") {
+        eprintln!("argparse lays out options differently on this Python; skipping");
+        return;
+    }
+    assert_eq!(rust_rnodeconf(home.path(), &["-h"]).stdout, python.stdout);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_display_and_neopixel() {
+    let home = tempfile::tempdir().unwrap();
+    // Values other than 0xC0 and 0xDB, which upstream sends unescaped.
+    compare_with_python(
+        provisioned(),
+        home.path(),
+        &[
+            "-D",
+            "300",
+            "-t",
+            "45",
+            "-R",
+            "7",
+            "--recondition-display",
+            "-x",
+            "-X",
+            "--np",
+            "-4",
+            "-i",
+        ],
+    );
+    compare_with_python(provisioned(), home.path(), &["-t", "0"]);
+    compare_with_python(
+        provisioned(),
+        home.path(),
+        &["--display-addr", "0x3d", "-i"],
+    );
+    compare_with_python(provisioned(), home.path(), &["--display-addr", "zz"]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_bluetooth() {
+    let home = tempfile::tempdir().unwrap();
+    let (python, python_fake, rust, rust_fake) = run_both_with_input(
+        device(provisioned()),
+        home.path(),
+        home.path(),
+        &["-b", "-B", "-p"],
+        Some("\n"),
+    );
+    assert_eq!(rust, python);
+    assert_eq!(rust_fake.received(), python_fake.received());
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_wifi() {
+    let home = tempfile::tempdir().unwrap();
+    for args in [
+        &[
+            "--channel",
+            "6",
+            "--ssid",
+            "mesh",
+            "--psk",
+            "s3cretpw",
+            "--ip",
+            "10.0.0.2",
+            "--nm",
+            "255.255.255.0",
+            "-w",
+            "ap",
+        ][..],
+        &[
+            "--ssid", "none", "--psk", "NONE", "--ip", "none", "--nm", "none", "-w", "off",
+        ],
+        &["-w", "station"],
+        &["--channel", "0"],
+        &["--channel", "six"],
+        &["--psk", "1234567"],
+        &["--psk", "123456"],
+        &["--ssid", "this-ssid-is-much-too-long-for-wifi"],
+        &["--ip", "10.0.0"],
+        &["--ip", "10.0.0.256"],
+        &["--nm", "255.x.0.0"],
+    ] {
+        compare_with_python(provisioned(), home.path(), args);
+    }
+    // On an unprovisioned device too: the settings come before the checks.
+    compare_with_python(blank_eeprom(), home.path(), &["-w", "sta"]);
 }
