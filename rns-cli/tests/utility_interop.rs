@@ -2025,10 +2025,16 @@ fn rnpath_looks_up_a_destination_as_python_does() {
     assert!(found.starts_with("Path found, destination"), "{found}");
     assert_eq!(final_rnpath_line(&rust), found);
 
+    // Python's rnpath means to exit 1 on these failures, but a shared
+    // instance client's exit races its LocalInterface reader, which on
+    // seeing the connection close calls RNS.exit() and so os._exit(0);
+    // on a slow runner Python exits 0. The output is what is compared.
+    let python_failed = |output: &Output| matches!(output.status.code(), Some(0) | Some(1));
+
     let unknown = "0123456789abcdef0123456789abcdef";
     let python = lookup(false, unknown, &["-w", "1"]);
     let rust = lookup(true, unknown, &["-w", "1"]);
-    assert_eq!(python.status.code(), Some(1));
+    assert!(python_failed(&python), "{:?}", python.status);
     assert_eq!(rust.status.code(), Some(1));
     assert_eq!(final_rnpath_line(&rust), final_rnpath_line(&python));
     assert_eq!(final_rnpath_line(&rust), "Path not found");
@@ -2036,7 +2042,8 @@ fn rnpath_looks_up_a_destination_as_python_does() {
     for bad in ["abcd", "zz23456789abcdef0123456789abcdef"] {
         let python = lookup(false, bad, &[]);
         let rust = lookup(true, bad, &[]);
-        assert_eq!(rust.status.code(), python.status.code());
+        assert!(python_failed(&python), "{:?}", python.status);
+        assert_eq!(rust.status.code(), Some(1));
         assert_eq!(rust.stdout, python.stdout);
     }
 }
