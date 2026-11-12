@@ -18,12 +18,13 @@ All tools accept `--config DIR` to select the config directory (default
 |------|---------|------|
 | `rnsd` | The node daemon | below |
 | `rnstatus` | Interface status, traffic counters, attach/detach/reload | [rnstatus](rnstatus.md) |
-| `rnpath` | Display and manage the path table, request paths | `rnpath --help`; `rnpath -t -u` shows and sorts by last path use |
+| `rnpath` | Display and manage the path table, request paths | `rnpath --help`; `rnpath -t -u` shows and sorts by last path use; `rnpath <hash> -w 30` requests a path and waits up to 30 s |
 | `rnprobe` | Send a probe packet to a destination and measure RTT | `rnprobe --help` |
-| `rnid` | Identity creation, inspection, encryption, and signatures | `rnid --help` |
+| `rnid` | Identity creation, inspection, encryption, and signatures | `rnid --help`; `rnid -i ID -a app.aspect` announces the identity's destination |
 | `rnsh` | Remote shell over a Reticulum link | [rnsh](rnsh.md) |
 | `rncp` | File transfer with authenticated fetch | below |
 | `rnx` | Remote command execution | below |
+| `rnir`, `rnpkg` | Placeholders, as upstream ships them: they start Reticulum and exit | `rnpkg --exampleconfig` |
 | `rns-statsd` | Statistics sidecar, writes to a SQLite database | below |
 | `rns-sentineld` | Sentinel policy sidecar | below |
 

@@ -25,7 +25,7 @@ want to do, then follow the links from there. The repository
 
 | Page | Covers |
 |------|--------|
-| [CLI Tools](cli-tools.md) | `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, `rncp`, `rnx`, and the sidecar daemons |
+| [CLI Tools](cli-tools.md) | `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, `rncp`, `rnx`, `rnir`, `rnpkg`, and the sidecar daemons |
 | [rns-ctl](rns-ctl.md) | The unified control binary and its HTTP/WebSocket API |
 | [rnstatus](rnstatus.md) | Interface status and live attach/detach/reload |
 | [rnsh](rnsh.md) | Remote shell over Reticulum links |

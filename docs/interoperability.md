@@ -56,7 +56,9 @@ which were inherited. Physical radio hardware validation remains unclaimed.
 - **State**: identities and retained-ratchet files are file-compatible with
   Python, with the caveats in [Local Ratchets](local-ratchets.md#storage).
 - **Tools**: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, `rncp`,
-  and `rnx` mirror their Python namesakes in role and most flags.
+  `rnx`, `rnir`, `rnpkg` and `rnodeconf` mirror their Python namesakes; see
+  the [surface record](upstream-parity/reticulum-1.6.0-surface-parity.md)
+  for what still differs.
 - **Extensions**: [Hooks](hooks.md) and [Direct Link](direct-link.md) are
   additive. A Python peer never sees them.
 

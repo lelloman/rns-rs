@@ -9,7 +9,7 @@ depends only on the layers below it, and the two lowest layers compile without
  ─────────────────────────────────────────────────────────────
  rns-server      supervisor + control plane + built-in UI
  rns-ctl         unified daemon/control CLI, HTTP + WebSocket API
- rns-cli         rnsd, rnstatus, rnpath, rnprobe, rnid, rnsh, rncp, rnx,
+ rns-cli         rnsd, rnstatus, rnpath, rnprobe, rnid, rnsh, rncp, rnx, rnir, rnpkg,
                  rns-statsd, rns-sentineld
  rns-git         rngit, git-remote-rns, rngcs
  rns-tun         rntun (Linux)         rns-tun-android (JNI)
