@@ -1,12 +1,12 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.6.0 rgit `134dc677` Upstream Audit
 
 ## Scope and Baseline
 
 - audit date: `2026-11-13`
 - previous accepted version: `1.6.0`
 - previous normative commit: `16621a78e35e2ba5156c72af7fe492458ba092d5`
-- target version: `1.6.0` (pending: no version bump in range)
-- target tag or ref: `rgit/master` (pending promotion target)
+- target version: `1.6.0` (same-version advancement)
+- target tag or ref: `rgit/master` tip, no tag
 - target normative commit: `134dc6777c0dd29404e61b36d4094f4e35b88b3e`
 - target root tree: `da30506871f4036968e0355447e3d0e79b39942d`
 - target `RNS` tree: `aa29f48513fca2a1be8c9940bcee9ca7bbb074db`
@@ -20,7 +20,7 @@ Found by the 2026-11-13 daily drift check (`data/upstream-drift-2026-11-13.json`
 both remotes refreshed fresh. The GitHub mirror tip `3c4b271f` (10 commits) is
 contained in rgit `master`; rgit adds five later commits (`db67adea`, `f96cef7e`,
 `9b6b724b`, `20e25a9f`, `134dc677`). No version bump, so the target version and
-promotion target stay pending.
+promotion target is the untagged rgit tip.
 
 ## Audit Vocabulary
 
@@ -214,19 +214,46 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ## Integration Plan
 
-Review every commit above and give it a disposition.
+Each upstream commit has one `upstream: <subject>` mapping commit with its
+`Upstream-Commit` trailer, in ancestry order on `upstream-next-audit`, after
+`0834156b` opened this audit. Commits 12 and 15 were planned together: 12's
+early announce drop is one of the drops 15 counts as filtered, and is
+counted there.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
-None yet.
+Gates were run on 2026-11-13 on `upstream-next-audit`: first on the audit
+opening and the fifteen mapping commits over `bf4d7bab`, then again after
+rebasing them onto `dev` `eee13176` (three packet receipt commits).
+
+- No conformance fixture changed; the range changes no wire format.
+- Exact-target interop against a disposable export of `134dc677`
+  (`import RNS` reports 1.6.0): `python_interop` 4/4, `utility_interop`
+  24/24. The same suites pass against `16621a78`, 1.5.4 and 1.4.2 exports
+  (`utility_interop` 20/20 ignored-gated tests each; the `rnstatus -F` and
+  `rnpath -u` checks skip on releases without those options).
+- `cargo test --workspace`: 3,316 passed, 0 failed; after the rebase onto
+  `dev`, 3,330 passed, 0 failed, with lint clean and the exact-target
+  `python_interop` 4/4 and `utility_interop` 24/24 again.
+  `cargo test --workspace --features rns-hooks`: 3,382 passed, 0 failed.
+  `rns-net` with the four `compact-threads-*` features: 1,455 passed.
+- `cargo fmt --all --check` and `bash scripts/lint-host.sh` clean.
+- `scripts/check_upstream_drift.py` (both remotes fetched fresh): rgit tip
+  `134dc677`, GitHub tip `3c4b271f`, exactly the fifteen audited commits.
+- Not run: the dual-VPS Backbone smoke and a release build. Docker E2E,
+  ARMv7 build smoke and the CI interop matrix are delegated to the promotion
+  pull request's CI. Physical hardware validation is not claimed.
+
+The final record is
+[reticulum-1.6.0-rgit-4-parity.md](reticulum-1.6.0-rgit-4-parity.md).
