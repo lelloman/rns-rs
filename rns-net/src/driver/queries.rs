@@ -182,6 +182,10 @@ impl Driver {
             interfaces.push(SingleInterfaceStat {
                 id: interface_id.0,
                 name: entry.info.name.clone(),
+                tunnel_id: self
+                    .engine
+                    .interface_info(&interface_id)
+                    .and_then(|info| info.tunnel_id),
                 status: entry.online && entry.enabled,
                 mode: entry.info.mode,
                 gravity: entry.info.gravity,
@@ -298,6 +302,8 @@ impl Driver {
             interfaces.push(SingleInterfaceStat {
                 id: handle.interface_id.0,
                 name: handle.interface_name.clone(),
+                // A listener's tunnels belong to its spawned clients.
+                tunnel_id: None,
                 status: true,
                 mode: handle.mode,
                 gravity: handle.gravity,

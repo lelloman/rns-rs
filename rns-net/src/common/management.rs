@@ -342,6 +342,14 @@ pub fn handle_status_request(
         let mut ifstats: Vec<(&str, Value)> = vec![
             ("name", Value::Str(info.name.clone())),
             ("short_name", Value::Str(info.name.clone())),
+            (
+                "tunnel_id",
+                engine
+                    .interface_info(&id)
+                    .and_then(|info| info.tunnel_id)
+                    .map(|tunnel_id| Value::Bin(tunnel_id.to_vec()))
+                    .unwrap_or(Value::Nil),
+            ),
             ("status", Value::Bool(entry.online())),
             ("mode", Value::UInt(info.mode as u64)),
             ("rxb", Value::UInt(stats.rxb)),

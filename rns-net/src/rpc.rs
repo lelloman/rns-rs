@@ -2179,6 +2179,12 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String(s.name.clone()),
         ),
         (
+            PickleValue::String("tunnel_id".into()),
+            s.tunnel_id
+                .map(|tunnel_id| PickleValue::Bytes(tunnel_id.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
             PickleValue::String("status".into()),
             PickleValue::Bool(s.status),
         ),
@@ -4393,6 +4399,7 @@ mod tests {
                         interfaces: vec![SingleInterfaceStat {
                             id: 7,
                             name: "TestInterface".into(),
+                            tunnel_id: None,
                             status: true,
                             mode: 1,
                             gravity: -2,
@@ -4995,6 +5002,7 @@ mod tests {
             interfaces: vec![SingleInterfaceStat {
                 id: 1,
                 name: "TCP".into(),
+                tunnel_id: Some([0x5A; 32]),
                 status: true,
                 mode: 1,
                 gravity: -2,
@@ -5078,6 +5086,11 @@ mod tests {
         assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        // Upstream 9b6b724b: the tunnel id, bytes or None.
+        assert_eq!(
+            ifaces[0].get("tunnel_id").unwrap().as_bytes(),
+            Some(&[0x5A; 32][..])
+        );
         assert_eq!(ifaces[0].get("mtu").unwrap().as_int(), Some(131_072));
         assert_eq!(ifaces[0].get("gravity").unwrap().as_int().unwrap(), -2);
         assert_eq!(ifaces[0].get("txdrp").unwrap().as_int(), Some(3));

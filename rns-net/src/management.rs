@@ -229,6 +229,15 @@ mod tests {
                         match ifaces {
                             Some(Value::Array(iface_arr)) => {
                                 assert_eq!(iface_arr.len(), 1);
+                                // Upstream 9b6b724b: no tunnel yet, so nil.
+                                let Value::Map(iface) = &iface_arr[0] else {
+                                    panic!("Expected interface map");
+                                };
+                                let tunnel_id = iface
+                                    .iter()
+                                    .find(|(k, _)| *k == Value::Str("tunnel_id".into()))
+                                    .map(|(_, v)| v);
+                                assert_eq!(tunnel_id, Some(&Value::Nil));
                             }
                             _ => panic!("Expected interfaces array"),
                         }
