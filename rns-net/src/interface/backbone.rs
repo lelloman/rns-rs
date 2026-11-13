@@ -132,6 +132,10 @@ pub struct FastFlapRecord {
     pub elapsed_since_first: Duration,
 }
 
+/// Concurrent clients a Backbone listener accepts unless configured
+/// otherwise (upstream `BackboneInterface.CLIENT_LIMIT`, rgit `3c4b271f`).
+pub const BACKBONE_CLIENT_LIMIT: usize = 500;
+
 /// The flap count upstream gives an address from the `blocked_ips` file
 /// (rgit `5f2dbc16`): it blocks wherever the listener's grace is below it.
 pub const STATIC_BLOCK_FLAP_COUNT: u64 = 0xFFFF;
@@ -836,6 +840,21 @@ impl Server {
         let peer_ip = peer_addr.ip();
         let peer_port = peer_addr.port();
 
+        // Upstream checks the client limit first, without logging; it counts
+        // every client of this listener, whatever its address.
+        let max_connections = lock_or_recover(&self.runtime, "backbone runtime").max_connections;
+        if let Some(max) = max_connections {
+            if state.clients.len() >= max {
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "[{}] client limit ({}) reached, rejecting {}",
+                    name,
+                    max,
+                    peer_addr,
+                );
+                return true;
+            }
+        }
+
         let (file_blocked, fast_flap_blocked_until) = {
             let mut monitor = lock_or_recover(&self.fast_flap_state, "backbone fast-flap state");
             (
@@ -875,19 +894,6 @@ impl Server {
                 peer_addr,
             );
             return true;
-        }
-
-        let max_connections = lock_or_recover(&self.runtime, "backbone runtime").max_connections;
-        if let Some(max) = max_connections {
-            if state.clients.len() >= max {
-                log::warn!(
-                    "[{}] max connections ({}) reached, rejecting {}",
-                    name,
-                    max,
-                    peer_addr
-                );
-                return true;
-            }
         }
 
         stream.set_nonblocking(true).ok();
@@ -1980,6 +1986,32 @@ fn parse_nonnegative_duration(
     Ok(duration)
 }
 
+/// The listener's limit on concurrent clients: upstream's `client_limit`
+/// (an integer; 0 or absent means `BACKBONE_CLIENT_LIMIT`), unless the
+/// rns-rs `max_connections` key is set, which takes precedence and keeps its
+/// meaning: a positive limit, or 0 for none. `None` means unlimited.
+fn parse_client_limit(params: &HashMap<String, String>) -> Result<Option<usize>, String> {
+    let client_limit = match params.get("client_limit") {
+        Some(raw) => raw.trim().parse::<usize>().map_err(|_| {
+            format!("invalid client_limit '{raw}' (expected a non-negative integer)")
+        })?,
+        None => 0,
+    };
+    let client_limit = if client_limit == 0 {
+        BACKBONE_CLIENT_LIMIT
+    } else {
+        client_limit
+    };
+    match params
+        .get("max_connections")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        Some(0) => Ok(None),
+        Some(max) => Ok(Some(max)),
+        None => Ok(Some(client_limit)),
+    }
+}
+
 fn parse_fast_flap_config(
     params: &HashMap<String, String>,
 ) -> Result<BackboneFastFlapConfig, String> {
@@ -2086,7 +2118,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 .or_else(|| params.get("port"))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4242);
-            let max_connections = params.get("max_connections").and_then(|v| v.parse().ok());
+            let max_connections = parse_client_limit(params)?;
             let idle_timeout = parse_positive_duration_secs(params, "idle_timeout");
             let write_stall_timeout = parse_positive_duration_secs(params, "write_stall_timeout");
             let abuse = BackboneAbuseConfig {
@@ -2357,7 +2389,9 @@ mod tests {
             ..test_fast_flap_config()
         };
         assert!(!monitor.is_statically_blocked(ip, &disabled));
-        assert!(monitor.blocked_ip_list(&disabled, Instant::now()).is_empty());
+        assert!(monitor
+            .blocked_ip_list(&disabled, Instant::now())
+            .is_empty());
         // Upstream gives these addresses a flap count of 0xFFFF.
         let just_below = BackboneFastFlapConfig {
             grace: STATIC_BLOCK_FLAP_COUNT - 1,
@@ -2411,6 +2445,53 @@ mod tests {
             .expect("blocked peer state");
         assert_eq!(entry.blacklist_reason.as_deref(), Some("blocked_ips file"));
         assert_eq!(entry.reject_count, 1);
+    }
+
+    fn limit_params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn client_limit_defaults_to_upstream_500() {
+        assert_eq!(BACKBONE_CLIENT_LIMIT, 500);
+        assert_eq!(parse_client_limit(&limit_params(&[])).unwrap(), Some(500));
+        // Upstream reads `client_limit or CLIENT_LIMIT`.
+        assert_eq!(
+            parse_client_limit(&limit_params(&[("client_limit", "0")])).unwrap(),
+            Some(500)
+        );
+        assert_eq!(
+            parse_client_limit(&limit_params(&[("client_limit", "7")])).unwrap(),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn client_limit_rejects_invalid_values() {
+        for raw in ["abc", "-1", "1.5"] {
+            let err = parse_client_limit(&limit_params(&[("client_limit", raw)])).unwrap_err();
+            assert!(err.contains("client_limit"), "{err}");
+        }
+    }
+
+    #[test]
+    fn max_connections_takes_precedence_over_client_limit() {
+        assert_eq!(
+            parse_client_limit(&limit_params(&[
+                ("client_limit", "7"),
+                ("max_connections", "512"),
+            ]))
+            .unwrap(),
+            Some(512)
+        );
+        // max_connections = 0 keeps its meaning: no limit.
+        assert_eq!(
+            parse_client_limit(&limit_params(&[("max_connections", "0")])).unwrap(),
+            None
+        );
     }
 
     #[test]

@@ -53,7 +53,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 7 | `0bc5c37c399cb6c489ade2ea3678c531bfc21390` | Reset DPEC on reconnect | Structurally covered | Fresh writer per connection, documented on `BackboneClientWriter` |
 | 8 | `9ef6c90ea6196057278685aabab06674e73ffa44` | Use RLock in logging | Structurally covered | No re-entrant logging path; documented on `RotatingLogWriter` |
 | 9 | `5f2dbc169d5b3cb497d0f7067acef823e5619f30` | Added ability to load a blocked_ips file from the current config dir | Integrated | `blocked_ips` file loaded at startup into the shared fast-flap table, with focused and live socket tests |
-| 10 | `3c4b271f4133ed1f00eae04b1f3160365f4d02ec` | Added client_limit option to BackboneInterface | Pending review | Changes `RNS/Interfaces/BackboneInterface.py` |
+| 10 | `3c4b271f4133ed1f00eae04b1f3160365f4d02ec` | Added client_limit option to BackboneInterface | Integrated | `client_limit` with the upstream default of 500, checked first |
 | 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Pending review | Changes `RNS/Utilities/rnpath.py` |
 | 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Pending review | Changes `RNS/Transport.py` |
 | 13 | `9b6b724b08e6c8681cfb9edd34edd905fb2238b3` | Diagnostics | Pending review | Changes `RNS/Reticulum.py`, `RNS/Utilities/rnstatus.py` |
@@ -154,13 +154,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 10. `3c4b271f` — Added client_limit option to BackboneInterface
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/BackboneInterface.py`).
+**Upstream change:** `BackboneInterface` gains `CLIENT_LIMIT = 500` and a `client_limit` option (`int(...)`, so a non-integer fails the interface; `client_limit or CLIENT_LIMIT`, so 0 or absent means 500). `incoming_connection` first refuses a connection, silently, when the listener already has `client_limit` spawned client interfaces. It is a total for the listener across all addresses, not a per-address limit. Initiators and `TCPServerInterface` are unaffected; no RPC field reports it.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs had the same mechanism as `max_connections` (a total per listener, enforced in `admit()`, adjustable at runtime) but did not read `client_limit` and defaulted to unlimited, checked the limit after the blocked-address checks, and logged every rejection as a warning. This is not the per-address limit rns-rs decided against for NAT reasons.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `BACKBONE_CLIENT_LIMIT = 500` and `parse_client_limit` (`rns-net/src/interface/backbone.rs`): `client_limit` as upstream reads it (an invalid or negative value is a configuration error, where upstream would fail the interface or refuse everyone), with `max_connections`, when set, taking precedence and keeping its meaning (0 = no limit). `admit()` now checks the limit first and logs at pathing trace. Both VPS listeners set `max_connections = 512`, so their limit is unchanged. Documented in `docs/rns-server-operator-runbook.md`. Tests: `client_limit_defaults_to_upstream_500`, `client_limit_rejects_invalid_values`, `max_connections_takes_precedence_over_client_limit`; the existing `backbone_max_connections_rejects_excess` and `backbone_max_connections_allows_after_disconnect` cover enforcement.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 11. `db67adea` — Fixed path usage display
 
