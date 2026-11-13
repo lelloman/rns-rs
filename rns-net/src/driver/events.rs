@@ -106,6 +106,15 @@ impl Driver {
             }
             return false;
         }
+        // Upstream f96cef7e: once the interface holds as many announces as
+        // it may, drop further announces at once, silently, before they
+        // cost any processing. Releases of held announces enter the engine
+        // from its tick, not through here.
+        if parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
+            && self.engine.announce_holding_saturated(&interface_id)
+        {
+            return false;
+        }
         true
     }
 

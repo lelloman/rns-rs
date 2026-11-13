@@ -55,7 +55,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 9 | `5f2dbc169d5b3cb497d0f7067acef823e5619f30` | Added ability to load a blocked_ips file from the current config dir | Integrated | `blocked_ips` file loaded at startup into the shared fast-flap table, with focused and live socket tests |
 | 10 | `3c4b271f4133ed1f00eae04b1f3160365f4d02ec` | Added client_limit option to BackboneInterface | Integrated | `client_limit` with the upstream default of 500, checked first |
 | 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Integrated | `rnpath` reads Python's integer `used`; Python `rnpath -t -u` interop |
-| 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Pending review | Changes `RNS/Transport.py` |
+| 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Integrated | Early held-full announce drop in the driver; hop-limiter path cull |
 | 13 | `9b6b724b08e6c8681cfb9edd34edd905fb2238b3` | Diagnostics | Pending review | Changes `RNS/Reticulum.py`, `RNS/Utilities/rnstatus.py` |
 | 14 | `20e25a9f0cd4bde8958642d36690cf709849f5ee` | Filter destinations at path table load time | Pending review | Changes `RNS/Transport.py` |
 | 15 | `134dc6777c0dd29404e61b36d4094f4e35b88b3e` | Added filtered traffic stats and display in rnstatus | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
@@ -174,13 +174,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 12. `f96cef7e` — Drop announces early when held announces is full
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** Two changes. (1) In `Transport` inbound preprocessing, after the packet filter and the malformed / oversize announce checks and before the blocked destination type check, an announce is dropped (`return None`, no protocol violation, no filter hit) when its interface already holds `ic_max_held_announces` announces. The check does not look at whether ingress control is on, so an interface with `ic_max_held_announces = 0` accepts no announces. Releases are popped from `held_announces` before they re-enter `inbound`, so they are never dropped by it. (2) Path table culling also removes a path, used or not, whose hops exceed `Transport.HOP_LIMITER`.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs held an announce or dropped it in the engine only after full processing (the drop was `hold_announce` at the limit); the driver had already recorded the incoming-announce sample and fed the frequency to the engine. Paths were never culled for their hops, and the engine did not know the hop limiter (only the driver did, for the inbound check).
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `TransportEngine::announce_holding_saturated` (`rns-core/src/transport/queries.rs`) and the early drop in `admit_decoded_inbound` (`rns-net/src/driver/events.rs`), after the oversize, path-request and packet-filter checks; held announces are released from the engine tick, not through it. The engine now has a `hop_limiter` (default `HOP_LIMITER`) set from `[filter] hop_limiter` by `Driver::apply_stamp_config`, and `jobs::cull_path_table` takes it and removes paths with more hops. Documented in `docs/configuration.md`. Tests: `announce_is_dropped_early_when_held_announces_are_full`, `announce_is_held_while_held_announces_have_room`, `apply_stamp_config_sets_the_engine_hop_limiter` (`rns-net/src/driver/tests.rs`), `cull_removes_paths_with_more_hops_than_the_hop_limiter` (`rns-core/src/transport/jobs.rs`). Upstream 134dc677 later counts this drop as filtered inbound; that is mapped with that commit.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 13. `9b6b724b` — Diagnostics
 

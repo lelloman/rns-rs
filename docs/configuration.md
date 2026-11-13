@@ -312,7 +312,9 @@ shared instance). Ignored types are dropped in every case.
 `hop_limiter` in the same section (default `128`) drops every inbound packet
 whose hop count has reached the limit, before any other check, and counts it
 per interface as `hop_limiter_hits` (`rnstatus` "Hop Limit"). It is clamped to
-0-128, so `0` drops all inbound packets. Upstream moved the option here from
+0-128, so `0` drops all inbound packets. Paths with more hops than the limit
+are removed from the path table (upstream `f96cef7e`), so lowering it also
+drops longer paths learned before. Upstream moved the option here from
 `[reticulum]` in `01aef5bc`; a `hop_limiter` left in `[reticulum]` is no longer
 read and logs a warning.
 
@@ -472,6 +474,12 @@ Defaults:
 The example's other values differ from these defaults on purpose. In the
 `[reticulum]` section, `ic_max_held_announces = 0` keeps the default, as
 upstream reads it; on an interface, `0` holds no announces.
+
+Once an interface holds `ic_max_held_announces` announces, every further
+announce it receives is dropped at once, before any processing, until held ones
+are released (upstream `f96cef7e`). This applies whether ingress control is on
+or not, so an interface with `ic_max_held_announces = 0` accepts no announces
+at all.
 
 Ingress control is on by default for Auto, Backbone, TCP client/server, UDP,
 and I2P interfaces, and off for local, serial, KISS, RNode, and Pipe-style
