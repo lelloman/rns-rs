@@ -1142,6 +1142,34 @@ fn python_rnpath_lists_rust_path_table() {
         ],
     );
 
+    // With -u, every line ends with its usage (upstream db67adea printed
+    // the suffix it computed); rns-rs sends `used` on every entry, so none
+    // reads "no usage info". Releases without -u skip this.
+    if python_rnpath_source_contains("\"--usage\"") {
+        let mut command = harness.python_command("rnpath");
+        command.args([
+            "--config",
+            harness.client_config.to_str().unwrap(),
+            "-t",
+            "-u",
+        ]);
+        let output = run(command);
+        assert_success(&output, "Python rnpath -t -u against the Rust daemon");
+        let usage = String::from_utf8_lossy(&output.stdout);
+        let line = usage
+            .lines()
+            .find(|line| line.contains(&destination))
+            .unwrap_or_else(|| panic!("rnpath -u did not list {destination}:\n{usage}"));
+        if python_rnpath_source_contains("{u_str}") {
+            assert!(
+                line.ends_with(", never used")
+                    || (line.contains(", last used ") && line.ends_with(" ago")),
+                "unexpected rnpath -u line: {line}"
+            );
+        }
+        assert!(!usage.contains("no usage info"), "{usage}");
+    }
+
     let mut command = harness.python_command("rnpath");
     command.args(["--config", harness.client_config.to_str().unwrap(), "-t"]);
     let output = run(command);
@@ -1959,6 +1987,22 @@ fn python_rnstatus_manages_rust_interface() {
             String::from_utf8_lossy(&output.stdout)
         );
     }
+}
+
+/// Whether the Python rnpath's source contains `needle`: `"--usage"` for
+/// releases with `-u`, `{u_str}` for those that print its suffix (upstream
+/// db67adea; before it the suffix was computed and never printed).
+fn python_rnpath_source_contains(needle: &str) -> bool {
+    let mut probe = Command::new("python3");
+    probe.env("PYTHONUNBUFFERED", "1");
+    probe.args([
+        "-c",
+        &format!(
+            "import inspect, RNS.Utilities.rnpath as m; print({needle:?} in inspect.getsource(m))"
+        ),
+    ]);
+    let probe = run(probe);
+    String::from_utf8_lossy(&probe.stdout).trim() == "True"
 }
 
 /// What an `rnpath <destination>` run finally shows: the text after its

@@ -54,7 +54,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 8 | `9ef6c90ea6196057278685aabab06674e73ffa44` | Use RLock in logging | Structurally covered | No re-entrant logging path; documented on `RotatingLogWriter` |
 | 9 | `5f2dbc169d5b3cb497d0f7067acef823e5619f30` | Added ability to load a blocked_ips file from the current config dir | Integrated | `blocked_ips` file loaded at startup into the shared fast-flap table, with focused and live socket tests |
 | 10 | `3c4b271f4133ed1f00eae04b1f3160365f4d02ec` | Added client_limit option to BackboneInterface | Integrated | `client_limit` with the upstream default of 500, checked first |
-| 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Pending review | Changes `RNS/Utilities/rnpath.py` |
+| 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Integrated | `rnpath` reads Python's integer `used`; Python `rnpath -t -u` interop |
 | 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Pending review | Changes `RNS/Transport.py` |
 | 13 | `9b6b724b08e6c8681cfb9edd34edd905fb2238b3` | Diagnostics | Pending review | Changes `RNS/Reticulum.py`, `RNS/Utilities/rnstatus.py` |
 | 14 | `20e25a9f0cd4bde8958642d36690cf709849f5ee` | Filter destinations at path table load time | Pending review | Changes `RNS/Transport.py` |
@@ -164,13 +164,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 11. `db67adea` — Fixed path usage display
 
-**Upstream change:** Pending review (changes `RNS/Utilities/rnpath.py`).
+**Upstream change:** `rnpath -t -u` printed nothing for path usage: the suffix (`, last used <time> ago`, `, never used`, or `, no usage info` when an entry has no `used` key) was computed and never added to the line. The fix appends it. No RPC change; `get path_table` already returned `used` (the integer 0 for a never-used path, a float time after use).
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs's `rnpath` already printed the suffix and sorted by `used` under `-u`, and the rns-rs daemon sends `used` (a float) on every path table entry, so Python's fixed `rnpath -u` works against it. Reviewing this found an rns-rs bug: against a Python daemon, rns-rs's `rnpath` read `used` only as a float, so a never-used path (integer 0) printed `, no usage info`.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `path_used` / `usage_suffix` (`rns-cli/src/bin/rnpath.rs`) read `used` as an integer or a float. Tests: `usage_suffix_reads_python_and_rust_used_values`; `python_rnpath_lists_rust_path_table` (`rns-cli/tests/utility_interop.rs`) now runs Python `rnpath -t -u` against a Rust daemon and requires the suffix where the Python release prints it, passing against RNS 1.4.2 (no `-u`), 1.5.4, 16621a78 and 134dc677.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 12. `f96cef7e` — Drop announces early when held announces is full
 
