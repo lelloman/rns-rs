@@ -33,6 +33,9 @@ impl RotatingLogWriter {
     }
 }
 
+/// Failures are returned, never logged: logging from inside the logger's
+/// write would re-enter it. Upstream's `RNS.log` logs from its own failure
+/// path and switched its lock to an `RLock` for that (rgit `9ef6c90e`).
 impl Write for RotatingLogWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let mut file = fs::OpenOptions::new()
