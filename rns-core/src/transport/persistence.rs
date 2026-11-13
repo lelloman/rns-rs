@@ -198,8 +198,11 @@ impl TransportEngine {
             if restored_paths.is_empty() {
                 continue;
             }
+            // A restored tunnel waits at most TUNNEL_RECONNECT_WINDOW for its
+            // endpoint to synthesize it again (upstream 023849ed).
+            let expires = tunnel.expires.min(now + constants::TUNNEL_RECONNECT_WINDOW);
             self.tunnel_table
-                .restore_detached(tunnel.tunnel_id, restored_paths, tunnel.expires);
+                .restore_detached(tunnel.tunnel_id, restored_paths, expires);
             stats.tunnels += 1;
         }
 
@@ -516,11 +519,21 @@ mod tests {
         let round_trip = restored.persistence_snapshot();
         assert_eq!(round_trip.tunnels.len(), 1);
         assert_eq!(round_trip.tunnels[0].interface_hash, None);
+        // A restored tunnel waits at most TUNNEL_RECONNECT_WINDOW (023849ed).
         assert_eq!(
             round_trip.tunnels[0].expires,
-            100.0 + constants::TUNNEL_TIMEOUT
+            101.0 + constants::TUNNEL_RECONNECT_WINDOW
         );
         assert_eq!(round_trip.tunnels[0].paths[0].expires, 500.0);
         assert_eq!(round_trip.tunnels[0].paths[0].destination_hash, [5; 16]);
+
+        // An expiry already inside the window is kept.
+        let mut snapshot = restored.persistence_snapshot();
+        snapshot.tunnels[0].expires = 300.0;
+        let mut again = TransportEngine::new(config(8));
+        again.restore_persistence_snapshot(snapshot, 200.0, |hash| {
+            (hash == &packet.packet_hash).then(|| packet.raw.clone())
+        });
+        assert_eq!(again.persistence_snapshot().tunnels[0].expires, 300.0);
     }
 }

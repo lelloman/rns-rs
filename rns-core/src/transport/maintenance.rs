@@ -210,7 +210,7 @@ impl TransportEngine {
             &self.interfaces,
             ctx.now,
             unused_path_linger,
-            constants::PATH_POOL_UNUSED_TARGET,
+            jobs::UnusedPoolLimits::UPSTREAM,
         );
         jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
         self.rediscover_unproven_link_paths(ctx.now);
@@ -240,7 +240,7 @@ impl TransportEngine {
                     && ctx.now < *requested_at + constants::PATH_REQUEST_TIMEOUT
             });
         self.tunnel_table
-            .void_missing_interfaces(|id| self.interfaces.contains_key(id));
+            .void_missing_interfaces(ctx.now, |id| self.interfaces.contains_key(id));
         self.tunnel_table.cull(ctx.now);
         self.announce_sig_cache.cull(ctx.now);
         self.tables_last_culled = ctx.now;

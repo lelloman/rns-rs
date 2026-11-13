@@ -68,7 +68,7 @@ impl TransportEngine {
             &self.interfaces,
             now,
             unused_path_linger,
-            constants::PATH_POOL_UNUSED_TARGET,
+            jobs::UnusedPoolLimits::UPSTREAM,
         );
         while self.path_table.len() >= self.config.max_path_destinations {
             let Some(dest_hash) = self.oldest_path_destination() else {

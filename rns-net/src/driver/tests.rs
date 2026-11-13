@@ -3804,6 +3804,41 @@ fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
         .contains_key(&InterfaceId(12)));
 }
 
+/// Upstream 023849ed: a tunnel whose interface is removed waits
+/// TUNNEL_RECONNECT_WINDOW to be synthesized again; an interface that only
+/// goes offline (a static one, which upstream keeps registered) leaves the
+/// tunnel's expiry alone.
+#[test]
+fn removed_dynamic_interface_starts_tunnel_reconnect_window() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "static-tunnel");
+    register_test_generic_interface(&mut driver, 2, "dynamic-tunnel");
+    driver.interfaces.get_mut(&InterfaceId(2)).unwrap().dynamic = true;
+    let (static_tunnel, dynamic_tunnel) = ([0x31; 32], [0x32; 32]);
+    let now = time::now();
+    for (id, tunnel) in [(1, static_tunnel), (2, dynamic_tunnel)] {
+        driver.engine.handle_tunnel(tunnel, InterfaceId(id), now);
+        driver
+            .interfaces
+            .get_mut(&InterfaceId(id))
+            .unwrap()
+            .info
+            .tunnel_id = Some(tunnel);
+    }
+
+    driver.handle_interface_down_event(InterfaceId(1));
+    driver.handle_interface_down_event(InterfaceId(2));
+
+    let table = driver.engine.tunnel_table();
+    let static_entry = table.get(&static_tunnel).unwrap();
+    assert_eq!(static_entry.interface, None);
+    assert!(static_entry.expires >= now + rns_core::constants::TUNNEL_TIMEOUT);
+    let dynamic_entry = table.get(&dynamic_tunnel).unwrap();
+    assert_eq!(dynamic_entry.interface, None);
+    assert!(dynamic_entry.expires <= time::now() + rns_core::constants::TUNNEL_RECONNECT_WINDOW);
+    assert!(dynamic_entry.expires >= now + rns_core::constants::TUNNEL_RECONNECT_WINDOW);
+}
+
 #[test]
 fn dynamic_interface_applies_transport_announce_rate_defaults() {
     let (tx, rx) = event::channel();

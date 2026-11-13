@@ -528,6 +528,12 @@ impl TransportEngine {
         self.tunnel_table.void_tunnel_interface(tunnel_id);
     }
 
+    /// Void a tunnel whose interface was removed; it waits
+    /// `TUNNEL_RECONNECT_WINDOW` to be synthesized again.
+    pub fn release_tunnel_interface(&mut self, tunnel_id: &[u8; 32], now: f64) {
+        self.tunnel_table.release_tunnel_interface(tunnel_id, now);
+    }
+
     /// Access the tunnel table for queries.
     pub fn tunnel_table(&self) -> &TunnelTable {
         &self.tunnel_table

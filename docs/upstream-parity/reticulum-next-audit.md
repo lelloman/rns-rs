@@ -45,7 +45,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `50b6733a1cc0c85cc0caa94ee2f5e38c6692e462` | Cleanup | Structurally covered | `oversized_announce_of_a_blocked_type_counts_a_protocol_violation` |
-| 2 | `023849ed29e230441499f1adf6eb135696d067b6` | Improved path pool and tunnel culling | Pending review | Changes `RNS/Transport.py` |
+| 2 | `023849ed29e230441499f1adf6eb135696d067b6` | Improved path pool and tunnel culling | Integrated | Reverse timeout, dynamic unused pool target and tunnel reconnect window, with focused tests |
 | 3 | `3ac3236b2f11f5e58ca9d86564ee44222bfacd9b` | Updated stale doc defaults | Pending review | Changes `RNS/Interfaces/Interface.py`, `docs/source/interfaces.rst` |
 | 4 | `7852f53a4c24fe7e063e02c00d35eb06568f0b15` | Always init announce_queue | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
 | 5 | `70b9d58f15d88a3e33402f06f30cad411001e0ed` | Cleaned up announce cap properties | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
@@ -74,13 +74,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 2. `023849ed` — Improved path pool and tunnel culling
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** Three retention changes. (a) `REVERSE_TIMEOUT` drops from 8 to 3 minutes, so a transport node stops routing proofs back for packets it relayed more than three minutes earlier. (b) The never-used path pool target is no longer a fixed 2048: it is `PATH_POOL_UNUSED_MAX` (1536) until more than `PATH_POOL_USED_TARGET` (2048) paths are in use, then shrinks by one per extra used path down to `PATH_POOL_UNUSED_MIN` (512); used paths are counted over the whole table before stale ones are removed. (c) `TUNNEL_RECONNECT_WINDOW` (10 minutes): a tunnel whose interface is no longer in `Transport.interfaces` gets that window to be synthesized again before it is culled, and a tunnel restored from storage keeps at most that window, instead of up to 8 hours.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs had all three old behaviours: `REVERSE_TIMEOUT = 480`, a fixed `PATH_POOL_UNUSED_TARGET = 2048` passed to `jobs::cull_path_table`, and tunnels voided without changing their expiry (`TunnelTable::void_tunnel_interface`, `void_missing_interfaces`) and restored with their stored expiry. Upstream only starts the window for interfaces removed from `Transport.interfaces` (spawned clients); static interfaces that go offline stay registered and keep their tunnel's expiry. rns-rs voids the tunnel on every interface-down event (a pre-existing difference), so the window is applied only when the interface is dynamic and therefore removed.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `REVERSE_TIMEOUT = 180`; `PATH_POOL_UNUSED_MAX`/`MIN`/`USED_TARGET` and `jobs::UnusedPoolLimits` (`UPSTREAM` in production, `fixed` for focused tests), with `cull_path_table` counting used paths first; `TUNNEL_RECONNECT_WINDOW = 600`, `TunnelTable::release_tunnel_interface` for removed dynamic interfaces (`driver/events.rs`), `void_missing_interfaces(now, ..)` starting the window, and the restore clamp in `restore_persistence_snapshot`. Tests: `test_cull_reverse_table_timeout` (kept at 3 min, culled after), `unused_path_pool_target_follows_used_count`, `unused_pool_shrinks_once_used_paths_exceed_their_target`, `test_tunnel_table_void_missing_interfaces`, `test_tunnel_table_released_interface_starts_reconnect_window`, `test_tunnel_table_reattach_within_window_restores_expiry`, `test_tunnel_table_void_tunnel_keeps_expiry`, `detached_tunnel_round_trips_when_at_least_one_cached_path_survives` (restore clamp, and an expiry inside the window kept), `removed_dynamic_interface_starts_tunnel_reconnect_window` (driver). rns-core and rns-net library suites pass.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 3. `3ac3236b` — Updated stale doc defaults
 

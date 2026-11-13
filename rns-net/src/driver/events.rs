@@ -1127,7 +1127,15 @@ impl Driver {
         self.event_tx.remove_interface(id);
         if let Some(entry) = self.interfaces.get(&id) {
             if let Some(tunnel_id) = entry.info.tunnel_id {
-                self.engine.void_tunnel_interface(&tunnel_id);
+                // A removed dynamic interface starts the tunnel's reconnect
+                // window, as upstream's cull does for an interface no longer
+                // in Transport.interfaces; a static one only goes offline.
+                if entry.dynamic {
+                    self.engine
+                        .release_tunnel_interface(&tunnel_id, time::now());
+                } else {
+                    self.engine.void_tunnel_interface(&tunnel_id);
+                }
             }
         }
 

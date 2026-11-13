@@ -327,8 +327,8 @@ pub const ANNOUNCE_SIG_CACHE_TTL: f64 = 600.0;
 
 // --- Timeouts ---
 
-/// Reverse table entry timeout (8 minutes)
-pub const REVERSE_TIMEOUT: f64 = 480.0;
+/// Reverse table entry timeout (3 minutes since upstream 023849ed).
+pub const REVERSE_TIMEOUT: f64 = 180.0;
 
 /// Destination table entry timeout (7 days)
 pub const DESTINATION_TIMEOUT: f64 = 604800.0;
@@ -342,8 +342,16 @@ pub const UNUSED_PATH_LINGER: f64 = 6300.0;
 /// Linger time for never-used paths on leaf instances (12 minutes).
 pub const UNUSED_PATH_LINGER_LEAF: f64 = 720.0;
 
-/// Maximum unused path pool target.
-pub const PATH_POOL_UNUSED_TARGET: usize = 2048;
+/// Largest target for the pool of never-used paths; never-used paths beyond
+/// it are culled (upstream 023849ed).
+pub const PATH_POOL_UNUSED_MAX: usize = 1536;
+
+/// Smallest target for the pool of never-used paths.
+pub const PATH_POOL_UNUSED_MIN: usize = 512;
+
+/// Once more paths than this are in use, the never-used pool target shrinks
+/// by one per extra used path, down to `PATH_POOL_UNUSED_MIN`.
+pub const PATH_POOL_USED_TARGET: usize = 2048;
 
 /// Interfaces with a known bitrate below this many bits per second are slow:
 /// never-used paths learnt on them linger `PATH_SLOW_LINGER_FACTOR` times
@@ -361,6 +369,11 @@ pub const TUNNEL_TIMEOUT: f64 = 28800.0;
 
 /// Tunnel path retention timeout (8 hours)
 pub const TUNNEL_PATH_TIMEOUT: f64 = 28800.0;
+
+/// How long a tunnel waits for its interface to come back once the interface
+/// is gone, and the longest expiry a restored tunnel keeps (10 minutes,
+/// upstream 023849ed).
+pub const TUNNEL_RECONNECT_WINDOW: f64 = 600.0;
 
 /// Link stale time = 2 * KEEPALIVE(360) = 720 seconds
 pub const LINK_STALE_TIME: f64 = 720.0;
@@ -767,8 +780,8 @@ mod tests {
         // LINK_TIMEOUT = STALE_TIME * 1.25
         assert_eq!(LINK_TIMEOUT, LINK_STALE_TIME * 1.25);
 
-        // REVERSE_TIMEOUT = 8 minutes
-        assert_eq!(REVERSE_TIMEOUT, 8.0 * 60.0);
+        // REVERSE_TIMEOUT = 3 minutes
+        assert_eq!(REVERSE_TIMEOUT, 3.0 * 60.0);
 
         assert_eq!(PATH_REQUEST_GATE_TIMEOUT, 45.0);
         assert_eq!(DISCOVERY_PR_TX_THROTTLE, 0.5);
