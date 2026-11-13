@@ -182,6 +182,13 @@ pub enum LinkManagerAction {
         dest_hash: [u8; 16],
         packet_hash: [u8; 32],
     },
+    /// The peer of `link_id` proved `packet_hash`: the proof's signature
+    /// checked out against the peer's link key. The driver completes the
+    /// receipt of that packet if it was sent on this link.
+    PacketProved {
+        link_id: LinkId,
+        packet_hash: [u8; 32],
+    },
     /// Link established — notify callbacks.
     LinkEstablished {
         link_id: LinkId,
@@ -1239,18 +1246,23 @@ impl LinkManager {
         // not it answers a tracked channel packet: plain confirmed sends
         // complete on transmission and leave nothing to match here.
         link.engine.record_proof(time::now());
+        let mut actions = vec![LinkManagerAction::PacketProved {
+            link_id: *link_id,
+            packet_hash: *tracked_hash,
+        }];
         let Some(sequence) = link.pending_channel_packets.remove(tracked_hash) else {
-            return Vec::new();
+            return actions;
         };
         link.channel_proofs_received += 1;
         let Some(channel) = link.channel.as_mut() else {
-            return Vec::new();
+            return actions;
         };
 
         let chan_actions = channel.packet_delivered(sequence);
         let _ = channel;
         let _ = link;
-        self.process_channel_actions(link_id, chan_actions, rng)
+        actions.extend(self.process_channel_actions(link_id, chan_actions, rng));
+        actions
     }
 
     /// Prove a packet received on `link_id`: the proof packet to send, signed

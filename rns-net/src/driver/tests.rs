@@ -468,6 +468,14 @@ fn make_known_destination_state(
     }
 }
 
+/// Know `identity` as the identity of `destination`, so the proofs of
+/// packets sent to it can be checked.
+fn know_identity(driver: &mut Driver, destination: [u8; 16], identity: &Identity) {
+    let mut known = make_known_destination_state(destination, time::now(), InterfaceId(1));
+    known.announced.public_key = identity.get_public_key().unwrap();
+    driver.known_destinations.insert(destination, known);
+}
+
 fn sent_contains_linkclose(sent: &[Vec<u8>], link_id: [u8; 16]) -> bool {
     sent.iter().any(|raw| {
         RawPacket::unpack(raw)
@@ -481,12 +489,24 @@ fn sent_contains_linkclose(sent: &[Vec<u8>], link_id: [u8; 16]) -> bool {
 pub(super) fn active_link_manager_with_route(
     interface_id: InterfaceId,
 ) -> (crate::link_manager::LinkManager, [u8; 16]) {
-    let mut rng = OsRng;
     let mut initiator = crate::link_manager::LinkManager::new();
+    let (_responder, link_id) = establish_link(&mut initiator, [0xDD; 16], interface_id);
+    initiator.set_link_route_hint(&link_id, interface_id, None);
+    (initiator, link_id)
+}
+
+/// Establish a link from `initiator` to a fresh responder serving
+/// `dest_hash`: the responder (which signs the link's packet proofs) and
+/// the link id.
+fn establish_link(
+    initiator: &mut crate::link_manager::LinkManager,
+    dest_hash: [u8; 16],
+    interface_id: InterfaceId,
+) -> (crate::link_manager::LinkManager, [u8; 16]) {
+    let mut rng = OsRng;
     let mut responder = crate::link_manager::LinkManager::new();
     let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
     let sig_pub_bytes = sig_prv.public_key().public_bytes();
-    let dest_hash = [0xDD; 16];
     responder.register_link_destination(
         dest_hash,
         sig_prv,
@@ -548,9 +568,7 @@ pub(super) fn active_link_manager_with_route(
         interface_id,
         &mut rng,
     );
-
-    initiator.set_link_route_hint(&link_id, interface_id, None);
-    (initiator, link_id)
+    (responder, link_id)
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -9921,10 +9939,12 @@ fn inbound_proof_fires_callback() {
     let sent_time = time::now() - 0.5; // 500ms ago
     driver.sent_packets.insert(tracked_hash, (dest, sent_time));
 
-    // Build a PROOF packet with the tracked hash + dummy signature
+    // Build a PROOF packet with the tracked hash, signed by the destination
+    let identity = Identity::new(&mut OsRng);
+    know_identity(&mut driver, dest, &identity);
     let mut proof_data = Vec::new();
     proof_data.extend_from_slice(&tracked_hash);
-    proof_data.extend_from_slice(&[0xAA; 64]); // dummy signature
+    proof_data.extend_from_slice(&identity.sign(&tracked_hash).unwrap());
 
     let flags = PacketFlags {
         header_type: constants::HEADER_1,
@@ -10119,7 +10139,9 @@ fn inbound_implicit_proof_matches_truncated_destination() {
         .register_destination(proof_dest, constants::DESTINATION_SINGLE);
 
     // Implicit proof is signature-only (64 bytes)
-    let proof_data = vec![0xAA; 64];
+    let identity = Identity::new(&mut OsRng);
+    know_identity(&mut driver, [0xEE; 16], &identity);
+    let proof_data = identity.sign(&tracked_hash).unwrap().to_vec();
     let flags = PacketFlags {
         header_type: constants::HEADER_1,
         context_flag: constants::FLAG_UNSET,
@@ -11287,9 +11309,11 @@ fn proof_callback_can_enqueue_outbound_message() {
     driver
         .sent_packets
         .insert(tracked_hash, (tracked_dest, time::now()));
+    let identity = Identity::new(&mut OsRng);
+    know_identity(&mut driver, tracked_dest, &identity);
     let mut proof = Vec::with_capacity(96);
     proof.extend_from_slice(&tracked_hash);
-    proof.extend_from_slice(&[0; 64]);
+    proof.extend_from_slice(&identity.sign(&tracked_hash).unwrap());
 
     // The callback synchronously enqueues another message. This must happen only
     // after receipt state is released, or callback-driven sends can deadlock.
@@ -11489,6 +11513,7 @@ fn inbound_proof_populates_completed_proofs() {
         .sent_packets
         .insert(data_packet_hash, (dest, time::now()));
     driver2.pending_probes.insert(data_packet_hash);
+    know_identity(&mut driver2, dest, &identity);
 
     // Feed the proof frame without shutting down, since shutdown now clears
     // completed proof state.
@@ -14072,7 +14097,11 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     assert_eq!(proofs.len(), 1);
     assert_eq!(proofs[0].0, DestHash(peer));
     assert_eq!(proofs[0].1, PacketHash(good));
-    assert!(driver.sent_packets.is_empty());
+    // The forged proof leaves its receipt for the genuine proof to complete.
+    assert_eq!(
+        driver.sent_packets.keys().collect::<Vec<_>>(),
+        vec![&forged]
+    );
 }
 
 /// Deferred-send reports, with how many frames were written when each came.
@@ -14537,4 +14566,363 @@ fn forced_shared_instance_bitrate_applies_to_local_clients() {
         driver.interfaces.get(&InterfaceId(6)).unwrap().info.bitrate,
         Some(1_000)
     );
+}
+
+// Receipts of sent packets complete only on a proof signed by the key the
+// packet was sent to: the link's peer for link packets, the destination's
+// identity otherwise. A proof that fails the check leaves the receipt
+// pending, for the genuine proof to complete it.
+
+/// Recorded `on_proof` calls.
+type RecordedProofs = Arc<Mutex<Vec<(DestHash, PacketHash, f64)>>>;
+
+/// A driver on interface 1 whose `on_proof` calls are recorded.
+fn proof_receipt_driver() -> (Driver, RecordedProofs) {
+    let (tx, rx) = event::channel();
+    let (mut cbs, ..) = MockCallbacks::new();
+    let proofs = Arc::new(Mutex::new(Vec::new()));
+    cbs.proofs = proofs.clone();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(cbs));
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, _sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    (driver, proofs)
+}
+
+/// A proof packet to `destination` carrying `data`.
+fn proof_frame(destination: [u8; 16], destination_type: u8, data: &[u8]) -> Vec<u8> {
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type,
+        packet_type: constants::PACKET_TYPE_PROOF,
+    };
+    RawPacket::pack(flags, 0, &destination, None, constants::CONTEXT_NONE, data)
+        .unwrap()
+        .raw
+}
+
+/// The explicit proof `prover` sends for `packet_hash` received on `link_id`.
+fn link_proof_frame(
+    prover: &mut crate::link_manager::LinkManager,
+    link_id: &[u8; 16],
+    packet_hash: &[u8; 32],
+) -> Vec<u8> {
+    prover
+        .prove_link_packet(link_id, packet_hash)
+        .into_iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.to_vec()),
+            _ => None,
+        })
+        .expect("link packet proof")
+}
+
+/// `[packet_hash][64 forged signature bytes]`.
+fn forged_explicit_proof(packet_hash: &[u8; 32]) -> Vec<u8> {
+    let mut data = packet_hash.to_vec();
+    data.extend_from_slice(&[0xAA; 64]);
+    data
+}
+
+/// A driver with an active link it sent `packet_hash` on: the driver, its
+/// recorded proofs, the link's peer and the link id.
+fn link_receipt_driver(
+    packet_hash: [u8; 32],
+) -> (
+    Driver,
+    RecordedProofs,
+    crate::link_manager::LinkManager,
+    [u8; 16],
+) {
+    let (mut driver, proofs) = proof_receipt_driver();
+    let (peer, link_id) = establish_link(&mut driver.link_manager, [0xDD; 16], InterfaceId(1));
+    driver
+        .sent_packets
+        .insert(packet_hash, (link_id, time::now() - 0.25));
+    (driver, proofs, peer, link_id)
+}
+
+#[test]
+fn link_packet_proof_from_the_link_peer_completes_the_receipt() {
+    let hash = [0x51; 32];
+    let (mut driver, proofs, mut peer, link_id) = link_receipt_driver(hash);
+
+    let frame = link_proof_frame(&mut peer, &link_id, &hash);
+    driver.handle_frame_event(InterfaceId(1), frame, None, None);
+
+    let proofs = proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 1);
+    assert_eq!(proofs[0].0, DestHash(link_id));
+    assert_eq!(proofs[0].1, PacketHash(hash));
+    assert!(!driver.sent_packets.contains_key(&hash));
+}
+
+#[test]
+fn forged_link_packet_proof_is_rejected() {
+    let hash = [0x52; 32];
+    let (mut driver, proofs, _peer, link_id) = link_receipt_driver(hash);
+
+    let frame = proof_frame(
+        link_id,
+        constants::DESTINATION_LINK,
+        &forged_explicit_proof(&hash),
+    );
+    driver.handle_frame_event(InterfaceId(1), frame, None, None);
+
+    assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
+    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+}
+
+#[test]
+fn forged_link_packet_proof_addressed_elsewhere_is_rejected() {
+    // An explicit proof names its packet itself, so it need not arrive on
+    // the link: it is still checked against the link's peer.
+    let hash = [0x53; 32];
+    let (mut driver, proofs, _peer, _link_id) = link_receipt_driver(hash);
+    let proof_destination: [u8; 16] = hash[..16].try_into().unwrap();
+    driver
+        .engine
+        .register_destination(proof_destination, constants::DESTINATION_SINGLE);
+
+    let frame = proof_frame(
+        proof_destination,
+        constants::DESTINATION_SINGLE,
+        &forged_explicit_proof(&hash),
+    );
+    driver.handle_frame_event(InterfaceId(1), frame, None, None);
+
+    assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
+    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+}
+
+#[test]
+fn link_packet_proof_signed_on_another_link_is_rejected() {
+    // A proof correctly signed by the peer of another link (one an attacker
+    // holds) does not prove a packet sent on this one.
+    let hash = [0x54; 32];
+    let (mut driver, proofs, _peer, _link_id) = link_receipt_driver(hash);
+    let (mut attacker, attacker_link) =
+        establish_link(&mut driver.link_manager, [0xAB; 16], InterfaceId(1));
+
+    let frame = link_proof_frame(&mut attacker, &attacker_link, &hash);
+    driver.handle_frame_event(InterfaceId(1), frame, None, None);
+
+    assert!(
+        proofs.lock().unwrap().is_empty(),
+        "cross-link proof accepted"
+    );
+    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+}
+
+#[test]
+fn forged_link_packet_proof_does_not_suppress_the_genuine_one() {
+    let hash = [0x55; 32];
+    let (mut driver, proofs, mut peer, link_id) = link_receipt_driver(hash);
+
+    let forged = proof_frame(
+        link_id,
+        constants::DESTINATION_LINK,
+        &forged_explicit_proof(&hash),
+    );
+    driver.handle_frame_event(InterfaceId(1), forged, None, None);
+    assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
+    let genuine = link_proof_frame(&mut peer, &link_id, &hash);
+    driver.handle_frame_event(InterfaceId(1), genuine, None, None);
+
+    let proofs = proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 1, "genuine proof not delivered exactly once");
+    assert_eq!(proofs[0].1, PacketHash(hash));
+    assert!(!driver.sent_packets.contains_key(&hash));
+}
+
+#[test]
+fn link_packet_proof_after_the_link_closed_is_rejected() {
+    // With the link gone there is no key left to check the proof against.
+    let hash = [0x56; 32];
+    let (mut driver, proofs, mut peer, link_id) = link_receipt_driver(hash);
+    let frame = link_proof_frame(&mut peer, &link_id, &hash);
+    driver.link_manager.teardown_link(&link_id);
+
+    let proof = RawPacket::unpack(&frame).unwrap();
+    driver.handle_inbound_proof(link_id, proof.data(), &[0; 32]);
+
+    assert!(
+        proofs.lock().unwrap().is_empty(),
+        "unchecked proof accepted"
+    );
+}
+
+/// A driver that sent `packet_hash` to a destination whose identity it
+/// knows: the driver, its recorded proofs, that identity and destination.
+fn single_receipt_driver(packet_hash: [u8; 32]) -> (Driver, RecordedProofs, Identity, [u8; 16]) {
+    let (mut driver, proofs) = proof_receipt_driver();
+    let identity = Identity::new(&mut OsRng);
+    let destination = [0xD2; 16];
+    know_identity(&mut driver, destination, &identity);
+    driver
+        .sent_packets
+        .insert(packet_hash, (destination, time::now() - 0.25));
+    let proof_destination: [u8; 16] = packet_hash[..16].try_into().unwrap();
+    driver
+        .engine
+        .register_destination(proof_destination, constants::DESTINATION_SINGLE);
+    (driver, proofs, identity, destination)
+}
+
+#[test]
+fn forged_single_packet_proof_does_not_suppress_the_genuine_one() {
+    let hash = [0x61; 32];
+    let (mut driver, proofs, identity, destination) = single_receipt_driver(hash);
+    let proof_destination: [u8; 16] = hash[..16].try_into().unwrap();
+
+    let forged = proof_frame(
+        proof_destination,
+        constants::DESTINATION_SINGLE,
+        &forged_explicit_proof(&hash),
+    );
+    driver.handle_frame_event(InterfaceId(1), forged, None, None);
+    assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
+    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+
+    let mut genuine = hash.to_vec();
+    genuine.extend_from_slice(&identity.sign(&hash).unwrap());
+    let genuine = proof_frame(proof_destination, constants::DESTINATION_SINGLE, &genuine);
+    driver.handle_frame_event(InterfaceId(1), genuine, None, None);
+
+    let proofs = proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 1, "genuine proof not delivered exactly once");
+    assert_eq!(proofs[0].0, DestHash(destination));
+    assert_eq!(proofs[0].1, PacketHash(hash));
+    assert!(!driver.sent_packets.contains_key(&hash));
+}
+
+#[test]
+fn forged_implicit_proof_does_not_suppress_the_genuine_one() {
+    let hash = [0x62; 32];
+    let (mut driver, proofs, identity, _destination) = single_receipt_driver(hash);
+    let proof_destination: [u8; 16] = hash[..16].try_into().unwrap();
+
+    let forged = proof_frame(
+        proof_destination,
+        constants::DESTINATION_SINGLE,
+        &[0xAA; 64],
+    );
+    driver.handle_frame_event(InterfaceId(1), forged, None, None);
+    assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
+
+    let signature = identity.sign(&hash).unwrap();
+    let genuine = proof_frame(proof_destination, constants::DESTINATION_SINGLE, &signature);
+    driver.handle_frame_event(InterfaceId(1), genuine, None, None);
+
+    assert_eq!(proofs.lock().unwrap().len(), 1);
+    assert!(!driver.sent_packets.contains_key(&hash));
+}
+
+#[test]
+fn single_packet_proof_to_an_unknown_identity_is_rejected() {
+    // Without the destination's identity the proof cannot be checked, and
+    // upstream (PacketReceipt.validate_proof) does not accept it.
+    let (mut driver, proofs) = proof_receipt_driver();
+    let hash = [0x63; 32];
+    driver.sent_packets.insert(hash, ([0xD3; 16], time::now()));
+
+    driver.handle_inbound_proof([0xD3; 16], &forged_explicit_proof(&hash), &[0; 32]);
+
+    assert!(
+        proofs.lock().unwrap().is_empty(),
+        "unchecked proof accepted"
+    );
+}
+
+#[cfg(feature = "proof-pool")]
+#[test]
+fn proofs_checked_on_the_pool_keep_the_receipt_until_one_is_valid() {
+    let hash = [0x64; 32];
+    let (mut driver, proofs, identity, destination) = single_receipt_driver(hash);
+    let (tx, _rx) = event::channel();
+    driver.link_manager.set_receive_worker_wake(tx);
+    driver
+        .link_manager
+        .set_proof_verify_threads(crate::ProofVerifyThreads::Fixed(2));
+    // Polls for a while: the pool's verdicts arrive within it.
+    let drain = |driver: &mut Driver| {
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+            driver
+                .link_manager
+                .poll_proof_pool(&mut OsRng)
+                .expect("the pool is running");
+            driver.apply_packet_proofs();
+        }
+    };
+
+    driver.handle_inbound_proof(destination, &forged_explicit_proof(&hash), &[0; 32]);
+    drain(&mut driver);
+    assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
+    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+
+    // Two genuine copies in flight at once complete the receipt once.
+    let mut genuine = hash.to_vec();
+    genuine.extend_from_slice(&identity.sign(&hash).unwrap());
+    driver.handle_inbound_proof(destination, &genuine, &[0; 32]);
+    driver.handle_inbound_proof(destination, &genuine, &[0; 32]);
+    drain(&mut driver);
+    assert_eq!(proofs.lock().unwrap().len(), 1);
+    assert!(!driver.sent_packets.contains_key(&hash));
+}
+
+#[cfg(feature = "proof-pool")]
+#[test]
+fn link_packet_proofs_checked_on_the_pool_complete_only_their_own_receipt() {
+    let hash = [0x57; 32];
+    let (mut driver, proofs, mut peer, link_id) = link_receipt_driver(hash);
+    let (mut attacker, attacker_link) =
+        establish_link(&mut driver.link_manager, [0xAB; 16], InterfaceId(1));
+    let (tx, _rx) = event::channel();
+    driver.link_manager.set_receive_worker_wake(tx);
+    driver
+        .link_manager
+        .set_proof_verify_threads(crate::ProofVerifyThreads::Fixed(2));
+    // Polls for a while: the pool's verdicts arrive within it.
+    let drain = |driver: &mut Driver| {
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+            let actions = driver
+                .link_manager
+                .poll_proof_pool(&mut OsRng)
+                .expect("the pool is running");
+            driver.dispatch_link_actions(actions);
+            driver.apply_packet_proofs();
+        }
+    };
+
+    let forged = proof_frame(
+        link_id,
+        constants::DESTINATION_LINK,
+        &forged_explicit_proof(&hash),
+    );
+    driver.handle_frame_event(InterfaceId(1), forged, None, None);
+    let cross_link = link_proof_frame(&mut attacker, &attacker_link, &hash);
+    driver.handle_frame_event(InterfaceId(1), cross_link, None, None);
+    drain(&mut driver);
+    assert!(proofs.lock().unwrap().is_empty(), "invalid proof accepted");
+    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+
+    let genuine = link_proof_frame(&mut peer, &link_id, &hash);
+    driver.handle_frame_event(InterfaceId(1), genuine, None, None);
+    assert!(
+        proofs.lock().unwrap().is_empty(),
+        "checked on the pool, not inline"
+    );
+    drain(&mut driver);
+    let proofs = proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 1);
+    assert_eq!(proofs[0].1, PacketHash(hash));
+    assert!(!driver.sent_packets.contains_key(&hash));
 }

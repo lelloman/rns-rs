@@ -4306,9 +4306,15 @@ fn test_channel_proof_reopens_send_window() {
             rns_core::transport::types::InterfaceId(0),
             &mut rng,
         );
+        // The proof frees a channel slot and is reported for the packet's
+        // receipt; nothing is sent.
         assert!(
-            ack_actions.is_empty(),
-            "proof delivery should only update channel state"
+            matches!(
+                ack_actions.as_slice(),
+                [LinkManagerAction::PacketProved { link_id: proved, packet_hash }]
+                    if *proved == link_id && packet_hash == tracked_hash
+            ),
+            "unexpected actions: {ack_actions:?}"
         );
     }
 
