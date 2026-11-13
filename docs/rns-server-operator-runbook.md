@@ -283,6 +283,21 @@ blocked addresses as `Blocked` under the listener. Pass `-b` or
 `--blocked-ips` to list the blocked addresses below that count, for example
 `rns-ctl status -c /var/lib/rns-node -b`.
 
+A listener accepts at most `client_limit` concurrent clients (default 500, as
+upstream; `0` also means 500). The limit counts every client of that listener,
+whatever its address: there is deliberately no per-address limit, since many
+users can share one address behind NAT. A connection over the limit is
+accepted and closed at once, before any other check. The rns-rs key
+`max_connections` takes precedence when set (`0` there means no limit), and
+can be changed at runtime with `rns-ctl`:
+
+```ini
+[[Backbone Listener]]
+  type = BackboneInterface
+  listen_port = 4242
+  client_limit = 500
+```
+
 Addresses can also be blocked permanently with a `blocked_ips` file in the
 node's configuration directory (next to `config`; for `rns-server`, the
 `--config` directory, not the state directory), as upstream Reticulum reads
