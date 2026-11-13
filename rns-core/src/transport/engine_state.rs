@@ -36,6 +36,7 @@ impl TransportEngine {
             discovery_pr_tag_set: BTreeSet::new(),
             path_requests: BTreeMap::new(),
             stamp_prs: constants::STAMP_PRS,
+            hop_limiter: constants::HOP_LIMITER,
             stamp_requirements: StampRequirements::default(),
             destination_filter: Default::default(),
             control_destinations: [

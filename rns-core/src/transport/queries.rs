@@ -439,6 +439,28 @@ impl TransportEngine {
         self.ingress_control.held_count(interface)
     }
 
+    /// Whether an interface already holds as many announces as its ingress
+    /// control allows (`ic_max_held_announces`). Upstream f96cef7e drops
+    /// every further announce from it before any processing; that is
+    /// checked whether ingress control is on or not, so a limit of 0 drops
+    /// every announce.
+    pub fn announce_holding_saturated(&self, interface: &InterfaceId) -> bool {
+        self.interfaces.get(interface).is_some_and(|info| {
+            self.ingress_control.held_count(interface) >= info.ingress_control.max_held_announces
+        })
+    }
+
+    /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`).
+    pub fn hop_limiter(&self) -> u8 {
+        self.hop_limiter
+    }
+
+    /// Set the hop limiter paths are culled against, from `[filter]
+    /// hop_limiter`.
+    pub fn set_hop_limiter(&mut self, hop_limiter: u8) {
+        self.hop_limiter = hop_limiter;
+    }
+
     pub fn burst_active(&self, interface: &InterfaceId) -> bool {
         self.ingress_control.burst_active(interface)
     }

@@ -4636,6 +4636,83 @@ fn oversized_announce_of_a_blocked_type_counts_a_protocol_violation() {
     );
 }
 
+/// An interface with ingress control that holds one announce and may hold
+/// `max_held`; returns the driver.
+fn driver_holding_one_announce(max_held: usize) -> Driver {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "held-announces");
+    let mut info = driver
+        .engine
+        .interface_info(&InterfaceId(1))
+        .unwrap()
+        .clone();
+    info.ingress_control.max_held_announces = max_held;
+    driver.engine.register_interface(info);
+    // An announce burst: the engine holds announces from now on.
+    driver
+        .engine
+        .update_interface_freqs(InterfaceId(1), 1000.0, 0.0, 0.0, 0);
+    let raw = build_announce_packet(&Identity::new(&mut OsRng));
+    driver.engine.handle_inbound(
+        rns_core::transport::InboundFrame {
+            raw: &raw,
+            iface: InterfaceId(1),
+            now: time::now(),
+            rx: rns_core::transport::RxMetadata::default(),
+        },
+        &mut driver.rng,
+    );
+    assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 1);
+    driver
+}
+
+#[test]
+fn announce_is_dropped_early_when_held_announces_are_full() {
+    // Upstream f96cef7e: with as many held announces as the interface may
+    // hold, a further announce is dropped before any processing: no
+    // incoming-announce sample, no path, no violation or filter count.
+    let mut driver = driver_holding_one_announce(1);
+    let identity = Identity::new(&mut OsRng);
+    let dest_hash =
+        rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
+
+    driver.handle_frame_event(InterfaceId(1), build_announce_packet(&identity), None, None);
+
+    assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 1);
+    assert!(!driver.engine.has_path(&dest_hash));
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert!(stats.ia_timestamps.is_empty());
+    assert_eq!(stats.protocol_violations, 0);
+    assert_eq!(stats.packet_filter_hits, 0);
+}
+
+#[test]
+fn announce_is_held_while_held_announces_have_room() {
+    let mut driver = driver_holding_one_announce(2);
+
+    driver.handle_frame_event(
+        InterfaceId(1),
+        build_announce_packet(&Identity::new(&mut OsRng)),
+        None,
+        None,
+    );
+
+    assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 2);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.ia_timestamps.len(),
+        1
+    );
+}
+
+#[test]
+fn apply_stamp_config_sets_the_engine_hop_limiter() {
+    // The path table is culled against `[filter] hop_limiter` (f96cef7e).
+    let mut driver = new_test_driver();
+    assert_eq!(driver.engine.hop_limiter(), constants::HOP_LIMITER);
+    driver.apply_stamp_config(&crate::config::StampsSection::default(), 7);
+    assert_eq!(driver.engine.hop_limiter(), 7);
+}
+
 #[test]
 fn ifac_flag_without_ifac_counts_an_ifac_violation() {
     let mut driver = new_test_driver();

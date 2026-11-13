@@ -1610,6 +1610,7 @@ impl Driver {
         link_request_costs.set_enforced(stamps.lr_stamps_enforced);
         self.stamp_settings = stamps.clone();
         self.hop_limiter = hop_limiter;
+        self.engine.set_hop_limiter(hop_limiter);
         // Transport.start (Transport.py:521).
         if hop_limiter != rns_core::constants::PATHFINDER_M {
             log::debug!("Transport hop limit set to {hop_limiter}");

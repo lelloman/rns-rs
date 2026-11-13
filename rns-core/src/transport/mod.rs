@@ -256,6 +256,9 @@ pub struct TransportEngine {
     /// node are stamped (`Transport.STAMP_PRS`). Defaults to the compile-time
     /// constant; settable so the stamping path can be exercised.
     stamp_prs: bool,
+    /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`,
+    /// upstream f96cef7e); `[filter] hop_limiter`.
+    hop_limiter: u8,
     /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
     /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
     stamp_requirements: StampRequirements,

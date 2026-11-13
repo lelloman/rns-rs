@@ -176,6 +176,7 @@ pub fn cull_path_table(
     now: f64,
     unused_path_linger: f64,
     pool: UnusedPoolLimits,
+    hop_limiter: u8,
 ) -> usize {
     // Upstream counts used paths over the whole table before removing stale
     // ones, and sizes the never-used pool from that count.
@@ -194,9 +195,12 @@ pub fn cull_path_table(
             } else {
                 unused_path_linger
             };
+            // Upstream f96cef7e also removes a path, used or not, with more
+            // hops than the hop limiter allows.
             now <= p.expires
                 && interfaces.contains_key(&p.receiving_interface)
                 && !(p.used == 0.0 && now > p.timestamp + linger)
+                && p.hops <= hop_limiter
         });
         culled += before - ps.len();
         for path in ps.iter() {
@@ -223,7 +227,7 @@ pub fn cull_path_table(
     path_table.retain(|_, ps| !ps.is_empty());
     if culled > 0 {
         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-            "Removed {} expired, unavailable, or unused path table entries",
+            "Removed {} expired, unavailable, unused or excessive hops path table entries",
             culled,
         );
     }
@@ -524,7 +528,14 @@ mod tests {
             min: 1,
             used_target: 1,
         };
-        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, pool);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            99_999.0,
+            pool,
+            crate::constants::HOP_LIMITER,
+        );
         assert_eq!(count, 2);
         assert!(!table.contains_key(&[0x20; 16]));
         assert!(!table.contains_key(&[0x21; 16]));
@@ -645,6 +656,7 @@ mod tests {
             600.0,
             crate::constants::UNUSED_PATH_LINGER,
             UnusedPoolLimits::UPSTREAM,
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
     }
@@ -667,6 +679,62 @@ mod tests {
     }
 
     #[test]
+    fn cull_removes_paths_with_more_hops_than_the_hop_limiter() {
+        // Upstream f96cef7e: a path beyond the hop limiter goes, used or not;
+        // one at the limit stays.
+        let mut table = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+        let with_hops = |hops: u8, used: f64| {
+            super::super::tables::PathSet::from_single(
+                PathEntry {
+                    timestamp: 100.0,
+                    next_hop: [0; 16],
+                    hops,
+                    expires: 9999.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(1),
+                    packet_hash: [0; 32],
+                    announce_raw: None,
+                    used,
+                },
+                1,
+            )
+        };
+        table.insert([0x11; 16], with_hops(4, 150.0));
+        table.insert([0x22; 16], with_hops(5, 150.0));
+        table.insert([0x33; 16], with_hops(5, 0.0));
+        table.insert([0x44; 16], with_hops(3, 0.0));
+
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            crate::constants::UNUSED_PATH_LINGER,
+            UnusedPoolLimits::fixed(2048),
+            4,
+        );
+        assert_eq!(count, 2);
+        assert!(table.contains_key(&[0x11; 16]));
+        assert!(!table.contains_key(&[0x22; 16]));
+        assert!(!table.contains_key(&[0x33; 16]));
+        assert!(table.contains_key(&[0x44; 16]));
+
+        // At the default limiter (PATHFINDER_M) no announced path is culled
+        // for its hops.
+        table.insert([0x55; 16], with_hops(crate::constants::PATHFINDER_M, 150.0));
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            crate::constants::UNUSED_PATH_LINGER,
+            UnusedPoolLimits::fixed(2048),
+            crate::constants::HOP_LIMITER,
+        );
+        assert_eq!(count, 0);
+    }
+
+    #[test]
     fn test_cull_never_used_paths_after_linger() {
         let mut table = BTreeMap::new();
         let mut interfaces = BTreeMap::new();
@@ -681,6 +749,7 @@ mod tests {
             300.0,
             100.0,
             UnusedPoolLimits::fixed(2048),
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x11; 16]));
@@ -703,6 +772,7 @@ mod tests {
             200.0,
             9999.0,
             UnusedPoolLimits::fixed(2),
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x31; 16]));
@@ -731,7 +801,8 @@ mod tests {
                 &interfaces,
                 200.0,
                 9999.0,
-                UnusedPoolLimits::fixed(2)
+                UnusedPoolLimits::fixed(2),
+                crate::constants::HOP_LIMITER
             ),
             3
         );
@@ -744,7 +815,8 @@ mod tests {
                 &interfaces,
                 200.0,
                 9999.0,
-                UnusedPoolLimits::fixed(2)
+                UnusedPoolLimits::fixed(2),
+                crate::constants::HOP_LIMITER
             ),
             0
         );
@@ -769,6 +841,7 @@ mod tests {
             200.0,
             9999.0,
             UnusedPoolLimits::fixed(2),
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x42; 16]));
@@ -834,6 +907,7 @@ mod tests {
             now,
             linger,
             UnusedPoolLimits::fixed(2048),
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 3);
         assert!(table.contains_key(&[0x51; 16]));
@@ -846,7 +920,8 @@ mod tests {
                 &interfaces,
                 before_factored,
                 linger,
-                UnusedPoolLimits::fixed(2048)
+                UnusedPoolLimits::fixed(2048),
+                crate::constants::HOP_LIMITER
             ),
             0
         );
@@ -856,7 +931,8 @@ mod tests {
                 &interfaces,
                 before_factored + 1.0,
                 linger,
-                UnusedPoolLimits::fixed(2048)
+                UnusedPoolLimits::fixed(2048),
+                crate::constants::HOP_LIMITER
             ),
             1
         );
@@ -878,7 +954,8 @@ mod tests {
                 &interfaces,
                 499.0,
                 10.0,
-                UnusedPoolLimits::fixed(2048)
+                UnusedPoolLimits::fixed(2048),
+                crate::constants::HOP_LIMITER
             ),
             0
         );
@@ -888,7 +965,8 @@ mod tests {
                 &interfaces,
                 501.0,
                 10.0,
-                UnusedPoolLimits::fixed(2048)
+                UnusedPoolLimits::fixed(2048),
+                crate::constants::HOP_LIMITER
             ),
             1
         );
@@ -929,6 +1007,7 @@ mod tests {
             200.0,
             99_999.0,
             UnusedPoolLimits::fixed(3),
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 2);
         assert!(table.contains_key(&[0x71; 16]));
@@ -944,6 +1023,7 @@ mod tests {
             200.0,
             99_999.0,
             UnusedPoolLimits::fixed(2),
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x75; 16]));
@@ -955,6 +1035,7 @@ mod tests {
             200.0,
             99_999.0,
             UnusedPoolLimits::fixed(1),
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x71; 16]));
@@ -1004,6 +1085,7 @@ mod tests {
             1100.0,
             crate::constants::UNUSED_PATH_LINGER,
             UnusedPoolLimits::UPSTREAM,
+            crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 0);
         assert_eq!(table.len(), 1);

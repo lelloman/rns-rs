@@ -211,6 +211,7 @@ impl TransportEngine {
             ctx.now,
             unused_path_linger,
             jobs::UnusedPoolLimits::UPSTREAM,
+            self.hop_limiter,
         );
         jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
         self.rediscover_unproven_link_paths(ctx.now);
