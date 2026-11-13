@@ -44,7 +44,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `50b6733a1cc0c85cc0caa94ee2f5e38c6692e462` | Cleanup | Pending review | Changes `RNS/Packet.py`, `RNS/Transport.py` |
+| 1 | `50b6733a1cc0c85cc0caa94ee2f5e38c6692e462` | Cleanup | Structurally covered | `oversized_announce_of_a_blocked_type_counts_a_protocol_violation` |
 | 2 | `023849ed29e230441499f1adf6eb135696d067b6` | Improved path pool and tunnel culling | Pending review | Changes `RNS/Transport.py` |
 | 3 | `3ac3236b2f11f5e58ca9d86564ee44222bfacd9b` | Updated stale doc defaults | Pending review | Changes `RNS/Interfaces/Interface.py`, `docs/source/interfaces.rst` |
 | 4 | `7852f53a4c24fe7e063e02c00d35eb06568f0b15` | Always init announce_queue | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
@@ -64,13 +64,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 1. `50b6733a` — Cleanup
 
-**Upstream change:** Pending review (changes `RNS/Packet.py`, `RNS/Transport.py`).
+**Upstream change:** `Packet.unpack` failures and the malformed-packet protocol violation log at EXTREME instead of DEBUG (counters unchanged). The oversized-announce check (`len(raw) > Reticulum.MTU`, a protocol violation) moves ahead of the `blocked_destination_types` and `required_destinations_only` filters, so an oversized announce of a blocked or not-allowed type now counts a protocol violation where it was dropped silently.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs checks the announce frame size in the driver (`admit_decoded_inbound`, `rns-net/src/driver/events.rs`) before the engine applies its destination type filter, and logs malformed packets at trace, so it already behaves as the new upstream. One counter-only nuance predates this commit: upstream runs `packet_filter` before the size check, so an oversized announce that is also a duplicate counts a packet-filter hit upstream and a protocol violation in rns-rs.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Regression `oversized_announce_of_a_blocked_type_counts_a_protocol_violation` (`rns-net/src/driver/tests.rs`) blocks the announce's name hash and still requires one protocol violation.
 
-**Final disposition:** Pending review.
+**Final disposition:** Structurally covered.
 
 ### 2. `023849ed` — Improved path pool and tunnel culling
 

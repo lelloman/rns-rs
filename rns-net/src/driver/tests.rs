@@ -4561,6 +4561,46 @@ fn oversized_announce_counts_a_protocol_violation() {
     );
 }
 
+/// Upstream 50b6733a moved the oversized-announce check ahead of the
+/// destination type filters, so an oversized announce of a blocked type is a
+/// protocol violation rather than a silent drop. rns-rs checks the frame size
+/// in the driver, before the engine's type filter.
+#[test]
+fn oversized_announce_of_a_blocked_type_counts_a_protocol_violation() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "blocked-announce-size-violations");
+    // The announce's name hash: the ten bytes after the public key.
+    driver
+        .engine
+        .destination_filter_mut()
+        .block([0x55; constants::NAME_HASH_LENGTH / 8]);
+
+    let packet = RawPacket::pack_with_max_mtu(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        },
+        0,
+        &[0xA6; 16],
+        None,
+        constants::CONTEXT_NONE,
+        &vec![0x55; constants::MTU],
+        constants::MTU * 2,
+    )
+    .unwrap();
+    assert!(packet.raw.len() > constants::MTU);
+
+    driver.handle_frame_event(InterfaceId(1), packet.raw, None, None);
+
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        1
+    );
+}
+
 #[test]
 fn ifac_flag_without_ifac_counts_an_ifac_violation() {
     let mut driver = new_test_driver();
