@@ -223,6 +223,31 @@ fn show_path_table(
     render_path_table(&response, show_usage);
 }
 
+/// When a path was last used. Python daemons send the integer 0 for a
+/// path never used and a float time once it has been; rns-rs sends floats.
+fn path_used(entry: &PickleValue) -> Option<f64> {
+    match entry.get("used")? {
+        PickleValue::Float(used) => Some(*used),
+        PickleValue::Int(used) => Some(*used as f64),
+        _ => None,
+    }
+}
+
+/// The `-u` suffix of a path table line, as upstream's rnpath prints it
+/// since rgit `db67adea`.
+fn usage_suffix(entry: &PickleValue, show_usage: bool, now: f64) -> String {
+    if !show_usage {
+        return String::new();
+    }
+    match path_used(entry) {
+        Some(used) if used > 0.0 => {
+            format!(", last used {} ago", prettytime((now - used).max(0.0)))
+        }
+        Some(_) => ", never used".into(),
+        None => ", no usage info".into(),
+    }
+}
+
 fn render_path_table(response: &PickleValue, show_usage: bool) {
     if let Some(entries) = response.as_list() {
         if entries.is_empty() {
@@ -237,8 +262,8 @@ fn render_path_table(response: &PickleValue, show_usage: bool) {
         let mut entries: Vec<&PickleValue> = entries.iter().collect();
         if show_usage {
             entries.sort_by(|a, b| {
-                let used_a = a.get("used").and_then(|v| v.as_float()).unwrap_or(0.0);
-                let used_b = b.get("used").and_then(|v| v.as_float()).unwrap_or(0.0);
+                let used_a = path_used(a).unwrap_or(0.0);
+                let used_b = path_used(b).unwrap_or(0.0);
                 used_b
                     .partial_cmp(&used_a)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -273,18 +298,7 @@ fn render_path_table(response: &PickleValue, show_usage: bool) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let usage = if !show_usage {
-                String::new()
-            } else {
-                match entry.get("used").and_then(|v| v.as_float()) {
-                    Some(used) if used > 0.0 => {
-                        let age = rns_net::time::now() - used;
-                        format!(", last used {} ago", prettytime(age.max(0.0)))
-                    }
-                    Some(_) => ", never used".into(),
-                    None => ", no usage info".into(),
-                }
-            };
+            let usage = usage_suffix(entry, show_usage, rns_net::time::now());
             println!(
                 "{:<34} {:>6} {:<34} {:<10} {} {}{}",
                 &hash[..hash.len().min(32)],
@@ -940,6 +954,51 @@ fn print_usage(usage_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn path_entry(used: Option<PickleValue>) -> PickleValue {
+        let mut items = vec![(
+            PickleValue::String("hash".into()),
+            PickleValue::Bytes(vec![0x11; 16]),
+        )];
+        if let Some(used) = used {
+            items.push((PickleValue::String("used".into()), used));
+        }
+        PickleValue::Dict(items)
+    }
+
+    #[test]
+    fn usage_suffix_reads_python_and_rust_used_values() {
+        let now = 10_000.0;
+        // A Python daemon's never-used path is the integer 0.
+        assert_eq!(
+            usage_suffix(&path_entry(Some(PickleValue::Int(0))), true, now),
+            ", never used"
+        );
+        assert_eq!(
+            usage_suffix(&path_entry(Some(PickleValue::Float(0.0))), true, now),
+            ", never used"
+        );
+        assert_eq!(
+            usage_suffix(
+                &path_entry(Some(PickleValue::Float(now - 120.0))),
+                true,
+                now
+            ),
+            format!(", last used {} ago", prettytime(120.0))
+        );
+        assert_eq!(
+            usage_suffix(&path_entry(Some(PickleValue::Int(9_880))), true, now),
+            format!(", last used {} ago", prettytime(120.0))
+        );
+        assert_eq!(
+            usage_suffix(&path_entry(None), true, now),
+            ", no usage info"
+        );
+        assert_eq!(
+            usage_suffix(&path_entry(Some(PickleValue::Int(0))), false, now),
+            ""
+        );
+    }
 
     #[test]
     fn rnpath_pretty_date_matches_upstream_minute_boundaries() {
