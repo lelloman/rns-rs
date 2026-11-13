@@ -52,7 +52,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 6 | `1855f9927fe23990c2da8d49c1409b85b1b7ef8f` | Cleanup | Non-runtime | Log wording only |
 | 7 | `0bc5c37c399cb6c489ade2ea3678c531bfc21390` | Reset DPEC on reconnect | Structurally covered | Fresh writer per connection, documented on `BackboneClientWriter` |
 | 8 | `9ef6c90ea6196057278685aabab06674e73ffa44` | Use RLock in logging | Structurally covered | No re-entrant logging path; documented on `RotatingLogWriter` |
-| 9 | `5f2dbc169d5b3cb497d0f7067acef823e5619f30` | Added ability to load a blocked_ips file from the current config dir | Pending review | Changes `RNS/Reticulum.py` |
+| 9 | `5f2dbc169d5b3cb497d0f7067acef823e5619f30` | Added ability to load a blocked_ips file from the current config dir | Integrated | `blocked_ips` file loaded at startup into the shared fast-flap table, with focused and live socket tests |
 | 10 | `3c4b271f4133ed1f00eae04b1f3160365f4d02ec` | Added client_limit option to BackboneInterface | Pending review | Changes `RNS/Interfaces/BackboneInterface.py` |
 | 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Pending review | Changes `RNS/Utilities/rnpath.py` |
 | 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Pending review | Changes `RNS/Transport.py` |
@@ -144,13 +144,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 9. `5f2dbc16` — Added ability to load a blocked_ips file from the current config dir
 
-**Upstream change:** Pending review (changes `RNS/Reticulum.py`).
+**Upstream change:** At startup, `Reticulum` reads `<configdir>/blocked_ips` when it exists: the whole file is stripped and split into lines, each line stripped, lines starting with `#` skipped, and every line that `ipaddress.ip_address()` accepts is put in `BackboneInterface.fast_flapping` with a flap time 1000 years ahead and a flap count of 0xFFFF. Every listening `BackboneInterface` with `block_fast_flapping` on (and a grace below 0xFFFF) then refuses connections from those addresses for the life of the process, and lists them in `rnstatus -b`. Errors are logged and load nothing; ranges, host names and trailing comments are skipped. The table is keyed by the address string as written.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs had no file-loaded block list. It already has the shared fast-flap table (`BackboneFastFlapMonitor`, process-wide like upstream's class-level table, with per-listener policy), rejection before interface allocation in `admit()`, and `rnstatus -b` reporting. A far-future `Instant` would not fit that table (`checked_add` overflow, absurd remaining times), so the file's addresses are kept as permanent entries instead.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `read_blocked_ips_file` / `load_blocked_ips_file` (`rns-net/src/interface/backbone.rs`) read the file as upstream does; `RnsNode::from_config_dirs` loads it from the config directory before interfaces start. `BackboneFastFlapMonitor` keeps the addresses in canonical form, applies them only when the listener's fast-flap blocking is on and its grace is below `STATIC_BLOCK_FLAP_COUNT` (0xFFFF), never expires them, lists them with the dynamic blocks, and forgets one on clear (an rns-rs operator extension; it returns at the next start). `admit()` rejects them first, recording `blocked_ips file` as the reason. Documented in `docs/rns-server-operator-runbook.md`, including two intended differences: addresses are compared by value (case and IPv4-mapped forms match), and scoped IPv6 addresses are not accepted. Tests: `blocked_ips_file_parses_addresses_and_skips_comments_and_garbage`, `missing_or_unreadable_blocked_ips_file_blocks_nothing`, `file_blocked_ip_never_expires_and_is_listed`, `file_blocked_ip_follows_the_listener_fast_flap_policy`, `file_blocked_ipv4_matches_its_ipv4_mapped_form`, `backbone_blocked_ips_file_rejects_before_allocating_interface` (live socket).
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 10. `3c4b271f` — Added client_limit option to BackboneInterface
 

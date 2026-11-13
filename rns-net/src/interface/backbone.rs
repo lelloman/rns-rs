@@ -9,7 +9,7 @@
 //!
 //! Matches Python `BackboneInterface.py`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 use std::io;
 #[cfg(test)]
@@ -132,11 +132,19 @@ pub struct FastFlapRecord {
     pub elapsed_since_first: Duration,
 }
 
+/// The flap count upstream gives an address from the `blocked_ips` file
+/// (rgit `5f2dbc16`): it blocks wherever the listener's grace is below it.
+pub const STATIC_BLOCK_FLAP_COUNT: u64 = 0xFFFF;
+
 /// Process-wide fast-flap history. Policy remains per listener, while the IP
 /// history is shared like upstream's class-level `fast_flapping` table.
 #[derive(Debug, Default)]
 pub struct BackboneFastFlapMonitor {
     peers: HashMap<IpAddr, FastFlapPeerState>,
+    /// Addresses from the `blocked_ips` file. Upstream stores them in the
+    /// fast-flap table with a flap time 1000 years ahead; here they are
+    /// permanent entries that never expire.
+    static_blocked: HashSet<IpAddr>,
 }
 
 impl BackboneFastFlapMonitor {
@@ -183,7 +191,25 @@ impl BackboneFastFlapMonitor {
         config: &BackboneFastFlapConfig,
         now: Instant,
     ) -> bool {
-        self.blocked_until(peer_ip, config, now).is_some()
+        self.is_statically_blocked(peer_ip, config)
+            || self.blocked_until(peer_ip, config, now).is_some()
+    }
+
+    /// Add addresses from the `blocked_ips` file.
+    pub fn load_static_blocked(&mut self, ips: impl IntoIterator<Item = IpAddr>) {
+        self.static_blocked
+            .extend(ips.into_iter().map(|ip| ip.to_canonical()));
+    }
+
+    /// Whether the `blocked_ips` file blocks `peer_ip` on a listener with
+    /// this policy: only with fast-flap blocking on and a grace below the
+    /// flap count upstream gives those addresses.
+    pub fn is_statically_blocked(&self, peer_ip: IpAddr, config: &BackboneFastFlapConfig) -> bool {
+        self.static_block_applies(config) && self.static_blocked.contains(&peer_ip.to_canonical())
+    }
+
+    fn static_block_applies(&self, config: &BackboneFastFlapConfig) -> bool {
+        config.enabled && STATIC_BLOCK_FLAP_COUNT > config.grace
     }
 
     pub fn blocked_until(
@@ -206,11 +232,7 @@ impl BackboneFastFlapMonitor {
         if !config.enabled {
             return 0;
         }
-        self.expire_all(config, now);
-        self.peers
-            .values()
-            .filter(|state| state.flap_count > config.grace)
-            .count()
+        self.blocked_ip_list(config, now).len()
     }
 
     pub fn blocked_ip_list(
@@ -228,7 +250,11 @@ impl BackboneFastFlapMonitor {
             .filter(|(_, state)| state.flap_count > config.grace)
             .map(|(peer_ip, _)| *peer_ip)
             .collect();
+        if self.static_block_applies(config) {
+            blocked.extend(self.static_blocked.iter().copied());
+        }
         blocked.sort_unstable();
+        blocked.dedup();
         blocked
     }
 
@@ -239,8 +265,12 @@ impl BackboneFastFlapMonitor {
             .unwrap_or(0)
     }
 
+    /// Forget an address, including a `blocked_ips` file entry; the file
+    /// blocks it again at the next start.
     pub fn clear(&mut self, peer_ip: IpAddr) -> bool {
-        self.peers.remove(&peer_ip).is_some()
+        let dynamic = self.peers.remove(&peer_ip).is_some();
+        let file = self.static_blocked.remove(&peer_ip.to_canonical());
+        dynamic || file
     }
 
     fn expire_peer(&mut self, peer_ip: IpAddr, config: &BackboneFastFlapConfig, now: Instant) {
@@ -256,6 +286,44 @@ impl BackboneFastFlapMonitor {
         self.peers.retain(|_, state| {
             now.saturating_duration_since(state.last_flap_at) <= config.block_duration
         });
+    }
+}
+
+/// The addresses in `<config dir>/blocked_ips`, as upstream reads the file
+/// (rgit `5f2dbc16`): one IPv4 or IPv6 address per line, lines starting
+/// with `#` skipped, anything else ignored. A missing file blocks nothing;
+/// an unreadable one is logged and blocks nothing.
+pub fn read_blocked_ips_file(config_dir: &std::path::Path) -> Vec<IpAddr> {
+    let path = config_dir.join("blocked_ips");
+    if !path.is_file() {
+        return Vec::new();
+    }
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            log::error!("Error while loading blocked IP list: {}", error);
+            return Vec::new();
+        }
+    };
+    text.trim()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.parse::<IpAddr>().ok())
+        .collect()
+}
+
+/// Block the addresses in `<config dir>/blocked_ips` on every Backbone
+/// listener of this process, as upstream does at startup.
+pub fn load_blocked_ips_file(config_dir: &std::path::Path) {
+    if !config_dir.join("blocked_ips").is_file() {
+        return;
+    }
+    let ips = read_blocked_ips_file(config_dir);
+    log::debug!("Loaded {} blocked IPs", ips.len());
+    if !ips.is_empty() {
+        lock_or_recover(&shared_fast_flap_monitor(), "backbone fast-flap state")
+            .load_static_blocked(ips);
     }
 }
 
@@ -768,11 +836,28 @@ impl Server {
         let peer_ip = peer_addr.ip();
         let peer_port = peer_addr.port();
 
-        let fast_flap_blocked_until = lock_or_recover(
-            &self.fast_flap_state,
-            "backbone fast-flap state",
-        )
-        .blocked_until(peer_ip, &self.fast_flap, Instant::now());
+        let (file_blocked, fast_flap_blocked_until) = {
+            let mut monitor = lock_or_recover(&self.fast_flap_state, "backbone fast-flap state");
+            (
+                monitor.is_statically_blocked(peer_ip, &self.fast_flap),
+                monitor.blocked_until(peer_ip, &self.fast_flap, Instant::now()),
+            )
+        };
+        if file_blocked {
+            let peer = state
+                .peers
+                .entry(peer_ip)
+                .or_insert_with(PeerBehaviorState::new);
+            peer.blacklist_reason = Some("blocked_ips file".into());
+            peer.reject_count = peer.reject_count.saturating_add(1);
+            lock_or_recover(&self.peer_state, "backbone peer state").upsert_snapshot(&state.peers);
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "[{}] rejecting peer {} from the blocked_ips file",
+                name,
+                peer_addr,
+            );
+            return true;
+        }
         if is_ip_blacklisted(&mut state.peers, peer_ip) || fast_flap_blocked_until.is_some() {
             let peer = state
                 .peers
@@ -2217,6 +2302,115 @@ mod tests {
             grace: 5,
             block_duration: Duration::from_secs(12 * 60 * 60),
         }
+    }
+
+    #[test]
+    fn blocked_ips_file_parses_addresses_and_skips_comments_and_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("blocked_ips"),
+            "\n# a comment\n 203.0.113.7 \n2001:DB8::1\n\n198.51.100.0/24\nexample.com\n\
+             192.0.2.1 # trailing comment\n010.0.0.1\n::ffff:192.0.2.9\n",
+        )
+        .unwrap();
+        let ips = read_blocked_ips_file(dir.path());
+        let expected: Vec<IpAddr> = ["203.0.113.7", "2001:db8::1", "::ffff:192.0.2.9"]
+            .iter()
+            .map(|ip| ip.parse().unwrap())
+            .collect();
+        assert_eq!(ips, expected);
+    }
+
+    #[test]
+    fn missing_or_unreadable_blocked_ips_file_blocks_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_blocked_ips_file(dir.path()).is_empty());
+        std::fs::write(dir.path().join("blocked_ips"), [0xFF, 0xFE, b'\n']).unwrap();
+        assert!(read_blocked_ips_file(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn file_blocked_ip_never_expires_and_is_listed() {
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        monitor.load_static_blocked([ip]);
+        let config = BackboneFastFlapConfig {
+            block_duration: Duration::from_secs(1),
+            ..test_fast_flap_config()
+        };
+        let later = Instant::now() + Duration::from_secs(1_000_000);
+        assert!(monitor.is_blocked(ip, &config, later));
+        assert_eq!(monitor.blocked_ip_list(&config, later), vec![ip]);
+        assert_eq!(monitor.blocked_ip_count(&config, later), 1);
+        // Clearing forgets it until the file is read again.
+        assert!(monitor.clear(ip));
+        assert!(!monitor.is_blocked(ip, &config, later));
+    }
+
+    #[test]
+    fn file_blocked_ip_follows_the_listener_fast_flap_policy() {
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let ip: IpAddr = "203.0.113.8".parse().unwrap();
+        monitor.load_static_blocked([ip]);
+        let disabled = BackboneFastFlapConfig {
+            enabled: false,
+            ..test_fast_flap_config()
+        };
+        assert!(!monitor.is_statically_blocked(ip, &disabled));
+        assert!(monitor.blocked_ip_list(&disabled, Instant::now()).is_empty());
+        // Upstream gives these addresses a flap count of 0xFFFF.
+        let just_below = BackboneFastFlapConfig {
+            grace: STATIC_BLOCK_FLAP_COUNT - 1,
+            ..test_fast_flap_config()
+        };
+        assert!(monitor.is_statically_blocked(ip, &just_below));
+        let at = BackboneFastFlapConfig {
+            grace: STATIC_BLOCK_FLAP_COUNT,
+            ..test_fast_flap_config()
+        };
+        assert!(!monitor.is_statically_blocked(ip, &at));
+    }
+
+    #[test]
+    fn file_blocked_ipv4_matches_its_ipv4_mapped_form() {
+        let mut monitor = BackboneFastFlapMonitor::new();
+        monitor.load_static_blocked(["192.0.2.10".parse::<IpAddr>().unwrap()]);
+        let mapped: IpAddr = "::ffff:192.0.2.10".parse().unwrap();
+        assert!(monitor.is_statically_blocked(mapped, &test_fast_flap_config()));
+    }
+
+    #[test]
+    fn backbone_blocked_ips_file_rejects_before_allocating_interface() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(9950));
+        let mut config =
+            make_server_config(port, 98, None, None, None, BackboneAbuseConfig::default());
+        config.fast_flap = test_fast_flap_config();
+        lock_or_recover(&config.fast_flap_state, "test fast-flap state")
+            .load_static_blocked(["127.0.0.1".parse::<IpAddr>().unwrap()]);
+        let peer_state = Arc::clone(&config.peer_state);
+
+        start(config, tx, Arc::clone(&next_id)).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let _rejected = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        serve_for(&rx, Duration::from_millis(200));
+        assert_eq!(
+            next_id.load(Ordering::Relaxed),
+            9950,
+            "rejection must happen before dynamic interface allocation"
+        );
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(event, Event::InterfaceUp(_, _, _)));
+        }
+        let entries = lock_or_recover(&peer_state, "test peer state").list("test-backbone");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.peer_ip == "127.0.0.1".parse::<IpAddr>().unwrap())
+            .expect("blocked peer state");
+        assert_eq!(entry.blacklist_reason.as_deref(), Some("blocked_ips file"));
+        assert_eq!(entry.reject_count, 1);
     }
 
     #[test]
