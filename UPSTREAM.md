@@ -11,11 +11,23 @@ The current upstream reference baseline is:
 - Version: `1.6.0`
 - Version metadata commit: `af8d05819d363240c133e4bc644bfde0d4620a71`
 - Release tag: `1.6.0` on `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4`
-- Normative commit: `16621a78e35e2ba5156c72af7fe492458ba092d5`
-- Commit date: `2026-11-10 10:49:44 +0100`
-- Subject: `Made max stamp workers and worker niceness configurable`
+- Normative commit: `134dc6777c0dd29404e61b36d4094f4e35b88b3e`
+- Commit date: `2026-11-13 01:07:12 +0100`
+- Subject: `Added filtered traffic stats and display in rnstatus`
 
-The normative baseline is the canonical `rgit/master` tip `16621a78`, accepted
+The normative baseline is the canonical `rgit/master` tip `134dc677`, accepted
+on 2026-11-13 as a same-version Reticulum 1.6.0 advancement from `16621a78`.
+The fifteen-commit range reworks the path pool and tunnel culling, drops
+announces early once an interface's held announces are full, adds a
+`blocked_ips` file and a `client_limit` for Backbone listeners, reports
+`tunnel_id` and filtered traffic in interface stats with `rnstatus -F`, and
+filters restored paths by destination type. The GitHub mirror is at
+`3c4b271f`, contained in rgit. Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.0-rgit-4-parity.md`](docs/upstream-parity/reticulum-1.6.0-rgit-4-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.0-rgit-4-audit.md`](docs/upstream-parity/reticulum-1.6.0-rgit-4-audit.md).
+
+The previous baseline was the canonical `rgit/master` tip `16621a78`, accepted
 on 2026-11-11 as a same-version Reticulum 1.6.0 advancement from `c5d205ff`.
 The four-commit range makes discovery receivers accept stamps against either
 the unexpanded or the expanded workblock, ahead of announcers switching, adds
