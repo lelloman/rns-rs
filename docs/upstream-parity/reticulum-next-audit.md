@@ -49,7 +49,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 3 | `3ac3236b2f11f5e58ca9d86564ee44222bfacd9b` | Updated stale doc defaults | Integrated | Held announce cap 64, section 0 keeps the default, docs |
 | 4 | `7852f53a4c24fe7e063e02c00d35eb06568f0b15` | Always init announce_queue | Structurally covered | `interface_without_a_queue_has_nothing_queued` |
 | 5 | `70b9d58f15d88a3e33402f06f30cad411001e0ed` | Cleaned up announce cap properties | Structurally covered | `new_interface_queue_allows_its_first_announce_at_once` |
-| 6 | `1855f9927fe23990c2da8d49c1409b85b1b7ef8f` | Cleanup | Pending review | Changes `RNS/Transport.py` |
+| 6 | `1855f9927fe23990c2da8d49c1409b85b1b7ef8f` | Cleanup | Non-runtime | Log wording only |
 | 7 | `0bc5c37c399cb6c489ade2ea3678c531bfc21390` | Reset DPEC on reconnect | Pending review | Changes `RNS/Interfaces/BackboneInterface.py` |
 | 8 | `9ef6c90ea6196057278685aabab06674e73ffa44` | Use RLock in logging | Pending review | Changes `RNS/__init__.py` |
 | 9 | `5f2dbc169d5b3cb497d0f7067acef823e5619f30` | Added ability to load a blocked_ips file from the current config dir | Pending review | Changes `RNS/Reticulum.py` |
@@ -114,13 +114,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 6. `1855f992` — Cleanup
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** Two EXTREME-level "Added announce to queue" log lines in `Transport.outbound` format their wait time with `RNS.prettyshorttime(..., compact=True, tight=True)`. Log wording only, behind `RNS.sl(LOG_EXTREME)`; no counter, queue or exit path changes.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs's announce queue logging is its own and carries no upstream log format contract.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Analysis recorded here; no runtime change.
 
-**Final disposition:** Pending review.
+**Final disposition:** Non-runtime.
 
 ### 7. `0bc5c37c` — Reset DPEC on reconnect
 
