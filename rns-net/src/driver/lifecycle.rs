@@ -269,6 +269,7 @@ impl Driver {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
         self.sent_packets.clear();
+        self.sent_packet_keys.clear();
         self.completed_proofs.clear();
         self.pending_probes.clear();
         if let Some(handle) = self.ratchet_cleanup_handle.take() {

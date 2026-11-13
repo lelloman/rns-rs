@@ -286,6 +286,11 @@ pub enum Event<W: Send> {
         dest_type: u8,
         replay: Option<Box<AnnounceReplay>>,
         completion: crate::link_send::Completion,
+        /// The signing key of the identity a SINGLE packet was encrypted
+        /// for, which its proof is checked with (as upstream's receipt holds
+        /// the destination's identity). Proofs of packets sent without one
+        /// are checked with the destination's known identity.
+        proof_key: Option<[u8; 32]>,
     },
     /// Register a local destination.
     RegisterDestination { dest_hash: [u8; 16], dest_type: u8 },

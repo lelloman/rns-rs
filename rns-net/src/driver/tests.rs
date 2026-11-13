@@ -2185,7 +2185,7 @@ fn confirmed_outbound_fanout_waits_for_all_interfaces_and_reports_partial_failur
         )
         .unwrap();
         let (completion, mut receipt) = Completion::new(tx.link_send_pool().try_acquire().unwrap());
-        driver.handle_confirmed_outbound(packet.raw, dest_type, None, completion);
+        driver.handle_confirmed_outbound(packet.raw, dest_type, None, completion, None);
         driver.flush_pending_link_frames();
         assert!(first.lock().unwrap().is_empty());
         assert!(second.lock().unwrap().is_empty());
@@ -14820,6 +14820,64 @@ fn forged_implicit_proof_does_not_suppress_the_genuine_one() {
 
     assert_eq!(proofs.lock().unwrap().len(), 1);
     assert!(!driver.sent_packets.contains_key(&hash));
+}
+
+#[test]
+fn single_packet_proof_is_checked_with_the_identity_it_was_sent_to() {
+    // The sender may hold an identity the driver does not know (an LXMF
+    // backchannel's, or one whose announce expired): the proof is checked
+    // with the identity the packet was encrypted for, as upstream's receipt.
+    let (tx, rx) = event::channel();
+    let (mut cbs, ..) = MockCallbacks::new();
+    let proofs = Arc::new(Mutex::new(Vec::new()));
+    cbs.proofs = proofs.clone();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, _sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let identity = Identity::new(&mut OsRng);
+    let key: [u8; 32] = identity.get_public_key().unwrap()[32..].try_into().unwrap();
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &[0xD4; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"for an identity the driver never saw announced",
+    )
+    .unwrap();
+    let hash = packet.packet_hash;
+    let (completion, _receipt) =
+        crate::link_send::Completion::new(tx.link_send_pool().try_acquire().unwrap());
+    driver.handle_confirmed_outbound(
+        packet.raw,
+        constants::DESTINATION_SINGLE,
+        None,
+        completion,
+        Some(key),
+    );
+    assert!(driver.sent_packets.contains_key(&hash));
+    let proof_destination: [u8; 16] = hash[..16].try_into().unwrap();
+
+    driver.handle_inbound_proof(proof_destination, &forged_explicit_proof(&hash), &[0; 32]);
+    assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
+
+    let mut genuine = hash.to_vec();
+    genuine.extend_from_slice(&identity.sign(&hash).unwrap());
+    driver.handle_inbound_proof(proof_destination, &genuine, &[0; 32]);
+    let proofs = proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 1);
+    assert_eq!(proofs[0].1, PacketHash(hash));
+    assert!(!driver.sent_packets.contains_key(&hash));
+    assert!(!driver.sent_packet_keys.contains_key(&hash));
 }
 
 #[test]

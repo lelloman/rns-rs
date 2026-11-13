@@ -3792,6 +3792,7 @@ impl RnsNode {
                 dest_type: dest.dest_type.to_wire_constant(),
                 replay,
                 completion,
+                proof_key: None,
             })
             .await?;
         receipt.await
@@ -3825,6 +3826,7 @@ impl RnsNode {
             dest_type: dest.dest_type.to_wire_constant(),
             replay,
             completion,
+            proof_key: None,
         })?;
         Ok(receipt)
     }
@@ -3852,6 +3854,7 @@ impl RnsNode {
                 dest_type: dest.dest_type.to_wire_constant(),
                 replay: None,
                 completion,
+                proof_key: single_proof_key(dest),
             })
             .await?;
         receipt.await?;
@@ -3877,6 +3880,7 @@ impl RnsNode {
             dest_type: dest.dest_type.to_wire_constant(),
             replay: None,
             completion,
+            proof_key: single_proof_key(dest),
         })?;
         Ok(crate::PacketSendReceipt {
             completion: receipt,
@@ -4803,6 +4807,16 @@ pub(crate) fn ensure_destination_stamp(
         started.elapsed()
     );
     Ok(())
+}
+
+/// The signing key the proof of a packet sent to `dest` is checked with:
+/// the public signing key of the SINGLE destination's identity.
+fn single_proof_key(dest: &crate::destination::Destination) -> Option<[u8; 32]> {
+    if dest.dest_type != rns_core::types::DestinationType::Single {
+        return None;
+    }
+    dest.public_key
+        .map(|key| key[32..].try_into().expect("64-byte public key"))
 }
 
 /// Build an announce packet for `dest`, signed by `identity`.
@@ -8190,5 +8204,29 @@ enable_transport = False
         // Other destinations keep the `LR_COST` default.
         assert_eq!(node.link_cost(&[0u8; 16]), 12.5);
         node.shutdown();
+    }
+
+    #[test]
+    fn single_packets_carry_the_signing_key_their_proof_is_checked_with() {
+        let identity = Identity::new(&mut OsRng);
+        let public_key = identity.get_public_key().unwrap();
+        let announced = crate::destination::AnnouncedIdentity {
+            dest_hash: rns_core::types::DestHash([0x23; 16]),
+            identity_hash: rns_core::types::IdentityHash(*identity.hash()),
+            public_key,
+            app_data: None,
+            hops: 1,
+            received_at: time::now(),
+            receiving_interface: rns_core::transport::types::InterfaceId(0),
+            rssi: None,
+            snr: None,
+        };
+        let single = crate::destination::Destination::single_out("test", &["proof"], &announced);
+        assert_eq!(
+            single_proof_key(&single),
+            Some(public_key[32..].try_into().unwrap())
+        );
+        let plain = crate::destination::Destination::plain("test", &["proof"]);
+        assert_eq!(single_proof_key(&plain), None);
     }
 }

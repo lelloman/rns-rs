@@ -11,6 +11,7 @@ impl Driver {
         dest_type: u8,
         replay: Option<Box<crate::common::event::AnnounceReplay>>,
         completion: crate::link_send::Completion,
+        proof_key: Option<[u8; 32]>,
     ) {
         use crate::link_send::LinkSendError;
         if self.is_draining() {
@@ -41,6 +42,9 @@ impl Driver {
         if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
             self.sent_packets
                 .insert(packet.packet_hash, (packet.destination_hash, now));
+            if let Some(key) = proof_key {
+                self.sent_packet_keys.insert(packet.packet_hash, key);
+            }
         }
         // These APIs originate hops=0 packets, so announcement relay bandwidth
         // queues do not apply. Retain the normal routing and per-send hooks.
@@ -569,9 +573,14 @@ impl Driver {
         }
         let rtt = time::now() - sent_time;
         // Checked with the destination's public key, as Python's
-        // `PacketReceipt.validate_proof`; without one the proof cannot be
-        // checked and is not accepted.
-        let key = match self.proof_key(&tracked_dest) {
+        // `PacketReceipt.validate_proof`: the identity the packet was
+        // encrypted for, else the destination's known one. Without either
+        // the proof cannot be checked and is not accepted.
+        let key = match self.sent_packet_keys.get(&tracked_hash) {
+            Some(bytes) => Some(rns_crypto::ed25519::Ed25519PublicKey::from_bytes(bytes).ok()),
+            None => self.proof_key(&tracked_dest),
+        };
+        let key = match key {
             Some(Some(key)) => key,
             Some(None) => {
                 log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
@@ -611,6 +620,7 @@ impl Driver {
         if self.sent_packets.remove(&packet_hash).is_none() {
             return;
         }
+        self.sent_packet_keys.remove(&packet_hash);
         let _ = self.mark_known_destination_used(&destination);
         self.packet_proof_accepted(destination, packet_hash, rtt);
     }

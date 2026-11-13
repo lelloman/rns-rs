@@ -601,6 +601,8 @@ impl Driver {
         self.sent_packets
             .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
         let sent_packets = &self.sent_packets;
+        self.sent_packet_keys
+            .retain(|hash, _| sent_packets.contains_key(hash));
         self.pending_probes
             .retain(|hash| sent_packets.contains_key(hash));
         self.completed_proofs
@@ -1452,8 +1454,9 @@ impl Driver {
                     dest_type,
                     replay,
                     completion,
+                    proof_key,
                 } => {
-                    self.handle_confirmed_outbound(raw, dest_type, replay, completion);
+                    self.handle_confirmed_outbound(raw, dest_type, replay, completion, proof_key);
                 }
                 Event::RegisterDestination {
                     dest_hash,
