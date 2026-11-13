@@ -4714,6 +4714,33 @@ fn apply_stamp_config_sets_the_engine_hop_limiter() {
 }
 
 #[test]
+fn interface_stats_report_the_tunnel_id() {
+    // Upstream 9b6b724b reports `tunnel_id` per interface: none until a
+    // tunnel is established on it.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "tunnelled");
+    let tunnel_id_of = |driver: &mut Driver| {
+        let QueryResponse::InterfaceStats(stats) =
+            driver.handle_query(QueryRequest::InterfaceStats)
+        else {
+            panic!("expected interface stats");
+        };
+        stats
+            .interfaces
+            .iter()
+            .find(|entry| entry.name == "tunnelled")
+            .expect("interface stats")
+            .tunnel_id
+    };
+    assert_eq!(tunnel_id_of(&mut driver), None);
+
+    driver
+        .engine
+        .handle_tunnel([0x7C; 32], InterfaceId(1), time::now());
+    assert_eq!(tunnel_id_of(&mut driver), Some([0x7C; 32]));
+}
+
+#[test]
 fn ifac_flag_without_ifac_counts_an_ifac_violation() {
     let mut driver = new_test_driver();
     register_test_generic_interface(&mut driver, 1, "ifac-violations");

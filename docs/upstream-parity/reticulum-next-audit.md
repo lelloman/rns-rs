@@ -56,7 +56,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 10 | `3c4b271f4133ed1f00eae04b1f3160365f4d02ec` | Added client_limit option to BackboneInterface | Integrated | `client_limit` with the upstream default of 500, checked first |
 | 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Integrated | `rnpath` reads Python's integer `used`; Python `rnpath -t -u` interop |
 | 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Integrated | Early held-full announce drop in the driver; hop-limiter path cull |
-| 13 | `9b6b724b08e6c8681cfb9edd34edd905fb2238b3` | Diagnostics | Pending review | Changes `RNS/Reticulum.py`, `RNS/Utilities/rnstatus.py` |
+| 13 | `9b6b724b08e6c8681cfb9edd34edd905fb2238b3` | Diagnostics | Integrated | `tunnel_id` in interface stats (RPC and management) |
 | 14 | `20e25a9f0cd4bde8958642d36690cf709849f5ee` | Filter destinations at path table load time | Pending review | Changes `RNS/Transport.py` |
 | 15 | `134dc6777c0dd29404e61b36d4094f4e35b88b3e` | Added filtered traffic stats and display in rnstatus | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 
@@ -184,13 +184,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 13. `9b6b724b` — Diagnostics
 
-**Upstream change:** Pending review (changes `RNS/Reticulum.py`, `RNS/Utilities/rnstatus.py`).
+**Upstream change:** `Reticulum.get_interface_stats` adds `tunnel_id` to every interface's stats: `interface.tunnel_id`, the 32-byte tunnel id once a tunnel is established on the interface, else `None`. `rnstatus` gets a commented-out `Tunnel ID` line (marked `TODO: Add switch`), so it prints nothing new.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs's interface stats (RPC `interface_stats` pickle and the remote management `/status` msgpack) had no `tunnel_id`. The engine already keeps it on its `InterfaceInfo` when a tunnel is established.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `SingleInterfaceStat.tunnel_id` (`rns-net/src/common/event.rs`), filled from the engine's interface info in `Driver` interface stats (`rns-net/src/driver/queries.rs`); `None` for an aggregated Backbone listener, whose tunnels belong to its clients. Encoded as bytes or `None` in the RPC pickle (`rns-net/src/rpc.rs`) and bin or nil in the management `/status` reply (`rns-net/src/common/management.rs`). Both `rnstatus -j` implementations already write bytes in an interface dict as hex. The commented-out `rnstatus` line is not ported. Tests: `interface_stats_report_the_tunnel_id` (`rns-net/src/driver/tests.rs`), `interface_stats_pickle_format` (`rns-net/src/rpc.rs`), `test_status_request_basic` (`rns-net/src/management.rs`).
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 14. `20e25a9f` — Filter destinations at path table load time
 

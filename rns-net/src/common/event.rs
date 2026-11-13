@@ -1023,6 +1023,9 @@ pub struct BackbonePeerPoolMemberStatus {
 pub struct SingleInterfaceStat {
     pub id: u64,
     pub name: String,
+    /// The tunnel this interface carries, once one is established
+    /// (upstream `interface.tunnel_id`, reported since 9b6b724b).
+    pub tunnel_id: Option<[u8; 32]>,
     pub status: bool,
     pub mode: u8,
     /// Signed interface preference used by path selection.
