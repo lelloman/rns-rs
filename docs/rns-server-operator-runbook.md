@@ -283,6 +283,27 @@ blocked addresses as `Blocked` under the listener. Pass `-b` or
 `--blocked-ips` to list the blocked addresses below that count, for example
 `rns-ctl status -c /var/lib/rns-node -b`.
 
+Addresses can also be blocked permanently with a `blocked_ips` file in the
+node's configuration directory (next to `config`; for `rns-server`, the
+`--config` directory, not the state directory), as upstream Reticulum reads
+it:
+
+```text
+# One IPv4 or IPv6 address per line. Lines starting with # are skipped,
+# and anything else (ranges, host names, trailing comments) is ignored.
+203.0.113.7
+2001:db8::1
+```
+
+The file is read once at startup and applies to every listening
+`BackboneInterface` with fast-flap blocking enabled; a listener with
+`block_fast_flapping = no` ignores it, as upstream does. These addresses never
+expire and appear in the `-b` list. Clearing one with `rns-ctl backbone`
+forgets it until the next start. Addresses are compared by value, so
+`2001:DB8::1` in the file matches a peer upstream would report as
+`2001:db8::1`, and an IPv4 entry matches its IPv4-mapped IPv6 form; scoped
+IPv6 addresses (`fe80::1%eth0`) are not accepted.
+
 ### Manual Backbone Smoke Test
 
 After deploying routing, path discovery or backbone config changes, run the live

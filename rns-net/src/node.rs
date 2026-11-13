@@ -1207,6 +1207,10 @@ impl RnsNode {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
         let link_mtu_discovery = config::parse_link_mtu_discovery(&config_content)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
+        // Addresses Backbone listeners refuse, from <config dir>/blocked_ips
+        // (upstream 5f2dbc16).
+        #[cfg(feature = "iface-backbone")]
+        crate::interface::backbone::load_blocked_ips_file(config_dir);
 
         // Load or create identity
         let identity = if let Some(ref id_path_str) = rns_config.reticulum.network_identity {
