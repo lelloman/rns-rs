@@ -448,8 +448,8 @@ pub const IC_HELD_RELEASE_INTERVAL: f64 = 5.0;
 pub const EC_BURST_MIN_SAMPLES: usize = 2;
 /// Default egress path request limit (requests/sec).
 pub const EC_PR_FREQ: f64 = 5.0;
-/// Maximum held announces per interface.
-pub const IC_MAX_HELD_ANNOUNCES: usize = 256;
+/// Maximum held announces per interface (64 since upstream 3ac3236b).
+pub const IC_MAX_HELD_ANNOUNCES: usize = 64;
 
 // --- Interface modes (from Interface.py) ---
 

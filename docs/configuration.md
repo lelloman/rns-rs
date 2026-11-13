@@ -465,8 +465,13 @@ Defaults:
 | `ic_burst_freq` | `10` /s | Announce rate that marks an established interface as bursting |
 | `ic_pr_burst_freq_new` | `3` /s | Path-request rate threshold for new interfaces |
 | `ic_pr_burst_freq` | `8` /s | Path-request rate threshold for established interfaces |
+| `ic_max_held_announces` | `64` | Unique announces held per interface while it bursts |
+| `ic_new_time` | `7200` s | How long an interface counts as new |
+| `ec_pr_freq` | `5` /s | Path-request rate that egress control allows |
 
-The remaining keys in the example already match their defaults.
+The example's other values differ from these defaults on purpose. In the
+`[reticulum]` section, `ic_max_held_announces = 0` keeps the default, as
+upstream reads it; on an interface, `0` holds no announces.
 
 Ingress control is on by default for Auto, Backbone, TCP client/server, UDP,
 and I2P interfaces, and off for local, serial, KISS, RNode, and Pipe-style

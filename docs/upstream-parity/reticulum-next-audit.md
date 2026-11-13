@@ -46,7 +46,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 |---:|---|---|---|---|
 | 1 | `50b6733a1cc0c85cc0caa94ee2f5e38c6692e462` | Cleanup | Structurally covered | `oversized_announce_of_a_blocked_type_counts_a_protocol_violation` |
 | 2 | `023849ed29e230441499f1adf6eb135696d067b6` | Improved path pool and tunnel culling | Integrated | Reverse timeout, dynamic unused pool target and tunnel reconnect window, with focused tests |
-| 3 | `3ac3236b2f11f5e58ca9d86564ee44222bfacd9b` | Updated stale doc defaults | Pending review | Changes `RNS/Interfaces/Interface.py`, `docs/source/interfaces.rst` |
+| 3 | `3ac3236b2f11f5e58ca9d86564ee44222bfacd9b` | Updated stale doc defaults | Integrated | Held announce cap 64, section 0 keeps the default, docs |
 | 4 | `7852f53a4c24fe7e063e02c00d35eb06568f0b15` | Always init announce_queue | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
 | 5 | `70b9d58f15d88a3e33402f06f30cad411001e0ed` | Cleaned up announce cap properties | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
 | 6 | `1855f9927fe23990c2da8d49c1409b85b1b7ef8f` | Cleanup | Pending review | Changes `RNS/Transport.py` |
@@ -84,13 +84,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 3. `3ac3236b` — Updated stale doc defaults
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/Interface.py`, `docs/source/interfaces.rst`).
+**Upstream change:** `Interface.MAX_HELD_ANNOUNCES` drops from 256 to 64. It is the default `ic_max_held_announces` of every interface (through `Reticulum._default_ic_max_held_announces`, which reads the `[reticulum]` value with `or`, so a section value of 0 also means 64), so an interface without an explicit setting holds at most 64 unique announces while it bursts. The rest is documentation: the stated defaults of `ic_burst_freq_new` (3.0), `ic_burst_freq` (10.0), `ic_max_held_announces` (64), `ic_burst_hold` (15), `ic_burst_penalty` (15) and `ic_held_release_interval` (5) are corrected to the values the code already used.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs used 256 (`IC_MAX_HELD_ANNOUNCES`), so held capacity differed on every ingress-controlled interface. The other ingress control constants already matched the corrected defaults. A `[reticulum] ic_max_held_announces = 0` was stored as 0, where upstream uses the default; with the early drop of `f96cef7e` (row 12) that would refuse every announce on every interface, so the section value now follows upstream's `or`. A per-interface 0 stays literal, as upstream applies it. `docs/configuration.md` implied that its example values (256, 60, 3.5, 12, 300, 30) were the defaults.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `IC_MAX_HELD_ANNOUNCES = 64`; `[reticulum] ic_max_held_announces = 0` keeps the default; `docs/configuration.md` lists the held cap, `ic_new_time` and `ec_pr_freq` defaults and no longer calls the example values defaults. Tests: `test_upstream_1_2_5_default_thresholds` pins 64, `parse_reticulum_ic_max_held_announces_zero_keeps_default`. rns-core and rns-net library suites pass.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 4. `7852f53a` — Always init announce_queue
 

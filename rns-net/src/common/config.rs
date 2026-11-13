@@ -1378,8 +1378,12 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.default_ar_grace = grace;
     }
+    // Upstream reads this with `or Interface.MAX_HELD_ANNOUNCES`, so 0
+    // keeps the default; a per-interface 0 is taken literally.
     if let Some(v) = parse_usize_option(kvs, "ic_max_held_announces")? {
-        section.default_ic_max_held_announces = v;
+        if v > 0 {
+            section.default_ic_max_held_announces = v;
+        }
     }
     if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_burst_hold")? {
         section.default_ic_burst_hold = v;
@@ -2235,6 +2239,16 @@ ec_pr_freq = 9.5
         assert_eq!(config.reticulum.default_ic_held_release_interval, 8.5);
         assert!(config.reticulum.default_egress_control);
         assert_eq!(config.reticulum.default_ec_pr_freq, 9.5);
+    }
+
+    #[test]
+    fn parse_reticulum_ic_max_held_announces_zero_keeps_default() {
+        let config = parse("[reticulum]\nic_max_held_announces = 0\n").unwrap();
+        assert_eq!(
+            config.reticulum.default_ic_max_held_announces,
+            rns_core::constants::IC_MAX_HELD_ANNOUNCES
+        );
+        assert_eq!(config.reticulum.default_ic_max_held_announces, 64);
     }
 
     #[test]
