@@ -23,6 +23,9 @@ pub struct TrafficRates {
     pub atxs: f64,
     pub prxs: f64,
     pub ptxs: f64,
+    /// Filtered inbound and outbound bits per second (upstream 134dc677).
+    pub frxs: f64,
+    pub ftxs: f64,
 }
 
 /// Traffic statistics for an interface.
@@ -30,6 +33,11 @@ pub struct TrafficRates {
 pub struct InterfaceStats {
     pub rxb: u64,
     pub txb: u64,
+    /// Received bytes dropped where upstream's `preprocess_inbound` drops
+    /// them (upstream 134dc677); they are moved out of `rxb`.
+    pub frxb: u64,
+    /// Filtered outbound bytes. Upstream reports it and never counts any.
+    pub ftxb: u64,
     pub arxb: u64,
     pub atxb: u64,
     pub arxc: u64,

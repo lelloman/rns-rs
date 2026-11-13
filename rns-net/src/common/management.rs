@@ -294,6 +294,10 @@ pub fn handle_status_request(
     let mut total_ptxc: u64 = 0;
     let mut total_rxs = 0.0;
     let mut total_txs = 0.0;
+    let mut total_frxb: u64 = 0;
+    let mut total_ftxb: u64 = 0;
+    let mut total_frxs = 0.0;
+    let mut total_ftxs = 0.0;
     let mut total_arxs = 0.0;
     let mut total_atxs = 0.0;
     let mut total_prxs = 0.0;
@@ -329,6 +333,10 @@ pub fn handle_status_request(
             total_ptxc += stats.ptxc;
             total_rxs += stats.traffic_rates.rxs;
             total_txs += stats.traffic_rates.txs;
+            total_frxb += stats.frxb;
+            total_ftxb += stats.ftxb;
+            total_frxs += stats.traffic_rates.frxs;
+            total_ftxs += stats.traffic_rates.ftxs;
             total_arxs += stats.traffic_rates.arxs;
             total_atxs += stats.traffic_rates.atxs;
             total_prxs += stats.traffic_rates.prxs;
@@ -360,6 +368,10 @@ pub fn handle_status_request(
             ("txbuffered", Value::UInt(entry.tx_buffered() as u64)),
             ("rxs", Value::Float(stats.traffic_rates.rxs)),
             ("txs", Value::Float(stats.traffic_rates.txs)),
+            ("frxb", Value::UInt(stats.frxb)),
+            ("ftxb", Value::UInt(stats.ftxb)),
+            ("frxs", Value::Float(stats.traffic_rates.frxs)),
+            ("ftxs", Value::Float(stats.traffic_rates.ftxs)),
             ("arxb", Value::UInt(stats.arxb)),
             ("atxb", Value::UInt(stats.atxb)),
             ("arxc", Value::UInt(stats.arxc)),
@@ -471,6 +483,10 @@ pub fn handle_status_request(
         ("ptxpkts", Value::UInt(total_path_request_tx)),
         ("rxs", Value::Float(total_rxs)),
         ("txs", Value::Float(total_txs)),
+        ("frxb", Value::UInt(total_frxb)),
+        ("ftxb", Value::UInt(total_ftxb)),
+        ("frxs", Value::Float(total_frxs)),
+        ("ftxs", Value::Float(total_ftxs)),
         ("arxb", Value::UInt(total_arxb)),
         ("atxb", Value::UInt(total_atxb)),
         ("arxc", Value::UInt(total_arxc)),

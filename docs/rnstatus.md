@@ -13,13 +13,15 @@ Options:
   --reload NAME           Reload a running interface from config
   -a                      Show all interfaces
   -j                      JSON output
-  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx,
-                          arxc, atxc, prxc, ptxc, vio, ifac, flt
+  -s SORT                 Sort by: rate, traffic, rx, tx, frx, ftx,
+                          frxs, ftxs, prx, ptx, arxc, atxc, prxc, ptxc,
+                          pvs, ivs, flt
   -r                      Reverse sort order
   -t                      Show traffic totals
   -l                      Show link count
   -A                      Show announce statistics
   -P, --pr-stats          Show path request statistics
+  -F, --filter-stats      Show filtered traffic statistics
   -B, --burst             Only show interfaces with active burst limiting
   -b, --blocked-ips       Show blocked IPs per interface
   -q, --queues            Show inbound queue pressure statistics
@@ -62,13 +64,26 @@ interfaces when that count is available.
 With `-A` or `-P`, each interface includes cumulative incoming and outgoing
 packet counts as well as byte totals, current rates, and frequencies. The
 `arxc`, `atxc`, `prxc`, and `ptxc` sort keys order interfaces by those announce
-and path-request counts. `vio`, `ifac`, and `flt` sort by protocol, IFAC, and
+and path-request counts. `pvs`, `ivs`, and `flt` sort by protocol, IFAC, and
 duplicate-filter violations respectively. A `Hop Limit` line counts frames
 dropped because their hop count reached the transport hop limiter configured
 with `[filter] hop_limiter`; these are reported separately from protocol
 violations and appear only when nonzero. With the default limiter of 128 the
 line stays empty: hop counts of 128 and above are malformed and counted as
 protocol violations, as upstream.
+
+With `-F`, each interface shows a `Filtered` line, and with `-t` the totals
+do too (upstream `134dc677`): the bytes and current rate of received frames
+dropped before transport processed them. Those are frames failing IFAC, too
+large, malformed, over the hop limiter or caught by the packet filter;
+announces dropped while the interface's held announces are full, of a
+blocked or not allowed destination type, failing to unpack or verify, from
+a blackholed identity, without a required stamp, or held by ingress control;
+and path requests that are duplicates, fail a required stamp or join one
+already in flight. A filtered frame is moved out of the received bytes and
+packets. The `frx`, `ftx`, `frxs` and `ftxs` sort keys order interfaces by
+filtered bytes and rates. As upstream, nothing is counted as filtered on
+transmit, so the outbound figures stay zero.
 
 For remote status, `-R HASH` requires the management identity selected with
 `-i PATH`, and the remote transport must authorize that identity.

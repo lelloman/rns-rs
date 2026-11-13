@@ -37,6 +37,7 @@ impl TransportEngine {
             path_requests: BTreeMap::new(),
             stamp_prs: constants::STAMP_PRS,
             hop_limiter: constants::HOP_LIMITER,
+            inbound_filtered: false,
             stamp_requirements: StampRequirements::default(),
             destination_filter: Default::default(),
             control_destinations: [

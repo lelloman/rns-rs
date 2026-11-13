@@ -166,10 +166,13 @@ impl TransportEngine {
         announce_queue: Option<&mut AnnounceVerifyQueue>,
         actions: &mut Vec<TransportAction>,
     ) {
+        self.inbound_filtered = false;
         let Some(mut ctx) = self.prepare_decoded_packet(frame) else {
+            self.inbound_filtered = true;
             return;
         };
         if !self.destination_filter_admits(&ctx) {
+            self.inbound_filtered = true;
             return;
         }
         // Routing state may have changed since decoding. Any packet whose hash
@@ -631,11 +634,13 @@ impl TransportEngine {
             Ok(a) => a,
             Err(_) => {
                 actions.push(TransportAction::ProtocolViolation { interface: iface });
+                self.inbound_filtered = true;
                 return;
             }
         };
 
         if self.should_hold_announce(packet, original_raw, iface, now) {
+            self.inbound_filtered = true;
             return;
         }
 
@@ -652,6 +657,7 @@ impl TransportEngine {
             Ok(v) => v,
             Err(_) => {
                 self.record_invalid_announce(&announce, iface, now, actions);
+                self.inbound_filtered = true;
                 return;
             }
         };
@@ -661,6 +667,7 @@ impl TransportEngine {
             Some(b) => b,
             None => {
                 actions.push(TransportAction::ProtocolViolation { interface: iface });
+                self.inbound_filtered = true;
                 return;
             }
         };
@@ -821,6 +828,7 @@ impl TransportEngine {
                 actions.push(TransportAction::ProtocolViolation {
                     interface: ctx.iface,
                 });
+                self.inbound_filtered = true;
                 return;
             }
         };
@@ -848,6 +856,7 @@ impl TransportEngine {
             .as_deref()
             .expect("announce packets retain original raw bytes");
         if self.should_hold_announce(&ctx.packet, original_raw, ctx.iface, ctx.now) {
+            self.inbound_filtered = true;
             return;
         }
 
@@ -857,11 +866,15 @@ impl TransportEngine {
                 announce.to_validated_with_cached_signature(&ctx.packet.destination_hash)
             else {
                 self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
+                self.inbound_filtered = true;
                 return;
             };
             let random_blob = match extract_random_blob(ctx.packet.data()) {
                 Some(b) => b,
-                None => return,
+                None => {
+                    self.inbound_filtered = true;
+                    return;
+                }
             };
             let announce_emitted = timebase_from_random_blob(&random_blob);
             self.process_verified_announce(
@@ -884,12 +897,16 @@ impl TransportEngine {
         if ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
             let Ok(validated) = announce.validate(&ctx.packet.destination_hash) else {
                 self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
+                self.inbound_filtered = true;
                 return;
             };
             self.announce_sig_cache.insert(sig_cache_key, ctx.now);
             let random_blob = match extract_random_blob(ctx.packet.data()) {
                 Some(b) => b,
-                None => return,
+                None => {
+                    self.inbound_filtered = true;
+                    return;
+                }
             };
             let announce_emitted = timebase_from_random_blob(&random_blob);
             self.process_verified_announce(
@@ -915,6 +932,7 @@ impl TransportEngine {
                 actions.push(TransportAction::ProtocolViolation {
                     interface: ctx.iface,
                 });
+                self.inbound_filtered = true;
                 return;
             }
         };
@@ -945,6 +963,7 @@ impl TransportEngine {
         now: f64,
         rng: &mut dyn Rng,
     ) -> Vec<TransportAction> {
+        self.inbound_filtered = false;
         self.announce_sig_cache.insert(sig_cache_key, now);
         let mut actions = Vec::new();
         self.process_verified_announce(
@@ -973,6 +992,7 @@ impl TransportEngine {
         actions: &mut Vec<TransportAction>,
     ) {
         if self.is_blackholed(&ctx.validated.identity_hash, ctx.now) {
+            self.inbound_filtered = true;
             return;
         }
         if ctx.packet.hops > constants::PATHFINDER_M {
@@ -992,6 +1012,7 @@ impl TransportEngine {
         if self.stamp_requirements.enforced
             && stamp_status != crate::announce::AnnounceStampStatus::Valid
         {
+            self.inbound_filtered = true;
             return;
         }
 

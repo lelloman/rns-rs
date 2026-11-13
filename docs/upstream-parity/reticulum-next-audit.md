@@ -58,7 +58,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Integrated | Early held-full announce drop in the driver; hop-limiter path cull |
 | 13 | `9b6b724b08e6c8681cfb9edd34edd905fb2238b3` | Diagnostics | Integrated | `tunnel_id` in interface stats (RPC and management) |
 | 14 | `20e25a9f0cd4bde8958642d36690cf709849f5ee` | Filter destinations at path table load time | Integrated | Destination type filter applied to restored paths |
-| 15 | `134dc6777c0dd29404e61b36d4094f4e35b88b3e` | Added filtered traffic stats and display in rnstatus | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
+| 15 | `134dc6777c0dd29404e61b36d4094f4e35b88b3e` | Added filtered traffic stats and display in rnstatus | Integrated | Filtered traffic counters, RPC keys and `rnstatus -F` |
 
 ## Per-Commit Analysis
 
@@ -204,13 +204,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 15. `134dc677` — Added filtered traffic stats and display in rnstatus
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py`).
+**Upstream change:** Interfaces get `frxb` / `ftxb` counters and `frxs` / `ftxs` rates, and `Transport` the totals (`filtered_rxb`, `filtered_txb`, `filtered_speed_rx`, `filtered_speed_tx`). `Transport.inbound` calls the new `filtered_inbound` whenever `preprocess_inbound` does not return `True` (or raises): the frame's length moves from the interface's `rxb` to its `frxb`, and from its parent interface's as well. With the inbound queue (the default) that covers exactly the preprocess drops: IFAC failures, short or over-MTU frames, malformed packets, the hop limiter, the packet filter, announces that are malformed, oversize, over the held limit, of a blocked or not allowed type, blackholed, missing a stamp, failing their stamp or signature, or held by ingress control, and path requests that are short, oversize, tagless, of an invalid size, duplicates, failing an enforced stamp, or batched into one in flight. `Transport.rx_packets` now counts only packets that pass. Nothing increments `ftxb`. `get_interface_stats` reports all four per interface and in total; `rnstatus -F/--filter-stats` prints `Filtered` lines per interface and in the totals (reading the keys unguarded), with sort keys `frx`, `ftx`, `frxs` and `ftxs`. `preprocess_inbound` also drops a packet with no interface.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs had none of these counters, so Python `rnstatus -F` failed with a `KeyError` against a Rust daemon. Its drops happen in two places: the driver (IFAC, decoding, hop limiter, and `admit_decoded_inbound`) and the engine (destination filter, announce unpacking, holding and checking, and the path request handling it delivers), with signature checks possibly finishing later on the verification queue.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `InterfaceStats.frxb` / `ftxb` and `TrafficRates.frxs` / `ftxs` (`rns-net/src/common/interface_stats.rs`), sampled with the other rates and carried in `TrafficDetail`, so per interface, per Backbone listener (summed over its clients, as rns-rs reports a listener) and in total. `Driver::record_filtered_inbound` (`rns-net/src/driver/events.rs`) moves the received frame size from `rxb` to `frxb` and takes the packet back out of `rx_packets`, at every driver drop above, a `PreIngress` hook drop, and whenever `TransportEngine::take_inbound_filtered` (`rns-core/src/transport/queries.rs`) reports an engine drop: the flag is reset per packet and set by the destination type filter, announce unpack, hold, signature and random-blob failures (synchronous and queued), blackholed identities and failed enforced stamps (`inbound_engine.rs`), and by `accept_path_request` for a rejected or in-flight request (`path_requests.rs`). A queued signature check that fails is filtered when it completes (`handle_announce_verify_failed`). Held announces released later re-enter from the engine tick and are not counted again. RPC pickle (`rns-net/src/rpc.rs`) and management `/status` (`rns-net/src/common/management.rs`) always carry `frxb`, `ftxb`, `frxs`, `ftxs`. Rust `rnstatus -F/--filter-stats` and the four sort keys (`rns-cli/src/bin/rnstatus.rs`, `rns-cli/src/args.rs`), documented in `docs/rnstatus.md`. Tests: `filtered_inbound_moves_the_frame_from_received_to_filtered`, `announce_of_a_blocked_type_is_filtered_inbound`, `held_announces_full_drop_is_filtered_inbound`, `duplicate_and_in_flight_path_requests_are_filtered_inbound`, `announce_failing_its_queued_signature_check_is_filtered_inbound`, `filtered_inbound_rate_is_sampled`, `folded_work_verifies_queued_announces` (`rns-net/src/driver/tests.rs`), `interface_stats_pickle_format`, `filtered_stats_render_and_sort`, and the interop test `python_rnstatus_shows_rust_filtered_traffic` (Python `rnstatus -F -t -s frx` against a Rust daemon).
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ## Integration Plan
 

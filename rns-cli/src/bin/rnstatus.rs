@@ -54,6 +54,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_links = args.has("l");
     let show_announces = args.has("A");
     let show_pr_stats = args.has("P") || args.has("pr-stats");
+    let show_filtered = args.has("F") || args.has("filter-stats");
     let show_bursts = args.has("B") || args.has("burst");
     let show_blocked_ips = args.has("b") || args.has("blocked-ips");
     let show_profiling = args.has("z") || args.has("profiling");
@@ -101,6 +102,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             show_pps,
             show_announces,
             show_pr_stats,
+            show_filtered,
             show_bursts,
             show_blocked_ips,
             show_queues,
@@ -352,6 +354,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                     show_pps,
                     show_announces,
                     show_pr_stats,
+                    show_filtered,
                     show_bursts,
                     show_blocked_ips,
                     show_queues,
@@ -395,6 +398,7 @@ struct StatusDisplayOptions<'a> {
     show_pps: bool,
     show_announces: bool,
     show_pr_stats: bool,
+    show_filtered: bool,
     show_bursts: bool,
     show_blocked_ips: bool,
     show_queues: bool,
@@ -410,6 +414,7 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
         show_pps,
         show_announces,
         show_pr_stats,
+        show_filtered,
         show_bursts,
         show_blocked_ips,
         show_queues,
@@ -513,6 +518,9 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                 transmit_buffer_suffix(iface),
                 size_str(rxb),
             );
+            if show_filtered {
+                println!("{}", filtered_status_line(iface));
+            }
             if let Some(line) = tx_drop_status_line(iface) {
                 println!("{line}");
             }
@@ -609,6 +617,11 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
     if show_totals {
         for line in traffic_total_lines(response, show_pr_stats || show_announces, show_pps) {
             println!("{line}");
+        }
+        if show_filtered {
+            for line in filtered_total_lines(response) {
+                println!("{line}");
+            }
         }
         println!();
         for line in detailed_traffic_total_lines(response, show_pr_stats, show_announces) {
@@ -836,6 +849,10 @@ fn interface_sort_value(iface: &PickleValue, sort_key: &str) -> SortValue {
         }
         "rx" => SortValue::Int(iface.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)),
         "tx" => SortValue::Int(iface.get("txb").and_then(|v| v.as_int()).unwrap_or(0)),
+        // Filtered traffic (upstream 134dc677).
+        "frx" => SortValue::Int(iface.get("frxb").and_then(|v| v.as_int()).unwrap_or(0)),
+        "ftx" => SortValue::Int(iface.get("ftxb").and_then(|v| v.as_int()).unwrap_or(0)),
+        "frxs" | "ftxs" => SortValue::Float(numeric(iface.get(sort_key)).unwrap_or(0.0)),
         "txdrp" => SortValue::Int(iface.get("txdrp").and_then(|v| v.as_int()).unwrap_or(0)),
         "txdrb" => SortValue::Int(iface.get("txdrb").and_then(|v| v.as_int()).unwrap_or(0)),
         "txbuf" => SortValue::Int(
@@ -1227,6 +1244,49 @@ fn detailed_traffic_total_lines(
     lines
 }
 
+/// Filtered traffic of one interface (`-F`, upstream 134dc677): bytes
+/// dropped before transport processed them, with their rates when reported.
+fn filtered_status_line(iface: &PickleValue) -> String {
+    let bytes = |key: &str| iface.get(key).and_then(|v| v.as_int()).unwrap_or(0).max(0) as u64;
+    let rates = numeric(iface.get("frxs")).zip(numeric(iface.get("ftxs")));
+    let rate = |value: f64| format!(" {}", speed_str(value.max(0.0) as u64));
+    format!(
+        "    Filtered  : {} \u{2191}{}  {} \u{2193}{}",
+        size_str(bytes("ftxb")),
+        rates.map(|(_, tx)| rate(tx)).unwrap_or_default(),
+        size_str(bytes("frxb")),
+        rates.map(|(rx, _)| rate(rx)).unwrap_or_default(),
+    )
+}
+
+/// Filtered traffic totals (`-F -t`, upstream 134dc677).
+fn filtered_total_lines(response: &PickleValue) -> Vec<String> {
+    let bytes = |key: &str| {
+        response
+            .get(key)
+            .and_then(|v| v.as_int())
+            .unwrap_or(0)
+            .max(0) as u64
+    };
+    let rate = |key: &str| {
+        numeric(response.get(key))
+            .map(|value| format!("  {}", speed_str(value.max(0.0) as u64)))
+            .unwrap_or_default()
+    };
+    vec![
+        format!(
+            " Filtered      : {} \u{2191}{}",
+            size_str(bytes("ftxb")),
+            rate("ftxs")
+        ),
+        format!(
+            "                 {} \u{2193}{}",
+            size_str(bytes("frxb")),
+            rate("frxs")
+        ),
+    ]
+}
+
 fn traffic_total_lines(
     response: &PickleValue,
     show_data_flow: bool,
@@ -1406,6 +1466,7 @@ fn remote_status(
     show_pps: bool,
     show_announces: bool,
     show_pr_stats: bool,
+    show_filtered: bool,
     show_bursts: bool,
     show_blocked_ips: bool,
     show_queues: bool,
@@ -1459,6 +1520,7 @@ fn remote_status(
                             show_pps,
                             show_announces,
                             show_pr_stats,
+                            show_filtered,
                             show_bursts,
                             show_blocked_ips,
                             show_queues,
@@ -1833,13 +1895,14 @@ fn print_usage(usage_name: &str) {
     println!("  --reload NAME           Reload a running interface from config");
     println!("  -a                      Show all interfaces");
     println!("  -j                      JSON output");
-    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx, arxc, atxc, prxc, ptxc, txdrp, txdrb, txbuf");
+    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, frx, ftx, frxs, ftxs, prx, ptx, arxc, atxc, prxc, ptxc, txdrp, txdrb, txbuf");
     println!("  -r                      Reverse sort order");
     println!("  -t                      Show traffic totals");
     println!("  -p, --pps               Show packets per second in traffic totals");
     println!("  -l                      Show link count");
     println!("  -A                      Show announce statistics");
     println!("  -P, --pr-stats          Show path request statistics");
+    println!("  -F, --filter-stats      Show filtered traffic statistics");
     println!("  -B, --burst             Only show interfaces with active burst limiting");
     println!("  -b, --blocked-ips       Show blocked IPs per interface");
     println!("  -q, --queues            Show inbound queue pressure statistics");
@@ -2460,6 +2523,66 @@ mod tests {
                 "                 1.0/h in  2.0/h out",
             ]
         );
+    }
+
+    #[test]
+    fn filtered_stats_render_and_sort() {
+        // Upstream 134dc677 `-F`: filtered bytes and rates per interface and
+        // in the totals, and the frx/ftx/frxs/ftxs sort keys.
+        let stats = |frxb: i64, frxs: f64| {
+            PickleValue::Dict(vec![
+                (PickleValue::String("frxb".into()), PickleValue::Int(frxb)),
+                (PickleValue::String("ftxb".into()), PickleValue::Int(0)),
+                (PickleValue::String("frxs".into()), PickleValue::Float(frxs)),
+                (PickleValue::String("ftxs".into()), PickleValue::Float(0.0)),
+            ])
+        };
+        let iface = stats(1500, 800.0);
+        assert_eq!(
+            filtered_status_line(&iface),
+            format!(
+                "    Filtered  : {} \u{2191} {}  {} \u{2193} {}",
+                size_str(0),
+                speed_str(0),
+                size_str(1500),
+                speed_str(800)
+            )
+        );
+        assert_eq!(
+            filtered_total_lines(&stats(2048, 16.0)),
+            vec![
+                format!(
+                    " Filtered      : {} \u{2191}  {}",
+                    size_str(0),
+                    speed_str(0)
+                ),
+                format!(
+                    "                 {} \u{2193}  {}",
+                    size_str(2048),
+                    speed_str(16)
+                ),
+            ]
+        );
+        // Without rates, only the byte counts.
+        let bytes_only = PickleValue::Dict(vec![(
+            PickleValue::String("frxb".into()),
+            PickleValue::Int(10),
+        )]);
+        assert_eq!(
+            filtered_status_line(&bytes_only),
+            format!(
+                "    Filtered  : {} \u{2191}  {} \u{2193}",
+                size_str(0),
+                size_str(10)
+            )
+        );
+        assert_eq!(interface_sort_value(&iface, "frx"), SortValue::Int(1500));
+        assert_eq!(interface_sort_value(&iface, "ftx"), SortValue::Int(0));
+        assert_eq!(
+            interface_sort_value(&iface, "frxs"),
+            SortValue::Float(800.0)
+        );
+        assert_eq!(interface_sort_value(&iface, "ftxs"), SortValue::Float(0.0));
     }
 
     #[test]

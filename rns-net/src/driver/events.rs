@@ -31,6 +31,19 @@ impl Driver {
     /// Inbound admission checks that run on a decoded packet before the
     /// `PreIngress` hook. They count protocol violations and packet filter hits
     /// on the receiving interface and return whether the packet may proceed.
+    /// Upstream 134dc677 `Transport.filtered_inbound`: a received frame
+    /// dropped where `preprocess_inbound` drops it moves its bytes from the
+    /// interface's received to its filtered count. Upstream counts a packet
+    /// in `rx_packets` only once it passes, so it leaves that count too.
+    pub(crate) fn record_filtered_inbound(&mut self, interface_id: InterfaceId, size: usize) {
+        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+            let size = size as u64;
+            entry.stats.rxb = entry.stats.rxb.saturating_sub(size);
+            entry.stats.frxb = entry.stats.frxb.saturating_add(size);
+            entry.stats.rx_packets = entry.stats.rx_packets.saturating_sub(1);
+        }
+    }
+
     fn admit_decoded_inbound(
         &mut self,
         interface_id: InterfaceId,
@@ -156,6 +169,7 @@ impl Driver {
                         if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                             entry.stats.ifac_violations += 1;
                         }
+                        self.record_filtered_inbound(interface_id, received_size);
                         return;
                     }
                 }
@@ -168,6 +182,7 @@ impl Driver {
                     if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                         entry.stats.ifac_violations += 1;
                     }
+                    self.record_filtered_inbound(interface_id, received_size);
                     return;
                 }
                 data
@@ -188,6 +203,7 @@ impl Driver {
                 if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                     entry.stats.protocol_violations += 1;
                 }
+                self.record_filtered_inbound(interface_id, received_size);
                 return;
             }
         };
@@ -217,6 +233,7 @@ impl Driver {
         }
         let packet_len = decoded_packet.packet().raw.len();
         if !self.admit_decoded_inbound(interface_id, packet_len, &decoded_packet) {
+            self.record_filtered_inbound(interface_id, received_size);
             return;
         }
 
@@ -260,17 +277,24 @@ impl Driver {
                 let max_len = self.hook_packet_limit(interface_id);
                 outcome = self.packet_hook_outcome(HookPoint::PreIngress, e, max_len);
             }
+            // A packet the hook drops is filtered inbound, as any other
+            // packet dropped before transport processes it.
             match outcome {
                 PacketHookOutcome::Keep => decoded_packet,
-                PacketHookOutcome::Drop => return,
+                PacketHookOutcome::Drop => {
+                    self.record_filtered_inbound(interface_id, received_size);
+                    return;
+                }
                 PacketHookOutcome::Replace(replacement) => {
                     // Decode the replacement afresh and hold it to the same
                     // admission checks as a received packet.
                     let replacement_len = replacement.raw.len();
                     let Ok(decoded) = DecodedPacket::unpack_owned(replacement.raw) else {
+                        self.record_filtered_inbound(interface_id, received_size);
                         return;
                     };
                     if !self.admit_decoded_inbound(interface_id, replacement_len, &decoded) {
+                        self.record_filtered_inbound(interface_id, received_size);
                         return;
                     }
                     decoded
@@ -417,6 +441,10 @@ impl Driver {
         }
 
         self.dispatch_all_with_ingress_class(actions, ingress_limited);
+        // The engine drops, and the path request its actions delivered.
+        if self.engine.take_inbound_filtered() {
+            self.record_filtered_inbound(interface_id, received_size);
+        }
         let bursts = (
             self.engine
                 .burst_active(&interface_id)
@@ -443,14 +471,21 @@ impl Driver {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let interface = announce_queue.pending_interface(&key);
+        let size = announce_queue.pending_size(&key).unwrap_or(0);
         let blackholed = announce_queue
             .pending_identity_hash(&key)
             .is_some_and(|hash| self.engine.is_blackholed(&hash, time::now()));
         if announce_queue.complete_failure(&key) {
-            if let Some(entry) = interface.and_then(|id| self.interfaces.get_mut(&id)) {
-                if !blackholed {
-                    entry.stats.protocol_violations += 1;
+            drop(announce_queue);
+            if let Some(id) = interface {
+                if let Some(entry) = self.interfaces.get_mut(&id) {
+                    if !blackholed {
+                        entry.stats.protocol_violations += 1;
+                    }
                 }
+                // Upstream checks the signature before the packet passes
+                // `preprocess_inbound`, so a failed one is filtered (134dc677).
+                self.record_filtered_inbound(id, size);
             }
         }
     }
@@ -540,6 +575,10 @@ impl Driver {
                     entry.stats.arxc = entry.stats.arxc.saturating_add(1);
                     entry.stats.arxb = entry.stats.arxb.saturating_add(received_size as u64);
                 }
+            }
+            // A blackholed identity or a failed stamp (134dc677).
+            if self.engine.take_inbound_filtered() {
+                self.record_filtered_inbound(interface, received_size);
             }
             self.dispatch_all(actions);
         }
@@ -708,6 +747,8 @@ impl Driver {
                 atxs: bps(entry.stats.atxb, previous.atxb),
                 prxs: bps(entry.stats.prxb, previous.prxb),
                 ptxs: bps(entry.stats.ptxb, previous.ptxb),
+                frxs: bps(entry.stats.frxb, previous.frxb),
+                ftxs: bps(entry.stats.ftxb, previous.ftxb),
             };
             self.traffic_samples
                 .insert(*id, TrafficSample::from_stats(now, &entry.stats));

@@ -43,6 +43,7 @@ const BOOLEAN_LONG: &[&str] = &[
     "export-pub",
     "export-prv",
     "pr-stats",
+    "filter-stats",
     "burst",
     "blocked-ips",
     "queues",
@@ -206,13 +207,15 @@ impl Args {
                     match c {
                         'v' => verbosity = verbosity.saturating_add(1),
                         'q' => quiet = quiet.saturating_add(1),
-                        'a' | 'b' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' | 't' | 'p'
-                        | 'x'
+                        'a' | 'b' | 'r' | 'j' | 'P' | 'F' | 'D' | 'l' | 'f' | 'A' | 'Z' | 't'
+                        | 'p' | 'x'
                             if !control =>
                         {
                             flags.insert(c.to_string(), "true".into());
                         }
-                        'a' | 'b' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' if control => {
+                        'a' | 'b' | 'r' | 'j' | 'P' | 'F' | 'D' | 'l' | 'f' | 'A' | 'Z'
+                            if control =>
+                        {
                             flags.insert(c.to_string(), "true".into());
                         }
                         'h' => {
@@ -389,6 +392,7 @@ mod tests {
             "--export-pub",
             "--export-prv",
             "--pr-stats",
+            "--filter-stats",
             "--burst",
             "--blocked-ips",
             "--queues",
@@ -409,6 +413,7 @@ mod tests {
         assert!(a.has("export-pub"));
         assert!(a.has("export-prv"));
         assert!(a.has("pr-stats"));
+        assert!(a.has("filter-stats"));
         assert!(a.has("burst"));
         assert!(a.has("blocked-ips"));
         assert!(a.has("queues"));

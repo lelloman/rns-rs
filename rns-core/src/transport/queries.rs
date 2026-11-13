@@ -450,6 +450,18 @@ impl TransportEngine {
         })
     }
 
+    /// Whether the inbound packet handled last was filtered: dropped where
+    /// upstream's `preprocess_inbound` drops it (upstream 134dc677), by the
+    /// destination type filter, an announce that does not unpack or verify,
+    /// one held by ingress control, a blackholed identity, a failed stamp,
+    /// or a path request that is a duplicate, fails its stamp or joins one
+    /// in flight. Covers [`Self::handle_decoded_inbound_into`] and the path
+    /// request it delivers, and [`Self::complete_verified_announce`];
+    /// clears the flag.
+    pub fn take_inbound_filtered(&mut self) -> bool {
+        core::mem::take(&mut self.inbound_filtered)
+    }
+
     /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`).
     pub fn hop_limiter(&self) -> u8 {
         self.hop_limiter
