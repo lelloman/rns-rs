@@ -167,6 +167,13 @@ impl AnnounceVerifyQueue {
             .map(|entry| pending_of(entry).interface)
     }
 
+    /// The size of a pending announce as received.
+    pub fn pending_size(&self, key: &AnnounceVerifyKey) -> Option<usize> {
+        self.pending
+            .get(key)
+            .map(|entry| pending_of(entry).original_raw.len())
+    }
+
     pub fn pending_identity_hash(&self, key: &AnnounceVerifyKey) -> Option<[u8; 16]> {
         let packet = &pending_of(self.pending.get(key)?).packet;
         Some(crate::hash::truncated_hash(packet.data().get(..64)?))

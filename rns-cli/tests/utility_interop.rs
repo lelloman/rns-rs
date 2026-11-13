@@ -1993,16 +1993,49 @@ fn python_rnstatus_manages_rust_interface() {
 /// releases with `-u`, `{u_str}` for those that print its suffix (upstream
 /// db67adea; before it the suffix was computed and never printed).
 fn python_rnpath_source_contains(needle: &str) -> bool {
+    python_utility_source_contains("rnpath", needle)
+}
+
+/// Whether the source of the Python utility `RNS.Utilities.<utility>`
+/// contains `needle`.
+fn python_utility_source_contains(utility: &str, needle: &str) -> bool {
     let mut probe = Command::new("python3");
     probe.env("PYTHONUNBUFFERED", "1");
     probe.args([
         "-c",
         &format!(
-            "import inspect, RNS.Utilities.rnpath as m; print({needle:?} in inspect.getsource(m))"
+            "import inspect, RNS.Utilities.{utility} as m; print({needle:?} in inspect.getsource(m))"
         ),
     ]);
     let probe = run(probe);
     String::from_utf8_lossy(&probe.stdout).trim() == "True"
+}
+
+/// Upstream 134dc677: Python `rnstatus -F` reads the filtered traffic keys
+/// of every interface and of the totals without checking for them, so a
+/// Rust daemon must always report them.
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnstatus_shows_rust_filtered_traffic() {
+    if !python_utility_source_contains("rnstatus", "--filter-stats") {
+        eprintln!("Python rnstatus predates filtered traffic stats; skipping");
+        return;
+    }
+    let harness = Harness::start("python-filtered");
+    let mut command = harness.python_command("rnstatus");
+    command.args([
+        "--config",
+        harness.listener_config.to_str().unwrap(),
+        "-F",
+        "-t",
+        "-s",
+        "frx",
+    ]);
+    let output = run(command);
+    assert_success(&output, "Python rnstatus -F -t -s frx");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("    Filtered  : "), "{stdout}");
+    assert!(stdout.contains(" Filtered     : "), "{stdout}");
 }
 
 /// What an `rnpath <destination>` run finally shows: the text after its

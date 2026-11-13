@@ -1819,6 +1819,24 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::String("txs".into()),
             PickleValue::Float(stats.traffic.txs),
         ),
+        // Filtered traffic (upstream 134dc677). Always present: upstream's
+        // `rnstatus -F` reads these keys unguarded.
+        (
+            PickleValue::String("frxb".into()),
+            PickleValue::Int(stats.traffic.frxb as i64),
+        ),
+        (
+            PickleValue::String("ftxb".into()),
+            PickleValue::Int(stats.traffic.ftxb as i64),
+        ),
+        (
+            PickleValue::String("frxs".into()),
+            PickleValue::Float(stats.traffic.frxs),
+        ),
+        (
+            PickleValue::String("ftxs".into()),
+            PickleValue::Float(stats.traffic.ftxs),
+        ),
         (
             PickleValue::String("arxb".into()),
             PickleValue::Int(stats.traffic.arxb as i64),
@@ -2233,6 +2251,24 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         (
             PickleValue::String("txs".into()),
             PickleValue::Float(s.traffic.txs),
+        ),
+        // Filtered traffic (upstream 134dc677). Always present: upstream's
+        // `rnstatus -F` reads these keys unguarded.
+        (
+            PickleValue::String("frxb".into()),
+            PickleValue::Int(s.traffic.frxb as i64),
+        ),
+        (
+            PickleValue::String("ftxb".into()),
+            PickleValue::Int(s.traffic.ftxb as i64),
+        ),
+        (
+            PickleValue::String("frxs".into()),
+            PickleValue::Float(s.traffic.frxs),
+        ),
+        (
+            PickleValue::String("ftxs".into()),
+            PickleValue::Float(s.traffic.ftxs),
         ),
         (
             PickleValue::String("arxb".into()),
@@ -4981,6 +5017,10 @@ mod tests {
         let traffic = TrafficDetail {
             rxs: 800.0,
             txs: 1600.0,
+            frxb: 55,
+            ftxb: 0,
+            frxs: 440.0,
+            ftxs: 0.0,
             arxb: 11,
             atxb: 22,
             arxc: 1,
@@ -5086,6 +5126,13 @@ mod tests {
         assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        // Upstream 134dc677: filtered traffic, per interface and in total.
+        for stats in [&decoded, &ifaces[0]] {
+            assert_eq!(stats.get("frxb").unwrap().as_int(), Some(55));
+            assert_eq!(stats.get("ftxb").unwrap().as_int(), Some(0));
+            assert_eq!(stats.get("frxs").unwrap().as_float(), Some(440.0));
+            assert_eq!(stats.get("ftxs").unwrap().as_float(), Some(0.0));
+        }
         // Upstream 9b6b724b: the tunnel id, bytes or None.
         assert_eq!(
             ifaces[0].get("tunnel_id").unwrap().as_bytes(),

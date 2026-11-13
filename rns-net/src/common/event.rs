@@ -976,6 +976,11 @@ pub struct InterfaceStatsResponse {
 pub struct TrafficDetail {
     pub rxs: f64,
     pub txs: f64,
+    /// Filtered traffic (upstream 134dc677): bytes and bits per second.
+    pub frxb: u64,
+    pub ftxb: u64,
+    pub frxs: f64,
+    pub ftxs: f64,
     pub arxb: u64,
     pub atxb: u64,
     pub arxc: u64,

@@ -693,6 +693,8 @@ pub(crate) struct TrafficSample {
     atxb: u64,
     prxb: u64,
     ptxb: u64,
+    frxb: u64,
+    ftxb: u64,
 }
 
 impl TrafficSample {
@@ -707,6 +709,8 @@ impl TrafficSample {
             atxb: stats.atxb,
             prxb: stats.prxb,
             ptxb: stats.ptxb,
+            frxb: stats.frxb,
+            ftxb: stats.ftxb,
         }
     }
 }

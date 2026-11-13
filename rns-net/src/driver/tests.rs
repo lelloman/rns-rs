@@ -4740,6 +4740,137 @@ fn interface_stats_report_the_tunnel_id() {
     assert_eq!(tunnel_id_of(&mut driver), Some([0x7C; 32]));
 }
 
+/// (rxb, frxb, rx_packets) of an interface.
+fn rx_and_filtered(driver: &Driver, id: u64) -> (u64, u64, u64) {
+    let stats = &driver.interfaces[&InterfaceId(id)].stats;
+    (stats.rxb, stats.frxb, stats.rx_packets)
+}
+
+#[test]
+fn filtered_inbound_moves_the_frame_from_received_to_filtered() {
+    // Upstream 134dc677 `filtered_inbound`: a frame dropped before transport
+    // processes it leaves `rxb` (and the received packet count) for `frxb`;
+    // one that passes stays received.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "filtered");
+    let mut flagged = build_announce_packet(&Identity::new(&mut OsRng));
+    flagged[0] |= 0x80;
+    let flagged_len = flagged.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), flagged, None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (0, flagged_len, 0));
+
+    let announce = build_announce_packet(&Identity::new(&mut OsRng));
+    let announce_len = announce.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), announce, None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (announce_len, flagged_len, 1));
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.ftxb, 0);
+}
+
+#[test]
+fn announce_of_a_blocked_type_is_filtered_inbound() {
+    // Dropped by the engine's destination type filter.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "blocked-type");
+    driver
+        .engine
+        .destination_filter_mut()
+        .block(rns_core::destination::name_hash("test", &["app"]));
+    let announce = build_announce_packet(&Identity::new(&mut OsRng));
+    let len = announce.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), announce, None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (0, len, 0));
+}
+
+#[test]
+fn held_announces_full_drop_is_filtered_inbound() {
+    let mut driver = driver_holding_one_announce(1);
+    let announce = build_announce_packet(&Identity::new(&mut OsRng));
+    let len = announce.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), announce, None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (0, len, 0));
+}
+
+#[test]
+fn duplicate_and_in_flight_path_requests_are_filtered_inbound() {
+    let (tx, rx) = event::channel();
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+    register_test_generic_interface(&mut driver, 1, "requests");
+    let request = |driver: &Driver, transport_id: u8, tag: u8| {
+        let mut data = vec![0xDB; 16];
+        data.extend_from_slice(&[transport_id; 16]);
+        data.extend_from_slice(&[tag; 16]);
+        RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_PLAIN,
+                packet_type: constants::PACKET_TYPE_DATA,
+            },
+            0,
+            &driver.path_request_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &data,
+        )
+        .unwrap()
+        .raw
+    };
+
+    let first = request(&driver, 0x71, 0x01);
+    let len = first.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), first, None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (len, 0, 1));
+
+    // The same tag from another transport instance: a duplicate.
+    driver.handle_frame_event(InterfaceId(1), request(&driver, 0x72, 0x01), None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (len, len, 1));
+
+    // A new tag for the unknown destination already requested: in flight.
+    driver.handle_frame_event(InterfaceId(1), request(&driver, 0x73, 0x02), None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (len, 2 * len, 1));
+}
+
+#[test]
+fn announce_failing_its_queued_signature_check_is_filtered_inbound() {
+    let mut driver = new_test_driver();
+    driver.async_announce_verification = true;
+    register_test_generic_interface(&mut driver, 1, "queued-check");
+    let mut tampered = build_announce_packet(&Identity::new(&mut OsRng));
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+    let len = tampered.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), tampered, None, None);
+    // Queued for checking: still received.
+    assert_eq!(rx_and_filtered(&driver, 1), (len, 0, 1));
+
+    let pending = driver
+        .announce_verify_queue
+        .lock()
+        .unwrap()
+        .take_pending(time::now());
+    assert_eq!(pending.len(), 1);
+    driver.handle_announce_verify_failed(pending[0].0);
+    assert_eq!(rx_and_filtered(&driver, 1), (0, len, 0));
+}
+
+#[test]
+fn filtered_inbound_rate_is_sampled() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "filtered-rate");
+    driver.sample_interface_traffic(100.0);
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(1))
+        .unwrap()
+        .stats
+        .frxb = 250;
+    driver.sample_interface_traffic(102.0);
+    let rates = driver.interfaces[&InterfaceId(1)].stats.traffic_rates;
+    assert_eq!((rates.frxs, rates.ftxs), (1000.0, 0.0));
+}
+
 #[test]
 fn ifac_flag_without_ifac_counts_an_ifac_violation() {
     let mut driver = new_test_driver();
@@ -4916,7 +5047,10 @@ fn query_interface_stats() {
         atxs: 160.0,
         prxs: 240.0,
         ptxs: 320.0,
+        frxs: 40.0,
+        ftxs: 0.0,
     };
+    entry.stats.frxb = 70;
     entry.stats.ia_timestamps = vec![1.0, 2.0, 3.0];
     entry.stats.oa_timestamps = vec![1.0, 3.0];
     entry.stats.ip_timestamps = vec![1.0, 3.0, 5.0];
@@ -4950,6 +5084,7 @@ fn query_interface_stats() {
             assert_eq!((stats.traffic.arxb, stats.traffic.atxb), (100, 200));
             assert_eq!((stats.traffic.prxb, stats.traffic.ptxb), (300, 400));
             assert_eq!((stats.traffic.rxs, stats.traffic.txs), (800.0, 1_600.0));
+            assert_eq!((stats.traffic.frxb, stats.traffic.frxs), (70, 40.0));
             assert_eq!((stats.rx_pps, stats.tx_pps), (8.0, 16.0));
             assert_eq!((stats.total_rxb, stats.total_txb), (1_000, 2_000));
             assert_eq!((stats.traffic.arxs, stats.traffic.atxs), (80.0, 160.0));
@@ -13895,6 +14030,7 @@ fn folded_work_verifies_queued_announces() {
     let mut tampered = build_announce_packet(&Identity::new(&mut OsRng));
     let last = tampered.len() - 1;
     tampered[last] ^= 0x01;
+    let (valid_len, tampered_len) = (valid.len() as u64, tampered.len() as u64);
     for raw in [valid, tampered] {
         tx.send(Event::Frame {
             interface_id: InterfaceId(1),
@@ -13920,6 +14056,8 @@ fn folded_work_verifies_queued_announces() {
         driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
         1
     );
+    // The tampered announce is filtered inbound once its check fails.
+    assert_eq!(rx_and_filtered(&driver, 1), (valid_len, tampered_len, 1));
     assert!(driver.folded.announces.is_empty());
 }
 

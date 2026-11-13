@@ -259,6 +259,11 @@ pub struct TransportEngine {
     /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`,
     /// upstream f96cef7e); `[filter] hop_limiter`.
     hop_limiter: u8,
+    /// Whether the inbound packet being handled was dropped where upstream's
+    /// `preprocess_inbound` drops it, so its bytes count as filtered
+    /// (upstream 134dc677). Reset when a packet's handling starts; read with
+    /// [`TransportEngine::take_inbound_filtered`].
+    inbound_filtered: bool,
     /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
     /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
     stamp_requirements: StampRequirements,
