@@ -661,6 +661,7 @@ fn stamp_announce(inner: &Inner, job: AnnounceStampJob) {
             dest_type,
             replay,
             completion,
+            proof_key: None,
         }),
         None => {
             let stored = match replay {

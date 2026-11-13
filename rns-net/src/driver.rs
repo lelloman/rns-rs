@@ -864,6 +864,10 @@ pub struct Driver {
     >,
     /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
     pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
+    /// The signing keys proofs of tracked sent packets are checked with,
+    /// for packets sent with the identity they were encrypted for:
+    /// packet_hash → Ed25519 public key bytes.
+    pub(crate) sent_packet_keys: HashMap<[u8; 32], [u8; 32]>,
     /// Local destinations whose single packets are delivered decrypted, with
     /// the identity they are decrypted with when they have no ratchets.
     pub(crate) decrypted_destinations: HashMap<[u8; 16], Arc<rns_crypto::identity::Identity>>,
@@ -1158,6 +1162,7 @@ impl Driver {
             path_request_dest,
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
+            sent_packet_keys: HashMap::new(),
             packet_proofs: Vec::new(),
             decrypted_destinations: HashMap::new(),
             transport_actions: crate::action_pool::ActionPool::new(),
