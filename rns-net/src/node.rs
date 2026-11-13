@@ -3681,7 +3681,8 @@ impl RnsNode {
     ///
     /// A successful return is a receipt, not a transmission result. Await the
     /// receipt for exactly the same completion contract as `send_on_link`.
-    /// QueueFull means nothing was admitted and the caller may retry.
+    /// QueueFull means nothing was admitted and the caller may retry. The
+    /// receipt's `packet_hash` matches the packet to its delivery proof.
     pub fn try_send_on_link(
         &self,
         link_id: [u8; 16],

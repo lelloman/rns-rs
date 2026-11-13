@@ -1,7 +1,7 @@
 //! Runtime-independent transmission completion and bounded admission.
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll, Waker};
 
 use futures::channel::oneshot;
@@ -43,12 +43,15 @@ impl std::error::Error for LinkSendError {}
 /// Obtaining a receipt means admission only; it is not a transmission result.
 /// Dropping a receipt does not cancel an admitted send.
 #[must_use = "await the receipt (or call wait) to observe transmission completion"]
-pub struct LinkSendReceipt(oneshot::Receiver<Result<(), LinkSendError>>);
+pub struct LinkSendReceipt {
+    completion: oneshot::Receiver<Result<(), LinkSendError>>,
+    packet_hash: Arc<OnceLock<[u8; 32]>>,
+}
 
 impl Future for LinkSendReceipt {
     type Output = Result<(), LinkSendError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0)
+        Pin::new(&mut self.completion)
             .poll(cx)
             .map(|result| result.unwrap_or(Err(LinkSendError::Interrupted)))
     }
@@ -58,6 +61,19 @@ impl LinkSendReceipt {
     /// Blocking counterpart for synchronous callers. Do not call from a driver callback.
     pub fn wait(self) -> Result<(), LinkSendError> {
         futures::executor::block_on(self)
+    }
+
+    /// The hash of the packet sent, which a delivery proof of it carries
+    /// (`Callbacks::on_proof`, with the link id as its destination). Link
+    /// packets are encrypted by the driver, so it is known once the driver
+    /// has built the packet: before any proof of it can arrive, and by the
+    /// time the receipt resolves successfully. `None` until then, or when
+    /// the send failed before a packet was built.
+    pub fn packet_hash(&self) -> Option<rns_core::types::PacketHash> {
+        self.packet_hash
+            .get()
+            .copied()
+            .map(rns_core::types::PacketHash)
     }
 }
 
@@ -272,6 +288,7 @@ impl Drop for Permit {
 pub struct Completion {
     ratchet_lease: Option<crate::local_ratchet::AnnouncementLease>,
     state: Arc<CompletionState>,
+    packet_hash: Arc<OnceLock<[u8; 32]>>,
     settled: bool,
 }
 
@@ -336,14 +353,24 @@ impl Completion {
                 pool.completions.push(Arc::downgrade(&completion));
             }
         }
+        let packet_hash = Arc::new(OnceLock::new());
         (
             Self {
                 ratchet_lease: None,
                 state: completion,
+                packet_hash: packet_hash.clone(),
                 settled: false,
             },
-            LinkSendReceipt(rx),
+            LinkSendReceipt {
+                completion: rx,
+                packet_hash,
+            },
         )
+    }
+
+    /// Record the hash of the packet this send built, for its receipt.
+    pub(crate) fn set_packet_hash(&self, hash: [u8; 32]) {
+        let _ = self.packet_hash.set(hash);
     }
     pub(crate) fn finish(mut self, result: Result<(), LinkSendError>) {
         self.settle(result);
@@ -358,6 +385,7 @@ impl Completion {
         Self {
             ratchet_lease: self.ratchet_lease.clone(),
             state: self.state.clone(),
+            packet_hash: self.packet_hash.clone(),
             settled: false,
         }
     }

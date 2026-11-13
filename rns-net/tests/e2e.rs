@@ -1294,6 +1294,34 @@ fn setup_link() -> (
     )
 }
 
+#[test]
+fn link_send_receipt_names_the_packet_its_proof_carries() {
+    // A link packet is encrypted by the driver; its receipt reports the
+    // hash, for the sender to match the peer's proof to it.
+    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _, _, _, _, link_id) = setup_link();
+
+    let mut receipt = alice_node
+        .try_send_on_link(link_id, b"prove this packet".to_vec(), 0)
+        .unwrap();
+    futures::executor::block_on(&mut receipt).unwrap();
+    let sent = receipt.packet_hash().expect("hash of the sent packet");
+
+    let proved = wait_for_event(&alice_rx, TIMEOUT, |event| match event {
+        TestEvent::Proof {
+            dest_hash,
+            packet_hash,
+            ..
+        } => Some((*dest_hash, *packet_hash)),
+        _ => None,
+    })
+    .expect("Bob should prove the link packet");
+    assert_eq!(proved, (DestHash(link_id), sent));
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Direct link establishment (no transport relay node)
 // ═══════════════════════════════════════════════════════════════════════════════
