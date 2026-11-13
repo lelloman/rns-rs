@@ -1804,6 +1804,7 @@ impl Driver {
                                 _ => None,
                             });
                             if let Some(hash) = hash {
+                                completion.set_packet_hash(hash);
                                 self.tracked_link_send = Some((hash, completion));
                                 self.dispatch_link_actions(actions);
                                 if let Some((_, completion)) = self.tracked_link_send.take() {
