@@ -1442,7 +1442,8 @@ impl Default for BackboneClientConfig {
 /// teardown, so no egress drain/stall state can survive into the next
 /// connection. This structurally covers upstream's `BackboneInterface._dp_ec_reset`
 /// (rgit `f0875ac4`), which resets the same counters on a persistent Python
-/// initiator instance.
+/// initiator instance, and its call on every initiator reconnect (rgit
+/// `0bc5c37c`): there is no persistent instance here to reset.
 struct BackboneClientWriter {
     stream: TcpStream,
     transmit_buffer: TransmitBuffer,
