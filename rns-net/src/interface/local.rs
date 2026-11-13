@@ -1080,14 +1080,16 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     type TestClient = TcpStream;
 
-    fn connect_test_client(instance_name: &str, _port: u16) -> TestClient {
+    fn connect_test_client(instance_name: &str, port: u16) -> TestClient {
         #[cfg(target_os = "linux")]
         {
+            let _ = port;
             unix_socket::try_connect_unix(instance_name).unwrap()
         }
 
         #[cfg(not(target_os = "linux"))]
         {
+            let _ = instance_name;
             TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap()
         }
     }

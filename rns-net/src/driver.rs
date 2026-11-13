@@ -52,7 +52,7 @@ use crate::interface::backbone::{
     start_client_with_ifac, BackboneClientConfig, BackboneClientRuntime,
     BackboneClientRuntimeConfigHandle, BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
 };
-#[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
+#[cfg(all(feature = "iface-backbone", test))]
 use crate::interface::backbone::{BackboneAbuseConfig, BackboneServerRuntime};
 #[cfg(all(feature = "iface-i2p", test))]
 use crate::interface::i2p::I2pRuntime;
