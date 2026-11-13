@@ -950,6 +950,9 @@ mod tests {
         assert_eq!(constants::IC_BURST_HOLD, 15.0);
         assert_eq!(constants::IC_HELD_RELEASE_INTERVAL, 5.0);
         assert_eq!(constants::EC_PR_FREQ, 5.0);
+        // Upstream 3ac3236b lowered the held announce cap from 256.
+        assert_eq!(constants::IC_MAX_HELD_ANNOUNCES, 64);
+        assert_eq!(config.max_held_announces, 64);
 
         assert_eq!(config.pr_burst_freq_new, constants::IC_PR_BURST_FREQ_NEW);
         assert_eq!(config.pr_burst_freq, constants::IC_PR_BURST_FREQ);
