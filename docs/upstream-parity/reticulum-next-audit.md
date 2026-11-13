@@ -48,7 +48,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 2 | `023849ed29e230441499f1adf6eb135696d067b6` | Improved path pool and tunnel culling | Integrated | Reverse timeout, dynamic unused pool target and tunnel reconnect window, with focused tests |
 | 3 | `3ac3236b2f11f5e58ca9d86564ee44222bfacd9b` | Updated stale doc defaults | Integrated | Held announce cap 64, section 0 keeps the default, docs |
 | 4 | `7852f53a4c24fe7e063e02c00d35eb06568f0b15` | Always init announce_queue | Structurally covered | `interface_without_a_queue_has_nothing_queued` |
-| 5 | `70b9d58f15d88a3e33402f06f30cad411001e0ed` | Cleaned up announce cap properties | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
+| 5 | `70b9d58f15d88a3e33402f06f30cad411001e0ed` | Cleaned up announce cap properties | Structurally covered | `new_interface_queue_allows_its_first_announce_at_once` |
 | 6 | `1855f9927fe23990c2da8d49c1409b85b1b7ef8f` | Cleanup | Pending review | Changes `RNS/Transport.py` |
 | 7 | `0bc5c37c399cb6c489ade2ea3678c531bfc21390` | Reset DPEC on reconnect | Pending review | Changes `RNS/Interfaces/BackboneInterface.py` |
 | 8 | `9ef6c90ea6196057278685aabab06674e73ffa44` | Use RLock in logging | Pending review | Changes `RNS/__init__.py` |
@@ -104,13 +104,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 5. `70b9d58f` — Cleaned up announce cap properties
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py`).
+**Upstream change:** `Interface.__init__` sets `announce_allowed_at = 0` (with `announce_cap`, already set there), and the lazy `hasattr` defaults for both in `Transport.outbound` and `request_path` are removed. No behaviour change.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** `InterfaceAnnounceQueue::new` starts `announce_allowed_at` at 0.0, and `InterfaceInfo.announce_cap` is a required field defaulting to `constants::ANNOUNCE_CAP`; neither can be missing.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Invariant pinned by `new_interface_queue_allows_its_first_announce_at_once` (`rns-core/src/transport/announce_queue.rs`).
 
-**Final disposition:** Pending review.
+**Final disposition:** Structurally covered.
 
 ### 6. `1855f992` — Cleanup
 

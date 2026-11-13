@@ -430,6 +430,16 @@ mod tests {
         assert_eq!(queues.queue_count(), 0);
     }
 
+    /// Upstream 70b9d58f sets `announce_allowed_at = 0` in
+    /// `Interface.__init__` instead of defaulting it in `Transport`. A new
+    /// queue here starts at 0 too, so the first announce goes out at once.
+    #[test]
+    fn new_interface_queue_allows_its_first_announce_at_once() {
+        let queue = InterfaceAnnounceQueue::new();
+        assert_eq!(queue.announce_allowed_at, 0.0);
+        assert!(queue.is_allowed(0.0));
+    }
+
     #[test]
     fn test_queue_entry_creation() {
         let entry = make_entry(0xAA, 3, 1000.0);
