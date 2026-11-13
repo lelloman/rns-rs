@@ -447,8 +447,7 @@ impl Driver {
                     valid,
                 } => {
                     if valid {
-                        let _ = self.mark_known_destination_used(&destination);
-                        self.packet_proof_accepted(destination, packet_hash, rtt);
+                        self.packet_proof_valid(destination, packet_hash, rtt);
                     } else {
                         log::debug!("Proof signature invalid for {:02x?}", &packet_hash[..4]);
                     }
@@ -546,48 +545,92 @@ impl Driver {
             return;
         };
 
-        // Look up the tracked sent packet
-        if let Some((tracked_dest, sent_time)) = self.sent_packets.remove(&tracked_hash) {
-            let rtt = time::now() - sent_time;
-            // Validate the proof signature using the destination's public key
-            // (matches Python's PacketReceipt.validate_proof behavior)
-            match self.proof_key(&tracked_dest) {
-                Some(Some(key)) => {
-                    let mut sig = [0u8; 64];
-                    sig.copy_from_slice(signature);
-                    // Checked on the proof pool when there is one, batched
-                    // with the proofs queued with it.
-                    if self.link_manager.submit_packet_proof_check(
-                        tracked_dest,
-                        tracked_hash,
-                        sig,
-                        key.clone(),
-                        rtt,
-                    ) {
-                        return;
-                    }
-                    if !key.verify(&sig, &tracked_hash) {
-                        log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
-                        return;
-                    }
-                    let _ = self.mark_known_destination_used(&tracked_dest);
-                }
-                Some(None) => {
-                    log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
-                    return;
-                }
-                None => log::debug!(
-                    "No known identity for dest {:02x?}, accepting proof without signature check",
-                    &tracked_dest[..4],
-                ),
-            }
-            self.packet_proof_accepted(tracked_dest, tracked_hash, rtt);
-        } else {
+        // The receipt stays until a proof checks out, so that a forged proof
+        // cannot keep the genuine one from completing it.
+        let Some(&(tracked_dest, sent_time)) = self.sent_packets.get(&tracked_hash) else {
             log::debug!(
                 "Proof for unknown packet {:02x?} on dest {:02x?}",
                 &tracked_hash[..4],
                 &dest_hash[..4],
             );
+            return;
+        };
+        if self.link_manager.link_state(&tracked_dest).is_some() {
+            // A packet sent on a link is proved by the link's peer, on that
+            // link: the link manager checks the proof against the peer's key
+            // and reports it (`link_packet_proved`). As upstream's
+            // `PacketReceipt.validate_proof`, refuse it arriving otherwise.
+            log::debug!(
+                "Proof for link packet {:02x?} outside its link {:02x?}",
+                &tracked_hash[..4],
+                &tracked_dest[..4],
+            );
+            return;
+        }
+        let rtt = time::now() - sent_time;
+        // Checked with the destination's public key, as Python's
+        // `PacketReceipt.validate_proof`; without one the proof cannot be
+        // checked and is not accepted.
+        let key = match self.proof_key(&tracked_dest) {
+            Some(Some(key)) => key,
+            Some(None) => {
+                log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
+                return;
+            }
+            None => {
+                log::debug!(
+                    "No known identity for dest {:02x?}, cannot check proof",
+                    &tracked_dest[..4],
+                );
+                return;
+            }
+        };
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(signature);
+        // Checked on the proof pool when there is one, batched with the
+        // proofs queued with it.
+        if self.link_manager.submit_packet_proof_check(
+            tracked_dest,
+            tracked_hash,
+            sig,
+            key.clone(),
+            rtt,
+        ) {
+            return;
+        }
+        if !key.verify(&sig, &tracked_hash) {
+            log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
+            return;
+        }
+        self.packet_proof_valid(tracked_dest, tracked_hash, rtt);
+    }
+
+    /// Complete the receipt of a packet sent to `destination` whose proof's
+    /// signature checked out, unless another proof completed it first.
+    fn packet_proof_valid(&mut self, destination: [u8; 16], packet_hash: [u8; 32], rtt: f64) {
+        if self.sent_packets.remove(&packet_hash).is_none() {
+            return;
+        }
+        let _ = self.mark_known_destination_used(&destination);
+        self.packet_proof_accepted(destination, packet_hash, rtt);
+    }
+
+    /// The peer of `link_id` proved `packet_hash`: complete its receipt if
+    /// the packet was sent on that link. A proof the peer of another link
+    /// signed proves nothing about this one.
+    fn link_packet_proved(&mut self, link_id: [u8; 16], packet_hash: [u8; 32]) {
+        match self.sent_packets.get(&packet_hash) {
+            Some(&(destination, sent_time)) if destination == link_id => {
+                self.sent_packets.remove(&packet_hash);
+                self.packet_proof_accepted(link_id, packet_hash, time::now() - sent_time);
+            }
+            Some(_) => log::debug!(
+                "Proof on link {:02x?} for {:02x?}, not sent on it",
+                &link_id[..4],
+                &packet_hash[..4],
+            ),
+            // Untracked, or completed by another copy of the proof.
+            None => {}
         }
     }
 
@@ -2089,6 +2132,10 @@ impl Driver {
                         }
                     }
                 }
+                LinkManagerAction::PacketProved {
+                    link_id,
+                    packet_hash,
+                } => self.link_packet_proved(link_id, packet_hash),
                 LinkManagerAction::LinkEstablished {
                     link_id,
                     dest_hash,
