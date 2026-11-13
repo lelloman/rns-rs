@@ -415,6 +415,21 @@ mod tests {
 
     // --- InterfaceAnnounceQueue tests ---
 
+    /// Upstream 7852f53a initialises every interface's announce queue in
+    /// `Interface.__init__` instead of lazily in `Transport.outbound` and
+    /// `request_path`. Here queues are typed and created on demand, so an
+    /// interface without one is simply one with nothing queued: processing
+    /// yields nothing and recursive path requests are not held back.
+    #[test]
+    fn interface_without_a_queue_has_nothing_queued() {
+        let mut queues = AnnounceQueues::new(8);
+        let unseen = InterfaceId(42);
+        assert!(queues.queue_for(&unseen).is_none());
+        assert!(!queues.blocks_recursive_path_request(unseen, 0.0));
+        assert!(queues.process_queues(0.0, &BTreeMap::new()).is_empty());
+        assert_eq!(queues.queue_count(), 0);
+    }
+
     #[test]
     fn test_queue_entry_creation() {
         let entry = make_entry(0xAA, 3, 1000.0);

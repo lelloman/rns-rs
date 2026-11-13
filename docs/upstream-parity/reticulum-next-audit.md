@@ -47,7 +47,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 1 | `50b6733a1cc0c85cc0caa94ee2f5e38c6692e462` | Cleanup | Structurally covered | `oversized_announce_of_a_blocked_type_counts_a_protocol_violation` |
 | 2 | `023849ed29e230441499f1adf6eb135696d067b6` | Improved path pool and tunnel culling | Integrated | Reverse timeout, dynamic unused pool target and tunnel reconnect window, with focused tests |
 | 3 | `3ac3236b2f11f5e58ca9d86564ee44222bfacd9b` | Updated stale doc defaults | Integrated | Held announce cap 64, section 0 keeps the default, docs |
-| 4 | `7852f53a4c24fe7e063e02c00d35eb06568f0b15` | Always init announce_queue | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
+| 4 | `7852f53a4c24fe7e063e02c00d35eb06568f0b15` | Always init announce_queue | Structurally covered | `interface_without_a_queue_has_nothing_queued` |
 | 5 | `70b9d58f15d88a3e33402f06f30cad411001e0ed` | Cleaned up announce cap properties | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
 | 6 | `1855f9927fe23990c2da8d49c1409b85b1b7ef8f` | Cleanup | Pending review | Changes `RNS/Transport.py` |
 | 7 | `0bc5c37c399cb6c489ade2ea3678c531bfc21390` | Reset DPEC on reconnect | Pending review | Changes `RNS/Interfaces/BackboneInterface.py` |
@@ -94,13 +94,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 4. `7852f53a` — Always init announce_queue
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py`).
+**Upstream change:** `Interface.__init__` always creates `announce_queue = []`, `process_announce_queue` returns early on an empty queue, and the lazy `hasattr(..., "announce_queue")` initialisations in `Transport.outbound` and `request_path` are removed. No change on the wire or for operators; only third-party Python interfaces that skip `Interface.__init__` would now fail.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** Announce queues are engine-owned and typed (`AnnounceQueues`, `InterfaceAnnounceQueue::new`), created on demand with `entry(..).or_default()`; an interface without a queue is one with nothing queued, so there is no missing-attribute state to initialise.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Invariant pinned by `interface_without_a_queue_has_nothing_queued` (`rns-core/src/transport/announce_queue.rs`): no queue, no queued work, recursive path requests not held back.
 
-**Final disposition:** Pending review.
+**Final disposition:** Structurally covered.
 
 ### 5. `70b9d58f` — Cleaned up announce cap properties
 
