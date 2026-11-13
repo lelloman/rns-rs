@@ -57,7 +57,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Integrated | `rnpath` reads Python's integer `used`; Python `rnpath -t -u` interop |
 | 12 | `f96cef7ed94029c8028fd688c55f3af5946b5d3c` | Drop announces early when held announces is full | Integrated | Early held-full announce drop in the driver; hop-limiter path cull |
 | 13 | `9b6b724b08e6c8681cfb9edd34edd905fb2238b3` | Diagnostics | Integrated | `tunnel_id` in interface stats (RPC and management) |
-| 14 | `20e25a9f0cd4bde8958642d36690cf709849f5ee` | Filter destinations at path table load time | Pending review | Changes `RNS/Transport.py` |
+| 14 | `20e25a9f0cd4bde8958642d36690cf709849f5ee` | Filter destinations at path table load time | Integrated | Destination type filter applied to restored paths |
 | 15 | `134dc6777c0dd29404e61b36d4094f4e35b88b3e` | Added filtered traffic stats and display in rnstatus | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 
 ## Per-Commit Analysis
@@ -194,13 +194,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 14. `20e25a9f` — Filter destinations at path table load time
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** When the path table is loaded from storage, a path is skipped (and counted in the load log as `N filtered`) when its cached announce's name hash, the 10 bytes after the public key, is a blocked destination type, or when `required_destinations_only` is set and the type is not allowed. Types local applications asked for are not considered. Tunnel table paths are not filtered. The load error message now says "path table".
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs restored every live path with its cached announce, whatever its destination type; the filter applied only to announces received afterwards.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `DestinationTypeFilter::admits_restored` (`rns-core/src/transport/destination_filter.rs`) and `TransportEngine::admits_restored_announce` (`rns-core/src/transport/persistence.rs`), checked in `restore_persistence_snapshot` after the interface, cached-announce and expiry checks; rejected paths count as `RestoreStats.filtered_paths`, logged by `rns-net/src/node.rs`. The filter is configured (`node.rs`, `destination_filter_mut`) before the restore runs. Like upstream, an announce too short to hold a name hash is not filtered, and detached tunnel paths are not filtered. Tests: `restored_paths_are_filtered_by_blocked_and_allowed_types_only`, `restore_skips_paths_whose_destination_type_is_filtered`.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 15. `134dc677` — Added filtered traffic stats and display in rnstatus
 
