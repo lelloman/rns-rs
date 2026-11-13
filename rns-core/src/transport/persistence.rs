@@ -49,6 +49,9 @@ pub struct RestoreStats {
     pub paths: usize,
     pub tunnels: usize,
     pub skipped_paths: usize,
+    /// Paths not restored because the destination type filter rejects
+    /// their announce (upstream 20e25a9f).
+    pub filtered_paths: usize,
 }
 
 impl TransportEngine {
@@ -155,6 +158,10 @@ impl TransportEngine {
                 stats.skipped_paths += 1;
                 continue;
             }
+            if !self.admits_restored_announce(&raw) {
+                stats.filtered_paths += 1;
+                continue;
+            }
             let destination_hash = path.destination_hash;
             let entry = PathEntry {
                 timestamp: path.timestamp,
@@ -232,6 +239,28 @@ impl PersistedPath {
 
 fn tail_random_blobs(blobs: &[[u8; 10]]) -> Vec<[u8; 10]> {
     blobs[blobs.len().saturating_sub(PERSIST_RANDOM_BLOBS)..].to_vec()
+}
+
+impl TransportEngine {
+    /// Whether the destination type filter lets a path with this cached
+    /// announce be restored (upstream 20e25a9f). Like upstream, the type is
+    /// the name hash after the announce's public key; an announce too short
+    /// to hold one is not filtered.
+    fn admits_restored_announce(&self, raw: &[u8]) -> bool {
+        let Ok(packet) = RawPacket::unpack(raw) else {
+            return true;
+        };
+        let start = constants::KEYSIZE / 8;
+        let Some(name_hash) = packet
+            .data()
+            .get(start..start + constants::NAME_HASH_LENGTH / 8)
+        else {
+            return true;
+        };
+        let mut destination_type = [0u8; constants::NAME_HASH_LENGTH / 8];
+        destination_type.copy_from_slice(name_hash);
+        self.destination_filter.admits_restored(&destination_type)
+    }
 }
 
 fn load_cached_announce<F>(path: &PersistedPath, lookup: &mut F) -> Option<Vec<u8>>
@@ -369,6 +398,76 @@ mod tests {
             &[0x77; 32],
         )
         .unwrap()
+    }
+
+    /// An announce whose name hash (after the 64-byte public key) is
+    /// `name_hash`.
+    fn typed_announce(dest: [u8; 16], name_hash: [u8; 10]) -> RawPacket {
+        let mut data = vec![0x77; constants::KEYSIZE / 8];
+        data.extend_from_slice(&name_hash);
+        data.extend_from_slice(&[0x66; 74]);
+        RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &dest,
+            None,
+            constants::CONTEXT_NONE,
+            &data,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn restore_skips_paths_whose_destination_type_is_filtered() {
+        // Upstream 20e25a9f: a blocked type, or with required_only a type
+        // not allowed, is not loaded into the path table.
+        let blocked = typed_announce([1; 16], [0xB1; 10]);
+        let allowed = typed_announce([2; 16], [0xA1; 10]);
+        let other = typed_announce([3; 16], [0xC1; 10]);
+        let short = announce([4; 16]);
+        let packets = [&blocked, &allowed, &other, &short];
+        let snapshot = |packets: &[&RawPacket]| TransportStateSnapshot {
+            packet_hashes: Vec::new(),
+            paths: packets
+                .iter()
+                .map(|packet| persisted_path(packet.destination_hash, packet, "alpha"))
+                .collect(),
+            tunnels: Vec::new(),
+        };
+        let cache: BTreeMap<[u8; 32], Vec<u8>> = packets
+            .iter()
+            .map(|packet| (packet.packet_hash, packet.raw.clone()))
+            .collect();
+
+        let mut engine = TransportEngine::new(config(8));
+        engine.register_interface(interface(7, "alpha"));
+        engine.destination_filter_mut().block([0xB1; 10]);
+        let stats = engine.restore_persistence_snapshot(snapshot(&packets), 100.0, |hash| {
+            cache.get(hash).cloned()
+        });
+        assert_eq!((stats.paths, stats.filtered_paths), (3, 1));
+        assert!(!engine.has_path(&[1; 16]));
+        assert!(engine.has_path(&[2; 16]));
+        assert!(engine.has_path(&[3; 16]));
+        // Too short to carry a type: not filtered, as upstream.
+        assert!(engine.has_path(&[4; 16]));
+
+        let mut engine = TransportEngine::new(config(8));
+        engine.register_interface(interface(7, "alpha"));
+        engine.destination_filter_mut().set_required_only(true);
+        engine.destination_filter_mut().allow([0xA1; 10]);
+        let stats = engine.restore_persistence_snapshot(snapshot(&packets), 100.0, |hash| {
+            cache.get(hash).cloned()
+        });
+        assert_eq!((stats.paths, stats.filtered_paths), (2, 2));
+        assert!(engine.has_path(&[2; 16]));
+        assert!(!engine.has_path(&[3; 16]));
     }
 
     fn persisted_path(dest: [u8; 16], packet: &RawPacket, iface: &str) -> PersistedPath {

@@ -105,6 +105,15 @@ impl DestinationTypeFilter {
     /// true for an announce sent with zero hops over a local client
     /// connection, in either direction: a client's own destination at the
     /// shared instance, or the shared instance's own destination at a client.
+    /// The check upstream applies to paths loaded from storage (rgit
+    /// `20e25a9f`): a blocked type, or with `required_only` a type that is
+    /// not allowed, is not restored. Types local applications ask for are
+    /// not considered; none have asked yet when the path table is loaded.
+    pub fn admits_restored(&self, destination_type: &DestinationType) -> bool {
+        !self.blocked.contains(destination_type)
+            && (!self.required_only || self.allowed.contains(destination_type))
+    }
+
     pub fn allows(&self, destination_type: &DestinationType, own_local_announce: bool) -> bool {
         if self.blocked.contains(destination_type) {
             return false;
@@ -130,6 +139,27 @@ mod tests {
             destination_type("rnsh"),
             crate::destination::name_hash("rnsh", &[])
         );
+    }
+
+    #[test]
+    fn restored_paths_are_filtered_by_blocked_and_allowed_types_only() {
+        let lxmf = destination_type("lxmf.delivery");
+        let nomad = destination_type("nomadnetwork.node");
+        let mut filter = DestinationTypeFilter::default();
+        assert!(filter.admits_restored(&lxmf));
+
+        filter.block(nomad);
+        assert!(filter.admits_restored(&lxmf));
+        assert!(!filter.admits_restored(&nomad));
+
+        filter.set_required_only(true);
+        filter.allow(lxmf);
+        let other = destination_type("rnsh");
+        filter.want(other, b"app");
+        assert!(filter.admits_restored(&lxmf));
+        // A wanted type is let through at ingress but not at load time.
+        assert!(filter.allows(&other, false));
+        assert!(!filter.admits_restored(&other));
     }
 
     #[test]
