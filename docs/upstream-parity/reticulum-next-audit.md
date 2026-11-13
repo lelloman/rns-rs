@@ -51,7 +51,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 5 | `70b9d58f15d88a3e33402f06f30cad411001e0ed` | Cleaned up announce cap properties | Structurally covered | `new_interface_queue_allows_its_first_announce_at_once` |
 | 6 | `1855f9927fe23990c2da8d49c1409b85b1b7ef8f` | Cleanup | Non-runtime | Log wording only |
 | 7 | `0bc5c37c399cb6c489ade2ea3678c531bfc21390` | Reset DPEC on reconnect | Structurally covered | Fresh writer per connection, documented on `BackboneClientWriter` |
-| 8 | `9ef6c90ea6196057278685aabab06674e73ffa44` | Use RLock in logging | Pending review | Changes `RNS/__init__.py` |
+| 8 | `9ef6c90ea6196057278685aabab06674e73ffa44` | Use RLock in logging | Structurally covered | No re-entrant logging path; documented on `RotatingLogWriter` |
 | 9 | `5f2dbc169d5b3cb497d0f7067acef823e5619f30` | Added ability to load a blocked_ips file from the current config dir | Pending review | Changes `RNS/Reticulum.py` |
 | 10 | `3c4b271f4133ed1f00eae04b1f3160365f4d02ec` | Added client_limit option to BackboneInterface | Pending review | Changes `RNS/Interfaces/BackboneInterface.py` |
 | 11 | `db67adea0a6cc4289580ff7a19923605d48870e8` | Fixed path usage display | Pending review | Changes `RNS/Utilities/rnpath.py` |
@@ -134,13 +134,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 8. `9ef6c90e` — Use RLock in logging
 
-**Upstream change:** Pending review (changes `RNS/__init__.py`).
+**Upstream change:** `RNS.logging_lock` becomes an `RLock`. `RNS.log` holds it while writing, and when a log file write or rotation fails, or the log callback raises, its exception handler calls `log()` again from inside the lock; with a plain `Lock` that deadlocked the logging thread, and with it the process. Operator-visible only: a full disk or broken log callback no longer hangs `rnsd`.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs logs through the `log` facade and `env_logger`; the service log file writer (`RotatingLogWriter`, `rns-cli/src/rnsd.rs`) returns write and rotation failures as `io::Error` and never logs, so nothing re-enters the logger. A pre-existing difference outside this commit: on a log file failure upstream falls back to stdout, while rns-rs drops the line.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** The non-re-entrant failure path is documented on `RotatingLogWriter` with this commit cited.
 
-**Final disposition:** Pending review.
+**Final disposition:** Structurally covered.
 
 ### 9. `5f2dbc16` — Added ability to load a blocked_ips file from the current config dir
 
