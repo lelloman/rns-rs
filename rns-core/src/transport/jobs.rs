@@ -175,8 +175,15 @@ pub fn cull_path_table(
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     now: f64,
     unused_path_linger: f64,
-    unused_pool_target: usize,
+    pool: UnusedPoolLimits,
 ) -> usize {
+    // Upstream counts used paths over the whole table before removing stale
+    // ones, and sizes the never-used pool from that count.
+    let used_count = path_table
+        .values()
+        .map(|ps| ps.iter().filter(|p| p.used != 0.0).count())
+        .sum();
+    let unused_pool_target = pool.target(used_count);
     let mut culled = 0usize;
     let mut unused: alloc::vec::Vec<(u8, f64, [u8; 16], [u8; 16])> = alloc::vec::Vec::new();
     for (dest_hash, ps) in path_table.iter_mut() {
@@ -221,6 +228,39 @@ pub fn cull_path_table(
         );
     }
     culled
+}
+
+/// The bounds on the pool of never-used paths (upstream 023849ed): its
+/// target is `max` until more than `used_target` paths are in use, then
+/// shrinks by one per extra used path, down to `min`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnusedPoolLimits {
+    pub max: usize,
+    pub min: usize,
+    pub used_target: usize,
+}
+
+impl UnusedPoolLimits {
+    pub const UPSTREAM: Self = Self {
+        max: crate::constants::PATH_POOL_UNUSED_MAX,
+        min: crate::constants::PATH_POOL_UNUSED_MIN,
+        used_target: crate::constants::PATH_POOL_USED_TARGET,
+    };
+
+    /// A target that does not depend on how many paths are in use.
+    pub const fn fixed(target: usize) -> Self {
+        Self {
+            max: target,
+            min: target,
+            used_target: usize::MAX,
+        }
+    }
+
+    /// The never-used pool target with `used_count` paths in use.
+    pub fn target(&self, used_count: usize) -> usize {
+        let trim = used_count.saturating_sub(self.used_target);
+        self.min.max(self.max.saturating_sub(trim))
+    }
 }
 
 /// Remove path state entries that no longer have a corresponding path.
@@ -445,10 +485,52 @@ mod tests {
             },
         );
 
-        // now > 100.0 + 480.0 = 580.0
-        let count = cull_reverse_table(&mut table, &interfaces, 600.0);
+        // Kept for three minutes (upstream 023849ed), then culled.
+        assert_eq!(cull_reverse_table(&mut table, &interfaces, 280.0), 0);
+        let count = cull_reverse_table(&mut table, &interfaces, 281.0);
         assert_eq!(count, 1);
         assert!(table.is_empty());
+    }
+
+    #[test]
+    fn unused_path_pool_target_follows_used_count() {
+        let pool = UnusedPoolLimits::UPSTREAM;
+        assert_eq!(pool.target(0), 1536);
+        assert_eq!(pool.target(2048), 1536);
+        assert_eq!(pool.target(2148), 1436);
+        assert_eq!(pool.target(3072), 512);
+        assert_eq!(pool.target(10_000), 512);
+        assert_eq!(UnusedPoolLimits::fixed(2).target(1_000_000), 2);
+    }
+
+    #[test]
+    fn unused_pool_shrinks_once_used_paths_exceed_their_target() {
+        // Three used paths over a used target of one trim the unused pool
+        // from four to two, culling the earliest-expiring unused paths.
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+        let mut table = BTreeMap::new();
+        for i in 0..3u8 {
+            table.insert([0x10 + i; 16], path_with_usage(100.0, 9_000.0, 150.0));
+        }
+        for i in 0..4u8 {
+            table.insert(
+                [0x20 + i; 16],
+                path_with_usage(100.0, 1_000.0 + f64::from(i), 0.0),
+            );
+        }
+        let pool = UnusedPoolLimits {
+            max: 4,
+            min: 1,
+            used_target: 1,
+        };
+        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, pool);
+        assert_eq!(count, 2);
+        assert!(!table.contains_key(&[0x20; 16]));
+        assert!(!table.contains_key(&[0x21; 16]));
+        assert!(table.contains_key(&[0x22; 16]));
+        assert!(table.contains_key(&[0x23; 16]));
+        assert_eq!(table.len(), 5);
     }
 
     #[test]
@@ -562,7 +644,7 @@ mod tests {
             &interfaces,
             600.0,
             crate::constants::UNUSED_PATH_LINGER,
-            crate::constants::PATH_POOL_UNUSED_TARGET,
+            UnusedPoolLimits::UPSTREAM,
         );
         assert_eq!(count, 1);
     }
@@ -593,7 +675,13 @@ mod tests {
         table.insert([0x11; 16], path_with_usage(100.0, 9999.0, 0.0));
         table.insert([0x22; 16], path_with_usage(100.0, 9999.0, 150.0));
 
-        let count = cull_path_table(&mut table, &interfaces, 300.0, 100.0, 2048);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            300.0,
+            100.0,
+            UnusedPoolLimits::fixed(2048),
+        );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x11; 16]));
         assert!(table.contains_key(&[0x22; 16]));
@@ -609,7 +697,13 @@ mod tests {
         table.insert([0x32; 16], path_with_usage(100.0, 2000.0, 0.0));
         table.insert([0x33; 16], path_with_usage(100.0, 3000.0, 0.0));
 
-        let count = cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            9999.0,
+            UnusedPoolLimits::fixed(2),
+        );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x31; 16]));
         assert!(table.contains_key(&[0x32; 16]));
@@ -632,14 +726,26 @@ mod tests {
         }
 
         assert_eq!(
-            cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2),
+            cull_path_table(
+                &mut table,
+                &interfaces,
+                200.0,
+                9999.0,
+                UnusedPoolLimits::fixed(2)
+            ),
             3
         );
         assert_eq!(table.len(), 2);
         assert!(table.contains_key(&[0x53; 16]));
         assert!(table.contains_key(&[0x54; 16]));
         assert_eq!(
-            cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2),
+            cull_path_table(
+                &mut table,
+                &interfaces,
+                200.0,
+                9999.0,
+                UnusedPoolLimits::fixed(2)
+            ),
             0
         );
         assert_eq!(table.len(), 2);
@@ -657,7 +763,13 @@ mod tests {
         table.insert([0x42; 16], path_with_usage(100.0, 1000.0, 0.0));
         table.insert([0x43; 16], path_with_usage(100.0, 2000.0, 0.0));
 
-        let count = cull_path_table(&mut table, &interfaces, 200.0, 9999.0, 2);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            9999.0,
+            UnusedPoolLimits::fixed(2),
+        );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x42; 16]));
         assert!(table.contains_key(&[0x41; 16]));
@@ -716,18 +828,36 @@ mod tests {
         }
         // Past the plain linger: everything but the slow-interface path goes.
         let now = 100.0 + linger + 1.0;
-        let count = cull_path_table(&mut table, &interfaces, now, linger, 2048);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            now,
+            linger,
+            UnusedPoolLimits::fixed(2048),
+        );
         assert_eq!(count, 3);
         assert!(table.contains_key(&[0x51; 16]));
 
         // The slow-interface path survives until the factored linger passes.
         let before_factored = 100.0 + linger * crate::constants::PATH_SLOW_LINGER_FACTOR;
         assert_eq!(
-            cull_path_table(&mut table, &interfaces, before_factored, linger, 2048),
+            cull_path_table(
+                &mut table,
+                &interfaces,
+                before_factored,
+                linger,
+                UnusedPoolLimits::fixed(2048)
+            ),
             0
         );
         assert_eq!(
-            cull_path_table(&mut table, &interfaces, before_factored + 1.0, linger, 2048),
+            cull_path_table(
+                &mut table,
+                &interfaces,
+                before_factored + 1.0,
+                linger,
+                UnusedPoolLimits::fixed(2048)
+            ),
             1
         );
         assert!(table.is_empty());
@@ -743,11 +873,23 @@ mod tests {
         );
         // A used path expires on its own timer regardless of the interface.
         assert_eq!(
-            cull_path_table(&mut table, &interfaces, 499.0, 10.0, 2048),
+            cull_path_table(
+                &mut table,
+                &interfaces,
+                499.0,
+                10.0,
+                UnusedPoolLimits::fixed(2048)
+            ),
             0
         );
         assert_eq!(
-            cull_path_table(&mut table, &interfaces, 501.0, 10.0, 2048),
+            cull_path_table(
+                &mut table,
+                &interfaces,
+                501.0,
+                10.0,
+                UnusedPoolLimits::fixed(2048)
+            ),
             1
         );
     }
@@ -781,7 +923,13 @@ mod tests {
 
         // Cull two to reach a pool target of three: the two earliest-expiring
         // fast-interface paths go, the slow-interface ones stay.
-        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, 3);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            99_999.0,
+            UnusedPoolLimits::fixed(3),
+        );
         assert_eq!(count, 2);
         assert!(table.contains_key(&[0x71; 16]));
         assert!(table.contains_key(&[0x72; 16]));
@@ -790,12 +938,24 @@ mod tests {
         assert!(table.contains_key(&[0x75; 16]), "fast, expires 4000");
 
         // The last fast-interface path goes before any slow one.
-        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, 2);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            99_999.0,
+            UnusedPoolLimits::fixed(2),
+        );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x75; 16]));
 
         // Once only slow-interface paths remain they are culled by expiry.
-        let count = cull_path_table(&mut table, &interfaces, 200.0, 99_999.0, 1);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            99_999.0,
+            UnusedPoolLimits::fixed(1),
+        );
         assert_eq!(count, 1);
         assert!(!table.contains_key(&[0x71; 16]));
         assert!(table.contains_key(&[0x72; 16]));
@@ -843,7 +1003,7 @@ mod tests {
             &interfaces,
             1100.0,
             crate::constants::UNUSED_PATH_LINGER,
-            crate::constants::PATH_POOL_UNUSED_TARGET,
+            UnusedPoolLimits::UPSTREAM,
         );
         assert_eq!(count, 0);
         assert_eq!(table.len(), 1);

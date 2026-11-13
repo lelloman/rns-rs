@@ -222,6 +222,16 @@ impl TunnelTable {
         }
     }
 
+    /// Void a tunnel whose interface is gone for good (a removed dynamic
+    /// interface): its paths wait `TUNNEL_RECONNECT_WINDOW` for the
+    /// endpoint to synthesize the tunnel again (upstream 023849ed).
+    pub fn release_tunnel_interface(&mut self, tunnel_id: &[u8; 32], now: f64) {
+        if let Some(entry) = self.tunnels.get_mut(tunnel_id) {
+            entry.interface = None;
+            entry.expires = now + constants::TUNNEL_RECONNECT_WINDOW;
+        }
+    }
+
     /// Store a path in a tunnel (called when announce arrives on tunnel interface).
     pub fn store_tunnel_path(
         &mut self,
@@ -275,12 +285,18 @@ impl TunnelTable {
         expired
     }
 
-    /// Void interfaces that are no longer registered.
-    pub fn void_missing_interfaces<F: Fn(&InterfaceId) -> bool>(&mut self, is_registered: F) {
+    /// Void interfaces that are no longer registered; their tunnels wait
+    /// `TUNNEL_RECONNECT_WINDOW` for the interface to come back.
+    pub fn void_missing_interfaces<F: Fn(&InterfaceId) -> bool>(
+        &mut self,
+        now: f64,
+        is_registered: F,
+    ) {
         for entry in self.tunnels.values_mut() {
             if let Some(iface) = entry.interface {
                 if !is_registered(&iface) {
                     entry.interface = None;
+                    entry.expires = now + constants::TUNNEL_RECONNECT_WINDOW;
                 }
             }
         }
@@ -704,10 +720,109 @@ mod tests {
         table.handle_tunnel(t2, InterfaceId(2), now, constants::DESTINATION_TIMEOUT);
 
         // Only interface 1 is registered
-        table.void_missing_interfaces(|id| *id == InterfaceId(1));
+        table.void_missing_interfaces(now + 5.0, |id| *id == InterfaceId(1));
 
         assert_eq!(table.get(&t1).unwrap().interface, Some(InterfaceId(1)));
         assert_eq!(table.get(&t2).unwrap().interface, None);
+        // The voided tunnel waits for its interface to come back (023849ed).
+        assert_eq!(
+            table.get(&t1).unwrap().expires,
+            now + constants::TUNNEL_TIMEOUT
+        );
+        assert_eq!(
+            table.get(&t2).unwrap().expires,
+            now + 5.0 + constants::TUNNEL_RECONNECT_WINDOW
+        );
+    }
+
+    #[test]
+    fn test_tunnel_table_released_interface_starts_reconnect_window() {
+        let mut table = TunnelTable::new();
+        let tunnel_id = [0x99; 32];
+        let now = 1000.0;
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(3),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
+        table.store_tunnel_path(
+            &tunnel_id,
+            [0x01; 16],
+            TunnelPath {
+                timestamp: now,
+                received_from: [0xBB; 16],
+                hops: 2,
+                expires: now + constants::DESTINATION_TIMEOUT,
+                random_blobs: Vec::new(),
+                packet_hash: [0xCC; 32],
+            },
+            now,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
+        );
+
+        table.release_tunnel_interface(&tunnel_id, now + 10.0);
+        let entry = table.get(&tunnel_id).unwrap();
+        assert_eq!(entry.interface, None);
+        assert_eq!(
+            entry.expires,
+            now + 10.0 + constants::TUNNEL_RECONNECT_WINDOW
+        );
+
+        // Kept through the window, culled after it.
+        assert!(table
+            .cull(now + 10.0 + constants::TUNNEL_RECONNECT_WINDOW)
+            .is_empty());
+        assert_eq!(
+            table.cull(now + 11.0 + constants::TUNNEL_RECONNECT_WINDOW),
+            vec![tunnel_id]
+        );
+    }
+
+    #[test]
+    fn test_tunnel_table_reattach_within_window_restores_expiry() {
+        let mut table = TunnelTable::new();
+        let tunnel_id = [0x9A; 32];
+        let now = 1000.0;
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(3),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
+        table.release_tunnel_interface(&tunnel_id, now);
+        let later = now + constants::TUNNEL_RECONNECT_WINDOW - 1.0;
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(4),
+            later,
+            constants::DESTINATION_TIMEOUT,
+        );
+        let entry = table.get(&tunnel_id).unwrap();
+        assert_eq!(entry.interface, Some(InterfaceId(4)));
+        assert_eq!(entry.expires, later + constants::TUNNEL_TIMEOUT);
+    }
+
+    #[test]
+    fn test_tunnel_table_void_tunnel_keeps_expiry() {
+        // A static interface going offline voids the tunnel but does not
+        // start the reconnect window; upstream keeps such interfaces in
+        // Transport.interfaces.
+        let mut table = TunnelTable::new();
+        let tunnel_id = [0x9B; 32];
+        let now = 1000.0;
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(5),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
+        table.void_tunnel_interface(&tunnel_id);
+        assert_eq!(
+            table.get(&tunnel_id).unwrap().expires,
+            now + constants::TUNNEL_TIMEOUT
+        );
     }
 
     #[test]
