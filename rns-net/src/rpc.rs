@@ -2747,7 +2747,7 @@ fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
                 ),
                 (
                     PickleValue::String("interface".into()),
-                    PickleValue::String(e.interface_name.clone()),
+                    PickleValue::String(e.interface_display_name.clone()),
                 ),
                 // Upstream 21170877: the known destination's stamp value and
                 // link request cost, None when it is not a known destination
@@ -5152,6 +5152,7 @@ mod tests {
             used: 0.0,
             interface: crate::InterfaceId(1),
             interface_name: "iface".into(),
+            interface_display_name: "TCPInterface[test/127.0.0.1:4242]".into(),
             stamp_value,
             lr_cost,
         };
@@ -5170,6 +5171,11 @@ mod tests {
         assert_eq!(
             entries[0].get("lr_cost").and_then(|v| v.as_float()),
             Some(4915.0 / 256.0)
+        );
+        // Upstream reports the receiving interface as str(interface).
+        assert_eq!(
+            entries[0].get("interface").and_then(|v| v.as_str()),
+            Some("TCPInterface[test/127.0.0.1:4242]")
         );
         assert_eq!(entries[1].get("value"), Some(&PickleValue::None));
         assert_eq!(entries[1].get("lr_cost"), Some(&PickleValue::None));

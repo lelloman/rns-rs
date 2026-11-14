@@ -621,6 +621,10 @@ impl Driver {
             .path_table_entries()
             .filter(|(_, entry)| max_hops.is_none_or(|max| entry.hops <= max))
             .map(|(hash, entry)| {
+                let iface_display_name = self
+                    .interfaces
+                    .get(&entry.receiving_interface)
+                    .map(|e| self.interface_display_name(e));
                 let iface_name = self
                     .interfaces
                     .get(&entry.receiving_interface)
@@ -640,6 +644,8 @@ impl Driver {
                     expires: entry.expires,
                     used: entry.used,
                     interface: entry.receiving_interface,
+                    interface_display_name: iface_display_name
+                        .unwrap_or_else(|| iface_name.clone()),
                     interface_name: iface_name,
                     stamp_value: known.map(|known| known.stamp_value),
                     lr_cost: known.and_then(|known| known.lr_cost),
@@ -971,7 +977,8 @@ impl Driver {
                     .engine
                     .next_hop_interface(&dest_hash)
                     .and_then(|id| self.interfaces.get(&id))
-                    .map(|entry| entry.info.name.clone());
+                    // Upstream answers with str(interface).
+                    .map(|entry| self.interface_display_name(entry));
                 QueryResponse::NextHopIfName(name)
             }
             QueryRequest::LinkCount => QueryResponse::LinkCount(

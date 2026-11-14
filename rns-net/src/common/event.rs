@@ -1197,6 +1197,9 @@ pub struct PathTableEntry {
     pub used: f64,
     pub interface: InterfaceId,
     pub interface_name: String,
+    /// Upstream's `str(interface)` for the receiving interface, as its RPC
+    /// reports it.
+    pub interface_display_name: String,
     /// Stamp value of the destination's announce, when it is a known
     /// destination (upstream `21170877` path table `value`).
     pub stamp_value: Option<rns_core::stamp::StampValue>,
