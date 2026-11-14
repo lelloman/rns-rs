@@ -2190,7 +2190,9 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     announce_rate_penalty: 0.0,
                     announce_cap: constants::ANNOUNCE_CAP,
                     is_local_client: false,
-                    wants_tunnel: false,
+                    // Synthesize a tunnel on each connect, as upstream's
+                    // BackboneClientInterface does.
+                    wants_tunnel: true,
                     tunnel_id: None,
                     mtu: HW_MTU as u32,
                     ingress_control: ctx.ingress_control,
@@ -4135,5 +4137,30 @@ mod tests {
             parse_positive_duration_secs(&params, "idle_timeout"),
             Some(Duration::from_millis(2500))
         );
+    }
+
+    #[test]
+    fn backbone_client_wants_a_tunnel() {
+        // Upstream's BackboneClientInterface synthesizes a tunnel on each
+        // connect; accepted peers do not.
+        let port = find_free_port();
+        let _listener = std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, _rx) = crate::event::channel();
+        let mut params = HashMap::new();
+        params.insert("remote".into(), "127.0.0.1".into());
+        params.insert("target_port".into(), port.to_string());
+        let config = BackboneInterfaceFactory
+            .parse_config("backbone-dialer", InterfaceId(78), &params)
+            .unwrap();
+        let result = BackboneInterfaceFactory
+            .start(config, crate::interface::test_start_context(tx))
+            .unwrap();
+        let StartResult::Simple { info, control, .. } = result else {
+            panic!("expected a simple interface");
+        };
+        assert!(info.wants_tunnel);
+        if let Some(control) = control {
+            control.request_stop();
+        }
     }
 }

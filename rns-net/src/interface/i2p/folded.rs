@@ -188,7 +188,7 @@ impl Session {
                 peer,
                 id.0
             );
-            let event = match self.writer(&stream, id, &peer) {
+            let event = match self.writer(&stream, id, &peer, true) {
                 Ok(event) => event,
                 Err(e) => {
                     log::warn!("[{}] failed to clone stream: {}", self.name, e);
@@ -214,14 +214,20 @@ impl Session {
     }
 
     /// The event bringing up a peer whose writer writes `stream`.
-    fn writer(&self, stream: &TcpStream, id: InterfaceId, remote: &str) -> io::Result<Event> {
+    fn writer(
+        &self,
+        stream: &TcpStream,
+        id: InterfaceId,
+        remote: &str,
+        outbound: bool,
+    ) -> io::Result<Event> {
         let writer = Box::new(I2pWriter {
             stream: stream.try_clone()?,
         });
         Ok(peer_up(
             id,
             writer,
-            peer_info(id, remote, self.ingress_control),
+            peer_info(id, remote, self.ingress_control, outbound),
             self.dynamic_template.as_ref(),
         ))
     }
@@ -417,7 +423,7 @@ impl StreamSource {
             remote,
             id.0
         );
-        let up = match session.writer(&self.stream, id, &remote) {
+        let up = match session.writer(&self.stream, id, &remote, false) {
             Ok(up) => up,
             Err(e) => {
                 log::warn!("[{}] failed to clone accepted stream: {}", session.name, e);

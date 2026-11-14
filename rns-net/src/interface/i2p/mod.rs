@@ -116,10 +116,13 @@ impl Writer for I2pWriter {
 }
 
 /// The interface a connected peer gets, named after `remote`.
+/// Outbound peers synthesize a tunnel on each connect, as upstream's
+/// initiating `I2PInterfacePeer` does; accepted peers do not.
 fn peer_info(
     client_id: InterfaceId,
     remote: &str,
     ingress_control: rns_core::transport::types::IngressControlConfig,
+    outbound: bool,
 ) -> InterfaceInfo {
     InterfaceInfo {
         stamp_costs: Default::default(),
@@ -139,7 +142,7 @@ fn peer_info(
         announce_rate_penalty: 0.0,
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: false,
-        wants_tunnel: false,
+        wants_tunnel: outbound,
         tunnel_id: None,
         mtu: 65535,
         ia_freq: 0.0,
@@ -458,7 +461,7 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                 let event = peer_up(
                     client_id,
                     writer,
-                    peer_info(client_id, &peer_addr, ingress_control),
+                    peer_info(client_id, &peer_addr, ingress_control, true),
                     dynamic_template.as_ref(),
                 );
                 if tx.send(event).is_err() {
@@ -552,7 +555,7 @@ fn acceptor_loop(context: AcceptorContext) {
                 let event = peer_up(
                     client_id,
                     writer,
-                    peer_info(client_id, &remote_b32, ingress_control),
+                    peer_info(client_id, &remote_b32, ingress_control, false),
                     dynamic_template.as_ref(),
                 );
                 if tx.send(event).is_err() {
@@ -758,5 +761,13 @@ mod tests {
         let decoded = decoder.feed_with_diagnostics(&hdlc::frame(&vec![0x5a; HW_MTU + 1]));
         assert!(decoded.frames.is_empty());
         assert_eq!(decoded.invalid_frame_lengths, vec![HW_MTU + 1]);
+    }
+
+    #[test]
+    fn only_outbound_i2p_peers_want_a_tunnel() {
+        // Upstream's initiating I2PInterfacePeer synthesizes a tunnel.
+        let ic = rns_core::transport::types::IngressControlConfig::enabled();
+        assert!(peer_info(InterfaceId(1), "peer.b32.i2p", ic, true).wants_tunnel);
+        assert!(!peer_info(InterfaceId(2), "peer.b32.i2p", ic, false).wants_tunnel);
     }
 }

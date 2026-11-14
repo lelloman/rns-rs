@@ -4717,6 +4717,102 @@ fn apply_stamp_config_sets_the_engine_hop_limiter() {
     assert_eq!(driver.engine.hop_limiter(), 7);
 }
 
+/// A client driver whose interface 1 dials out (`wants_tunnel`); returns
+/// the frames it sends.
+fn dialing_client_driver() -> (Driver, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let mut driver = new_test_driver();
+    driver.transport_identity = Some(Identity::new(&mut OsRng));
+    let mut info = make_interface_info(1);
+    info.name = "TCPInterface[dialer]".into();
+    info.wants_tunnel = true;
+    driver.engine.register_interface(info.clone());
+    let (writer, sent) = MockWriter::new();
+    let mut entry = make_entry(1, Box::new(writer), false);
+    entry.info = info;
+    driver.interfaces.insert(InterfaceId(1), entry);
+    (driver, sent)
+}
+
+#[test]
+fn dialing_interface_synthesizes_a_tunnel_on_each_connect() {
+    let (mut client, sent) = dialing_client_driver();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    assert_eq!(sent.lock().unwrap().len(), 1);
+    client.handle_interface_down_event(InterfaceId(1));
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 2);
+    // The same tunnel id each time (same identity and interface), so the
+    // server can reattach paths after a reconnect.
+    assert_eq!(sent[0][..2 + 16 + 1 + 96], sent[1][..2 + 16 + 1 + 96]);
+}
+
+#[test]
+fn synthesized_tunnel_attaches_to_the_receiving_interface() {
+    // `Transport.tunnel_synthesize_handler` hands the tunnel to the
+    // interface the synthesis arrived on.
+    let (mut client, sent) = dialing_client_driver();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    let synthesis = sent.lock().unwrap()[0].clone();
+
+    let mut server = new_test_driver();
+    register_test_generic_interface(&mut server, 4, "other-client");
+    register_test_generic_interface(&mut server, 5, "spawned-client");
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+
+    let tunnel_id = server
+        .engine
+        .interface_info(&InterfaceId(5))
+        .and_then(|info| info.tunnel_id)
+        .expect("tunnel on the receiving interface");
+    assert_eq!(
+        server
+            .engine
+            .tunnel_table()
+            .get(&tunnel_id)
+            .unwrap()
+            .interface,
+        Some(InterfaceId(5))
+    );
+    assert_eq!(
+        server
+            .engine
+            .interface_info(&InterfaceId(4))
+            .and_then(|info| info.tunnel_id),
+        None
+    );
+    assert_eq!(
+        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
+        0
+    );
+}
+
+#[test]
+fn tunnel_synthesis_with_a_bad_signature_is_ignored() {
+    let (mut client, sent) = dialing_client_driver();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    let mut synthesis = sent.lock().unwrap()[0].clone();
+    let last = synthesis.len() - 1;
+    synthesis[last] ^= 0x01;
+
+    let mut server = new_test_driver();
+    register_test_generic_interface(&mut server, 5, "spawned-client");
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+
+    assert_eq!(
+        server
+            .engine
+            .interface_info(&InterfaceId(5))
+            .and_then(|info| info.tunnel_id),
+        None
+    );
+    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+    assert_eq!(
+        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
+        0
+    );
+}
+
 #[test]
 fn interface_stats_report_the_tunnel_id() {
     // Upstream 9b6b724b reports `tunnel_id` per interface: none until a
