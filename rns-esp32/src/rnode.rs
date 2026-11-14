@@ -17,6 +17,7 @@ use esp_idf_hal::uart::UartDriver;
 use crate::display::SharedStats;
 use crate::lora::SharedRadio;
 use crate::version;
+use rns_esp32::channel::{airtime_limit, Airtime, Csma};
 use rns_esp32::protocol::{
     kiss_encode, reception_stat_frames, validate_radio_config, DetectBuffer, KissDecoder,
     KissFrame, RadioConfig, CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT, CMD_FREQUENCY,
@@ -106,6 +107,9 @@ const MCU_ESP32: u8 = 0x01;
 
 const DETECT_POLL_MS: u32 = 5;
 
+/// Frames from the host held while the channel is busy or airtime-locked.
+const TX_QUEUE_MAX_FRAMES: usize = 32;
+
 /// How long a host that detected the board may stay silent before it has
 /// switched the radio on, after which the board reverts to standalone. Once
 /// the radio is on the bridge stays up, as upstream firmware, until the host
@@ -135,6 +139,20 @@ pub struct RNodeBridge<T: BridgeTransport> {
     pending_power: Option<i8>,
     /// The host switched the radio on.
     radio_on: bool,
+    /// Frames from the host waiting for the channel, oldest first.
+    tx_queue: std::collections::VecDeque<Vec<u8>>,
+    /// Listen before talk for the configured channel.
+    csma: Csma,
+    /// This node's own airtime and the host's limits on it.
+    airtime: Airtime,
+    short_term_limit: Option<f64>,
+    long_term_limit: Option<f64>,
+    /// The configured channel, for airtime accounting.
+    channel: RadioConfig,
+    /// Origin of the millisecond clock the channel logic runs on.
+    epoch: Instant,
+    /// KISS decoder for the host's bytes.
+    decoder: KissDecoder,
 }
 
 impl<T: BridgeTransport> RNodeBridge<T> {
@@ -157,6 +175,23 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             pending_cr: None,
             pending_power: None,
             radio_on: false,
+            tx_queue: std::collections::VecDeque::new(),
+            csma: Csma::new(
+                crate::config::LORA_SPREADING_FACTOR,
+                crate::config::LORA_BANDWIDTH,
+            ),
+            airtime: Airtime::new(),
+            short_term_limit: None,
+            long_term_limit: None,
+            channel: RadioConfig {
+                frequency: crate::config::LORA_FREQUENCY,
+                bandwidth: crate::config::LORA_BANDWIDTH,
+                spreading_factor: crate::config::LORA_SPREADING_FACTOR,
+                coding_rate: crate::config::LORA_CODING_RATE,
+                tx_power: crate::config::LORA_TX_POWER,
+            },
+            epoch: Instant::now(),
+            decoder: KissDecoder::new(),
         }
     }
 
@@ -164,7 +199,6 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     pub fn run(mut self) -> (BridgeExit, PinDriver<'static, Input>) {
         log::info!("RNode bridge mode active");
 
-        let mut decoder = KissDecoder::new();
         let mut rx_buf = [0u8; 512];
         let mut last_activity = Instant::now();
         let notification = Notification::new();
@@ -208,7 +242,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             let n = self.transport.read(&mut rx_buf, 0);
             if n > 0 {
                 last_activity = Instant::now();
-                let frames = decoder.feed(&rx_buf[..n]);
+                let frames = self.decoder.feed(&rx_buf[..n]);
                 for frame in frames {
                     match self.handle_frame(frame) {
                         Ok(true) => {
@@ -249,6 +283,11 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     log::warn!("RNode bridge: LoRa->serial forwarding failed: {}", err);
                     break BridgeExit::TransportError;
                 }
+            }
+
+            if let Err(err) = self.service_tx_queue() {
+                log::warn!("RNode bridge: serial transport failed: {}", err);
+                break BridgeExit::TransportError;
             }
         };
 
@@ -341,20 +380,18 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             }
             CMD_ST_ALOCK => {
                 if frame.data.len() >= 2 {
-                    log::info!(
-                        "RNode: set ST airtime lock {}",
-                        ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
-                    );
+                    let value = (frame.data[0] as u16) << 8 | frame.data[1] as u16;
+                    log::info!("RNode: set ST airtime lock {}%", value as f32 / 100.0);
+                    self.short_term_limit = airtime_limit(value);
                     let resp = kiss_encode(CMD_ST_ALOCK, &frame.data[..2]);
                     self.transport.write(&resp)?;
                 }
             }
             CMD_LT_ALOCK => {
                 if frame.data.len() >= 2 {
-                    log::info!(
-                        "RNode: set LT airtime lock {}",
-                        ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
-                    );
+                    let value = (frame.data[0] as u16) << 8 | frame.data[1] as u16;
+                    log::info!("RNode: set LT airtime lock {}%", value as f32 / 100.0);
+                    self.long_term_limit = airtime_limit(value);
                     let resp = kiss_encode(CMD_LT_ALOCK, &frame.data[..2]);
                     self.transport.write(&resp)?;
                 }
@@ -372,24 +409,12 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             }
             CMD_DATA => {
                 if !frame.data.is_empty() {
-                    log::debug!("RNode: TX {} bytes over LoRa", frame.data.len());
-                    if let Some(ref stats) = self.stats {
-                        stats.lock().unwrap().bridge_tx_bytes += frame.data.len() as u32;
-                    }
-                    let result = {
-                        let mut radio = self.radio.lock().unwrap();
-                        let r = radio.send(&frame.data);
-                        radio.set_rx_continuous();
-                        r
-                    };
-                    match result {
-                        Ok(()) => {
-                            let resp = kiss_encode(CMD_READY, &[0x01]);
-                            self.transport.write(&resp)?;
-                        }
-                        Err(e) => {
-                            log::error!("RNode: LoRa TX failed: {}", e);
-                        }
+                    // Queued for the channel; upstream refuses frames while
+                    // its queue is full.
+                    if self.tx_queue.len() < TX_QUEUE_MAX_FRAMES {
+                        self.tx_queue.push_back(frame.data);
+                    } else {
+                        log::warn!("RNode: TX queue full, dropping a frame");
                     }
                 }
             }
@@ -398,6 +423,81 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             }
         }
         Ok(false)
+    }
+
+    /// Milliseconds since the bridge started, for the channel logic.
+    fn now_ms(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
+    }
+
+    /// Send the queued frames once the channel allows, as upstream's
+    /// `tx_queue_handler`: nothing while an airtime limit is reached; else
+    /// wait for listen before talk, then send everything queued.
+    fn service_tx_queue(&mut self) -> io::Result<()> {
+        if self.tx_queue.is_empty() || !self.radio_on {
+            return Ok(());
+        }
+        let now = self.now_ms();
+        if self
+            .airtime
+            .locked(now, self.short_term_limit, self.long_term_limit)
+        {
+            return Ok(());
+        }
+        let short_term = self.airtime.short_term(now);
+        self.csma.set_airtime(short_term);
+        let channel_free = !self.radio.lock().unwrap().carrier_detected();
+        let mut random = |lo: u32, hi: u32| {
+            // SAFETY: esp_random reads the hardware random number generator.
+            let r = unsafe { esp_idf_sys::esp_random() };
+            lo + r % (hi - lo + 1)
+        };
+        if !self.csma.may_transmit(now, channel_free, &mut random) {
+            return Ok(());
+        }
+        // One channel access sends everything queued, as upstream's
+        // flush_queue.
+        while let Some(frame) = self.tx_queue.pop_front() {
+            log::debug!("RNode: TX {} bytes over LoRa", frame.len());
+            if let Some(ref stats) = self.stats {
+                stats.lock().unwrap().bridge_tx_bytes += frame.len() as u32;
+            }
+            let result = self.radio.lock().unwrap().send(&frame);
+            let sent_at = self.now_ms();
+            self.airtime.add(sent_at, self.frame_airtime_ms(&frame));
+            match result {
+                Ok(()) => {
+                    let resp = kiss_encode(CMD_READY, &[0x01]);
+                    self.transport.write(&resp)?;
+                }
+                Err(e) => log::error!("RNode: LoRa TX failed: {}", e),
+            }
+        }
+        self.radio.lock().unwrap().set_rx_continuous();
+        Ok(())
+    }
+
+    /// Airtime of a frame: one LoRa packet, or two for a split frame.
+    fn frame_airtime_ms(&self, frame: &[u8]) -> f64 {
+        let channel = self.channel;
+        let preamble = rns_esp32::modem::preamble_symbols(
+            channel.spreading_factor,
+            channel.bandwidth,
+            channel.coding_rate,
+        );
+        rns_esp32::airframe::packets(frame, 0)
+            .unwrap_or_default()
+            .iter()
+            .map(|packet| {
+                rns_esp32::channel::packet_airtime_ms(
+                    packet.len(),
+                    channel.spreading_factor,
+                    channel.bandwidth,
+                    channel.coding_rate,
+                    preamble,
+                )
+            })
+            .sum()
     }
 
     /// Apply pending radio configuration to the SX1262.
@@ -420,6 +520,8 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             return false;
         }
 
+        self.channel = config;
+        self.csma = Csma::new(config.spreading_factor, config.bandwidth);
         let mut radio = self.radio.lock().unwrap();
         radio.reconfigure(
             config.frequency,
