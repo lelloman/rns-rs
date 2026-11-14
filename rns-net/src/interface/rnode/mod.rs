@@ -1112,9 +1112,16 @@ impl InterfaceFactory for RNodeFactory {
             .and_then(|v| crate::config::parse_bool_pub(v))
             .unwrap_or(false);
 
-        let st_alock = params.get("st_alock").and_then(|v| v.parse().ok());
+        // Upstream's keys, with the earlier Rust names still accepted.
+        let st_alock = params
+            .get("airtime_limit_short")
+            .or_else(|| params.get("st_alock"))
+            .and_then(|v| v.parse().ok());
 
-        let lt_alock = params.get("lt_alock").and_then(|v| v.parse().ok());
+        let lt_alock = params
+            .get("airtime_limit_long")
+            .or_else(|| params.get("lt_alock"))
+            .and_then(|v| v.parse().ok());
 
         let id_interval = params.get("id_interval").and_then(|v| v.parse().ok());
 
@@ -1929,6 +1936,43 @@ mod tests {
         assert_eq!(config.subinterfaces[1].vport, 1);
         assert!(!config.subinterfaces[0].outgoing);
         assert_eq!(config.subinterfaces[0].st_alock, Some(12.5));
+    }
+
+    #[test]
+    fn rnode_factory_reads_upstream_airtime_limit_keys() {
+        let parse = |params: &[(&str, &str)]| {
+            let params: HashMap<String, String> = params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let parsed = RNodeFactory
+                .parse_config("radio", InterfaceId(41), &params)
+                .unwrap();
+            let config = parsed.into_any().downcast::<RNodeConfig>().unwrap();
+            (
+                config.subinterfaces[0].st_alock,
+                config.subinterfaces[0].lt_alock,
+            )
+        };
+        // Upstream RNodeInterface reads airtime_limit_short / _long.
+        assert_eq!(
+            parse(&[
+                ("port", "/dev/ttyUSB0"),
+                ("airtime_limit_short", "25"),
+                ("airtime_limit_long", "3.5"),
+            ]),
+            (Some(25.0), Some(3.5))
+        );
+        // The earlier Rust names still work.
+        assert_eq!(
+            parse(&[
+                ("port", "/dev/ttyUSB0"),
+                ("st_alock", "10"),
+                ("lt_alock", "1")
+            ]),
+            (Some(10.0), Some(1.0))
+        );
+        assert_eq!(parse(&[("port", "/dev/ttyUSB0")]), (None, None));
     }
 
     #[test]
