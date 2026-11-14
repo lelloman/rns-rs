@@ -43,6 +43,164 @@ pub fn prettyhexrep(hash: &[u8]) -> String {
         .join("")
 }
 
+/// upstream's `RNS.prettytime(time)`: days, hours and minutes, and seconds
+/// rounded to two decimals as Python writes them (`1m and 5.5s`, `2h`,
+/// `0s`).
+pub fn upstream_prettytime(time: f64) -> String {
+    prettytime_with(time, false)
+}
+
+/// upstream's `RNS.prettytime(time, compact=True)`: whole seconds and at
+/// most the two largest units (`1d and 2h`).
+pub fn upstream_prettytime_compact(time: f64) -> String {
+    prettytime_with(time, true)
+}
+
+fn prettytime_with(time: f64, compact: bool) -> String {
+    let neg = time < 0.0;
+    let mut time = time.abs();
+    let days = (time / 86400.0).floor();
+    time %= 86400.0;
+    let hours = (time / 3600.0).floor();
+    time %= 3600.0;
+    let minutes = (time / 60.0).floor();
+    time %= 60.0;
+    // Python: int(time) when compact, else round(time, 2).
+    let seconds = if compact {
+        time.trunc()
+    } else {
+        format!("{time:.2}").parse::<f64>().unwrap_or(0.0)
+    };
+
+    let mut components = Vec::new();
+    for (value, unit) in [(days, "d"), (hours, "h"), (minutes, "m")] {
+        if value > 0.0 && (!compact || components.len() < 2) {
+            components.push(format!("{value}{unit}"));
+        }
+    }
+    if seconds > 0.0 && (!compact || components.len() < 2) {
+        let seconds = if compact {
+            format!("{seconds}")
+        } else {
+            python_float(seconds)
+        };
+        components.push(format!("{seconds}s"));
+    }
+
+    let mut text = String::new();
+    let count = components.len();
+    for (i, component) in components.iter().enumerate() {
+        if i > 0 {
+            text.push_str(if i + 1 < count { ", " } else { " and " });
+        }
+        text.push_str(component);
+    }
+    match (text.is_empty(), neg) {
+        (true, _) => "0s".into(),
+        (false, true) => format!("-{text}"),
+        (false, false) => text,
+    }
+}
+
+/// A float as Python's `repr()` and `str()` write it: the shortest form
+/// that reads back the same, with `.0` on whole numbers and an exponent
+/// below 1e-4 and from 1e16 (`1e+16`, `1.5e-07`).
+pub fn python_float(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".into();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "inf" } else { "-inf" }.into();
+    }
+    let sci = format!("{:e}", value.abs());
+    let (mantissa, exponent) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    if (-4..16).contains(&exponent) {
+        let point = exponent + 1;
+        let text = if point <= 0 {
+            format!("0.{}{digits}", "0".repeat((-point) as usize))
+        } else if point as usize >= digits.len() {
+            format!("{digits}{}.0", "0".repeat(point as usize - digits.len()))
+        } else {
+            let (whole, fraction) = digits.split_at(point as usize);
+            format!("{whole}.{fraction}")
+        };
+        format!("{sign}{text}")
+    } else {
+        let (first, rest) = digits.split_at(1);
+        let rest = if rest.is_empty() {
+            String::new()
+        } else {
+            format!(".{rest}")
+        };
+        let exp_sign = if exponent < 0 { '-' } else { '+' };
+        format!("{sign}{first}{rest}e{exp_sign}{:02}", exponent.abs())
+    }
+}
+
+/// A value as Python's `json.dumps` writes it, bytes as plain hex (as
+/// upstream's rnpath converts them first).
+pub fn python_json(value: &rns_net::pickle::PickleValue) -> String {
+    use rns_net::pickle::PickleValue;
+    match value {
+        PickleValue::None => "null".into(),
+        PickleValue::Bool(b) => if *b { "true" } else { "false" }.into(),
+        PickleValue::Int(n) => n.to_string(),
+        PickleValue::Float(f) if f.is_nan() => "NaN".into(),
+        PickleValue::Float(f) if f.is_infinite() => {
+            if *f > 0.0 { "Infinity" } else { "-Infinity" }.into()
+        }
+        PickleValue::Float(f) => python_float(*f),
+        PickleValue::String(s) => json_string(s),
+        PickleValue::Bytes(b) => format!("\"{}\"", prettyhexrep(b)),
+        PickleValue::List(items) => {
+            let inner: Vec<String> = items.iter().map(python_json).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        PickleValue::Dict(pairs) => {
+            let inner: Vec<String> = pairs
+                .iter()
+                .map(|(k, v)| {
+                    let key = match k {
+                        PickleValue::String(s) => json_string(s),
+                        other => json_string(&python_json(other)),
+                    };
+                    format!("{key}: {}", python_json(v))
+                })
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+    }
+}
+
+/// A JSON string as Python's `json.dumps` writes it (`ensure_ascii`).
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 || (c as u32) > 0x7e => {
+                let mut units = [0u16; 2];
+                for unit in c.encode_utf16(&mut units) {
+                    out.push_str(&format!("\\u{unit:04x}"));
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Format a duration in seconds as a human-readable string.
 /// Matches Python's `RNS.prettytime()`.
 pub fn prettytime(secs: f64) -> String {
@@ -218,6 +376,77 @@ mod tests {
         assert_eq!(prettyfrequency(1.0 / 3600.0), "1.0/h");
         // 10 per minute = 10/60 per second
         assert_eq!(prettyfrequency(10.0 / 60.0), "10.0/m");
+    }
+
+    #[test]
+    fn prettytime_matches_upstream() {
+        // Python: RNS.prettytime(t) and RNS.prettytime(t, compact=True).
+        let cases = [
+            (0.0, "0s", "0s"),
+            (0.004, "0s", "0s"),
+            (1.0, "1.0s", "1s"),
+            (30.0, "30.0s", "30s"),
+            (65.5, "1m and 5.5s", "1m and 5s"),
+            (90.0, "1m and 30.0s", "1m and 30s"),
+            (120.0, "2m", "2m"),
+            (3661.0, "1h, 1m and 1.0s", "1h and 1m"),
+            (86400.0, "1d", "1d"),
+            (90061.25, "1d, 1h, 1m and 1.25s", "1d and 1h"),
+            (604799.999, "6d, 23h, 59m and 60.0s", "6d and 23h"),
+            (-125.0, "-2m and 5.0s", "-2m and 5s"),
+            (59.996, "60.0s", "59s"),
+        ];
+        for (time, full, compact) in cases {
+            assert_eq!(upstream_prettytime(time), full, "{time}");
+            assert_eq!(upstream_prettytime_compact(time), compact, "{time}");
+        }
+    }
+
+    #[test]
+    fn python_float_matches_repr() {
+        let cases = [
+            (0.0, "0.0"),
+            (5.0, "5.0"),
+            (-1.5, "-1.5"),
+            (1234.5, "1234.5"),
+            (0.0001, "0.0001"),
+            (0.00001, "1e-05"),
+            (1.5e-7, "1.5e-07"),
+            (1e15, "1000000000000000.0"),
+            (1e16, "1e+16"),
+            (1.2345e20, "1.2345e+20"),
+            (1763112345.123456, "1763112345.123456"),
+            (0.1 + 0.2, "0.30000000000000004"),
+        ];
+        for (value, repr) in cases {
+            assert_eq!(python_float(value), repr);
+        }
+    }
+
+    #[test]
+    fn python_json_matches_json_dumps() {
+        use rns_net::pickle::PickleValue as P;
+        let value = P::List(vec![P::Dict(vec![
+            (P::String("hash".into()), P::Bytes(vec![0xab, 0x01])),
+            (P::String("hops".into()), P::Int(2)),
+            (P::String("expires".into()), P::Float(1.5)),
+            (P::String("value".into()), P::None),
+            (P::String("ok".into()), P::Bool(true)),
+            (
+                P::String("interface".into()),
+                P::String("If \"x\"\\ é\n😀".into()),
+            ),
+            (
+                P::String("ts".into()),
+                P::List(vec![P::Float(2.0), P::Float(1e16)]),
+            ),
+        ])]);
+        // Python: json.dumps of the same list.
+        assert_eq!(
+            python_json(&value),
+            r#"[{"hash": "ab01", "hops": 2, "expires": 1.5, "value": null, "ok": true, "interface": "If \"x\"\\ \u00e9\n\ud83d\ude00", "ts": [2.0, 1e+16]}]"#
+        );
+        assert_eq!(python_json(&P::List(Vec::new())), "[]");
     }
 
     #[test]
