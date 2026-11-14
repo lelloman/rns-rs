@@ -488,6 +488,14 @@ impl TransportEngine {
         core::mem::take(&mut self.inbound_filtered_announce)
     }
 
+    /// Announces to count as received in `arxc`/`arxb`, as (interface,
+    /// bytes): one ingress control took up (held or dropped) counts with no
+    /// bytes, and a released one that was accepted with its size (upstream
+    /// c850cdac). Clears the list.
+    pub fn take_announce_receipts(&mut self) -> Vec<(InterfaceId, usize)> {
+        core::mem::take(&mut self.announce_receipts)
+    }
+
     /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`).
     pub fn hop_limiter(&self) -> u8 {
         self.hop_limiter

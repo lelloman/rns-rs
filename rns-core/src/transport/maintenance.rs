@@ -194,6 +194,15 @@ impl TransportEngine {
                     },
                     ctx.rng,
                 );
+                // Upstream c850cdac: a release is not counted as received
+                // traffic again, but an accepted announce counts in arxc.
+                if released_actions
+                    .iter()
+                    .any(|action| matches!(action, TransportAction::AnnounceReceived(_)))
+                {
+                    self.announce_receipts
+                        .push((held.receiving_interface, held.raw.len()));
+                }
                 ctx.actions.extend(released_actions);
             }
         }

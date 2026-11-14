@@ -849,6 +849,9 @@ impl TransportEngine {
         {
             return HoldDecision::Pass;
         }
+        // Upstream c850cdac: an announce ingress control takes up counts as
+        // received, without bytes, whether it is held or dropped.
+        self.announce_receipts.push((iface, 0));
         let held = self.ingress_control.hold_announce(
             iface,
             &info.ingress_control,

@@ -44,6 +44,18 @@ impl Driver {
         }
     }
 
+    /// Count the announces the engine received outside a frame's own
+    /// `arxc` accounting: taken up by ingress control, with no bytes, or
+    /// released from it (upstream c850cdac).
+    pub(crate) fn record_announce_receipts(&mut self) {
+        for (interface_id, size) in self.engine.take_announce_receipts() {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.arxc = entry.stats.arxc.saturating_add(1);
+                entry.stats.arxb = entry.stats.arxb.saturating_add(size as u64);
+            }
+        }
+    }
+
     /// Count a filtered announce on the receiving interface (upstream
     /// 819076c3 `Interface.filtered_announce`). Upstream also adds it to a
     /// spawned interface's parent; a listener's row sums its children.
@@ -457,6 +469,7 @@ impl Driver {
         if self.engine.take_inbound_filtered_announce() {
             self.record_filtered_announce(interface_id);
         }
+        self.record_announce_receipts();
         let bursts = (
             self.engine
                 .burst_active(&interface_id)
@@ -649,6 +662,8 @@ impl Driver {
             );
         }
         let actions = self.engine.tick(now, &mut self.rng);
+        // Released held announces (upstream c850cdac).
+        self.record_announce_receipts();
         self.dispatch_all(actions);
         let link_actions = self.link_manager.tick(&mut self.rng);
         self.dispatch_link_actions(link_actions);

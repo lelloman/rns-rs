@@ -4663,6 +4663,14 @@ fn driver_holding_one_announce(max_held: usize) -> Driver {
         &mut driver.rng,
     );
     assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 1);
+    // As the driver does after a frame.
+    driver.record_announce_receipts();
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(1))
+        .unwrap()
+        .stats
+        .arxc = 0;
     driver
 }
 
@@ -4685,6 +4693,9 @@ fn announce_over_a_full_hold_is_a_filtered_announce() {
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
     assert_eq!(stats.afrxc, 1);
     assert_eq!((stats.rxb, stats.frxb), (0, len));
+    // Upstream c850cdac: taken up by ingress control, it counts as a
+    // received announce without bytes.
+    assert_eq!((stats.arxc, stats.arxb), (1, 0));
     assert_eq!(stats.protocol_violations, 0);
     assert_eq!(stats.packet_filter_hits, 0);
 }
@@ -4706,6 +4717,8 @@ fn announce_is_held_while_held_announces_have_room() {
     // Upstream 819076c3: a held announce is received traffic.
     assert_eq!((stats.frxb, stats.afrxc), (0, 0));
     assert!(stats.rxb > 0);
+    // Upstream c850cdac: and a received announce, without bytes.
+    assert_eq!((stats.arxc, stats.arxb), (1, 0));
 }
 
 #[test]
@@ -5207,9 +5220,10 @@ fn duplicate_and_in_flight_path_requests_are_filtered_inbound() {
     driver.handle_frame_event(InterfaceId(1), request(&driver, 0x72, 0x01), None, None);
     assert_eq!(rx_and_filtered(&driver, 1), (len, len, 1));
 
-    // A new tag for the unknown destination already requested: in flight.
+    // A new tag for the unknown destination already requested: in flight,
+    // batched into it and received since upstream c850cdac.
     driver.handle_frame_event(InterfaceId(1), request(&driver, 0x73, 0x02), None, None);
-    assert_eq!(rx_and_filtered(&driver, 1), (len, 2 * len, 1));
+    assert_eq!(rx_and_filtered(&driver, 1), (2 * len, len, 2));
 }
 
 #[test]

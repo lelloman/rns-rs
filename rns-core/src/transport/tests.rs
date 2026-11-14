@@ -6993,3 +6993,32 @@ fn waiting_local_path_request_skips_ingress_limiting() {
     assert!(!engine.has_path(&other));
     assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
 }
+
+#[test]
+fn held_and_released_announces_count_as_received() {
+    // Upstream c850cdac: an announce ingress control takes up counts as
+    // received without bytes; once released and accepted, with its size.
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.started = 0.0;
+    engine.register_interface(inbound);
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let (dest, announce) = signed_announce(0x77, "released");
+
+    engine.handle_inbound(
+        InboundFrame::new(&announce, InterfaceId(1), 10_000.0),
+        &mut rng,
+    );
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    assert_eq!(engine.take_announce_receipts(), vec![(InterfaceId(1), 0)]);
+
+    engine.interfaces.get_mut(&InterfaceId(1)).unwrap().ia_freq = 0.0;
+    engine.tick(10_000.0 + constants::IC_BURST_PENALTY + 1.0, &mut rng);
+    assert!(engine.has_path(&dest));
+    assert_eq!(
+        engine.take_announce_receipts(),
+        vec![(InterfaceId(1), announce.len())]
+    );
+}
