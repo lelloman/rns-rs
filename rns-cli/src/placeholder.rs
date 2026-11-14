@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use crate::args::Args;
+use crate::args::{Args, Opt, OptionSpec};
 
 const VERSION: &str = env!("FULL_VERSION");
 
@@ -33,8 +33,20 @@ pub struct Placeholder {
 /// upstream rnpkg's example configuration.
 pub const RNPKG_EXAMPLE_CONFIG: &str = "# This is an example package manager configuration file.\n";
 
+/// upstream rnir's and rnpkg's options (rnir has no `--exampleconfig`), and
+/// the Rust-only `-c` for `--config`.
+const OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("", "config"),
+        Opt::count("v", "verbose"),
+        Opt::count("q", "quiet"),
+        Opt::flag("", "exampleconfig"),
+        Opt::value("c", ""),
+    ],
+};
+
 pub fn main(placeholder: &Placeholder) -> i32 {
-    let args = Args::parse();
+    let args = Args::parse_spec(&OPTIONS);
     if args.has("version") {
         println!("{} {VERSION}", placeholder.name);
         return 0;
@@ -83,5 +95,26 @@ pub fn main(placeholder: &Placeholder) -> i32 {
             eprintln!("Could not start Reticulum: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        let parse = |argv: &[&str]| {
+            Args::parse_spec_from(argv.iter().map(|s| s.to_string()).collect(), &OPTIONS)
+        };
+        let args = parse(&["--config=/c", "-vvq"]);
+        assert_eq!(
+            (args.config_path(), args.verbosity, args.quiet),
+            (Some("/c"), 2, 1)
+        );
+        let args = parse(&["--conf", "/c", "--verb", "--example"]);
+        assert_eq!((args.config_path(), args.verbosity), (Some("/c"), 1));
+        assert!(args.has("exampleconfig"));
+        assert!(parse(&["--vers"]).has("version"));
     }
 }
