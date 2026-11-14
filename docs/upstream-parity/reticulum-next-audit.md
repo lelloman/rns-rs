@@ -43,7 +43,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `54159d1d93237612239f19653f6a99b8a62708b3` | Cleanup | Pending review | Changes `RNS/Transport.py` |
+| 1 | `54159d1d93237612239f19653f6a99b8a62708b3` | Cleanup | Non-runtime | `InboundFrame::iface` invariant documented (`rns-core/src/transport/mod.rs`) |
 | 2 | `04585ff2a8af37ee1683aca03d001cd49ae8399a` | Cleanup | Pending review | Changes `RNS/Transport.py` |
 | 3 | `6852971d3c8e0e0d055bdb1472b51fa6de87b3a9` | Logging cleanup | Pending review | Changes `RNS/Identity.py` |
 | 4 | `d5f1e014dbec2921d70b8acd15c820601de6525d` | Persist and load announce rate table | Pending review | Changes `RNS/Storage.py`, `RNS/Transport.py` |
@@ -61,13 +61,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 1. `54159d1d` — Cleanup
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** Removes the `if packet.receiving_interface` / `!= None` guards around the oversized-announce, invalid-signature, oversized and tagless path request, and invalid path request size protocol violations, and around the `received_announce` / `received_path_request` counters in `Transport.inbound`. `preprocess_inbound` already returns early when no interface is set, so every removed guard was always true; behavior and counters are unchanged.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** `InboundFrame::iface` is a required `InterfaceId`, so the engine cannot receive an interface-less frame and has no equivalent guards to remove.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Mapping commit documents the invariant on `InboundFrame::iface`. No behavior change; `cargo test -p rns-core` passes.
 
-**Final disposition:** Pending review.
+**Final disposition:** Non-runtime.
 
 ### 2. `04585ff2` — Cleanup
 

@@ -92,6 +92,10 @@ pub struct RxMetadata {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InboundFrame<'a> {
     pub raw: &'a [u8],
+    /// The receiving interface. It is not optional: every inbound frame
+    /// arrives on an interface, so protocol violations and receive counters
+    /// can always be charged to it. Python drops interface-less frames on
+    /// entry to `Transport.inbound` and so needs no later per-call guards.
     pub iface: InterfaceId,
     pub now: f64,
     pub rx: RxMetadata,
