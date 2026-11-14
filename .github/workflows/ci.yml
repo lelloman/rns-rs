@@ -1,10 +1,18 @@
 name: CI
 
+# The full suite runs on every pull request, on every push to master and
+# nightly (against master, so a dependency, toolchain or upstream change
+# that breaks it shows up without a commit). The slow analyses that do not
+# gate changes, fuzzing, Miri, coverage and mutation testing, are in
+# nightly.yml and fuzz.yml.
 on:
   push:
     branches:
       - master
   pull_request:
+  schedule:
+    - cron: "7 1 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
