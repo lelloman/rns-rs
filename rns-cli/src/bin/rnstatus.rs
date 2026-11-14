@@ -568,10 +568,12 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                     .and_then(|v| v.as_int())
                     .filter(|n| *n > 0)
                     .map(|n| n as u64);
-                let ar_target = iface.get("announce_rate_target").and_then(|v| v.as_float());
+                let ar_target = iface
+                    .get("announce_rate_target")
+                    .and_then(|v| v.as_number());
                 let ar_penalty = iface
                     .get("announce_rate_penalty")
-                    .and_then(|v| v.as_float());
+                    .and_then(|v| v.as_number());
                 let ar_grace = iface.get("announce_rate_grace").and_then(|v| v.as_int());
                 let flow = interface_flow_rates(iface, "arxs", "atxs");
                 let lines = announce_status_lines(
@@ -1423,7 +1425,7 @@ fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
     {
         let activated = iface
             .get("burst_activated")
-            .and_then(|v| v.as_float())
+            .and_then(|v| v.as_number())
             .unwrap_or(now);
         let count = iface
             .get("burst_count")
@@ -1443,7 +1445,7 @@ fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
     {
         let activated = iface
             .get("pr_burst_activated")
-            .and_then(|v| v.as_float())
+            .and_then(|v| v.as_number())
             .unwrap_or(now);
         let count = iface
             .get("pr_burst_count")

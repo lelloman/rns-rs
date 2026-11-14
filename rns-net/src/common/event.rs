@@ -929,6 +929,8 @@ pub struct LinkDistributionEntry {
 pub struct InterfaceStatsResponse {
     pub interfaces: Vec<SingleInterfaceStat>,
     pub transport_id: Option<[u8; 16]>,
+    /// The hash of the configured network identity (upstream `network_id`).
+    pub network_id: Option<[u8; 16]>,
     pub transport_enabled: bool,
     pub transport_uptime: f64,
     /// Total received bytes across all interfaces.
@@ -1111,6 +1113,15 @@ pub struct SingleInterfaceStat {
     pub announce_rate_penalty: f64,
     /// Human-readable interface type string (e.g. "TCPClientInterface").
     pub interface_type: String,
+    /// Announces held back by ingress control (upstream `held_announces`).
+    pub held_announces: usize,
+    /// Announces waiting in the interface's announce queue (upstream
+    /// `announce_queue`).
+    pub announce_queue: usize,
+    /// The IFAC network name (upstream `ifac_netname`).
+    pub ifac_netname: Option<String>,
+    /// The IFAC signature (upstream `ifac_signature`).
+    pub ifac_signature: Option<[u8; 64]>,
 }
 
 /// A locally registered destination.

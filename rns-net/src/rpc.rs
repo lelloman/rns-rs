@@ -1922,6 +1922,22 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         ));
     }
 
+    // Upstream's resident set size, in bytes (None where it is unknown).
+    dict.push((
+        PickleValue::String("rss".into()),
+        resident_set_size()
+            .map(|bytes| PickleValue::Int(bytes as i64))
+            .unwrap_or(PickleValue::None),
+    ));
+
+    dict.push((
+        PickleValue::String("network_id".into()),
+        stats
+            .network_id
+            .map(|id| PickleValue::Bytes(id.to_vec()))
+            .unwrap_or(PickleValue::None),
+    ));
+
     if let Some(pr) = stats.probe_responder {
         dict.push((
             PickleValue::String("probe_responder".into()),
@@ -2190,6 +2206,34 @@ fn set_pickle_dict_entry(
         *existing = value;
     } else {
         dict.push((PickleValue::String(key.into()), value));
+    }
+}
+
+/// This process's resident set size in bytes, from `/proc/self/status`.
+fn resident_set_size() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("VmRSS:"))?;
+    let kilobytes: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kilobytes * 1024)
+}
+
+/// A number as upstream would hold it: an int when it is whole (as from a
+/// config value or an unset `0`), else a float.
+fn python_number(value: f64) -> PickleValue {
+    if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
+        PickleValue::Int(value as i64)
+    } else {
+        PickleValue::Float(value)
+    }
+}
+
+/// Upstream's class name for an interface type: spawned clients of TCP and
+/// local servers are `TCPClientInterface` and `LocalClientInterface` there.
+fn upstream_interface_type(interface_type: &str) -> &str {
+    match interface_type {
+        "TCPServerClientInterface" => "TCPClientInterface",
+        "LocalServerClientInterface" => "LocalClientInterface",
+        other => other,
     }
 }
 
@@ -2508,7 +2552,7 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         ),
         (
             PickleValue::String("burst_activated".into()),
-            PickleValue::Float(s.burst_activated),
+            python_number(s.burst_activated),
         ),
         (
             PickleValue::String("pr_burst_active".into()),
@@ -2516,7 +2560,7 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         ),
         (
             PickleValue::String("pr_burst_activated".into()),
-            PickleValue::Float(s.pr_burst_activated),
+            python_number(s.pr_burst_activated),
         ),
         (
             PickleValue::String("clients".into()),
@@ -2545,7 +2589,54 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         ),
         (
             PickleValue::String("announce_rate_penalty".into()),
-            PickleValue::Float(s.announce_rate_penalty),
+            python_number(s.announce_rate_penalty),
+        ),
+        // Upstream's names for the frequencies above, which its rnstatus
+        // reads.
+        (
+            PickleValue::String("incoming_announce_frequency".into()),
+            python_number(s.ia_freq),
+        ),
+        (
+            PickleValue::String("outgoing_announce_frequency".into()),
+            python_number(s.oa_freq),
+        ),
+        (
+            PickleValue::String("incoming_pr_frequency".into()),
+            python_number(s.ip_freq),
+        ),
+        (
+            PickleValue::String("outgoing_pr_frequency".into()),
+            python_number(s.op_freq),
+        ),
+        (
+            PickleValue::String("type".into()),
+            PickleValue::String(upstream_interface_type(&s.interface_type).into()),
+        ),
+        (
+            PickleValue::String("short_name".into()),
+            PickleValue::String(s.name.clone()),
+        ),
+        (
+            PickleValue::String("held_announces".into()),
+            PickleValue::Int(s.held_announces as i64),
+        ),
+        (
+            PickleValue::String("announce_queue".into()),
+            PickleValue::Int(s.announce_queue as i64),
+        ),
+        (
+            PickleValue::String("ifac_netname".into()),
+            s.ifac_netname
+                .clone()
+                .map(PickleValue::String)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("ifac_signature".into()),
+            s.ifac_signature
+                .map(|signature| PickleValue::Bytes(signature.to_vec()))
+                .unwrap_or(PickleValue::None),
         ),
     ];
     weave_stats_to_pickle(s, &mut dict);
@@ -2553,7 +2644,7 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
     match s.announce_rate_target {
         Some(target) => dict.push((
             PickleValue::String("announce_rate_target".into()),
-            PickleValue::Float(target),
+            python_number(target),
         )),
         None => dict.push((
             PickleValue::String("announce_rate_target".into()),
@@ -4472,6 +4563,7 @@ mod tests {
                     if matches!(*request, QueryRequest::InterfaceStats) =>
                 {
                     let _ = resp_tx.send(QueryResponse::InterfaceStats(InterfaceStatsResponse {
+                        network_id: None,
                         interfaces: vec![SingleInterfaceStat {
                             id: 7,
                             name: "TestInterface".into(),
@@ -4531,6 +4623,10 @@ mod tests {
                             announce_rate_grace: 5,
                             announce_rate_penalty: 0.0,
                             interface_type: "TestInterface".into(),
+                            held_announces: 0,
+                            announce_queue: 0,
+                            ifac_netname: None,
+                            ifac_signature: None,
                         }],
                         transport_id: None,
                         transport_enabled: true,
@@ -5081,6 +5177,7 @@ mod tests {
             ptxf: 4.0,
         };
         let mut stats = InterfaceStatsResponse {
+            network_id: None,
             interfaces: vec![SingleInterfaceStat {
                 id: 1,
                 name: "TCP".into(),
@@ -5140,6 +5237,10 @@ mod tests {
                 announce_rate_grace: 5,
                 announce_rate_penalty: 0.0,
                 interface_type: "TCPClientInterface".into(),
+                held_announces: 0,
+                announce_queue: 0,
+                ifac_netname: None,
+                ifac_signature: None,
             }],
             transport_id: Some([0xAB; 16]),
             transport_enabled: true,
@@ -5169,6 +5270,57 @@ mod tests {
         assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        // Upstream's own keys and number types, which its rnstatus reads.
+        assert_eq!(ifaces[0].get("short_name").unwrap().as_str(), Some("TCP"));
+        assert_eq!(
+            ifaces[0].get("type").unwrap().as_str(),
+            Some("TCPClientInterface")
+        );
+        for (upstream, ours) in [
+            ("incoming_announce_frequency", "ia_freq"),
+            ("outgoing_announce_frequency", "oa_freq"),
+            ("incoming_pr_frequency", "ip_freq"),
+            ("outgoing_pr_frequency", "op_freq"),
+        ] {
+            assert_eq!(
+                ifaces[0].get(upstream).unwrap().as_number(),
+                ifaces[0].get(ours).unwrap().as_float(),
+                "{upstream}"
+            );
+        }
+        assert_eq!(ifaces[0].get("held_announces").unwrap().as_int(), Some(0));
+        assert_eq!(ifaces[0].get("announce_queue").unwrap().as_int(), Some(0));
+        assert!(ifaces[0].get("ifac_netname").is_some());
+        assert!(ifaces[0].get("ifac_signature").is_some());
+        assert!(decoded.get("network_id").is_some());
+        #[cfg(target_os = "linux")]
+        assert!(decoded.get("rss").unwrap().as_int().unwrap() > 0);
+        let mut spawned = stats.interfaces[0].clone();
+        spawned.interface_type = "TCPServerClientInterface".into();
+        spawned.burst_activated = 0.0;
+        spawned.announce_rate_penalty = 7.0;
+        spawned.announce_rate_target = Some(3600.0);
+        spawned.ifac_netname = Some("mesh".into());
+        spawned.ifac_signature = Some([9; 64]);
+        let spawned = pickle::decode(&pickle::encode(&single_iface_to_pickle(&spawned))).unwrap();
+        assert_eq!(
+            spawned.get("type").unwrap().as_str(),
+            Some("TCPClientInterface")
+        );
+        assert_eq!(spawned.get("burst_activated").unwrap().as_int(), Some(0));
+        assert_eq!(
+            spawned.get("announce_rate_penalty").unwrap().as_int(),
+            Some(7)
+        );
+        assert_eq!(
+            spawned.get("announce_rate_target").unwrap().as_int(),
+            Some(3600)
+        );
+        assert_eq!(spawned.get("ifac_netname").unwrap().as_str(), Some("mesh"));
+        assert_eq!(
+            spawned.get("ifac_signature").unwrap().as_bytes(),
+            Some(&[9u8; 64][..])
+        );
         // Weave statistics only on Weave interfaces: upstream's rnstatus
         // prints "Unknown" lines for a key that is there without a value.
         for key in [
@@ -5284,7 +5436,7 @@ mod tests {
             ifaces[0]
                 .get("burst_activated")
                 .unwrap()
-                .as_float()
+                .as_number()
                 .unwrap(),
             1200.0
         );
@@ -5293,7 +5445,7 @@ mod tests {
             ifaces[0]
                 .get("pr_burst_activated")
                 .unwrap()
-                .as_float()
+                .as_number()
                 .unwrap(),
             1300.0
         );
@@ -5301,7 +5453,7 @@ mod tests {
             ifaces[0]
                 .get("announce_rate_target")
                 .unwrap()
-                .as_float()
+                .as_number()
                 .unwrap(),
             3600.0
         );
@@ -5317,7 +5469,7 @@ mod tests {
             ifaces[0]
                 .get("announce_rate_penalty")
                 .unwrap()
-                .as_float()
+                .as_number()
                 .unwrap(),
             0.0
         );
@@ -5393,7 +5545,7 @@ mod tests {
             runtime_ifaces[0]
                 .get("burst_activated")
                 .unwrap()
-                .as_float()
+                .as_number()
                 .unwrap(),
             10.0
         );
@@ -5406,7 +5558,7 @@ mod tests {
             runtime_ifaces[0]
                 .get("pr_burst_activated")
                 .unwrap()
-                .as_float()
+                .as_number()
                 .unwrap(),
             20.0
         );
@@ -5463,6 +5615,7 @@ mod tests {
     #[test]
     fn interface_stats_pickle_includes_backbone_peer_pool_priority() {
         let stats = InterfaceStatsResponse {
+            network_id: None,
             interfaces: vec![],
             transport_id: None,
             transport_enabled: true,
@@ -5901,6 +6054,7 @@ mod tests {
     fn interface_stats_with_probe_responder() {
         let probe_hash = [0x42; 16];
         let stats = InterfaceStatsResponse {
+            network_id: None,
             interfaces: vec![],
             transport_id: None,
             transport_enabled: true,
