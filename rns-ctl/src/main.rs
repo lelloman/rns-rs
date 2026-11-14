@@ -2,6 +2,7 @@ use rns_ctl::args::Args;
 use rns_ctl::cmd;
 
 fn main() {
+    rns_cli::stdout::exit_quietly_on_closed_stdout();
     let args = Args::parse_control();
 
     if args.has("version") {

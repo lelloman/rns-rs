@@ -24,3 +24,4 @@ pub mod rnx;
 pub mod sentineld;
 #[cfg(feature = "sidecars")]
 pub mod statsd;
+pub mod stdout;
