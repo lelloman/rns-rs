@@ -1488,10 +1488,15 @@ fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
 
     // Notify driver of new dynamic interface
     let event = if let Some(template) = dynamic_template {
+        let mut registration = template.registration(peer_info);
+        registration.display_name = Some(crate::interface::display::auto_peer(
+            ifname,
+            &peer_key.link_local_addr,
+        ));
         Event::DynamicInterfaceUp {
             id: peer_id,
             writer: driver_writer,
-            registration: Box::new(template.registration(peer_info)),
+            registration: Box::new(registration),
         }
     } else {
         Event::InterfaceUp(peer_id, Some(driver_writer), Some(Box::new(peer_info)))

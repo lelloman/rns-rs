@@ -286,6 +286,15 @@ pub fn start_server(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
 ) -> io::Result<ListenerControl> {
+    start_server_with_template(config, tx, next_id, None).map(|(control, _)| control)
+}
+
+/// [`start_server`], also returning where the server listens.
+pub(crate) fn start_shared_instance_server(
+    config: LocalServerConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+) -> io::Result<(ListenerControl, super::display::LocalEndpoint)> {
     start_server_with_template(config, tx, next_id, None)
 }
 
@@ -294,7 +303,7 @@ fn start_server_with_template(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
-) -> io::Result<ListenerControl> {
+) -> io::Result<(ListenerControl, super::display::LocalEndpoint)> {
     let control = ListenerControl::new();
     // With interface I/O folded, the listener and its clients are served on
     // the driver loop, keyed by the server's interface id.
@@ -311,6 +320,7 @@ fn start_server_with_template(
                     config.instance_name
                 );
                 let name = format!("rns/{}", config.instance_name);
+                let endpoint = super::display::LocalEndpoint::Unix(config.instance_name.clone());
                 if fold {
                     folded::serve(
                         folded::Listener::Unix(listener),
@@ -321,7 +331,7 @@ fn start_server_with_template(
                         control.clone(),
                         dynamic_template,
                     )?;
-                    return Ok(control);
+                    return Ok((control, endpoint));
                 }
                 let listener_control = control.clone();
                 thread::Builder::new()
@@ -336,7 +346,7 @@ fn start_server_with_template(
                             dynamic_template,
                         );
                     })?;
-                return Ok(control);
+                return Ok((control, endpoint));
             }
             Err(e) => {
                 log::info!("Unix socket bind failed ({}), falling back to TCP", e);
@@ -351,6 +361,7 @@ fn start_server_with_template(
 
     log::info!("Local server listening on TCP {}", addr);
 
+    let endpoint = super::display::LocalEndpoint::Tcp(config.port);
     if fold {
         folded::serve(
             folded::Listener::Tcp(listener),
@@ -361,7 +372,7 @@ fn start_server_with_template(
             control.clone(),
             dynamic_template,
         )?;
-        return Ok(control);
+        return Ok((control, endpoint));
     }
     let listener_control = control.clone();
     thread::Builder::new()
@@ -370,7 +381,7 @@ fn start_server_with_template(
             tcp_server_loop(listener, tx, next_id, listener_control, dynamic_template);
         })?;
 
-    Ok(control)
+    Ok((control, endpoint))
 }
 
 /// TCP server accept loop for local interface.
@@ -488,10 +499,12 @@ fn unix_server_loop(
         });
 
         let event = if let Some(template) = &dynamic_template {
+            let mut registration = template.registration(info);
+            registration.display_name = Some(unix_client_display_name(&name));
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
-                registration: Box::new(template.registration(info)),
+                registration: Box::new(registration),
             }
         } else {
             Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
@@ -598,6 +611,23 @@ fn unix_reader_loop(
     }
 }
 
+/// Upstream's display name for a client of the local server on the
+/// abstract Unix socket `name` (`rns/{instance}`).
+#[cfg(target_os = "linux")]
+fn unix_client_display_name(name: &str) -> String {
+    let instance = name.strip_prefix("rns/").unwrap_or(name);
+    super::display::local_client(&super::display::LocalEndpoint::Unix(instance.to_string()))
+}
+
+/// Upstream's display name for a client of the local server on TCP: it
+/// names the client after its port.
+fn tcp_client_display_name(stream: &TcpStream) -> Option<String> {
+    let peer = stream.peer_addr().ok()?;
+    Some(super::display::local_client(
+        &super::display::LocalEndpoint::Tcp(peer.port()),
+    ))
+}
+
 /// Spawn handler threads for a connected TCP local client.
 fn spawn_local_client_handler(
     stream: TcpStream,
@@ -622,10 +652,12 @@ fn spawn_local_client_handler(
     });
 
     let event = if let Some(template) = dynamic_template {
+        let mut registration = template.registration(info);
+        registration.display_name = tcp_client_display_name(&stream);
         Event::DynamicInterfaceUp {
             id: client_id,
             writer,
-            registration: Box::new(template.registration(info)),
+            registration: Box::new(registration),
         }
     } else {
         Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
@@ -956,7 +988,7 @@ impl InterfaceFactory for LocalServerFactory {
             })?;
 
         let parent_id = server_config.interface_id;
-        let control = start_server_with_template(
+        let (control, _) = start_server_with_template(
             server_config,
             ctx.tx,
             ctx.next_dynamic_id,

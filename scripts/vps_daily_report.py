@@ -434,8 +434,8 @@ def ensure_schema(conn: sqlite3.Connection) -> int:
     return repair_packet_freshness_history(conn)
 
 
-def interface_kind(name: str) -> str:
-    if name == "LocalInterface":
+def interface_kind(name: str, display_name: str = "") -> str:
+    if name == "LocalInterface" or display_name.startswith("Shared Instance["):
         return "local"
     if name.startswith("BackboneInterface/"):
         return "backbone_discovered"
@@ -456,8 +456,11 @@ def parse_interface_snapshots(
             raise ValueError("status JSON interface entries must be objects")
         if not isinstance(iface.get("name"), str) or not iface["name"]:
             raise ValueError("status JSON interface name must be a non-empty string")
-        name = iface["name"]
-        kind = interface_kind(name)
+        # `name` is upstream's display name, e.g. "TCPInterface[Peer/host:port]";
+        # `short_name` the interface's own name, which history is keyed on.
+        short_name = iface.get("short_name")
+        name = short_name if isinstance(short_name, str) and short_name else iface["name"]
+        kind = interface_kind(name, iface["name"])
         started_epoch = iface.get("started")
         uptime_seconds = None
         if isinstance(started_epoch, (int, float)) and started_epoch > 0:

@@ -54,6 +54,8 @@ impl Driver {
         }
         let managed = self.managed_interfaces.remove(name).expect("checked above");
         self.retired_interface_parents.insert(managed.parent_id);
+        self.listener_stats
+            .retain(|listener| listener.id != managed.parent_id);
         if let Some(control) = &managed.control {
             control.request_stop();
             self.listener_controls
@@ -83,6 +85,7 @@ impl Driver {
                 self.interface_ifac_runtime_defaults.remove(&entry_name);
             }
             self.event_tx.remove_interface(id);
+            self.interface_display_names.remove(&id);
             if self.engine.interface_info(&id).is_some() {
                 self.engine.deregister_interface(id);
             }
@@ -227,6 +230,7 @@ impl Driver {
             ifac: ifac_state.clone(),
             underlay_mark,
         };
+        let mut display = crate::node::ConfiguredDisplay::of(&config, ifac_state.as_ref());
         let result = match factory.start(config.config_data, ctx) {
             Ok(result) => result,
             Err(error) => {
@@ -254,10 +258,14 @@ impl Driver {
                     ifac_state,
                     ifac_runtime: &ifac_runtime,
                     stamp_costs: config.stamp_costs,
+                    display_name: display.interface.take(),
                 });
                 (control, vec![id])
             }
-            StartResult::Listener { control } => (control, Vec::new()),
+            StartResult::Listener { control } => {
+                display.register_listener(self);
+                (control, Vec::new())
+            }
             StartResult::Multi {
                 subinterfaces,
                 control,
@@ -270,6 +278,7 @@ impl Driver {
                         derive_ifac_state(config.ifac.as_ref(), &sub.info.name)?
                     };
                     ids.push(sub.id);
+                    let display_name = crate::node::subinterface_display_name(&config.name, &sub);
                     register_started_interface(StartedInterface {
                         driver: self,
                         tx: &tx,
@@ -281,6 +290,7 @@ impl Driver {
                         ifac_state: sub_ifac,
                         ifac_runtime: &ifac_runtime,
                         stamp_costs: config.stamp_costs,
+                        display_name,
                     });
                 }
                 (control, ids)

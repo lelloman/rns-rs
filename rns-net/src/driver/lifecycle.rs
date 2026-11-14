@@ -189,6 +189,31 @@ impl Driver {
         self.listener_controls.push(control);
     }
 
+    /// Report the shared instance's local server, serving on `endpoint`,
+    /// in interface statistics as upstream's `LocalServerInterface`.
+    #[cfg(feature = "iface-local")]
+    pub(crate) fn register_shared_instance_listener(
+        &mut self,
+        id: InterfaceId,
+        endpoint: crate::interface::display::LocalEndpoint,
+    ) {
+        self.listener_stats.retain(|listener| listener.id != id);
+        self.listener_stats.push(super::ListenerStat {
+            id,
+            // Upstream's `LocalServerInterface.name`.
+            name: "Reticulum".into(),
+            display_name: crate::interface::display::shared_instance(&endpoint),
+            interface_type: "LocalServerInterface".into(),
+            mode: rns_core::constants::MODE_FULL,
+            gravity: 0,
+            announces_to_internal: None,
+            bitrate: Some(crate::interface::local::BITRATE),
+            mtu: crate::interface::local::HW_MTU,
+            ifac: None,
+            clients: super::ListenerClients::Local(endpoint),
+        });
+    }
+
     pub(crate) fn stop_listener_accepts(&mut self) {
         for control in &self.listener_controls {
             control.request_stop();

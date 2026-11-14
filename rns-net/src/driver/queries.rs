@@ -155,6 +155,156 @@ impl Driver {
             .then(|| self.dynamic_burst_counts(parent_id))
     }
 
+    /// Upstream's `str(interface)` for an interface entry.
+    fn interface_display_name(&self, entry: &InterfaceEntry) -> String {
+        if let Some(display_name) = self.interface_display_names.get(&entry.info.id) {
+            return display_name.clone();
+        }
+        // The shared instance's clients, which its listener spawns
+        // unnamed: upstream names them after the shared instance socket.
+        if entry.info.is_local_client && entry.dynamic {
+            if let Some(ListenerStat {
+                clients: ListenerClients::Local(endpoint),
+                ..
+            }) = self.shared_instance_listener()
+            {
+                return crate::interface::display::local_client(endpoint);
+            }
+        }
+        crate::interface::display::typed(
+            crate::rpc::upstream_interface_type(&entry.interface_type),
+            &entry.info.name,
+        )
+    }
+
+    /// The display name of the listener that spawned an interface.
+    fn parent_display_name(&self, entry: &InterfaceEntry) -> Option<String> {
+        let parent_id = match self.dynamic_interface_parents.get(&entry.info.id) {
+            Some(parent_id) => *parent_id,
+            // The shared instance's clients have no registered parent.
+            None if entry.info.is_local_client && entry.dynamic => {
+                return self
+                    .shared_instance_listener()
+                    .map(|listener| listener.display_name.clone());
+            }
+            None => return None,
+        };
+        if let Some(listener) = self
+            .listener_stats
+            .iter()
+            .find(|listener| listener.id == parent_id)
+        {
+            return Some(listener.display_name.clone());
+        }
+        if let Some(display_name) = self.interface_display_names.get(&parent_id) {
+            return Some(display_name.clone());
+        }
+        self.interfaces
+            .get(&parent_id)
+            .map(|parent| self.interface_display_name(parent))
+    }
+
+    fn shared_instance_listener(&self) -> Option<&ListenerStat> {
+        self.listener_stats
+            .iter()
+            .find(|listener| matches!(listener.clients, ListenerClients::Local(_)))
+    }
+
+    /// The statistics of a listener without an interface entry of its own:
+    /// upstream counts its clients and adds up their bytes.
+    fn listener_interface_stat(&self, listener: &ListenerStat) -> SingleInterfaceStat {
+        let children: Vec<&InterfaceEntry> = self
+            .interfaces
+            .values()
+            .filter(|entry| match listener.clients {
+                ListenerClients::Spawned => {
+                    self.dynamic_interface_parents.get(&entry.info.id) == Some(&listener.id)
+                }
+                ListenerClients::Local(_) => entry.info.is_local_client && entry.dynamic,
+            })
+            .collect();
+        let mut stat = SingleInterfaceStat {
+            id: listener.id.0,
+            name: listener.name.clone(),
+            display_name: listener.display_name.clone(),
+            parent_display_name: None,
+            // A listener's tunnels belong to its spawned clients.
+            tunnel_id: None,
+            remote_transport_id: None,
+            status: true,
+            mode: listener.mode,
+            gravity: listener.gravity,
+            announces_to_internal: listener.announces_to_internal,
+            rxb: 0,
+            txb: 0,
+            tx_drops: 0,
+            tx_dropped_bytes: 0,
+            tx_stalled: false,
+            tx_buffered: 0,
+            traffic: TrafficDetail::default(),
+            protocol_violations: 0,
+            ifac_violations: 0,
+            packet_filter_hits: 0,
+            hop_limiter_hits: 0,
+            stamped_path_requests: 0,
+            rx_packets: 0,
+            tx_packets: 0,
+            cpu_load: None,
+            mem_load: None,
+            switch_id: None,
+            endpoint_id: None,
+            via_switch_id: None,
+            peers: None,
+            rssi: None,
+            snr: None,
+            signal_quality: None,
+            frequency: None,
+            bandwidth: None,
+            txpower: None,
+            spreading_factor: None,
+            coding_rate: None,
+            channel: None,
+            modulation: None,
+            bitrate: match listener.clients {
+                ListenerClients::Local(_) => self.forced_local_bitrate.or(listener.bitrate),
+                ListenerClients::Spawned => listener.bitrate,
+            },
+            mtu: Some(listener.mtu),
+            ifac_size: listener.ifac.as_ref().map(|ifac| ifac.size),
+            started: self.started,
+            ia_freq: 0.0,
+            oa_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
+            burst_active: false,
+            burst_activated: 0.0,
+            pr_burst_active: false,
+            pr_burst_activated: 0.0,
+            clients: Some(children.len() as u64),
+            blocked_ips: None,
+            blocked_ip_list: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            interface_type: listener.interface_type.clone(),
+            held_announces: self.engine.held_announce_count(&listener.id),
+            announce_queue: self.engine.queued_announce_count_for(&listener.id),
+            ifac_netname: listener.ifac.as_ref().and_then(|ifac| ifac.netname.clone()),
+            ifac_signature: listener.ifac.as_ref().map(|ifac| ifac.signature),
+        };
+        // As upstream, only the byte counts (and so the speeds) of the
+        // clients add up on their listener; their other counters stay
+        // theirs, and summing all interfaces' counters counts each once.
+        for child in children {
+            stat.rxb += child.stats.rxb;
+            stat.txb += child.stats.txb;
+            stat.traffic.rxs += child.stats.traffic_rates.rxs;
+            stat.traffic.txs += child.stats.traffic_rates.txs;
+        }
+        stat
+    }
+
     pub(crate) fn handle_interface_stats_query(&self) -> QueryResponse {
         QueryResponse::InterfaceStats(self.interface_stats())
     }
@@ -192,6 +342,8 @@ impl Driver {
             interfaces.push(SingleInterfaceStat {
                 id: interface_id.0,
                 name: entry.info.name.clone(),
+                display_name: self.interface_display_name(entry),
+                parent_display_name: self.parent_display_name(entry),
                 tunnel_id: self
                     .engine
                     .interface_info(&interface_id)
@@ -319,6 +471,17 @@ impl Driver {
             interfaces.push(SingleInterfaceStat {
                 id: handle.interface_id.0,
                 name: handle.interface_name.clone(),
+                display_name: self
+                    .interface_display_names
+                    .get(&handle.interface_id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::interface::display::typed(
+                            "BackboneInterface",
+                            &handle.interface_name,
+                        )
+                    }),
+                parent_display_name: None,
                 // A listener's tunnels belong to its spawned clients.
                 tunnel_id: None,
                 remote_transport_id: None,
@@ -382,7 +545,10 @@ impl Driver {
                 ifac_signature: None,
             });
         }
-        interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+        for listener in &self.listener_stats {
+            interfaces.push(self.listener_interface_stat(listener));
+        }
+        interfaces.sort_by(|a, b| a.display_name.cmp(&b.display_name).then(a.id.cmp(&b.id)));
         let (path_pool_total, path_pool_unused) = self.engine.path_pool_counts();
         let total_links = self.engine.link_table_count() + self.link_manager.link_count();
         let active_links = self.engine.active_link_count() + self.link_manager.active_link_count();

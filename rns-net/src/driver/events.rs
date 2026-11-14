@@ -1170,8 +1170,12 @@ impl Driver {
 
         let interface_type = registration.interface_type;
         let telemetry = registration.telemetry;
+        let display_name = registration.display_name;
         self.handle_interface_up_event(id, Some(writer), Some(registration.info));
         if let Some(entry) = self.interfaces.get_mut(&id) {
+            if let Some(display_name) = display_name {
+                self.interface_display_names.insert(id, display_name);
+            }
             self.dynamic_interface_parents.insert(id, parent_id);
             self.event_tx.register_dynamic_parent(id, parent_id);
             entry.interface_type = interface_type;
@@ -1259,6 +1263,7 @@ impl Driver {
                 self.engine.deregister_interface(id);
                 self.interfaces.remove(&id);
                 self.dynamic_interface_parents.remove(&id);
+                self.interface_display_names.remove(&id);
             } else {
                 log::info!("[{}] interface offline", id.0);
                 if let Some(entry) = self.interfaces.get_mut(&id) {

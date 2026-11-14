@@ -86,6 +86,9 @@ pub struct DynamicInterfaceRegistration {
     pub parent_id: InterfaceId,
     pub telemetry: InterfaceTelemetry,
     pub ifac: Option<crate::ifac::IfacState>,
+    /// Upstream's `str(interface)` for this interface, reported as its
+    /// `name` in interface statistics; when unset, `{type}[{name}]`.
+    pub display_name: Option<String>,
 }
 
 /// Policy for handling incoming direct-connect proposals.
@@ -1031,7 +1034,17 @@ pub struct BackbonePeerPoolMemberStatus {
 #[derive(Debug, Clone)]
 pub struct SingleInterfaceStat {
     pub id: u64,
+    /// The interface's name: its config name, or the name a listener gave
+    /// a spawned interface (upstream's `interface.name`, `short_name` in
+    /// RPC statistics).
     pub name: String,
+    /// Upstream's `str(interface)`, e.g. `TCPInterface[Peer/10.0.0.1:4242]`
+    /// or `Shared Instance[rns/default]`, reported as `name` in RPC
+    /// statistics.
+    pub display_name: String,
+    /// The display name of the listener that spawned this interface
+    /// (upstream `str(interface.parent_interface)`).
+    pub parent_display_name: Option<String>,
     /// The tunnel this interface carries, once one is established
     /// (upstream `interface.tunnel_id`, reported since 9b6b724b).
     pub tunnel_id: Option<[u8; 32]>,
