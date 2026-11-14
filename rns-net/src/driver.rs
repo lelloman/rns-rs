@@ -632,6 +632,35 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
         .collect()
 }
 
+/// A listener reported in interface statistics: upstream lists a TCP
+/// server and the shared instance's local server as interfaces of their
+/// own, with the clients they serve.
+#[derive(Debug, Clone)]
+pub(crate) struct ListenerStat {
+    pub(crate) id: InterfaceId,
+    /// Upstream's `interface.name`.
+    pub(crate) name: String,
+    /// Upstream's `str(interface)`.
+    pub(crate) display_name: String,
+    pub(crate) interface_type: String,
+    pub(crate) mode: u8,
+    pub(crate) gravity: i64,
+    pub(crate) announces_to_internal: Option<bool>,
+    pub(crate) bitrate: Option<u64>,
+    pub(crate) mtu: u32,
+    pub(crate) ifac: Option<crate::ifac::IfacState>,
+    pub(crate) clients: ListenerClients,
+}
+
+/// Which interfaces a [`ListenerStat`] serves.
+#[derive(Debug, Clone)]
+pub(crate) enum ListenerClients {
+    /// The interfaces registered with this listener as their parent.
+    Spawned,
+    /// The shared instance's local clients, on this endpoint.
+    Local(crate::interface::display::LocalEndpoint),
+}
+
 /// Infer the interface type string from a dynamic interface's name.
 /// Dynamic interfaces (TCP server clients, backbone peers, auto peers, local server clients)
 /// include their type in the name prefix set at construction.
@@ -783,6 +812,12 @@ pub struct Driver {
     pub(crate) interfaces: crate::interface::InterfaceMap<InterfaceEntry>,
     /// Parent listener for dynamically spawned interfaces.
     pub(crate) dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
+    /// Upstream's display names (`str(interface)`) of interfaces whose
+    /// name shows more than `{type}[{name}]`: addresses, parents.
+    pub(crate) interface_display_names: HashMap<InterfaceId, String>,
+    /// Listeners with no interface entry of their own, reported in
+    /// interface statistics as upstream lists them.
+    pub(crate) listener_stats: Vec<ListenerStat>,
     /// Previous cumulative counters used to calculate current one-second rates.
     pub(crate) traffic_samples: HashMap<InterfaceId, TrafficSample>,
     pub(crate) rng: OsRng,
@@ -1122,6 +1157,8 @@ impl Driver {
             engine,
             interfaces: Default::default(),
             dynamic_interface_parents: HashMap::new(),
+            interface_display_names: HashMap::new(),
+            listener_stats: Vec::new(),
             traffic_samples: HashMap::new(),
             rng: OsRng,
             rx,

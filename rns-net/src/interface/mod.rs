@@ -8,6 +8,7 @@ pub mod ax25_kiss;
 pub mod backbone;
 #[cfg(any(feature = "iface-rnode", feature = "iface-weave"))]
 pub(crate) mod device_writer;
+pub(crate) mod display;
 #[cfg(feature = "iface-i2p")]
 pub mod i2p;
 #[cfg(feature = "iface-kiss")]
@@ -1511,6 +1512,7 @@ impl DynamicInterfaceTemplate {
             parent_id: self.parent_id,
             telemetry: crate::event::InterfaceTelemetry::default(),
             ifac: self.ifac.clone(),
+            display_name: None,
         }
     }
 }

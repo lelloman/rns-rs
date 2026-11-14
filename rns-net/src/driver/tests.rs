@@ -3711,6 +3711,7 @@ fn dynamic_interface_inherits_parent_announce_cap() {
             parent_id: InterfaceId(10),
             telemetry: event::InterfaceTelemetry::default(),
             ifac: None,
+            display_name: None,
         },
     );
 
@@ -3758,6 +3759,7 @@ fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
                 parent_id: InterfaceId(parent_id),
                 telemetry: event::InterfaceTelemetry::default(),
                 ifac: None,
+                display_name: None,
             },
         );
         let registered = driver
@@ -15754,4 +15756,144 @@ fn link_packet_proofs_checked_on_the_pool_complete_only_their_own_receipt() {
     assert_eq!(proofs.len(), 1);
     assert_eq!(proofs[0].1, PacketHash(hash));
     assert!(!driver.sent_packets.contains_key(&hash));
+}
+
+#[test]
+fn interface_stats_report_upstream_display_names_and_listeners() {
+    let (callbacks, ..) = MockCallbacks::new();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+
+    // A configured interface with an address in its display name, and one
+    // named `{type}[{name}]`.
+    let (writer, _) = MockWriter::new();
+    let mut udp = make_entry(1, Box::new(writer), true);
+    udp.info.name = "UDP".into();
+    udp.interface_type = "UDPInterface".into();
+    driver.interfaces.insert(InterfaceId(1), udp);
+    driver
+        .interface_display_names
+        .insert(InterfaceId(1), "UDPInterface[UDP/0.0.0.0:4242]".into());
+    let (writer, _) = MockWriter::new();
+    let mut kiss = make_entry(2, Box::new(writer), true);
+    kiss.info.name = "Radio".into();
+    kiss.interface_type = "KISSInterface".into();
+    driver.interfaces.insert(InterfaceId(2), kiss);
+
+    // A TCP server and the client it spawned.
+    driver.listener_stats.push(ListenerStat {
+        id: InterfaceId(10),
+        name: "Server".into(),
+        display_name: "TCPServerInterface[Server/0.0.0.0:4242]".into(),
+        interface_type: "TCPServerInterface".into(),
+        mode: constants::MODE_GATEWAY,
+        gravity: 3,
+        announces_to_internal: None,
+        bitrate: Some(10_000_000),
+        mtu: 262_144,
+        ifac: None,
+        clients: ListenerClients::Spawned,
+    });
+    let (writer, _) = MockWriter::new();
+    driver.handle_dynamic_interface_up_event(
+        InterfaceId(11),
+        Box::new(writer),
+        event::DynamicInterfaceRegistration {
+            info: make_interface_info(11),
+            interface_type: "TCPServerClientInterface".into(),
+            parent_id: InterfaceId(10),
+            telemetry: event::InterfaceTelemetry::default(),
+            ifac: None,
+            display_name: Some("TCPInterface[Client on Server/10.0.0.2:50000]".into()),
+        },
+    );
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(11))
+        .unwrap()
+        .stats
+        .rxb = 300;
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(11))
+        .unwrap()
+        .stats
+        .txb = 400;
+
+    // The shared instance and two programs connected to it.
+    driver.register_shared_instance_listener(
+        InterfaceId(20),
+        crate::interface::display::LocalEndpoint::Unix("default".into()),
+    );
+    for id in [21, 22] {
+        let mut info = make_interface_info(id);
+        info.name = "LocalInterface".into();
+        info.is_local_client = true;
+        let (writer, _) = MockWriter::new();
+        driver.handle_interface_up_event(InterfaceId(id), Some(Box::new(writer)), Some(info));
+    }
+
+    let stats = driver.interface_stats();
+    let by_id = |id: u64| {
+        stats
+            .interfaces
+            .iter()
+            .find(|stat| stat.id == id)
+            .unwrap_or_else(|| panic!("no stats for interface {id}"))
+    };
+    assert_eq!(by_id(1).display_name, "UDPInterface[UDP/0.0.0.0:4242]");
+    assert_eq!(by_id(1).name, "UDP");
+    assert_eq!(by_id(2).display_name, "KISSInterface[Radio]");
+
+    let server = by_id(10);
+    assert_eq!(
+        server.display_name,
+        "TCPServerInterface[Server/0.0.0.0:4242]"
+    );
+    assert_eq!(server.name, "Server");
+    assert_eq!(server.interface_type, "TCPServerInterface");
+    assert_eq!(server.clients, Some(1));
+    assert_eq!((server.rxb, server.txb), (300, 400));
+    assert_eq!(server.mode, constants::MODE_GATEWAY);
+    assert_eq!(server.gravity, 3);
+    assert_eq!(
+        by_id(11).display_name,
+        "TCPInterface[Client on Server/10.0.0.2:50000]"
+    );
+
+    let shared = by_id(20);
+    assert_eq!(shared.display_name, "Shared Instance[rns/default]");
+    assert_eq!(shared.name, "Reticulum");
+    assert_eq!(shared.interface_type, "LocalServerInterface");
+    assert_eq!(shared.clients, Some(2));
+    assert_eq!(by_id(21).display_name, "LocalInterface[rns/default]");
+    assert_eq!(
+        by_id(21).parent_display_name.as_deref(),
+        Some("Shared Instance[rns/default]")
+    );
+    assert_eq!(
+        by_id(11).parent_display_name.as_deref(),
+        Some("TCPServerInterface[Server/0.0.0.0:4242]")
+    );
+    assert_eq!(by_id(1).parent_display_name, None);
+
+    // Interfaces are listed by display name.
+    let names: Vec<_> = stats
+        .interfaces
+        .iter()
+        .map(|stat| stat.display_name.as_str())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+
+    // A spawned interface's display name goes with it.
+    driver.handle_interface_down_event(InterfaceId(11));
+    assert!(!driver
+        .interface_display_names
+        .contains_key(&InterfaceId(11)));
+    assert_eq!(driver.interface_stats().interfaces.len(), 6);
+    let stats = driver.interface_stats();
+    let server = stats.interfaces.iter().find(|stat| stat.id == 10).unwrap();
+    assert_eq!(server.clients, Some(0));
 }

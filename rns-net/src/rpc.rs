@@ -2229,7 +2229,7 @@ fn python_number(value: f64) -> PickleValue {
 
 /// Upstream's class name for an interface type: spawned clients of TCP and
 /// local servers are `TCPClientInterface` and `LocalClientInterface` there.
-fn upstream_interface_type(interface_type: &str) -> &str {
+pub(crate) fn upstream_interface_type(interface_type: &str) -> &str {
     match interface_type {
         "TCPServerClientInterface" => "TCPClientInterface",
         "LocalServerClientInterface" => "LocalClientInterface",
@@ -2295,9 +2295,16 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String("id".into()),
             PickleValue::Int(s.id as i64),
         ),
+        // Upstream's `str(interface)`, which its rnstatus prints and keys
+        // on; `short_name` is the interface's own name.
         (
             PickleValue::String("name".into()),
-            PickleValue::String(s.name.clone()),
+            PickleValue::String(s.display_name.clone()),
+        ),
+        // Upstream `Interface.get_hash()`: the full hash of `str(interface)`.
+        (
+            PickleValue::String("hash".into()),
+            PickleValue::Bytes(rns_core::hash::full_hash(s.display_name.as_bytes()).to_vec()),
         ),
         (
             PickleValue::String("tunnel_id".into()),
@@ -2569,21 +2576,6 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
                 .unwrap_or(PickleValue::None),
         ),
         (
-            PickleValue::String("blocked_ips".into()),
-            s.blocked_ips
-                .map(|blocked| PickleValue::Int(blocked as i64))
-                .unwrap_or(PickleValue::None),
-        ),
-        (
-            PickleValue::String("blocked_ip_list".into()),
-            s.blocked_ip_list
-                .as_ref()
-                .map(|blocked| {
-                    PickleValue::List(blocked.iter().cloned().map(PickleValue::String).collect())
-                })
-                .unwrap_or(PickleValue::None),
-        ),
-        (
             PickleValue::String("announce_rate_grace".into()),
             PickleValue::Int(s.announce_rate_grace as i64),
         ),
@@ -2640,6 +2632,31 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         ),
     ];
     weave_stats_to_pickle(s, &mut dict);
+    // Only listeners that block addresses report them: upstream's rnstatus
+    // compares `blocked_ips` with 0 whenever the key is present.
+    if let Some(blocked) = s.blocked_ips {
+        dict.push((
+            PickleValue::String("blocked_ips".into()),
+            PickleValue::Int(blocked as i64),
+        ));
+    }
+    if let Some(blocked) = &s.blocked_ip_list {
+        dict.push((
+            PickleValue::String("blocked_ip_list".into()),
+            PickleValue::List(blocked.iter().cloned().map(PickleValue::String).collect()),
+        ));
+    }
+    // Upstream reports the listener a spawned interface came from.
+    if let Some(parent) = &s.parent_display_name {
+        dict.push((
+            PickleValue::String("parent_interface_name".into()),
+            PickleValue::String(parent.clone()),
+        ));
+        dict.push((
+            PickleValue::String("parent_interface_hash".into()),
+            PickleValue::Bytes(rns_core::hash::full_hash(parent.as_bytes()).to_vec()),
+        ));
+    }
 
     match s.announce_rate_target {
         Some(target) => dict.push((
@@ -4567,6 +4584,8 @@ mod tests {
                         interfaces: vec![SingleInterfaceStat {
                             id: 7,
                             name: "TestInterface".into(),
+                            display_name: "TestInterface[TestInterface]".into(),
+                            parent_display_name: None,
                             tunnel_id: None,
                             remote_transport_id: None,
                             status: true,
@@ -4724,9 +4743,16 @@ mod tests {
         let iface = &ifaces[0];
         assert_eq!(
             iface.get("name").unwrap().as_str().unwrap(),
+            "TestInterface[TestInterface]"
+        );
+        assert_eq!(
+            iface.get("short_name").unwrap().as_str().unwrap(),
             "TestInterface"
         );
         assert_eq!(iface.get("rxb").unwrap().as_int().unwrap(), 1000);
+        // Upstream's rnstatus compares a present `blocked_ips` with 0.
+        assert!(iface.get("blocked_ips").is_none());
+        assert!(iface.get("blocked_ip_list").is_none());
         assert_eq!(iface.get("mtu").unwrap().as_int(), Some(262_144));
         drop(client2);
 
@@ -5181,6 +5207,8 @@ mod tests {
             interfaces: vec![SingleInterfaceStat {
                 id: 1,
                 name: "TCP".into(),
+                display_name: "TCPInterface[TCP/10.0.0.1:4242]".into(),
+                parent_display_name: None,
                 tunnel_id: Some([0x5A; 32]),
                 remote_transport_id: Some([0x6B; 16]),
                 status: true,
@@ -5269,9 +5297,18 @@ mod tests {
         assert_eq!(decoded.get("rxpps").unwrap().as_float(), Some(3.0));
         assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
-        assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
-        // Upstream's own keys and number types, which its rnstatus reads.
+        // Upstream's `str(interface)`, its config name, and `get_hash()`,
+        // the full hash of the former.
+        assert_eq!(
+            ifaces[0].get("name").unwrap().as_str().unwrap(),
+            "TCPInterface[TCP/10.0.0.1:4242]"
+        );
         assert_eq!(ifaces[0].get("short_name").unwrap().as_str(), Some("TCP"));
+        assert_eq!(
+            ifaces[0].get("hash").unwrap().as_bytes().unwrap(),
+            rns_core::hash::full_hash(b"TCPInterface[TCP/10.0.0.1:4242]").as_slice()
+        );
+        // Upstream's own keys and number types, which its rnstatus reads.
         assert_eq!(
             ifaces[0].get("type").unwrap().as_str(),
             Some("TCPClientInterface")

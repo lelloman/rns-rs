@@ -271,10 +271,16 @@ impl ListenerSource {
         // Register the client with the driver before any of its frames: the
         // queue never delivers a frame ahead of an older control event.
         let registration = if let Some(template) = &self.dynamic_template {
+            let mut registration = template.registration(info);
+            registration.display_name = match &stream {
+                Stream::Tcp(stream) => super::tcp_client_display_name(stream),
+                #[cfg(target_os = "linux")]
+                Stream::Unix(_) => Some(super::unix_client_display_name(&self.name)),
+            };
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
-                registration: Box::new(template.registration(info)),
+                registration: Box::new(registration),
             }
         } else {
             Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))

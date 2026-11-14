@@ -281,6 +281,15 @@ impl RnsNode {
         };
 
         let id = local_config.interface_id;
+        // Upstream's `str(interface)` for this connection.
+        let endpoint = crate::interface::display::LocalEndpoint::for_client(
+            local_config.use_af_unix,
+            &local_config.instance_name,
+            local_config.port,
+        );
+        driver
+            .interface_display_names
+            .insert(id, crate::interface::display::local_client(&endpoint));
         let info = rns_core::transport::types::InterfaceInfo {
             stamp_costs: Default::default(),
             id,

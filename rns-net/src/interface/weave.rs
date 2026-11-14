@@ -683,6 +683,7 @@ impl WeaveSession {
                     ..Default::default()
                 },
                 ifac: self.ifac.clone(),
+                display_name: Some(crate::interface::display::weave_peer(&endpoint)),
             }),
         });
         self.publish_parent_telemetry();

@@ -998,10 +998,14 @@ impl Server {
             ingress_control: self.ingress_control,
         };
         let up = if let Some(template) = &self.dynamic_template {
+            let mut registration = template.registration(info);
+            registration.display_name = Some(crate::interface::display::backbone_server_client(
+                name, peer_ip, peer_port,
+            ));
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
-                registration: Box::new(template.registration(info)),
+                registration: Box::new(registration),
             }
         } else {
             Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))

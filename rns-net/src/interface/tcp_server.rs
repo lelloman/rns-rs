@@ -351,10 +351,14 @@ impl ListenerSource {
         // Register the client with the driver before any of its frames: the
         // queue never delivers a frame ahead of an older control event.
         let registration = if let Some(template) = &self.dynamic_template {
+            let mut registration = template.registration(info);
+            registration.display_name = peer_addr.map(|peer| {
+                crate::interface::display::tcp_server_client(name, peer.ip(), peer.port())
+            });
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
-                registration: Box::new(template.registration(info)),
+                registration: Box::new(registration),
             }
         } else {
             Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
@@ -747,9 +751,17 @@ mod tests {
         )
         .unwrap();
         thread::sleep(Duration::from_millis(50));
-        let _client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        let client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        let client_port = client.local_addr().unwrap().port();
         match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
             Event::DynamicInterfaceUp { registration, .. } => {
+                assert_eq!(
+                    registration.display_name.as_deref(),
+                    Some(
+                        format!("TCPInterface[Client on test-server/127.0.0.1:{client_port}]")
+                            .as_str()
+                    )
+                );
                 assert_eq!(registration.parent_id, InterfaceId(77));
                 assert_eq!(registration.interface_type, "TCPServerClientInterface");
                 assert_eq!(registration.info.mode, constants::MODE_GATEWAY);

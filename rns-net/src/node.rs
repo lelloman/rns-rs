@@ -531,6 +531,128 @@ pub(crate) fn derive_ifac_state(
         })
 }
 
+/// Upstream's display names of a configured interface, read from its
+/// config before the factory consumes it.
+#[derive(Default)]
+pub(crate) struct ConfiguredDisplay {
+    /// The display name of the interface a `Simple` start registers.
+    pub(crate) interface: Option<String>,
+    /// A listener without an interface entry of its own: its id and
+    /// display name.
+    pub(crate) listener: Option<(rns_core::transport::types::InterfaceId, String)>,
+    /// The statistics entry of a TCP server listener.
+    pub(crate) listener_stat: Option<crate::driver::ListenerStat>,
+}
+
+impl ConfiguredDisplay {
+    pub(crate) fn of(config: &InterfaceConfig, ifac: Option<&ifac::IfacState>) -> Self {
+        use crate::interface::display;
+        let data = config.config_data.as_any();
+        let name = config.name.as_str();
+        // Unused when no interface feature that reads them is enabled.
+        let _ = (data, name, ifac);
+        #[cfg(feature = "iface-tcp")]
+        if let Some(tcp) = data.downcast_ref::<TcpClientConfig>() {
+            return Self {
+                interface: Some(display::tcp_client(name, &tcp.target_host, tcp.target_port)),
+                ..Self::default()
+            };
+        }
+        #[cfg(feature = "iface-tcp")]
+        if let Some(tcp) = data.downcast_ref::<TcpServerConfig>() {
+            let display_name = display::tcp_server(name, &tcp.listen_ip, tcp.listen_port);
+            return Self {
+                listener: Some((tcp.interface_id, display_name.clone())),
+                listener_stat: Some(crate::driver::ListenerStat {
+                    id: tcp.interface_id,
+                    name: config.name.clone(),
+                    display_name,
+                    interface_type: "TCPServerInterface".into(),
+                    mode: config.mode,
+                    gravity: config.gravity,
+                    announces_to_internal: config.announces_to_internal,
+                    bitrate: Some(tcp.bitrate.unwrap_or(TCP_SERVER_BITRATE_GUESS)),
+                    // The MTU its clients get.
+                    mtu: crate::interface::tcp_hardware_mtu(tcp.bitrate, tcp.fixed_mtu),
+                    ifac: ifac.cloned(),
+                    clients: crate::driver::ListenerClients::Spawned,
+                }),
+                ..Self::default()
+            };
+        }
+        #[cfg(feature = "iface-udp")]
+        if let Some(udp) = data.downcast_ref::<UdpConfig>() {
+            return Self {
+                interface: Some(display::udp(
+                    name,
+                    udp.listen_ip.as_deref(),
+                    udp.listen_port,
+                )),
+                ..Self::default()
+            };
+        }
+        #[cfg(feature = "iface-backbone")]
+        if let Some(mode) = data.downcast_ref::<BackboneMode>() {
+            return match mode {
+                BackboneMode::Server(server) => Self {
+                    listener: Some((
+                        server.interface_id,
+                        display::backbone(name, &server.listen_ip, server.listen_port),
+                    )),
+                    ..Self::default()
+                },
+                BackboneMode::Client(client, _) => Self {
+                    interface: Some(display::backbone(
+                        name,
+                        &client.target_host,
+                        client.target_port,
+                    )),
+                    ..Self::default()
+                },
+            };
+        }
+        #[cfg(feature = "iface-local")]
+        if let Some(local) = data.downcast_ref::<crate::interface::local::LocalClientConfig>() {
+            let endpoint = display::LocalEndpoint::for_client(
+                local.use_af_unix,
+                &local.instance_name,
+                local.port,
+            );
+            return Self {
+                interface: Some(display::local_client(&endpoint)),
+                ..Self::default()
+            };
+        }
+        Self::default()
+    }
+
+    /// Register the display names of a listener that started.
+    pub(crate) fn register_listener(&mut self, driver: &mut Driver) {
+        if let Some((id, display_name)) = self.listener.take() {
+            driver.interface_display_names.insert(id, display_name);
+        }
+        if let Some(listener) = self.listener_stat.take() {
+            driver
+                .listener_stats
+                .retain(|candidate| candidate.id != listener.id);
+            driver.listener_stats.push(listener);
+        }
+    }
+}
+
+/// Upstream `TCPServerInterface.BITRATE_GUESS`.
+#[cfg(feature = "iface-tcp")]
+const TCP_SERVER_BITRATE_GUESS: u64 = 10_000_000;
+
+/// The display name of a subinterface a `Multi` start registers.
+pub(crate) fn subinterface_display_name(
+    config_name: &str,
+    sub: &crate::interface::SubInterface,
+) -> Option<String> {
+    (sub.interface_type_name == "RNodeMultiInterface")
+        .then(|| crate::interface::display::rnode_multi_sub(config_name, &sub.info.name))
+}
+
 pub(crate) struct StartedInterface<'a> {
     pub(crate) driver: &'a mut Driver,
     pub(crate) tx: &'a EventSender,
@@ -542,6 +664,8 @@ pub(crate) struct StartedInterface<'a> {
     pub(crate) ifac_state: Option<crate::ifac::IfacState>,
     pub(crate) ifac_runtime: &'a crate::driver::IfacRuntimeConfig,
     pub(crate) stamp_costs: rns_core::transport::types::InterfaceStampCosts,
+    /// Upstream's display name, when it shows more than `{type}[{name}]`.
+    pub(crate) display_name: Option<String>,
 }
 
 pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
@@ -556,7 +680,16 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
         ifac_state,
         ifac_runtime,
         stamp_costs,
+        display_name,
     } = params;
+    match display_name {
+        Some(display_name) => {
+            driver.interface_display_names.insert(id, display_name);
+        }
+        None => {
+            driver.interface_display_names.remove(&id);
+        }
+    }
     info.stamp_costs = stamp_costs;
     driver.apply_interface_announce_limits(&mut info);
     driver.apply_announce_rate_defaults(&mut info);
@@ -2392,6 +2525,7 @@ impl RnsNode {
                 underlay_mark: config.underlay_mark,
             };
 
+            let mut display = ConfiguredDisplay::of(&iface_config, ifac_state.as_ref());
             let result = match factory.start(iface_config.config_data, ctx) {
                 Ok(r) => r,
                 Err(e) => {
@@ -2451,11 +2585,13 @@ impl RnsNode {
                         ifac_state,
                         ifac_runtime: &ifac_runtime,
                         stamp_costs: iface_config.stamp_costs,
+                        display_name: display.interface.take(),
                     });
                 }
                 crate::interface::StartResult::Listener { control } => {
                     // Listener-type interface (TcpServer, Auto, I2P, etc.)
                     // registers dynamic interfaces via InterfaceUp events.
+                    display.register_listener(&mut driver);
                     let managed_control = control.clone();
                     if let Some(control) = control {
                         driver.register_listener_control(control);
@@ -2501,6 +2637,7 @@ impl RnsNode {
                         } else {
                             derive_ifac_state(ifac_cfg.as_ref(), &sub.info.name)?
                         };
+                        let display_name = subinterface_display_name(&iface_config.name, &sub);
                         register_started_interface(StartedInterface {
                             driver: &mut driver,
                             tx: &tx,
@@ -2512,6 +2649,7 @@ impl RnsNode {
                             ifac_state: sub_ifac,
                             ifac_runtime: &ifac_runtime,
                             stamp_costs: iface_config.stamp_costs,
+                            display_name,
                         });
                     }
                 }
@@ -2745,13 +2883,15 @@ impl RnsNode {
                 ),
                 use_af_unix: config.shared_instance.use_af_unix,
             };
-            match crate::interface::local::start_server(
+            let listener_id = local_server_config.interface_id;
+            match crate::interface::local::start_shared_instance_server(
                 local_server_config,
                 tx.clone(),
                 next_dynamic_id.clone(),
             ) {
-                Ok(control) => {
+                Ok((control, endpoint)) => {
                     driver.register_listener_control(control);
+                    driver.register_shared_instance_listener(listener_id, endpoint);
                     log::info!(
                         "Local shared instance server started (instance={}, port={})",
                         config.instance_name,
@@ -5306,6 +5446,7 @@ mod tests {
                 size: 16,
             },
             stamp_costs: Default::default(),
+            display_name: None,
         });
 
         let info = &driver.interfaces[&id].info;
@@ -5387,6 +5528,7 @@ mod tests {
                     size: 16,
                 },
                 stamp_costs: Default::default(),
+                display_name: None,
             });
             driver.interfaces[&id].info.clone()
         };
@@ -5464,6 +5606,7 @@ mod tests {
                 destination_cost: None,
                 pr_cost: Some(rns_core::stamp::StampCost::from_f64(12.25)),
             },
+            display_name: None,
         });
 
         let ic = driver.interfaces[&id].info.ingress_control;
@@ -8270,5 +8413,80 @@ enable_transport = False
         );
         let plain = crate::destination::Destination::plain("test", &["proof"]);
         assert_eq!(single_proof_key(&plain), None);
+    }
+
+    #[test]
+    fn configured_interfaces_get_upstream_display_names() {
+        let parsed = config::parse(
+            "[interfaces]\n\
+             [[TCP Peer]]\n  type = TCPClientInterface\n  target_host = 10.0.0.1\n  target_port = 4242\n\
+             [[TCP Server]]\n  type = TCPServerInterface\n  listen_ip = ::\n  listen_port = 4243\n  mode = gateway\n\
+             [[UDP]]\n  type = UDPInterface\n  listen_ip = 0.0.0.0\n  listen_port = 4244\n  forward_ip = 255.255.255.255\n  forward_port = 4244\n\
+             [[Backbone]]\n  type = BackboneInterface\n  listen_on = 0.0.0.0\n  port = 4245\n\
+             [[Backbone Peer]]\n  type = BackboneInterface\n  remote = example.org\n  target_port = 4246\n\
+             [[Radio]]\n  type = KISSInterface\n  port = /dev/null\n",
+        )
+        .unwrap();
+        let registry = crate::interface::registry::InterfaceRegistry::with_builtins();
+        let display = |name: &str, id: u64| {
+            let iface = parsed
+                .interfaces
+                .iter()
+                .find(|iface| iface.name == name)
+                .unwrap();
+            let config = parse_managed_interface(
+                iface,
+                &parsed,
+                Path::new("/tmp"),
+                rns_core::transport::types::InterfaceId(id),
+                &registry,
+            )
+            .unwrap();
+            ConfiguredDisplay::of(&config, None)
+        };
+
+        let tcp = display("TCP Peer", 1);
+        assert_eq!(
+            tcp.interface.as_deref(),
+            Some("TCPInterface[TCP Peer/10.0.0.1:4242]")
+        );
+        assert!(tcp.listener.is_none() && tcp.listener_stat.is_none());
+
+        let server = display("TCP Server", 2);
+        assert!(server.interface.is_none());
+        assert_eq!(
+            server.listener,
+            Some((
+                rns_core::transport::types::InterfaceId(2),
+                "TCPServerInterface[TCP Server/[::]:4243]".to_string()
+            ))
+        );
+        let stat = server.listener_stat.unwrap();
+        assert_eq!(stat.name, "TCP Server");
+        assert_eq!(stat.interface_type, "TCPServerInterface");
+        assert_eq!(stat.mode, rns_core::constants::MODE_GATEWAY);
+        assert!(matches!(
+            stat.clients,
+            crate::driver::ListenerClients::Spawned
+        ));
+
+        assert_eq!(
+            display("UDP", 3).interface.as_deref(),
+            Some("UDPInterface[UDP/0.0.0.0:4244]")
+        );
+        assert_eq!(
+            display("Backbone", 4)
+                .listener
+                .map(|(_, name)| name)
+                .as_deref(),
+            Some("BackboneInterface[Backbone/0.0.0.0:4245]")
+        );
+        assert_eq!(
+            display("Backbone Peer", 5).interface.as_deref(),
+            Some("BackboneInterface[Backbone Peer/example.org:4246]")
+        );
+        // Named `{type}[{name}]` by the driver.
+        let radio = display("Radio", 6);
+        assert!(radio.interface.is_none() && radio.listener.is_none());
     }
 }

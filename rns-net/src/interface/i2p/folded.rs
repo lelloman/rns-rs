@@ -229,6 +229,7 @@ impl Session {
             writer,
             peer_info(id, remote, self.ingress_control, outbound),
             self.dynamic_template.as_ref(),
+            crate::interface::display::i2p_peer(&self.name, remote, outbound),
         ))
     }
 

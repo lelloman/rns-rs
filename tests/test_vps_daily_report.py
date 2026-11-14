@@ -47,6 +47,43 @@ class StatusJsonTests(unittest.TestCase):
             "local", "configured_public", "backbone_discovered", "configured_public"
         ])
 
+    def test_keys_rows_on_short_name_with_upstream_display_names(self) -> None:
+        status, rows = status_from_json(
+            {
+                "transport_uptime": 30,
+                "interfaces": [
+                    {
+                        "name": "Shared Instance[rns/default]",
+                        "short_name": "Reticulum",
+                        "status": True,
+                    },
+                    {
+                        "name": "LocalInterface[rns/default]",
+                        "short_name": "LocalInterface",
+                        "status": True,
+                    },
+                    {
+                        "name": "BackboneInterface[BackboneInterface/10001/10.0.0.1:4242]",
+                        "short_name": "BackboneInterface/10001",
+                        "status": True,
+                    },
+                    {
+                        "name": "TCPInterface[Named Peer/10.0.0.2:4242]",
+                        "short_name": "Named Peer",
+                        "status": False,
+                    },
+                ],
+            },
+            parse_utc("2026-08-14 12:00:00 UTC"),
+        )
+        self.assertEqual([row["interface_name"] for row in rows], [
+            "Reticulum", "LocalInterface", "BackboneInterface/10001", "Named Peer"
+        ])
+        self.assertEqual([row["interface_kind"] for row in rows], [
+            "local", "local", "backbone_discovered", "configured_public"
+        ])
+        self.assertEqual(status["named_peers_down"], ["Named Peer"])
+
     def test_counts_every_interface_regardless_of_order(self) -> None:
         status, _ = status_from_json(
             {
