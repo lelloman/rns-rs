@@ -921,6 +921,36 @@ impl Driver {
         }
     }
 
+    /// The ratchet to encrypt a SINGLE packet for `dest_hash` with: the
+    /// application's own for destinations it attached ratchets to, else the
+    /// latest one the destination announced.
+    pub(crate) fn single_ratchet_for(&self, dest_hash: &[u8; 16]) -> Option<[u8; 32]> {
+        let local = self
+            .event_tx
+            .local_ratchets()
+            .lock()
+            .unwrap()
+            .get(dest_hash)
+            .and_then(|owner| owner.current_public());
+        local.or_else(|| {
+            let store = self.ratchet_store.as_ref()?;
+            match store.current(dest_hash, time::now(), self.ratchet_expiry_secs) {
+                Ok(entry) => entry.map(|entry| entry.ratchet),
+                Err(err) => {
+                    log::warn!(
+                        "failed to load ratchet for {:02x}{:02x}{:02x}{:02x}..: {}",
+                        dest_hash[0],
+                        dest_hash[1],
+                        dest_hash[2],
+                        dest_hash[3],
+                        err
+                    );
+                    None
+                }
+            }
+        })
+    }
+
     fn finish_ratchet_cleanup_if_ready(&mut self) {
         let finished = self
             .ratchet_cleanup_handle

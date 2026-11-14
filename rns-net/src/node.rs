@@ -1152,7 +1152,7 @@ pub struct RnsNode {
     /// Shared with the driver; grinds stamps off the calling thread.
     stamper: Option<Arc<crate::stamper::Stamper>>,
     transport_state_dir: Option<std::path::PathBuf>,
-    ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
+    pub(crate) ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
     ratchet_expiry: Duration,
     /// Destination types this application needs (upstream 825c2e19).
     #[cfg(feature = "iface-local")]
