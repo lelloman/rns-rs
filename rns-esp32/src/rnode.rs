@@ -31,6 +31,10 @@ pub trait BridgeTransport {
     fn read(&self, buf: &mut [u8], timeout_ms: u32) -> usize;
     /// Write a frame in full.
     fn write(&self, data: &[u8]) -> io::Result<()>;
+    /// Whether the host is still there, where the transport can tell.
+    fn connected(&self) -> bool {
+        true
+    }
 }
 
 /// UART transport — wraps the existing UartDriver for USB serial bridge.
@@ -81,6 +85,10 @@ impl BridgeTransport for BleTransport {
         crate::ble::read_timeout(buf, Duration::from_millis(timeout_ms as u64))
     }
 
+    fn connected(&self) -> bool {
+        crate::ble::is_connected()
+    }
+
     fn write(&self, data: &[u8]) -> io::Result<()> {
         match crate::ble::write(data) {
             Ok(()) => Ok(()),
@@ -98,7 +106,11 @@ const MCU_ESP32: u8 = 0x01;
 
 const DETECT_POLL_MS: u32 = 5;
 
-/// Idle timeout before reverting to standalone mode.
+/// How long a host that detected the board may stay silent before it has
+/// switched the radio on, after which the board reverts to standalone. Once
+/// the radio is on the bridge stays up, as upstream firmware, until the host
+/// sends LEAVE, the transport disconnects (BLE) or the board resets: hosts
+/// send no keepalive over serial, so silence is not a sign they left.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Reason the bridge loop exited.
@@ -121,6 +133,8 @@ pub struct RNodeBridge<T: BridgeTransport> {
     pending_sf: Option<u8>,
     pending_cr: Option<u8>,
     pending_power: Option<i8>,
+    /// The host switched the radio on.
+    radio_on: bool,
 }
 
 impl<T: BridgeTransport> RNodeBridge<T> {
@@ -142,6 +156,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             pending_sf: None,
             pending_cr: None,
             pending_power: None,
+            radio_on: false,
         }
     }
 
@@ -181,7 +196,11 @@ impl<T: BridgeTransport> RNodeBridge<T> {
 
         let exit = loop {
             // Check idle timeout
-            if last_activity.elapsed() > IDLE_TIMEOUT {
+            if !self.transport.connected() {
+                log::info!("RNode bridge: host disconnected");
+                break BridgeExit::TransportError;
+            }
+            if !self.radio_on && last_activity.elapsed() > IDLE_TIMEOUT {
                 log::info!("RNode bridge: idle timeout, reverting to standalone");
                 break BridgeExit::IdleTimeout;
             }
@@ -343,6 +362,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             CMD_RADIO_STATE => {
                 if frame.data.first() == Some(&RADIO_STATE_ON) {
                     if self.apply_radio_config() {
+                        self.radio_on = true;
                         let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
                         self.transport.write(&resp)?;
                         let ready = kiss_encode(CMD_READY, &[0x01]);
