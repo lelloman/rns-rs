@@ -11,11 +11,33 @@ The current upstream reference baseline is:
 - Version: `1.6.0`
 - Version metadata commit: `af8d05819d363240c133e4bc644bfde0d4620a71`
 - Release tag: `1.6.0` on `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4`
-- Normative commit: `134dc6777c0dd29404e61b36d4094f4e35b88b3e`
-- Commit date: `2026-11-13 01:07:12 +0100`
-- Subject: `Added filtered traffic stats and display in rnstatus`
+- Normative commit: `c850cdac6c8bd5422af045652216ba451e98aa33`
+- Commit date: `2026-11-14 02:14:38 +0100`
+- Subject: `Traffic counting`
 
-The normative baseline is the canonical `rgit/master` tip `134dc677`, accepted
+The normative baseline is the canonical `rgit/master` tip `c850cdac`, accepted
+on 2026-11-14 as a same-version Reticulum 1.6.0 advancement from `134dc677`.
+The range has thirteen commits:
+
+- The announce rate table is persisted across restarts.
+- Traffic accounting moves into transport.
+- Interfaces count filtered announces, with `rnstatus` support.
+- Held announces count as received traffic, and the early drop once an
+  interface's held announces are full is reverted.
+- Tunnel and remote transport ids are reported, with `rnstatus -T`, and
+  interfaces can be detached by tunnel id.
+- Tunnel synthesis is restricted to TCP, Backbone and I2P connections, and is
+  torn down on a bad signature or a blackholed transport node.
+- Paths to blackholed identities are not restored at load.
+
+rns-rs needed a prerequisite fix so that its dialing interfaces synthesize
+tunnels at all. The GitHub mirror is at `3c4b271f`, behind the previous
+baseline. Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.0-rgit-5-parity.md`](docs/upstream-parity/reticulum-1.6.0-rgit-5-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.0-rgit-5-audit.md`](docs/upstream-parity/reticulum-1.6.0-rgit-5-audit.md).
+
+The previous baseline was the canonical `rgit/master` tip `134dc677`, accepted
 on 2026-11-13 as a same-version Reticulum 1.6.0 advancement from `16621a78`.
 The fifteen-commit range reworks the path pool and tunnel culling, drops
 announces early once an interface's held announces are full, adds a
