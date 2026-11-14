@@ -556,8 +556,9 @@ fn fetch(
             RncpEvent::ReceiveProgress(id, done, total) if id == link_id => {
                 deadline = Instant::now() + timeout;
                 if !options.silent {
+                    // A received resource reports its progress in parts.
                     eprint!(
-                        "\r{:.1}% ({done}/{total} bytes)",
+                        "\r{:.1}% ({done}/{total} parts)",
                         done as f64 * 100.0 / total.max(1) as f64
                     );
                 }
