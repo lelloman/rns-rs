@@ -198,6 +198,7 @@ impl Driver {
                     .and_then(|info| info.tunnel_id)
                     // Upstream 3281e283: else the tunnel this node synthesized.
                     .or_else(|| self.engine.local_tunnel_id(&interface_id)),
+                remote_transport_id: self.engine.remote_transport(&interface_id),
                 status: entry.online && entry.enabled,
                 mode: entry.info.mode,
                 gravity: entry.info.gravity,
@@ -316,6 +317,7 @@ impl Driver {
                 name: handle.interface_name.clone(),
                 // A listener's tunnels belong to its spawned clients.
                 tunnel_id: None,
+                remote_transport_id: None,
                 status: true,
                 mode: handle.mode,
                 gravity: handle.gravity,

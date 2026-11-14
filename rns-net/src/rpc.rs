@@ -2203,6 +2203,12 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
                 .unwrap_or(PickleValue::None),
         ),
         (
+            PickleValue::String("remote_transport_id".into()),
+            s.remote_transport_id
+                .map(|identity_hash| PickleValue::Bytes(identity_hash.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
             PickleValue::String("status".into()),
             PickleValue::Bool(s.status),
         ),
@@ -4440,6 +4446,7 @@ mod tests {
                             id: 7,
                             name: "TestInterface".into(),
                             tunnel_id: None,
+                            remote_transport_id: None,
                             status: true,
                             mode: 1,
                             gravity: -2,
@@ -5048,6 +5055,7 @@ mod tests {
                 id: 1,
                 name: "TCP".into(),
                 tunnel_id: Some([0x5A; 32]),
+                remote_transport_id: Some([0x6B; 16]),
                 status: true,
                 mode: 1,
                 gravity: -2,
@@ -5141,6 +5149,11 @@ mod tests {
         // Upstream 819076c3: filtered announces, per interface only.
         assert_eq!(ifaces[0].get("afrxc").unwrap().as_int(), Some(6));
         assert!(decoded.get("afrxc").is_none());
+        // Upstream 464e7598: the remote transport identity hash.
+        assert_eq!(
+            ifaces[0].get("remote_transport_id").unwrap().as_bytes(),
+            Some(&[0x6B; 16][..])
+        );
         // Upstream 9b6b724b: the tunnel id, bytes or None.
         assert_eq!(
             ifaces[0].get("tunnel_id").unwrap().as_bytes(),

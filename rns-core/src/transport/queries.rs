@@ -441,6 +441,12 @@ impl TransportEngine {
         self.local_tunnel_ids.get(interface).copied()
     }
 
+    /// The transport identity hash of the node that synthesized a tunnel
+    /// over an interface (upstream 464e7598 `remote_transport`).
+    pub fn remote_transport(&self, interface: &InterfaceId) -> Option<[u8; 16]> {
+        self.remote_transports.get(interface).copied()
+    }
+
     /// The interface a tunnel id names: the one a remote node's tunnel is
     /// attached to, else the one this node synthesized it on (upstream
     /// 3281e283's detach by tunnel id).
