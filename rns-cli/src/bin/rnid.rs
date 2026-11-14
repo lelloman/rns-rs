@@ -103,6 +103,7 @@ const ALIASES: &[(&str, &str)] = &[
 
 #[allow(dead_code)]
 fn main() {
+    rns_cli::stdout::exit_quietly_on_closed_stdout();
     run_with_args(Args::parse_spec(&OPTIONS), "rnid", "rnid");
 }
 
