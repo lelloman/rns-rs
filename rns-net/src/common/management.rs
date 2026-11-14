@@ -355,6 +355,8 @@ pub fn handle_status_request(
                 engine
                     .interface_info(&id)
                     .and_then(|info| info.tunnel_id)
+                    // Upstream 3281e283: else the tunnel this node synthesized.
+                    .or_else(|| engine.local_tunnel_id(&id))
                     .map(|tunnel_id| Value::Bin(tunnel_id.to_vec()))
                     .unwrap_or(Value::Nil),
             ),

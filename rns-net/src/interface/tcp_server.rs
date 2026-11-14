@@ -108,6 +108,10 @@ impl Writer for TcpServerWriter {
     fn loop_flush_after(&self) -> Option<Duration> {
         self.flush_after
     }
+
+    fn shutdown(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
 }
 
 /// Start a TCP server. Spawns a listener thread that accepts connections

@@ -22,6 +22,7 @@ Options:
   -A                      Show announce statistics
   -P, --pr-stats          Show path request statistics
   -F, --filter-stats      Show filtered traffic statistics
+  -T, --tunnels           Show tunnel information
   -B, --burst             Only show interfaces with active burst limiting
   -b, --blocked-ips       Show blocked IPs per interface
   -q, --queues            Show inbound queue pressure statistics
@@ -48,6 +49,18 @@ interfaces cannot be detached. Set `enable_interface_management = no` in
 For example, after editing an interface section named `Backbone`, run
 `rnstatus --reload Backbone`. Use `rnstatus --attach Backbone` to start it when
 it is not running, or `rnstatus --detach Backbone` to stop it.
+
+`--detach` also takes a tunnel id, as `-T` shows it without the angle
+brackets. It names the interface a remote node's tunnel is attached to, such
+as one client of a server interface, or the interface this node synthesized
+that tunnel on. A spawned client interface has its connection closed. A
+configured interface is detached as by its name.
+
+With `-T`, each interface shows a `Tunnel ID` line: the tunnel a connected
+transport node synthesized over it, else the one this node synthesized over
+it when dialing out, else `None`. TCP clients, Backbone clients and outbound
+I2P peers synthesize a tunnel each time they connect, so the remote side
+keeps their paths across reconnects.
 
 Discovered-interface views (`-d` and `-D`) show the announcing stack's
 implementation and version as `Running` in the table or `Stack` in the detail

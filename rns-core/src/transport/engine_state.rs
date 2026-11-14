@@ -27,6 +27,7 @@ impl TransportEngine {
             path_states: BTreeMap::new(),
             interfaces: BTreeMap::new(),
             interface_hashes: BTreeMap::new(),
+            local_tunnel_ids: BTreeMap::new(),
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
             announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
@@ -73,6 +74,7 @@ impl TransportEngine {
     pub fn deregister_interface(&mut self, id: InterfaceId) {
         self.interfaces.remove(&id);
         self.interface_hashes.remove(&id);
+        self.local_tunnel_ids.remove(&id);
         self.drop_paths_for_interface(id);
         self.drop_reverse_for_interface(id);
         self.drop_links_for_interface(id);
@@ -487,7 +489,7 @@ impl TransportEngine {
     ///
     /// Returns TunnelSynthesize action to send the synthesis packet.
     pub fn synthesize_tunnel(
-        &self,
+        &mut self,
         identity: &rns_crypto::identity::Identity,
         interface_id: InterfaceId,
         rng: &mut dyn Rng,
@@ -506,7 +508,8 @@ impl TransportEngine {
         };
 
         match tunnel::build_tunnel_synthesize_data(identity, &interface_hash, rng) {
-            Ok((data, _tunnel_id)) => {
+            Ok((data, tunnel_id)) => {
+                self.local_tunnel_ids.insert(interface_id, tunnel_id);
                 let dest_hash = crate::destination::destination_hash(
                     "rnstransport",
                     &["tunnel", "synthesize"],

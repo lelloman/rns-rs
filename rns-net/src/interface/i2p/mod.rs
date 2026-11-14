@@ -113,6 +113,10 @@ impl Writer for I2pWriter {
         use std::os::fd::AsRawFd;
         crate::engine::FOLD_IO.then(|| self.stream.as_raw_fd())
     }
+
+    fn shutdown(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
 }
 
 /// The interface a connected peer gets, named after `remote`.

@@ -44,6 +44,7 @@ const BOOLEAN_LONG: &[&str] = &[
     "export-prv",
     "pr-stats",
     "filter-stats",
+    "tunnels",
     "burst",
     "blocked-ips",
     "queues",
@@ -208,7 +209,7 @@ impl Args {
                         'v' => verbosity = verbosity.saturating_add(1),
                         'q' => quiet = quiet.saturating_add(1),
                         'a' | 'b' | 'r' | 'j' | 'P' | 'F' | 'D' | 'l' | 'f' | 'A' | 'Z' | 't'
-                        | 'p' | 'x'
+                        | 'p' | 'x' | 'T'
                             if !control =>
                         {
                             flags.insert(c.to_string(), "true".into());
@@ -330,6 +331,15 @@ mod tests {
         let a = args(&["-t", "abcd1234"]);
         assert!(a.has("t"));
         assert_eq!(a.positional, vec!["abcd1234"]);
+    }
+
+    #[test]
+    fn tunnels_flag_takes_no_value() {
+        // rnstatus -T (upstream 3281e283) leaves a name filter positional.
+        let a = args(&["-T", "Backbone"]);
+        assert!(a.has("T"));
+        assert_eq!(a.positional, vec!["Backbone"]);
+        assert!(args(&["--tunnels"]).has("tunnels"));
     }
 
     #[test]

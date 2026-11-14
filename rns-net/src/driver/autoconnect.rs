@@ -435,8 +435,15 @@ impl Driver {
         }
     }
 
+    /// Whether an interface was auto-connected from a discovery.
+    pub(crate) fn is_autoconnected(&self, id: InterfaceId) -> bool {
+        self.upstream_autoconnect
+            .as_ref()
+            .is_some_and(|autoconnect| autoconnect.members.iter().any(|member| member.id == id))
+    }
+
     /// Detach an auto-connected interface (`teardown_interface`).
-    fn teardown_autoconnected(&mut self, id: InterfaceId) {
+    pub(crate) fn teardown_autoconnected(&mut self, id: InterfaceId) {
         let Some(autoconnect) = self.upstream_autoconnect.as_mut() else {
             return;
         };

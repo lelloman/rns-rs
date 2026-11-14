@@ -195,7 +195,9 @@ impl Driver {
                 tunnel_id: self
                     .engine
                     .interface_info(&interface_id)
-                    .and_then(|info| info.tunnel_id),
+                    .and_then(|info| info.tunnel_id)
+                    // Upstream 3281e283: else the tunnel this node synthesized.
+                    .or_else(|| self.engine.local_tunnel_id(&interface_id)),
                 status: entry.online && entry.enabled,
                 mode: entry.info.mode,
                 gravity: entry.info.gravity,

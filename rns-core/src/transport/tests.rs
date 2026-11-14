@@ -2798,7 +2798,7 @@ fn replacing_interface_id_refreshes_cached_tunnel_hash() {
 
 #[test]
 fn test_synthesize_tunnel_missing_interface_is_dropped() {
-    let engine = TransportEngine::new(make_config(true));
+    let mut engine = TransportEngine::new(make_config(true));
 
     let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
     let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
