@@ -931,6 +931,10 @@ pub struct Driver {
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
     /// Latest explicit SINGLE announces to replay after shared-client reconnect.
     shared_announces: HashMap<[u8; 16], SharedAnnounceRecord>,
+    /// Keys of SINGLE IN destinations registered with their identity, to
+    /// answer path requests for them before they announce. Kept apart from
+    /// `shared_announces`, which shared clients replay on reconnect.
+    path_responders: HashMap<[u8; 16], SharedAnnounceRecord>,
     /// Shared local interfaces that went down and should replay announces on reconnect.
     shared_reconnect_pending: HashMap<InterfaceId, bool>,
     /// Path-response announces recently sent for local destinations, keyed by
@@ -1213,6 +1217,7 @@ impl Driver {
             proof_keys: HashMap::new(),
             local_destinations,
             shared_announces: HashMap::new(),
+            path_responders: HashMap::new(),
             shared_reconnect_pending: HashMap::new(),
             local_path_responses: HashMap::new(),
             holepunch_manager: {

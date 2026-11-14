@@ -13461,6 +13461,54 @@ fn transport_node_answers_path_requests_for_local_destinations() {
             && p.destination_hash == unknown_dest)));
 }
 
+/// A destination registered with its identity but never announced is
+/// announced on demand for a path request, as upstream does: before, a
+/// listener such as `rncp -l` without `-b` could not be reached by a peer
+/// that had not heard it announce (found over LoRa with a Python peer).
+#[test]
+fn path_request_for_a_never_announced_registered_destination_is_answered() {
+    let LocalPathResponseFixture {
+        mut driver,
+        tx,
+        sent_1,
+        ..
+    } = local_path_response_fixture(true);
+    let identity = Identity::new(&mut OsRng);
+    let dest =
+        rns_core::destination::destination_hash("quiet", &["listener"], Some(identity.hash()));
+    tx.send(Event::RegisterDestination {
+        dest_hash: dest,
+        dest_type: constants::DESTINATION_SINGLE,
+    })
+    .unwrap();
+    tx.send(Event::RegisterPathResponder {
+        dest_hash: dest,
+        name_hash: rns_core::destination::name_hash("quiet", &["listener"]),
+        identity_prv_key: identity.get_private_key().unwrap(),
+    })
+    .unwrap();
+    tx.send(Event::Frame {
+        interface_id: InterfaceId(1),
+        data: local_path_request_frame(&driver, &dest, &[0xD4; 16]).into(),
+        rssi: None,
+        snr: None,
+    })
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let frames = sent_1.lock().unwrap().clone();
+    let answers = path_responses_for(&frames, &dest);
+    assert_eq!(answers.len(), 1, "expected one path response");
+    let packet = RawPacket::unpack(&answers[0]).unwrap();
+    let announce = AnnounceData::unpack(packet.data(), false).unwrap();
+    assert!(announce.validate(&dest).is_ok());
+    assert!(announce.app_data.is_none());
+    // The key only answers path requests: it is not a shared-client replay
+    // record, so a reconnect does not start announcing the destination.
+    assert!(!driver.shared_announces.contains_key(&dest));
+}
+
 #[test]
 fn local_path_response_replays_identical_bytes_for_repeated_tag() {
     let LocalPathResponseFixture {
