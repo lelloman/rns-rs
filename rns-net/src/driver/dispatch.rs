@@ -445,13 +445,16 @@ impl Driver {
                 ProofOutcome::Verified {
                     owner:
                         ProofOwner::Packet {
-                            destination, rtt, ..
+                            destination,
+                            rtt,
+                            proof_packet,
+                            ..
                         },
                     packet_hash,
                     valid,
                 } => {
                     if valid {
-                        self.packet_proof_valid(destination, packet_hash, rtt);
+                        self.packet_proof_valid(destination, packet_hash, rtt, proof_packet);
                     } else {
                         log::debug!("Proof signature invalid for {:02x?}", &packet_hash[..4]);
                     }
@@ -489,7 +492,7 @@ impl Driver {
         &mut self,
         dest_hash: [u8; 16],
         proof_data: &[u8],
-        _raw_packet_hash: &[u8; 32],
+        proof_packet_hash: &[u8; 32],
     ) {
         // Reticulum supports both proof formats:
         // - explicit: [packet_hash:32][signature:64]
@@ -604,6 +607,7 @@ impl Driver {
             sig,
             key.clone(),
             rtt,
+            *proof_packet_hash,
         ) {
             return;
         }
@@ -611,18 +615,24 @@ impl Driver {
             log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4]);
             return;
         }
-        self.packet_proof_valid(tracked_dest, tracked_hash, rtt);
+        self.packet_proof_valid(tracked_dest, tracked_hash, rtt, Some(*proof_packet_hash));
     }
 
     /// Complete the receipt of a packet sent to `destination` whose proof's
     /// signature checked out, unless another proof completed it first.
-    fn packet_proof_valid(&mut self, destination: [u8; 16], packet_hash: [u8; 32], rtt: f64) {
+    fn packet_proof_valid(
+        &mut self,
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        rtt: f64,
+        proof_packet: Option<[u8; 32]>,
+    ) {
         if self.sent_packets.remove(&packet_hash).is_none() {
             return;
         }
         self.sent_packet_keys.remove(&packet_hash);
         let _ = self.mark_known_destination_used(&destination);
-        self.packet_proof_accepted(destination, packet_hash, rtt);
+        self.packet_proof_accepted(destination, packet_hash, rtt, proof_packet);
     }
 
     /// The peer of `link_id` proved `packet_hash`: complete its receipt if
@@ -632,7 +642,7 @@ impl Driver {
         match self.sent_packets.get(&packet_hash) {
             Some(&(destination, sent_time)) if destination == link_id => {
                 self.sent_packets.remove(&packet_hash);
-                self.packet_proof_accepted(link_id, packet_hash, time::now() - sent_time);
+                self.packet_proof_accepted(link_id, packet_hash, time::now() - sent_time, None);
             }
             Some(_) => log::debug!(
                 "Proof on link {:02x?} for {:02x?}, not sent on it",
@@ -645,8 +655,14 @@ impl Driver {
     }
 
     /// Complete the receipt of a packet sent to `destination` whose proof
-    /// was accepted.
-    fn packet_proof_accepted(&mut self, destination: [u8; 16], packet_hash: [u8; 32], rtt: f64) {
+    /// was accepted; `proof_packet` is the packet that carried the proof.
+    fn packet_proof_accepted(
+        &mut self,
+        destination: [u8; 16],
+        packet_hash: [u8; 32],
+        rtt: f64,
+        proof_packet: Option<[u8; 32]>,
+    ) {
         log::debug!(
             "Proof received for {:02x?} rtt={:.3}s",
             &packet_hash[..4],
@@ -656,10 +672,11 @@ impl Driver {
             self.completed_proofs
                 .insert(packet_hash, (rtt, time::now()));
         }
-        self.callbacks.on_proof(
+        self.callbacks.on_proof_packet(
             rns_core::types::DestHash(destination),
             rns_core::types::PacketHash(packet_hash),
             rtt,
+            proof_packet.map(rns_core::types::PacketHash),
         );
     }
 

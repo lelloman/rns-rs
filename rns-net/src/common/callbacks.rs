@@ -209,6 +209,20 @@ pub trait Callbacks: Send {
     /// `rtt` is the round-trip time in seconds.
     fn on_proof(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash, _rtt: f64) {}
 
+    /// [`on_proof`](Self::on_proof), also naming the packet that carried the
+    /// proof (`PacketReceipt.proof_packet`), whose reception stats
+    /// `RnsNode::packet_rssi` and friends report; `None` for a proof that
+    /// arrived on a link. The default forwards to `on_proof`.
+    fn on_proof_packet(
+        &mut self,
+        dest_hash: DestHash,
+        packet_hash: PacketHash,
+        rtt: f64,
+        _proof_packet: Option<PacketHash>,
+    ) {
+        self.on_proof(dest_hash, packet_hash, rtt);
+    }
+
     /// Called for ProveApp strategy: should we prove this incoming packet?
     /// Return true to generate and send a proof, false to skip.
     fn on_proof_requested(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash) -> bool {

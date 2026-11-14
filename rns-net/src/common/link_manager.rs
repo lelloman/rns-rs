@@ -557,6 +557,7 @@ impl LinkManager {
         signature: [u8; 64],
         key: Ed25519PublicKey,
         rtt: f64,
+        proof_packet: [u8; 32],
     ) -> bool {
         self.proof_pool().is_some_and(|pool| {
             pool.submit_verify(
@@ -564,6 +565,7 @@ impl LinkManager {
                     destination,
                     rtt,
                     interface: None,
+                    proof_packet: Some(proof_packet),
                 },
                 packet_hash,
                 signature,
@@ -588,6 +590,7 @@ impl LinkManager {
                     destination,
                     rtt: 0.0,
                     interface,
+                    proof_packet: None,
                 },
                 packet_hash,
                 key,

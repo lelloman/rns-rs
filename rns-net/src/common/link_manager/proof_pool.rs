@@ -66,11 +66,13 @@ pub(crate) enum Owner {
     /// A single packet sent to or received for `destination`. For a check,
     /// `rtt` is the round trip measured when the proof arrived; for a
     /// signature, `interface` is where the proved packet arrived, which its
-    /// proof goes back on.
+    /// proof goes back on. `proof_packet` is the hash of the packet that
+    /// carried a checked proof, for its reception stats.
     Packet {
         destination: [u8; 16],
         rtt: f64,
         interface: Option<rns_core::transport::types::InterfaceId>,
+        proof_packet: Option<[u8; 32]>,
     },
 }
 
