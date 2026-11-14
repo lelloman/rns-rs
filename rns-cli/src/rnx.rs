@@ -16,6 +16,7 @@ use rns_net::destination::Destination;
 use rns_net::{AnnouncedIdentity, Callbacks, RnsNode};
 
 use crate::app;
+use crate::args::{Args, Opt, OptionSpec};
 use crate::format::prettyhexrep;
 
 const APP_NAME: &str = "rnx";
@@ -53,64 +54,81 @@ struct Options {
     version: bool,
 }
 
+/// upstream rnx's options, and the Rust-only long names this
+/// implementation has accepted.
+const OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("", "config"),
+        Opt::count("v", "verbose"),
+        Opt::count("q", "quiet"),
+        Opt::flag("p", "print-identity"),
+        Opt::flag("l", "listen"),
+        Opt::value("i", "identity").rust_only(),
+        Opt::flag("x", "interactive"),
+        Opt::flag("b", "no-announce"),
+        Opt::value("a", "allowed").rust_only(),
+        Opt::flag("n", "noauth"),
+        Opt::flag("N", "noid"),
+        Opt::flag("d", "detailed"),
+        Opt::flag("m", "mirror").rust_only(),
+        Opt::value("w", "timeout").rust_only(),
+        Opt::value("W", "result-timeout").rust_only(),
+        Opt::value("", "stdin"),
+        Opt::value("", "stdout"),
+        Opt::value("", "stderr"),
+        Opt::flag("", "no-auth").rust_only(),
+        Opt::flag("", "no-id").rust_only(),
+    ],
+};
+
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self, String> {
+        let args = Args::parse_spec_from(arguments, &OPTIONS);
+        if let Some(option) = args.unknown.first() {
+            return Err(format!("unknown option {option}"));
+        }
+        if let Some(option) = args.missing.first() {
+            return Err(format!("{option} requires a value"));
+        }
+        let limit = |key: &str, name: &str| -> Result<Option<usize>, String> {
+            args.get(key)
+                .map(|v| {
+                    v.parse()
+                        .map_err(|_| format!("{name} limit must be an integer"))
+                })
+                .transpose()
+        };
         let mut options = Options {
-            timeout: 15.0,
+            config: args.get("config").map(str::to_string),
+            identity: args.get("i").map(str::to_string),
+            allowed: args.get_all("a").into_iter().map(str::to_string).collect(),
+            timeout: args
+                .get("w")
+                .map(|w| parse_number(w, "timeout"))
+                .transpose()?
+                .unwrap_or(15.0),
+            result_timeout: args
+                .get("W")
+                .map(|w| parse_number(w, "result timeout"))
+                .transpose()?,
+            stdin: args.get("stdin").map(str::to_string),
+            stdout_limit: limit("stdout", "stdout")?,
+            stderr_limit: limit("stderr", "stderr")?,
+            listen: args.has("l"),
+            print_identity: args.has("p"),
+            no_announce: args.has("b"),
+            no_auth: args.has("n") || args.has("no-auth"),
+            no_id: args.has("N") || args.has("no-id"),
+            detailed: args.has("d"),
+            mirror: args.has("m"),
+            interactive: args.has("x"),
+            verbose: args.verbosity,
+            quiet: args.quiet,
+            help: args.has("help"),
+            version: args.has("version"),
             ..Options::default()
         };
-        let mut positional = Vec::new();
-        let mut index = 0;
-        while index < arguments.len() {
-            let argument = &arguments[index];
-            let mut value = |name: &str| -> Result<String, String> {
-                index += 1;
-                arguments
-                    .get(index)
-                    .cloned()
-                    .ok_or_else(|| format!("{name} requires a value"))
-            };
-            match argument.as_str() {
-                "--config" => options.config = Some(value(argument)?),
-                "-i" | "--identity" => options.identity = Some(value(argument)?),
-                "-a" | "--allowed" => options.allowed.push(value(argument)?),
-                "-w" | "--timeout" => options.timeout = parse_number(&value(argument)?, "timeout")?,
-                "-W" | "--result-timeout" => {
-                    options.result_timeout =
-                        Some(parse_number(&value(argument)?, "result timeout")?)
-                }
-                "--stdin" => options.stdin = Some(value(argument)?),
-                "--stdout" => {
-                    options.stdout_limit = Some(
-                        value(argument)?
-                            .parse()
-                            .map_err(|_| "stdout limit must be an integer")?,
-                    )
-                }
-                "--stderr" => {
-                    options.stderr_limit = Some(
-                        value(argument)?
-                            .parse()
-                            .map_err(|_| "stderr limit must be an integer")?,
-                    )
-                }
-                "-l" | "--listen" => options.listen = true,
-                "-p" | "--print-identity" => options.print_identity = true,
-                "-b" | "--no-announce" => options.no_announce = true,
-                "-n" | "--noauth" | "--no-auth" => options.no_auth = true,
-                "-N" | "--noid" | "--no-id" => options.no_id = true,
-                "-d" | "--detailed" => options.detailed = true,
-                "-m" | "--mirror" => options.mirror = true,
-                "-x" | "--interactive" => options.interactive = true,
-                "-v" | "--verbose" => options.verbose = options.verbose.saturating_add(1),
-                "-q" | "--quiet" => options.quiet = options.quiet.saturating_add(1),
-                "-h" | "--help" => options.help = true,
-                "--version" => options.version = true,
-                item if item.starts_with('-') => return Err(format!("unknown option {item}")),
-                item => positional.push(item.to_string()),
-            }
-            index += 1;
-        }
+        let positional = args.positional;
         options.destination = positional.first().cloned();
         if positional.len() > 1 {
             options.command = Some(positional[1..].join(" "));
@@ -872,6 +890,50 @@ fn usage() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        let hash = "00".repeat(16);
+        let parse = |argv: &[&str]| {
+            Options::parse(argv.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_else(|e| panic!("{argv:?}: {e}"))
+        };
+        let o = parse(&["-l", "-a", "aa", "-abb", "-vv"]);
+        assert!(o.listen);
+        assert_eq!(o.allowed, vec!["aa", "bb"]);
+        assert_eq!(o.verbose, 2);
+        let o = parse(&["-lbn", "-i", "id", "--config=/c"]);
+        assert!(o.listen && o.no_announce && o.no_auth);
+        assert_eq!(o.identity.as_deref(), Some("id"));
+        assert_eq!(o.config.as_deref(), Some("/c"));
+        let o = parse(&[&hash, "ls -la", "-dmN", "-w5", "-W", "30"]);
+        assert_eq!(o.destination.as_deref(), Some(hash.as_str()));
+        assert_eq!(o.command.as_deref(), Some("ls -la"));
+        assert!(o.detailed && o.mirror && o.no_id);
+        assert_eq!((o.timeout, o.result_timeout), (5.0, Some(30.0)));
+        let o = parse(&[
+            &hash,
+            "cat",
+            "--stdin",
+            "hello",
+            "--stdout=10",
+            "--stderr",
+            "20",
+        ]);
+        assert_eq!(o.stdin.as_deref(), Some("hello"));
+        assert_eq!((o.stdout_limit, o.stderr_limit), (Some(10), Some(20)));
+        let o = parse(&[&hash, "-x", "--noauth", "--noid", "--detailed", "-q"]);
+        assert!(o.interactive && o.no_auth && o.no_id && o.detailed);
+        assert_eq!(o.quiet, 1);
+        let o = parse(&["--listen", "--no-ann", "--print", "--inter", "--det"]);
+        assert!(o.listen && o.no_announce && o.print_identity && o.interactive && o.detailed);
+        // A command that starts with a dash, after `--`.
+        let o = parse(&[&hash, "--", "-v"]);
+        assert_eq!(o.command.as_deref(), Some("-v"));
+        assert!(parse(&["-h"]).help && parse(&["--version"]).version);
+        assert!(Options::parse(vec!["--std".into(), "x".into()]).is_err());
+        assert!(Options::parse(vec!["-w".into()]).is_err());
+    }
 
     #[test]
     fn shell_words_are_parsed_without_a_shell() {
