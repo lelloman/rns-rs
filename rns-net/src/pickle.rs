@@ -288,6 +288,8 @@ pub enum DecodeError {
     NoMarkFound,
     NoStop,
     UnsupportedGlobal(String),
+    /// A pickled integer outside the range of `i64`.
+    IntegerOutOfRange,
 }
 
 impl std::fmt::Display for DecodeError {
@@ -302,6 +304,7 @@ impl std::fmt::Display for DecodeError {
             DecodeError::UnsupportedGlobal(name) => {
                 write!(f, "unsupported global: {}", name)
             }
+            DecodeError::IntegerOutOfRange => write!(f, "pickled integer out of range"),
         }
     }
 }
@@ -311,6 +314,10 @@ impl std::error::Error for DecodeError {}
 /// Decode pickle protocol 2 bytes into a PickleValue.
 pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
     let mut stack: Vec<PickleValue> = Vec::new();
+    // Stack heights at each MARK, kept apart from the values (as CPython's
+    // metastack): a value can never be taken for a mark, and no opcode may
+    // pop below the innermost mark.
+    let mut marks: Vec<usize> = Vec::new();
     let mut memo: HashMap<u32, PickleValue> = HashMap::new();
     let mut memo_counter: u32 = 0;
     let mut pos = 0;
@@ -330,7 +337,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
 
         match op {
             STOP => {
-                return stack.pop().ok_or(DecodeError::StackUnderflow);
+                return pop(&mut stack, &marks);
             }
             NONE => stack.push(PickleValue::None),
             NEWTRUE => stack.push(PickleValue::Bool(true)),
@@ -365,10 +372,11 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 }
                 let n = data[pos] as usize;
                 pos += 1;
-                if pos + n > data.len() {
+                if n > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                let val = bytes_to_long(&data[pos..pos + n]);
+                let val =
+                    bytes_to_long(&data[pos..pos + n]).ok_or(DecodeError::IntegerOutOfRange)?;
                 stack.push(PickleValue::Int(val));
                 pos += n;
             }
@@ -395,7 +403,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 }
                 let len = data[pos] as usize;
                 pos += 1;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 let s = std::str::from_utf8(&data[pos..pos + len])
@@ -411,7 +419,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
                         as usize;
                 pos += 4;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 let s = std::str::from_utf8(&data[pos..pos + len])
@@ -426,7 +434,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 }
                 let len = data[pos] as usize;
                 pos += 1;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 stack.push(PickleValue::Bytes(data[pos..pos + len].to_vec()));
@@ -441,7 +449,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     i32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
                         as usize;
                 pos += 4;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 stack.push(PickleValue::Bytes(data[pos..pos + len].to_vec()));
@@ -458,7 +466,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 }
                 let len = data[pos] as usize;
                 pos += 1;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 stack.push(PickleValue::Bytes(data[pos..pos + len].to_vec()));
@@ -472,7 +480,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
                         as usize;
                 pos += 4;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 stack.push(PickleValue::Bytes(data[pos..pos + len].to_vec()));
@@ -481,7 +489,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
             EMPTY_LIST => stack.push(PickleValue::List(Vec::new())),
             EMPTY_DICT => stack.push(PickleValue::Dict(Vec::new())),
             EMPTY_TUPLE => stack.push(PickleValue::List(Vec::new())), // treat tuple as list
-            MARK => stack.push(PickleValue::String("__mark__".into())),
+            MARK => marks.push(stack.len()),
             FRAME => {
                 // Protocol 4: 8-byte frame length prefix. We just skip it
                 // since we already have the full data.
@@ -499,8 +507,8 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
             }
             APPEND => {
                 // Pop item, append to list on top of stack
-                let item = stack.pop().ok_or(DecodeError::StackUnderflow)?;
-                if let Some(PickleValue::List(ref mut list)) = stack.last_mut() {
+                let item = pop(&mut stack, &marks)?;
+                if let Some(PickleValue::List(ref mut list)) = top_mut(&mut stack, &marks) {
                     list.push(item);
                 } else {
                     return Err(DecodeError::StackUnderflow);
@@ -508,10 +516,8 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
             }
             APPENDS => {
                 // Pop items until mark, then append them to the list before the mark
-                let mark_pos = find_mark(&stack)?;
-                let items: Vec<PickleValue> = stack.drain(mark_pos + 1..).collect();
-                stack.pop(); // remove mark
-                if let Some(PickleValue::List(ref mut list)) = stack.last_mut() {
+                let items = pop_mark(&mut stack, &mut marks)?;
+                if let Some(PickleValue::List(ref mut list)) = top_mut(&mut stack, &marks) {
                     list.extend(items);
                 } else {
                     return Err(DecodeError::StackUnderflow);
@@ -519,9 +525,9 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
             }
             SETITEM => {
                 // Pop value, pop key, set on dict at top of stack
-                let value = stack.pop().ok_or(DecodeError::StackUnderflow)?;
-                let key = stack.pop().ok_or(DecodeError::StackUnderflow)?;
-                if let Some(PickleValue::Dict(ref mut dict)) = stack.last_mut() {
+                let value = pop(&mut stack, &marks)?;
+                let key = pop(&mut stack, &marks)?;
+                if let Some(PickleValue::Dict(ref mut dict)) = top_mut(&mut stack, &marks) {
                     dict.push((key, value));
                 } else {
                     return Err(DecodeError::StackUnderflow);
@@ -529,10 +535,11 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
             }
             SETITEMS => {
                 // Pop key-value pairs until mark, then set them on the dict before the mark
-                let mark_pos = find_mark(&stack)?;
-                let items: Vec<PickleValue> = stack.drain(mark_pos + 1..).collect();
-                stack.pop(); // remove mark
-                if let Some(PickleValue::Dict(ref mut dict)) = stack.last_mut() {
+                let items = pop_mark(&mut stack, &mut marks)?;
+                if items.len() % 2 != 0 {
+                    return Err(DecodeError::StackUnderflow);
+                }
+                if let Some(PickleValue::Dict(ref mut dict)) = top_mut(&mut stack, &marks) {
                     for pair in items.chunks_exact(2) {
                         dict.push((pair[0].clone(), pair[1].clone()));
                     }
@@ -541,18 +548,18 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 }
             }
             TUPLE1 => {
-                let a = stack.pop().ok_or(DecodeError::StackUnderflow)?;
+                let a = pop(&mut stack, &marks)?;
                 stack.push(PickleValue::List(vec![a]));
             }
             TUPLE2 => {
-                let b = stack.pop().ok_or(DecodeError::StackUnderflow)?;
-                let a = stack.pop().ok_or(DecodeError::StackUnderflow)?;
+                let b = pop(&mut stack, &marks)?;
+                let a = pop(&mut stack, &marks)?;
                 stack.push(PickleValue::List(vec![a, b]));
             }
             TUPLE3 => {
-                let c = stack.pop().ok_or(DecodeError::StackUnderflow)?;
-                let b = stack.pop().ok_or(DecodeError::StackUnderflow)?;
-                let a = stack.pop().ok_or(DecodeError::StackUnderflow)?;
+                let c = pop(&mut stack, &marks)?;
+                let b = pop(&mut stack, &marks)?;
+                let a = pop(&mut stack, &marks)?;
                 stack.push(PickleValue::List(vec![a, b, c]));
             }
             SHORT_BINBYTES8 => {
@@ -571,7 +578,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     data[pos + 7],
                 ]) as usize;
                 pos += 8;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 stack.push(PickleValue::Bytes(data[pos..pos + len].to_vec()));
@@ -593,7 +600,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     data[pos + 7],
                 ]) as usize;
                 pos += 8;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 let s = std::str::from_utf8(&data[pos..pos + len])
@@ -617,7 +624,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     data[pos + 7],
                 ]) as usize;
                 pos += 8;
-                if pos + len > data.len() {
+                if len > data.len() - pos {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 stack.push(PickleValue::Bytes(data[pos..pos + len].to_vec()));
@@ -692,8 +699,8 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
             }
             REDUCE => {
                 // Pop args tuple and callable, apply
-                let args = stack.pop().ok_or(DecodeError::StackUnderflow)?;
-                let callable = stack.pop().ok_or(DecodeError::StackUnderflow)?;
+                let args = pop(&mut stack, &marks)?;
+                let callable = pop(&mut stack, &marks)?;
 
                 if let PickleValue::String(ref s) = callable {
                     if s == "__codecs_encode__" {
@@ -723,38 +730,113 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
     }
 }
 
-fn bytes_to_long(bytes: &[u8]) -> i64 {
+/// A little-endian two's complement integer (pickle's LONG1), or `None`
+/// when it does not fit an `i64`: bytes past the eighth may only repeat the
+/// sign.
+fn bytes_to_long(bytes: &[u8]) -> Option<i64> {
     if bytes.is_empty() {
-        return 0;
+        return Some(0);
     }
     let negative = bytes[bytes.len() - 1] & 0x80 != 0;
-    let mut result: i64 = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        result |= (b as i64) << (i * 8);
+    let (low, high) = bytes.split_at(bytes.len().min(8));
+    let sign_byte = if negative { 0xff } else { 0x00 };
+    if high.iter().any(|&b| b != sign_byte) {
+        return None;
     }
-    if negative {
-        // Sign-extend
-        let bits = bytes.len() * 8;
-        if bits < 64 {
-            result |= !0i64 << bits;
-        }
+    let mut buf = [sign_byte; 8];
+    buf[..low.len()].copy_from_slice(low);
+    let value = i64::from_le_bytes(buf);
+    // With more than eight bytes, the eighth must carry the same sign.
+    if !high.is_empty() && (value < 0) != negative {
+        return None;
     }
-    result
+    Some(value)
 }
 
-fn find_mark(stack: &[PickleValue]) -> Result<usize, DecodeError> {
-    for i in (0..stack.len()).rev() {
-        if let PickleValue::String(ref s) = stack[i] {
-            if s == "__mark__" {
-                return Ok(i);
-            }
-        }
+/// Pop a value, refusing to reach below the innermost MARK.
+fn pop(stack: &mut Vec<PickleValue>, marks: &[usize]) -> Result<PickleValue, DecodeError> {
+    if stack.len() <= marks.last().copied().unwrap_or(0) {
+        return Err(DecodeError::StackUnderflow);
     }
-    Err(DecodeError::NoMarkFound)
+    stack.pop().ok_or(DecodeError::StackUnderflow)
+}
+
+/// The value on top of the stack, if it is above the innermost MARK.
+fn top_mut<'a>(stack: &'a mut [PickleValue], marks: &[usize]) -> Option<&'a mut PickleValue> {
+    if stack.len() <= marks.last().copied().unwrap_or(0) {
+        return None;
+    }
+    stack.last_mut()
+}
+
+/// Pop the innermost MARK and the values pushed since it.
+fn pop_mark(
+    stack: &mut Vec<PickleValue>,
+    marks: &mut Vec<usize>,
+) -> Result<Vec<PickleValue>, DecodeError> {
+    let mark = marks.pop().ok_or(DecodeError::NoMarkFound)?;
+    if mark > stack.len() {
+        return Err(DecodeError::StackUnderflow);
+    }
+    Ok(stack.drain(mark..).collect())
 }
 
 #[cfg(test)]
 mod tests {
+    /// Lengths read from the stream are checked without overflowing: a
+    /// negative BINSTRING length (an i32) or a huge 8-byte length used to
+    /// overflow `pos + len` (found by fuzzing the RPC decoder).
+    /// MARK used to be the string "__mark__" on the value stack: a pickled
+    /// "__mark__" was then taken for a mark, and a mark could leak out as a
+    /// value (found by fuzzing).
+    #[test]
+    fn marks_are_not_values() {
+        let value = PickleValue::Dict(vec![(
+            PickleValue::String("__mark__".into()),
+            PickleValue::List(vec![PickleValue::String("__mark__".into())]),
+        )]);
+        assert_eq!(decode(&encode(&value)).unwrap(), value);
+        // PROTO 2, EMPTY_DICT, MARK, SETITEM (would pop the mark), STOP.
+        assert!(decode(&[0x80, 0x02, b'}', b'(', b's', b'.']).is_err());
+        // A leftover MARK never comes out as a value: MARK, STOP.
+        assert!(decode(&[0x80, 0x02, b'(', b'.']).is_err());
+    }
+
+    #[test]
+    fn long_integers_beyond_i64_are_errors() {
+        assert_eq!(bytes_to_long(&[]), Some(0));
+        assert_eq!(bytes_to_long(&[0xff]), Some(-1));
+        assert_eq!(bytes_to_long(&[0x00, 0x80]), Some(-32768));
+        assert_eq!(bytes_to_long(&[0x00, 0x80, 0x00]), Some(32768));
+        assert_eq!(
+            bytes_to_long(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]),
+            Some(i64::MAX)
+        );
+        // Redundant sign bytes past the eighth are fine.
+        assert_eq!(bytes_to_long(&[0xff; 12]), Some(-1));
+        assert_eq!(bytes_to_long(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0]), Some(1));
+        // 2**63 and wider values do not fit.
+        assert_eq!(bytes_to_long(&[0, 0, 0, 0, 0, 0, 0, 0x80, 0]), None);
+        assert_eq!(bytes_to_long(&[0, 0, 0, 0, 0, 0, 0, 0, 1]), None);
+        // PROTO 2, LONG1 of nine bytes holding 2**64, STOP.
+        let mut data = vec![0x80, 0x02, 0x8a, 9];
+        data.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        data.push(b'.');
+        assert!(matches!(decode(&data), Err(DecodeError::IntegerOutOfRange)));
+    }
+
+    #[test]
+    fn oversized_and_negative_lengths_are_errors_not_panics() {
+        // PROTO 2, BINSTRING with length -1.
+        assert!(decode(&[0x80, 0x02, b'T', 0xff, 0xff, 0xff, 0xff]).is_err());
+        // PROTO 4, BINBYTES8 / BINUNICODE8 with length u64::MAX.
+        for opcode in [0x8e, 0x8d] {
+            let mut data = vec![0x80, 0x04, opcode];
+            data.extend_from_slice(&u64::MAX.to_le_bytes());
+            assert!(decode(&data).is_err(), "opcode {opcode:#x}");
+        }
+    }
+
     use super::*;
 
     #[test]
