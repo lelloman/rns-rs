@@ -435,6 +435,28 @@ impl TransportEngine {
         }
     }
 
+    /// The tunnel this node synthesized on an interface, if any (upstream
+    /// 3281e283 `local_tunnel_id`).
+    pub fn local_tunnel_id(&self, interface: &InterfaceId) -> Option<[u8; 32]> {
+        self.local_tunnel_ids.get(interface).copied()
+    }
+
+    /// The interface a tunnel id names: the one a remote node's tunnel is
+    /// attached to, else the one this node synthesized it on (upstream
+    /// 3281e283's detach by tunnel id).
+    pub fn interface_for_tunnel_id(&self, tunnel_id: &[u8; 32]) -> Option<InterfaceId> {
+        self.interfaces
+            .iter()
+            .find(|(_, info)| info.tunnel_id.as_ref() == Some(tunnel_id))
+            .map(|(id, _)| *id)
+            .or_else(|| {
+                self.local_tunnel_ids
+                    .iter()
+                    .find(|(_, local)| *local == tunnel_id)
+                    .map(|(id, _)| *id)
+            })
+    }
+
     pub fn held_announce_count(&self, interface: &InterfaceId) -> usize {
         self.ingress_control.held_count(interface)
     }

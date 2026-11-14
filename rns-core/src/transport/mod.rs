@@ -248,6 +248,9 @@ pub struct TransportEngine {
     path_states: BTreeMap<[u8; 16], u8>,
     interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
     interface_hashes: BTreeMap<InterfaceId, [u8; 32]>,
+    /// Tunnels this node synthesized, by the interface it synthesized them
+    /// on (upstream 3281e283 `Interface.local_tunnel_id`).
+    local_tunnel_ids: BTreeMap<InterfaceId, [u8; 32]>,
     local_destinations: BTreeMap<[u8; 16], u8>,
     blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
     announce_queues: AnnounceQueues,

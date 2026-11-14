@@ -750,6 +750,8 @@ struct WriterQueueState {
     sender_closed: bool,
     receiver_closed: bool,
     receiver_waiting: bool,
+    /// The driver asked to close the connection ([`Writer::shutdown`]).
+    shutdown_requested: bool,
 }
 
 impl WriterQueue {
@@ -760,6 +762,7 @@ impl WriterQueue {
                 sender_closed: false,
                 receiver_closed: false,
                 receiver_waiting: false,
+                shutdown_requested: false,
             }),
             ready: Condvar::new(),
             capacity: capacity.max(1),
@@ -770,8 +773,11 @@ impl WriterQueue {
     /// Returns false once the sender is gone and nothing remains.
     fn recv_all(&self, out: &mut Vec<QueuedFrame>) -> bool {
         let mut state = lock_or_recover(&self.state, "async writer queue");
+        if state.shutdown_requested {
+            return false;
+        }
         while state.frames.is_empty() {
-            if state.sender_closed {
+            if state.sender_closed || state.shutdown_requested {
                 return false;
             }
             state.receiver_waiting = true;
@@ -786,6 +792,16 @@ impl WriterQueue {
         }
         out.extend(state.frames.drain(..));
         true
+    }
+
+    /// Ask the worker to close its writer's connection and exit.
+    fn request_shutdown(&self) {
+        lock_or_recover(&self.state, "async writer queue").shutdown_requested = true;
+        self.ready.notify_one();
+    }
+
+    fn shutdown_requested(&self) -> bool {
+        lock_or_recover(&self.state, "async writer queue").shutdown_requested
     }
 
     /// Wake the worker if it sleeps while frames are queued.
@@ -919,6 +935,11 @@ impl Writer for AsyncWriter {
     fn flush_pending(&mut self) {
         // The driver's pass is over: nothing it deferred may wait longer.
         self.wake();
+    }
+
+    fn shutdown(&mut self) {
+        // The worker owns the inner writer; it closes the connection.
+        self.tx.0.request_shutdown();
     }
 
     fn enqueue_confirmed(
@@ -1328,6 +1349,9 @@ fn async_writer_loop(
         }
     }
 
+    if rx.shutdown_requested() {
+        writer.shutdown();
+    }
     rx.close_receiver();
     metrics.worker_alive.store(false, Ordering::Relaxed);
     metrics.notify_space();

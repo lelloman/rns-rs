@@ -4813,6 +4813,96 @@ fn tunnel_synthesis_with_a_bad_signature_is_ignored() {
     );
 }
 
+/// A writer recording whether the driver closed its connection.
+struct ShutdownRecorder(Arc<std::sync::atomic::AtomicBool>);
+
+impl Writer for ShutdownRecorder {
+    fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn shutdown(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn enable_interface_management(driver: &mut Driver) {
+    driver.interface_management = Some(crate::node::InterfaceManagementConfig {
+        config_file: std::path::PathBuf::from("/nonexistent/config"),
+        storage_dir: std::path::PathBuf::from("/nonexistent/storage"),
+        initial_ids: HashMap::new(),
+        queue_capacity: 16,
+        transport_enabled: true,
+        underlay_mark: None,
+    });
+}
+
+#[test]
+fn interface_stats_report_the_tunnel_this_node_synthesized() {
+    // Upstream 3281e283: `tunnel_id or local_tunnel_id`.
+    let (mut client, _) = dialing_client_driver();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    let local = client
+        .engine
+        .local_tunnel_id(&InterfaceId(1))
+        .expect("a synthesized tunnel");
+    let QueryResponse::InterfaceStats(stats) = client.handle_query(QueryRequest::InterfaceStats)
+    else {
+        panic!("expected interface stats");
+    };
+    assert_eq!(stats.interfaces[0].tunnel_id, Some(local));
+    assert_eq!(
+        client.engine.interface_for_tunnel_id(&local),
+        Some(InterfaceId(1))
+    );
+}
+
+#[test]
+fn spawned_interface_is_detached_by_its_tunnel_id() {
+    let (mut client, sent) = dialing_client_driver();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    let synthesis = sent.lock().unwrap()[0].clone();
+
+    let mut server = new_test_driver();
+    enable_interface_management(&mut server);
+    register_test_generic_interface(&mut server, 5, "spawned-client");
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let entry = server.interfaces.get_mut(&InterfaceId(5)).unwrap();
+        entry.dynamic = true;
+        entry.writer = Box::new(ShutdownRecorder(Arc::clone(&closed)));
+    }
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    let tunnel_id = server
+        .engine
+        .interface_info(&InterfaceId(5))
+        .and_then(|info| info.tunnel_id)
+        .unwrap();
+    let hex: String = tunnel_id.iter().map(|b| format!("{b:02x}")).collect();
+
+    assert_eq!(
+        server.manage_interface(crate::event::InterfaceManagementOperation::Detach, &hex),
+        Some(true)
+    );
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!server.interfaces.contains_key(&InterfaceId(5)));
+    // Upstream returns None for anything naming no interface.
+    for name in [hex.as_str(), "not-hex", "abcd"] {
+        assert_eq!(
+            server.manage_interface(crate::event::InterfaceManagementOperation::Detach, name),
+            None
+        );
+    }
+}
+
+#[test]
+fn a_static_unmanaged_interface_is_not_torn_down() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 3, "static");
+    assert_eq!(driver.teardown_interface(InterfaceId(3)), Some(false));
+    assert!(driver.interfaces.contains_key(&InterfaceId(3)));
+}
+
 #[test]
 fn interface_stats_report_the_tunnel_id() {
     // Upstream 9b6b724b reports `tunnel_id` per interface: none until a

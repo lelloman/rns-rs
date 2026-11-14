@@ -37,6 +37,14 @@ impl Driver {
     }
 
     fn detach_interface(&mut self, name: &str) -> Option<bool> {
+        if !self.managed_interfaces.contains_key(name) {
+            // Upstream 3281e283: a name that is no interface may be a tunnel
+            // id, naming the interface a remote tunnel is attached to or the
+            // one this node synthesized its tunnel on.
+            let tunnel_id = parse_tunnel_id(name)?;
+            let id = self.engine.interface_for_tunnel_id(&tunnel_id)?;
+            return self.teardown_interface(id);
+        }
         let managed = self.managed_interfaces.get(name)?;
         if matches!(
             managed.type_name.as_str(),
@@ -88,6 +96,45 @@ impl Driver {
             announcer.remove_interface(name);
         }
         log::info!("Interface '{name}' was detached");
+        Some(true)
+    }
+
+    /// Detach one running interface, as upstream's `_detach_interface` does
+    /// with an interface instance: a configured interface is detached with
+    /// its configuration entry, and a spawned one has its connection closed
+    /// and is removed. I2P and local interfaces are not detached.
+    pub(crate) fn teardown_interface(&mut self, id: InterfaceId) -> Option<bool> {
+        let entry = self.interfaces.get(&id)?;
+        if matches!(
+            entry.interface_type.as_str(),
+            "I2PInterface" | "LocalClientInterface" | "LocalServerInterface"
+        ) || entry.info.is_local_client
+        {
+            return Some(false);
+        }
+        if let Some(name) = self
+            .managed_interfaces
+            .iter()
+            .find(|(_, managed)| managed.static_ids.contains(&id))
+            .map(|(name, _)| name.clone())
+        {
+            return self.detach_interface(&name);
+        }
+        if self.is_autoconnected(id) {
+            self.teardown_autoconnected(id);
+            return Some(true);
+        }
+        let entry = self.interfaces.get(&id)?;
+        if !entry.dynamic {
+            return Some(false);
+        }
+        let name = entry.info.name.clone();
+        if let Some(entry) = self.interfaces.get_mut(&id) {
+            entry.writer.shutdown();
+        }
+        self.handle_interface_down_event(id);
+        self.traffic_samples.remove(&id);
+        log::info!("Interface {name} was detached");
         Some(true)
     }
 
@@ -415,4 +462,16 @@ impl Driver {
             ));
         }
     }
+}
+
+/// A 32-byte tunnel id written as 64 hexadecimal digits.
+fn parse_tunnel_id(name: &str) -> Option<[u8; 32]> {
+    if name.len() != 64 || !name.is_ascii() {
+        return None;
+    }
+    let mut tunnel_id = [0u8; 32];
+    for (byte, pair) in tunnel_id.iter_mut().zip(name.as_bytes().chunks(2)) {
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(tunnel_id)
 }

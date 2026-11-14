@@ -121,6 +121,10 @@ impl Writer for TcpWriter {
     fn loop_flush_after(&self) -> Option<Duration> {
         self.flush_after
     }
+
+    fn shutdown(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
 }
 
 /// Set TCP_NODELAY, keepalive and (on Linux) keepalive tuning and user

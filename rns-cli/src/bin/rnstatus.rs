@@ -55,6 +55,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_announces = args.has("A");
     let show_pr_stats = args.has("P") || args.has("pr-stats");
     let show_filtered = args.has("F") || args.has("filter-stats");
+    let show_tunnels = args.has("T") || args.has("tunnels");
     let show_bursts = args.has("B") || args.has("burst");
     let show_blocked_ips = args.has("b") || args.has("blocked-ips");
     let show_profiling = args.has("z") || args.has("profiling");
@@ -103,6 +104,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             show_announces,
             show_pr_stats,
             show_filtered,
+            show_tunnels,
             show_bursts,
             show_blocked_ips,
             show_queues,
@@ -355,6 +357,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                     show_announces,
                     show_pr_stats,
                     show_filtered,
+                    show_tunnels,
                     show_bursts,
                     show_blocked_ips,
                     show_queues,
@@ -399,6 +402,7 @@ struct StatusDisplayOptions<'a> {
     show_announces: bool,
     show_pr_stats: bool,
     show_filtered: bool,
+    show_tunnels: bool,
     show_bursts: bool,
     show_blocked_ips: bool,
     show_queues: bool,
@@ -415,6 +419,7 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
         show_announces,
         show_pr_stats,
         show_filtered,
+        show_tunnels,
         show_bursts,
         show_blocked_ips,
         show_queues,
@@ -511,6 +516,11 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
             println!("    Mode      : {}", mode_str);
             if let Some(line) = interface_rate_line(bitrate, mtu) {
                 println!("{line}");
+            }
+            if show_tunnels {
+                if let Some(line) = tunnel_id_line(iface) {
+                    println!("{line}");
+                }
             }
             println!(
                 "    Traffic   : {}{} \u{2191}  {} \u{2193}",
@@ -1039,6 +1049,16 @@ fn interface_has_active_burst(iface: &PickleValue) -> bool {
             .unwrap_or(false)
 }
 
+/// Upstream 3281e283 `-T`: the interface's tunnel, when the instance
+/// reports one.
+fn tunnel_id_line(iface: &PickleValue) -> Option<String> {
+    let tunnel_id = iface.get("tunnel_id")?;
+    Some(match tunnel_id.as_bytes() {
+        Some(bytes) => format!("    Tunnel ID : <{}>", prettyhexrep(bytes)),
+        None => "    Tunnel ID : None".to_string(),
+    })
+}
+
 fn interface_rate_line(bitrate: Option<u64>, mtu: Option<u32>) -> Option<String> {
     bitrate.map(|bitrate| match mtu {
         Some(mtu) => format!("    Rate      : {}, MTU {}", speed_str(bitrate), mtu),
@@ -1485,6 +1505,7 @@ fn remote_status(
     show_announces: bool,
     show_pr_stats: bool,
     show_filtered: bool,
+    show_tunnels: bool,
     show_bursts: bool,
     show_blocked_ips: bool,
     show_queues: bool,
@@ -1539,6 +1560,7 @@ fn remote_status(
                             show_announces,
                             show_pr_stats,
                             show_filtered,
+                            show_tunnels,
                             show_bursts,
                             show_blocked_ips,
                             show_queues,
@@ -1921,6 +1943,7 @@ fn print_usage(usage_name: &str) {
     println!("  -A                      Show announce statistics");
     println!("  -P, --pr-stats          Show path request statistics");
     println!("  -F, --filter-stats      Show filtered traffic statistics");
+    println!("  -T, --tunnels           Show tunnel information");
     println!("  -B, --burst             Only show interfaces with active burst limiting");
     println!("  -b, --blocked-ips       Show blocked IPs per interface");
     println!("  -q, --queues            Show inbound queue pressure statistics");
@@ -2541,6 +2564,23 @@ mod tests {
                 "                 1.0/h in  2.0/h out",
             ]
         );
+    }
+
+    #[test]
+    fn tunnel_id_line_matches_upstream() {
+        // Upstream 3281e283 `-T`.
+        let with = |value: PickleValue| {
+            PickleValue::Dict(vec![(PickleValue::String("tunnel_id".into()), value)])
+        };
+        assert_eq!(
+            tunnel_id_line(&with(PickleValue::Bytes(vec![0xAB; 32]))),
+            Some(format!("    Tunnel ID : <{}>", "ab".repeat(32)))
+        );
+        assert_eq!(
+            tunnel_id_line(&with(PickleValue::None)),
+            Some("    Tunnel ID : None".into())
+        );
+        assert_eq!(tunnel_id_line(&PickleValue::Dict(Vec::new())), None);
     }
 
     #[test]

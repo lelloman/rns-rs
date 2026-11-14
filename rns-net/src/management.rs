@@ -255,6 +255,46 @@ mod tests {
         }
     }
 
+    /// The (single) interface map of a status response.
+    fn status_interface(response: &[u8]) -> Vec<(Value, Value)> {
+        let Value::Array(arr) = msgpack::unpack_exact(response).unwrap() else {
+            panic!("Expected array response");
+        };
+        let Value::Map(map) = &arr[0] else {
+            panic!("Expected map in response");
+        };
+        let Some((_, Value::Array(ifaces))) = map
+            .iter()
+            .find(|(k, _)| *k == Value::Str("interfaces".into()))
+        else {
+            panic!("Expected interfaces array");
+        };
+        let Value::Map(iface) = &ifaces[0] else {
+            panic!("Expected interface map");
+        };
+        iface.clone()
+    }
+
+    #[test]
+    fn test_status_request_reports_the_tunnel_this_node_synthesized() {
+        // Upstream 3281e283: `tunnel_id or local_tunnel_id`.
+        let mut engine = make_engine();
+        let (interfaces, _) = make_interface_views();
+        engine.register_interface(interfaces[&InterfaceId(1)].info.clone());
+        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        engine.synthesize_tunnel(&identity, InterfaceId(1), &mut rns_crypto::OsRng);
+        let local = engine.local_tunnel_id(&InterfaceId(1)).unwrap();
+        let views = as_views(&interfaces);
+
+        let request = msgpack::pack(&Value::Array(vec![Value::Bool(false)]));
+        let response = handle_status_request(&request, &engine, &views, time::now(), None).unwrap();
+        let tunnel_id = status_interface(&response)
+            .into_iter()
+            .find(|(k, _)| *k == Value::Str("tunnel_id".into()))
+            .map(|(_, v)| v);
+        assert_eq!(tunnel_id, Some(Value::Bin(local.to_vec())));
+    }
+
     #[test]
     fn test_status_request_with_lstats() {
         let engine = make_engine();
