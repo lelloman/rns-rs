@@ -2243,6 +2243,15 @@ impl Driver {
                     entry.stats.protocol_violations += 1;
                 }
             }
+            // Upstream 3281e283, effective since 56b23c48: a bad signature
+            // tears the interface down.
+            Err(rns_core::transport::tunnel::TunnelError::InvalidSignature) => {
+                log::debug!(
+                    "Invalid tunnel synthesis signature, tearing down interface {:?}",
+                    receiving_interface
+                );
+                self.teardown_interface(receiving_interface);
+            }
             Err(e) => log::debug!("Ignoring tunnel synthesis: {}", e),
         }
     }
