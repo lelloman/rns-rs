@@ -180,6 +180,7 @@ impl Driver {
             // A frame of up to 508 bytes, split over two LoRa packets,
             // as upstream's RNode interface.
             mtu: rns_esp32::airframe::MTU as u32,
+            mtu_upgradable: false,
             ingress_control: Default::default(),
             stamp_costs: Default::default(),
             ia_freq: 0.0,

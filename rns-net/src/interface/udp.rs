@@ -410,6 +410,7 @@ impl InterfaceFactory for UdpFactory {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: HW_MTU,
+            mtu_upgradable: false,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
             ip_freq: 0.0,

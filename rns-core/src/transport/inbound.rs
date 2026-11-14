@@ -88,7 +88,8 @@ pub fn forward_transport_packet<B: AsRef<[u8]>>(
 /// Transport.py (forwarding a LINKREQUEST): when the request carries MTU
 /// signalling and either hop's hardware MTU is smaller than the signalled
 /// path MTU, the signalled MTU is lowered so both endpoints negotiate a frame
-/// size every hop can carry. A next-hop interface without a usable MTU strips
+/// size every hop can carry. A next-hop interface that cannot carry an
+/// upgraded MTU (no usable MTU, or not `mtu_upgradable`; pass `None`) strips
 /// the signalling, disabling the upgrade. The three mode bits are preserved.
 /// Link IDs exclude the signalling bytes, so rewriting them does not change
 /// the link table key.
@@ -106,20 +107,54 @@ pub fn clamp_forwarded_link_request_mtu(
         new_raw.truncate(start);
         return;
     };
-    let value = ((new_raw[start] as u32) << 16)
-        | ((new_raw[start + 1] as u32) << 8)
-        | (new_raw[start + 2] as u32);
-    let path_mtu = value & constants::LINK_MTU_BYTEMASK;
     let mut limit = next_hop_mtu;
     if let Some(receiving_mtu) = receiving_mtu.filter(|mtu| *mtu > 0) {
         limit = limit.min(receiving_mtu);
     }
-    if limit < path_mtu {
+    lower_signalled_mtu(&mut new_raw[start..], limit);
+}
+
+/// Clamp the link MTU signalled by a LINKREQUEST for a local destination to
+/// what the receiving interface carries.
+///
+/// Transport.py (link requests to local destinations): the limit is the
+/// receiving interface's hardware MTU when that interface is MTU-upgradable,
+/// and the protocol default MTU otherwise. Upstream strips the signalling
+/// when the receiving interface has no hardware MTU at all; that would change
+/// the bytes the link ID is derived from, so here an unknown MTU leaves the
+/// request untouched instead.
+pub fn clamp_local_link_request_mtu(
+    raw: &mut [u8],
+    signalled: bool,
+    receiving_mtu: Option<u32>,
+    receiving_mtu_upgradable: bool,
+) {
+    if !signalled || raw.len() < constants::LINK_MTU_SIZE {
+        return;
+    }
+    let Some(receiving_mtu) = receiving_mtu.filter(|mtu| *mtu > 0) else {
+        return;
+    };
+    let limit = if receiving_mtu_upgradable {
+        receiving_mtu
+    } else {
+        constants::MTU as u32
+    };
+    let start = raw.len() - constants::LINK_MTU_SIZE;
+    lower_signalled_mtu(&mut raw[start..], limit);
+}
+
+/// Lower the MTU in three signalling bytes to `limit` if it is higher,
+/// keeping the mode bits.
+fn lower_signalled_mtu(signalling: &mut [u8], limit: u32) {
+    let value =
+        ((signalling[0] as u32) << 16) | ((signalling[1] as u32) << 8) | (signalling[2] as u32);
+    if limit < value & constants::LINK_MTU_BYTEMASK {
         let clamped =
             (value & !constants::LINK_MTU_BYTEMASK) | (limit & constants::LINK_MTU_BYTEMASK);
-        new_raw[start] = (clamped >> 16) as u8;
-        new_raw[start + 1] = (clamped >> 8) as u8;
-        new_raw[start + 2] = clamped as u8;
+        signalling[0] = (clamped >> 16) as u8;
+        signalling[1] = (clamped >> 8) as u8;
+        signalling[2] = clamped as u8;
     }
 }
 
@@ -628,7 +663,7 @@ mod tests {
 
 #[cfg(test)]
 mod link_request_mtu_tests {
-    use super::clamp_forwarded_link_request_mtu;
+    use super::{clamp_forwarded_link_request_mtu, clamp_local_link_request_mtu};
     use crate::link::handshake::build_signalling_bytes;
     use crate::link::types::LinkMode;
 
@@ -671,5 +706,33 @@ mod link_request_mtu_tests {
         let mut raw = vec![0xAA; 19 + 64];
         clamp_forwarded_link_request_mtu(&mut raw, false, Some(500), Some(500));
         assert_eq!(raw, vec![0xAA; 19 + 64]);
+    }
+    #[test]
+    fn local_request_clamps_to_upgradable_receiving_interface() {
+        let mut raw = request(262_144, LinkMode::Aes128Cbc);
+        clamp_local_link_request_mtu(&mut raw, true, Some(16_384), true);
+        assert_eq!(raw, request(16_384, LinkMode::Aes128Cbc));
+    }
+
+    #[test]
+    fn local_request_over_fixed_interface_gets_default_mtu() {
+        // A radio's 508-byte frames never raise a link above the default.
+        let mut raw = request(262_144, LinkMode::Aes256Cbc);
+        clamp_local_link_request_mtu(&mut raw, true, Some(508), false);
+        assert_eq!(raw, request(500, LinkMode::Aes256Cbc));
+    }
+
+    #[test]
+    fn local_request_that_fits_is_untouched() {
+        let mut raw = request(500, LinkMode::Aes256Cbc);
+        clamp_local_link_request_mtu(&mut raw, true, Some(508), false);
+        assert_eq!(raw, request(500, LinkMode::Aes256Cbc));
+    }
+
+    #[test]
+    fn local_request_on_interface_without_mtu_is_untouched() {
+        let mut raw = request(262_144, LinkMode::Aes256Cbc);
+        clamp_local_link_request_mtu(&mut raw, true, None, false);
+        assert_eq!(raw, request(262_144, LinkMode::Aes256Cbc));
     }
 }

@@ -409,6 +409,7 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
+            mtu_upgradable: false,
             ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
             ip_freq: 0.0,

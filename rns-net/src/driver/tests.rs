@@ -2096,6 +2096,7 @@ fn make_interface_info(id: u64) -> InterfaceInfo {
         wants_tunnel: false,
         tunnel_id: None,
         mtu: constants::MTU as u32,
+        mtu_upgradable: false,
         ia_freq: 0.0,
         ip_freq: 0.0,
         op_freq: 0.0,
