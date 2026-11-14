@@ -15,6 +15,9 @@ use rns_core::transport::types::InterfaceId;
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
+/// Upstream's `UDPInterface.HW_MTU`.
+pub(crate) const HW_MTU: u32 = 1064;
+
 /// Configuration for a UDP interface.
 #[derive(Debug, Clone)]
 pub struct UdpConfig {
@@ -406,7 +409,7 @@ impl InterfaceFactory for UdpFactory {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
-            mtu: 1400,
+            mtu: HW_MTU,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
             ip_freq: 0.0,
