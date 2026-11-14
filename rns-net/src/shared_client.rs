@@ -226,13 +226,16 @@ impl RnsNode {
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,
     ) -> io::Result<Self> {
-        Self::connect_shared_with_reconnect_wait(config, callbacks, Duration::from_secs(8))
+        Self::connect_shared_with_reconnect_wait(config, callbacks, Duration::from_secs(8), None)
     }
 
+    /// `instance_storage` is the shared instance's storage directory: ratchets
+    /// this client has not seen announced are looked up there, read-only.
     fn connect_shared_with_reconnect_wait(
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,
         reconnect_wait: Duration,
+        instance_storage: Option<std::path::PathBuf>,
     ) -> io::Result<Self> {
         let transport_config = TransportConfig {
             transport_enabled: false,
@@ -259,6 +262,11 @@ impl RnsNode {
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         driver.connected_to_shared_instance = true;
+        // Received ratchets: without a store, packets to destinations that
+        // enforce ratchets would go out encrypted to the identity key alone.
+        let ratchet_store: Arc<dyn storage::RatchetStore> =
+            Arc::new(storage::SharedClientRatchetStore::new(instance_storage));
+        driver.ratchet_store = Some(Arc::clone(&ratchet_store));
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
         let accepting_work = driver.accepting_work_handle();
 
@@ -363,6 +371,7 @@ impl RnsNode {
         let mut node =
             RnsNode::from_parts(tx, driver_handle, None, tick_interval_ms, accepting_work);
         node.destination_types.shared_client = true;
+        node.ratchet_store = Some(ratchet_store);
         Ok(node)
     }
 
@@ -388,7 +397,12 @@ impl RnsNode {
         let shared_config = SharedClientConfig::from_reticulum(&rns_config.reticulum);
         let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
-        let mut node = Self::connect_shared(shared_config, callbacks)?;
+        let mut node = Self::connect_shared_with_reconnect_wait(
+            shared_config,
+            callbacks,
+            Duration::from_secs(8),
+            Some(config_dir.join("storage")),
+        )?;
         node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
         Ok(node)
     }

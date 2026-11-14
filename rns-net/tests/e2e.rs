@@ -5752,6 +5752,83 @@ fn test_issue4_shared_client_message_to_remote_peer() {
 }
 
 #[test]
+fn shared_client_encrypts_to_announced_ratchet() {
+    // A shared instance client must encrypt to the ratchet a destination
+    // announced, as a standalone node does: a receiver that enforces
+    // ratchets drops anything encrypted to its identity key alone.
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("shared-ratchet-{}", tcp_port);
+    let ratchet_dir = tempfile::tempdir().unwrap();
+
+    let daemon = start_shared_daemon(tcp_port, shared_port, &instance_name);
+
+    // Bob: remote TCP peer whose destination announces and enforces ratchets.
+    let bob_id = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_node = start_client_node(tcp_port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
+    let bob_dest = Destination::single_in(
+        APP_NAME,
+        &["ratchet", "shared"],
+        IdentityHash(*bob_id.hash()),
+    );
+    let bob_ratchets = rns_net::LocalRatchets::persistent(
+        &bob_dest,
+        Identity::from_private_key(&bob_id.get_private_key().unwrap()),
+        ratchet_dir.path().join("bob"),
+    )
+    .unwrap();
+    bob_ratchets.enforce();
+    bob_node
+        .attach_local_ratchets(bob_ratchets.clone())
+        .unwrap();
+    bob_node
+        .register_destination(bob_dest.hash.0, bob_dest.dest_type.to_wire_constant())
+        .unwrap();
+
+    // Alice: shared instance client of the daemon.
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice_node = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    wait_for_event(&alice_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    let bob_announced = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"bob"), &alice_rx)
+        .expect("Alice should receive Bob's announce");
+    let dest_to_bob = Destination::single_out(APP_NAME, &["ratchet", "shared"], &bob_announced);
+    let plaintext = b"ratcheted from a shared client";
+    alice_node
+        .send_packet_queued(&dest_to_bob, plaintext)
+        .unwrap();
+
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, Duration::from_secs(5)).expect("Bob received nothing");
+    let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+    assert!(
+        bob_id.decrypt(packet.data()).is_err(),
+        "the shared client encrypted to Bob's identity key, not his ratchet"
+    );
+    assert_eq!(
+        bob_ratchets.decrypt(packet.data()).unwrap().plaintext,
+        plaintext
+    );
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    daemon.shutdown();
+}
+
+#[test]
 fn test_issue4_remote_peer_message_to_shared_client() {
     // Reverse direction: remote TCP peer sends a message to the shared client.
     // The daemon has the shared client's destination registered and should

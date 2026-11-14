@@ -1042,12 +1042,17 @@ impl Driver {
                 match announced {
                     Some(recalled) => {
                         let _ = self.mark_known_destination_used(&dest_hash);
-                        // Encrypt random payload with remote public key
-                        let remote_id =
-                            rns_crypto::identity::Identity::from_public_key(&recalled.public_key);
+                        // Encrypt random payload to the destination's ratchet
+                        // when it announced one, else to its public key.
+                        let ratchet = self.single_ratchet_for(&dest_hash);
                         let mut payload = vec![0u8; payload_size];
                         self.rng.fill_bytes(&mut payload);
-                        match remote_id.and_then(|id| id.encrypt(&payload, &mut self.rng)) {
+                        match rns_crypto::identity::Identity::encrypt_for_public_key(
+                            &recalled.public_key,
+                            &payload,
+                            ratchet.as_ref(),
+                            &mut self.rng,
+                        ) {
                             Ok(ciphertext) => {
                                 // Build DATA SINGLE BROADCAST packet to dest_hash
                                 let flags = rns_core::packet::PacketFlags {

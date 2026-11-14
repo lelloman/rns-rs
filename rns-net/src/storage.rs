@@ -252,6 +252,103 @@ impl RatchetStore for FsRatchetStore {
 }
 
 /// Ensure all storage directories exist. Creates them if missing.
+/// The received-ratchet store of a shared instance client: ratchets from
+/// announces this client sees stay in memory, and a miss reads the shared
+/// instance's own store without writing to it, as the reference's shared
+/// clients do (`Identity.get_ratchet`): its `known_destinations.db` read-only,
+/// then the legacy `ratchets/` files of instances without that database.
+#[derive(Debug)]
+pub struct SharedClientRatchetStore {
+    memory: Mutex<HashMap<[u8; 16], RatchetEntry>>,
+    /// The shared instance's storage directory, when known.
+    instance_storage: Option<PathBuf>,
+}
+
+impl SharedClientRatchetStore {
+    pub fn new(instance_storage: Option<PathBuf>) -> Self {
+        Self {
+            memory: Mutex::new(HashMap::new()),
+            instance_storage,
+        }
+    }
+
+    fn read_instance_store(
+        &self,
+        dest_hash: &[u8; 16],
+        now: f64,
+        expiry_secs: f64,
+    ) -> Option<RatchetEntry> {
+        let storage = self.instance_storage.as_ref()?;
+        let db = crate::storage_sqlite::default_path(storage);
+        if db.is_file() {
+            match crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db, 16)
+                .and_then(|store| store.current(dest_hash, now, expiry_secs))
+            {
+                Ok(Some(entry)) => return Some(entry),
+                Ok(None) => {}
+                Err(err) => log::debug!(
+                    "could not read ratchet from shared instance database {}: {}",
+                    db.display(),
+                    err
+                ),
+            }
+        }
+        let file = storage.join("ratchets").join(hex_lower(dest_hash));
+        if !file.is_file() {
+            return None;
+        }
+        match FsRatchetStore::read_entry(&file) {
+            Ok(entry) if now <= entry.received_at + expiry_secs => Some(entry),
+            Ok(_) => None,
+            Err(err) => {
+                log::debug!("could not read ratchet file {}: {}", file.display(), err);
+                None
+            }
+        }
+    }
+}
+
+impl RatchetStore for SharedClientRatchetStore {
+    fn remember(&self, dest_hash: [u8; 16], entry: RatchetEntry) -> io::Result<()> {
+        if let Ok(mut memory) = self.memory.lock() {
+            memory.insert(dest_hash, entry);
+        }
+        Ok(())
+    }
+
+    fn current(
+        &self,
+        dest_hash: &[u8; 16],
+        now: f64,
+        expiry_secs: f64,
+    ) -> io::Result<Option<RatchetEntry>> {
+        if let Ok(memory) = self.memory.lock() {
+            if let Some(entry) = memory.get(dest_hash).copied() {
+                if now <= entry.received_at + expiry_secs {
+                    return Ok(Some(entry));
+                }
+            }
+        }
+        let entry = self.read_instance_store(dest_hash, now, expiry_secs);
+        if let (Some(entry), Ok(mut memory)) = (entry, self.memory.lock()) {
+            memory.insert(*dest_hash, entry);
+        }
+        Ok(entry)
+    }
+
+    fn cleanup(
+        &self,
+        _known_destinations: &HashSet<[u8; 16]>,
+        now: f64,
+        expiry_secs: f64,
+    ) -> io::Result<RatchetCleanupStats> {
+        if let Ok(mut memory) = self.memory.lock() {
+            memory.retain(|_, entry| now <= entry.received_at + expiry_secs);
+        }
+        Ok(RatchetCleanupStats::default())
+    }
+}
+
 pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
     let storage = config_dir.join("storage");
     let cache = config_dir.join("cache");
@@ -1275,6 +1372,70 @@ mod tests {
             .filter_map(Result::ok)
             .any(|entry| entry.file_name().to_string_lossy().contains(".tmp."));
         assert!(!leftover_temp);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_client_ratchets_read_the_instance_store_without_writing() {
+        let dir = temp_dir();
+        let storage = dir.join("storage");
+        let now = 1700000000.0;
+        let in_db = [0x01; 16];
+        let in_file = [0x02; 16];
+        let db_entry = RatchetEntry {
+            ratchet: [0x11; 32],
+            received_at: now,
+        };
+        let file_entry = RatchetEntry {
+            ratchet: [0x22; 32],
+            received_at: now,
+        };
+        {
+            let db = crate::storage_sqlite::KnownDestinationsStore::open(
+                &crate::storage_sqlite::default_path(&storage),
+                16,
+            )
+            .unwrap();
+            db.remember(in_db, db_entry).unwrap();
+        }
+        FsRatchetStore::new(storage.join("ratchets"))
+            .remember(in_file, file_entry)
+            .unwrap();
+
+        let client = SharedClientRatchetStore::new(Some(storage.clone()));
+        assert_eq!(
+            client.current(&in_db, now + 1.0, 60.0).unwrap(),
+            Some(db_entry)
+        );
+        assert_eq!(
+            client.current(&in_file, now + 1.0, 60.0).unwrap(),
+            Some(file_entry)
+        );
+        assert_eq!(client.current(&in_db, now + 120.0, 60.0).unwrap(), None);
+
+        // What the client hears stays in memory: the instance store is not
+        // written.
+        let heard = [0x03; 16];
+        let heard_entry = RatchetEntry {
+            ratchet: [0x33; 32],
+            received_at: now,
+        };
+        client.remember(heard, heard_entry).unwrap();
+        assert_eq!(
+            client.current(&heard, now, 60.0).unwrap(),
+            Some(heard_entry)
+        );
+        assert!(!storage.join("ratchets").join(hex_lower(&heard)).exists());
+        let db = crate::storage_sqlite::KnownDestinationsStore::open_read_only(
+            &crate::storage_sqlite::default_path(&storage),
+            16,
+        )
+        .unwrap();
+        assert_eq!(db.current(&heard, now, 60.0).unwrap(), None);
+
+        let without_instance = SharedClientRatchetStore::new(None);
+        assert_eq!(without_instance.current(&in_db, now, 60.0).unwrap(), None);
 
         let _ = fs::remove_dir_all(&dir);
     }

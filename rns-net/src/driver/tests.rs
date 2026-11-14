@@ -11758,6 +11758,66 @@ fn send_probe_known_dest_returns_packet_hash() {
     }
 }
 
+#[test]
+fn send_probe_encrypts_to_the_announced_ratchet() {
+    let (mut driver, _) = probe_test_driver();
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let store = Arc::new(crate::storage::SharedClientRatchetStore::new(None));
+    driver.ratchet_store = Some(store.clone());
+
+    let remote_identity = Identity::new(&mut OsRng);
+    let dest_hash = rns_core::destination::destination_hash(
+        "rnstransport",
+        &["probe"],
+        Some(remote_identity.hash()),
+    );
+    let ratchet_private = rns_crypto::x25519::X25519PrivateKey::generate(&mut OsRng);
+    let ratchet_public = ratchet_private.public_key().public_bytes();
+    crate::storage::RatchetStore::remember(
+        store.as_ref(),
+        dest_hash,
+        crate::storage::RatchetEntry {
+            ratchet: ratchet_public,
+            received_at: time::now(),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        driver.handle_query_mut(QueryRequest::InjectIdentity {
+            dest_hash,
+            identity_hash: *remote_identity.hash(),
+            public_key: remote_identity.get_public_key().unwrap(),
+            app_data: None,
+            hops: 1,
+            received_at: 0.0,
+        }),
+        QueryResponse::InjectIdentity(true)
+    ));
+
+    match driver.handle_query_mut(QueryRequest::SendProbe {
+        dest_hash,
+        payload_size: 16,
+    }) {
+        QueryResponse::SendProbe(Ok(_)) => {}
+        other => panic!("expected SendProbe(Ok(..)), got {:?}", other),
+    }
+    let raw = sent.lock().unwrap()[0].clone();
+    let packet = RawPacket::unpack(&raw).unwrap();
+    assert!(
+        remote_identity.decrypt(packet.data()).is_err(),
+        "the probe was encrypted to the identity key, not the announced ratchet"
+    );
+    let ring =
+        rns_crypto::ratchet::RatchetRing::from_keys(vec![ratchet_private.private_bytes()]).unwrap();
+    let decrypted = remote_identity
+        .decrypt_with_ratchets(packet.data(), &ring, true)
+        .unwrap();
+    assert_eq!(decrypted.plaintext.len(), 16);
+}
+
 fn probe_test_driver() -> (Driver, [u8; 16]) {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
