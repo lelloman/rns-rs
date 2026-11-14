@@ -1,29 +1,53 @@
 //! rnprobe - Reticulum Network Probe Utility
 //!
-//! Sends a real probe packet to a Reticulum destination, waits for the
-//! proof (delivery receipt), and reports RTT and hop count.
-//! Uses RPC to communicate with a running rnsd daemon.
+//! Sends probe packets to a Reticulum destination and reports the round-trip
+//! time of each delivery proof, as upstream's `rnprobe` does: attached to a
+//! running shared instance (Rust or Python), or as an instance of its own.
 
 use std::path::Path;
 use std::process;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use rns_cli::args::Args;
-use rns_cli::format::prettyhexrep;
-use rns_net::config;
-use rns_net::event::MAX_PROBE_PAYLOAD_SIZE;
+use rns_cli::args::{Args, OptionSpec};
+use rns_core::types::{DestHash, PacketHash};
+use rns_net::event::{QueryRequest, QueryResponse, MAX_PROBE_PAYLOAD_SIZE};
 use rns_net::pickle::PickleValue;
-use rns_net::rpc::derive_auth_key;
-use rns_net::storage;
-use rns_net::{RpcAddr, RpcClient};
+use rns_net::{
+    config, storage, AnnouncedIdentity, Callbacks, Destination, RnsNode, RpcAddr, RpcClient,
+};
 
 const VERSION: &str = env!("FULL_VERSION");
-const DEFAULT_TIMEOUT: f64 = 15.0;
-const DEFAULT_PAYLOAD_SIZE: usize = 16;
+const DEFAULT_PROBE_SIZE: usize = 16;
+/// Upstream's `DEFAULT_TIMEOUT`, added to the first-hop timeout.
+const DEFAULT_TIMEOUT: f64 = 12.0;
+/// The destination probed when only a hash is given.
+const DEFAULT_FULL_NAME: &str = "rnstransport.probe";
+
+/// `rnprobe`'s options: none of its short options is a bare flag, so `-t`,
+/// `-s`, `-n` and `-w` always take a value (`-t 5` or `-t5`).
+pub const OPTIONS: OptionSpec = OptionSpec {
+    flags: &[],
+    optional: &[],
+    long_optional: &[],
+};
 
 #[allow(dead_code)]
 fn main() {
-    run_with_args(Args::parse(), "rnprobe", "rnprobe");
+    run_with_args(Args::parse_spec(&OPTIONS), "rnprobe", "rnprobe");
+}
+
+struct ProbeCallbacks {
+    proofs: mpsc::Sender<(PacketHash, f64)>,
+}
+
+impl Callbacks for ProbeCallbacks {
+    fn on_announce(&mut self, _: AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
+    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
+    fn on_proof(&mut self, _: DestHash, packet_hash: PacketHash, rtt: f64) {
+        let _ = self.proofs.send((packet_hash, rtt));
+    }
 }
 
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
@@ -31,344 +55,381 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         println!("{} {}", version_name, VERSION);
         return;
     }
-
     if args.has("help") || args.has("h") {
         print_usage(usage_name);
         return;
     }
 
-    env_logger::Builder::new()
-        .filter_level(match args.verbosity {
-            0 => log::LevelFilter::Warn,
-            1 => log::LevelFilter::Info,
-            _ => log::LevelFilter::Debug,
-        })
+    // As upstream, the first -v adds detail to the output; more raise the
+    // log level.
+    let level = (2i16 + args.verbosity.saturating_sub(1) as i16).clamp(0, 5);
+    let filter = ["off", "error", "warn", "info", "debug", "trace"][level as usize];
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
         .format_timestamp_secs()
-        .init();
+        .try_init();
 
-    let config_path = args.config_path().map(|s| s.to_string());
-    let timeout_arg = args.get("t").or_else(|| args.get("timeout"));
-    let timeout: f64 = timeout_arg
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_TIMEOUT);
-    let payload_size: usize = args
-        .get("s")
-        .or_else(|| args.get("size"))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_PAYLOAD_SIZE);
-    let count: usize = args
-        .get("n")
-        .or_else(|| args.get("count"))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    let wait: f64 = args
-        .get("w")
-        .or_else(|| args.get("wait"))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
-    let verbosity = args.verbosity;
-
-    if let Some(message) = oversize_probe_error(payload_size) {
-        eprintln!("{}", message);
+    let options = match Options::from_args(&args) {
+        Ok(options) => options,
+        Err(OptionsError::Usage) => {
+            println!();
+            print_usage(usage_name);
+            println!();
+            return;
+        }
+        Err(OptionsError::Message(message)) => {
+            println!("{message}");
+            return;
+        }
+    };
+    if let Some(message) = oversize_probe_error(options.size) {
+        println!("{}", message);
         process::exit(3);
     }
+    process::exit(probe(&options));
+}
 
-    // Positional args: destination_hash
-    let dest_hash_hex = match args.positional.first() {
-        Some(h) => h.clone(),
-        None => {
-            eprintln!("No destination hash specified.");
-            print_usage(usage_name);
-            process::exit(1);
+#[derive(Debug, PartialEq)]
+struct Options {
+    config: Option<String>,
+    size: usize,
+    probes: usize,
+    timeout: Option<f64>,
+    wait: f64,
+    app_name: String,
+    aspects: Vec<String>,
+    dest_hash: [u8; 16],
+    verbose: bool,
+}
+
+#[derive(Debug, PartialEq)]
+enum OptionsError {
+    /// No destination: upstream prints the help.
+    Usage,
+    /// Upstream prints the message and exits.
+    Message(String),
+}
+
+impl Options {
+    fn from_args(args: &Args) -> Result<Self, OptionsError> {
+        let value = |short: &str, long: &str| args.get(short).or_else(|| args.get(long));
+        // `full_name destination_hash`, as upstream takes them; a lone hash
+        // probes the transport's probe destination.
+        let (full_name, hash) = match args.positional.as_slice() {
+            [] => return Err(OptionsError::Usage),
+            [hash] if parse_dest_hash(hash).is_some() => (DEFAULT_FULL_NAME.to_string(), hash),
+            [_] => return Err(OptionsError::Usage),
+            [full_name, hash, ..] => (full_name.clone(), hash),
+        };
+        let (app_name, aspects) = app_and_aspects_from_name(&full_name)?;
+        if hash.len() != 32 {
+            return Err(OptionsError::Message(
+                "Destination length is invalid, must be 32 hexadecimal characters (16 bytes)."
+                    .into(),
+            ));
         }
-    };
+        let dest_hash = parse_dest_hash(hash).ok_or_else(|| {
+            OptionsError::Message("Invalid destination entered. Check your input.".into())
+        })?;
+        Ok(Options {
+            config: args.config_path().map(str::to_string),
+            size: parse_number(value("s", "size"), "-s/--size", "int")?
+                .unwrap_or(DEFAULT_PROBE_SIZE),
+            probes: parse_number(
+                value("n", "probes").or_else(|| args.get("count")),
+                "-n/--probes",
+                "int",
+            )?
+            .unwrap_or(1),
+            timeout: parse_number(value("t", "timeout"), "-t/--timeout", "float")?,
+            wait: parse_number(value("w", "wait"), "-w/--wait", "float")?.unwrap_or(0.0),
+            app_name,
+            aspects,
+            dest_hash,
+            verbose: args.verbosity > 0,
+        })
+    }
+}
 
-    let dest_hash = match parse_dest_hash(&dest_hash_hex) {
-        Some(h) => h,
-        None => {
-            eprintln!(
-                "Invalid destination hash: {} (expected 32 hex chars)",
-                dest_hash_hex,
-            );
-            process::exit(1);
-        }
-    };
+fn parse_number<T: std::str::FromStr>(
+    value: Option<&str>,
+    name: &str,
+    kind: &str,
+) -> Result<Option<T>, OptionsError> {
+    value
+        .map(|v| {
+            v.parse::<T>().map_err(|_| {
+                OptionsError::Message(format!("argument {name}: invalid {kind} value: '{v}'"))
+            })
+        })
+        .transpose()
+}
 
-    // Load config
-    let config_dir =
-        storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
-    let config_file = config_dir.join("config");
-    let rns_config = if config_file.exists() {
-        match config::parse_file(&config_file) {
-            Ok(c) => c,
+/// `RNS.Destination.app_and_aspects_from_name`.
+fn app_and_aspects_from_name(full_name: &str) -> Result<(String, Vec<String>), OptionsError> {
+    let mut parts = full_name.split('.');
+    let app_name = parts.next().unwrap_or_default().to_string();
+    if app_name.is_empty() {
+        return Err(OptionsError::Message(
+            "The full destination name including application name aspects must be specified for the destination".into(),
+        ));
+    }
+    Ok((app_name, parts.map(str::to_string).collect()))
+}
+
+/// Run the probes; returns the process exit code (upstream's: 1 when no path
+/// was found, 2 on any packet loss, 0 otherwise).
+fn probe(options: &Options) -> i32 {
+    let config_dir = storage::resolve_config_dir(options.config.as_deref().map(Path::new));
+    let (tx, rx) = mpsc::channel();
+    let callbacks = || Box::new(ProbeCallbacks { proofs: tx.clone() });
+    // As upstream: attached to a running shared instance, or as an instance
+    // of its own.
+    let node = match RnsNode::connect_shared_from_config(Some(&config_dir), callbacks()) {
+        Ok(node) => node,
+        Err(_) => match RnsNode::from_config(Some(&config_dir), callbacks()) {
+            Ok(node) => node,
             Err(e) => {
-                eprintln!("Config parse error: {}", e);
-                process::exit(1);
+                eprintln!("Could not start Reticulum: {e}");
+                return 1;
             }
-        }
-    } else {
-        match config::parse("") {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Config parse error: {}", e);
-                process::exit(1);
-            }
-        }
+        },
     };
-
-    // Connect to rnsd via RPC
-    let paths = match storage::ensure_storage_dirs(&config_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            process::exit(1);
-        }
-    };
-    let identity = match storage::load_rpc_identity(&paths) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("Failed to load identity (is rnsd running?): {}", e);
-            process::exit(1);
-        }
-    };
-
-    let prv_key = match identity.get_private_key() {
-        Some(k) => k,
-        None => {
-            eprintln!("Identity has no private key");
-            process::exit(1);
-        }
-    };
-
-    let auth_key = rns_config
-        .reticulum
-        .rpc_key
-        .unwrap_or_else(|| derive_auth_key(&prv_key));
-    let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
-
-    // First, ensure we have a path
-    let adaptive_timeout = if timeout_arg.is_some() {
-        timeout
-    } else {
-        timeout.max(query_medium_path_timeout(&rpc_addr, &auth_key).unwrap_or(0.0))
-    };
-    let timeout_dur = Duration::from_secs_f64(adaptive_timeout);
-    if !wait_for_path(&rpc_addr, &auth_key, &dest_hash, timeout_dur, verbosity) {
-        process::exit(1);
-    }
-
-    // Send probe(s)
-    let mut any_failed = false;
-    for i in 0..count {
-        if i > 0 && wait > 0.0 {
-            std::thread::sleep(Duration::from_secs_f64(wait));
-        }
-
-        if !send_and_wait_probe(
-            &rpc_addr,
-            &auth_key,
-            &dest_hash,
-            payload_size,
-            timeout_dur,
-            verbosity,
-        ) {
-            any_failed = true;
-        }
-    }
-
-    if any_failed {
-        process::exit(1);
-    }
+    let instance = InstanceRpc::for_config_dir(&config_dir);
+    let code = run_probes(&node, instance.as_ref(), options, &rx);
+    node.shutdown();
+    code
 }
 
-fn query_medium_path_timeout(addr: &RpcAddr, auth_key: &[u8; 32]) -> Option<f64> {
-    let mut client = RpcClient::connect(addr, auth_key).ok()?;
-    client
-        .call(&PickleValue::Dict(vec![(
-            PickleValue::String("get".into()),
-            PickleValue::String("medium_path_timeout".into()),
-        )]))
-        .ok()?
-        .as_float()
-}
-
-/// Wait for a path to the destination, requesting it if needed.
-fn wait_for_path(
-    addr: &RpcAddr,
-    auth_key: &[u8; 32],
-    dest_hash: &[u8; 16],
-    timeout: Duration,
-    verbosity: u8,
-) -> bool {
-    // Check if path already exists
-    match query_has_path(addr, auth_key, dest_hash) {
-        Ok(true) => return true,
-        Ok(false) => {}
-        Err(e) => {
-            eprintln!("RPC error: {}", e);
-            return false;
-        }
-    }
-
-    // Request path
-    if let Err(e) = request_path(addr, auth_key, dest_hash) {
-        eprintln!("RPC error requesting path: {}", e);
-        return false;
-    }
-
-    eprint!("Waiting for path to {}... ", prettyhexrep(dest_hash));
-
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        std::thread::sleep(Duration::from_millis(250));
-        match query_has_path(addr, auth_key, dest_hash) {
-            Ok(true) => {
-                eprintln!("found!");
-                if verbosity > 0 {
-                    if let Ok(Some(info)) = query_path_info(addr, auth_key, dest_hash) {
-                        eprintln!(
-                            "  via {} on {}, {} hops",
-                            prettyhexrep(&info.next_hop),
-                            info.interface_name,
-                            info.hops,
-                        );
-                    }
-                }
-                return true;
-            }
-            Ok(false) => continue,
-            Err(_) => continue,
-        }
-    }
-
-    eprintln!("timeout!");
-    eprintln!(
-        "Path to {} not found within {:.1}s",
-        prettyhexrep(dest_hash),
-        timeout.as_secs_f64(),
-    );
-    false
-}
-
-/// Send a probe and wait for the proof.
-fn send_and_wait_probe(
-    addr: &RpcAddr,
-    auth_key: &[u8; 32],
-    dest_hash: &[u8; 16],
-    payload_size: usize,
-    timeout: Duration,
-    verbosity: u8,
-) -> bool {
-    // Send probe
-    let (packet_hash, hops) = match send_probe_rpc(addr, auth_key, dest_hash, payload_size) {
-        Ok(ProbeSendOutcome::Sent(packet_hash, hops)) => (packet_hash, hops),
-        Ok(ProbeSendOutcome::UnknownIdentity) => {
-            eprintln!(
-                "Could not send probe to {} (identity not known)",
-                prettyhexrep(dest_hash),
-            );
-            return false;
-        }
-        Ok(ProbeSendOutcome::PayloadTooLarge { max }) => {
-            eprintln!(
-                "Could not send probe to {}: payload of {} bytes exceeds the maximum of {} bytes",
-                prettyhexrep(dest_hash),
-                payload_size,
-                max,
-            );
-            return false;
-        }
-        Ok(ProbeSendOutcome::Failed(reason)) => {
-            eprintln!(
-                "Could not send probe to {} ({})",
-                prettyhexrep(dest_hash),
-                reason,
-            );
-            return false;
-        }
-        Err(e) => {
-            eprintln!("RPC error sending probe: {}", e);
-            return false;
-        }
+fn run_probes(
+    node: &RnsNode,
+    instance: Option<&InstanceRpc>,
+    options: &Options,
+    proofs: &mpsc::Receiver<(PacketHash, f64)>,
+) -> i32 {
+    let dest = DestHash(options.dest_hash);
+    let pretty = prettyhexrep(&options.dest_hash);
+    let timeout = || {
+        options.timeout.unwrap_or_else(|| {
+            let first_hop = instance
+                .and_then(|rpc| rpc.first_hop_timeout(&options.dest_hash))
+                .or_else(|| local_first_hop_timeout(node, &options.dest_hash))
+                .unwrap_or(rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP);
+            let medium = node.medium_path_timeout().unwrap_or(0.0);
+            (DEFAULT_TIMEOUT + first_hop).max(medium)
+        })
     };
 
-    if verbosity > 0 {
-        if let Ok(Some(info)) = query_path_info(addr, auth_key, dest_hash) {
-            println!(
-                "Sent probe ({} bytes) to {} via {} on {}",
-                payload_size,
-                prettyhexrep(dest_hash),
-                prettyhexrep(&info.next_hop),
-                info.interface_name,
-            );
-        } else {
-            println!(
-                "Sent probe ({} bytes) to {}",
-                payload_size,
-                prettyhexrep(dest_hash),
-            );
-        }
-    } else {
-        println!(
-            "Sent probe ({} bytes) to {}",
-            payload_size,
-            prettyhexrep(dest_hash),
-        );
+    if !node.has_path(&dest).unwrap_or(false) {
+        let _ = node.request_path(&dest);
+        print!("Path to {pretty} requested   ");
+        flush();
     }
-
-    // Poll for proof
-    let start = Instant::now();
-    while start.elapsed() < timeout {
+    let deadline = Instant::now() + Duration::from_secs_f64(timeout());
+    while !node.has_path(&dest).unwrap_or(false) {
+        if Instant::now() > deadline {
+            println!("\r{:58}\rPath request timed out", "");
+            return 1;
+        }
         std::thread::sleep(Duration::from_millis(100));
-        match check_proof_rpc(addr, auth_key, &packet_hash) {
-            Ok(Some(rtt)) => {
-                let rtt_ms = rtt * 1000.0;
-                println!("Probe reply received in {:.0}ms, {} hops", rtt_ms, hops,);
-                return true;
+    }
+
+    let Some(recalled) = node.recall_identity(&dest).ok().flatten() else {
+        println!("\r{:58}\rCould not recall the identity of {pretty}", "");
+        return 1;
+    };
+    let aspects: Vec<&str> = options.aspects.iter().map(String::as_str).collect();
+    let destination = Destination::single_out(&options.app_name, &aspects, &recalled);
+
+    let mut sent = 0usize;
+    let mut replies = 0usize;
+    for _ in 0..options.probes {
+        if sent > 0 {
+            std::thread::sleep(Duration::from_secs_f64(options.wait));
+        }
+        let mut payload = vec![0u8; options.size];
+        rns_crypto::Rng::fill_bytes(&mut rns_crypto::OsRng, &mut payload);
+        sent += 1;
+        let packet_hash = match node.send_packet_queued(&destination, &payload) {
+            Ok(hash) => hash,
+            Err(e) => {
+                println!("\rCould not send probe to {pretty}: {e:?}");
+                continue;
             }
-            Ok(None) => continue,
-            Err(_) => continue,
+        };
+
+        let more = if options.verbose {
+            let via = instance
+                .and_then(|rpc| rpc.next_hop(&options.dest_hash))
+                .map(|hop| format!(" via {}", prettyhexrep(&hop)))
+                .unwrap_or_default();
+            let on = instance
+                .and_then(|rpc| rpc.next_hop_if_name(&options.dest_hash))
+                .filter(|name| name != "None")
+                .map(|name| format!(" on {name}"))
+                .unwrap_or_default();
+            format!("{via}{on}")
+        } else {
+            String::new()
+        };
+        print!(
+            "\rSent probe {sent} ({} bytes) to {pretty}{more}   ",
+            options.size
+        );
+        flush();
+
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout());
+        let rtt = loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break None;
+            }
+            match proofs.recv_timeout(left.min(Duration::from_millis(100))) {
+                Ok((hash, rtt)) if hash == packet_hash => break Some(rtt),
+                _ => continue,
+            }
+        };
+        match rtt {
+            None => println!("\r{:64}\rProbe timed out", ""),
+            Some(rtt) => {
+                println!("\u{8}\u{8} ");
+                replies += 1;
+                let hops = node.hops_to(&dest).ok().flatten().unwrap_or(0);
+                println!(
+                    "Valid reply from {}\nRound-trip time is {} over {} hop{}\n",
+                    prettyhexrep(&destination.hash.0),
+                    rtt_string(rtt),
+                    hops,
+                    if hops != 1 { "s" } else { "" },
+                );
+            }
         }
     }
 
-    println!("Probe timed out after {:.1}s", timeout.as_secs_f64());
-    false
+    let loss = python_round((1.0 - replies as f64 / sent.max(1) as f64) * 100.0, 2);
+    println!(
+        "Sent {sent}, received {replies}, packet loss {}%",
+        python_float(loss)
+    );
+    if loss > 0.0 {
+        2
+    } else {
+        0
+    }
 }
 
-// --- RPC helpers ---
-
-fn query_has_path(
-    addr: &RpcAddr,
-    auth_key: &[u8; 32],
-    dest_hash: &[u8; 16],
-) -> Result<bool, String> {
-    let mut client =
-        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
-    let response = client
-        .call(&PickleValue::Dict(vec![
-            (
-                PickleValue::String("get".into()),
-                PickleValue::String("next_hop".into()),
-            ),
-            (
-                PickleValue::String("destination_hash".into()),
-                PickleValue::Bytes(dest_hash.to_vec()),
-            ),
-        ]))
-        .map_err(|e| format!("RPC call: {}", e))?;
-    Ok(response.as_bytes().is_some_and(|b| b.len() == 16))
+fn flush() {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
 }
 
-fn request_path(addr: &RpcAddr, auth_key: &[u8; 32], dest_hash: &[u8; 16]) -> Result<(), String> {
-    let mut client =
-        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
-    let _ = client
-        .call(&PickleValue::Dict(vec![(
-            PickleValue::String("request_path".into()),
-            PickleValue::Bytes(dest_hash.to_vec()),
-        )]))
-        .map_err(|e| format!("RPC call: {}", e))?;
-    Ok(())
+/// Upstream's round-trip string: seconds from one second up, else
+/// milliseconds, rounded to three decimals.
+fn rtt_string(rtt: f64) -> String {
+    if rtt >= 1.0 {
+        format!("{} seconds", python_float(python_round(rtt, 3)))
+    } else {
+        format!(
+            "{} milliseconds",
+            python_float(python_round(rtt * 1000.0, 3))
+        )
+    }
+}
+
+fn python_round(value: f64, digits: i32) -> f64 {
+    let scale = 10f64.powi(digits);
+    (value * scale).round() / scale
+}
+
+/// A float as Python's `str()` writes it: the shortest round-trip form, with
+/// a `.0` on whole numbers.
+fn python_float(value: f64) -> String {
+    let text = format!("{value}");
+    if text.contains(['.', 'e', 'i', 'N']) {
+        text
+    } else {
+        format!("{text}.0")
+    }
+}
+
+/// `RNS.prettyhexrep`.
+fn prettyhexrep(hash: &[u8]) -> String {
+    format!("<{}>", rns_cli::format::prettyhexrep(hash))
+}
+
+fn local_first_hop_timeout(node: &RnsNode, dest_hash: &[u8; 16]) -> Option<f64> {
+    match node.query(QueryRequest::FirstHopTimeout {
+        dest_hash: *dest_hash,
+    }) {
+        Ok(QueryResponse::FirstHopTimeout(timeout)) => Some(timeout),
+        _ => None,
+    }
+}
+
+/// The shared instance's RPC, for what upstream's shared clients ask it:
+/// the first-hop timeout and the next hop of a path. Absent when no shared
+/// instance RPC key is available; the probe itself never needs it.
+struct InstanceRpc {
+    addr: RpcAddr,
+    auth_key: [u8; 32],
+}
+
+impl InstanceRpc {
+    fn for_config_dir(config_dir: &Path) -> Option<Self> {
+        let config_file = config_dir.join("config");
+        let rns_config = if config_file.exists() {
+            config::parse_file(&config_file).ok()?
+        } else {
+            config::parse("").ok()?
+        };
+        let auth_key = match rns_config.reticulum.rpc_key {
+            Some(key) => key,
+            None => {
+                let identity =
+                    storage::load_identity(&config_dir.join("storage").join("transport_identity"))
+                        .ok()?;
+                rns_net::rpc::derive_auth_key(&identity.get_private_key()?)
+            }
+        };
+        Some(InstanceRpc {
+            addr: RpcAddr::for_shared_instance(&rns_config.reticulum),
+            auth_key,
+        })
+    }
+
+    fn get(&self, what: &str, dest_hash: &[u8; 16]) -> Option<PickleValue> {
+        let mut client = RpcClient::connect(&self.addr, &self.auth_key).ok()?;
+        client
+            .call(&PickleValue::Dict(vec![
+                (
+                    PickleValue::String("get".into()),
+                    PickleValue::String(what.into()),
+                ),
+                (
+                    PickleValue::String("destination_hash".into()),
+                    PickleValue::Bytes(dest_hash.to_vec()),
+                ),
+            ]))
+            .ok()
+    }
+
+    fn first_hop_timeout(&self, dest_hash: &[u8; 16]) -> Option<f64> {
+        let value = self.get("first_hop_timeout", dest_hash)?;
+        value
+            .as_float()
+            .or_else(|| value.as_int().map(|v| v as f64))
+    }
+
+    fn next_hop(&self, dest_hash: &[u8; 16]) -> Option<Vec<u8>> {
+        self.get("next_hop", dest_hash)?
+            .as_bytes()
+            .map(<[u8]>::to_vec)
+    }
+
+    fn next_hop_if_name(&self, dest_hash: &[u8; 16]) -> Option<String> {
+        self.get("next_hop_if_name", dest_hash)?
+            .as_str()
+            .map(str::to_string)
+    }
 }
 
 /// Size on the wire of a probe carrying `payload_size` random bytes: HEADER_1
@@ -387,243 +448,122 @@ fn oversize_probe_error(payload_size: usize) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Error: Probe packet size of {} bytes exceed MTU of {} bytes (maximum probe payload is {} bytes)",
+        "Error: Probe packet size of {} bytes exceed MTU of {} bytes",
         probe_packet_size(payload_size),
         rns_core::constants::MTU,
-        MAX_PROBE_PAYLOAD_SIZE,
     ))
 }
 
-/// Result of a `send_probe` RPC call.
-#[derive(Debug, PartialEq)]
-enum ProbeSendOutcome {
-    Sent([u8; 32], u8),
-    UnknownIdentity,
-    PayloadTooLarge { max: usize },
-    Failed(String),
-}
-
-fn parse_send_probe_response(response: &PickleValue) -> ProbeSendOutcome {
-    if let Some(code) = response.get("error").and_then(|v| v.as_str()) {
-        return match code {
-            "payload_too_large" => ProbeSendOutcome::PayloadTooLarge {
-                max: response
-                    .get("max_size")
-                    .and_then(|v| v.as_int())
-                    .and_then(|n| usize::try_from(n).ok())
-                    .unwrap_or(MAX_PROBE_PAYLOAD_SIZE),
-            },
-            other => ProbeSendOutcome::Failed(other.replace('_', " ")),
-        };
-    }
-    let packet_hash = response.get("packet_hash").and_then(|v| v.as_bytes());
-    let hops = response.get("hops").and_then(|v| v.as_int());
-    match (packet_hash, hops) {
-        (Some(ph), Some(h)) if ph.len() >= 32 => {
-            let mut hash = [0u8; 32];
-            hash.copy_from_slice(&ph[..32]);
-            ProbeSendOutcome::Sent(hash, h as u8)
-        }
-        _ => ProbeSendOutcome::UnknownIdentity,
-    }
-}
-
-fn send_probe_rpc(
-    addr: &RpcAddr,
-    auth_key: &[u8; 32],
-    dest_hash: &[u8; 16],
-    payload_size: usize,
-) -> Result<ProbeSendOutcome, String> {
-    let mut client =
-        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
-    let response = client
-        .call(&PickleValue::Dict(vec![
-            (
-                PickleValue::String("send_probe".into()),
-                PickleValue::Bytes(dest_hash.to_vec()),
-            ),
-            (
-                PickleValue::String("size".into()),
-                PickleValue::Int(payload_size as i64),
-            ),
-        ]))
-        .map_err(|e| format!("RPC call: {}", e))?;
-
-    Ok(parse_send_probe_response(&response))
-}
-
-fn check_proof_rpc(
-    addr: &RpcAddr,
-    auth_key: &[u8; 32],
-    packet_hash: &[u8; 32],
-) -> Result<Option<f64>, String> {
-    let mut client =
-        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
-    let response = client
-        .call(&PickleValue::Dict(vec![(
-            PickleValue::String("check_proof".into()),
-            PickleValue::Bytes(packet_hash.to_vec()),
-        )]))
-        .map_err(|e| format!("RPC call: {}", e))?;
-
-    match &response {
-        PickleValue::Float(rtt) => Ok(Some(*rtt)),
-        _ => Ok(None),
-    }
-}
-
-/// Information about a path to a destination.
-struct PathInfo {
-    next_hop: [u8; 16],
-    hops: u8,
-    interface_name: String,
-}
-
-/// Query path information for a destination via RPC.
-fn query_path_info(
-    addr: &RpcAddr,
-    auth_key: &[u8; 32],
-    dest_hash: &[u8; 16],
-) -> Result<Option<PathInfo>, String> {
-    let mut client =
-        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
-
-    let response = client
-        .call(&PickleValue::Dict(vec![
-            (
-                PickleValue::String("get".into()),
-                PickleValue::String("next_hop".into()),
-            ),
-            (
-                PickleValue::String("destination_hash".into()),
-                PickleValue::Bytes(dest_hash.to_vec()),
-            ),
-        ]))
-        .map_err(|e| format!("RPC call: {}", e))?;
-
-    let next_hop = match response.as_bytes() {
-        Some(b) if b.len() == 16 => {
-            let mut h = [0u8; 16];
-            h.copy_from_slice(b);
-            h
-        }
-        _ => return Ok(None),
-    };
-
-    // Query interface name
-    let if_name = {
-        let mut client2 =
-            RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
-
-        let resp = client2
-            .call(&PickleValue::Dict(vec![
-                (
-                    PickleValue::String("get".into()),
-                    PickleValue::String("next_hop_if_name".into()),
-                ),
-                (
-                    PickleValue::String("destination_hash".into()),
-                    PickleValue::Bytes(dest_hash.to_vec()),
-                ),
-            ]))
-            .map_err(|e| format!("RPC call: {}", e))?;
-
-        match resp {
-            PickleValue::String(s) => s,
-            _ => "unknown".into(),
-        }
-    };
-
-    // Query hop count
-    let hops = {
-        let mut client3 =
-            RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
-
-        let resp = client3
-            .call(&PickleValue::Dict(vec![(
-                PickleValue::String("get".into()),
-                PickleValue::String("path_table".into()),
-            )]))
-            .map_err(|e| format!("RPC call: {}", e))?;
-
-        extract_hops_from_path_table(&resp, dest_hash)
-    };
-
-    Ok(Some(PathInfo {
-        next_hop,
-        hops,
-        interface_name: if_name,
-    }))
-}
-
-/// Extract hop count for a destination from a path table RPC response.
-/// Find `dest_hash`'s hop count in a `path_table` RPC response.
-///
-/// The daemon, like Python's `Reticulum.get_path_table`, returns one dict per
-/// entry with `hash` and `hops` keys. Positional list entries are still
-/// accepted for older daemons. Returns 0 when the destination is not listed.
-fn extract_hops_from_path_table(response: &PickleValue, dest_hash: &[u8; 16]) -> u8 {
-    let PickleValue::List(entries) = response else {
-        return 0;
-    };
-    for entry in entries {
-        let (hash, hops) = match entry {
-            PickleValue::Dict(_) => (entry.get("hash"), entry.get("hops")),
-            PickleValue::List(fields) if fields.len() >= 4 => (fields.first(), fields.get(3)),
-            _ => continue,
-        };
-        if hash.and_then(PickleValue::as_bytes) != Some(&dest_hash[..]) {
-            continue;
-        }
-        if let Some(PickleValue::Int(h)) = hops {
-            return u8::try_from(*h).unwrap_or(u8::MAX);
-        }
-    }
-    0
-}
-
-/// Parse a 32-character hex string into a 16-byte hash.
 fn parse_dest_hash(hex: &str) -> Option<[u8; 16]> {
-    if hex.len() != 32 {
-        return None;
-    }
-    let bytes: Vec<u8> = (0..hex.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-        .collect();
-    if bytes.len() != 16 {
+    if hex.len() != 32 || !hex.is_ascii() {
         return None;
     }
     let mut result = [0u8; 16];
-    result.copy_from_slice(&bytes);
+    for (i, byte) in result.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
     Some(result)
 }
 
 fn print_usage(usage_name: &str) {
-    println!("Usage: {usage_name} [OPTIONS] <destination_hash>");
-    println!();
-    println!("Send a probe packet to a Reticulum destination and measure RTT.");
-    println!();
-    println!("Arguments:");
-    println!("  <destination_hash>    Hex hash of the destination (32 chars)");
-    println!();
-    println!("Options:");
-    println!("  -c, --config PATH     Config directory path");
-    println!("  -t, --timeout SECS    Timeout in seconds (default: 15)");
     println!(
-        "  -s, --size BYTES      Probe payload size (default: 16, max: {})",
-        MAX_PROBE_PAYLOAD_SIZE
+        "usage: {usage_name} [-h] [--config CONFIG] [-s SIZE] [-n PROBES] [-t seconds] [-w seconds] [--version] [-v] [full_name] [destination_hash]"
     );
-    println!("  -n, --count N         Number of probes to send (default: 1)");
-    println!("  -w, --wait SECS       Seconds between probes (default: 0)");
-    println!("  -v, --verbose         Increase verbosity");
-    println!("      --version         Show version");
-    println!("  -h, --help            Show this help");
+    println!();
+    println!("Reticulum Probe Utility");
+    println!();
+    println!("positional arguments:");
+    println!("  full_name             full destination name in dotted notation");
+    println!("                        (with a lone hash: {DEFAULT_FULL_NAME})");
+    println!("  destination_hash      hexadecimal hash of the destination");
+    println!();
+    println!("options:");
+    println!("  -h, --help            show this help message and exit");
+    println!("  --config CONFIG       path to alternative Reticulum config directory");
+    println!(
+        "  -s, --size SIZE       size of probe packet payload in bytes (max {MAX_PROBE_PAYLOAD_SIZE})"
+    );
+    println!("  -n, --probes PROBES   number of probes to send");
+    println!("  -t, --timeout seconds");
+    println!("                        timeout before giving up");
+    println!("  -w, --wait seconds    time between each probe");
+    println!("  --version             show program's version number and exit");
+    println!("  -v, --verbose");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn options(argv: &[&str]) -> Result<Options, OptionsError> {
+        Options::from_args(&Args::parse_spec_from(
+            argv.iter().map(|s| s.to_string()).collect(),
+            &OPTIONS,
+        ))
+    }
+
+    const HASH: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn short_value_options_take_their_value() {
+        let parsed =
+            options(&["-t", "3", "-s", "32", "-n", "4", "-w", "0.5", "a.b", HASH]).unwrap();
+        assert_eq!(parsed.timeout, Some(3.0));
+        assert_eq!(parsed.size, 32);
+        assert_eq!(parsed.probes, 4);
+        assert_eq!(parsed.wait, 0.5);
+        assert_eq!(options(&["-t10", HASH]).unwrap().timeout, Some(10.0));
+        assert_eq!(options(&[HASH, "-t", "10"]).unwrap().timeout, Some(10.0));
+        assert_eq!(
+            options(&["--timeout", "7", HASH]).unwrap().timeout,
+            Some(7.0)
+        );
+        assert_eq!(options(&["--count", "2", HASH]).unwrap().probes, 2);
+    }
+
+    #[test]
+    fn full_name_and_hash_as_upstream_takes_them() {
+        let parsed = options(&["rnstransport.probe", HASH]).unwrap();
+        assert_eq!(parsed.app_name, "rnstransport");
+        assert_eq!(parsed.aspects, vec!["probe".to_string()]);
+        let parsed = options(&["app.one.two", HASH]).unwrap();
+        assert_eq!(parsed.app_name, "app");
+        assert_eq!(parsed.aspects, vec!["one".to_string(), "two".to_string()]);
+        // A lone hash probes the transport probe destination.
+        let parsed = options(&[HASH]).unwrap();
+        assert_eq!(parsed.app_name, "rnstransport");
+        assert_eq!(parsed.aspects, vec!["probe".to_string()]);
+        assert_eq!(parsed.dest_hash[0], 0x01);
+        assert_eq!(options(&[]), Err(OptionsError::Usage));
+        assert_eq!(options(&["only.a.name"]), Err(OptionsError::Usage));
+        assert!(matches!(
+            options(&["a.b", "abcd"]),
+            Err(OptionsError::Message(m)) if m.starts_with("Destination length is invalid")
+        ));
+        assert!(matches!(
+            options(&["a.b", "zz23456789abcdef0123456789abcdef"]),
+            Err(OptionsError::Message(m)) if m == "Invalid destination entered. Check your input."
+        ));
+        assert!(matches!(
+            options(&["-t", "soon", HASH]),
+            Err(OptionsError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn output_numbers_match_upstream() {
+        assert_eq!(rtt_string(0.0012345), "1.235 milliseconds");
+        assert_eq!(rtt_string(0.25), "250.0 milliseconds");
+        assert_eq!(rtt_string(1.0), "1.0 seconds");
+        assert_eq!(rtt_string(2.34567), "2.346 seconds");
+        assert_eq!(python_float(python_round(0.0, 2)), "0.0");
+        assert_eq!(
+            python_float(python_round((1.0 - 2.0 / 3.0) * 100.0, 2)),
+            "33.33"
+        );
+        assert_eq!(python_float(100.0), "100.0");
+        assert_eq!(prettyhexrep(&[0xab, 0x01]), "<ab01>");
+    }
 
     #[test]
     fn oversize_probe_error_matches_mtu_boundary() {
@@ -632,173 +572,22 @@ mod tests {
         assert!(oversize_probe_error(16).is_none());
         assert!(oversize_probe_error(MAX_PROBE_PAYLOAD_SIZE).is_none());
         let msg = oversize_probe_error(400).unwrap();
-        assert!(msg.contains("515 bytes exceed MTU of 500 bytes"), "{}", msg);
-        assert!(
-            msg.contains("maximum probe payload is 399 bytes"),
-            "{}",
-            msg
+        assert_eq!(
+            msg,
+            "Error: Probe packet size of 515 bytes exceed MTU of 500 bytes"
         );
     }
 
     #[test]
-    fn parse_send_probe_response_distinguishes_outcomes() {
+    fn parse_hashes() {
+        assert_eq!(parse_dest_hash(HASH).unwrap()[15], 0xef);
         assert_eq!(
-            parse_send_probe_response(&PickleValue::None),
-            ProbeSendOutcome::UnknownIdentity
+            parse_dest_hash("0123456789ABCDEF0123456789ABCDEF").unwrap()[1],
+            0x23
         );
-        let sent = PickleValue::Dict(vec![
-            (
-                PickleValue::String("packet_hash".into()),
-                PickleValue::Bytes(vec![0xAB; 32]),
-            ),
-            (PickleValue::String("hops".into()), PickleValue::Int(2)),
-        ]);
-        assert_eq!(
-            parse_send_probe_response(&sent),
-            ProbeSendOutcome::Sent([0xAB; 32], 2)
-        );
-        let too_large = PickleValue::Dict(vec![
-            (
-                PickleValue::String("error".into()),
-                PickleValue::String("payload_too_large".into()),
-            ),
-            (
-                PickleValue::String("max_size".into()),
-                PickleValue::Int(399),
-            ),
-        ]);
-        assert_eq!(
-            parse_send_probe_response(&too_large),
-            ProbeSendOutcome::PayloadTooLarge { max: 399 }
-        );
-        let pack_failed = PickleValue::Dict(vec![(
-            PickleValue::String("error".into()),
-            PickleValue::String("pack_failed".into()),
-        )]);
-        assert_eq!(
-            parse_send_probe_response(&pack_failed),
-            ProbeSendOutcome::Failed("pack failed".into())
-        );
-    }
-
-    #[test]
-    fn parse_valid_hash() {
-        let hex = "0123456789abcdef0123456789abcdef";
-        let hash = parse_dest_hash(hex).unwrap();
-        assert_eq!(hash[0], 0x01);
-        assert_eq!(hash[1], 0x23);
-        assert_eq!(hash[15], 0xef);
-    }
-
-    #[test]
-    fn parse_invalid_hash_short() {
         assert!(parse_dest_hash("0123").is_none());
-    }
-
-    #[test]
-    fn parse_invalid_hash_long() {
-        assert!(parse_dest_hash("0123456789abcdef0123456789abcdef00").is_none());
-    }
-
-    #[test]
-    fn parse_invalid_hash_bad_hex() {
-        assert!(parse_dest_hash("xyz3456789abcdef0123456789abcdef").is_none());
-    }
-
-    #[test]
-    fn parse_uppercase_hash() {
-        let hex = "0123456789ABCDEF0123456789ABCDEF";
-        let hash = parse_dest_hash(hex).unwrap();
-        assert_eq!(hash[0], 0x01);
-        assert_eq!(hash[15], 0xEF);
-    }
-
-    #[test]
-    fn default_timeout() {
-        assert!((DEFAULT_TIMEOUT - 15.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn prettyhexrep_format() {
-        let hash = [
-            0xAA, 0xBB, 0xCC, 0xDD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
-            0xAA, 0xBB,
-        ];
-        let hex = prettyhexrep(&hash);
-        assert_eq!(hex, "aabbccdd00112233445566778899aabb");
-    }
-
-    #[test]
-    fn extract_hops_empty_table() {
-        let table = PickleValue::List(vec![]);
-        let hash = [0u8; 16];
-        assert_eq!(extract_hops_from_path_table(&table, &hash), 0);
-    }
-
-    #[test]
-    fn extract_hops_found() {
-        let dest = vec![0xAA; 16];
-        let entry = PickleValue::List(vec![
-            PickleValue::Bytes(dest.clone()),
-            PickleValue::Float(1000.0),
-            PickleValue::Bytes(vec![0xBB; 16]),
-            PickleValue::Int(3),
-            PickleValue::Float(2000.0),
-            PickleValue::String("TCPInterface".into()),
-        ]);
-        let table = PickleValue::List(vec![entry]);
-        let mut hash = [0u8; 16];
-        hash.copy_from_slice(&dest);
-        assert_eq!(extract_hops_from_path_table(&table, &hash), 3);
-    }
-
-    /// The daemon's real `path_table` format: one dict per entry. rnprobe -v
-    /// used to print "0 hops" for every path because it only parsed lists.
-    #[test]
-    fn extract_hops_from_dict_entries() {
-        let entry = |hash: u8, hops: i64| {
-            PickleValue::Dict(vec![
-                (
-                    PickleValue::String("hash".into()),
-                    PickleValue::Bytes(vec![hash; 16]),
-                ),
-                (
-                    PickleValue::String("timestamp".into()),
-                    PickleValue::Float(1000.0),
-                ),
-                (
-                    PickleValue::String("via".into()),
-                    PickleValue::Bytes(vec![0xBB; 16]),
-                ),
-                (PickleValue::String("hops".into()), PickleValue::Int(hops)),
-                (
-                    PickleValue::String("expires".into()),
-                    PickleValue::Float(2000.0),
-                ),
-                (
-                    PickleValue::String("interface".into()),
-                    PickleValue::String("BackboneInterface/1".into()),
-                ),
-            ])
-        };
-        let table = PickleValue::List(vec![entry(0xCC, 5), entry(0xAA, 10)]);
-        assert_eq!(extract_hops_from_path_table(&table, &[0xAA; 16]), 10);
-        assert_eq!(extract_hops_from_path_table(&table, &[0xCC; 16]), 5);
-        assert_eq!(extract_hops_from_path_table(&table, &[0xDD; 16]), 0);
-    }
-
-    #[test]
-    fn extract_hops_not_found() {
-        let entry = PickleValue::List(vec![
-            PickleValue::Bytes(vec![0xCC; 16]),
-            PickleValue::Float(1000.0),
-            PickleValue::Bytes(vec![0xBB; 16]),
-            PickleValue::Int(5),
-            PickleValue::Float(2000.0),
-            PickleValue::String("TCPInterface".into()),
-        ]);
-        let table = PickleValue::List(vec![entry]);
-        let hash = [0xAA; 16];
-        assert_eq!(extract_hops_from_path_table(&table, &hash), 0);
+        assert!(parse_dest_hash(&format!("{HASH}00")).is_none());
+        assert!(parse_dest_hash("zz23456789abcdef0123456789abcdef").is_none());
+        assert!(parse_dest_hash("é123456789abcdef0123456789abcde").is_none());
     }
 }
