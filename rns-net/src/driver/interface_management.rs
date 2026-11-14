@@ -58,6 +58,7 @@ impl Driver {
             .retain(|listener| listener.id != managed.parent_id);
         if let Some(control) = &managed.control {
             control.request_stop();
+            control.finish();
             self.listener_controls
                 .retain(|candidate| !candidate.same_instance(control));
         }

@@ -422,6 +422,11 @@ pub fn detect_request() -> Vec<u8> {
     rnode_command(CMD_DETECT, &[DETECT_REQ])
 }
 
+/// Tell the device the host is leaving (upstream `RNodeInterface.leave`).
+pub fn leave_request() -> Vec<u8> {
+    rnode_command(CMD_LEAVE, &[0xFF])
+}
+
 /// Build a data frame for a subinterface:
 /// [FEND][CMD_INTn_DATA][escaped data][FEND].
 pub fn rnode_data_frame(index: u8, data: &[u8]) -> Vec<u8> {
