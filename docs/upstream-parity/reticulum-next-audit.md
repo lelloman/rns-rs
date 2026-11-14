@@ -191,11 +191,31 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ## Integration Plan
 
-Review every commit above and give it a disposition.
+Every commit has a final disposition and a mapping commit. One prerequisite
+fix landed outside the mappings: `1df27919` ("net: synthesize tunnels from
+dialing interfaces, attach them where they arrive"). Before it, rns-rs never
+synthesized tunnels and attached received ones to the wrong interface, so
+3281e283, 464e7598, 56b23c48 and 350b7e26 had no working base. It is
+Python-interop checked against 134dc677
+(`python_rns_receives_tunnel_synthesis_from_rust_client`).
+
+Open caveats recorded in the entries above:
+
+- 819076c3: rns-rs decides ingress holding before signature validation. A
+  blackholed or stamp-failing announce arriving during a burst is therefore
+  held rather than counted as filtered, and it is filtered on release.
+- 3281e283: tearing down an outbound I2P peer closes its stream, but its loop
+  reconnects.
+- 56b23c48: without interface management (no config file), a static
+  configured interface cannot be detached, so a bad synthesis on one is only
+  logged.
+
+Remaining before promotion: the promotion gates below, starting with
+exact-target (`c850cdac`) live Python/Rust interop.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
+- [x] Every upstream commit has a final disposition.
 - [ ] Focused regressions pass for every applicable behavior change.
 - [ ] Fixture provenance and byte stability are checked where applicable.
 - [ ] Exact-target live Python/Rust interop passes.
