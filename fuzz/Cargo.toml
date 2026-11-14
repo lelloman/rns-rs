@@ -1,0 +1,90 @@
+[package]
+name = "rns-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rns-core = { path = "../rns-core" }
+rns-crypto = { path = "../rns-crypto" }
+rns-net = { path = "../rns-net" }
+
+# Its own workspace: cargo-fuzz builds with nightly and sanitizer flags.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "pickle_decode"
+path = "fuzz_targets/pickle_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packet_unpack"
+path = "fuzz_targets/packet_unpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "announce"
+path = "fuzz_targets/announce.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ifac_unmask"
+path = "fuzz_targets/ifac_unmask.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hdlc_decode"
+path = "fuzz_targets/hdlc_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kiss_decode"
+path = "fuzz_targets/kiss_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resource_advertisement"
+path = "fuzz_targets/resource_advertisement.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_handshake"
+path = "fuzz_targets/link_handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_parse"
+path = "fuzz_targets/config_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "msgpack_unpack"
+path = "fuzz_targets/msgpack_unpack.rs"
+test = false
+doc = false
+bench = false

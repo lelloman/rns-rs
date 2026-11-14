@@ -1,0 +1,75 @@
+name: Fuzz
+
+# Nightly coverage-guided fuzzing of the parsers that read untrusted input:
+# network frames, announces, link handshakes, resource advertisements, IFAC,
+# HDLC/KISS framing, msgpack, the RPC pickle decoder and config files. Each
+# target keeps its corpus in the Actions cache, so runs build on each other;
+# a crash fails the job and uploads the reproducer.
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds per target"
+        required: false
+        default: "300"
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - pickle_decode
+          - packet_unpack
+          - announce
+          - ifac_unmask
+          - hdlc_decode
+          - kiss_decode
+          - resource_advertisement
+          - link_handshake
+          - config_parse
+          - msgpack_unpack
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Restore corpus
+        uses: actions/cache@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        working-directory: fuzz
+        env:
+          # Pull requests that touch the harness get a short smoke run.
+          SECONDS_PER_TARGET: ${{ github.event_name == 'pull_request' && '30' || inputs.seconds || '300' }}
+        run: >
+          cargo +nightly fuzz run ${{ matrix.target }} --
+          -max_total_time=${SECONDS_PER_TARGET} -rss_limit_mb=2048
+
+      - name: Upload reproducer
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
