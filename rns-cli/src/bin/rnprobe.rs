@@ -46,16 +46,26 @@ fn main() {
     run_with_args(Args::parse_spec(&OPTIONS), "rnprobe", "rnprobe");
 }
 
+/// A delivery proof: the probe it proves, the round trip, and the packet
+/// that carried it.
+type Proof = (PacketHash, f64, Option<PacketHash>);
+
 struct ProbeCallbacks {
-    proofs: mpsc::Sender<(PacketHash, f64)>,
+    proofs: mpsc::Sender<Proof>,
 }
 
 impl Callbacks for ProbeCallbacks {
     fn on_announce(&mut self, _: AnnouncedIdentity) {}
     fn on_path_updated(&mut self, _: DestHash, _: u8) {}
     fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
-    fn on_proof(&mut self, _: DestHash, packet_hash: PacketHash, rtt: f64) {
-        let _ = self.proofs.send((packet_hash, rtt));
+    fn on_proof_packet(
+        &mut self,
+        _: DestHash,
+        packet_hash: PacketHash,
+        rtt: f64,
+        proof_packet: Option<PacketHash>,
+    ) {
+        let _ = self.proofs.send((packet_hash, rtt, proof_packet));
     }
 }
 
@@ -213,7 +223,7 @@ fn run_probes(
     node: &RnsNode,
     instance: Option<&InstanceRpc>,
     options: &Options,
-    proofs: &mpsc::Receiver<(PacketHash, f64)>,
+    proofs: &mpsc::Receiver<Proof>,
 ) -> i32 {
     let dest = DestHash(options.dest_hash);
     let pretty = prettyhexrep(&options.dest_hash);
@@ -287,28 +297,31 @@ fn run_probes(
         flush();
 
         let deadline = Instant::now() + Duration::from_secs_f64(timeout());
-        let rtt = loop {
+        let reply = loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break None;
             }
             match proofs.recv_timeout(left.min(Duration::from_millis(100))) {
-                Ok((hash, rtt)) if hash == packet_hash => break Some(rtt),
+                Ok((hash, rtt, proof_packet)) if hash == packet_hash => {
+                    break Some((rtt, proof_packet))
+                }
                 _ => continue,
             }
         };
-        match rtt {
+        match reply {
             None => println!("\r{:64}\rProbe timed out", ""),
-            Some(rtt) => {
+            Some((rtt, proof_packet)) => {
                 println!("\u{8}\u{8} ");
                 replies += 1;
                 let hops = node.hops_to(&dest).ok().flatten().unwrap_or(0);
                 println!(
-                    "Valid reply from {}\nRound-trip time is {} over {} hop{}\n",
+                    "Valid reply from {}\nRound-trip time is {} over {} hop{}{}\n",
                     prettyhexrep(&destination.hash.0),
                     rtt_string(rtt),
                     hops,
                     if hops != 1 { "s" } else { "" },
+                    reception_stats(node, instance, proof_packet),
                 );
             }
         }
@@ -365,6 +378,58 @@ fn prettyhexrep(hash: &[u8]) -> String {
     format!("<{}>", rns_cli::format::prettyhexrep(hash))
 }
 
+/// Upstream's reception stats suffix for the proof that answered a probe.
+/// A shared instance client asks the instance, which saw the packet arrive
+/// (`get_packet_rssi`, `_snr`, `_q`); an instance of its own reads the
+/// proof packet's RSSI and SNR, as upstream, which has no link quality there.
+fn reception_stats(
+    node: &RnsNode,
+    instance: Option<&InstanceRpc>,
+    proof_packet: Option<PacketHash>,
+) -> String {
+    let Some(PacketHash(hash)) = proof_packet else {
+        return String::new();
+    };
+    let (rssi, snr, q) = if node.is_connected_to_shared_instance() {
+        let Some(rpc) = instance else {
+            return String::new();
+        };
+        let stat = |what| rpc.packet_stat(what, &hash).and_then(|v| python_str(&v));
+        (stat("packet_rssi"), stat("packet_snr"), stat("packet_q"))
+    } else {
+        (
+            node.packet_rssi(&hash)
+                .ok()
+                .flatten()
+                .map(|v| v.to_string()),
+            node.packet_snr(&hash)
+                .ok()
+                .flatten()
+                .map(|v| python_float(f64::from(v))),
+            None,
+        )
+    };
+    let mut stats = String::new();
+    if let Some(rssi) = rssi {
+        stats += &format!(" [RSSI {rssi} dBm]");
+    }
+    if let Some(snr) = snr {
+        stats += &format!(" [SNR {snr} dB]");
+    }
+    if let Some(q) = q {
+        stats += &format!(" [Link Quality {q}%]");
+    }
+    stats
+}
+
+/// A number as Python's `str()` writes it; `None` for anything else.
+fn python_str(value: &PickleValue) -> Option<String> {
+    value
+        .as_int()
+        .map(|v| v.to_string())
+        .or_else(|| value.as_float().map(python_float))
+}
+
 fn local_first_hop_timeout(node: &RnsNode, dest_hash: &[u8; 16]) -> Option<f64> {
     match node.query(QueryRequest::FirstHopTimeout {
         dest_hash: *dest_hash,
@@ -416,6 +481,23 @@ impl InstanceRpc {
                 (
                     PickleValue::String("destination_hash".into()),
                     PickleValue::Bytes(dest_hash.to_vec()),
+                ),
+            ]))
+            .ok()
+    }
+
+    /// Upstream's `get_packet_rssi` / `_snr` / `_q` on the shared instance.
+    fn packet_stat(&self, what: &str, packet_hash: &[u8; 32]) -> Option<PickleValue> {
+        let mut client = RpcClient::connect(&self.addr, &self.auth_key).ok()?;
+        client
+            .call(&PickleValue::Dict(vec![
+                (
+                    PickleValue::String("get".into()),
+                    PickleValue::String(what.into()),
+                ),
+                (
+                    PickleValue::String("packet_hash".into()),
+                    PickleValue::Bytes(packet_hash.to_vec()),
                 ),
             ]))
             .ok()
