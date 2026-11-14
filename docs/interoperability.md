@@ -10,8 +10,8 @@ wire protocol it implements is written down in the
 
 The accepted upstream baseline is recorded in [UPSTREAM.md](../UPSTREAM.md):
 the Reticulum version, the canonical commit, the `RNS` tree hash, and the
-validation that ran when it was accepted. At the time of writing that is
-Reticulum 1.5.7 at the rgit tip of 2026-10-05.
+validation that ran when it was accepted. It is the single place the
+baseline version is stated.
 
 Every upstream commit since the previous baseline is audited individually and
 given a disposition: ported, already covered, non-runtime, or deferred with a

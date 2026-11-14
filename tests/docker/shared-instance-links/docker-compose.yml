@@ -34,7 +34,7 @@ services:
       context: .
       dockerfile: Dockerfile.python
       args:
-        RNS_VERSION: ${RNS_VERSION:-1.5.7}
+        RNS_VERSION: ${RNS_VERSION:-1.6.0}
     image: rns-test-python-sil
     container_name: sil-py-sibling
     network_mode: "service:daemon"
