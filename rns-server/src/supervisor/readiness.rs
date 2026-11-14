@@ -3,6 +3,8 @@ use super::*;
 #[derive(Clone)]
 pub enum ReadinessTarget {
     Tcp(SocketAddr),
+    /// An RPC server, reached as its clients reach it.
+    Rpc(RpcAddr),
     UnixSocket(PathBuf),
     ReadyFile(PathBuf),
     HookSet {
@@ -32,6 +34,10 @@ impl ProcessReadiness {
                     Err(err) => (false, "waiting", Some(format!("waiting for {}", err))),
                 }
             }
+            ReadinessTarget::Rpc(addr) => match addr.accepts_connections() {
+                Ok(()) => (true, "ready", Some(format!("RPC listening at {:?}", addr))),
+                Err(err) => (false, "waiting", Some(format!("waiting for RPC: {}", err))),
+            },
             ReadinessTarget::UnixSocket(path) => match UnixStream::connect(path) {
                 Ok(_) => (
                     true,

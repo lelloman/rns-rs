@@ -247,7 +247,7 @@ mod tests {
                 disable_auth: true,
                 daemon_mode: true,
             },
-            rnsd_rpc_addr: "127.0.0.1:37429".parse().unwrap(),
+            rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
         }
     }
 

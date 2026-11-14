@@ -145,7 +145,9 @@ instance_control_port = {rpc_port}
 fn wait_for_rpc(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        // Where the daemon serves RPC: its abstract socket on Linux.
+        let addr = rns_net::RpcAddr::local(format!("rnid-test-{port}"), port);
+        if addr.accepts_connections().is_ok() {
             return;
         }
         assert!(
