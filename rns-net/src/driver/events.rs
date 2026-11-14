@@ -158,6 +158,9 @@ impl Driver {
         if !entry.enabled || !entry.online {
             return;
         }
+        // The only place received traffic is counted. Only frames read from
+        // an interface arrive here: rns-rs keeps no packet cache to replay
+        // into inbound, which upstream d1837919 exempts from accounting.
         if let Some(entry) = self.interfaces.get_mut(&interface_id) {
             entry.stats.rxb += data.len() as u64;
             entry.stats.rx_packets += 1;
