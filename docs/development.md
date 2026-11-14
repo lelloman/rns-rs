@@ -74,7 +74,7 @@ shared instance and from a directly adjacent peer (issue #183, run with the
 daemon's transport both disabled and enabled), `rns-server`
 supervision, NAT traversal for Direct Link, and the privileged Linux `rntun`
 suite with real TUN devices. The shared-instance-links test also builds a
-Python image with `rns==1.5.7` from PyPI (override with `RNS_VERSION`), so it
+Python image with `rns==1.6.0` from PyPI (override with `RNS_VERSION`), so it
 needs network access on first run.
 
 The matrix runner prints the wall time of every round in its summary. Rounds

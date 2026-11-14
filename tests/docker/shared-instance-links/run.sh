@@ -58,7 +58,7 @@ fi
 
 # The Python Reticulum image is always built: SKIP_BUILD only refers to
 # rns-test. Docker layer caching makes this cheap after the first run.
-echo "=== Building Python Reticulum image (rns==${RNS_VERSION:-1.5.7}) ==="
+echo "=== Building Python Reticulum image (rns==${RNS_VERSION:-1.6.0}) ==="
 docker compose -f "$COMPOSE_FILE" build
 
 # ── Set up results file ─────────────────────────────────────────────────────
