@@ -1603,7 +1603,22 @@ impl Driver {
                         },
                     );
                 }
+                Event::RegisterPathResponder {
+                    dest_hash,
+                    name_hash,
+                    identity_prv_key,
+                } => {
+                    self.path_responders.insert(
+                        dest_hash,
+                        SharedAnnounceRecord {
+                            name_hash,
+                            identity_prv_key,
+                            app_data: None,
+                        },
+                    );
+                }
                 Event::DeregisterDestination { dest_hash } => {
+                    self.path_responders.remove(&dest_hash);
                     self.decrypted_destinations.remove(&dest_hash);
                     self.engine.deregister_destination(&dest_hash);
                     self.local_destinations.remove(&dest_hash);
@@ -3027,11 +3042,12 @@ impl Driver {
             return self.build_shared_announce_raw(dest_hash, &record, true);
         }
 
-        // Known gap: the driver only holds announce keys for SINGLE
-        // destinations that were announced through the node API at least
-        // once (`shared_announces`). A destination that is registered but
-        // never announced cannot be answered here, whereas Python announces
-        // it on demand from the Destination object.
+        // Registered with its identity but never announced: announce it on
+        // demand, as upstream does from the Destination object.
+        if let Some(record) = self.path_responders.get(dest_hash).cloned() {
+            return self.build_shared_announce_raw(dest_hash, &record, true);
+        }
+
         log::debug!(
             "Cannot answer path request for local destination {:02x?}: no announce record",
             &dest_hash[..4],

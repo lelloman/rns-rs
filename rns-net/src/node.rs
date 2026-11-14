@@ -4400,6 +4400,23 @@ impl RnsNode {
         // Register with transport engine
         self.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())?;
 
+        // With its identity, a SINGLE IN destination can answer path
+        // requests before it announces, as upstream's destinations do.
+        if let (Some(identity_prv_key), rns_core::types::DestinationType::Single, true) = (
+            signing_key,
+            dest.dest_type,
+            dest.direction == rns_core::types::Direction::In,
+        ) {
+            let aspects: Vec<&str> = dest.aspects.iter().map(String::as_str).collect();
+            self.tx
+                .send(Event::RegisterPathResponder {
+                    dest_hash: dest.hash.0,
+                    name_hash: rns_core::destination::name_hash(&dest.app_name, &aspects),
+                    identity_prv_key,
+                })
+                .map_err(|_| SendError)?;
+        }
+
         // Register proof strategy if not ProveNone
         if dest.proof_strategy != rns_core::types::ProofStrategy::ProveNone {
             self.tx
