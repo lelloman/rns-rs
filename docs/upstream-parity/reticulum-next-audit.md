@@ -50,7 +50,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 5 | `01e7ed84433ee3e9a64643e40e892ccfcdb85243` | Refactored traffic accounting | Structurally covered | `every_received_frame_is_charged_once_to_received_or_filtered`; `record_filtered_inbound` doc |
 | 6 | `d183791956f807c92d5eb0a9f9bc9e12f9135cd1` | Refactored traffic accounting | Structurally covered | Single-counting-site invariant documented in `handle_classified_frame_event` |
 | 7 | `819076c3783565dc303abb2894c99e6ce6074342` | Track filtered announce count per interface | Integrated | `held_announces_limit_applies_only_while_ingress_limiting`, `announce_with_too_many_hops_to_hold_is_a_filtered_announce`, `blackholed_announce_is_a_filtered_announce`, `announce_over_a_full_hold_is_a_filtered_announce`, `announce_of_a_type_not_required_is_a_filtered_announce`, `filtered_announces_render_and_sort`; `afrxc` in RPC and `rnstatus` |
-| 8 | `daec67a116347b28e2268beb1d7b004f827eebb2` | Cleanup | Pending review | Changes `RNS/Transport.py` |
+| 8 | `daec67a116347b28e2268beb1d7b004f827eebb2` | Cleanup | Integrated | `waiting_local_path_request_skips_ingress_limiting`; pathing-level skip log in `hold_decision` |
 | 9 | `3281e283154af393ba1a521eaba4246a32d52f1f` | Added tunnel info to rnstatus | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 | 10 | `464e75986e06b4ad2050a5a4c572159ae2c2d647` | Added remote transport ID info to rnstatus | Pending review | Changes `RNS/Interfaces/BackboneInterface.py`, `RNS/Interfaces/I2PInterface.py`, `RNS/Interfaces/Interface.py`, `RNS/Interfaces/TCPInterface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 | 11 | `56b23c4810d477ed82daf06f2e34ac0a69d87bfc` | Typo | Pending review | Changes `RNS/Reticulum.py` |
@@ -131,13 +131,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 8. `daec67a1` — Cleanup
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** In `preprocess_inbound`'s ingress-limiting branch, the commented-out log for skipping the check, when the destination is in `path_requests` or `discovery_path_requests`, becomes a live `LOG_PATHING` line replacing `pass`. Behavior is unchanged; that skip predates this commit.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** Reviewing the branch exposed a pre-existing gap. rns-rs's `hold_decision` skipped ingress limiting only for `discovery_path_requests`, not for the local `path_requests` table (`record_outbound_path_request`, culled like upstream's). During a burst it therefore held a plain announce for a destination this node had asked for, where upstream processes it. Path responses (`CONTEXT_PATH_RESPONSE`) were already exempt.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Mapping commit adds the `path_requests` check and the pathing-level trace log in `hold_decision`, recording the closure of the gap here because it is the branch this commit touches. Regression `waiting_local_path_request_skips_ingress_limiting` fails without the check (the announce was held) and passes with it. The same burst still holds an unrequested announce. `cargo test -p rns-core` (882) and `-p rns-net --lib` pass; fmt and clippy clean.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 9. `3281e283` — Added tunnel info to rnstatus
 

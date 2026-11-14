@@ -6963,3 +6963,33 @@ fn blackholed_announce_is_a_filtered_announce() {
     assert!(!engine.has_path(&dest));
     assert_eq!(filtered_flags(&mut engine), (true, true));
 }
+
+#[test]
+fn waiting_local_path_request_skips_ingress_limiting() {
+    // Upstream skips the ingress limit check while a path request, local
+    // or for discovery, waits for the destination (logged since daec67a1).
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.started = 0.0;
+    engine.register_interface(inbound);
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let (requested, announce_requested) = signed_announce(0x55, "requested");
+    let (other, announce_other) = signed_announce(0x66, "other");
+
+    engine.record_outbound_path_request(requested, 9_999.0);
+    engine.handle_inbound(
+        InboundFrame::new(&announce_requested, InterfaceId(1), 10_000.0),
+        &mut rng,
+    );
+    assert!(engine.has_path(&requested));
+
+    // The same burst still holds an announce nobody asked for.
+    engine.handle_inbound(
+        InboundFrame::new(&announce_other, InterfaceId(1), 10_001.0),
+        &mut rng,
+    );
+    assert!(!engine.has_path(&other));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+}
