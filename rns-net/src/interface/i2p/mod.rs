@@ -148,7 +148,10 @@ fn peer_info(
         is_local_client: false,
         wants_tunnel: outbound,
         tunnel_id: None,
-        mtu: 65535,
+        // Upstream's I2PInterfacePeer HW_MTU, which the HDLC decoder also
+        // enforces: a larger one would let links negotiate packets that
+        // the receiving peer then drops as oversized frames.
+        mtu: HW_MTU as u32,
         ia_freq: 0.0,
         ip_freq: 0.0,
         op_freq: 0.0,
@@ -780,6 +783,11 @@ mod tests {
         // Upstream's initiating I2PInterfacePeer synthesizes a tunnel.
         let ic = rns_core::transport::types::IngressControlConfig::enabled();
         assert!(peer_info(InterfaceId(1), "peer.b32.i2p", ic, true).wants_tunnel);
+        assert_eq!(
+            peer_info(InterfaceId(1), "peer.b32.i2p", ic, true).mtu,
+            1064,
+            "upstream I2PInterfacePeer.HW_MTU, and what the decoder accepts"
+        );
         assert!(!peer_info(InterfaceId(2), "peer.b32.i2p", ic, false).wants_tunnel);
     }
 }
