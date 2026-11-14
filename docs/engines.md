@@ -122,8 +122,7 @@ The existing optional features map as follows:
 ## What is shared
 
 - `rns-crypto` is unchanged apart from additions: a batch Ed25519 verification
-  call for the parallel engine. The multi-lane SHA-256 kernels already help
-  both engines.
+  call for the parallel engine.
 - `rns-core` keeps all protocol logic. The parallel engine needs a few
   two-phase entry points (see [Two-phase steps](#two-phase-steps)); these are
   additions, and the compact engine keeps calling the existing one-step

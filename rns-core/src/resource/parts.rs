@@ -15,8 +15,7 @@ pub fn map_hash(part_data: &[u8], random_hash: &[u8]) -> [u8; RESOURCE_MAPHASH_L
 }
 
 /// The map hashes of `encrypted` cut into `sdu`-byte parts, with `data`
-/// absorbed into `data_state` alongside: each part's blocks are compressed
-/// together with as many of `data`'s.
+/// absorbed into `data_state` in the same pass.
 ///
 /// With `mac`, `encrypted` is a token whose last 32 bytes are its tag still
 /// to be written: the MAC takes every byte before them alongside, and the
@@ -29,7 +28,7 @@ pub(crate) fn map_hashes_with_data(
     data_state: &mut rns_crypto::sha256::Sha256,
     mac: Option<rns_crypto::hmac::HmacSha256>,
 ) -> Vec<[u8; RESOURCE_MAPHASH_LEN]> {
-    use rns_crypto::sha256::{update_pair, Sha256};
+    use rns_crypto::sha256::Sha256;
     let finish = |mut hasher: Sha256| {
         hasher.update(random_hash);
         let mut result = [0u8; RESOURCE_MAPHASH_LEN];
@@ -50,17 +49,21 @@ pub(crate) fn map_hashes_with_data(
         tagged_from = signed / sdu * sdu;
         for part in encrypted[..tagged_from].chunks(sdu) {
             let mut hasher = Sha256::new();
-            mac.update_tripled(part, &mut hasher, part, data_state, take(part.len()));
+            hasher.update(part);
+            mac.update(part);
+            data_state.update(take(part.len()));
             hashes.push(finish(hasher));
         }
         let unsigned = &encrypted[tagged_from..signed];
-        mac.update_paired(unsigned, data_state, take(unsigned.len()));
+        mac.update(unsigned);
+        data_state.update(take(unsigned.len()));
         let tag = mac.finalize();
         encrypted[signed..].copy_from_slice(&tag);
     }
     for part in encrypted[tagged_from..].chunks(sdu) {
         let mut hasher = Sha256::new();
-        update_pair(&mut hasher, part, data_state, take(part.len()));
+        hasher.update(part);
+        data_state.update(take(part.len()));
         hashes.push(finish(hasher));
     }
     let rest = take(usize::MAX);

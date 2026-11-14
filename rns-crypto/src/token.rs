@@ -377,8 +377,8 @@ impl TokenDecryptStream {
             Some((hash, hashed)) => {
                 // The last block may still lose its padding.
                 let settled = self.plaintext.len().saturating_sub(16).max(*hashed);
-                self.mac
-                    .update_paired(data, hash, &self.plaintext[*hashed..settled]);
+                self.mac.update(data);
+                hash.update(&self.plaintext[*hashed..settled]);
                 *hashed = settled;
             }
             None => self.mac.update(data),
