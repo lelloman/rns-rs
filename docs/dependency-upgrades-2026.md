@@ -288,3 +288,24 @@ series.
   exact `maybe-async-cfg` 0.2.4 pin behind newer registry releases.
   No manifest range, patch section, advisory ignore, or lockfile was changed to
   force them.
+
+## rns-crypto delegation (2026-11-14)
+
+`rns-crypto` no longer implements any primitive of its own:
+
+- HMAC-SHA256 is `hmac::Hmac<sha2::Sha256>`; tags are checked with
+  `Mac::verify_slice` (constant time). `hmac` moved from a dev dependency to a
+  runtime one.
+- HKDF is `hkdf::Hkdf<sha2::Sha256>` (new dependency, `hkdf` 0.13). The
+  reference's counter wrap past 255 blocks is kept as a fallback expansion
+  over the same pseudorandom key; vectors cover both sides of the limit.
+- The incremental `Sha256` wraps `sha2::Sha256` (no own block buffer or
+  padding).
+- Removed: the AES-NI CBC encryptor (`aes256_ni.rs`), the two/three-lane
+  SHA-256 compressor (`sha256_x2.rs`) and the paired/tripled update API built
+  on them, the unused `bigint.rs`, and the `cpufeatures` dependency.
+- `#![deny(unsafe_code)]`: the remaining `unsafe` is FFI only (getrandom(3),
+  `esp_fill_random`, the optional aws-lc backends), each site opting in.
+
+Cost, `crypto-v1/token-aes256` at 64 KiB on x86_64 (criterion, baseline vs
+after): encrypt 79.8 µs → 89.3 µs (+12%), decrypt 36.6 µs → 37.1 µs (+1%).

@@ -88,6 +88,7 @@ impl X25519PublicKey {
     feature = "x25519-aws-lc",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+#[allow(unsafe_code)] // aws-lc FFI
 mod aws_lc {
     use crate::aws_lc_init as init;
 

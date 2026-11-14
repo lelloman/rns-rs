@@ -1,7 +1,12 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::hmac::{hmac_sha256, HmacSha256};
+use ::hkdf::Hkdf;
+use sha2::Sha256;
+
+#[cfg(test)]
+use crate::hmac::hmac_sha256;
+use crate::hmac::HmacSha256;
 
 #[derive(Debug, PartialEq)]
 pub enum HkdfError {
@@ -18,56 +23,53 @@ impl fmt::Display for HkdfError {
     }
 }
 
-/// Custom HKDF implementation matching RNS/Cryptography/HKDF.py.
-/// WARNING: This is NOT RFC 5869. The counter wraps modulo 256.
+/// HKDF-SHA256 as RNS/Cryptography/HKDF.py computes it: RFC 5869 through the
+/// `hkdf` crate, with two reference quirks kept. An empty salt counts as no
+/// salt (32 zero bytes, which RFC 5869 also gives), and past RFC 5869's
+/// 255-block limit the block counter wraps modulo 256 instead of failing.
 pub fn hkdf(
     length: usize,
     derive_from: &[u8],
     salt: Option<&[u8]>,
     context: Option<&[u8]>,
 ) -> Result<Vec<u8>, HkdfError> {
-    let hash_len: usize = 32;
-
     if length < 1 {
         return Err(HkdfError::InvalidLength);
     }
-
     if derive_from.is_empty() {
         return Err(HkdfError::EmptyInput);
     }
-
-    let salt = match salt {
-        Some(s) if !s.is_empty() => s.to_vec(),
-        _ => alloc::vec![0u8; hash_len],
-    };
-
+    let salt = salt.filter(|salt| !salt.is_empty());
     let context = context.unwrap_or(b"");
 
-    // Extract
-    let prk = hmac_sha256(&salt, derive_from);
-
-    // Expand
-    let expansion_hmac = HmacSha256::new(&prk);
-    let mut block = [0u8; 32];
-    let mut has_block = false;
-    let mut derived = Vec::with_capacity(length);
-
-    let iterations = length.div_ceil(hash_len);
-    for i in 0..iterations {
-        let mut hmac = expansion_hmac.clone();
-        if has_block {
-            hmac.update(&block);
-        }
-        hmac.update(context);
-        hmac.update(&[((i + 1) % 256) as u8]);
-        block = hmac.finalize();
-        has_block = true;
-        derived.extend_from_slice(&block);
+    let (prk, expander) = Hkdf::<Sha256>::extract(salt, derive_from);
+    let mut derived = alloc::vec![0u8; length];
+    if length <= RFC5869_MAX_LENGTH {
+        expander
+            .expand(context, &mut derived)
+            .map_err(|_| HkdfError::InvalidLength)?;
+        return Ok(derived);
     }
 
-    derived.truncate(length);
+    // Beyond 255 blocks: the reference's counter wraps, so expand by hand
+    // over the same pseudorandom key.
+    let mut block: Option<[u8; HASH_LEN]> = None;
+    for (index, out) in derived.chunks_mut(HASH_LEN).enumerate() {
+        let mut mac = HmacSha256::new(&prk);
+        if let Some(previous) = &block {
+            mac.update(previous);
+        }
+        mac.update(context);
+        mac.update(&[((index + 1) % 256) as u8]);
+        let next = mac.finalize();
+        out.copy_from_slice(&next[..out.len()]);
+        block = Some(next);
+    }
     Ok(derived)
 }
+
+const HASH_LEN: usize = 32;
+const RFC5869_MAX_LENGTH: usize = 255 * HASH_LEN;
 
 // Cargo discovers this module through the crate test harness, so the HKDF
 // vectors run under `cargo test --workspace` without a manual runner registry.
@@ -106,11 +108,11 @@ mod tests {
     }
 
     #[test]
-    fn optimized_expansion_matches_reference_across_counter_wrap() {
+    fn expansion_matches_reference_across_rfc_limit_and_counter_wrap() {
         let ikm = b"deterministic input material";
         let salt = b"deterministic salt";
         let context = b"counter-wrap";
-        for length in [8191, 8192, 8193] {
+        for length in [1, 31, 32, 33, 8159, 8160, 8161, 8191, 8192, 8193] {
             assert_eq!(
                 hkdf(length, ikm, Some(salt), Some(context)).unwrap(),
                 reference_hkdf(length, ikm, salt, context)

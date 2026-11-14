@@ -36,6 +36,8 @@ sha2 = { version = "0.11", default-features = false }
 subtle = { version = "2", default-features = false }
 aes = { version = "0.9", default-features = false }
 cbc = { version = "0.2", default-features = false, features = ["alloc", "block-padding"] }
+hmac = { version = "0.13", default-features = false }
+hkdf = { version = "0.13", default-features = false }
 
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 
@@ -46,7 +48,6 @@ zeroize = { version = "1", default-features = false, features = ["alloc"] }
 aws-lc-sys = { version = "0.47", optional = true }
 
 [dev-dependencies]
-hmac = { version = "0.13", default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
 
@@ -58,8 +59,6 @@ harness = false
 name = "ratchets"
 harness = false
 
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-cpufeatures = { version = "0.3", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2", default-features = false }

@@ -71,6 +71,7 @@ impl Ed25519PrivateKey {
         feature = "ed25519-aws-lc",
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
+    #[allow(unsafe_code)] // aws-lc FFI
     fn sign_aws_lc(&self, message: &[u8]) -> Option<[u8; 64]> {
         crate::aws_lc_init();
         // aws-lc's private key form: the seed, then the public key.

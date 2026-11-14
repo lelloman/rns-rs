@@ -1,10 +1,12 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+// Cryptographic logic lives in the RustCrypto/dalek crates. `unsafe` is
+// allowed only at FFI boundaries (OS randomness, the optional aws-lc
+// backends), each site opting in with `#[allow(unsafe_code)]`.
+#![deny(unsafe_code)]
 extern crate alloc;
 
 pub mod aes128;
 pub mod aes256;
-#[cfg(target_arch = "x86_64")]
-mod aes256_ni;
 pub mod ed25519;
 pub mod hkdf;
 pub mod hmac;
@@ -12,8 +14,6 @@ pub mod identity;
 pub mod pkcs7;
 pub mod ratchet;
 pub mod sha256;
-#[cfg(target_arch = "x86_64")]
-mod sha256_x2;
 pub mod sha512;
 pub mod stamp_value;
 pub mod token;
@@ -56,6 +56,7 @@ impl Rng for FixedRng {
 pub struct OsRng;
 
 #[cfg(feature = "std")]
+#[allow(unsafe_code)] // getrandom(3) / esp_fill_random FFI
 impl Rng for OsRng {
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         // ESP-IDF: use hardware RNG via esp_fill_random
@@ -143,6 +144,7 @@ mod tests {
     any(feature = "x25519-aws-lc", feature = "ed25519-aws-lc"),
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+#[allow(unsafe_code)] // aws-lc FFI
 pub(crate) fn aws_lc_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
     // SAFETY: takes no arguments; sets up aws-lc's CPU feature detection.
