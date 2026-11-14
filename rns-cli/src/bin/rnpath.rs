@@ -8,7 +8,10 @@ use std::process;
 use std::time::Duration;
 
 use rns_cli::args::{Args, Opt, OptionSpec};
-use rns_cli::format::{prettycost, prettyfrequency, prettyhexrep, prettytime};
+use rns_cli::format::{
+    prettycost, prettyhexrep, python_float, python_json, upstream_prettytime,
+    upstream_prettytime_compact,
+};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
@@ -137,6 +140,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             remote_timeout,
             show_table,
             show_usage,
+            json_output,
             show_rates,
             remote_blackholed,
             max_hops,
@@ -211,9 +215,11 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     } else if let Some(hash_str) = unblackhole_hash {
         do_unblackhole(&mut client, &hash_str);
     } else if show_table {
-        show_path_table(&mut client, json_output, max_hops, show_usage);
+        let destination = destination_filter(destination.as_deref());
+        show_path_table(&mut client, json_output, max_hops, show_usage, destination);
     } else if show_rates {
-        show_rate_table(&mut client, json_output);
+        let destination = destination_filter(destination.as_deref());
+        show_rate_table(&mut client, json_output, destination);
     } else if drop_queues {
         drop_announce_queues(&mut client);
     } else if let Some(hash_str) = drop_hash {
@@ -254,11 +260,89 @@ fn parse_hex_hash(s: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// `RNS.prettyhexrep`: the hash in hex, between angle brackets.
+fn pretty(hash: &[u8]) -> String {
+    format!("<{}>", prettyhexrep(hash))
+}
+
+/// upstream's destination argument check, with its messages.
+fn parse_destination(hash_str: &str) -> Result<[u8; 16], &'static str> {
+    if hash_str.chars().count() != 32 {
+        return Err("Destination length is invalid, must be 32 hexadecimal characters (16 bytes).");
+    }
+    let bytes = parse_hex_hash(hash_str).ok_or("Invalid destination entered. Check your input.")?;
+    let mut hash = [0u8; 16];
+    hash.copy_from_slice(&bytes);
+    Ok(hash)
+}
+
+/// The destination argument of a table view, or upstream's message and
+/// exit.
+fn destination_filter(destination: Option<&str>) -> Option<[u8; 16]> {
+    destination.map(|hash_str| {
+        parse_destination(hash_str).unwrap_or_else(|message| {
+            println!("{message}");
+            process::exit(1);
+        })
+    })
+}
+
+/// A Python number (bools are ints there).
+fn number(value: &PickleValue) -> Option<f64> {
+    match value {
+        PickleValue::Float(f) => Some(*f),
+        PickleValue::Int(i) => Some(*i as f64),
+        PickleValue::Bool(b) => Some(*b as u8 as f64),
+        _ => None,
+    }
+}
+
+/// Python truthiness of a table value.
+fn truthy(value: &PickleValue) -> bool {
+    match value {
+        PickleValue::None => false,
+        PickleValue::Bool(b) => *b,
+        PickleValue::Int(i) => *i != 0,
+        PickleValue::Float(f) => *f != 0.0,
+        PickleValue::String(s) => !s.is_empty(),
+        PickleValue::Bytes(b) => !b.is_empty(),
+        PickleValue::List(l) => !l.is_empty(),
+        PickleValue::Dict(d) => !d.is_empty(),
+    }
+}
+
+/// Python's `str()` of a table value, for the interface name.
+fn python_str(value: Option<&PickleValue>) -> String {
+    match value {
+        Some(PickleValue::String(s)) => s.clone(),
+        Some(PickleValue::Int(i)) => i.to_string(),
+        Some(PickleValue::Float(f)) => python_float(*f),
+        _ => "None".into(),
+    }
+}
+
+/// What `rnpath -t` and `-r` print, and the exit status upstream ends with.
+struct Rendered {
+    text: String,
+    status: i32,
+}
+
+impl Rendered {
+    fn print_and_exit(self) {
+        print!("{}", self.text);
+        let _ = std::io::stdout().flush();
+        if self.status != 0 {
+            process::exit(self.status);
+        }
+    }
+}
+
 fn show_path_table(
     client: &mut RpcClient,
-    _json_output: bool,
+    json_output: bool,
     max_hops: Option<u8>,
     show_usage: bool,
+    destination: Option<[u8; 16]>,
 ) {
     let max_hops_val = match max_hops {
         Some(h) => PickleValue::Int(h as i64),
@@ -279,118 +363,137 @@ fn show_path_table(
         }
     };
 
-    render_path_table(&response, show_usage);
-}
-
-/// When a path was last used. Python daemons send the integer 0 for a
-/// path never used and a float time once it has been; rns-rs sends floats.
-fn path_used(entry: &PickleValue) -> Option<f64> {
-    match entry.get("used")? {
-        PickleValue::Float(used) => Some(*used),
-        PickleValue::Int(used) => Some(*used as f64),
-        _ => None,
-    }
-}
-
-/// The `-u` suffix of a path table line, as upstream's rnpath prints it
-/// since rgit `db67adea`.
-fn usage_suffix(entry: &PickleValue, show_usage: bool, now: f64) -> String {
-    if !show_usage {
-        return String::new();
-    }
-    match path_used(entry) {
-        Some(used) if used > 0.0 => {
-            format!(", last used {} ago", prettytime((now - used).max(0.0)))
-        }
-        Some(_) => ", never used".into(),
-        None => ", no usage info".into(),
-    }
-}
-
-fn render_path_table(response: &PickleValue, show_usage: bool) {
-    if let Some(entries) = response.as_list() {
-        if entries.is_empty() {
-            println!("Path table is empty");
-            return;
-        }
-        println!(
-            "{:<34} {:>6} {:<34} {:<10} Interface",
-            "Destination", "Hops", "Via", "Expires"
-        );
-        println!("{}", "-".repeat(100));
-        let mut entries: Vec<&PickleValue> = entries.iter().collect();
-        if show_usage {
-            entries.sort_by(|a, b| {
-                let used_a = path_used(a).unwrap_or(0.0);
-                let used_b = path_used(b).unwrap_or(0.0);
-                used_b
-                    .partial_cmp(&used_a)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-        for entry in entries {
-            let hash = entry
-                .get("hash")
-                .and_then(|v| v.as_bytes())
-                .map(prettyhexrep)
-                .unwrap_or_default();
-            let hops = entry.get("hops").and_then(|v| v.as_int()).unwrap_or(0);
-            let via = entry
-                .get("via")
-                .and_then(|v| v.as_bytes())
-                .map(prettyhexrep)
-                .unwrap_or_default();
-            let expires = entry
-                .get("expires")
-                .and_then(|v| v.as_float())
-                .map(|e| {
-                    let remaining = e - rns_net::time::now();
-                    if remaining > 0.0 {
-                        prettytime(remaining)
-                    } else {
-                        "expired".into()
-                    }
-                })
-                .unwrap_or_default();
-            let interface = entry
-                .get("interface")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            let usage = usage_suffix(entry, show_usage, rns_net::time::now());
-            println!(
-                "{:<34} {:>6} {:<34} {:<10} {} {}{}",
-                &hash[..hash.len().min(32)],
-                hops,
-                &via[..via.len().min(32)],
-                expires,
-                interface,
-                path_costs(entry),
-                usage,
-            );
-        }
-    } else {
+    if response.as_list().is_none() {
         eprintln!("Unexpected response format");
+        process::exit(1);
     }
+    let view = TableView {
+        destination,
+        json: json_output,
+        usage: show_usage,
+        sort: true,
+    };
+    render_path_table(&response, &view, rns_net::time::now()).print_and_exit();
+}
+
+/// What a table view shows, as upstream's options choose it.
+struct TableView {
+    /// Only this destination's entry (`rnpath -t <hash>`).
+    destination: Option<[u8; 16]>,
+    json: bool,
+    /// `-u`: last use, most recent first.
+    usage: bool,
+    /// upstream sorts a local path table by interface and hops; a remote
+    /// one is shown as it arrives.
+    sort: bool,
+}
+
+/// upstream's `rnpath -t`: one line per path, sorted by interface and hops
+/// (`<hash>   1h via <hash> on <interface> expires in 6d and 23h
+/// (dv:n/lc:n)`), or the table in JSON with `-j`. An empty table prints
+/// nothing.
+fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rendered {
+    let Some(entries) = response.as_list() else {
+        return Rendered {
+            text: String::new(),
+            status: 0,
+        };
+    };
+    let mut table: Vec<&PickleValue> = entries.iter().collect();
+    if view.sort {
+        table.sort_by(|a, b| {
+            let key = |e: &PickleValue| {
+                (
+                    python_str(e.get("interface")),
+                    e.get("hops").and_then(number).unwrap_or(0.0),
+                )
+            };
+            let (a, b) = (key(a), key(b));
+            a.0.cmp(&b.0)
+                .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        });
+    }
+
+    if view.json {
+        let table = PickleValue::List(table.into_iter().cloned().collect());
+        return Rendered {
+            text: format!("{}\n", python_json(&table)),
+            status: 0,
+        };
+    }
+
+    // upstream sorts by last use when every entry has one it can compare.
+    if view.usage
+        && table
+            .iter()
+            .all(|e| e.get("used").and_then(number).is_some())
+    {
+        table.sort_by(|a, b| {
+            let used = |e: &PickleValue| e.get("used").and_then(number).unwrap_or(0.0);
+            used(b)
+                .partial_cmp(&used(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    let mut text = String::new();
+    let mut displayed = 0;
+    for path in table {
+        let hash = path.get("hash").and_then(|v| v.as_bytes()).unwrap_or(&[]);
+        if view.destination.is_some_and(|d| d.as_slice() != hash) {
+            continue;
+        }
+        displayed += 1;
+        let hops = match path.get("hops") {
+            Some(PickleValue::Int(hops)) => hops.to_string(),
+            other => python_str(other),
+        };
+        let via = path.get("via").and_then(|v| v.as_bytes()).unwrap_or(&[]);
+        let expires = path.get("expires").and_then(number).unwrap_or(0.0);
+        let usage = match path.get("used") {
+            None => ", no usage info".to_string(),
+            Some(used) if view.usage && truthy(used) => format!(
+                ", last used {} ago",
+                upstream_prettytime(now - number(used).unwrap_or(0.0))
+            ),
+            Some(_) if view.usage => ", never used".to_string(),
+            Some(_) => String::new(),
+        };
+        text.push_str(&format!(
+            "{} {hops:>3}h via {} on {} expires in {} {}{usage}\n",
+            pretty(hash),
+            pretty(via),
+            python_str(path.get("interface")),
+            upstream_prettytime_compact(expires - now),
+            path_costs(path),
+        ));
+    }
+
+    if view.destination.is_some() && displayed == 0 {
+        text.push_str("No path known\n");
+        return Rendered { text, status: 1 };
+    }
+    Rendered { text, status: 0 }
 }
 
 /// The destination's stamp value and link request cost, in upstream's
 /// `rnpath` notation since rgit `21170877` (`(dv:25.000/lc:19.199)`), with
 /// `n` for what the daemon does not know or does not report.
 fn path_costs(entry: &PickleValue) -> String {
-    let number = |key: &str| {
-        entry
-            .get(key)
-            .and_then(|v| v.as_float().or_else(|| v.as_int().map(|v| v as f64)))
+    // Python's prettycost takes ints and floats, not bools.
+    let cost = |key: &str| match entry.get(key) {
+        Some(PickleValue::Float(f)) => Some(*f),
+        Some(PickleValue::Int(i)) => Some(*i as f64),
+        _ => None,
     };
     format!(
         "(dv:{}/lc:{})",
-        prettycost(number("value")),
-        prettycost(number("lr_cost"))
+        prettycost(cost("value")),
+        prettycost(cost("lr_cost"))
     )
 }
 
-fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
+fn show_rate_table(client: &mut RpcClient, json_output: bool, destination: Option<[u8; 16]>) {
     let response = match client.call(&PickleValue::Dict(vec![(
         PickleValue::String("get".into()),
         PickleValue::String("rate_table".into()),
@@ -402,100 +505,132 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
         }
     };
 
-    render_rate_table(&response);
+    let view = TableView {
+        destination,
+        json: json_output,
+        usage: false,
+        sort: true,
+    };
+    render_rate_table(&response, &view, rns_net::time::now()).print_and_exit();
 }
 
-fn render_rate_table(response: &PickleValue) {
-    if let Some(entries) = response.as_list() {
-        if entries.is_empty() {
-            println!("Rate table is empty");
-            return;
-        }
-        println!(
-            "{:<34} {:>12} {:>12} {:>16}",
-            "Destination", "Violations", "Frequency", "Blocked Until"
-        );
-        println!("{}", "-".repeat(78));
-        for entry in entries {
-            let hash = entry
-                .get("hash")
-                .and_then(|v| v.as_bytes())
-                .map(prettyhexrep)
-                .unwrap_or_default();
-            let violations = entry
-                .get("rate_violations")
-                .and_then(|v| v.as_int())
-                .unwrap_or(0);
-            let blocked = entry
-                .get("blocked_until")
-                .and_then(|v| v.as_float())
-                .map(|b| {
-                    let remaining = b - rns_net::time::now();
-                    if remaining > 0.0 {
-                        pretty_date_elapsed(remaining as u64)
-                    } else {
-                        "not blocked".into()
-                    }
-                })
-                .unwrap_or_default();
+/// upstream's `rnpath -r`: by time last heard, `<hash> last heard 5
+/// minutes ago, 2 announces/hour in the last 3 hours`, with any active
+/// rate violations and blocking, or the table in JSON with `-j`.
+fn render_rate_table(response: &PickleValue, view: &TableView, now: f64) -> Rendered {
+    let mut table: Vec<&PickleValue> = response
+        .as_list()
+        .map(|entries| entries.iter().collect())
+        .unwrap_or_default();
+    table.sort_by(|a, b| {
+        let last = |e: &PickleValue| e.get("last").and_then(number).unwrap_or(0.0);
+        last(a)
+            .partial_cmp(&last(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-            // Compute hourly frequency from timestamps
-            let freq_str =
-                if let Some(timestamps) = entry.get("timestamps").and_then(|v| v.as_list()) {
-                    let ts: Vec<f64> = timestamps.iter().filter_map(|v| v.as_float()).collect();
-                    if ts.len() >= 2 {
-                        let span = ts[ts.len() - 1] - ts[0];
-                        if span > 0.0 {
-                            let freq_per_sec = (ts.len() - 1) as f64 / span;
-                            prettyfrequency(freq_per_sec)
-                        } else {
-                            "none".into()
-                        }
-                    } else {
-                        "none".into()
-                    }
-                } else {
-                    "none".into()
-                };
-
-            println!(
-                "{:<34} {:>12} {:>12} {:>16}",
-                &hash[..hash.len().min(32)],
-                violations,
-                freq_str,
-                blocked,
-            );
-        }
+    if view.json {
+        let table = PickleValue::List(table.into_iter().cloned().collect());
+        return Rendered {
+            text: format!("{}\n", python_json(&table)),
+            status: 0,
+        };
     }
+    if table.is_empty() {
+        return Rendered {
+            text: "No information available\n".into(),
+            status: 0,
+        };
+    }
+
+    let mut text = String::new();
+    let mut displayed = 0;
+    for entry in table {
+        let hash = entry.get("hash").and_then(|v| v.as_bytes()).unwrap_or(&[]);
+        if view.destination.is_some_and(|d| d.as_slice() != hash) {
+            continue;
+        }
+        displayed += 1;
+        let timestamps: Vec<f64> = entry
+            .get("timestamps")
+            .and_then(|v| v.as_list())
+            .map(|ts| ts.iter().filter_map(number).collect())
+            .unwrap_or_default();
+        let Some(&start) = timestamps.first() else {
+            // upstream's handler for the IndexError of an empty list.
+            text.push_str(&format!(
+                "Error while processing entry for {}\nlist index out of range\n",
+                pretty(hash)
+            ));
+            continue;
+        };
+        let last = entry.get("last").and_then(number).unwrap_or(0.0);
+        let last_str = pretty_date(now - last.trunc());
+        let span_hours = (now - start).max(3600.0) / 3600.0;
+        let span_str = pretty_date(now - start.trunc());
+        let rate: f64 = format!("{:.3}", timestamps.len() as f64 / span_hours)
+            .parse()
+            .unwrap_or(0.0);
+        let rate = if rate.fract() == 0.0 {
+            format!("{}", rate as i64)
+        } else {
+            python_float(rate)
+        };
+        let violations = entry.get("rate_violations").and_then(number).unwrap_or(0.0) as i64;
+        let violations = match violations {
+            v if v > 1 => format!(", {v} active rate violations"),
+            1 => ", 1 active rate violation".to_string(),
+            _ => String::new(),
+        };
+        let blocked_until = entry.get("blocked_until").and_then(number).unwrap_or(0.0);
+        let blocked = if blocked_until > now {
+            // upstream: pretty_date(int(now - (int(blocked_until) - now))),
+            // the time left until announces are allowed again.
+            let since = now - (blocked_until.trunc() - now);
+            format!(
+                ", new announces allowed in {}",
+                pretty_date(now - since.trunc())
+            )
+        } else {
+            String::new()
+        };
+        text.push_str(&format!(
+            "{} last heard {last_str} ago, {rate} announces/hour in the last {span_str}{violations}{blocked}\n",
+            pretty(hash)
+        ));
+    }
+
+    if view.destination.is_some() && displayed == 0 {
+        text.push_str("No information available\n");
+        return Rendered { text, status: 1 };
+    }
+    Rendered { text, status: 0 }
 }
 
-fn pretty_date_elapsed(seconds: u64) -> String {
-    let days = seconds / 86_400;
+/// upstream rnpath's `pretty_date`, given how long ago the (whole second)
+/// time was: `5 seconds`, `1 minute`, `3 hours`, `2 days`; nothing for a
+/// time in the future.
+fn pretty_date(elapsed: f64) -> String {
+    let days = (elapsed / 86_400.0).floor() as i64;
+    let seconds = (elapsed - days as f64 * 86_400.0).floor() as i64;
+    if days < 0 {
+        return String::new();
+    }
     if days == 0 {
-        if seconds < 60 {
-            return format!("{} seconds", seconds);
-        }
-        if seconds < 70 {
-            return "1 minute".into();
-        }
-        if seconds < 7200 {
-            return format!("{} minutes", seconds / 60);
-        }
-        return format!("{} hours", seconds / 3600);
+        return match seconds {
+            s if s < 60 => format!("{s} seconds"),
+            s if s < 70 => "1 minute".into(),
+            s if s < 7200 => format!("{} minutes", s / 60),
+            s => format!("{} hours", s / 3600),
+        };
     }
-    if days == 1 {
-        return "1 day".into();
+    match days {
+        1 => "1 day".into(),
+        d if d < 7 => format!("{d} days"),
+        d if d < 31 => format!("{} weeks", d / 7),
+        d if d < 365 => format!("{} months", d / 30),
+        d => format!("{} years", d / 365),
     }
-    if days < 7 {
-        return format!("{} days", days);
-    }
-    if days < 31 {
-        return format!("{} weeks", days / 7);
-    }
-    if days < 365 {
-        return format!("{} months", days / 30);
-    }
-    format!("{} years", days / 365)
 }
 
 fn show_blackholed_list(client: &mut RpcClient, local_identity: &[u8; 16]) {
@@ -579,7 +714,7 @@ fn render_blackholed_list(response: &PickleValue, local_identity: Option<&[u8; 1
     let now = rns_net::time::now();
     for line in lines {
         let until = match line.until {
-            Some(until) => format!("for {}", prettytime((until - now).max(0.0))),
+            Some(until) => format!("for {}", upstream_prettytime((until - now).max(0.0))),
             None => "indefinitely".into(),
         };
         let reason = match line.reason {
@@ -599,12 +734,12 @@ fn render_blackholed_list(response: &PickleValue, local_identity: Option<&[u8; 1
         };
         let by = match (&line.source, local_identity) {
             (Some(source), Some(local)) if source.as_slice() == local.as_slice() => String::new(),
-            (Some(source), _) => format!(" by {}", prettyhexrep(source)),
+            (Some(source), _) => format!(" by {}", pretty(source)),
             (None, _) => String::new(),
         };
         println!(
             "{} blackholed {until}{reason}{by}",
-            prettyhexrep(&line.identity_hash)
+            pretty(&line.identity_hash)
         );
     }
 }
@@ -798,17 +933,10 @@ fn lookup_path(connect: &dyn Fn() -> RpcClient, hash_str: &str, timeout: f64) {
 }
 
 fn drop_path(client: &mut RpcClient, hash_str: &str) {
-    let hash_bytes = match parse_hex_hash(hash_str) {
-        Some(b) if b.len() >= 16 => b,
-        _ => {
-            eprintln!("Invalid destination hash: {}", hash_str);
-            process::exit(1);
-        }
-    };
-
-    let mut dest_hash = [0u8; 16];
-    dest_hash.copy_from_slice(&hash_bytes[..16]);
-
+    let dest_hash = parse_destination(hash_str).unwrap_or_else(|message| {
+        println!("{message}");
+        process::exit(1);
+    });
     let response = match client.call(&PickleValue::Dict(vec![
         (
             PickleValue::String("drop".into()),
@@ -826,25 +954,22 @@ fn drop_path(client: &mut RpcClient, hash_str: &str) {
         }
     };
 
-    if response.as_bool() == Some(true) {
-        println!("Dropped path for {}", prettyhexrep(&dest_hash));
+    if truthy(&response) {
+        println!("Dropped path to {}", pretty(&dest_hash));
     } else {
-        println!("No path found for {}", prettyhexrep(&dest_hash));
+        println!(
+            "Unable to drop path to {}. Does it exist?",
+            pretty(&dest_hash)
+        );
+        process::exit(1);
     }
 }
 
 fn drop_all_via(client: &mut RpcClient, hash_str: &str) {
-    let hash_bytes = match parse_hex_hash(hash_str) {
-        Some(b) if b.len() >= 16 => b,
-        _ => {
-            eprintln!("Invalid transport hash: {}", hash_str);
-            process::exit(1);
-        }
-    };
-
-    let mut transport_hash = [0u8; 16];
-    transport_hash.copy_from_slice(&hash_bytes[..16]);
-
+    let transport_hash = parse_destination(hash_str).unwrap_or_else(|message| {
+        println!("{message}");
+        process::exit(1);
+    });
     let response = match client.call(&PickleValue::Dict(vec![
         (
             PickleValue::String("drop".into()),
@@ -862,21 +987,26 @@ fn drop_all_via(client: &mut RpcClient, hash_str: &str) {
         }
     };
 
-    if let Some(n) = response.as_int() {
-        println!("Dropped {} paths via {}", n, prettyhexrep(&transport_hash));
+    // upstream reports the number of paths dropped only as success.
+    if truthy(&response) {
+        println!("Dropped all paths via {}", pretty(&transport_hash));
+    } else {
+        println!(
+            "Unable to drop paths via {}. Does the transport instance exist?",
+            pretty(&transport_hash)
+        );
+        process::exit(1);
     }
 }
 
 fn drop_announce_queues(client: &mut RpcClient) {
-    match client.call(&PickleValue::Dict(vec![(
+    println!("Dropping announce queues on all interfaces...");
+    if let Err(e) = client.call(&PickleValue::Dict(vec![(
         PickleValue::String("drop".into()),
         PickleValue::String("announce_queues".into()),
     )])) {
-        Ok(_) => println!("Announce queues dropped"),
-        Err(e) => {
-            eprintln!("RPC error: {}", e);
-            process::exit(1);
-        }
+        eprintln!("RPC error: {}", e);
+        process::exit(1);
     }
 }
 
@@ -888,6 +1018,7 @@ fn remote_path(
     remote_timeout: f64,
     show_table: bool,
     show_usage: bool,
+    json_output: bool,
     show_rates: bool,
     remote_blackholed: bool,
     max_hops: Option<u8>,
@@ -950,6 +1081,12 @@ fn remote_path(
         }
     };
 
+    let remote_view = TableView {
+        destination: destination_filter,
+        json: json_output,
+        usage: show_usage,
+        sort: false,
+    };
     let result = if show_rates {
         client.rate_table(transport_hash, destination_filter)
     } else if remote_blackholed {
@@ -962,9 +1099,13 @@ fn remote_path(
     };
 
     match result {
-        Ok(response) if show_rates => render_rate_table(&response),
+        Ok(response) if show_rates => {
+            render_rate_table(&response, &remote_view, rns_net::time::now()).print_and_exit()
+        }
         Ok(response) if remote_blackholed => render_blackholed_list(&response, None),
-        Ok(response) => render_path_table(&response, show_usage),
+        Ok(response) => {
+            render_path_table(&response, &remote_view, rns_net::time::now()).print_and_exit()
+        }
         Err(e) => {
             eprintln!("Remote path error: {e}");
             process::exit(1);
@@ -1084,64 +1225,247 @@ mod tests {
         assert_eq!(flag_target(&control, "d").as_deref(), Some(HASH));
     }
 
-    fn path_entry(used: Option<PickleValue>) -> PickleValue {
-        let mut items = vec![(
-            PickleValue::String("hash".into()),
-            PickleValue::Bytes(vec![0x11; 16]),
-        )];
+    const PLAIN: &str = concat!(
+        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
+        "\n",
+        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
+        "\n",
+        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n)"#,
+        "\n",
+        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
+        "\n",
+    );
+    const USAGE: &str = concat!(
+        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000), last used 1.0s ago"#,
+        "\n",
+        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n), last used 1m and 5.5s ago"#,
+        "\n",
+        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n), last used 2h ago"#,
+        "\n",
+        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199), never used"#,
+        "\n",
+    );
+    const NO_USED: &str = concat!(
+        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
+        "\n",
+        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
+        "\n",
+        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n), no usage info"#,
+        "\n",
+        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
+        "\n",
+    );
+    const JSON: &str = r#"[{"hash": "22222222222222222222222222222222", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 3, "expires": 1763103662.15, "value": 25.0, "used": 0, "lr_cost": 19.19921875, "interface": "AutoInterface[Local]"}, {"hash": "44444444444444444444444444444444", "timestamp": 1763099900.25, "via": "cccccccccccccccccccccccccccccccc", "hops": 12, "expires": 1763186400.25, "value": null, "used": 1763099999.25, "lr_cost": 7, "interface": "AutoInterface[Local]"}, {"hash": "11111111111111111111111111111111", "timestamp": 1763099900.25, "via": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hops": 1, "expires": 1763704700.75, "value": null, "used": 1763099934.75, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]"}, {"hash": "33333333333333333333333333333333", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 2, "expires": 1763099970.25, "value": 0.0, "used": 1763092800.25, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]"}]"#;
+    const RATES: &str = concat!(
+        r#"<77777777777777777777777777777777> last heard 1 day ago, 0.028 announces/hour in the last 3 days, 1 active rate violation"#,
+        "\n",
+        r#"<66666666666666666666666666666666> last heard 6 minutes ago, 3 announces/hour in the last 15 minutes, 2 active rate violations, new announces allowed in 66 minutes"#,
+        "\n",
+        r#"<55555555555555555555555555555555> last heard 31 seconds ago, 1.44 announces/hour in the last 83 minutes"#,
+        "\n",
+        r#"<88888888888888888888888888888888> last heard 10 seconds ago, 7 announces/hour in the last 10 seconds"#,
+        "\n",
+    );
+    const RATES_JSON: &str = r#"[{"hash": "77777777777777777777777777777777", "last": 1763010000.25, "rate_violations": 1, "blocked_until": 1763099995.25, "timestamps": [1762840800.75, 1763010000.25]}, {"hash": "66666666666666666666666666666666", "last": 1763099600.25, "rate_violations": 2, "blocked_until": 1763104000.65, "timestamps": [1763099100.25, 1763099400.25, 1763099600.25]}, {"hash": "55555555555555555555555555555555", "last": 1763099969.55, "rate_violations": 0, "blocked_until": 0, "timestamps": [1763094999.95, 1763099969.55]}, {"hash": "88888888888888888888888888888888", "last": 1763099990.25, "rate_violations": 0, "blocked_until": 0, "timestamps": [1763099990.25, 1763099990.25, 1763099990.25, 1763099990.25, 1763099990.25, 1763099990.25, 1763099990.25]}]"#;
+
+    const NOW: f64 = 1763100000.25;
+
+    fn dict(items: Vec<(&str, PickleValue)>) -> PickleValue {
+        PickleValue::Dict(
+            items
+                .into_iter()
+                .map(|(k, v)| (PickleValue::String(k.into()), v))
+                .collect(),
+        )
+    }
+
+    /// A path table entry as upstream's get_path_table builds it.
+    #[allow(clippy::too_many_arguments)]
+    fn path(
+        byte: u8,
+        via: u8,
+        hops: i64,
+        expires: f64,
+        value: PickleValue,
+        used: Option<PickleValue>,
+        lr_cost: PickleValue,
+        interface: &str,
+    ) -> PickleValue {
+        let mut items = vec![
+            ("hash", PickleValue::Bytes(vec![byte; 16])),
+            ("timestamp", PickleValue::Float(NOW - 100.0)),
+            ("via", PickleValue::Bytes(vec![via; 16])),
+            ("hops", PickleValue::Int(hops)),
+            ("expires", PickleValue::Float(NOW + expires)),
+            ("value", value),
+        ];
         if let Some(used) = used {
-            items.push((PickleValue::String("used".into()), used));
+            items.push(("used", used));
         }
-        PickleValue::Dict(items)
+        items.push(("lr_cost", lr_cost));
+        items.push(("interface", PickleValue::String(interface.into())));
+        dict(items)
     }
 
-    #[test]
-    fn usage_suffix_reads_python_and_rust_used_values() {
-        let now = 10_000.0;
-        // A Python daemon's never-used path is the integer 0.
-        assert_eq!(
-            usage_suffix(&path_entry(Some(PickleValue::Int(0))), true, now),
-            ", never used"
-        );
-        assert_eq!(
-            usage_suffix(&path_entry(Some(PickleValue::Float(0.0))), true, now),
-            ", never used"
-        );
-        assert_eq!(
-            usage_suffix(
-                &path_entry(Some(PickleValue::Float(now - 120.0))),
-                true,
-                now
+    fn path_table(first_used: bool) -> PickleValue {
+        let tcp = "TCPInterface[B/127.0.0.1:4242]";
+        let auto = "AutoInterface[Local]";
+        PickleValue::List(vec![
+            path(
+                0x11,
+                0xaa,
+                1,
+                604700.5,
+                PickleValue::None,
+                first_used.then_some(PickleValue::Float(NOW - 65.5)),
+                PickleValue::None,
+                tcp,
             ),
-            format!(", last used {} ago", prettytime(120.0))
-        );
+            path(
+                0x22,
+                0xbb,
+                3,
+                3661.9,
+                PickleValue::Float(25.0),
+                Some(PickleValue::Int(0)),
+                PickleValue::Float(4915.0 / 256.0),
+                auto,
+            ),
+            path(
+                0x33,
+                0xbb,
+                2,
+                -30.0,
+                PickleValue::Float(0.0),
+                Some(PickleValue::Float(NOW - 7200.0)),
+                PickleValue::None,
+                tcp,
+            ),
+            path(
+                0x44,
+                0xcc,
+                12,
+                86400.0,
+                PickleValue::None,
+                Some(PickleValue::Float(NOW - 1.0)),
+                PickleValue::Int(7),
+                auto,
+            ),
+        ])
+    }
+
+    fn view(destination: Option<u8>, json: bool, usage: bool) -> TableView {
+        TableView {
+            destination: destination.map(|b| [b; 16]),
+            json,
+            usage,
+            sort: true,
+        }
+    }
+
+    // The expected texts are what upstream rnpath 1.6.0 prints for the same
+    // tables: its rendering code, run on them with the same time.
+    #[test]
+    fn path_table_prints_as_upstream() {
+        let plain = render_path_table(&path_table(true), &view(None, false, false), NOW);
+        assert_eq!(plain.text, PLAIN);
+        let usage = render_path_table(&path_table(true), &view(None, false, true), NOW);
+        assert_eq!(usage.text, USAGE);
+        let no_used = render_path_table(&path_table(false), &view(None, false, false), NOW);
+        assert_eq!(no_used.text, NO_USED);
+        let json = render_path_table(&path_table(true), &view(None, true, false), NOW);
+        assert_eq!(json.text, format!("{JSON}\n"));
+
+        // One destination, or upstream's message when it has no path.
+        let one = render_path_table(&path_table(true), &view(Some(0x33), false, false), NOW);
+        assert_eq!(one.text, format!("{}\n", PLAIN.lines().nth(3).unwrap()));
+        assert_eq!(one.status, 0);
+        let none = render_path_table(&path_table(true), &view(Some(0x99), false, false), NOW);
+        assert_eq!((none.text.as_str(), none.status), ("No path known\n", 1));
+
+        // An empty table prints nothing, or an empty JSON list.
+        let empty = PickleValue::List(Vec::new());
+        let rendered = render_path_table(&empty, &view(None, false, false), NOW);
+        assert_eq!(rendered.text, "");
+        let rendered = render_path_table(&empty, &view(None, true, false), NOW);
+        assert_eq!(rendered.text, "[]\n");
+    }
+
+    fn rate(byte: u8, last: f64, violations: i64, blocked: PickleValue, ts: &[f64]) -> PickleValue {
+        dict(vec![
+            ("hash", PickleValue::Bytes(vec![byte; 16])),
+            ("last", PickleValue::Float(NOW - last)),
+            ("rate_violations", PickleValue::Int(violations)),
+            ("blocked_until", blocked),
+            (
+                "timestamps",
+                PickleValue::List(ts.iter().map(|t| PickleValue::Float(NOW - t)).collect()),
+            ),
+        ])
+    }
+
+    fn rate_table() -> PickleValue {
+        PickleValue::List(vec![
+            rate(0x55, 30.7, 0, PickleValue::Int(0), &[5000.3, 30.7]),
+            rate(
+                0x66,
+                400.0,
+                2,
+                PickleValue::Float(NOW + 4000.4),
+                &[900.0, 600.0, 400.0],
+            ),
+            rate(
+                0x77,
+                90000.0,
+                1,
+                PickleValue::Float(NOW - 5.0),
+                &[3.0 * 86400.0 - 0.5, 90000.0],
+            ),
+            rate(0x88, 10.0, 0, PickleValue::Int(0), &[10.0; 7]),
+        ])
+    }
+
+    #[test]
+    fn rate_table_prints_as_upstream() {
+        let rates = render_rate_table(&rate_table(), &view(None, false, false), NOW);
+        assert_eq!(rates.text, RATES);
+        let json = render_rate_table(&rate_table(), &view(None, true, false), NOW);
+        assert_eq!(json.text, format!("{RATES_JSON}\n"));
+        let one = render_rate_table(&rate_table(), &view(Some(0x66), false, false), NOW);
+        assert_eq!(one.text, format!("{}\n", RATES.lines().nth(1).unwrap()));
+        let none = render_rate_table(&rate_table(), &view(Some(0x99), false, false), NOW);
         assert_eq!(
-            usage_suffix(&path_entry(Some(PickleValue::Int(9_880))), true, now),
-            format!(", last used {} ago", prettytime(120.0))
+            (none.text.as_str(), none.status),
+            ("No information available\n", 1)
         );
+        let empty = PickleValue::List(Vec::new());
         assert_eq!(
-            usage_suffix(&path_entry(None), true, now),
-            ", no usage info"
-        );
-        assert_eq!(
-            usage_suffix(&path_entry(Some(PickleValue::Int(0))), false, now),
-            ""
+            render_rate_table(&empty, &view(None, false, false), NOW).text,
+            "No information available\n"
         );
     }
 
     #[test]
-    fn rnpath_pretty_date_matches_upstream_minute_boundaries() {
-        assert_eq!(pretty_date_elapsed(0), "0 seconds");
-        assert_eq!(pretty_date_elapsed(9), "9 seconds");
-        assert_eq!(pretty_date_elapsed(59), "59 seconds");
-        assert_eq!(pretty_date_elapsed(60), "1 minute");
-        assert_eq!(pretty_date_elapsed(69), "1 minute");
-        assert_eq!(pretty_date_elapsed(70), "1 minutes");
-        assert_eq!(pretty_date_elapsed(119), "1 minutes");
-        assert_eq!(pretty_date_elapsed(120), "2 minutes");
-        assert_eq!(pretty_date_elapsed(3600), "60 minutes");
-        assert_eq!(pretty_date_elapsed(7199), "119 minutes");
-        assert_eq!(pretty_date_elapsed(7200), "2 hours");
+    fn rnpath_pretty_date_matches_upstream() {
+        let cases = [
+            (0.0, "0 seconds"),
+            (59.9, "59 seconds"),
+            (60.0, "1 minute"),
+            (69.0, "1 minute"),
+            (70.0, "1 minutes"),
+            (7199.0, "119 minutes"),
+            (7200.0, "2 hours"),
+            (86_399.9, "23 hours"),
+            (86_400.0, "1 day"),
+            (2.0 * 86_400.0, "2 days"),
+            (7.0 * 86_400.0, "1 weeks"),
+            (31.0 * 86_400.0, "1 months"),
+            (365.0 * 86_400.0, "1 years"),
+            (-1.0, ""),
+        ];
+        for (elapsed, text) in cases {
+            assert_eq!(pretty_date(elapsed), text, "{elapsed}");
+        }
     }
 
     #[test]
@@ -1165,14 +1489,5 @@ mod tests {
         );
         // A daemon from before 21170877 sends neither key.
         assert_eq!(path_costs(&PickleValue::Dict(Vec::new())), "(dv:n/lc:n)");
-    }
-
-    #[test]
-    fn rnpath_pretty_date_matches_upstream_day_ranges() {
-        assert_eq!(pretty_date_elapsed(86_400), "1 day");
-        assert_eq!(pretty_date_elapsed(2 * 86_400), "2 days");
-        assert_eq!(pretty_date_elapsed(7 * 86_400), "1 weeks");
-        assert_eq!(pretty_date_elapsed(31 * 86_400), "1 months");
-        assert_eq!(pretty_date_elapsed(365 * 86_400), "1 years");
     }
 }
