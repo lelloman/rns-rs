@@ -2193,6 +2193,58 @@ fn set_pickle_dict_entry(
     }
 }
 
+/// The Weave statistics, under upstream's keys and only on the interfaces
+/// that carry them: a key present with no value makes upstream's `rnstatus`
+/// print an "Unknown" line. `WeaveInterface` has the device's CPU and memory
+/// load, switch and endpoint ids; `WeaveInterfacePeer` the switch it is
+/// reached through. Ids are `RNS.hexrep` strings, loads as upstream keeps
+/// them (whole CPU percent, memory percent to two decimals).
+fn weave_stats_to_pickle(s: &SingleInterfaceStat, dict: &mut Vec<(PickleValue, PickleValue)>) {
+    let hexrep = |bytes: &[u8]| {
+        PickleValue::String(
+            bytes
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(":"),
+        )
+    };
+    let key = |name: &str| PickleValue::String(name.into());
+    match s.interface_type.as_str() {
+        "WeaveInterface" => {
+            dict.push((
+                key("cpu_load"),
+                s.cpu_load
+                    .map(|v| PickleValue::Int(v.round() as i64))
+                    .unwrap_or(PickleValue::None),
+            ));
+            dict.push((
+                key("mem_load"),
+                s.mem_load
+                    .map(|v| PickleValue::Float((v * 100.0).round() / 100.0))
+                    .unwrap_or(PickleValue::None),
+            ));
+            dict.push((
+                key("switch_id"),
+                s.switch_id.map(|v| hexrep(&v)).unwrap_or(PickleValue::None),
+            ));
+            dict.push((
+                key("endpoint_id"),
+                s.endpoint_id
+                    .map(|v| hexrep(&v))
+                    .unwrap_or(PickleValue::None),
+            ));
+        }
+        "WeaveInterfacePeer" => dict.push((
+            key("via_switch_id"),
+            s.via_switch_id
+                .map(|v| hexrep(&v))
+                .unwrap_or(PickleValue::None),
+        )),
+        _ => {}
+    }
+}
+
 fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
     let mut dict = vec![
         (
@@ -2364,36 +2416,6 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Int(s.tx_packets as i64),
         ),
         (
-            PickleValue::String("cpu_load".into()),
-            s.cpu_load
-                .map(PickleValue::Float)
-                .unwrap_or(PickleValue::None),
-        ),
-        (
-            PickleValue::String("mem_load".into()),
-            s.mem_load
-                .map(PickleValue::Float)
-                .unwrap_or(PickleValue::None),
-        ),
-        (
-            PickleValue::String("switch_id".into()),
-            s.switch_id
-                .map(|v| PickleValue::Bytes(v.to_vec()))
-                .unwrap_or(PickleValue::None),
-        ),
-        (
-            PickleValue::String("endpoint_id".into()),
-            s.endpoint_id
-                .map(|v| PickleValue::Bytes(v.to_vec()))
-                .unwrap_or(PickleValue::None),
-        ),
-        (
-            PickleValue::String("via_switch_id".into()),
-            s.via_switch_id
-                .map(|v| PickleValue::Bytes(v.to_vec()))
-                .unwrap_or(PickleValue::None),
-        ),
-        (
             PickleValue::String("peers".into()),
             s.peers
                 .map(|v| PickleValue::Int(v as i64))
@@ -2526,6 +2548,7 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Float(s.announce_rate_penalty),
         ),
     ];
+    weave_stats_to_pickle(s, &mut dict);
 
     match s.announce_rate_target {
         Some(target) => dict.push((
@@ -5146,6 +5169,40 @@ mod tests {
         assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        // Weave statistics only on Weave interfaces: upstream's rnstatus
+        // prints "Unknown" lines for a key that is there without a value.
+        for key in [
+            "cpu_load",
+            "mem_load",
+            "switch_id",
+            "endpoint_id",
+            "via_switch_id",
+        ] {
+            assert!(ifaces[0].get(key).is_none(), "{key} on a TCP interface");
+        }
+        let weave = |interface_type: &str| {
+            let mut stat = stats.interfaces[0].clone();
+            stat.interface_type = interface_type.into();
+            pickle::decode(&pickle::encode(&single_iface_to_pickle(&stat))).unwrap()
+        };
+        let device = weave("WeaveInterface");
+        assert_eq!(device.get("cpu_load").unwrap().as_int(), Some(12));
+        assert_eq!(device.get("mem_load").unwrap().as_float(), Some(34.5));
+        assert_eq!(
+            device.get("switch_id").unwrap().as_str(),
+            Some("01:02:03:04")
+        );
+        assert_eq!(
+            device.get("endpoint_id").unwrap().as_str(),
+            Some("05:05:05:05:05:05:05:05")
+        );
+        assert!(device.get("via_switch_id").is_none());
+        let peer = weave("WeaveInterfacePeer");
+        assert_eq!(
+            peer.get("via_switch_id").unwrap().as_str(),
+            Some("06:06:06:06")
+        );
+        assert!(peer.get("cpu_load").is_none());
         // Upstream 134dc677: filtered traffic, per interface and in total.
         for stats in [&decoded, &ifaces[0]] {
             assert_eq!(stats.get("frxb").unwrap().as_int(), Some(55));
