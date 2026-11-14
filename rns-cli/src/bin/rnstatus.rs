@@ -410,7 +410,7 @@ struct StatusDisplayOptions<'a> {
 
 fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
     let StatusDisplayOptions {
-        show_all: _show_all,
+        show_all,
         sort_by,
         reverse,
         filter,
@@ -446,6 +446,10 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
     if let Some(interfaces) = response.get("interfaces").and_then(|v| v.as_list()) {
         // Collect into a sortable vec of references
         let mut iface_list: Vec<&PickleValue> = interfaces.iter().collect();
+
+        if !show_all {
+            iface_list.retain(|iface| !hidden_by_default(iface));
+        }
 
         // Apply filter
         if let Some(f) = filter {
@@ -1081,10 +1085,47 @@ fn interface_rate_line(bitrate: Option<u64>, mtu: Option<u32>) -> Option<String>
     })
 }
 
+/// Whether upstream's rnstatus lists an interface only with `-a`: the
+/// interfaces listeners spawn, local clients, and I2P interfaces that
+/// cannot be reached.
+fn hidden_by_default(iface: &PickleValue) -> bool {
+    let name = iface
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    const SPAWNED_PREFIXES: [&str; 6] = [
+        "LocalInterface[",
+        "TCPInterface[Client",
+        "BackboneInterface[Client on",
+        "AutoInterfacePeer[",
+        "WeaveInterfacePeer[",
+        "I2PInterfacePeer[Connected peer",
+    ];
+    SPAWNED_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || (name.starts_with("I2PInterface[")
+            && iface
+                .get("i2p_connectable")
+                .and_then(|value| value.as_bool())
+                == Some(false))
+}
+
 fn client_status_lines(iface: &PickleValue, show_blocked_ips: bool) -> Vec<String> {
     let Some(clients) = iface.get("clients").and_then(|value| value.as_int()) else {
         return Vec::new();
     };
+    let name = iface
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    // The shared instance serves programs; this tool asks over RPC and is
+    // not one of them.
+    if name.starts_with("Shared Instance[") {
+        let programs = clients.max(0);
+        let noun = if programs == 1 { "program" } else { "programs" };
+        return vec![format!("    Serving   : {programs} {noun}")];
+    }
     let mut lines = vec![format!("    Clients   : {}", clients.max(0))];
     if let Some(blocked) = iface
         .get("blocked_ips")
@@ -2088,6 +2129,59 @@ mod tests {
             ));
         }
         PickleValue::Dict(fields)
+    }
+
+    fn named(name: &str, extra: Vec<(PickleValue, PickleValue)>) -> PickleValue {
+        let mut fields = vec![(
+            PickleValue::String("name".into()),
+            PickleValue::String(name.into()),
+        )];
+        fields.extend(extra);
+        PickleValue::Dict(fields)
+    }
+
+    #[test]
+    fn spawned_and_local_interfaces_are_hidden_without_all() {
+        for name in [
+            "LocalInterface[rns/default]",
+            "TCPInterface[Client on Server/10.0.0.2:50000]",
+            "BackboneInterface[Client on Backbone/10.0.0.2:50000]",
+            "AutoInterfacePeer[eth0/fe80::1]",
+            "WeaveInterfacePeer[01:02]",
+            "I2PInterfacePeer[Connected peer on I2P]",
+        ] {
+            assert!(hidden_by_default(&named(name, Vec::new())), "{name}");
+        }
+        for name in [
+            "Shared Instance[rns/default]",
+            "TCPInterface[Peer/10.0.0.1:4242]",
+            "TCPServerInterface[Server/0.0.0.0:4242]",
+            "I2PInterfacePeer[I2P to peer.b32.i2p]",
+            "I2PInterface[I2P]",
+        ] {
+            assert!(!hidden_by_default(&named(name, Vec::new())), "{name}");
+        }
+        let unreachable_i2p = named(
+            "I2PInterface[I2P]",
+            vec![(
+                PickleValue::String("i2p_connectable".into()),
+                PickleValue::Bool(false),
+            )],
+        );
+        assert!(hidden_by_default(&unreachable_i2p));
+    }
+
+    #[test]
+    fn shared_instance_reports_the_programs_it_serves() {
+        let clients = |n| vec![(PickleValue::String("clients".into()), PickleValue::Int(n))];
+        assert_eq!(
+            client_status_lines(&named("Shared Instance[rns/default]", clients(1)), false),
+            vec!["    Serving   : 1 program"]
+        );
+        assert_eq!(
+            client_status_lines(&named("Shared Instance[37428]", clients(3)), false),
+            vec!["    Serving   : 3 programs"]
+        );
     }
 
     #[test]
