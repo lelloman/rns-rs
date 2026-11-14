@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process;
 use std::time::{Duration, Instant};
 
-use rns_cli::args::Args;
+use rns_cli::args::{Args, Opt, OptionSpec};
 use rns_cli::format::{prettycost, prettyfrequency, prettyhexrep, prettytime, size_str, speed_str};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
@@ -18,9 +18,47 @@ use rns_net::{RpcAddr, RpcClient};
 const VERSION: &str = env!("FULL_VERSION");
 const MONITOR_MIN_SLEEP: Duration = Duration::from_millis(200);
 
+/// upstream rnstatus's options, and the Rust-only `-c` for `--config`.
+/// `-q` is `--queues` here, not a quiet counter.
+pub const OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("", "config"),
+        Opt::value("", "attach"),
+        Opt::value("", "detach"),
+        Opt::value("", "reload"),
+        Opt::flag("a", "all"),
+        Opt::flag("A", "announce-stats"),
+        Opt::flag("P", "pr-stats"),
+        Opt::flag("F", "filter-stats"),
+        Opt::flag("l", "link-stats"),
+        Opt::flag("B", "burst"),
+        Opt::flag("b", "blocked-ips"),
+        Opt::flag("t", "totals"),
+        Opt::flag("T", "tunnels"),
+        Opt::flag("p", "pps"),
+        Opt::flag("q", "queues"),
+        Opt::flag("z", "profiling"),
+        Opt::value("s", "sort"),
+        Opt::flag("r", "reverse"),
+        Opt::flag("j", "json"),
+        Opt::value("R", ""),
+        Opt::value("i", ""),
+        Opt::value("w", ""),
+        Opt::flag("d", "discovered"),
+        Opt::flag("D", ""),
+        Opt::flag("", "show-stale"),
+        Opt::flag("", "show-unknown"),
+        Opt::flag("m", "monitor"),
+        Opt::value("I", "monitor-interval"),
+        Opt::count("v", "verbose"),
+        Opt::value("c", ""),
+        Opt::value("", "identity").rust_only(),
+    ],
+};
+
 #[allow(dead_code)]
 fn main() {
-    run_with_args(Args::parse(), "rnstatus", "rnstatus");
+    run_with_args(Args::parse_spec(&OPTIONS), "rnstatus", "rnstatus");
 }
 
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
@@ -59,8 +97,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_bursts = args.has("B") || args.has("burst");
     let show_blocked_ips = args.has("b") || args.has("blocked-ips");
     let show_profiling = args.has("z") || args.has("profiling");
-    // `q` is the shared parser's quiet counter, but rnstatus follows upstream
-    // in assigning it to queue statistics.
+    // `q` is the queue statistics flag, as upstream has it; rns-ctl's
+    // shared parser counts it as quiet.
     let show_queues = args.has("queues") || args.quiet > 0;
     let monitor_mode = args.has("m");
     let monitor_interval: f64 = args.get("I").and_then(|s| s.parse().ok()).unwrap_or(1.0);
@@ -1989,14 +2027,14 @@ fn print_usage(usage_name: &str) {
     println!("  --attach NAME           Attach a configured interface");
     println!("  --detach NAME           Detach a running interface");
     println!("  --reload NAME           Reload a running interface from config");
-    println!("  -a                      Show all interfaces");
-    println!("  -j                      JSON output");
-    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, frx, ftx, frxs, ftxs, prx, ptx, arxc, atxc, afrxc, prxc, ptxc, txdrp, txdrb, txbuf");
-    println!("  -r                      Reverse sort order");
-    println!("  -t                      Show traffic totals");
+    println!("  -a, --all               Show all interfaces");
+    println!("  -j, --json              JSON output");
+    println!("  -s, --sort SORT         Sort by: rate, traffic, rx, tx, frx, ftx, frxs, ftxs, prx, ptx, arxc, atxc, afrxc, prxc, ptxc, txdrp, txdrb, txbuf");
+    println!("  -r, --reverse           Reverse sort order");
+    println!("  -t, --totals            Show traffic totals");
     println!("  -p, --pps               Show packets per second in traffic totals");
-    println!("  -l                      Show link count");
-    println!("  -A                      Show announce statistics");
+    println!("  -l, --link-stats        Show link count");
+    println!("  -A, --announce-stats    Show announce statistics");
     println!("  -P, --pr-stats          Show path request statistics");
     println!("  -F, --filter-stats      Show filtered traffic statistics");
     println!("  -T, --tunnels           Show tunnel information");
@@ -2004,16 +2042,16 @@ fn print_usage(usage_name: &str) {
     println!("  -b, --blocked-ips       Show blocked IPs per interface");
     println!("  -q, --queues            Show inbound queue pressure statistics");
     println!("  -z, --profiling         Show live profiling results");
-    println!("  -d                      Show discovered interfaces");
+    println!("  -d, --discovered        Show discovered interfaces");
     println!("  -D                      Show discovered interfaces with config entries");
     println!("  --show-stale            Include stale discovery entries");
     println!("  --show-unknown          Include discovery entries without version info");
-    println!("  -m                      Monitor mode (loop)");
-    println!("  -I SECONDS              Monitor interval (default: 1.0)");
+    println!("  -m, --monitor           Monitor mode (loop)");
+    println!("  -I, --monitor-interval SECONDS  Monitor interval (default: 1.0)");
     println!("  -R HASH                 Query remote transport identity via management link");
     println!("  -i PATH                 Identity file for remote management");
     println!("  -w SECONDS              Timeout for remote queries");
-    println!("  -v                      Increase verbosity");
+    println!("  -v, --verbose           Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");
 }
@@ -2021,6 +2059,98 @@ fn print_usage(usage_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        // (argv, options set with their values, positional filter)
+        type Case<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)], Option<&'a str>);
+        let cases: &[Case] = &[
+            (&["-a"], &[("a", "true")], None),
+            (&["--all", "Backbone"], &[("a", "true")], Some("Backbone")),
+            (&["-z", "Backbone"], &[("z", "true")], Some("Backbone")),
+            (&["-m", "rnode"], &[("m", "true")], Some("rnode")),
+            (&["-d", "rnode"], &[("d", "true")], Some("rnode")),
+            (&["-B", "tcp"], &[("B", "true")], Some("tcp")),
+            (
+                &["tcp", "-srate", "-r"],
+                &[("s", "rate"), ("r", "true")],
+                Some("tcp"),
+            ),
+            (
+                &["--sort=traffic", "--reverse"],
+                &[("s", "traffic"), ("r", "true")],
+                None,
+            ),
+            (
+                &["-atpAPFlTbqz"],
+                &[("t", "true"), ("p", "true"), ("q", "true"), ("z", "true")],
+                None,
+            ),
+            (
+                &["--totals", "--pps", "--link-stats", "--announce-stats"],
+                &[("t", "true"), ("p", "true"), ("l", "true"), ("A", "true")],
+                None,
+            ),
+            (
+                &["--queues", "--profiling", "--burst", "--blocked-ips"],
+                &[("q", "true"), ("z", "true"), ("B", "true"), ("b", "true")],
+                None,
+            ),
+            (&["-mI", "2.5"], &[("m", "true"), ("I", "2.5")], None),
+            (
+                &["--monitor", "--monitor-interval=3"],
+                &[("m", "true"), ("I", "3")],
+                None,
+            ),
+            (
+                &["-R", "aa", "-i", "id", "-w5"],
+                &[("R", "aa"), ("i", "id"), ("w", "5")],
+                None,
+            ),
+            (
+                &["-D", "--show-stale", "--show-unknown"],
+                &[
+                    ("D", "true"),
+                    ("show-stale", "true"),
+                    ("show-unknown", "true"),
+                ],
+                None,
+            ),
+            (
+                &["--discovered", "-j"],
+                &[("d", "true"), ("j", "true")],
+                None,
+            ),
+            (
+                &["--attach", "If", "--config", "/c"],
+                &[("attach", "If"), ("config", "/c")],
+                None,
+            ),
+            (&["--det", "If"], &[("detach", "If")], None),
+            (&["--rel=If"], &[("reload", "If")], None),
+            (
+                &["--monitor", "--monitor-i", "2"],
+                &[("m", "true"), ("I", "2")],
+                None,
+            ),
+        ];
+        for (argv, expected, filter) in cases {
+            let args =
+                Args::parse_spec_from(argv.iter().map(|s| s.to_string()).collect(), &OPTIONS);
+            for (key, value) in *expected {
+                assert_eq!(args.get(key), Some(*value), "{argv:?}: {key}");
+            }
+            assert_eq!(
+                args.positional.first().map(String::as_str),
+                *filter,
+                "{argv:?}"
+            );
+            assert!(args.unknown.is_empty(), "{argv:?}: {:?}", args.unknown);
+            assert_eq!(args.quiet, 0, "{argv:?}");
+        }
+        let args = Args::parse_spec_from(vec!["-vv".into()], &OPTIONS);
+        assert_eq!(args.verbosity, 2);
+    }
 
     #[test]
     fn formats_nested_live_profiling_results() {

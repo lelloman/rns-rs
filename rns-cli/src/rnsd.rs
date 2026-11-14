@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::args::Args;
+use crate::args::{Args, Opt, OptionSpec};
 use rns_net::storage;
 use rns_net::{Callbacks, InterfaceId, RnsNode};
 
@@ -121,8 +121,21 @@ impl Callbacks for DaemonCallbacks {
     }
 }
 
+/// upstream rnsd's options, and the Rust-only `-c` for `--config`.
+pub const OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("", "config"),
+        Opt::count("v", "verbose"),
+        Opt::count("q", "quiet"),
+        Opt::flag("s", "service"),
+        Opt::flag("i", "interactive"),
+        Opt::flag("", "exampleconfig"),
+        Opt::value("c", ""),
+    ],
+};
+
 pub fn main_entry() {
-    main_entry_from(Args::parse());
+    main_entry_from(Args::parse_spec(&OPTIONS));
 }
 
 pub fn main_entry_from(args: Args) {
@@ -187,6 +200,9 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     }
 
     log::info!("Starting rnsd {}", VERSION);
+    if args.has("interactive") {
+        log::warn!("Interactive mode is not supported, continuing without it");
+    }
     if let Err(err) = register_native_sidecar_hooks() {
         log::error!("Failed to register built-in sidecar hooks: {}", err);
         std::process::exit(1);
@@ -347,10 +363,10 @@ fn print_usage(usage_name: &str) {
     println!();
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");
-    println!("  -s                      Service mode (log to file)");
+    println!("  -s, --service           Service mode (log to file)");
     println!("  --exampleconfig         Print example config and exit");
-    println!("  -v                      Increase verbosity (can repeat)");
-    println!("  -q                      Decrease verbosity (can repeat)");
+    println!("  -v, --verbose           Increase verbosity (can repeat)");
+    println!("  -q, --quiet             Decrease verbosity (can repeat)");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");
 }
@@ -559,6 +575,45 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        // (argv, service, interactive, config, verbosity, quiet)
+        type Case<'a> = (&'a [&'a str], bool, bool, Option<&'a str>, u8, u8);
+        let cases: &[Case] = &[
+            (&["-s"], true, false, None, 0, 0),
+            (&["--service", "-v"], true, false, None, 1, 0),
+            (&["--serv", "--config", "/c"], true, false, Some("/c"), 0, 0),
+            (&["--config=/c", "-svvq"], true, false, Some("/c"), 2, 1),
+            (&["-i", "-v"], false, true, None, 1, 0),
+            (
+                &["--interactive", "--quiet", "--verbose"],
+                false,
+                true,
+                None,
+                1,
+                1,
+            ),
+            (&["-c", "/c"], false, false, Some("/c"), 0, 0),
+        ];
+        for (argv, service, interactive, config, verbosity, quiet) in cases {
+            let args =
+                Args::parse_spec_from(argv.iter().map(|s| s.to_string()).collect(), &OPTIONS);
+            assert_eq!(
+                (
+                    args.has("s"),
+                    args.has("interactive"),
+                    args.config_path(),
+                    args.verbosity,
+                    args.quiet
+                ),
+                (*service, *interactive, *config, *verbosity, *quiet),
+                "{argv:?}"
+            );
+            assert!(args.unknown.is_empty(), "{argv:?}");
+        }
+        assert!(Args::parse_spec_from(vec!["--example".into()], &OPTIONS).has("exampleconfig"));
+    }
 
     #[test]
     fn configured_logging_defaults_to_info_with_timestamps() {

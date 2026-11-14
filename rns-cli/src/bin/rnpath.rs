@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process;
 use std::time::Duration;
 
-use rns_cli::args::Args;
+use rns_cli::args::{Args, Opt, OptionSpec};
 use rns_cli::format::{prettycost, prettyfrequency, prettyhexrep, prettytime};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
@@ -17,9 +17,48 @@ use rns_net::{RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
 
+/// upstream rnpath's options, and the Rust-only `-c` for `--config`. `-d`,
+/// `-x`, `-B` and `-U` are flags acting on the positional destination.
+pub const OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("", "config"),
+        Opt::flag("t", "table"),
+        Opt::flag("u", "usage"),
+        Opt::value("m", "max"),
+        Opt::flag("r", "rates"),
+        Opt::flag("d", "drop"),
+        Opt::flag("D", "drop-announces"),
+        Opt::flag("x", "drop-via"),
+        Opt::value("w", ""),
+        Opt::value("R", ""),
+        Opt::value("i", ""),
+        Opt::value("W", ""),
+        Opt::flag("b", "blackholed"),
+        Opt::flag("B", "blackhole"),
+        Opt::flag("U", "unblackhole"),
+        Opt::value("", "duration"),
+        Opt::value("", "reason"),
+        Opt::flag("p", "blackholed-list"),
+        Opt::flag("j", "json"),
+        Opt::count("v", "verbose"),
+        Opt::value("c", ""),
+        Opt::value("", "identity").rust_only(),
+    ],
+};
+
 #[allow(dead_code)]
 fn main() {
-    run_with_args(Args::parse(), "rnpath", "rnpath");
+    run_with_args(Args::parse_spec(&OPTIONS), "rnpath", "rnpath");
+}
+
+/// The destination a flag such as `-d` acts on: upstream's positional
+/// destination, or the flag's own value where rns-ctl's parser reads
+/// `-d HASH` as one.
+fn flag_target(args: &Args, short: &str) -> Option<String> {
+    match args.get(short)? {
+        "true" => Some(args.positional.first().cloned().unwrap_or_default()),
+        value => Some(value.to_string()),
+    }
 }
 
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
@@ -46,20 +85,14 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_table = args.has("t");
     let show_usage = args.has("u") || args.has("usage");
     let show_rates = args.has("r");
-    let drop_hash = args.get("d").map(|s| s.to_string());
-    let drop_via = args.get("x").map(|s| s.to_string());
+    let drop_hash = flag_target(&args, "d");
+    let drop_via = flag_target(&args, "x");
     let drop_queues = args.has("D");
     let json_output = args.has("j");
     let max_hops: Option<u8> = args.get("m").and_then(|s| s.parse().ok());
     let show_blackholed = args.has("blackholed") || args.has("b");
-    let blackhole_hash = args
-        .get("B")
-        .or_else(|| args.get("blackhole"))
-        .map(|s| s.to_string());
-    let unblackhole_hash = args
-        .get("U")
-        .or_else(|| args.get("unblackhole"))
-        .map(|s| s.to_string());
+    let blackhole_hash = flag_target(&args, "B");
+    let unblackhole_hash = flag_target(&args, "U");
     let duration_hours: Option<f64> = args.get("duration").and_then(|s| s.parse().ok());
     let reason = args.get("reason").map(|s| s.to_string());
     let remote_blackholed = args.has("p") || args.has("blackholed-list");
@@ -68,7 +101,32 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(rns_core::constants::PATH_REQUEST_TIMEOUT);
     let management_identity = args.get("i").or_else(|| args.get("identity"));
-    let remote_hash = args.get("R").map(|s| s.to_string());
+    // upstream's `-p <identity hash>` reads the published list of that
+    // transport instance, as `-R <hash> -p` does here.
+    let (remote_hash, destination) = match (args.get("R"), args.positional.first()) {
+        (Some(remote), destination) => (Some(remote.to_string()), destination.cloned()),
+        (None, Some(publisher)) if remote_blackholed => (Some(publisher.clone()), None),
+        (None, destination) => (None, destination.cloned()),
+    };
+
+    // As upstream, nothing to do without one of these.
+    let has_destination = destination.is_some()
+        || [&drop_hash, &drop_via, &blackhole_hash, &unblackhole_hash]
+            .iter()
+            .any(|target| target.as_deref().is_some_and(|t| !t.is_empty()));
+    let has_work = drop_queues
+        || show_table
+        || show_rates
+        || has_destination
+        || drop_via.is_some()
+        || show_blackholed
+        || remote_hash.is_some();
+    if !has_work {
+        println!();
+        print_usage(usage_name);
+        println!();
+        return;
+    }
 
     // Remote management query via -R flag
     if let Some(ref hash_str) = remote_hash {
@@ -82,7 +140,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             show_rates,
             remote_blackholed,
             max_hops,
-            args.positional.first().map(String::as_str),
+            destination.as_deref(),
             drop_hash.as_deref(),
             drop_via.as_deref(),
             drop_queues,
@@ -145,23 +203,24 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         }
     };
 
-    if show_table {
-        show_path_table(&mut client, json_output, max_hops, show_usage);
-    } else if show_rates {
-        show_rate_table(&mut client, json_output);
+    // In upstream's order, for invocations that combine them.
+    if show_blackholed {
+        show_blackholed_list(&mut client, identity.hash());
     } else if let Some(hash_str) = blackhole_hash {
         do_blackhole(&mut client, &hash_str, duration_hours, reason);
     } else if let Some(hash_str) = unblackhole_hash {
         do_unblackhole(&mut client, &hash_str);
-    } else if show_blackholed {
-        show_blackholed_list(&mut client, identity.hash());
+    } else if show_table {
+        show_path_table(&mut client, json_output, max_hops, show_usage);
+    } else if show_rates {
+        show_rate_table(&mut client, json_output);
+    } else if drop_queues {
+        drop_announce_queues(&mut client);
     } else if let Some(hash_str) = drop_hash {
         drop_path(&mut client, &hash_str);
     } else if let Some(hash_str) = drop_via {
         drop_all_via(&mut client, &hash_str);
-    } else if drop_queues {
-        drop_announce_queues(&mut client);
-    } else if let Some(hash_str) = args.positional.first() {
+    } else if let Some(hash_str) = destination {
         let timeout = args
             .get("w")
             .and_then(|s| s.parse::<f64>().ok())
@@ -174,7 +233,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                 process::exit(1);
             }
         };
-        lookup_path(&connect, hash_str, timeout);
+        lookup_path(&connect, &hash_str, timeout);
     } else {
         print_usage(usage_name);
     }
@@ -928,25 +987,25 @@ fn print_usage(usage_name: &str) {
     println!();
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");
-    println!("  -t                      Show path table");
+    println!("  -t, --table             Show all known paths");
     println!("  -u, --usage             Show and sort by last path use");
-    println!("  -m HOPS                 Filter path table by max hops");
-    println!("  -r                      Show rate table");
-    println!("  -d HASH                 Drop path for destination");
-    println!("  -x HASH                 Drop all paths via transport");
-    println!("  -D                      Drop all announce queues");
-    println!("  -b                      Show blackholed identities");
-    println!("  -p, --blackholed-list   View published remote blackhole list with -R");
-    println!("  -B HASH                 Blackhole an identity");
-    println!("  -U HASH                 Remove identity from blackhole list");
+    println!("  -m, --max HOPS          Filter path table by max hops");
+    println!("  -r, --rates             Show announce rate info");
+    println!("  -d, --drop              Drop the path to DESTINATION_HASH");
+    println!("  -x, --drop-via          Drop all paths via transport DESTINATION_HASH");
+    println!("  -D, --drop-announces    Drop all queued announces");
+    println!("  -b, --blackholed        List blackholed identities");
+    println!("  -p, --blackholed-list   View the blackhole list published by DESTINATION_HASH");
+    println!("  -B, --blackhole         Blackhole identity DESTINATION_HASH");
+    println!("  -U, --unblackhole       Lift the blackhole of identity DESTINATION_HASH");
     println!("  --duration HOURS        Blackhole duration (default: permanent)");
     println!("  --reason TEXT           Reason for blackholing");
     println!("  -R HASH                 Query remote transport identity via management link");
     println!("  -i PATH                 Identity file for remote management");
     println!("  -w SECONDS              Path request timeout (default 15)");
     println!("  -W SECONDS              Timeout for remote path queries");
-    println!("  -j                      JSON output");
-    println!("  -v                      Increase verbosity");
+    println!("  -j, --json              JSON output");
+    println!("  -v, --verbose           Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");
 }
@@ -954,6 +1013,76 @@ fn print_usage(usage_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HASH: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        let parse = |argv: &[&str]| {
+            Args::parse_spec_from(argv.iter().map(|s| s.to_string()).collect(), &OPTIONS)
+        };
+        // (argv, options set with their values, destination)
+        type Case<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)], Option<&'a str>);
+        let cases: &[Case] = &[
+            (&["-t"], &[("t", "true")], None),
+            (&["--table", "-m", "2"], &[("t", "true"), ("m", "2")], None),
+            (&["-tm2"], &[("t", "true"), ("m", "2")], None),
+            (&["-t", "--max=3", "-u"], &[("m", "3"), ("u", "true")], None),
+            (&["-t", HASH], &[("t", "true")], Some(HASH)),
+            (&["-tj"], &[("t", "true"), ("j", "true")], None),
+            (
+                &["--rates", "--json", HASH],
+                &[("r", "true"), ("j", "true")],
+                Some(HASH),
+            ),
+            (&["-d", HASH], &[("d", "true")], Some(HASH)),
+            (&[HASH, "-d"], &[("d", "true")], Some(HASH)),
+            (&["--drop-via", HASH], &[("x", "true")], Some(HASH)),
+            (&["-x", HASH], &[("x", "true")], Some(HASH)),
+            (&["-D"], &[("D", "true")], None),
+            (&["--drop-a"], &[("D", "true")], None),
+            (
+                &["-B", HASH, "--duration", "2", "--reason", "spam"],
+                &[("B", "true"), ("duration", "2"), ("reason", "spam")],
+                Some(HASH),
+            ),
+            (&["-U", HASH], &[("U", "true")], Some(HASH)),
+            (&["-b"], &[("b", "true")], None),
+            (&["-p", HASH, "filter"], &[("p", "true")], Some(HASH)),
+            (
+                &["-R", HASH, "-i", "id", "-W5", "-t"],
+                &[("R", HASH), ("i", "id"), ("W", "5")],
+                None,
+            ),
+            (&[HASH, "-w", "10"], &[("w", "10")], Some(HASH)),
+            (
+                &["--config", "/c", HASH, "-w3"],
+                &[("config", "/c"), ("w", "3")],
+                Some(HASH),
+            ),
+        ];
+        for (argv, expected, destination) in cases {
+            let args = parse(argv);
+            for (key, value) in *expected {
+                assert_eq!(args.get(key), Some(*value), "{argv:?}: {key}");
+            }
+            assert_eq!(
+                args.positional.first().map(String::as_str),
+                *destination,
+                "{argv:?}"
+            );
+            assert!(args.unknown.is_empty(), "{argv:?}: {:?}", args.unknown);
+        }
+        // Flags act on the positional destination; rns-ctl reads `-d HASH`
+        // as a value.
+        assert_eq!(
+            flag_target(&parse(&[HASH, "-x"]), "x").as_deref(),
+            Some(HASH)
+        );
+        assert_eq!(flag_target(&parse(&["-t"]), "x"), None);
+        let control = Args::parse_control_from(vec!["-d".into(), HASH.into()]);
+        assert_eq!(flag_target(&control, "d").as_deref(), Some(HASH));
+    }
 
     fn path_entry(used: Option<PickleValue>) -> PickleValue {
         let mut items = vec![(
