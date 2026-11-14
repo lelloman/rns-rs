@@ -15,6 +15,8 @@ pub const CMD_LEAVE: u8 = 0x0A;
 pub const CMD_ST_ALOCK: u8 = 0x0B;
 pub const CMD_LT_ALOCK: u8 = 0x0C;
 pub const CMD_READY: u8 = 0x0F;
+pub const CMD_STAT_RSSI: u8 = 0x23;
+pub const CMD_STAT_SNR: u8 = 0x24;
 pub const CMD_PLATFORM: u8 = 0x48;
 pub const CMD_MCU: u8 = 0x49;
 pub const CMD_FW_VERSION: u8 = 0x50;
@@ -186,11 +188,26 @@ pub fn validate_radio_config(config: RadioConfig) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The host-side offset RNode firmware adds to a packet's RSSI in dBm.
+pub const RSSI_OFFSET: i16 = 157;
+
+/// The reception stats RNode firmware sends just before a received frame:
+/// `CMD_STAT_RSSI` with the packet RSSI plus [`RSSI_OFFSET`], and
+/// `CMD_STAT_SNR` with the raw SNR in quarter dB (signed). Hosts attach both
+/// to the frame that follows.
+pub fn reception_stat_frames(rssi_dbm: i16, snr_raw: i8) -> [Vec<u8>; 2] {
+    let rssi = (rssi_dbm + RSSI_OFFSET).clamp(0, 255) as u8;
+    [
+        kiss_encode(CMD_STAT_RSSI, &[rssi]),
+        kiss_encode(CMD_STAT_SNR, &[snr_raw as u8]),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        kiss_encode, validate_radio_config, DetectBuffer, KissDecoder, KissFrame, RadioConfig,
-        CMD_DETECT, CMD_FREQUENCY, DETECT_REQ,
+        kiss_encode, reception_stat_frames, validate_radio_config, DetectBuffer, KissDecoder,
+        KissFrame, RadioConfig, CMD_DETECT, CMD_FREQUENCY, CMD_STAT_RSSI, CMD_STAT_SNR, DETECT_REQ,
     };
 
     #[test]
@@ -261,5 +278,24 @@ mod tests {
         };
 
         assert!(validate_radio_config(cfg).is_err());
+    }
+
+    #[test]
+    fn reception_stats_use_rnode_encoding() {
+        // -25 dBm and an SNR of 13.75 dB (55 quarter dB), as upstream
+        // RNodeInterface decodes them: byte - 157, signed byte * 0.25.
+        let [rssi, snr] = reception_stat_frames(-25, 55);
+        assert_eq!(rssi, kiss_encode(CMD_STAT_RSSI, &[132]));
+        assert_eq!(snr, kiss_encode(CMD_STAT_SNR, &[55]));
+        let [_, negative] = reception_stat_frames(-120, -30);
+        assert_eq!(negative, kiss_encode(CMD_STAT_SNR, &[(-30i8) as u8]));
+    }
+
+    #[test]
+    fn reception_rssi_is_clamped_to_a_byte() {
+        let [low, _] = reception_stat_frames(-200, 0);
+        assert_eq!(low, kiss_encode(CMD_STAT_RSSI, &[0]));
+        let [high, _] = reception_stat_frames(120, 0);
+        assert_eq!(high, kiss_encode(CMD_STAT_RSSI, &[255]));
     }
 }
