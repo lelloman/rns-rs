@@ -49,10 +49,13 @@ The node now announces both its transport destination and its control destinatio
 
 When a PC connects via USB serial and sends an RNode DETECT handshake, the device automatically switches from standalone mode to bridge mode. In bridge mode it:
 
-- Responds to the RNode KISS protocol (DETECT, FW_VERSION, PLATFORM, MCU)
-- Accepts radio configuration commands (frequency, bandwidth, SF, CR, TX power)
-- Bridges KISS data frames between USB serial and the SX1262 LoRa radio
-- Reverts to standalone mode after 30 seconds without host serial activity
+- Responds to the RNode KISS protocol (DETECT, FW_VERSION, PLATFORM, MCU) and reports RNode protocol 1.52, so both `rns-net` and upstream Python Reticulum (`RNodeInterface`) can use it as an RNode
+- Accepts radio configuration commands (frequency, bandwidth, SF, CR, TX power) and echoes them, as hosts validate
+- Bridges KISS data frames between USB serial and the SX1262 LoRa radio, sending RSSI/SNR stats before each received frame
+- Queues frames from the host and sends them with listen before talk (DIFS plus random backoff, carrier detect from the SX1262's preamble/header flags), as RNode firmware does
+- Enforces the host's short- and long-term airtime limits (`airtime_limit_short` / `airtime_limit_long`)
+- Stays in bridge mode once the host has switched the radio on, until the host sends LEAVE, a BLE host disconnects or the board resets; before that, 30 seconds without host serial activity reverts it to standalone mode
+- Does not answer the optional RNode statistics commands (channel utilisation, PHY parameters, battery)
 
 Use the `rnode_lora` example from `rns-net` to connect from a PC:
 
@@ -64,8 +67,8 @@ RUST_LOG=info cargo run --example rnode_lora -- /dev/ttyUSB0
 
 The firmware now embeds two version forms:
 
-- **RNode protocol version**: the `FW_VERSION` response uses the Cargo package `major.minor`
-- **Full build version**: startup logs include `major.minor.commit_count-short_hash[-dirty]`
+- **RNode protocol version**: the `FW_VERSION` response reports the RNode protocol level the bridge implements (1.52, `RNODE_PROTOCOL` in `build.rs`), not the crate version
+- **Full build version**: `major.minor.commit_count-short_hash[-dirty]` of this crate, in the `FW_DETAIL` response and the startup logs
 
 Example:
 
