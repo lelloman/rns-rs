@@ -2147,3 +2147,264 @@ fn rnpath_looks_up_a_destination_as_python_does() {
         assert_eq!(rust.stdout, python.stdout);
     }
 }
+
+/// A shared instance run by `daemon` with a TCP server and a probe responder,
+/// in its own config directory.
+#[cfg(target_os = "linux")]
+struct ProbeInstance {
+    _root: tempfile::TempDir,
+    config: PathBuf,
+    instance: String,
+    transport_port: u16,
+    probe_hash: String,
+    _daemon: ProcessGuard,
+}
+
+#[cfg(target_os = "linux")]
+impl ProbeInstance {
+    fn start(daemon: Daemon, label: &str) -> Self {
+        let _startup_guard = HARNESS_START_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("instance");
+        fs::create_dir_all(&config).unwrap();
+        let shared = TcpPortReservation::new();
+        let control = TcpPortReservation::new();
+        let transport = TcpPortReservation::new();
+        let transport_port = transport.port();
+        let control_port = control.port();
+        let instance = format!("{label}-{}", std::process::id());
+        fs::write(
+            config.join("config"),
+            format!(
+                "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+                 instance_name = {instance}\n  shared_instance_port = {}\n  \
+                 instance_control_port = {}\n  respond_to_probes = Yes\n  \
+                 discover_interfaces = No\n\n[logging]\n  loglevel = 4\n\n\
+                 [interfaces]\n  [[TCP Server]]\n    type = TCPServerInterface\n    \
+                 enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n",
+                shared.port(),
+                control.port()
+            ),
+        )
+        .unwrap();
+        drop((shared, control, transport));
+        let mut process = spawn_daemon(daemon, &config, &root.path().join("daemon.log"));
+        wait_for_abstract_socket(&format!("rns/{instance}"), &mut process, "daemon");
+        wait_for_port(transport_port, &mut process, "daemon TCP server");
+        wait_for_rpc(&instance, control_port, &mut process, "daemon RPC");
+        // Python writes the transport identity just after opening the socket.
+        let identity_path = config.join("storage").join("transport_identity");
+        let deadline = Instant::now() + START_TIMEOUT;
+        let identity = loop {
+            match rns_net::storage::load_identity(&identity_path) {
+                Ok(identity) => break identity,
+                Err(error) => {
+                    process.assert_running("daemon");
+                    assert!(Instant::now() < deadline, "no transport identity: {error}");
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        };
+        let probe_hash = rns_core::destination::destination_hash(
+            "rnstransport",
+            &["probe"],
+            Some(identity.hash()),
+        )
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+        ProbeInstance {
+            _root: root,
+            config,
+            instance,
+            transport_port,
+            probe_hash,
+            _daemon: process,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn utility_command(implementation: Daemon, utility: &str) -> Command {
+    match implementation {
+        Daemon::Python => {
+            let mut command = Command::new("python3");
+            command
+                .args(["-m", &format!("RNS.Utilities.{utility}")])
+                .env("PYTHONUNBUFFERED", "1");
+            command
+        }
+        Daemon::Rust => Command::new(match utility {
+            "rnstatus" => env!("CARGO_BIN_EXE_rnstatus"),
+            "rnpath" => env!("CARGO_BIN_EXE_rnpath"),
+            "rnprobe" => env!("CARGO_BIN_EXE_rnprobe"),
+            other => panic!("no Rust binary for {other}"),
+        }),
+    }
+}
+
+/// The utilities that talk to a shared instance, run by one implementation
+/// against a shared instance run by the other: each succeeds, and none
+/// prints a Python traceback or a Rust panic. This is the cross check that
+/// caught the interface stats, RPC address and probe gaps.
+#[cfg(target_os = "linux")]
+fn utilities_run_cleanly_against(daemon: Daemon, utilities: Daemon) {
+    let instance = ProbeInstance::start(
+        daemon,
+        if daemon == Daemon::Rust {
+            "sweep-rust"
+        } else {
+            "sweep-python"
+        },
+    );
+    let config = instance.config.to_str().unwrap();
+    let probe = instance.probe_hash.as_str();
+    let invocations: [(&str, Vec<&str>); 6] = [
+        ("rnstatus", vec![]),
+        ("rnstatus", vec!["-a"]),
+        ("rnpath", vec!["-t"]),
+        ("rnpath", vec!["-r"]),
+        ("rnprobe", vec!["-t", "15", "rnstatus.probe", probe]),
+        (
+            "rnprobe",
+            vec!["-t", "15", "-n", "2", "rnstransport.probe", probe],
+        ),
+    ];
+    for (utility, args) in invocations {
+        // The first probe uses a wrong name on purpose: it must fail cleanly
+        // (no path to the hash its name gives), not crash.
+        let expect_success = !args.contains(&"rnstatus.probe");
+        let mut command = utility_command(utilities, utility);
+        command.args(["--config", config]).args(&args);
+        let output = run(command);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let what = format!("{utility} {}", args.join(" "));
+        for marker in ["Traceback", "panicked", "KeyError", "Exception"] {
+            assert!(
+                !stdout.contains(marker) && !stderr.contains(marker),
+                "{what} printed {marker}:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+        if expect_success {
+            assert_success(&output, &what);
+        }
+        if utility == "rnprobe" && expect_success {
+            assert!(
+                stdout.contains("Valid reply") && stdout.contains("packet loss 0.0%"),
+                "{what}:\n{stdout}"
+            );
+        }
+        if utility == "rnstatus" {
+            assert!(
+                stdout.contains(&format!("Shared Instance[rns/{}]", instance.instance)),
+                "{what} lists no shared instance:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("TCPServerInterface[TCP Server/127.0.0.1:"),
+                "{what} lists no TCP server:\n{stdout}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+#[cfg(target_os = "linux")]
+fn python_utilities_run_cleanly_against_rust_instance() {
+    utilities_run_cleanly_against(Daemon::Rust, Daemon::Python);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+#[cfg(target_os = "linux")]
+fn rust_utilities_run_cleanly_against_python_instance() {
+    utilities_run_cleanly_against(Daemon::Python, Daemon::Rust);
+}
+
+/// A destination that enforces ratchets, run by Python as an instance of its
+/// own over TCP to a Rust rnsd: Rust rnprobe, a shared instance client of
+/// that rnsd, gets a proof back only if it encrypted to the announced
+/// ratchet (the shared client used to have no ratchet store).
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+#[cfg(target_os = "linux")]
+fn rust_shared_client_probes_a_python_destination_enforcing_ratchets() {
+    let instance = ProbeInstance::start(Daemon::Rust, "ratchet-rust");
+    let root = tempfile::tempdir().unwrap();
+    let python_config = root.path().join("python");
+    fs::create_dir_all(&python_config).unwrap();
+    fs::write(
+        python_config.join("config"),
+        format!(
+            "[reticulum]\n  share_instance = No\n  discover_interfaces = No\n\n\
+             [interfaces]\n  [[TCP Client]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {}\n",
+            instance.transport_port
+        ),
+    )
+    .unwrap();
+    let script = format!(
+        r#"
+import RNS, sys, time
+r = RNS.Reticulum("{config}", loglevel=RNS.LOG_WARNING)
+identity = RNS.Identity()
+d = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "ratchet")
+d.enable_ratchets("{ratchets}")
+d.enforce_ratchets()
+d.set_proof_strategy(RNS.Destination.PROVE_ALL)
+d.set_packet_callback(lambda data, packet: print("DECRYPTED", len(data), flush=True))
+print("DESTINATION", RNS.hexrep(d.hash, delimit=False), flush=True)
+while True:
+    d.announce()
+    time.sleep(2)
+"#,
+        config = python_config.display(),
+        ratchets = root.path().join("ratchets").display(),
+    );
+    let mut command = Command::new("python3");
+    command.args(["-c", &script]).env("PYTHONUNBUFFERED", "1");
+    let log = root.path().join("python.log");
+    let mut python = spawn_logged(command, &log);
+    let deadline = Instant::now() + START_TIMEOUT;
+    let destination = loop {
+        python.assert_running("Python ratchet destination");
+        if let Some(line) = fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .find_map(|line| line.strip_prefix("DESTINATION ").map(str::to_string))
+        {
+            break line;
+        }
+        assert!(Instant::now() < deadline, "no destination announced");
+        thread::sleep(Duration::from_millis(50));
+    };
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rnprobe"));
+    command.args([
+        "--config",
+        instance.config.to_str().unwrap(),
+        "-t",
+        "20",
+        "interop.ratchet",
+        &destination,
+    ]);
+    let output = run(command);
+    assert_success(&output, "Rust rnprobe to a ratchet-enforcing destination");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Valid reply"), "{stdout}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fs::read_to_string(&log)
+        .unwrap_or_default()
+        .contains("DECRYPTED")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "Python never decrypted the probe:\n{}",
+            fs::read_to_string(&log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
