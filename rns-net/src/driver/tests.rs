@@ -4798,32 +4798,6 @@ fn synthesized_tunnel_attaches_to_the_receiving_interface() {
     );
 }
 
-#[test]
-fn tunnel_synthesis_with_a_bad_signature_is_ignored() {
-    let (mut client, sent) = dialing_client_driver();
-    client.handle_interface_up_event(InterfaceId(1), None, None);
-    let mut synthesis = sent.lock().unwrap()[0].clone();
-    let last = synthesis.len() - 1;
-    synthesis[last] ^= 0x01;
-
-    let mut server = new_test_driver();
-    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
-    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
-
-    assert_eq!(
-        server
-            .engine
-            .interface_info(&InterfaceId(5))
-            .and_then(|info| info.tunnel_id),
-        None
-    );
-    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
-    assert_eq!(
-        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
-        0
-    );
-}
-
 /// A writer recording whether the driver closed its connection.
 struct ShutdownRecorder(Arc<std::sync::atomic::AtomicBool>);
 
@@ -4846,6 +4820,44 @@ fn enable_interface_management(driver: &mut Driver) {
         transport_enabled: true,
         underlay_mark: None,
     });
+}
+
+#[test]
+fn tunnel_synthesis_with_a_bad_signature_tears_the_interface_down() {
+    // Upstream 3281e283, effective since 56b23c48 fixed its typo.
+    let (mut synthesis, _) = client_synthesis();
+    let last = synthesis.len() - 1;
+    synthesis[last] ^= 0x01;
+
+    let mut server = new_test_driver();
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let entry = server.interfaces.get_mut(&InterfaceId(5)).unwrap();
+        entry.dynamic = true;
+        entry.writer = Box::new(ShutdownRecorder(Arc::clone(&closed)));
+    }
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!server.interfaces.contains_key(&InterfaceId(5)));
+    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+}
+
+#[test]
+fn tunnel_synthesis_of_the_wrong_length_is_ignored() {
+    let (mut synthesis, _) = client_synthesis();
+    synthesis.pop();
+    let mut server = new_test_driver();
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
+    server.interfaces.get_mut(&InterfaceId(5)).unwrap().dynamic = true;
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    assert!(server.interfaces.contains_key(&InterfaceId(5)));
+    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+    assert_eq!(
+        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
+        0
+    );
 }
 
 #[test]

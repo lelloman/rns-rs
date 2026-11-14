@@ -53,7 +53,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 8 | `daec67a116347b28e2268beb1d7b004f827eebb2` | Cleanup | Integrated | `waiting_local_path_request_skips_ingress_limiting`; pathing-level skip log in `hold_decision` |
 | 9 | `3281e283154af393ba1a521eaba4246a32d52f1f` | Added tunnel info to rnstatus | Integrated | `interface_stats_report_the_tunnel_this_node_synthesized`, `spawned_interface_is_detached_by_its_tunnel_id`, `a_static_unmanaged_interface_is_not_torn_down`, `tunnel_id_line_matches_upstream`, `tunnels_flag_takes_no_value`; prerequisite `1df27919` |
 | 10 | `464e75986e06b4ad2050a5a4c572159ae2c2d647` | Added remote transport ID info to rnstatus | Integrated | `synthesis_records_and_reports_the_remote_transport`, `an_interface_takes_only_one_tunnel_synthesis`, `tunnels_are_not_synthesized_over_other_interface_types`, `remote_transport_line_matches_upstream`, RPC pickle assertion |
-| 11 | `56b23c4810d477ed82daf06f2e34ac0a69d87bfc` | Typo | Pending review | Changes `RNS/Reticulum.py` |
+| 11 | `56b23c4810d477ed82daf06f2e34ac0a69d87bfc` | Typo | Integrated | `tunnel_synthesis_with_a_bad_signature_tears_the_interface_down`, `tunnel_synthesis_of_the_wrong_length_is_ignored` |
 | 12 | `350b7e2614960cd6f521031cec966462c9f216c9` | Added ability to blackhole remote transport nodes | Pending review | Changes `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 | 13 | `c850cdac6c8bd5422af045652216ba451e98aa33` | Traffic counting | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
 
@@ -161,13 +161,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 11. `56b23c48` — Typo
 
-**Upstream change:** Pending review (changes `RNS/Reticulum.py`).
+**Upstream change:** Fixes `interface = interface_instances` to `interface_instance` in `_detach_interface`. This makes 3281e283's teardown effective: a tunnel synthesis with an invalid signature now detaches the receiving interface (`internal_forced`, so even with interface management disabled). I2P and local interfaces refuse; spawned interfaces of the target are detached too, then the interface itself.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** Needs port: the 3281e283 mapping deliberately left the teardown out, because upstream's code could not reach it until this fix.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `handle_tunnel_synth_delivery` calls `Driver::teardown_interface` (from the 3281e283 mapping) on `TunnelError::InvalidSignature`. A spawned interface has its connection closed and is removed; a configured one is detached through its config entry; I2P and local interfaces are refused. A synthesis of the wrong length is still ignored, and an unloadable key still counts a protocol violation. `docs/rnstatus.md` is updated. Caveat: without interface management (no config file) rns-rs cannot detach a static configured interface, so a bad synthesis received on one is only logged; upstream detaches it. `cargo test -p rns-net` passes and clippy is clean.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 12. `350b7e26` — Added ability to blackhole remote transport nodes
 
