@@ -9,7 +9,7 @@ use std::process;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use rns_cli::args::{Args, OptionSpec};
+use rns_cli::args::{Args, Opt, OptionSpec};
 use rns_core::types::{DestHash, PacketHash};
 use rns_net::event::{QueryRequest, QueryResponse, MAX_PROBE_PAYLOAD_SIZE};
 use rns_net::pickle::PickleValue;
@@ -24,12 +24,20 @@ const DEFAULT_TIMEOUT: f64 = 12.0;
 /// The destination probed when only a hash is given.
 const DEFAULT_FULL_NAME: &str = "rnstransport.probe";
 
-/// `rnprobe`'s options: none of its short options is a bare flag, so `-t`,
-/// `-s`, `-n` and `-w` always take a value (`-t 5` or `-t5`).
+/// upstream rnprobe's options: `-s`, `-n`, `-t` and `-w` always take a
+/// value (`-t 5`, `-t5` or `--timeout=5`).
 pub const OPTIONS: OptionSpec = OptionSpec {
-    flags: &[],
-    optional: &[],
-    long_optional: &[],
+    options: &[
+        Opt::value("", "config"),
+        Opt::value("s", "size"),
+        Opt::value("n", "probes"),
+        Opt::value("t", "timeout"),
+        Opt::value("w", "wait"),
+        Opt::count("v", "verbose"),
+        // Rust-only: the shared parser's `-c` and an alias of `--probes`.
+        Opt::value("c", ""),
+        Opt::value("", "count").rust_only(),
+    ],
 };
 
 #[allow(dead_code)]
@@ -519,6 +527,83 @@ mod tests {
             Some(7.0)
         );
         assert_eq!(options(&["--count", "2", HASH]).unwrap().probes, 2);
+    }
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        // (argv, size, probes, timeout, wait, verbose, app name)
+        type Case<'a> = (&'a [&'a str], usize, usize, Option<f64>, f64, bool, &'a str);
+        let cases: &[Case] = &[
+            (&[HASH], 16, 1, None, 0.0, false, "rnstransport"),
+            (&["a.b", HASH, "-s32", "-n=3"], 32, 3, None, 0.0, false, "a"),
+            (
+                &["-v", "--size", "8", "--probes=2", "a.b", HASH],
+                8,
+                2,
+                None,
+                0.0,
+                true,
+                "a",
+            ),
+            (
+                &["--timeout", "2.5", "--wait", "1", HASH],
+                16,
+                1,
+                Some(2.5),
+                1.0,
+                false,
+                "rnstransport",
+            ),
+            (
+                &["--tim", "2", "--wa=1", "--pro", "4", HASH],
+                16,
+                4,
+                Some(2.0),
+                1.0,
+                false,
+                "rnstransport",
+            ),
+            (
+                &["-vvt", "3", HASH, "-w0.25"],
+                16,
+                1,
+                Some(3.0),
+                0.25,
+                true,
+                "rnstransport",
+            ),
+            (
+                &["--config", "/tmp/x", HASH],
+                16,
+                1,
+                None,
+                0.0,
+                false,
+                "rnstransport",
+            ),
+        ];
+        for (argv, size, probes, timeout, wait, verbose, app) in cases {
+            let parsed = options(argv).unwrap_or_else(|e| panic!("{argv:?}: {e:?}"));
+            assert_eq!(
+                (
+                    parsed.size,
+                    parsed.probes,
+                    parsed.timeout,
+                    parsed.wait,
+                    parsed.verbose
+                ),
+                (*size, *probes, *timeout, *wait, *verbose),
+                "{argv:?}"
+            );
+            assert_eq!(parsed.app_name, *app, "{argv:?}");
+        }
+        assert_eq!(
+            options(&["--config=/tmp/x", HASH])
+                .unwrap()
+                .config
+                .as_deref(),
+            Some("/tmp/x")
+        );
     }
 
     #[test]
