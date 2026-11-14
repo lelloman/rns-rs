@@ -9,6 +9,25 @@ pub(super) fn extra_link_proof_timeout(interface: Option<&InterfaceInfo>) -> f64
         })
 }
 
+/// How the destination type filter treats an inbound announce.
+enum DestinationFilterVerdict {
+    Admit,
+    /// A blocked destination type.
+    Blocked,
+    /// With `required_destinations_only`, a type nobody allowed or wants.
+    NotAllowed,
+}
+
+/// The ingress limiting outcome for an inbound announce.
+enum HoldDecision {
+    /// Not limited; processing continues.
+    Pass,
+    /// Held for later release.
+    Held,
+    /// Dropped or replacing a held announce: a filtered announce.
+    Filtered,
+}
+
 impl TransportEngine {
     fn record_invalid_announce(
         &self,
@@ -167,13 +186,22 @@ impl TransportEngine {
         actions: &mut Vec<TransportAction>,
     ) {
         self.inbound_filtered = false;
+        self.inbound_filtered_announce = false;
         let Some(mut ctx) = self.prepare_decoded_packet(frame) else {
             self.inbound_filtered = true;
             return;
         };
-        if !self.destination_filter_admits(&ctx) {
-            self.inbound_filtered = true;
-            return;
+        match self.destination_filter_verdict(&ctx) {
+            DestinationFilterVerdict::Admit => {}
+            DestinationFilterVerdict::Blocked => {
+                self.inbound_filtered = true;
+                return;
+            }
+            // Upstream 819076c3 counts this one as a filtered announce.
+            DestinationFilterVerdict::NotAllowed => {
+                self.filter_announce();
+                return;
+            }
         }
         // Routing state may have changed since decoding. Any packet whose hash
         // a step could now read is hashed first.
@@ -202,9 +230,9 @@ impl TransportEngine {
     /// runs before anything else sees the packet. Python's `hops == 1` after
     /// its increment means the announce was sent with zero hops; local
     /// client hops are not incremented here.
-    fn destination_filter_admits(&self, ctx: &InboundPacketCtx) -> bool {
+    fn destination_filter_verdict(&self, ctx: &InboundPacketCtx) -> DestinationFilterVerdict {
         if ctx.packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE {
-            return true;
+            return DestinationFilterVerdict::Admit;
         }
         let start = constants::KEYSIZE / 8;
         let Some(name_hash) = ctx
@@ -213,13 +241,28 @@ impl TransportEngine {
             .get(start..start + constants::NAME_HASH_LENGTH / 8)
         else {
             // Malformed; announce unpacking reports the violation.
-            return true;
+            return DestinationFilterVerdict::Admit;
         };
         let mut destination_type = [0u8; constants::NAME_HASH_LENGTH / 8];
         destination_type.copy_from_slice(name_hash);
         let own_local_announce = ctx.from_local_client && ctx.packet.hops == 0;
-        self.destination_filter
+        if self.destination_filter.blocks(&destination_type) {
+            DestinationFilterVerdict::Blocked
+        } else if self
+            .destination_filter
             .allows(&destination_type, own_local_announce)
+        {
+            DestinationFilterVerdict::Admit
+        } else {
+            DestinationFilterVerdict::NotAllowed
+        }
+    }
+
+    /// Mark the inbound packet as a filtered announce: its bytes count as
+    /// filtered and the interface's `afrxc` grows (upstream 819076c3).
+    fn filter_announce(&mut self) {
+        self.inbound_filtered = true;
+        self.inbound_filtered_announce = true;
     }
 
     pub(super) fn prepare_inbound_packet(
@@ -639,9 +682,13 @@ impl TransportEngine {
             }
         };
 
-        if self.should_hold_announce(packet, original_raw, iface, now) {
-            self.inbound_filtered = true;
-            return;
+        match self.hold_decision(packet, original_raw, iface, now) {
+            HoldDecision::Pass => {}
+            HoldDecision::Held => return,
+            HoldDecision::Filtered => {
+                self.filter_announce();
+                return;
+            }
         }
 
         let sig_cache_key = Self::announce_sig_cache_key(&packet.destination_hash, &announce);
@@ -762,24 +809,27 @@ impl TransportEngine {
         }
     }
 
-    fn should_hold_announce<B: AsRef<[u8]>>(
+    /// Ingress limiting of an announce for an unknown destination. Since
+    /// upstream 819076c3 a held announce is received traffic; one ingress
+    /// control drops or uses to replace a held one is a filtered announce.
+    fn hold_decision<B: AsRef<[u8]>>(
         &mut self,
         packet: &RawPacket<B>,
         original_raw: &[u8],
         iface: InterfaceId,
         now: f64,
-    ) -> bool {
+    ) -> HoldDecision {
         if self.has_path(&packet.destination_hash) {
-            return false;
+            return HoldDecision::Pass;
         }
         if self
             .discovery_path_requests
             .contains_key(&packet.destination_hash)
         {
-            return false;
+            return HoldDecision::Pass;
         }
         let Some(info) = self.interfaces.get(&iface) else {
-            return false;
+            return HoldDecision::Pass;
         };
         if packet.context == constants::CONTEXT_PATH_RESPONSE
             || !self.ingress_control.should_ingress_limit(
@@ -790,9 +840,9 @@ impl TransportEngine {
                 now,
             )
         {
-            return false;
+            return HoldDecision::Pass;
         }
-        self.ingress_control.hold_announce(
+        let held = self.ingress_control.hold_announce(
             iface,
             &info.ingress_control,
             packet.destination_hash,
@@ -807,7 +857,11 @@ impl TransportEngine {
                 timestamp: now,
             },
         );
-        true
+        if held {
+            HoldDecision::Held
+        } else {
+            HoldDecision::Filtered
+        }
     }
 
     fn try_enqueue_announce(
@@ -855,9 +909,13 @@ impl TransportEngine {
             .original_raw
             .as_deref()
             .expect("announce packets retain original raw bytes");
-        if self.should_hold_announce(&ctx.packet, original_raw, ctx.iface, ctx.now) {
-            self.inbound_filtered = true;
-            return;
+        match self.hold_decision(&ctx.packet, original_raw, ctx.iface, ctx.now) {
+            HoldDecision::Pass => {}
+            HoldDecision::Held => return,
+            HoldDecision::Filtered => {
+                self.filter_announce();
+                return;
+            }
         }
 
         let sig_cache_key = Self::announce_sig_cache_key(&ctx.packet.destination_hash, &announce);
@@ -964,6 +1022,7 @@ impl TransportEngine {
         rng: &mut dyn Rng,
     ) -> Vec<TransportAction> {
         self.inbound_filtered = false;
+        self.inbound_filtered_announce = false;
         self.announce_sig_cache.insert(sig_cache_key, now);
         let mut actions = Vec::new();
         self.process_verified_announce(
@@ -992,7 +1051,7 @@ impl TransportEngine {
         actions: &mut Vec<TransportAction>,
     ) {
         if self.is_blackholed(&ctx.validated.identity_hash, ctx.now) {
-            self.inbound_filtered = true;
+            self.filter_announce();
             return;
         }
         if ctx.packet.hops > constants::PATHFINDER_M {
@@ -1012,7 +1071,7 @@ impl TransportEngine {
         if self.stamp_requirements.enforced
             && stamp_status != crate::announce::AnnounceStampStatus::Valid
         {
-            self.inbound_filtered = true;
+            self.filter_announce();
             return;
         }
 

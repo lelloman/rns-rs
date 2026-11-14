@@ -985,6 +985,8 @@ pub struct TrafficDetail {
     pub atxb: u64,
     pub arxc: u64,
     pub atxc: u64,
+    /// Filtered announces (upstream 819076c3).
+    pub afrxc: u64,
     pub arxs: f64,
     pub atxs: f64,
     pub prxb: u64,

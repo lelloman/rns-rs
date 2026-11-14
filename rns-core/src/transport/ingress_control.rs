@@ -192,29 +192,33 @@ impl IngressControl {
 
     /// Store a held announce for later release.
     ///
-    /// If the destination already has a held announce, it is updated.
-    /// If the max is reached, the announce is dropped.
+    /// Returns whether the announce was newly held. As in upstream
+    /// `Interface.hold_announce` (819076c3), the other outcomes are filtered
+    /// announces: one with too many hops or arriving at the limit is dropped,
+    /// and one for a destination already held replaces the held announce.
     pub fn hold_announce(
         &mut self,
         interface: InterfaceId,
         config: &IngressControlConfig,
         dest_hash: [u8; 16],
         held: HeldAnnounce,
-    ) {
+    ) -> bool {
         if held.hops >= crate::constants::PATHFINDER_M - 1 {
-            return;
+            return false;
         }
         let state = self
             .states
             .entry(interface)
             .or_insert_with(IngressControlState::new);
         if state.held_announces.contains_key(&dest_hash) {
-            // Update existing
             state.held_announces.insert(dest_hash, held);
+            false
         } else if state.held_announces.len() < config.max_held_announces {
             state.held_announces.insert(dest_hash, held);
+            true
+        } else {
+            false
         }
-        // else: at max, silently drop
     }
 
     /// Try to release one held announce from this interface.

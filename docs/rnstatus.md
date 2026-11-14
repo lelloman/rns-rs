@@ -14,7 +14,7 @@ Options:
   -a                      Show all interfaces
   -j                      JSON output
   -s SORT                 Sort by: rate, traffic, rx, tx, frx, ftx,
-                          frxs, ftxs, prx, ptx, arxc, atxc, prxc, ptxc,
+                          frxs, ftxs, prx, ptx, arxc, atxc, afrxc, prxc, ptxc,
                           pvs, ivs, flt
   -r                      Reverse sort order
   -t                      Show traffic totals
@@ -64,7 +64,11 @@ interfaces when that count is available.
 With `-A` or `-P`, each interface includes cumulative incoming and outgoing
 packet counts as well as byte totals, current rates, and frequencies. The
 `arxc`, `atxc`, `prxc`, and `ptxc` sort keys order interfaces by those announce
-and path-request counts. `pvs`, `ivs`, and `flt` sort by protocol, IFAC, and
+and path-request counts. The announce total line ends with the number of
+filtered announces when there are any, and the `afrxc` sort key orders by it.
+An announce is filtered when ingress control drops it or uses it to replace an
+announce it already holds, when `required_destinations_only` rejects its type,
+or when its identity is blackholed or its stamp fails. `pvs`, `ivs`, and `flt` sort by protocol, IFAC, and
 duplicate-filter violations respectively. A `Hop Limit` line counts frames
 dropped because their hop count reached the transport hop limiter configured
 with `[filter] hop_limiter`; these are reported separately from protocol

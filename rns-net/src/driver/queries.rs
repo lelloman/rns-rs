@@ -12,6 +12,7 @@ fn traffic_detail(stats: &crate::interface::InterfaceStats) -> TrafficDetail {
         atxb: stats.atxb,
         arxc: stats.arxc,
         atxc: stats.atxc,
+        afrxc: stats.afrxc,
         arxs: stats.traffic_rates.arxs,
         atxs: stats.traffic_rates.atxs,
         prxb: stats.prxb,
@@ -38,6 +39,7 @@ fn add_traffic(total: &mut TrafficDetail, detail: TrafficDetail) {
     total.atxb += detail.atxb;
     total.arxc += detail.arxc;
     total.atxc += detail.atxc;
+    total.afrxc += detail.afrxc;
     total.arxs += detail.arxs;
     total.atxs += detail.atxs;
     total.prxb += detail.prxb;

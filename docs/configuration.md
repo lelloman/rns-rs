@@ -475,11 +475,12 @@ The example's other values differ from these defaults on purpose. In the
 `[reticulum]` section, `ic_max_held_announces = 0` keeps the default, as
 upstream reads it; on an interface, `0` holds no announces.
 
-Once an interface holds `ic_max_held_announces` announces, every further
-announce it receives is dropped at once, before any processing, until held ones
-are released (upstream `f96cef7e`). This applies whether ingress control is on
-or not, so an interface with `ic_max_held_announces = 0` accepts no announces
-at all.
+While an interface bursts, an announce for a new destination is held if fewer
+than `ic_max_held_announces` are held. Otherwise it is dropped, and an announce
+for a destination already held replaces the held one. Both count as filtered
+announces (`afrxc` in `rnstatus -A`). Outside a burst the limit drops nothing
+(upstream `819076c3`), so on an interface with `ic_max_held_announces = 0`
+announces are only dropped while it bursts.
 
 Ingress control is on by default for Auto, Backbone, TCP client/server, UDP,
 and I2P interfaces, and off for local, serial, KISS, RNode, and Pipe-style

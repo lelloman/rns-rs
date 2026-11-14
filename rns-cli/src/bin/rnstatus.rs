@@ -575,7 +575,9 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                 );
                 let arxc = iface.get("arxc").and_then(|v| v.as_int()).unwrap_or(0);
                 let atxc = iface.get("atxc").and_then(|v| v.as_int()).unwrap_or(0);
-                for line in traffic_count_lines("Announces", arxc, atxc, lines) {
+                let afrxc = iface.get("afrxc").and_then(|v| v.as_int()).unwrap_or(0);
+                let lines = traffic_count_lines("Announces", arxc, atxc, lines);
+                for line in with_filtered_announces(lines, arxc, atxc, afrxc) {
                     println!("{}", line);
                 }
             }
@@ -873,7 +875,7 @@ fn interface_sort_value(iface: &PickleValue, sort_key: &str) -> SortValue {
                 .and_then(|v| v.as_float())
                 .unwrap_or(0.0),
         ),
-        "arxc" | "atxc" | "prxc" | "ptxc" => SortValue::Int(
+        "arxc" | "atxc" | "afrxc" | "prxc" | "ptxc" => SortValue::Int(
             iface
                 .get(sort_key)
                 .and_then(|value| value.as_int())
@@ -998,6 +1000,22 @@ fn traffic_count_lines(
             .map(|suffix| format!("                {suffix}"))
             .unwrap_or(line)
     }));
+    lines
+}
+
+/// Upstream 819076c3: the announce total line ends with the filtered
+/// announce count when there is one.
+fn with_filtered_announces(
+    mut lines: Vec<String>,
+    arxc: i64,
+    atxc: i64,
+    afrxc: i64,
+) -> Vec<String> {
+    if arxc > 0 && atxc > 0 && afrxc > 0 {
+        if let Some(total) = lines.first_mut() {
+            total.push_str(&format!(", {afrxc} filtered"));
+        }
+    }
     lines
 }
 
@@ -1895,7 +1913,7 @@ fn print_usage(usage_name: &str) {
     println!("  --reload NAME           Reload a running interface from config");
     println!("  -a                      Show all interfaces");
     println!("  -j                      JSON output");
-    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, frx, ftx, frxs, ftxs, prx, ptx, arxc, atxc, prxc, ptxc, txdrp, txdrb, txbuf");
+    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, frx, ftx, frxs, ftxs, prx, ptx, arxc, atxc, afrxc, prxc, ptxc, txdrp, txdrb, txbuf");
     println!("  -r                      Reverse sort order");
     println!("  -t                      Show traffic totals");
     println!("  -p, --pps               Show packets per second in traffic totals");
@@ -2522,6 +2540,38 @@ mod tests {
                 "    Announces : 11\u{2193} 22\u{2191} total",
                 "                 1.0/h in  2.0/h out",
             ]
+        );
+    }
+
+    #[test]
+    fn filtered_announces_render_and_sort() {
+        // Upstream 819076c3: `afrxc` per interface and its sort key.
+        let iface = PickleValue::Dict(vec![(
+            PickleValue::String("afrxc".into()),
+            PickleValue::Int(7),
+        )]);
+        assert_eq!(interface_sort_value(&iface, "afrxc"), SortValue::Int(7));
+        let lines = || {
+            traffic_count_lines(
+                "Announces",
+                11,
+                22,
+                vec!["    Announces : 1.0/h in  2.0/h out".into()],
+            )
+        };
+        assert_eq!(
+            with_filtered_announces(lines(), 11, 22, 7),
+            vec![
+                "    Announces : 11\u{2193} 22\u{2191} total, 7 filtered",
+                "                 1.0/h in  2.0/h out",
+            ]
+        );
+        assert_eq!(with_filtered_announces(lines(), 11, 22, 0), lines());
+        // Without both totals there is no total line to extend.
+        let rate_only = vec!["    Announces : 1.0/h in  2.0/h out".to_string()];
+        assert_eq!(
+            with_filtered_announces(rate_only.clone(), 0, 22, 7),
+            rate_only
         );
     }
 

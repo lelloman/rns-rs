@@ -42,6 +42,8 @@ pub struct InterfaceStats {
     pub atxb: u64,
     pub arxc: u64,
     pub atxc: u64,
+    /// Announces dropped as filtered (upstream 819076c3).
+    pub afrxc: u64,
     pub prxb: u64,
     pub ptxb: u64,
     pub prxc: u64,
