@@ -5,6 +5,14 @@ use std::process::Command;
 
 const MAX_CONTROL_IDENTITIES: usize = 3;
 
+/// The RNode firmware protocol level the bridge implements, reported in
+/// reply to CMD_FW_VERSION; this crate's own version is in CMD_FW_DETAIL.
+/// 1.52 is the oldest level upstream's RNodeInterface accepts. The bridge
+/// meets what hosts rely on at that level: detection, configuration echoes,
+/// staying up until LEAVE, listen before talk, enforced airtime limits and
+/// per-packet RSSI/SNR. It does not answer the optional statistics commands.
+const RNODE_PROTOCOL: (u8, u8) = (1, 52);
+
 fn main() {
     if env::var_os("CARGO_FEATURE_FIRMWARE").is_some() {
         embuild::espidf::sysenv::output();
@@ -45,7 +53,13 @@ fn main() {
              pub const DIRTY: bool = {};\n\
              pub const RNODE_PROTOCOL_MAJOR: u8 = {};\n\
              pub const RNODE_PROTOCOL_MINOR: u8 = {};\n",
-            pkg_version, full_version, commit_hash, commit_count, dirty, major, minor
+            pkg_version,
+            full_version,
+            commit_hash,
+            commit_count,
+            dirty,
+            RNODE_PROTOCOL.0,
+            RNODE_PROTOCOL.1
         ),
     )
     .expect("write firmware_version.rs");
