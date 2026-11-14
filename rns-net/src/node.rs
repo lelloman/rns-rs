@@ -2565,13 +2565,14 @@ impl RnsNode {
                         },
                     );
                     log::debug!(
-                        "restored transport state: {} packet hashes, {} paths, {} tunnels, {} announce rates ({} paths skipped, {} filtered)",
+                        "restored transport state: {} packet hashes, {} paths, {} tunnels, {} announce rates ({} paths skipped, {} filtered, {} blackholed)",
                         stats.packet_hashes,
                         stats.paths,
                         stats.tunnels,
                         stats.announce_rates,
                         stats.skipped_paths,
                         stats.filtered_paths,
+                        stats.blackholed_paths,
                     );
                 }
                 Err(err) => log::warn!("failed to restore transport state: {}", err),

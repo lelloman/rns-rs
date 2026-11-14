@@ -92,6 +92,23 @@ impl Driver {
                 drop.len()
             );
         }
+
+        // Upstream 350b7e26: connections from blackholed transport nodes are
+        // torn down.
+        let detach: Vec<(InterfaceId, [u8; 16])> = self
+            .interfaces
+            .keys()
+            .filter_map(|id| Some((*id, self.engine.remote_transport(id)?)))
+            .filter(|(_, remote)| self.engine.is_blackholed(remote, now))
+            .collect();
+        for (id, remote) in detach {
+            log::info!(
+                "Tearing down interface {} from blackholed transport node {}",
+                id.0,
+                hex16(&remote)
+            );
+            self.teardown_interface(id);
+        }
     }
 }
 

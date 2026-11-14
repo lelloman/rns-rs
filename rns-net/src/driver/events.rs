@@ -2222,13 +2222,24 @@ impl Driver {
         // cannot be loaded, where Python raises, is a protocol violation.
         match rns_core::transport::tunnel::validate_tunnel_synthesize_data(packet.data()) {
             Ok(validated) => {
-                if let Ok(remote) =
-                    rns_crypto::identity::Identity::from_public_key(&validated.public_key)
-                {
-                    self.engine
-                        .set_remote_transport(receiving_interface, *remote.hash());
-                }
                 let now = time::now();
+                let remote = rns_core::hash::truncated_hash(&validated.public_key);
+                // Upstream 350b7e26: a blackholed transport node's connection
+                // is torn down instead.
+                if self.engine.is_blackholed(&remote, now) {
+                    log::debug!(
+                        "Tunnel synthesis from blackholed transport node {}, tearing down {:?}",
+                        remote
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>(),
+                        receiving_interface
+                    );
+                    self.teardown_interface(receiving_interface);
+                    return;
+                }
+                self.engine
+                    .set_remote_transport(receiving_interface, remote);
                 let tunnel_actions =
                     self.engine
                         .handle_tunnel(validated.tunnel_id, receiving_interface, now);
