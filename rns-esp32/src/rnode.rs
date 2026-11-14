@@ -18,10 +18,10 @@ use crate::display::SharedStats;
 use crate::lora::SharedRadio;
 use crate::version;
 use rns_esp32::protocol::{
-    kiss_encode, validate_radio_config, DetectBuffer, KissDecoder, KissFrame, RadioConfig,
-    CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT, CMD_FREQUENCY, CMD_FW_DETAIL, CMD_FW_VERSION,
-    CMD_LEAVE, CMD_LT_ALOCK, CMD_MCU, CMD_PLATFORM, CMD_RADIO_STATE, CMD_READY, CMD_SF,
-    CMD_ST_ALOCK, CMD_TXPOWER, DETECT_REQ, DETECT_RESP, RADIO_STATE_ON,
+    kiss_encode, reception_stat_frames, validate_radio_config, DetectBuffer, KissDecoder,
+    KissFrame, RadioConfig, CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT, CMD_FREQUENCY,
+    CMD_FW_DETAIL, CMD_FW_VERSION, CMD_LEAVE, CMD_LT_ALOCK, CMD_MCU, CMD_PLATFORM, CMD_RADIO_STATE,
+    CMD_READY, CMD_SF, CMD_ST_ALOCK, CMD_TXPOWER, DETECT_REQ, DETECT_RESP, RADIO_STATE_ON,
 };
 
 /// Transport-agnostic serial interface for the RNode bridge.
@@ -212,14 +212,20 @@ impl<T: BridgeTransport> RNodeBridge<T> {
 
             let received = {
                 let mut radio = self.radio.lock().unwrap();
-                radio.receive()
+                radio
+                    .receive()
+                    .map(|data| (data, radio.last_packet_stats()))
             };
-            if let Some(data) = received {
+            if let Some((data, (rssi, snr))) = received {
                 log::debug!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
                 if let Some(ref stats) = self.stats {
                     stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
                 }
-                let frame = kiss_encode(CMD_DATA, &data);
+                // As upstream firmware: reception stats, then the frame.
+                let [rssi_frame, snr_frame] = reception_stat_frames(rssi, snr);
+                let mut frame = rssi_frame;
+                frame.extend_from_slice(&snr_frame);
+                frame.extend_from_slice(&kiss_encode(CMD_DATA, &data));
                 if let Err(err) = self.transport.write(&frame) {
                     log::warn!("RNode bridge: LoRa->serial forwarding failed: {}", err);
                     break BridgeExit::TransportError;

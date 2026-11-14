@@ -39,6 +39,7 @@ const OPCODE_CLEAR_IRQ_STATUS: u8 = 0x02;
 const OPCODE_SET_RX: u8 = 0x82;
 const OPCODE_SET_TX: u8 = 0x83;
 const OPCODE_GET_RX_BUFFER_STATUS: u8 = 0x13;
+const OPCODE_GET_PACKET_STATUS: u8 = 0x14;
 const OPCODE_SET_DIO3_AS_TCXO_CTRL: u8 = 0x97;
 const OPCODE_CALIBRATE: u8 = 0x89;
 const OPCODE_SET_REGULATOR_MODE: u8 = 0x96;
@@ -79,6 +80,8 @@ pub struct Radio {
     reassembler: Reassembler,
     /// The preamble for the current channel, in symbols.
     preamble: u16,
+    /// RSSI (dBm) and raw SNR (quarter dB) of the last packet received.
+    last_packet_stats: (i16, i8),
 }
 
 impl Radio {
@@ -400,6 +403,12 @@ impl Radio {
         Ok(())
     }
 
+    /// RSSI (dBm) and raw SNR (quarter dB) of the last packet received; for
+    /// a frame split over two packets, of its second, as upstream firmware.
+    pub fn last_packet_stats(&self) -> (i16, i8) {
+        self.last_packet_stats
+    }
+
     /// A received frame, once all of its LoRa packets are in.
     pub fn receive(&mut self) -> Option<Vec<u8>> {
         let packet = self.try_receive()?;
@@ -431,6 +440,10 @@ impl Radio {
 
             // Read buffer
             let data = self.cmd_read(OPCODE_READ_BUFFER, &[offset], len);
+            // GetPacketStatus (LoRa): RssiPkt (-dBm * 2), SnrPkt (signed,
+            // quarter dB), SignalRssiPkt.
+            let status = self.cmd_read(OPCODE_GET_PACKET_STATUS, &[], 3);
+            self.last_packet_stats = (-(status[0] as i16) / 2, status[1] as i8);
             Some(data)
         } else {
             if irq & IRQ_CRC_ERR != 0 {
@@ -496,6 +509,7 @@ pub fn init(
         rst,
         busy,
         reassembler: Reassembler::new(),
+        last_packet_stats: (0, 0),
         preamble: modem::preamble_symbols(
             config::LORA_SPREADING_FACTOR,
             config::LORA_BANDWIDTH,
