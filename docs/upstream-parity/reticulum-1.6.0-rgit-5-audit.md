@@ -1,12 +1,12 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.6.0 rgit `c850cdac` Upstream Audit
 
 ## Scope and Baseline
 
 - audit date: `2026-11-14`
 - previous accepted version: `1.6.0`
 - previous normative commit: `134dc6777c0dd29404e61b36d4094f4e35b88b3e`
-- target version: `1.6.0` (pending: no version bump in range)
-- target tag or ref: `rgit/master` (pending promotion target)
+- target version: `1.6.0` (same-version advancement)
+- target tag or ref: `rgit/master` tip, no tag
 - target normative commit: `c850cdac6c8bd5422af045652216ba451e98aa33`
 - target root tree: `af323f9220c51ea4925a2b2d5422a61d6f917a07`
 - target `RNS` tree: `77efe59cff06d6c9c17a7ecbd9b1f53308d44759`
@@ -14,12 +14,12 @@
 - audited range: `134dc6777c0dd29404e61b36d4094f4e35b88b3e..c850cdac6c8bd5422af045652216ba451e98aa33`
 - commits in range: `13`
 - repositories checked: rgit `master` (normative) and the GitHub mirror `master`
-- local branch and revision inspected: `dev@9aa6de76b6bc5a67042f892af4481f6d8572d554`
+- local branch and revision inspected: `dev@9aa6de76b6bc5a67042f892af4481f6d8572d554` (audit opened); gates run on `dev@8d5177db`
 
 Found by the 2026-11-14 daily drift check (`data/upstream-drift-2026-11-14.json`),
 both remotes refreshed fresh. The GitHub mirror tip `3c4b271f` lags behind the
 accepted baseline; all 13 commits are reachable only from rgit `master`.
-No version bump, so the target version and promotion target stay pending.
+No version bump, so the promotion target is the untagged rgit tip.
 
 ## Audit Vocabulary
 
@@ -210,20 +210,48 @@ Open caveats recorded in the entries above:
   configured interface cannot be detached, so a bad synthesis on one is only
   logged.
 
-Remaining before promotion: the promotion gates below, starting with
-exact-target (`c850cdac`) live Python/Rust interop.
+All promotion gates below pass; the final record is
+[reticulum-1.6.0-rgit-5-parity.md](reticulum-1.6.0-rgit-5-parity.md).
 
 ## Promotion Gates
 
 - [x] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
-None yet.
+Gates were run on 2026-11-14 on `dev@8d5177db`: the audit opening, the
+prerequisite tunnel synthesis fix `1df27919`, the thirteen mapping commits and
+the audit summary, over `9aa6de76`.
+
+- One fixture was added: `tests/fixtures/transport/announce_rate_table_d5f1e014.bin`.
+  It was written by upstream's own `AnnounceRateTable.persist` at `d5f1e014`
+  with `tests/generate_announce_rate_table_fixture.py`, and is byte-identical
+  across two generations. No existing fixture changed, and the range changes
+  no wire format.
+- Exact-target interop against a disposable export of `c850cdac`
+  (`import RNS` reports 1.6.0): `python_interop` 5/5, including the new
+  `python_rns_receives_tunnel_synthesis_from_rust_client`. `utility_interop`
+  passed 20/20 ignored-gated tests; its 4 other tests pass in the workspace
+  suite, for 24/24. The same suites pass against exports of `134dc677`, 1.5.4
+  and 1.4.2 (`python_interop` 5/5 and `utility_interop` 20/20 each).
+- `cargo test --workspace`: 3,368 passed, 0 failed.
+  `cargo test --workspace --features rns-hooks`: 3,434 passed, 0 failed.
+  `rns-net` with the four `compact-threads-*` features: 1,490 passed, 0 failed.
+- `cargo fmt --all --check` and `bash scripts/lint-host.sh` are clean.
+- `scripts/check_upstream_drift.py`: the first run in the gate sequence could
+  not refresh rgit (link establishment timed out) and was reported as
+  incomplete. A retry at 08:04 UTC fetched both remotes fresh: rgit tip
+  `c850cdac`, GitHub tip `3c4b271f`, exactly the thirteen audited commits.
+- Not run: the dual-VPS Backbone smoke and a release build. Docker E2E,
+  ARMv7 build smoke and the CI interop matrix are delegated to the promotion
+  pull request's CI. Physical hardware validation is not claimed.
+
+The final record is
+[reticulum-1.6.0-rgit-5-parity.md](reticulum-1.6.0-rgit-5-parity.md).
