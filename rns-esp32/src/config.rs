@@ -62,6 +62,14 @@ pub const LORA_CRC_ON: bool = true;
 /// SX1262 max payload size.
 pub const LORA_MTU: u32 = 255;
 
+/// Host-serial receive buffer, in bytes. Sending a frame blocks the bridge
+/// loop for its whole airtime (over a second at SF8), and the host does not
+/// wait between frames: it writes a full resource window back to back. The
+/// UART driver's default buffer (256 bytes) holds less than one frame, so
+/// every frame after the first in a window was lost. 16 KiB holds a slow-link
+/// window (10 frames of up to 508 bytes) even with worst-case KISS escaping.
+pub const SERIAL_RX_BUFFER: usize = 16 * 1024;
+
 // Heltec V3 SX1262 GPIO pin assignments
 pub const PIN_SCK: i32 = 9;
 pub const PIN_MOSI: i32 = 10;

@@ -113,7 +113,9 @@ fn main() {
     let (radio, writer) = lora::init(spi_driver, cs, rst, busy).expect("LoRa radio init");
 
     // Initialize UART0 for RNode serial protocol (USB-UART bridge on Heltec V3)
-    let uart_config = uart::config::Config::default().baudrate(Hertz(115200));
+    let uart_config = uart::config::Config::default()
+        .baudrate(Hertz(115200))
+        .rx_fifo_size(config::SERIAL_RX_BUFFER);
     let uart = UartDriver::new(
         peripherals.uart0,
         peripherals.pins.gpio43, // TX (U0TXD on ESP32-S3)
