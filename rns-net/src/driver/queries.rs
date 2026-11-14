@@ -268,6 +268,10 @@ impl Driver {
                 announce_rate_grace: entry.info.announce_rate_grace,
                 announce_rate_penalty: entry.info.announce_rate_penalty,
                 interface_type: entry.interface_type.clone(),
+                held_announces: self.engine.held_announce_count(&interface_id),
+                announce_queue: self.engine.queued_announce_count_for(&interface_id),
+                ifac_netname: entry.ifac.as_ref().and_then(|s| s.netname.clone()),
+                ifac_signature: entry.ifac.as_ref().map(|s| s.signature),
             });
         }
         #[cfg(feature = "iface-backbone")]
@@ -372,6 +376,10 @@ impl Driver {
                 announce_rate_grace: 0,
                 announce_rate_penalty: 0.0,
                 interface_type: "BackboneInterface".into(),
+                held_announces: self.engine.held_announce_count(&handle.interface_id),
+                announce_queue: self.engine.queued_announce_count_for(&handle.interface_id),
+                ifac_netname: None,
+                ifac_signature: None,
             });
         }
         interfaces.sort_by(|a, b| a.name.cmp(&b.name));
@@ -401,6 +409,10 @@ impl Driver {
             tx_pps,
             traffic: total_traffic,
             probe_responder: self.probe_responder_hash,
+            network_id: self
+                .discovery_network_identity
+                .as_ref()
+                .map(|identity| *identity.hash()),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: self.backbone_peer_pool_status(),
             #[cfg(not(feature = "iface-backbone"))]

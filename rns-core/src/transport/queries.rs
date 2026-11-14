@@ -467,6 +467,11 @@ impl TransportEngine {
         self.ingress_control.held_count(interface)
     }
 
+    /// Announces waiting in `interface`'s announce queue.
+    pub fn queued_announce_count_for(&self, interface: &InterfaceId) -> usize {
+        self.announce_queues.queued_for(interface)
+    }
+
     /// Whether the inbound packet handled last was filtered: dropped where
     /// upstream's `preprocess_inbound` drops it (upstream 134dc677), by the
     /// destination type filter, an announce that does not unpack or verify,

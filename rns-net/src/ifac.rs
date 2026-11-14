@@ -20,6 +20,11 @@ pub struct IfacState {
     pub size: usize,
     pub key: [u8; 64],
     pub identity: Identity,
+    /// The configured `network_name`, as upstream reports it.
+    pub netname: Option<String>,
+    /// Upstream's `ifac_signature`: the IFAC identity's signature over the
+    /// hash of its key, which `rnstatus` shows the end of.
+    pub signature: [u8; 64],
 }
 
 impl core::fmt::Debug for IfacState {
@@ -37,6 +42,8 @@ impl Clone for IfacState {
             size: self.size,
             key: self.key,
             identity: Identity::from_private_key(&self.key),
+            netname: self.netname.clone(),
+            signature: self.signature,
         }
     }
 }
@@ -75,11 +82,16 @@ pub fn derive_ifac(
     ifac_key.copy_from_slice(&ifac_key_vec);
 
     let identity = Identity::from_private_key(&ifac_key);
+    let signature = identity
+        .sign(&sha256::sha256(&ifac_key))
+        .map_err(|err| format!("failed to sign IFAC key: {:?}", err))?;
 
     Ok(IfacState {
         size: size.max(IFAC_MIN_SIZE),
         key: ifac_key,
         identity,
+        netname: netname.map(str::to_string),
+        signature,
     })
 }
 
@@ -211,6 +223,21 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
 // matrix runs under `cargo test --workspace` without a manual runner registry.
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn derived_state_carries_upstream_netname_and_signature() {
+        let state = derive_ifac(Some("mesh"), Some("secret"), 16).unwrap();
+        assert_eq!(state.netname.as_deref(), Some("mesh"));
+        // ifac_identity.sign(full_hash(ifac_key)), as upstream reports it.
+        assert!(state
+            .identity
+            .verify(&state.signature, &sha256::sha256(&state.key)));
+        assert_eq!(state.clone().signature, state.signature);
+        assert!(derive_ifac(None, Some("secret"), 16)
+            .unwrap()
+            .netname
+            .is_none());
+    }
+
     use super::*;
 
     fn patterned_packet(size: usize, pattern: usize) -> Vec<u8> {

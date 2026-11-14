@@ -89,6 +89,16 @@ impl PickleValue {
         }
     }
 
+    /// Get a number, float or int, as `f64`: upstream sends some values as
+    /// either, depending on how they were last set.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            PickleValue::Float(f) => Some(*f),
+            PickleValue::Int(i) => Some(*i as f64),
+            _ => None,
+        }
+    }
+
     /// Get as bool if this is a Bool variant.
     pub fn as_bool(&self) -> Option<bool> {
         match self {

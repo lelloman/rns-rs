@@ -354,6 +354,11 @@ impl AnnounceQueues {
         self.interface_cap_drops
     }
 
+    /// Announces waiting in `id`'s queue.
+    pub fn queued_for(&self, id: &InterfaceId) -> usize {
+        self.queues.get(id).map_or(0, |queue| queue.entries.len())
+    }
+
     /// Get the queue for a specific interface (for testing).
     #[cfg(test)]
     pub fn queue_for(&self, id: &InterfaceId) -> Option<&InterfaceAnnounceQueue> {
