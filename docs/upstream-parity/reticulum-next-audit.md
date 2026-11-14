@@ -48,7 +48,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 3 | `6852971d3c8e0e0d055bdb1472b51fa6de87b3a9` | Logging cleanup | Non-runtime | Log-only; no equivalent Rust log line |
 | 4 | `d5f1e014dbec2921d70b8acd15c820601de6525d` | Persist and load announce rate table | Integrated | `storage/announce_rate_table` (`RNSART` v1) save/load; upstream-generated fixture `tests/fixtures/transport/announce_rate_table_d5f1e014.bin`; `announce_rate_block_survives_snapshot_restore` and storage tests |
 | 5 | `01e7ed84433ee3e9a64643e40e892ccfcdb85243` | Refactored traffic accounting | Structurally covered | `every_received_frame_is_charged_once_to_received_or_filtered`; `record_filtered_inbound` doc |
-| 6 | `d183791956f807c92d5eb0a9f9bc9e12f9135cd1` | Refactored traffic accounting | Pending review | Changes `RNS/Transport.py` |
+| 6 | `d183791956f807c92d5eb0a9f9bc9e12f9135cd1` | Refactored traffic accounting | Structurally covered | Single-counting-site invariant documented in `handle_classified_frame_event` |
 | 7 | `819076c3783565dc303abb2894c99e6ce6074342` | Track filtered announce count per interface | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 | 8 | `daec67a116347b28e2268beb1d7b004f827eebb2` | Cleanup | Pending review | Changes `RNS/Transport.py` |
 | 9 | `3281e283154af393ba1a521eaba4246a32d52f1f` | Added tunnel info to rnstatus | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
@@ -111,13 +111,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 6. `d1837919` — Refactored traffic accounting
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** `Transport.inbound` gains `no_accounting=False`. The two cache replays (`cache_request_packet`, for a received CACHE_REQUEST, and `cache_request`, for a local request) pass `no_accounting=True`, so a cached packet re-injected into `inbound` is counted in neither `rxb` nor `frxb`. After 01e7ed84 it would otherwise have counted again on its original interface.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs has no packet cache and no cache-request replay; `CONTEXT_CACHE_REQUEST` is only classified, never served. Received traffic is counted in one place, `handle_classified_frame_event`, and only frames read from an interface reach it. No internal re-injection passes through it, so nothing needs exempting.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Mapping commit documents the invariant at the counting site. Searched for every `rxb` and `rx_packets` increment (only that site) and every `Event::Frame` producer (interfaces and tests). `cargo build -p rns-net` clean.
 
-**Final disposition:** Pending review.
+**Final disposition:** Structurally covered.
 
 ### 7. `819076c3` — Track filtered announce count per interface
 
