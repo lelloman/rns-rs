@@ -392,7 +392,11 @@ rnpath -b
 ```
 
 Blackholing an identity that already is blackholed leaves the entry as it is.
-A new entry also drops the paths to that identity's destinations. The entries
+A new entry also drops the paths to that identity's destinations, and paths
+saved to such destinations are not restored at startup. Blackholing a
+transport node's identity tears down the connections it synthesized a tunnel
+over, and a connection whose tunnel synthesis comes from a blackholed
+transport node is torn down at once (upstream `350b7e26`). The entries
 made on this node persist in `storage/blackhole/local`, in upstream's
 msgpack format (identity hash to `source`, `until` and `reason`), so the list
 survives restarts and moves with the configuration directory between

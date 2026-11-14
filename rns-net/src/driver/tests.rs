@@ -4997,6 +4997,51 @@ fn tunnels_are_not_synthesized_over_other_interface_types() {
     }
 }
 
+/// A server whose dynamic interface 5 records whether it was closed.
+fn server_with_closable_spawned_client() -> (Driver, Arc<std::sync::atomic::AtomicBool>) {
+    let mut server = new_test_driver();
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let entry = server.interfaces.get_mut(&InterfaceId(5)).unwrap();
+    entry.dynamic = true;
+    entry.writer = Box::new(ShutdownRecorder(Arc::clone(&closed)));
+    (server, closed)
+}
+
+#[test]
+fn synthesis_from_a_blackholed_transport_node_tears_the_interface_down() {
+    // Upstream 350b7e26.
+    let (synthesis, client_transport) = client_synthesis();
+    let (mut server, closed) = server_with_closable_spawned_client();
+    server.blackhole_identity_local(client_transport, None, None);
+
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!server.interfaces.contains_key(&InterfaceId(5)));
+    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+}
+
+#[test]
+fn blackholing_a_transport_node_tears_down_its_connections() {
+    // Upstream 350b7e26 `remove_blackholed_paths`: interfaces whose remote
+    // transport becomes blackholed are detached.
+    let (synthesis, client_transport) = client_synthesis();
+    let (mut server, closed) = server_with_closable_spawned_client();
+    register_typed_interface(&mut server, 6, "other-client", "TCPServerClientInterface");
+    server.interfaces.get_mut(&InterfaceId(6)).unwrap().dynamic = true;
+    let (other, _) = client_synthesis();
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    server.handle_frame_event(InterfaceId(6), other, None, None);
+    assert!(!closed.load(std::sync::atomic::Ordering::SeqCst));
+
+    server.blackhole_identity_local(client_transport, None, None);
+
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!server.interfaces.contains_key(&InterfaceId(5)));
+    assert!(server.interfaces.contains_key(&InterfaceId(6)));
+}
+
 #[test]
 fn interface_stats_report_the_tunnel_id() {
     // Upstream 9b6b724b reports `tunnel_id` per interface: none until a

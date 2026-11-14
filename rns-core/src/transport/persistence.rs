@@ -66,6 +66,9 @@ pub struct RestoreStats {
     /// Paths not restored because the destination type filter rejects
     /// their announce (upstream 20e25a9f).
     pub filtered_paths: usize,
+    /// Paths not restored because their destination's identity is
+    /// blackholed (upstream 350b7e26 fixed that check at load time).
+    pub blackholed_paths: usize,
 }
 
 impl TransportEngine {
@@ -189,6 +192,10 @@ impl TransportEngine {
                 stats.filtered_paths += 1;
                 continue;
             }
+            if self.restored_announce_blackholed(&raw, now) {
+                stats.blackholed_paths += 1;
+                continue;
+            }
             let destination_hash = path.destination_hash;
             let entry = PathEntry {
                 timestamp: path.timestamp,
@@ -307,6 +314,19 @@ impl TransportEngine {
         let mut destination_type = [0u8; constants::NAME_HASH_LENGTH / 8];
         destination_type.copy_from_slice(name_hash);
         self.destination_filter.admits_restored(&destination_type)
+    }
+}
+
+impl TransportEngine {
+    /// Whether a restored path's announce came from a blackholed identity.
+    fn restored_announce_blackholed(&self, raw: &[u8], now: f64) -> bool {
+        let Ok(packet) = RawPacket::unpack(raw) else {
+            return false;
+        };
+        let Some(public_key) = packet.data().get(..constants::KEYSIZE / 8) else {
+            return false;
+        };
+        self.is_blackholed(&crate::hash::truncated_hash(public_key), now)
     }
 }
 
@@ -747,5 +767,59 @@ mod tests {
             engine.persistence_snapshot().announce_rates[0].timestamps,
             timestamps[20 - constants::MAX_RATE_TIMESTAMPS..].to_vec()
         );
+    }
+
+    /// Upstream 350b7e26 fixed the load-time check: a path whose
+    /// destination's identity is blackholed is not restored.
+    #[test]
+    fn restore_skips_paths_of_blackholed_identities() {
+        let keyed = |dest: [u8; 16], key: u8| {
+            let mut data = vec![key; constants::KEYSIZE / 8];
+            data.extend_from_slice(&[0x55; 10]);
+            data.extend_from_slice(&[0x66; 74]);
+            RawPacket::pack(
+                PacketFlags {
+                    header_type: constants::HEADER_1,
+                    context_flag: constants::FLAG_UNSET,
+                    transport_type: constants::TRANSPORT_BROADCAST,
+                    destination_type: constants::DESTINATION_SINGLE,
+                    packet_type: constants::PACKET_TYPE_ANNOUNCE,
+                },
+                0,
+                &dest,
+                None,
+                constants::CONTEXT_NONE,
+                &data,
+            )
+            .unwrap()
+        };
+        let blocked = keyed([1; 16], 0xB1);
+        let allowed = keyed([2; 16], 0xA1);
+        let snapshot = TransportStateSnapshot {
+            paths: [&blocked, &allowed]
+                .iter()
+                .map(|packet| persisted_path(packet.destination_hash, packet, "alpha"))
+                .collect(),
+            ..TransportStateSnapshot::default()
+        };
+        let mut cache = BTreeMap::new();
+        for packet in [&blocked, &allowed] {
+            cache.insert(packet.packet_hash, packet.raw.clone());
+        }
+        let mut engine = TransportEngine::new(config(8));
+        engine.register_interface(interface(7, "alpha"));
+        engine.blackhole_identity(
+            crate::hash::truncated_hash(&[0xB1; constants::KEYSIZE / 8]),
+            100.0,
+            None,
+            None,
+        );
+
+        let stats =
+            engine.restore_persistence_snapshot(snapshot, 100.0, |hash| cache.get(hash).cloned());
+
+        assert_eq!((stats.paths, stats.blackholed_paths), (1, 1));
+        assert!(!engine.has_path(&[1; 16]));
+        assert!(engine.has_path(&[2; 16]));
     }
 }

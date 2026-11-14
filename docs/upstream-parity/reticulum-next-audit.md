@@ -54,7 +54,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 9 | `3281e283154af393ba1a521eaba4246a32d52f1f` | Added tunnel info to rnstatus | Integrated | `interface_stats_report_the_tunnel_this_node_synthesized`, `spawned_interface_is_detached_by_its_tunnel_id`, `a_static_unmanaged_interface_is_not_torn_down`, `tunnel_id_line_matches_upstream`, `tunnels_flag_takes_no_value`; prerequisite `1df27919` |
 | 10 | `464e75986e06b4ad2050a5a4c572159ae2c2d647` | Added remote transport ID info to rnstatus | Integrated | `synthesis_records_and_reports_the_remote_transport`, `an_interface_takes_only_one_tunnel_synthesis`, `tunnels_are_not_synthesized_over_other_interface_types`, `remote_transport_line_matches_upstream`, RPC pickle assertion |
 | 11 | `56b23c4810d477ed82daf06f2e34ac0a69d87bfc` | Typo | Integrated | `tunnel_synthesis_with_a_bad_signature_tears_the_interface_down`, `tunnel_synthesis_of_the_wrong_length_is_ignored` |
-| 12 | `350b7e2614960cd6f521031cec966462c9f216c9` | Added ability to blackhole remote transport nodes | Pending review | Changes `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
+| 12 | `350b7e2614960cd6f521031cec966462c9f216c9` | Added ability to blackhole remote transport nodes | Integrated | `restore_skips_paths_of_blackholed_identities`, `synthesis_from_a_blackholed_transport_node_tears_the_interface_down`, `blackholing_a_transport_node_tears_down_its_connections` |
 | 13 | `c850cdac6c8bd5422af045652216ba451e98aa33` | Traffic counting | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
 
 ## Per-Commit Analysis
@@ -171,13 +171,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 12. `350b7e26` — Added ability to blackhole remote transport nodes
 
-**Upstream change:** Pending review (changes `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py`).
+**Upstream change:** (1) `tunnel_synthesize_handler`: a valid synthesis from a transport identity in `blackholed_identities` detaches the receiving interface (`internal_forced`) instead of recording `remote_transport` and handling the tunnel. (2) `remove_blackholed_paths`, run when an identity is blackholed and when blackhole lists load, now also detaches every interface whose `remote_transport` is blackholed. (3) Path-table loading compared the recalled `Identity` object with the hash-keyed blackhole dict, which never matched; it now uses `path_identity.hash`, so paths to blackholed identities are not restored. (4) `_detach_interface` also calls `teardown()` on an interface that is in its parent's `spawned_interfaces`, closing its connection. (5) `rnstatus` totals check `frxs`/`ftxs` in the totals `stats` rather than the last interface's `ifstat`.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** (1) and (2) need port on the remote transport kept since the 464e7598 mapping. (3) needs port: rns-rs restored paths after loading the blackhole list, filtering only by destination type. (4) is structurally covered: `Driver::teardown_interface` already closes a spawned interface's connection (`Writer::shutdown`) before removing it. (5) is structurally covered: `filtered_total_lines` already reads rates from the totals response.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** (1) `handle_tunnel_synth_delivery` tears the receiving interface down when the validated remote identity is blackholed, and does not record the remote transport or the tunnel. (2) `Driver::remove_blackholed_paths` (used by `blackhole_identity_local`, `load_blackhole` and the blackhole updater) tears down every interface whose engine `remote_transport` is blackholed. (3) `restore_persistence_snapshot` skips a path whose cached announce's public key hashes to a blackholed identity, counted in the new `RestoreStats::blackholed_paths` and logged at startup. The node loads the blackhole list before restoring. `docs/configuration.md` (Blackholes) is updated. `cargo test -p rns-core -p rns-net` (2371) passes; clippy and fmt are clean.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 13. `c850cdac` — Traffic counting
 
