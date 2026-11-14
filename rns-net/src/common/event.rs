@@ -1033,6 +1033,9 @@ pub struct SingleInterfaceStat {
     /// The tunnel this interface carries, once one is established
     /// (upstream `interface.tunnel_id`, reported since 9b6b724b).
     pub tunnel_id: Option<[u8; 32]>,
+    /// The transport identity hash of the node that synthesized a tunnel
+    /// over this interface (upstream 464e7598 `remote_transport_id`).
+    pub remote_transport_id: Option<[u8; 16]>,
     pub status: bool,
     pub mode: u8,
     /// Signed interface preference used by path selection.

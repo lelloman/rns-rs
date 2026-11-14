@@ -28,6 +28,7 @@ impl TransportEngine {
             interfaces: BTreeMap::new(),
             interface_hashes: BTreeMap::new(),
             local_tunnel_ids: BTreeMap::new(),
+            remote_transports: BTreeMap::new(),
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
             announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
@@ -75,6 +76,7 @@ impl TransportEngine {
         self.interfaces.remove(&id);
         self.interface_hashes.remove(&id);
         self.local_tunnel_ids.remove(&id);
+        self.remote_transports.remove(&id);
         self.drop_paths_for_interface(id);
         self.drop_reverse_for_interface(id);
         self.drop_links_for_interface(id);
@@ -479,6 +481,11 @@ impl TransportEngine {
         });
 
         actions
+    }
+
+    /// Record the transport node that synthesized a tunnel over an interface.
+    pub fn set_remote_transport(&mut self, interface: InterfaceId, identity_hash: [u8; 16]) {
+        self.remote_transports.insert(interface, identity_hash);
     }
 
     /// Synthesize a tunnel on an interface.

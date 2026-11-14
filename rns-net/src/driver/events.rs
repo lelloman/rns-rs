@@ -2200,12 +2200,34 @@ impl Driver {
             Err(_) => return,
         };
 
+        // Upstream 464e7598: only TCP, Backbone and I2P connections carry
+        // tunnels, and each takes one synthesis.
+        let Some(entry) = self.interfaces.get(&receiving_interface) else {
+            return;
+        };
+        if !crate::interface::tunnels_allowed(&entry.interface_type) {
+            return;
+        }
+        if self.engine.remote_transport(&receiving_interface).is_some() {
+            log::debug!(
+                "Tunnel already synthesized on {}, ignoring synthesis packet",
+                entry.info.name
+            );
+            return;
+        }
+
         // As `Transport.tunnel_synthesize_handler`: the tunnel belongs to
         // the interface the synthesis arrived on. A synthesis of the wrong
         // length or with a bad signature is ignored; only one whose key
         // cannot be loaded, where Python raises, is a protocol violation.
         match rns_core::transport::tunnel::validate_tunnel_synthesize_data(packet.data()) {
             Ok(validated) => {
+                if let Ok(remote) =
+                    rns_crypto::identity::Identity::from_public_key(&validated.public_key)
+                {
+                    self.engine
+                        .set_remote_transport(receiving_interface, *remote.hash());
+                }
                 let now = time::now();
                 let tunnel_actions =
                     self.engine

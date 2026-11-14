@@ -4733,6 +4733,17 @@ fn dialing_client_driver() -> (Driver, Arc<Mutex<Vec<Vec<u8>>>>) {
     (driver, sent)
 }
 
+/// Register a server-side interface of `interface_type`, as a spawned
+/// TCP server client is.
+fn register_typed_interface(driver: &mut Driver, id: u64, name: &str, interface_type: &str) {
+    register_test_generic_interface(driver, id, name);
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(id))
+        .unwrap()
+        .interface_type = interface_type.into();
+}
+
 #[test]
 fn dialing_interface_synthesizes_a_tunnel_on_each_connect() {
     let (mut client, sent) = dialing_client_driver();
@@ -4756,8 +4767,8 @@ fn synthesized_tunnel_attaches_to_the_receiving_interface() {
     let synthesis = sent.lock().unwrap()[0].clone();
 
     let mut server = new_test_driver();
-    register_test_generic_interface(&mut server, 4, "other-client");
-    register_test_generic_interface(&mut server, 5, "spawned-client");
+    register_typed_interface(&mut server, 4, "other-client", "TCPServerClientInterface");
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
     server.handle_frame_event(InterfaceId(5), synthesis, None, None);
 
     let tunnel_id = server
@@ -4796,7 +4807,7 @@ fn tunnel_synthesis_with_a_bad_signature_is_ignored() {
     synthesis[last] ^= 0x01;
 
     let mut server = new_test_driver();
-    register_test_generic_interface(&mut server, 5, "spawned-client");
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
     server.handle_frame_event(InterfaceId(5), synthesis, None, None);
 
     assert_eq!(
@@ -4865,7 +4876,7 @@ fn spawned_interface_is_detached_by_its_tunnel_id() {
 
     let mut server = new_test_driver();
     enable_interface_management(&mut server);
-    register_test_generic_interface(&mut server, 5, "spawned-client");
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let entry = server.interfaces.get_mut(&InterfaceId(5)).unwrap();
@@ -4901,6 +4912,77 @@ fn a_static_unmanaged_interface_is_not_torn_down() {
     register_test_generic_interface(&mut driver, 3, "static");
     assert_eq!(driver.teardown_interface(InterfaceId(3)), Some(false));
     assert!(driver.interfaces.contains_key(&InterfaceId(3)));
+}
+
+/// A synthesis from a fresh dialing client.
+fn client_synthesis() -> (Vec<u8>, [u8; 16]) {
+    let (mut client, sent) = dialing_client_driver();
+    let identity_hash = *client.transport_identity.as_ref().unwrap().hash();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    let synthesis = sent.lock().unwrap()[0].clone();
+    (synthesis, identity_hash)
+}
+
+#[test]
+fn synthesis_records_and_reports_the_remote_transport() {
+    // Upstream 464e7598 `remote_transport_id`.
+    let (synthesis, client_transport) = client_synthesis();
+    let mut server = new_test_driver();
+    register_typed_interface(&mut server, 5, "spawned-client", "BackboneInterfacePeer");
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    assert_eq!(
+        server.engine.remote_transport(&InterfaceId(5)),
+        Some(client_transport)
+    );
+    let QueryResponse::InterfaceStats(stats) = server.handle_query(QueryRequest::InterfaceStats)
+    else {
+        panic!("expected interface stats");
+    };
+    let entry = stats.interfaces.iter().find(|e| e.id == 5).unwrap();
+    assert_eq!(entry.remote_transport_id, Some(client_transport));
+}
+
+#[test]
+fn an_interface_takes_only_one_tunnel_synthesis() {
+    let (first, first_transport) = client_synthesis();
+    let (second, _) = client_synthesis();
+    let mut server = new_test_driver();
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
+    server.handle_frame_event(InterfaceId(5), first, None, None);
+    let tunnel = server
+        .engine
+        .interface_info(&InterfaceId(5))
+        .and_then(|info| info.tunnel_id);
+    server.handle_frame_event(InterfaceId(5), second, None, None);
+    assert_eq!(
+        server
+            .engine
+            .interface_info(&InterfaceId(5))
+            .and_then(|info| info.tunnel_id),
+        tunnel
+    );
+    assert_eq!(server.engine.tunnel_table().iter().count(), 1);
+    assert_eq!(
+        server.engine.remote_transport(&InterfaceId(5)),
+        Some(first_transport)
+    );
+}
+
+#[test]
+fn tunnels_are_not_synthesized_over_other_interface_types() {
+    // Upstream 464e7598: `tunnels_allowed` only on TCP, Backbone and I2P.
+    for interface_type in ["UDPInterface", "AutoInterfacePeer", "LocalClientInterface"] {
+        let (synthesis, _) = client_synthesis();
+        let mut server = new_test_driver();
+        register_typed_interface(&mut server, 5, "other", interface_type);
+        server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+        assert_eq!(
+            server.engine.tunnel_table().iter().count(),
+            0,
+            "{interface_type}"
+        );
+        assert_eq!(server.engine.remote_transport(&InterfaceId(5)), None);
+    }
 }
 
 #[test]

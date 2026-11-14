@@ -360,6 +360,13 @@ pub fn handle_status_request(
                     .map(|tunnel_id| Value::Bin(tunnel_id.to_vec()))
                     .unwrap_or(Value::Nil),
             ),
+            (
+                "remote_transport_id",
+                engine
+                    .remote_transport(&id)
+                    .map(|identity_hash| Value::Bin(identity_hash.to_vec()))
+                    .unwrap_or(Value::Nil),
+            ),
             ("status", Value::Bool(entry.online())),
             ("mode", Value::UInt(info.mode as u64)),
             ("rxb", Value::UInt(stats.rxb)),

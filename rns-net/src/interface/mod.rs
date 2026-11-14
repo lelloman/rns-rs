@@ -465,6 +465,20 @@ pub fn shared_medium_hint(interface_type: &str) -> bool {
     )
 }
 
+/// Whether a tunnel may be synthesized over an interface of this type
+/// (upstream 464e7598 `tunnels_allowed`): TCP, Backbone and I2P connections.
+pub fn tunnels_allowed(interface_type: &str) -> bool {
+    matches!(
+        interface_type,
+        "TCPClientInterface"
+            | "TCPServerClientInterface"
+            | "BackboneInterface"
+            | "BackboneClientInterface"
+            | "BackboneInterfacePeer"
+            | "I2PInterfacePeer"
+    )
+}
+
 /// Hardware MTU tier shared by TCP and Backbone interfaces.
 pub(crate) const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
     if bitrate >= 1_000_000_000 {

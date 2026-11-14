@@ -52,7 +52,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 7 | `819076c3783565dc303abb2894c99e6ce6074342` | Track filtered announce count per interface | Integrated | `held_announces_limit_applies_only_while_ingress_limiting`, `announce_with_too_many_hops_to_hold_is_a_filtered_announce`, `blackholed_announce_is_a_filtered_announce`, `announce_over_a_full_hold_is_a_filtered_announce`, `announce_of_a_type_not_required_is_a_filtered_announce`, `filtered_announces_render_and_sort`; `afrxc` in RPC and `rnstatus` |
 | 8 | `daec67a116347b28e2268beb1d7b004f827eebb2` | Cleanup | Integrated | `waiting_local_path_request_skips_ingress_limiting`; pathing-level skip log in `hold_decision` |
 | 9 | `3281e283154af393ba1a521eaba4246a32d52f1f` | Added tunnel info to rnstatus | Integrated | `interface_stats_report_the_tunnel_this_node_synthesized`, `spawned_interface_is_detached_by_its_tunnel_id`, `a_static_unmanaged_interface_is_not_torn_down`, `tunnel_id_line_matches_upstream`, `tunnels_flag_takes_no_value`; prerequisite `1df27919` |
-| 10 | `464e75986e06b4ad2050a5a4c572159ae2c2d647` | Added remote transport ID info to rnstatus | Pending review | Changes `RNS/Interfaces/BackboneInterface.py`, `RNS/Interfaces/I2PInterface.py`, `RNS/Interfaces/Interface.py`, `RNS/Interfaces/TCPInterface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
+| 10 | `464e75986e06b4ad2050a5a4c572159ae2c2d647` | Added remote transport ID info to rnstatus | Integrated | `synthesis_records_and_reports_the_remote_transport`, `an_interface_takes_only_one_tunnel_synthesis`, `tunnels_are_not_synthesized_over_other_interface_types`, `remote_transport_line_matches_upstream`, RPC pickle assertion |
 | 11 | `56b23c4810d477ed82daf06f2e34ac0a69d87bfc` | Typo | Pending review | Changes `RNS/Reticulum.py` |
 | 12 | `350b7e2614960cd6f521031cec966462c9f216c9` | Added ability to blackhole remote transport nodes | Pending review | Changes `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 | 13 | `c850cdac6c8bd5422af045652216ba451e98aa33` | Traffic counting | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
@@ -151,13 +151,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 10. `464e7598` — Added remote transport ID info to rnstatus
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/BackboneInterface.py`, `RNS/Interfaces/I2PInterface.py`, `RNS/Interfaces/Interface.py`, `RNS/Interfaces/TCPInterface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py`).
+**Upstream change:** `Interface` gains `tunnels_allowed` (default `False`) and `remote_transport`. `tunnels_allowed` is `True` on TCP client and server, Backbone server and client, and I2P interface and peer; spawned children are TCP or Backbone client objects, so they are allowed too. `tunnel_synthesize_handler` ignores a synthesis on an interface without `tunnels_allowed`, or one that already has a `remote_transport` (logged at debug). On a valid synthesis it stores the remote transport identity before `handle_tunnel`. `ifstats` gains `remote_transport_id` (identity hash or `None`), and `tunnel_id` moves in the dict, with no effect. `rnstatus -T` prints `    Rem.Tr.ID : <hex>` or `Unknown`. A Backbone client's `else:` is reformatted with no change.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** Needs port on top of the 1df27919 synthesis fix. rns-rs accepted a synthesis on any interface type, any number of times per interface, and kept no remote transport.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** `interface::tunnels_allowed` covers the interface types that correspond to upstream's allowed classes: `TCPClientInterface`, `TCPServerClientInterface`, `BackboneInterface`, `BackboneClientInterface`, `BackboneInterfacePeer` and `I2PInterfacePeer`. Listeners never receive packets themselves. The driver's synthesis handler returns early for other types, and logs at debug and returns when the engine already has a `remote_transport` for the interface. On a valid synthesis it records the remote identity hash (`TransportEngine::set_remote_transport`, cleared on deregister) before `handle_tunnel`. `SingleInterfaceStat.remote_transport_id`, the RPC pickle and remote-management status carry it. `rnstatus -T` prints upstream's `Rem.Tr.ID` line, and `docs/rnstatus.md` is updated. Existing tunnel tests now register their server interfaces as spawned TCP or Backbone clients. `cargo test -p rns-core -p rns-net -p rns-cli` (2627) passes, as does Python interop against 134dc677 (5 tests); clippy and fmt are clean.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ### 11. `56b23c48` — Typo
 

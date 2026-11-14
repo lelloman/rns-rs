@@ -518,7 +518,10 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                 println!("{line}");
             }
             if show_tunnels {
-                if let Some(line) = tunnel_id_line(iface) {
+                for line in [tunnel_id_line(iface), remote_transport_line(iface)]
+                    .into_iter()
+                    .flatten()
+                {
                     println!("{line}");
                 }
             }
@@ -1056,6 +1059,16 @@ fn tunnel_id_line(iface: &PickleValue) -> Option<String> {
     Some(match tunnel_id.as_bytes() {
         Some(bytes) => format!("    Tunnel ID : <{}>", prettyhexrep(bytes)),
         None => "    Tunnel ID : None".to_string(),
+    })
+}
+
+/// Upstream 464e7598 `-T`: the transport node that synthesized a tunnel
+/// over the interface, when the instance reports it.
+fn remote_transport_line(iface: &PickleValue) -> Option<String> {
+    let remote = iface.get("remote_transport_id")?;
+    Some(match remote.as_bytes() {
+        Some(bytes) => format!("    Rem.Tr.ID : <{}>", prettyhexrep(bytes)),
+        None => "    Rem.Tr.ID : Unknown".to_string(),
     })
 }
 
@@ -2581,6 +2594,26 @@ mod tests {
             Some("    Tunnel ID : None".into())
         );
         assert_eq!(tunnel_id_line(&PickleValue::Dict(Vec::new())), None);
+    }
+
+    #[test]
+    fn remote_transport_line_matches_upstream() {
+        // Upstream 464e7598 `-T`.
+        let with = |value: PickleValue| {
+            PickleValue::Dict(vec![(
+                PickleValue::String("remote_transport_id".into()),
+                value,
+            )])
+        };
+        assert_eq!(
+            remote_transport_line(&with(PickleValue::Bytes(vec![0xCD; 16]))),
+            Some(format!("    Rem.Tr.ID : <{}>", "cd".repeat(16)))
+        );
+        assert_eq!(
+            remote_transport_line(&with(PickleValue::None)),
+            Some("    Rem.Tr.ID : Unknown".into())
+        );
+        assert_eq!(remote_transport_line(&PickleValue::Dict(Vec::new())), None);
     }
 
     #[test]

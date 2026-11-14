@@ -58,9 +58,12 @@ configured interface is detached as by its name.
 
 With `-T`, each interface shows a `Tunnel ID` line: the tunnel a connected
 transport node synthesized over it, else the one this node synthesized over
-it when dialing out, else `None`. TCP clients, Backbone clients and outbound
-I2P peers synthesize a tunnel each time they connect, so the remote side
-keeps their paths across reconnects.
+it when dialing out, else `None`. A `Rem.Tr.ID` line follows with the
+transport identity of the node that synthesized a tunnel over the interface,
+or `Unknown`. TCP clients, Backbone clients and outbound I2P peers synthesize a
+tunnel each time they connect, so the remote side keeps their paths across
+reconnects. Tunnels are only accepted over TCP, Backbone and I2P connections,
+one per connection.
 
 Discovered-interface views (`-d` and `-D`) show the announcing stack's
 implementation and version as `Running` in the table or `Stack` in the detail
