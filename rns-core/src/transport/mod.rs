@@ -268,6 +268,10 @@ pub struct TransportEngine {
     /// (upstream 134dc677). Reset when a packet's handling starts; read with
     /// [`TransportEngine::take_inbound_filtered`].
     inbound_filtered: bool,
+    /// Whether that packet was also a filtered announce, counted in the
+    /// interface's `afrxc` (upstream 819076c3); read with
+    /// [`TransportEngine::take_inbound_filtered_announce`].
+    inbound_filtered_announce: bool,
     /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
     /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
     stamp_requirements: StampRequirements,

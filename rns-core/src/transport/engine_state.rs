@@ -38,6 +38,7 @@ impl TransportEngine {
             stamp_prs: constants::STAMP_PRS,
             hop_limiter: constants::HOP_LIMITER,
             inbound_filtered: false,
+            inbound_filtered_announce: false,
             stamp_requirements: StampRequirements::default(),
             destination_filter: Default::default(),
             control_destinations: [

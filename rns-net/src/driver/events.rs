@@ -44,6 +44,15 @@ impl Driver {
         }
     }
 
+    /// Count a filtered announce on the receiving interface (upstream
+    /// 819076c3 `Interface.filtered_announce`). Upstream also adds it to a
+    /// spawned interface's parent; a listener's row sums its children.
+    pub(crate) fn record_filtered_announce(&mut self, interface_id: InterfaceId) {
+        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+            entry.stats.afrxc = entry.stats.afrxc.saturating_add(1);
+        }
+    }
+
     /// Inbound admission checks that run on a decoded packet before the
     /// `PreIngress` hook. They count protocol violations and packet filter hits
     /// on the receiving interface and return whether the packet may proceed.
@@ -122,15 +131,9 @@ impl Driver {
             }
             return false;
         }
-        // Upstream f96cef7e: once the interface holds as many announces as
-        // it may, drop further announces at once, silently, before they
-        // cost any processing. Releases of held announces enter the engine
-        // from its tick, not through here.
-        if parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
-            && self.engine.announce_holding_saturated(&interface_id)
-        {
-            return false;
-        }
+        // Upstream 819076c3 dropped f96cef7e's early held-announces-full
+        // drop: the limit now applies only while ingress control holds
+        // announces, in the engine.
         true
     }
 
@@ -451,6 +454,9 @@ impl Driver {
         if self.engine.take_inbound_filtered() {
             self.record_filtered_inbound(interface_id, received_size);
         }
+        if self.engine.take_inbound_filtered_announce() {
+            self.record_filtered_announce(interface_id);
+        }
         let bursts = (
             self.engine
                 .burst_active(&interface_id)
@@ -585,6 +591,9 @@ impl Driver {
             // A blackholed identity or a failed stamp (134dc677).
             if self.engine.take_inbound_filtered() {
                 self.record_filtered_inbound(interface, received_size);
+            }
+            if self.engine.take_inbound_filtered_announce() {
+                self.record_filtered_announce(interface);
             }
             self.dispatch_all(actions);
         }

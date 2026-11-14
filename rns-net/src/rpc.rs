@@ -2283,6 +2283,10 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Int(s.traffic.arxc as i64),
         ),
         (
+            PickleValue::String("afrxc".into()),
+            PickleValue::Int(s.traffic.afrxc as i64),
+        ),
+        (
             PickleValue::String("atxc".into()),
             PickleValue::Int(s.traffic.atxc as i64),
         ),
@@ -5025,6 +5029,7 @@ mod tests {
             atxb: 22,
             arxc: 1,
             atxc: 2,
+            afrxc: 6,
             arxs: 88.0,
             atxs: 176.0,
             prxb: 33,
@@ -5133,6 +5138,9 @@ mod tests {
             assert_eq!(stats.get("frxs").unwrap().as_float(), Some(440.0));
             assert_eq!(stats.get("ftxs").unwrap().as_float(), Some(0.0));
         }
+        // Upstream 819076c3: filtered announces, per interface only.
+        assert_eq!(ifaces[0].get("afrxc").unwrap().as_int(), Some(6));
+        assert!(decoded.get("afrxc").is_none());
         // Upstream 9b6b724b: the tunnel id, bytes or None.
         assert_eq!(
             ifaces[0].get("tunnel_id").unwrap().as_bytes(),

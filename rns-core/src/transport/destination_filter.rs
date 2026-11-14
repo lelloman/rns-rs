@@ -114,6 +114,11 @@ impl DestinationTypeFilter {
             && (!self.required_only || self.allowed.contains(destination_type))
     }
 
+    /// Whether announces of this type are blocked outright.
+    pub fn blocks(&self, destination_type: &DestinationType) -> bool {
+        self.blocked.contains(destination_type)
+    }
+
     pub fn allows(&self, destination_type: &DestinationType, own_local_announce: bool) -> bool {
         if self.blocked.contains(destination_type) {
             return false;

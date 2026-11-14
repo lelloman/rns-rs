@@ -4667,21 +4667,24 @@ fn driver_holding_one_announce(max_held: usize) -> Driver {
 }
 
 #[test]
-fn announce_is_dropped_early_when_held_announces_are_full() {
-    // Upstream f96cef7e: with as many held announces as the interface may
-    // hold, a further announce is dropped before any processing: no
-    // incoming-announce sample, no path, no violation or filter count.
+fn announce_over_a_full_hold_is_a_filtered_announce() {
+    // Upstream 819076c3 replaced f96cef7e's early drop: while ingress
+    // control limits, an announce the full hold cannot take is processed up
+    // to the hold and counted as a filtered announce.
     let mut driver = driver_holding_one_announce(1);
     let identity = Identity::new(&mut OsRng);
     let dest_hash =
         rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
+    let announce = build_announce_packet(&identity);
+    let len = announce.len() as u64;
 
-    driver.handle_frame_event(InterfaceId(1), build_announce_packet(&identity), None, None);
+    driver.handle_frame_event(InterfaceId(1), announce, None, None);
 
     assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 1);
     assert!(!driver.engine.has_path(&dest_hash));
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
-    assert!(stats.ia_timestamps.is_empty());
+    assert_eq!(stats.afrxc, 1);
+    assert_eq!((stats.rxb, stats.frxb), (0, len));
     assert_eq!(stats.protocol_violations, 0);
     assert_eq!(stats.packet_filter_hits, 0);
 }
@@ -4698,10 +4701,11 @@ fn announce_is_held_while_held_announces_have_room() {
     );
 
     assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 2);
-    assert_eq!(
-        driver.interfaces[&InterfaceId(1)].stats.ia_timestamps.len(),
-        1
-    );
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(stats.ia_timestamps.len(), 1);
+    // Upstream 819076c3: a held announce is received traffic.
+    assert_eq!((stats.frxb, stats.afrxc), (0, 0));
+    assert!(stats.rxb > 0);
 }
 
 #[test]
@@ -4811,6 +4815,24 @@ fn announce_of_a_blocked_type_is_filtered_inbound() {
     let len = announce.len() as u64;
     driver.handle_frame_event(InterfaceId(1), announce, None, None);
     assert_eq!(rx_and_filtered(&driver, 1), (0, len, 0));
+    // Upstream 819076c3 does not count a blocked type as a filtered announce.
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.afrxc, 0);
+}
+
+#[test]
+fn announce_of_a_type_not_required_is_a_filtered_announce() {
+    // With `required_destinations_only`, upstream 819076c3 counts it.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "required-only");
+    driver
+        .engine
+        .destination_filter_mut()
+        .set_required_only(true);
+    let announce = build_announce_packet(&Identity::new(&mut OsRng));
+    let len = announce.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), announce, None, None);
+    assert_eq!(rx_and_filtered(&driver, 1), (0, len, 0));
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.afrxc, 1);
 }
 
 #[test]
@@ -4820,6 +4842,7 @@ fn held_announces_full_drop_is_filtered_inbound() {
     let len = announce.len() as u64;
     driver.handle_frame_event(InterfaceId(1), announce, None, None);
     assert_eq!(rx_and_filtered(&driver, 1), (0, len, 0));
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.afrxc, 1);
 }
 
 #[test]

@@ -439,27 +439,25 @@ impl TransportEngine {
         self.ingress_control.held_count(interface)
     }
 
-    /// Whether an interface already holds as many announces as its ingress
-    /// control allows (`ic_max_held_announces`). Upstream f96cef7e drops
-    /// every further announce from it before any processing; that is
-    /// checked whether ingress control is on or not, so a limit of 0 drops
-    /// every announce.
-    pub fn announce_holding_saturated(&self, interface: &InterfaceId) -> bool {
-        self.interfaces.get(interface).is_some_and(|info| {
-            self.ingress_control.held_count(interface) >= info.ingress_control.max_held_announces
-        })
-    }
-
     /// Whether the inbound packet handled last was filtered: dropped where
     /// upstream's `preprocess_inbound` drops it (upstream 134dc677), by the
     /// destination type filter, an announce that does not unpack or verify,
-    /// one held by ingress control, a blackholed identity, a failed stamp,
+    /// one ingress control drops or uses to replace a held announce, a
+    /// blackholed identity, a failed stamp,
     /// or a path request that is a duplicate, fails its stamp or joins one
     /// in flight. Covers [`Self::handle_decoded_inbound_into`] and the path
     /// request it delivers, and [`Self::complete_verified_announce`];
     /// clears the flag.
     pub fn take_inbound_filtered(&mut self) -> bool {
         core::mem::take(&mut self.inbound_filtered)
+    }
+
+    /// Whether that packet was a filtered announce, counted in `afrxc`
+    /// (upstream 819076c3): one ingress control drops or uses to replace a
+    /// held announce, a type `required_destinations_only` rejects, a
+    /// blackholed identity, or a failed stamp. Clears the flag.
+    pub fn take_inbound_filtered_announce(&mut self) -> bool {
+        core::mem::take(&mut self.inbound_filtered_announce)
     }
 
     /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`).

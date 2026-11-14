@@ -376,6 +376,7 @@ pub fn handle_status_request(
             ("atxb", Value::UInt(stats.atxb)),
             ("arxc", Value::UInt(stats.arxc)),
             ("atxc", Value::UInt(stats.atxc)),
+            ("afrxc", Value::UInt(stats.afrxc)),
             ("arxs", Value::Float(stats.traffic_rates.arxs)),
             ("atxs", Value::Float(stats.traffic_rates.atxs)),
             ("prxb", Value::UInt(stats.prxb)),

@@ -6826,3 +6826,140 @@ fn rediscovery_queue_is_throttled_deduplicated_and_bounded() {
         ]
     );
 }
+
+// =========================================================================
+// Upstream 819076c3: filtered announces and the held-announces limit
+// =========================================================================
+
+fn signed_announce(seed: u8, aspect: &str) -> ([u8; 16], Vec<u8>) {
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[seed; 32]));
+    let dest_hash =
+        crate::destination::destination_hash("filtered", &[aspect], Some(identity.hash()));
+    let name_hash = crate::destination::name_hash("filtered", &[aspect]);
+    let (announce_data, _) = crate::announce::AnnounceData::pack(
+        &identity,
+        &dest_hash,
+        &name_hash,
+        &[seed; 10],
+        None,
+        None,
+    )
+    .unwrap();
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_ANNOUNCE,
+    };
+    let raw = RawPacket::pack(
+        flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        &announce_data,
+    )
+    .unwrap()
+    .raw;
+    (dest_hash, raw)
+}
+
+/// (filtered, filtered announce) for the inbound packet handled last.
+fn filtered_flags(engine: &mut TransportEngine) -> (bool, bool) {
+    (
+        engine.take_inbound_filtered(),
+        engine.take_inbound_filtered_announce(),
+    )
+}
+
+#[test]
+fn held_announces_limit_applies_only_while_ingress_limiting() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    inbound.ingress_control.max_held_announces = 1;
+    inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.started = 0.0;
+    engine.register_interface(inbound);
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let (a, announce_a) = signed_announce(0x11, "a");
+    let (b, announce_b) = signed_announce(0x22, "b");
+
+    // Held: received traffic, not filtered.
+    engine.handle_inbound(
+        InboundFrame::new(&announce_a, InterfaceId(1), 10_000.0),
+        &mut rng,
+    );
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    assert_eq!(filtered_flags(&mut engine), (false, false));
+
+    // Limiting with the hold full: a filtered announce.
+    engine.handle_inbound(
+        InboundFrame::new(&announce_b, InterfaceId(1), 10_001.0),
+        &mut rng,
+    );
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    assert_eq!(filtered_flags(&mut engine), (true, true));
+
+    // Replacing the held announce for a destination: a filtered announce.
+    engine.handle_inbound(
+        InboundFrame::new(&announce_a, InterfaceId(1), 10_002.0),
+        &mut rng,
+    );
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    assert_eq!(filtered_flags(&mut engine), (true, true));
+    assert!(!engine.has_path(&a));
+
+    // Not limiting: the full hold no longer drops anything (f96cef7e's
+    // early drop is gone).
+    engine
+        .interfaces
+        .get_mut(&InterfaceId(1))
+        .unwrap()
+        .ingress_control
+        .enabled = false;
+    engine.handle_inbound(
+        InboundFrame::new(&announce_b, InterfaceId(1), 10_003.0),
+        &mut rng,
+    );
+    assert_eq!(filtered_flags(&mut engine), (false, false));
+    assert!(engine.has_path(&b));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+}
+
+#[test]
+fn announce_with_too_many_hops_to_hold_is_a_filtered_announce() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.started = 0.0;
+    engine.register_interface(inbound);
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let (_, mut announce) = signed_announce(0x33, "far");
+    // Arrives with PATHFINDER_M - 1 hops after the inbound increment.
+    announce[1] = constants::PATHFINDER_M - 2;
+    engine.handle_inbound(
+        InboundFrame::new(&announce, InterfaceId(1), 10_000.0),
+        &mut rng,
+    );
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
+    assert_eq!(filtered_flags(&mut engine), (true, true));
+}
+
+#[test]
+fn blackholed_announce_is_a_filtered_announce() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x44; 32]));
+    engine.blackhole_identity(*identity.hash(), 0.0, None, None);
+    let (dest, announce) = signed_announce(0x44, "blackholed");
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    engine.handle_inbound(
+        InboundFrame::new(&announce, InterfaceId(1), 10_000.0),
+        &mut rng,
+    );
+    assert!(!engine.has_path(&dest));
+    assert_eq!(filtered_flags(&mut engine), (true, true));
+}
