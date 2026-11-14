@@ -278,6 +278,11 @@ pub struct TransportEngine {
     /// interface's `afrxc` (upstream 819076c3); read with
     /// [`TransportEngine::take_inbound_filtered_announce`].
     inbound_filtered_announce: bool,
+    /// Announces counted as received outside a frame's own accounting, as
+    /// (interface, bytes): held by ingress control with no bytes, and
+    /// released later with their size (upstream c850cdac); read with
+    /// [`TransportEngine::take_announce_receipts`].
+    announce_receipts: Vec<(InterfaceId, usize)>,
     /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
     /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
     stamp_requirements: StampRequirements,

@@ -41,6 +41,7 @@ impl TransportEngine {
             hop_limiter: constants::HOP_LIMITER,
             inbound_filtered: false,
             inbound_filtered_announce: false,
+            announce_receipts: Vec::new(),
             stamp_requirements: StampRequirements::default(),
             destination_filter: Default::default(),
             control_destinations: [

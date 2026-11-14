@@ -79,13 +79,10 @@ impl TransportEngine {
         now: f64,
     ) -> Option<AcceptedPathRequest> {
         let request = self.parse_path_request(data, interface_id, now);
-        // Upstream 134dc677 counts these as filtered inbound: a request that
-        // is dropped (a duplicate tag, a failed enforced stamp, a malformed
-        // one) or batched into one already in flight.
-        if request
-            .as_ref()
-            .is_none_or(|request| request.already_in_flight)
-        {
+        // Upstream 134dc677 counts a request that is dropped (a duplicate
+        // tag, a failed enforced stamp, a malformed one) as filtered inbound.
+        // Since c850cdac one batched into a request in flight is received.
+        if request.is_none() {
             self.inbound_filtered = true;
         }
         request

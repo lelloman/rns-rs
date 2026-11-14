@@ -55,7 +55,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 10 | `464e75986e06b4ad2050a5a4c572159ae2c2d647` | Added remote transport ID info to rnstatus | Integrated | `synthesis_records_and_reports_the_remote_transport`, `an_interface_takes_only_one_tunnel_synthesis`, `tunnels_are_not_synthesized_over_other_interface_types`, `remote_transport_line_matches_upstream`, RPC pickle assertion |
 | 11 | `56b23c4810d477ed82daf06f2e34ac0a69d87bfc` | Typo | Integrated | `tunnel_synthesis_with_a_bad_signature_tears_the_interface_down`, `tunnel_synthesis_of_the_wrong_length_is_ignored` |
 | 12 | `350b7e2614960cd6f521031cec966462c9f216c9` | Added ability to blackhole remote transport nodes | Integrated | `restore_skips_paths_of_blackholed_identities`, `synthesis_from_a_blackholed_transport_node_tears_the_interface_down`, `blackholing_a_transport_node_tears_down_its_connections` |
-| 13 | `c850cdac6c8bd5422af045652216ba451e98aa33` | Traffic counting | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py` |
+| 13 | `c850cdac6c8bd5422af045652216ba451e98aa33` | Traffic counting | Integrated | `held_and_released_announces_count_as_received`; `announce_over_a_full_hold_is_a_filtered_announce`, `announce_is_held_while_held_announces_have_room` and `duplicate_and_in_flight_path_requests_are_filtered_inbound` updated |
 
 ## Per-Commit Analysis
 
@@ -181,13 +181,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 13. `c850cdac` — Traffic counting
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/Interface.py`, `RNS/Transport.py`).
+**Upstream change:** (1) `process_held_announces` releases with `no_accounting=True`, so a released announce is not counted in `rxb`/`frxb` again. (2) `received_announce` and `Transport.announce_rxc` move after the ingress-limit decision. An announce handed to `hold_announce` counts `received_announce(size=0)`, whether it is held or dropped, and does not count in `announce_rxc`. Every other validly signed announce counts `received_announce(size=len(raw))` and `announce_rxc`, so a released announce counts with its size when it passes. (3) A path request batched into one in flight returns `True`, so it counts as accepted traffic instead of filtered. The enforced-stamp `return` becomes `return None` (no change).
 
-**Rust applicability:** Pending review.
+**Rust applicability:** (1) is structurally covered: rns-rs releases held announces from the engine tick, which never passes through the driver's frame accounting. (2) needs port: rns-rs counted `arxc`/`arxb` only for announces the engine emitted as received from a frame, so held announces and releases were not counted. (Frequency samples are taken per announce frame and are unaffected.) (3) needs port: the 134dc677 mapping counted in-flight path requests as filtered.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** (2) The engine queues announce receipts (`take_announce_receipts`): `(interface, 0)` when ingress control takes an announce up (held or dropped), and `(interface, raw length)` when a released announce is accepted in the tick. The driver adds them to `arxc`/`arxb` after each frame and after each tick. Announces that pass straight through keep their existing count, so nothing is counted twice. (3) `accept_path_request` marks only dropped requests filtered; batched in-flight ones stay received. Tests: core `held_and_released_announces_count_as_received`; the driver hold tests now require `arxc` 1 with 0 bytes; the in-flight path request is received. `cargo test -p rns-core -p rns-net -p rns-cli` (2632) passes, as does Python interop against 134dc677 (5 tests); clippy (default and `rns-hooks`) and fmt are clean.
 
-**Final disposition:** Pending review.
+**Final disposition:** Integrated.
 
 ## Integration Plan
 
