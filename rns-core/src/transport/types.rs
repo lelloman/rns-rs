@@ -190,6 +190,11 @@ pub struct InterfaceInfo {
     /// The interface selects this before registration; the transport core does
     /// not recalculate or log MTU choices while processing packets.
     pub mtu: u32,
+    /// Whether links routed over this interface may negotiate an MTU above
+    /// the protocol default (upstream `AUTOCONFIGURE_MTU or FIXED_MTU`).
+    /// When false, a link request leaving through this interface carries no
+    /// MTU signalling, so the link uses the default MTU whatever `mtu` says.
+    pub mtu_upgradable: bool,
     /// Ingress control behavior for this interface.
     pub ingress_control: IngressControlConfig,
     /// Stamp costs required of announces and path requests received here.

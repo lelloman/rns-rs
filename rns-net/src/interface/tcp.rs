@@ -548,6 +548,7 @@ impl InterfaceFactory for TcpClientFactory {
             wants_tunnel: true,
             tunnel_id: None,
             mtu: super::tcp_hardware_mtu(tcp_config.bitrate, tcp_config.fixed_mtu),
+            mtu_upgradable: true,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
             ip_freq: 0.0,

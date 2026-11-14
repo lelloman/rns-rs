@@ -131,6 +131,7 @@ pub fn start_direct_interface(
         wants_tunnel: false,
         tunnel_id: None,
         mtu: 1400,
+        mtu_upgradable: false,
         ia_freq: 0.0,
         ip_freq: 0.0,
         op_freq: 0.0,

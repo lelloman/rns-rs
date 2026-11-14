@@ -152,8 +152,12 @@ impl Driver {
             .hops_to(&dest_hash)
             .or_else(|| recalled_route_hint.map(|(_, hops)| hops))
             .unwrap_or(0);
+        // Upstream `Transport.next_hop_interface_hw_mtu`: only an
+        // MTU-upgradable next hop offers its hardware MTU; anything else
+        // signals the protocol default.
         let mtu = attached_interface
             .and_then(|iface_id| self.interfaces.get(&iface_id))
+            .filter(|entry| entry.info.mtu_upgradable)
             .map(|entry| entry.info.mtu)
             .unwrap_or(rns_core::constants::MTU as u32);
         let (link_id, mut link_actions) = self.link_manager.create_link_with_keys(

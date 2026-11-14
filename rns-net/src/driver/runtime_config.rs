@@ -1048,6 +1048,7 @@ impl Driver {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: crate::interface::backbone::HW_MTU as u32,
+            mtu_upgradable: true,
             ingress_control,
             ia_freq: 0.0,
             ip_freq: 0.0,

@@ -1190,7 +1190,10 @@ impl InterfaceFactory for RNodeFactory {
                 is_local_client: false,
                 wants_tunnel: false,
                 tunnel_id: None,
-                mtu: rns_core::constants::MTU as u32,
+                // Upstream RNodeInterface.HW_MTU. Links never negotiate
+                // above the default over a radio (not `mtu_upgradable`).
+                mtu: HW_MTU,
+                mtu_upgradable: false,
                 ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
                 ia_freq: 0.0,
                 ip_freq: 0.0,

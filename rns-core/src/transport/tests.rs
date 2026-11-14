@@ -50,6 +50,7 @@ fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         wants_tunnel: false,
         tunnel_id: None,
         mtu: constants::MTU as u32,
+        mtu_upgradable: false,
         ingress_control: crate::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
         ip_freq: 0.0,
@@ -1831,6 +1832,7 @@ fn make_local_client_interface(id: u64) -> InterfaceInfo {
         wants_tunnel: false,
         tunnel_id: None,
         mtu: constants::MTU as u32,
+        mtu_upgradable: false,
         ingress_control: crate::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
         ip_freq: 0.0,
@@ -2426,6 +2428,7 @@ fn make_tunnel_interface(id: u64) -> InterfaceInfo {
         wants_tunnel: true,
         tunnel_id: None,
         mtu: constants::MTU as u32,
+        mtu_upgradable: false,
         ingress_control: crate::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
         ip_freq: 0.0,
@@ -7021,4 +7024,104 @@ fn held_and_released_announces_count_as_received() {
         engine.take_announce_receipts(),
         vec![(InterfaceId(1), announce.len())]
     );
+}
+
+fn signalled_link_request(dest_hash: &[u8; 16], header_type: u8, mtu: u32) -> RawPacket {
+    let mut payload = vec![0x5A; constants::LINK_ECPUBSIZE];
+    payload.extend_from_slice(&crate::link::handshake::build_signalling_bytes(
+        mtu,
+        crate::link::types::LinkMode::Aes256Cbc,
+    ));
+    let (transport_type, transport_id) = if header_type == constants::HEADER_2 {
+        (constants::TRANSPORT_TRANSPORT, Some(&[0x42; 16]))
+    } else {
+        (constants::TRANSPORT_BROADCAST, None)
+    };
+    RawPacket::pack(
+        PacketFlags {
+            header_type,
+            context_flag: constants::FLAG_UNSET,
+            transport_type,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_LINKREQUEST,
+        },
+        0,
+        dest_hash,
+        transport_id,
+        constants::CONTEXT_NONE,
+        &payload,
+    )
+    .unwrap()
+}
+
+fn signalled_mtu(raw: &[u8]) -> Option<u32> {
+    let data = &RawPacket::unpack(raw).unwrap().data().to_vec();
+    (data.len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE).then(|| {
+        let s = &data[constants::LINK_ECPUBSIZE..];
+        (((s[0] as u32) << 16) | ((s[1] as u32) << 8) | s[2] as u32) & constants::LINK_MTU_BYTEMASK
+    })
+}
+
+/// Upstream Transport.py strips link MTU signalling when forwarding a link
+/// request onto an interface that is neither AUTOCONFIGURE_MTU nor
+/// FIXED_MTU (a radio, serial line, UDP, I2P), and clamps it on one that is.
+#[test]
+fn forwarded_link_request_mtu_follows_next_hop_upgradability() {
+    for (upgradable, expected) in [(false, None), (true, Some(16_384))] {
+        let mut config = make_config(true);
+        config.identity_hash = Some([0x42; 16]);
+        let mut engine = TransportEngine::new(config);
+        let mut inbound = make_interface(1, constants::MODE_FULL);
+        inbound.mtu = 262_144;
+        inbound.mtu_upgradable = true;
+        engine.register_interface(inbound);
+        let mut outbound = make_interface(2, constants::MODE_FULL);
+        outbound.mtu = if upgradable { 16_384 } else { 508 };
+        outbound.mtu_upgradable = upgradable;
+        engine.register_interface(outbound);
+        let dest_hash = [0x99; 16];
+        engine.inject_path(
+            dest_hash,
+            make_path_entry(1000.0, 2, InterfaceId(2), [0x77; 16]),
+        );
+
+        let request = signalled_link_request(&dest_hash, constants::HEADER_2, 262_144);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&request.raw, InterfaceId(1), 1001.0),
+            &mut rns_crypto::FixedRng::new(&[0x11; 32]),
+        );
+        let sends = issue183_sends_on(&actions, InterfaceId(2));
+        assert_eq!(sends.len(), 1, "link request must be forwarded");
+        assert_eq!(signalled_mtu(sends[0]), expected, "upgradable={upgradable}");
+    }
+}
+
+/// Upstream Transport.py clamps the MTU a link request for a local
+/// destination signals to the receiving interface's HW_MTU when that
+/// interface is MTU-upgradable, and to the default MTU otherwise.
+#[test]
+fn local_link_request_mtu_is_clamped_to_receiving_interface() {
+    for (mtu, upgradable, expected) in [(508, false, 500), (16_384, true, 16_384)] {
+        let mut engine = TransportEngine::new(make_config(false));
+        let mut iface = make_interface(1, constants::MODE_FULL);
+        iface.mtu = mtu;
+        iface.mtu_upgradable = upgradable;
+        engine.register_interface(iface);
+        let dest_hash = [0xAB; 16];
+        engine.register_destination(dest_hash, constants::DESTINATION_SINGLE);
+
+        let request = signalled_link_request(&dest_hash, constants::HEADER_1, 262_144);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&request.raw, InterfaceId(1), 1001.0),
+            &mut rns_crypto::FixedRng::new(&[0x12; 32]),
+        );
+        let raw = actions
+            .iter()
+            .find_map(|action| match action {
+                TransportAction::DeliverLocal { raw, .. } => Some(raw),
+                _ => None,
+            })
+            .expect("link request should be delivered locally");
+        assert_eq!(signalled_mtu(raw), Some(expected), "mtu={mtu}");
+    }
 }

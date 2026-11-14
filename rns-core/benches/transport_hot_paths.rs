@@ -62,6 +62,7 @@ fn make_interface(id: u64, mode: u8, is_local_client: bool) -> InterfaceInfo {
         wants_tunnel: false,
         tunnel_id: None,
         mtu: constants::MTU as u32,
+        mtu_upgradable: false,
         ingress_control: IngressControlConfig::disabled(),
         ia_freq: 0.0,
         ip_freq: 0.0,

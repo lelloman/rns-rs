@@ -152,6 +152,7 @@ fn peer_info(
         // enforces: a larger one would let links negotiate packets that
         // the receiving peer then drops as oversized frames.
         mtu: HW_MTU as u32,
+        mtu_upgradable: false,
         ia_freq: 0.0,
         ip_freq: 0.0,
         op_freq: 0.0,

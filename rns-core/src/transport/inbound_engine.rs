@@ -488,6 +488,7 @@ impl TransportEngine {
                 self.interfaces.get(&ctx.iface).map(|info| info.mtu),
                 self.interfaces
                     .get(&outbound_interface)
+                    .filter(|info| info.mtu_upgradable)
                     .map(|info| info.mtu),
             );
             let extra_proof_timeout =
@@ -635,15 +636,28 @@ impl TransportEngine {
             // Link responders learn the post-ingress hop metric from the
             // authenticated LRRTT packet. Preserve that field when crossing
             // the action boundary without changing ordinary callback bytes.
-            let delivery_raw =
-                if ctx.packet.context == constants::CONTEXT_LRRTT && ctx.packet.raw.len() >= 2 {
-                    let mut raw = ctx.packet.raw.to_vec();
-                    raw[1] = ctx.packet.hops;
-                    PacketBytes::from(raw)
-                } else {
-                    // The received bytes themselves, shared.
-                    ctx.packet.raw.clone()
-                };
+            let delivery_raw = if ctx.packet.context == constants::CONTEXT_LRRTT
+                && ctx.packet.raw.len() >= 2
+            {
+                let mut raw = ctx.packet.raw.to_vec();
+                raw[1] = ctx.packet.hops;
+                PacketBytes::from(raw)
+            } else if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
+                && ctx.packet.data().len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE
+            {
+                let receiving = self.interfaces.get(&ctx.iface);
+                let mut raw = ctx.packet.raw.to_vec();
+                super::inbound::clamp_local_link_request_mtu(
+                    &mut raw,
+                    true,
+                    receiving.map(|info| info.mtu),
+                    receiving.is_some_and(|info| info.mtu_upgradable),
+                );
+                PacketBytes::from(raw)
+            } else {
+                // The received bytes themselves, shared.
+                ctx.packet.raw.clone()
+            };
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: ctx.packet.destination_hash,
                 raw: delivery_raw,
