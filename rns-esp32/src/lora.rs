@@ -58,9 +58,13 @@ const REG_TX_MODULATION: u16 = 0x0889;
 // IRQ masks
 const IRQ_TX_DONE: u16 = 0x0001;
 const IRQ_RX_DONE: u16 = 0x0002;
+const IRQ_PREAMBLE_DETECTED: u16 = 0x0004;
+const IRQ_HEADER_VALID: u16 = 0x0010;
 const IRQ_CRC_ERR: u16 = 0x0040;
 const IRQ_TIMEOUT: u16 = 0x0200;
-const IRQ_ALL: u16 = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT;
+/// Flags that show a packet is on air before it has arrived: carrier detect.
+const IRQ_CARRIER: u16 = IRQ_PREAMBLE_DETECTED | IRQ_HEADER_VALID;
+const IRQ_ALL: u16 = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT | IRQ_CARRIER;
 const MAX_SPI_FRAME: usize = 258;
 const MAX_TX_WRITE_BUFFER: usize = 256;
 
@@ -82,6 +86,13 @@ pub struct Radio {
     preamble: u16,
     /// RSSI (dBm) and raw SNR (quarter dB) of the last packet received.
     last_packet_stats: (i16, i8),
+    /// The current channel's spreading factor and bandwidth.
+    spreading_factor: u8,
+    bandwidth: u32,
+    /// When the radio first reported a preamble / a valid header that has
+    /// not yet completed as a packet.
+    preamble_since: Option<std::time::Instant>,
+    header_since: Option<std::time::Instant>,
 }
 
 impl Radio {
@@ -162,6 +173,8 @@ impl Radio {
             &[spreading_factor, bw_param, coding_rate - 4, ldro],
         );
         self.preamble = modem::preamble_symbols(spreading_factor, bandwidth, coding_rate);
+        self.spreading_factor = spreading_factor;
+        self.bandwidth = bandwidth;
         let quality = self.read_register(REG_TX_MODULATION);
         let quality = if bandwidth == 500_000 {
             quality & !0x04
@@ -259,15 +272,17 @@ impl Radio {
         // Buffer base addresses: TX=0, RX=128
         self.cmd(OPCODE_SET_BUFFER_BASE_ADDRESS, &[0x00, 0x80]);
 
-        // DIO1 IRQ: map TxDone + RxDone + CrcErr + Timeout to DIO1
-        let irq_mask = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT;
+        // DIO1 IRQ: map TxDone + RxDone + CrcErr + Timeout to DIO1. The
+        // carrier flags are latched for carrier detect but do not wake DIO1.
+        let dio1_mask = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT;
+        let irq_mask = dio1_mask | IRQ_CARRIER;
         self.cmd(
             OPCODE_SET_DIO_IRQ_PARAMS,
             &[
                 (irq_mask >> 8) as u8,
                 irq_mask as u8, // IRQ mask
-                (irq_mask >> 8) as u8,
-                irq_mask as u8, // DIO1 mask
+                (dio1_mask >> 8) as u8,
+                dio1_mask as u8, // DIO1 mask
                 0x00,
                 0x00, // DIO2 mask
                 0x00,
@@ -403,6 +418,52 @@ impl Radio {
         Ok(())
     }
 
+    /// Carrier detect, as upstream's `sx126x::dcd()`: a preamble or a valid
+    /// header the radio is receiving. A preamble that brings no header
+    /// within the preamble and header time is a false detection: as
+    /// upstream, its flag is cleared and receive mode restarted, since the
+    /// demodulator may stay locked on it and miss real packets. A header
+    /// whose packet never completes within two full frames is dropped the
+    /// same way.
+    pub fn carrier_detected(&mut self) -> bool {
+        let irq = self.get_irq_status();
+        let now = std::time::Instant::now();
+        let symbol_ms = modem::symbol_time_ms(self.spreading_factor, self.bandwidth);
+        if irq & IRQ_HEADER_VALID != 0 {
+            let since = *self.header_since.get_or_insert(now);
+            let frame_ms = 2.0
+                * rns_esp32::channel::packet_airtime_ms(
+                    config::LORA_MTU as usize,
+                    self.spreading_factor,
+                    self.bandwidth,
+                    8,
+                    self.preamble,
+                );
+            if now.duration_since(since).as_secs_f64() * 1000.0 <= frame_ms {
+                return true;
+            }
+            self.clear_irq(IRQ_CARRIER);
+            self.header_since = None;
+            self.preamble_since = None;
+            self.set_rx_continuous();
+            return false;
+        }
+        self.header_since = None;
+        if irq & IRQ_PREAMBLE_DETECTED != 0 {
+            let since = *self.preamble_since.get_or_insert(now);
+            // Upstream's lora_preamble_time_ms + lora_header_time_ms: the
+            // preamble, its sync symbols and the header's eight symbols.
+            let window_ms = (self.preamble as f64 + 4.25 + 8.0) * symbol_ms;
+            if now.duration_since(since).as_secs_f64() * 1000.0 <= window_ms {
+                return true;
+            }
+            self.clear_irq(IRQ_PREAMBLE_DETECTED);
+            self.set_rx_continuous();
+        }
+        self.preamble_since = None;
+        false
+    }
+
     /// RSSI (dBm) and raw SNR (quarter dB) of the last packet received; for
     /// a frame split over two packets, of its second, as upstream firmware.
     pub fn last_packet_stats(&self) -> (i16, i8) {
@@ -420,7 +481,10 @@ impl Radio {
         let irq = self.get_irq_status();
 
         if irq & IRQ_RX_DONE != 0 {
-            self.clear_irq(IRQ_RX_DONE);
+            // The packet is in: its carrier flags are done too.
+            self.clear_irq(IRQ_RX_DONE | IRQ_CARRIER);
+            self.preamble_since = None;
+            self.header_since = None;
 
             if irq & IRQ_CRC_ERR != 0 {
                 self.clear_irq(IRQ_CRC_ERR);
@@ -447,7 +511,9 @@ impl Radio {
             Some(data)
         } else {
             if irq & IRQ_CRC_ERR != 0 {
-                self.clear_irq(IRQ_CRC_ERR);
+                self.clear_irq(IRQ_CRC_ERR | IRQ_CARRIER);
+                self.preamble_since = None;
+                self.header_since = None;
                 log::warn!("LoRa CRC error (no RxDone)");
             }
             if irq & IRQ_TIMEOUT != 0 {
@@ -510,6 +576,10 @@ pub fn init(
         busy,
         reassembler: Reassembler::new(),
         last_packet_stats: (0, 0),
+        spreading_factor: config::LORA_SPREADING_FACTOR,
+        bandwidth: config::LORA_BANDWIDTH,
+        preamble_since: None,
+        header_since: None,
         preamble: modem::preamble_symbols(
             config::LORA_SPREADING_FACTOR,
             config::LORA_BANDWIDTH,

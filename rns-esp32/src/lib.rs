@@ -1,5 +1,6 @@
 pub mod airframe;
 pub mod ble_buffer;
+pub mod channel;
 pub mod config;
 pub mod control;
 pub mod identity_store;
