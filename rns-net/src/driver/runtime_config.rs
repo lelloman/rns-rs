@@ -949,6 +949,7 @@ impl Driver {
     ) -> String {
         if let Some(control) = control {
             control.request_stop();
+            control.finish();
         }
         let name = if let Some(entry) = self.interfaces.remove(&id) {
             entry.info.name

@@ -595,6 +595,9 @@ pub struct ListenerControl {
     running: Option<Arc<AtomicBool>>,
     /// Wakes the listener thread blocked waiting for a connection.
     wake: Arc<std::sync::OnceLock<crate::listen::ListenerWake>>,
+    /// Run once the interface's last frame is out: on shutdown after the
+    /// final flush, or when the interface is detached.
+    on_finish: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl ListenerControl {
@@ -603,6 +606,7 @@ impl ListenerControl {
             stop: Arc::new(AtomicBool::new(false)),
             running: None,
             wake: Arc::default(),
+            on_finish: None,
         }
     }
 
@@ -611,6 +615,21 @@ impl ListenerControl {
             stop: Arc::new(AtomicBool::new(false)),
             running: Some(running),
             wake: Arc::default(),
+            on_finish: None,
+        }
+    }
+
+    /// Run `finish` from [`Self::finish`].
+    pub(crate) fn with_on_finish(mut self, finish: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_finish = Some(Arc::new(finish));
+        self
+    }
+
+    /// The interface has sent its last frame: run its finishing step, such
+    /// as telling a device the host is leaving.
+    pub(crate) fn finish(&self) {
+        if let Some(finish) = &self.on_finish {
+            finish();
         }
     }
 
@@ -1605,6 +1624,26 @@ impl InterfaceStatusView for InterfaceEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listener_control_finish_runs_hook_on_every_clone() {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::clone(&count);
+        let control = ListenerControl::with_running_flag(Arc::new(AtomicBool::new(true)))
+            .with_on_finish(move || {
+                seen.fetch_add(1, Ordering::Relaxed);
+            });
+        let registered = control.clone();
+        registered.request_stop();
+        assert_eq!(
+            count.load(Ordering::Relaxed),
+            0,
+            "stopping alone must not finish"
+        );
+        registered.finish();
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        ListenerControl::new().finish(); // no hook: nothing to run
+    }
 
     #[test]
     fn tcp_interfaces_take_upstream_bitrate_and_fixed_mtu_keys() {

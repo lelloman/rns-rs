@@ -296,6 +296,9 @@ impl Driver {
         self.sent_packets.clear();
         self.sent_packet_keys.clear();
         self.completed_proofs.clear();
+        for control in &self.listener_controls {
+            control.finish();
+        }
         self.pending_probes.clear();
         if let Some(handle) = self.ratchet_cleanup_handle.take() {
             let _ = handle.join();
