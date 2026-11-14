@@ -16,8 +16,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
-  issues: write
 
 jobs:
   audit:
@@ -36,8 +34,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # cargo audit directly: rustsec/audit-check failed its own check-run
+      # update whenever it had a warning to report, which kept this red with
+      # no vulnerability found. Informational advisories (unsound,
+      # unmaintained) fail the gate too.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
       - name: Audit dependencies
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: ${{ matrix.working-directory }}
+        working-directory: ${{ matrix.working-directory }}
+        run: cargo audit --deny warnings
