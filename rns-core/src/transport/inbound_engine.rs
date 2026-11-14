@@ -822,10 +822,17 @@ impl TransportEngine {
         if self.has_path(&packet.destination_hash) {
             return HoldDecision::Pass;
         }
-        if self
-            .discovery_path_requests
-            .contains_key(&packet.destination_hash)
+        // Waiting path requests, local or for discovery, skip ingress
+        // limiting (upstream logs this at pathing level since daec67a1).
+        if self.path_requests.contains_key(&packet.destination_hash)
+            || self
+                .discovery_path_requests
+                .contains_key(&packet.destination_hash)
         {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Skipping ingress limit check for {:02x?} due to waiting path requests",
+                &packet.destination_hash[..4],
+            );
             return HoldDecision::Pass;
         }
         let Some(info) = self.interfaces.get(&iface) else {
