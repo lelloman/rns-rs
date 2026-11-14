@@ -2565,10 +2565,11 @@ impl RnsNode {
                         },
                     );
                     log::debug!(
-                        "restored transport state: {} packet hashes, {} paths, {} tunnels ({} paths skipped, {} filtered)",
+                        "restored transport state: {} packet hashes, {} paths, {} tunnels, {} announce rates ({} paths skipped, {} filtered)",
                         stats.packet_hashes,
                         stats.paths,
                         stats.tunnels,
+                        stats.announce_rates,
                         stats.skipped_paths,
                         stats.filtered_paths,
                     );
@@ -6049,6 +6050,7 @@ share_instance = False
                     }],
                     expires: now + 1_200.0,
                 }],
+                announce_rates: Vec::new(),
             },
             &paths.storage,
             false,
