@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use super::tables::PathEntry;
+use super::tables::{PathEntry, RateEntry};
 use super::tunnel::TunnelPath;
 use super::types::InterfaceId;
 use super::TransportEngine;
@@ -36,11 +36,24 @@ pub struct PersistedTunnel {
     pub expires: f64,
 }
 
+/// One announce rate table entry (upstream d5f1e014 persists the table).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersistedAnnounceRate {
+    pub destination_hash: [u8; 16],
+    /// Last non-violating announce time.
+    pub last: f64,
+    pub rate_violations: u32,
+    pub blocked_until: f64,
+    /// Recent announce times, oldest first.
+    pub timestamps: Vec<f64>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TransportStateSnapshot {
     pub packet_hashes: Vec<[u8; 32]>,
     pub paths: Vec<PersistedPath>,
     pub tunnels: Vec<PersistedTunnel>,
+    pub announce_rates: Vec<PersistedAnnounceRate>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -48,6 +61,7 @@ pub struct RestoreStats {
     pub packet_hashes: usize,
     pub paths: usize,
     pub tunnels: usize,
+    pub announce_rates: usize,
     pub skipped_paths: usize,
     /// Paths not restored because the destination type filter rejects
     /// their announce (upstream 20e25a9f).
@@ -108,10 +122,23 @@ impl TransportEngine {
             })
             .collect();
 
+        let announce_rates = self
+            .rate_limiter
+            .entries()
+            .map(|(destination_hash, entry)| PersistedAnnounceRate {
+                destination_hash: *destination_hash,
+                last: entry.last,
+                rate_violations: entry.rate_violations,
+                blocked_until: entry.blocked_until,
+                timestamps: entry.timestamps.clone(),
+            })
+            .collect();
+
         TransportStateSnapshot {
             packet_hashes,
             paths,
             tunnels,
+            announce_rates,
         }
     }
 
@@ -211,6 +238,26 @@ impl TransportEngine {
             self.tunnel_table
                 .restore_detached(tunnel.tunnel_id, restored_paths, expires);
             stats.tunnels += 1;
+        }
+
+        // Rate state survives a restart, so a restart does not reset a
+        // blocked destination's penalty or its accumulated violations.
+        for rate in snapshot.announce_rates {
+            let mut timestamps = rate.timestamps;
+            let excess = timestamps
+                .len()
+                .saturating_sub(constants::MAX_RATE_TIMESTAMPS);
+            timestamps.drain(..excess);
+            self.rate_limiter.restore(
+                rate.destination_hash,
+                RateEntry {
+                    last: rate.last,
+                    rate_violations: rate.rate_violations,
+                    blocked_until: rate.blocked_until,
+                    timestamps,
+                },
+            );
+            stats.announce_rates += 1;
         }
 
         stats
@@ -340,6 +387,7 @@ mod tests {
             packet_hashes: vec![[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]],
             paths: Vec::new(),
             tunnels: Vec::new(),
+            announce_rates: Vec::new(),
         };
 
         let stats = engine.restore_persistence_snapshot(snapshot, 100.0, |_| None);
@@ -439,6 +487,7 @@ mod tests {
                 .map(|packet| persisted_path(packet.destination_hash, packet, "alpha"))
                 .collect(),
             tunnels: Vec::new(),
+            announce_rates: Vec::new(),
         };
         let cache: BTreeMap<[u8; 32], Vec<u8>> = packets
             .iter()
@@ -558,6 +607,7 @@ mod tests {
                 expired,
             ],
             tunnels: Vec::new(),
+            announce_rates: Vec::new(),
         };
         let mut cache = BTreeMap::new();
         cache.insert(good_packet.packet_hash, good_packet.raw.clone());
@@ -634,5 +684,68 @@ mod tests {
             (hash == &packet.packet_hash).then(|| packet.raw.clone())
         });
         assert_eq!(again.persistence_snapshot().tunnels[0].expires, 300.0);
+    }
+
+    /// Upstream d5f1e014 persists the announce rate table, so a restart
+    /// keeps a blocked destination blocked until its penalty ends.
+    #[test]
+    fn announce_rate_block_survives_snapshot_restore() {
+        let dest = [0x3A; 16];
+        let mut source = TransportEngine::new(config(8));
+        // target 10s, grace 0, penalty 30s: the second fast announce blocks
+        // until 100 + 10 + 30 = 140.
+        assert!(!source
+            .rate_limiter
+            .check_and_update(&dest, 100.0, Some(10.0), 0, 30.0));
+        assert!(source
+            .rate_limiter
+            .check_and_update(&dest, 101.0, Some(10.0), 0, 30.0));
+
+        let snapshot = source.persistence_snapshot();
+        assert_eq!(
+            snapshot.announce_rates,
+            vec![PersistedAnnounceRate {
+                destination_hash: dest,
+                last: 100.0,
+                rate_violations: 1,
+                blocked_until: 140.0,
+                timestamps: vec![100.0, 101.0],
+            }]
+        );
+
+        let mut restored = TransportEngine::new(config(8));
+        let stats = restored.restore_persistence_snapshot(snapshot, 120.0, |_| None);
+        assert_eq!(stats.announce_rates, 1);
+        assert!(restored
+            .rate_limiter
+            .check_and_update(&dest, 120.0, Some(10.0), 0, 30.0));
+        // An unrestored engine would admit it as a first announce.
+        assert!(!TransportEngine::new(config(8))
+            .rate_limiter
+            .check_and_update(&dest, 120.0, Some(10.0), 0, 30.0));
+    }
+
+    #[test]
+    fn restored_announce_rate_keeps_only_the_newest_timestamps() {
+        let mut engine = TransportEngine::new(config(8));
+        let timestamps: Vec<f64> = (0..20).map(f64::from).collect();
+        engine.restore_persistence_snapshot(
+            TransportStateSnapshot {
+                announce_rates: vec![PersistedAnnounceRate {
+                    destination_hash: [1; 16],
+                    last: 19.0,
+                    rate_violations: 0,
+                    blocked_until: 0.0,
+                    timestamps: timestamps.clone(),
+                }],
+                ..TransportStateSnapshot::default()
+            },
+            20.0,
+            |_| None,
+        );
+        assert_eq!(
+            engine.persistence_snapshot().announce_rates[0].timestamps,
+            timestamps[20 - constants::MAX_RATE_TIMESTAMPS..].to_vec()
+        );
     }
 }

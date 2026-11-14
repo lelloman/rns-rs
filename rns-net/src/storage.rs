@@ -617,7 +617,183 @@ where
     atomic_write(
         &storage_dir.join("tunnels"),
         &msgpack::pack(&Value::Array(tunnels)),
+    )?;
+
+    checkpoint();
+    atomic_write(
+        &storage_dir.join(ANNOUNCE_RATE_TABLE_FILE),
+        &encode_announce_rate_table(&snapshot.announce_rates),
     )
+}
+
+/// Upstream's `storage/announce_rate_table` (d5f1e014).
+const ANNOUNCE_RATE_TABLE_FILE: &str = "announce_rate_table";
+const ANNOUNCE_RATE_MAGIC: &[u8; 6] = b"RNSART";
+const ANNOUNCE_RATE_VERSION: u8 = 0x01;
+const ANNOUNCE_RATE_HEADER_LEN: usize = 16;
+const ANNOUNCE_RATE_KEY_LEN: usize = 16;
+
+/// Encode the announce rate table in upstream's columnar little-endian
+/// layout: a 16-byte header (magic, version, zero flags, timestamp ring
+/// size, key length, two reserved bytes, u32 entry count), then the keys and
+/// the `last` (f64), `blocked_until` (f64), `rate_violations` (i32),
+/// ring length (u8), ring head (u8) and ring (`max_ts` f64 per entry)
+/// columns. Timestamps are written oldest first from ring slot 0.
+fn encode_announce_rate_table(
+    rates: &[rns_core::transport::persistence::PersistedAnnounceRate],
+) -> Vec<u8> {
+    let max_ts = rns_core::constants::MAX_RATE_TIMESTAMPS;
+    let count = rates.len();
+    let mut blob = Vec::with_capacity(
+        ANNOUNCE_RATE_HEADER_LEN + count * (ANNOUNCE_RATE_KEY_LEN + 22 + max_ts * 8),
+    );
+    blob.extend_from_slice(ANNOUNCE_RATE_MAGIC);
+    blob.extend_from_slice(&[
+        ANNOUNCE_RATE_VERSION,
+        0x00,
+        max_ts as u8,
+        ANNOUNCE_RATE_KEY_LEN as u8,
+        0x00,
+        0x00,
+    ]);
+    blob.extend_from_slice(&(count as u32).to_le_bytes());
+    for rate in rates {
+        blob.extend_from_slice(&rate.destination_hash);
+    }
+    for rate in rates {
+        blob.extend_from_slice(&rate.last.to_le_bytes());
+    }
+    for rate in rates {
+        blob.extend_from_slice(&rate.blocked_until.to_le_bytes());
+    }
+    for rate in rates {
+        let violations = i32::try_from(rate.rate_violations).unwrap_or(i32::MAX);
+        blob.extend_from_slice(&violations.to_le_bytes());
+    }
+    fn ring(timestamps: &[f64], max_ts: usize) -> &[f64] {
+        &timestamps[timestamps.len().saturating_sub(max_ts)..]
+    }
+    for rate in rates {
+        blob.push(ring(&rate.timestamps, max_ts).len() as u8);
+    }
+    for rate in rates {
+        blob.push((ring(&rate.timestamps, max_ts).len() % max_ts) as u8);
+    }
+    for rate in rates {
+        let ring = ring(&rate.timestamps, max_ts);
+        for slot in 0..max_ts {
+            let ts = ring.get(slot).copied().unwrap_or(0.0);
+            blob.extend_from_slice(&ts.to_le_bytes());
+        }
+    }
+    blob
+}
+
+/// Decode upstream's announce rate table, with upstream's validation: any
+/// header, size, duplicate-key or ring-cursor inconsistency rejects the
+/// whole file. Rings of another size are replayed oldest first and keep the
+/// newest `MAX_RATE_TIMESTAMPS` timestamps.
+fn decode_announce_rate_table(
+    blob: &[u8],
+) -> io::Result<Vec<rns_core::transport::persistence::PersistedAnnounceRate>> {
+    use rns_core::transport::persistence::PersistedAnnounceRate;
+
+    let bad = invalid_transport_data;
+    if blob.len() < ANNOUNCE_RATE_HEADER_LEN {
+        return Err(bad("announce rate table header is truncated"));
+    }
+    if &blob[0..6] != ANNOUNCE_RATE_MAGIC {
+        return Err(bad("announce rate table magic mismatch"));
+    }
+    if blob[6] != ANNOUNCE_RATE_VERSION {
+        return Err(bad("unsupported announce rate table version"));
+    }
+    if blob[7] != 0 {
+        return Err(bad("announce rate table flags must be zero"));
+    }
+    let file_max_ts = blob[8] as usize;
+    let keylen = blob[9] as usize;
+    let count = u32::from_le_bytes([blob[12], blob[13], blob[14], blob[15]]) as usize;
+    if file_max_ts == 0 {
+        return Err(bad("announce rate table ring size must be positive"));
+    }
+    if keylen != ANNOUNCE_RATE_KEY_LEN {
+        return Err(bad("announce rate table key length must be 16"));
+    }
+    let entry_size = keylen + 22 + file_max_ts * 8;
+    let expected_len = count
+        .checked_mul(entry_size)
+        .and_then(|len| len.checked_add(ANNOUNCE_RATE_HEADER_LEN));
+    if expected_len != Some(blob.len()) {
+        return Err(bad(
+            "announce rate table size does not match its entry count",
+        ));
+    }
+
+    let mut offset = ANNOUNCE_RATE_HEADER_LEN;
+    let mut take = |len: usize| {
+        let column = &blob[offset..offset + len];
+        offset += len;
+        column
+    };
+    let keys = take(count * keylen);
+    let last = take(count * 8);
+    let blocked = take(count * 8);
+    let violations = take(count * 4);
+    let ts_len = take(count);
+    let ts_head = take(count);
+    let ts = take(count * file_max_ts * 8);
+    let f64_at = |column: &[u8], index: usize| {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&column[index * 8..index * 8 + 8]);
+        f64::from_le_bytes(bytes)
+    };
+
+    let mut seen = HashSet::with_capacity(count);
+    let mut rates = Vec::with_capacity(count);
+    for slot in 0..count {
+        let mut destination_hash = [0u8; 16];
+        destination_hash.copy_from_slice(&keys[slot * keylen..(slot + 1) * keylen]);
+        if !seen.insert(destination_hash) {
+            return Err(bad("announce rate table has a duplicate destination"));
+        }
+        let len = ts_len[slot] as usize;
+        let head = ts_head[slot] as usize;
+        if len > file_max_ts || head >= file_max_ts {
+            return Err(bad("announce rate table ring cursor is out of range"));
+        }
+        let base = slot * file_max_ts;
+        let ring = |index: usize| f64_at(ts, base + index);
+        let mut timestamps: Vec<f64> = if len < file_max_ts {
+            (0..len).map(ring).collect()
+        } else {
+            (head..file_max_ts).chain(0..head).map(ring).collect()
+        };
+        let excess = timestamps
+            .len()
+            .saturating_sub(rns_core::constants::MAX_RATE_TIMESTAMPS);
+        timestamps.drain(..excess);
+        let mut violation_bytes = [0u8; 4];
+        violation_bytes.copy_from_slice(&violations[slot * 4..slot * 4 + 4]);
+        rates.push(PersistedAnnounceRate {
+            destination_hash,
+            last: f64_at(last, slot),
+            rate_violations: i32::from_le_bytes(violation_bytes).max(0) as u32,
+            blocked_until: f64_at(blocked, slot),
+            timestamps,
+        });
+    }
+    Ok(rates)
+}
+
+fn load_announce_rate_table(
+    path: &Path,
+) -> io::Result<Vec<rns_core::transport::persistence::PersistedAnnounceRate>> {
+    match fs::read(path) {
+        Ok(blob) => decode_announce_rate_table(&blob),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(err),
+    }
 }
 
 fn encode_persisted_path(
@@ -660,10 +836,24 @@ pub fn load_transport_state(
     let packet_hashes = load_packet_hashlist(&storage_dir.join("packet_hashlist.raw"))?;
     let paths = load_path_table(&storage_dir.join("destination_table"))?;
     let tunnels = load_tunnel_table(&storage_dir.join("tunnels"))?;
+    // Like upstream, an unreadable rate table starts empty without failing
+    // the rest of the restore.
+    let announce_rates = match load_announce_rate_table(&storage_dir.join(ANNOUNCE_RATE_TABLE_FILE))
+    {
+        Ok(rates) => rates,
+        Err(err) => {
+            log::warn!(
+                "could not load announce rate table from storage, initialized empty: {}",
+                err
+            );
+            Vec::new()
+        }
+    };
     Ok(TransportStateSnapshot {
         packet_hashes,
         paths,
         tunnels,
+        announce_rates,
     })
 }
 
@@ -858,6 +1048,7 @@ pub fn load_rpc_identity(paths: &StoragePaths) -> io::Result<Identity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rns_core::transport::persistence::PersistedAnnounceRate;
 
     use std::sync::atomic::{AtomicU64, Ordering};
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1236,7 +1427,104 @@ mod tests {
                 }],
                 expires: 30.75,
             }],
+            announce_rates: vec![PersistedAnnounceRate {
+                destination_hash: [0x99; 16],
+                last: 40.5,
+                rate_violations: 2,
+                blocked_until: 80.5,
+                timestamps: vec![39.0, 40.5],
+            }],
         }
+    }
+
+    const UPSTREAM_ANNOUNCE_RATE_TABLE: &[u8] =
+        include_bytes!("../../tests/fixtures/transport/announce_rate_table_d5f1e014.bin");
+
+    fn upstream_announce_rates() -> Vec<PersistedAnnounceRate> {
+        vec![
+            PersistedAnnounceRate {
+                destination_hash: [0xA1; 16],
+                last: 1003.0,
+                rate_violations: 4,
+                blocked_until: 1043.0,
+                timestamps: (1002..=1017).map(f64::from).collect(),
+            },
+            PersistedAnnounceRate {
+                destination_hash: [0xB2; 16],
+                last: 2015.5,
+                rate_violations: 0,
+                blocked_until: 0.0,
+                timestamps: vec![2000.0, 2015.5],
+            },
+        ]
+    }
+
+    /// The fixture is written by upstream d5f1e014's `AnnounceRateTable.persist`
+    /// (`tests/generate_announce_rate_table_fixture.py`); entry A's ring wrapped.
+    #[test]
+    fn upstream_announce_rate_table_decodes_with_wrapped_rings_in_order() {
+        assert_eq!(
+            decode_announce_rate_table(UPSTREAM_ANNOUNCE_RATE_TABLE).unwrap(),
+            upstream_announce_rates()
+        );
+    }
+
+    #[test]
+    fn announce_rate_table_encoding_matches_upstream_layout() {
+        let encoded = encode_announce_rate_table(&upstream_announce_rates());
+        // Same header, size and every column except the wrapped ring, which
+        // is rewritten oldest first from slot 0.
+        assert_eq!(encoded.len(), UPSTREAM_ANNOUNCE_RATE_TABLE.len());
+        assert_eq!(encoded[..16], UPSTREAM_ANNOUNCE_RATE_TABLE[..16]);
+        let columns_before_rings = 16 + 2 * (16 + 8 + 8 + 4 + 1);
+        assert_eq!(
+            encoded[16..columns_before_rings],
+            UPSTREAM_ANNOUNCE_RATE_TABLE[16..columns_before_rings]
+        );
+        let entry_b_ring = columns_before_rings + 1 + 16 * 8;
+        assert_eq!(
+            encoded[entry_b_ring..],
+            UPSTREAM_ANNOUNCE_RATE_TABLE[entry_b_ring..]
+        );
+        assert_eq!(
+            decode_announce_rate_table(&encoded).unwrap(),
+            upstream_announce_rates()
+        );
+    }
+
+    #[test]
+    fn announce_rate_table_rejects_inconsistent_files() {
+        let fixture = UPSTREAM_ANNOUNCE_RATE_TABLE;
+        let corrupt = |offset: usize, byte: u8| {
+            let mut blob = fixture.to_vec();
+            blob[offset] = byte;
+            decode_announce_rate_table(&blob).unwrap_err().kind()
+        };
+        assert_eq!(corrupt(0, b'X'), io::ErrorKind::InvalidData); // magic
+        assert_eq!(corrupt(6, 2), io::ErrorKind::InvalidData); // version
+        assert_eq!(corrupt(7, 1), io::ErrorKind::InvalidData); // flags
+        assert_eq!(corrupt(8, 0), io::ErrorKind::InvalidData); // ring size
+        assert_eq!(corrupt(12, 3), io::ErrorKind::InvalidData); // entry count
+                                                                // Entry B's key duplicates entry A's.
+        let mut duplicate = fixture.to_vec();
+        duplicate.copy_within(16..32, 32);
+        assert!(decode_announce_rate_table(&duplicate).is_err());
+        // Entry B's ring head equal to the ring size.
+        let ring_heads = 16 + 2 * (16 + 8 + 8 + 4 + 1);
+        assert_eq!(corrupt(ring_heads + 1, 16), io::ErrorKind::InvalidData);
+        assert!(decode_announce_rate_table(&fixture[..fixture.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn unreadable_announce_rate_table_restores_empty_without_failing_other_state() {
+        let dir = temp_dir();
+        let mut expected = transport_snapshot();
+        save_transport_state(&expected, &dir, false).unwrap();
+        fs::write(dir.join(ANNOUNCE_RATE_TABLE_FILE), b"not a rate table").unwrap();
+
+        expected.announce_rates.clear();
+        assert_eq!(load_transport_state(&dir).unwrap(), expected);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1300,8 +1588,8 @@ mod tests {
         let mut checkpoints = 0;
         save_transport_state_with_checkpoint(&snapshot, &dir, || checkpoints += 1).unwrap();
 
-        // 2 hashes + 1 route + 1 tunnel + 1 tunnel route.
-        assert_eq!(checkpoints, 5);
+        // 2 hashes + 1 route + 1 tunnel + 1 tunnel route + the rate table.
+        assert_eq!(checkpoints, 6);
         assert!(!fs::read_dir(&dir)
             .unwrap()
             .filter_map(Result::ok)

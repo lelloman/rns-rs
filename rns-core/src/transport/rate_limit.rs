@@ -30,6 +30,11 @@ impl AnnounceRateLimiter {
         self.table.iter()
     }
 
+    /// Insert or replace one entry, as when restoring persisted state.
+    pub fn restore(&mut self, dest_hash: [u8; 16], entry: RateEntry) {
+        self.table.insert(dest_hash, entry);
+    }
+
     /// Remove entries for destinations that are neither active nor recently used.
     /// Returns the number of removed entries.
     pub fn cull_stale(
