@@ -8,7 +8,7 @@ use std::process::{self, Command};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rns_cli::args::{Args, OptionSpec};
+use rns_cli::args::{Args, Opt, OptionSpec};
 use rns_cli::format::{
     b256_to_bytes, b256rep, base32_decode, base32_encode, prettyb256rep, prettyhexrep,
 };
@@ -47,14 +47,48 @@ enum RsgOutputFormat {
     Base64,
 }
 
-/// upstream rnid's options: those that take no value, and those whose value
-/// is optional; every other short option takes one.
+/// upstream rnid's options. `-d`, `-e`, `-V` and `-s` take any number of
+/// paths (`nargs="*"`): the first is the option's value, and the rest are
+/// positional, where [`operation_paths`] collects them.
 pub const OPTIONS: OptionSpec = OptionSpec {
-    flags: &[
-        'x', 'X', 'R', 'N', 'p', 'P', 'B', 'b', 'U', 'F', 'f', 'I', 'O', 'Z',
+    options: &[
+        Opt::value("", "config"),
+        Opt::value("i", "identity"),
+        Opt::value("g", "generate"),
+        Opt::value("m", "import-pub"),
+        Opt::value("M", "import-prv"),
+        Opt::flag("x", "export-pub"),
+        Opt::flag("X", "export-prv"),
+        Opt::count("v", "verbose"),
+        Opt::count("q", "quiet"),
+        Opt::optional("a", "announce"),
+        Opt::value("H", "hash"),
+        Opt::optional("d", "decrypt"),
+        Opt::optional("e", "encrypt"),
+        Opt::optional("V", "validate"),
+        Opt::optional("s", "sign"),
+        Opt::optional("S", "sign-message"),
+        Opt::optional("E", "embed-meta"),
+        Opt::optional("", "meta-spec"),
+        Opt::flag("", "raw"),
+        Opt::value("w", "write"),
+        Opt::value("r", "read"),
+        Opt::flag("f", "force"),
+        Opt::flag("I", "stdin"),
+        Opt::flag("O", "stdout"),
+        Opt::flag("R", "request"),
+        Opt::flag("N", "no-cache"),
+        Opt::value("t", ""),
+        Opt::flag("p", "print-identity"),
+        Opt::flag("P", "print-private"),
+        Opt::flag("B", "base32"),
+        Opt::flag("b", "base64"),
+        Opt::flag("U", "base256"),
+        Opt::flag("F", "hex"),
+        Opt::flag("", "meta"),
+        // Rust-only: the older short name of --base256.
+        Opt::flag("Z", ""),
     ],
-    optional: &['a', 'S', 'E'],
-    long_optional: &["announce", "sign-message", "embed-meta", "meta-spec"],
 };
 
 /// upstream's short names for options this implementation reads by their
@@ -1828,6 +1862,134 @@ fn print_usage(usage_name: &str) {
 mod tests {
     use super::*;
     use rns_crypto::FixedRng;
+
+    fn parse(argv: &[&str]) -> Args {
+        Args::parse_spec_from(argv.iter().map(|s| s.to_string()).collect(), &OPTIONS)
+    }
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        // (argv, options expected with their values, positionals)
+        type Case<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)], &'a [&'a str]);
+        let cases: &[Case] = &[
+            (
+                &["-i", "id", "-p"],
+                &[("identity", "id"), ("p", "true")],
+                &[],
+            ),
+            (
+                &["-iid", "-pP"],
+                &[("i", "id"), ("print-private", "true")],
+                &[],
+            ),
+            (
+                &["--identity=id", "-x"],
+                &[("i", "id"), ("export-pub", "true")],
+                &[],
+            ),
+            (
+                &["-g", "new.id", "-B"],
+                &[("generate", "new.id"), ("base32", "true")],
+                &[],
+            ),
+            (&["-i", "id", "-a"], &[("announce", "true")], &[]),
+            (&["-i", "id", "-a", "app.x"], &[("announce", "app.x")], &[]),
+            (
+                &["-a", "-i", "id"],
+                &[("announce", "true"), ("i", "id")],
+                &[],
+            ),
+            (&["-i", "id", "-H", "app.x"], &[("hash", "app.x")], &[]),
+            // nargs="*": no path, then other options.
+            (
+                &["-i", "id", "-d", "-w", "out", "-r", "in"],
+                &[("d", "true"), ("w", "out"), ("read", "in")],
+                &[],
+            ),
+            (
+                &["-i", "id", "-e", "a", "b", "-f"],
+                &[("encrypt", "a"), ("force", "true")],
+                &["b"],
+            ),
+            (
+                &["-i", "id", "-s", "a", "-V", "a.rsg"],
+                &[("sign", "a"), ("validate", "a.rsg")],
+                &[],
+            ),
+            (
+                &["-i", "id", "-S", "-r", "msg"],
+                &[("sign-message", "true"), ("r", "msg")],
+                &[],
+            ),
+            (
+                &["-i", "id", "-S", "hello", "-E"],
+                &[("S", "hello"), ("embed-meta", "true")],
+                &[],
+            ),
+            (
+                &["-i", "id", "-E", "m.cfg", "--meta-spec"],
+                &[("E", "m.cfg"), ("meta-spec", "true")],
+                &[],
+            ),
+            (
+                &["-i", "id", "-V", "f", "--meta", "--raw"],
+                &[("meta", "true"), ("raw", "true")],
+                &[],
+            ),
+            (
+                &["-i", "hash", "-R", "-t", "5"],
+                &[("request", "true"), ("t", "5")],
+                &[],
+            ),
+            (
+                &["-i", "hash", "-RNt5"],
+                &[("R", "true"), ("no-cache", "true"), ("t", "5")],
+                &[],
+            ),
+            (
+                &["-m", "key", "-b"],
+                &[("import-pub", "key"), ("base64", "true")],
+                &[],
+            ),
+            (
+                &["-M", "key", "-U", "-F"],
+                &[("import-prv", "key"), ("base256", "true"), ("hex", "true")],
+                &[],
+            ),
+            (
+                &["-i", "id", "-X", "-w", "f", "-f"],
+                &[("export-prv", "true"), ("write", "f")],
+                &[],
+            ),
+            (
+                &["-i", "id", "-e", "-I", "-O"],
+                &[("stdin", "true"), ("stdout", "true")],
+                &[],
+            ),
+            (&["--config", "dir", "-i", "id"], &[("config", "dir")], &[]),
+            // Abbreviated long options.
+            (
+                &["--ident", "id", "--print-i"],
+                &[("i", "id"), ("print-identity", "true")],
+                &[],
+            ),
+        ];
+        for (argv, expected, positional) in cases {
+            let args = parse(argv);
+            for (key, value) in *expected {
+                assert_eq!(args.get(key), Some(*value), "{argv:?}: {key}");
+            }
+            assert_eq!(args.positional, *positional, "{argv:?}");
+            assert!(args.unknown.is_empty(), "{argv:?}: {:?}", args.unknown);
+        }
+        let args = parse(&["-vvq", "-v", "-i", "id"]);
+        assert_eq!((args.verbosity, args.quiet), (3, 1));
+        let args = parse(&["-i", "id", "-e", "a", "b"]);
+        assert_eq!(
+            operation_paths(&args, "e", "encrypt").unwrap(),
+            vec!["a", "b"]
+        );
+    }
 
     fn test_identity(seed: u8) -> Identity {
         let bytes = (0..64).map(|i| seed.wrapping_add(i)).collect::<Vec<u8>>();

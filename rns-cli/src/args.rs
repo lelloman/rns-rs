@@ -5,14 +5,99 @@
 
 use std::collections::HashMap;
 
-/// A tool's short options, as its upstream argument parser declares them:
-/// options that take no value, options whose value is optional, and (any
-/// other) options that take one. Long options whose value is optional are
-/// listed too.
+/// How an option takes its value, as upstream's argparse declares it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// `store_true`: never takes a value.
+    Flag,
+    /// `store`: always takes one, attached (`-t5`, `--timeout=5`) or as the
+    /// next argument.
+    Value,
+    /// `nargs="?"` or `nargs="*"`: takes the next argument when it is not
+    /// an option itself.
+    Optional,
+    /// `count`; `verbose` and `quiet` feed [`Args::verbosity`] and
+    /// [`Args::quiet`].
+    Count,
+}
+
+/// One option of a tool: its short name (one character), its long name
+/// (without `--`), either of which may be empty, and how it takes a value.
+#[derive(Clone, Copy, Debug)]
+pub struct Opt {
+    pub short: &'static str,
+    pub long: &'static str,
+    pub kind: Kind,
+    /// Whether the long name is upstream's. Only upstream's long names may
+    /// be abbreviated, so a Rust-only option never makes an abbreviation
+    /// upstream accepts ambiguous.
+    pub upstream: bool,
+}
+
+impl Opt {
+    pub const fn new(short: &'static str, long: &'static str, kind: Kind) -> Self {
+        Opt {
+            short,
+            long,
+            kind,
+            upstream: true,
+        }
+    }
+    pub const fn flag(short: &'static str, long: &'static str) -> Self {
+        Self::new(short, long, Kind::Flag)
+    }
+    pub const fn value(short: &'static str, long: &'static str) -> Self {
+        Self::new(short, long, Kind::Value)
+    }
+    pub const fn optional(short: &'static str, long: &'static str) -> Self {
+        Self::new(short, long, Kind::Optional)
+    }
+    pub const fn count(short: &'static str, long: &'static str) -> Self {
+        Self::new(short, long, Kind::Count)
+    }
+    /// The same option, with a long name upstream does not have.
+    pub const fn rust_only(self) -> Self {
+        Opt {
+            upstream: false,
+            ..self
+        }
+    }
+}
+
+/// A tool's options, mirroring its upstream argument parser (plus the
+/// Rust-only options it accepts). `-h`/`--help` and `--version` are implied.
 pub struct OptionSpec {
-    pub flags: &'static [char],
-    pub optional: &'static [char],
-    pub long_optional: &'static [&'static str],
+    pub options: &'static [Opt],
+}
+
+const IMPLIED: &[Opt] = &[Opt::flag("h", "help"), Opt::flag("", "version")];
+
+impl OptionSpec {
+    fn all(&self) -> impl Iterator<Item = &Opt> {
+        self.options.iter().chain(IMPLIED.iter())
+    }
+
+    fn short(&self, c: char) -> Option<&Opt> {
+        self.all().find(|o| o.short.chars().eq(std::iter::once(c)))
+    }
+
+    /// The option a long name stands for: an exact match, or as argparse
+    /// does, the one upstream option it is an unambiguous prefix of.
+    fn long(&self, name: &str) -> Option<&Opt> {
+        if name.is_empty() {
+            return None;
+        }
+        if let Some(opt) = self.all().find(|o| o.long == name) {
+            return Some(opt);
+        }
+        let mut matches = self
+            .all()
+            .filter(|o| o.upstream && !o.long.is_empty() && o.long.starts_with(name));
+        match (matches.next(), matches.next()) {
+            (Some(opt), None) => Some(opt),
+            _ => None,
+        }
+    }
 }
 
 /// Parsed command-line arguments.
@@ -21,6 +106,12 @@ pub struct Args {
     pub positional: Vec<String>,
     pub verbosity: u8,
     pub quiet: u8,
+    /// Every value an option was given, in order, under each of its names:
+    /// what [`Args::get_all`] reads for options given more than once.
+    pub values: Vec<(String, String)>,
+    /// Options a tool's [`OptionSpec`] does not know, as given. They are
+    /// still parsed as the shared parser would.
+    pub unknown: Vec<String>,
 }
 
 /// Long options that never take a value.
@@ -60,6 +151,26 @@ const BOOLEAN_LONG: &[&str] = &[
     "show-unknown",
 ];
 
+/// Whether an argument is a value rather than an option, as argparse
+/// decides it: `-` alone and negative numbers are values.
+fn is_value(arg: &String) -> bool {
+    !arg.starts_with('-') || arg == "-" || looks_negative(arg)
+}
+
+/// argparse's negative number pattern: `-5`, `-.5`, `-1.5`.
+fn looks_negative(arg: &str) -> bool {
+    let Some(number) = arg.strip_prefix('-') else {
+        return false;
+    };
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if number.contains('.') {
+        digits(whole) && !fraction.is_empty() && digits(fraction)
+    } else {
+        !whole.is_empty() && digits(whole)
+    }
+}
+
 impl Args {
     /// Parse command-line arguments (skipping argv[0]).
     pub fn parse() -> Self {
@@ -87,82 +198,124 @@ impl Args {
     }
 
     pub fn parse_spec_from(args: Vec<String>, spec: &OptionSpec) -> Self {
-        let mut flags = HashMap::new();
-        let mut positional = Vec::new();
-        let mut verbosity: u8 = 0;
-        let mut quiet: u8 = 0;
+        let mut parsed = Args {
+            flags: HashMap::new(),
+            positional: Vec::new(),
+            verbosity: 0,
+            quiet: 0,
+            values: Vec::new(),
+            unknown: Vec::new(),
+        };
         let mut iter = args.into_iter().peekable();
-        let is_value = |s: &String| !s.starts_with('-') || s == "-";
 
         while let Some(arg) = iter.next() {
             if arg == "--" {
-                positional.extend(iter);
+                parsed.positional.extend(iter);
                 break;
             } else if let Some(key) = arg.strip_prefix("--") {
-                if let Some((k, v)) = key.split_once('=') {
-                    flags.insert(k.to_string(), v.to_string());
+                let (name, inline) = match key.split_once('=') {
+                    Some((name, value)) => (name, Some(value.to_string())),
+                    None => (key, None),
+                };
+                let Some(opt) = spec.long(name) else {
+                    // Not one of the tool's options: parse it as the shared
+                    // parser does.
+                    parsed.unknown.push(arg.clone());
+                    let value = match inline {
+                        Some(value) => value,
+                        None if BOOLEAN_LONG.contains(&name) => "true".into(),
+                        None => iter.next().unwrap_or_else(|| "true".into()),
+                    };
+                    parsed.store_key(name, value);
+                    continue;
+                };
+                if inline.is_some() && matches!(opt.kind, Kind::Flag | Kind::Count) {
+                    // argparse: "ignored explicit argument".
+                    parsed.unknown.push(arg.clone());
                     continue;
                 }
-                match key {
-                    "verbose" => verbosity = verbosity.saturating_add(1),
-                    "quiet" => quiet = quiet.saturating_add(1),
-                    _ if spec.long_optional.contains(&key) => {
-                        let value = match iter.peek() {
-                            Some(next) if is_value(next) => iter.next().unwrap(),
-                            _ => "true".into(),
-                        };
-                        flags.insert(key.to_string(), value);
-                    }
-                    _ if BOOLEAN_LONG.contains(&key) => {
-                        flags.insert(key.to_string(), "true".into());
-                    }
-                    _ => {
-                        let value = iter.next().unwrap_or_else(|| "true".into());
-                        flags.insert(key.to_string(), value);
-                    }
-                }
-            } else if arg.starts_with('-') && arg.len() > 1 {
+                let value = match inline {
+                    Some(value) => Some(value),
+                    None => Self::take(opt.kind, &mut iter),
+                };
+                parsed.store(opt, value);
+            } else if arg.len() > 1 && arg.starts_with('-') && !looks_negative(&arg) {
                 let chars: Vec<char> = arg[1..].chars().collect();
                 for (i, &c) in chars.iter().enumerate() {
-                    match c {
-                        'v' => verbosity = verbosity.saturating_add(1),
-                        'q' => quiet = quiet.saturating_add(1),
-                        'h' => {
-                            flags.insert("help".into(), "true".into());
+                    let opt = spec.short(c);
+                    let kind = match opt {
+                        Some(opt) => opt.kind,
+                        None => {
+                            parsed.unknown.push(format!("-{c}"));
+                            Kind::Value
                         }
-                        _ if spec.flags.contains(&c) => {
-                            flags.insert(c.to_string(), "true".into());
-                        }
-                        // A value option ends a group, its value the rest of
-                        // the argument or the next one: `-t5` or `-t 5`.
-                        _ => {
-                            let attached: String = chars[i + 1..].iter().collect();
-                            let value = if !attached.is_empty() {
-                                attached
-                            } else if spec.optional.contains(&c) {
-                                match iter.peek() {
-                                    Some(next) if is_value(next) => iter.next().unwrap(),
-                                    _ => "true".into(),
-                                }
-                            } else {
-                                iter.next().unwrap_or_else(|| "true".into())
-                            };
-                            flags.insert(c.to_string(), value);
-                            break;
-                        }
+                    };
+                    if matches!(kind, Kind::Flag | Kind::Count) {
+                        parsed.store(opt.unwrap(), None);
+                        continue;
                     }
+                    // A value option ends a group, its value the rest of the
+                    // argument (`-t5`, `-t=5`) or the next one: `-t 5`.
+                    let attached: String = chars[i + 1..].iter().collect();
+                    let value = if attached.is_empty() {
+                        Self::take(kind, &mut iter)
+                    } else {
+                        Some(
+                            attached
+                                .strip_prefix('=')
+                                .map(str::to_string)
+                                .unwrap_or(attached),
+                        )
+                    };
+                    match opt {
+                        Some(opt) => parsed.store(opt, value),
+                        None => parsed.store_key(&c.to_string(), value.unwrap_or("true".into())),
+                    }
+                    break;
                 }
             } else {
-                positional.push(arg);
+                parsed.positional.push(arg);
             }
         }
+        parsed
+    }
 
-        Args {
-            flags,
-            positional,
-            verbosity,
-            quiet,
+    /// The value an option without an attached one takes from the
+    /// arguments that follow.
+    fn take(
+        kind: Kind,
+        iter: &mut std::iter::Peekable<std::vec::IntoIter<String>>,
+    ) -> Option<String> {
+        match kind {
+            Kind::Flag | Kind::Count => None,
+            Kind::Value => iter.next(),
+            Kind::Optional => match iter.peek() {
+                Some(next) if is_value(next) => iter.next(),
+                _ => None,
+            },
         }
+    }
+
+    fn store(&mut self, opt: &Opt, value: Option<String>) {
+        if opt.kind == Kind::Count {
+            match opt.long {
+                "verbose" => self.verbosity = self.verbosity.saturating_add(1),
+                "quiet" => self.quiet = self.quiet.saturating_add(1),
+                _ => {}
+            }
+            return;
+        }
+        let value = value.unwrap_or_else(|| "true".into());
+        for key in [opt.short, opt.long] {
+            if !key.is_empty() {
+                self.store_key(key, value.clone());
+            }
+        }
+    }
+
+    fn store_key(&mut self, key: &str, value: String) {
+        self.values.push((key.to_string(), value.clone()));
+        self.flags.insert(key.to_string(), value);
     }
 
     fn parse_profile(args: Vec<String>, control: bool) -> Self {
@@ -256,12 +409,29 @@ impl Args {
             positional,
             verbosity,
             quiet,
+            values: Vec::new(),
+            unknown: Vec::new(),
         }
     }
 
     /// Get a flag value by long or short name.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.flags.get(key).map(|s| s.as_str())
+    }
+
+    /// Every value an option was given, in order (`-a x -a y`).
+    pub fn get_all(&self, key: &str) -> Vec<&str> {
+        let all: Vec<&str> = self
+            .values
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+            .collect();
+        if all.is_empty() {
+            self.get(key).into_iter().collect()
+        } else {
+            all
+        }
     }
 
     /// Check if a flag is set.
@@ -298,26 +468,85 @@ mod tests {
         assert!(a.positional.is_empty());
     }
 
+    const SPEC: OptionSpec = OptionSpec {
+        options: &[
+            Opt::flag("x", "execute"),
+            Opt::flag("p", "print"),
+            Opt::optional("a", "announce"),
+            Opt::value("t", "timeout"),
+            Opt::value("i", ""),
+            Opt::flag("", "table"),
+            Opt::flag("", "tables-too"),
+            Opt::count("v", "verbose"),
+            Opt::count("q", "quiet"),
+            Opt::value("", "allowed").rust_only(),
+        ],
+    };
+
+    fn spec(s: &[&str]) -> Args {
+        Args::parse_spec_from(s.iter().map(|s| s.to_string()).collect(), &SPEC)
+    }
+
     #[test]
     fn spec_profile_follows_the_tool_table() {
-        const SPEC: OptionSpec = OptionSpec {
-            flags: &['x', 'p'],
-            optional: &['a'],
-            long_optional: &["announce"],
-        };
-        let parse =
-            |s: &[&str]| Args::parse_spec_from(s.iter().map(|s| s.to_string()).collect(), &SPEC);
-        let a = parse(&["-t", "12", "-xp", "-a", "-i", "id", "file"]);
+        let a = spec(&["-t", "12", "-xp", "-a", "-i", "id", "file"]);
         assert_eq!(a.get("t"), Some("12"));
-        assert!(a.has("x") && a.has("p"));
+        assert_eq!(a.get("timeout"), Some("12"));
+        assert!(a.has("x") && a.has("p") && a.has("execute") && a.has("print"));
         assert_eq!(a.get("a"), Some("true"));
         assert_eq!(a.get("i"), Some("id"));
         assert_eq!(a.positional, vec!["file"]);
-        let a = parse(&["-a", "app.aspect", "-t5", "--announce", "--verbose"]);
-        assert_eq!(a.get("a"), Some("app.aspect"));
+        assert!(a.unknown.is_empty());
+        let a = spec(&["-a", "app.aspect", "-t5", "--announce", "--verbose"]);
+        assert_eq!(a.get("a"), Some("true"));
         assert_eq!(a.get("t"), Some("5"));
-        assert_eq!(a.get("announce"), Some("true"));
         assert_eq!(a.verbosity, 1);
+    }
+
+    #[test]
+    fn spec_profile_parses_as_argparse() {
+        // Attached values, also after flags in a group and after `=`.
+        assert_eq!(spec(&["-xt5"]).get("timeout"), Some("5"));
+        assert_eq!(spec(&["-t=5"]).get("t"), Some("5"));
+        assert_eq!(spec(&["-vxt=5"]).get("t"), Some("5"));
+        assert_eq!(spec(&["--timeout=5"]).get("t"), Some("5"));
+        // A value option takes the next argument, even a negative number.
+        assert_eq!(spec(&["-t", "-5"]).get("t"), Some("-5"));
+        // An optional value is not taken from an option, nor a dash-less
+        // negative number mistaken for one.
+        let a = spec(&["-a", "-x"]);
+        assert_eq!(a.get("a"), Some("true"));
+        assert!(a.has("x"));
+        assert_eq!(spec(&["-a", "-1"]).get("a"), Some("-1"));
+        // Flags after positionals; negative numbers and `-` are positional.
+        let a = spec(&["one", "-x", "-1.5", "-", "-v", "-vq"]);
+        assert_eq!(a.positional, vec!["one", "-1.5", "-"]);
+        assert!(a.has("x"));
+        assert_eq!((a.verbosity, a.quiet), (2, 1));
+        // Unique prefixes of upstream long names, exact Rust-only names.
+        assert_eq!(spec(&["--time", "3"]).get("t"), Some("3"));
+        assert!(spec(&["--exec"]).has("x"));
+        assert!(spec(&["--verb"]).verbosity == 1);
+        assert!(spec(&["--table"]).has("table"));
+        assert!(spec(&["--tables"]).has("tables-too"));
+        assert!(spec(&["--ver"]).unknown == vec!["--ver"]);
+        assert_eq!(spec(&["--allowed", "h"]).get("allowed"), Some("h"));
+        assert!(spec(&["--allow", "h"]).unknown == vec!["--allow"]);
+        // `--` ends the options.
+        assert_eq!(spec(&["--", "-x"]).positional, vec!["-x"]);
+        // Help and version are implied.
+        assert!(spec(&["-h"]).has("help"));
+        assert!(spec(&["--vers"]).has("version"));
+        // Repeated values are all kept.
+        let a = spec(&["-i", "one", "-itwo"]);
+        assert_eq!(a.get_all("i"), vec!["one", "two"]);
+        assert_eq!(a.get("i"), Some("two"));
+        // Unknown options are reported, and parsed as the shared parser does.
+        let a = spec(&["-k", "v", "--other", "w", "--execute=1"]);
+        assert_eq!(a.unknown, vec!["-k", "--other", "--execute=1"]);
+        assert_eq!(a.get("k"), Some("v"));
+        assert_eq!(a.get("other"), Some("w"));
+        assert!(!a.has("execute"));
     }
 
     #[test]
