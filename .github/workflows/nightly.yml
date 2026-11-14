@@ -1,0 +1,108 @@
+name: Nightly
+
+# Slow analyses that do not gate changes: line coverage against per-crate
+# floors (nightly) and mutation testing of rns-core (weekly). The full CI
+# suite also runs nightly (ci.yml), and fuzzing has its own workflow
+# (fuzz.yml).
+
+on:
+  schedule:
+    # Nightly: coverage.
+    - cron: "23 3 * * *"
+    # Weekly, Sunday: mutation testing as well.
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      mutants:
+        description: "Also run mutation testing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: llvm-tools
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+
+      - name: Measure
+        run: |
+          cargo llvm-cov -p rns-core -p rns-net --lib --lcov --output-path lcov.info
+          cargo llvm-cov report --summary-only | tee coverage.txt
+
+      # Floors live in the script; raise them as coverage rises.
+      - name: Check floors
+        run: python3 scripts/coverage-floor.py < coverage.txt
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            lcov.info
+            coverage.txt
+
+  mutants:
+    name: Mutants (rns-core, shard ${{ matrix.shard }}/16)
+    if: github.event.schedule == '23 4 * * 0' || inputs.mutants
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --version 27.1.0 --locked
+
+      # A report, not a gate: a missed mutant is a test that runs code
+      # without checking what it does. Read mutants.out/missed.txt.
+      - name: Mutate rns-core
+        run: >
+          cargo mutants -p rns-core --shard ${{ matrix.shard }}/16
+          --timeout-multiplier 3 --no-shuffle || true
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### rns-core shard ${{ matrix.shard }}/16"
+            for outcome in caught missed timeout unviable; do
+              echo "- ${outcome}: $(wc -l < mutants.out/${outcome}.txt 2>/dev/null || echo 0)"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-rns-core-${{ matrix.shard }}
+          path: mutants.out/
