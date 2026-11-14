@@ -2187,7 +2187,8 @@ impl Driver {
                             );
                         }
                     }
-                    log::info!(
+                    // Upstream logs this at LOG_DEBUG.
+                    log::debug!(
                         "Link established: {:02x?} rtt={:.3}s initiator={}",
                         &link_id[..4],
                         rtt,
@@ -2230,7 +2231,7 @@ impl Driver {
                             self.collect_hook_side_effects("LinkClosed", e, &mut hook_injected);
                         }
                     }
-                    log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
+                    log::debug!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
                     self.holepunch_manager.link_closed(&link_id);
                     if self.blackhole_update_source(&link_id).is_some() {
                         self.blackhole_update_link_closed(&link_id);
