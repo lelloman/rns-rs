@@ -16,6 +16,7 @@ use rns_net::{
 };
 
 use crate::app;
+use crate::args::{Args, Opt, OptionSpec};
 use crate::format::prettyhexrep;
 
 const APP_NAME: &str = "rncp";
@@ -38,6 +39,8 @@ struct Options {
     print_identity: bool,
     overwrite: bool,
     silent: bool,
+    /// upstream's -P: accepted, but physical layer rates are not shown.
+    #[allow(dead_code)]
     phy_rates: bool,
     save: Option<String>,
     jail: Option<String>,
@@ -50,55 +53,72 @@ struct Options {
     version: bool,
 }
 
+/// upstream rncp's options, and Rust-only long names for -i, -a, -b and -w.
+const OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("", "config"),
+        Opt::count("v", "verbose"),
+        Opt::count("q", "quiet"),
+        Opt::flag("S", "silent"),
+        Opt::flag("l", "listen"),
+        Opt::flag("C", "no-compress"),
+        Opt::flag("F", "allow-fetch"),
+        Opt::flag("f", "fetch"),
+        Opt::value("j", "jail"),
+        Opt::value("s", "save"),
+        Opt::flag("O", "overwrite"),
+        Opt::value("b", "announce").rust_only(),
+        Opt::value("a", "allowed").rust_only(),
+        Opt::flag("n", "no-auth"),
+        Opt::flag("p", "print-identity"),
+        Opt::value("i", "identity").rust_only(),
+        Opt::value("w", "timeout").rust_only(),
+        Opt::flag("P", "phy-rates"),
+    ],
+};
+
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self, String> {
+        let args = Args::parse_spec_from(arguments, &OPTIONS);
+        if let Some(option) = args.unknown.first() {
+            return Err(format!("unknown option {option}"));
+        }
+        if let Some(option) = args.missing.first() {
+            return Err(format!("{option} requires a value"));
+        }
+        let value = |key: &str| args.get(key).map(str::to_string);
         let mut options = Options {
-            timeout: 15.0,
+            config: value("config"),
+            identity: value("i"),
+            jail: value("j"),
+            save: value("s"),
+            allowed: args.get_all("a").into_iter().map(str::to_string).collect(),
+            announce: value("b")
+                .map(|b| {
+                    b.parse()
+                        .map_err(|_| "announce interval must be an integer".to_string())
+                })
+                .transpose()?,
+            timeout: value("w")
+                .map(|w| parse_timeout(&w))
+                .transpose()?
+                .unwrap_or(15.0),
+            listen: args.has("l"),
+            fetch: args.has("f"),
+            allow_fetch: args.has("F"),
+            no_compress: args.has("C"),
+            no_auth: args.has("n"),
+            print_identity: args.has("p"),
+            overwrite: args.has("O"),
+            silent: args.has("S"),
+            phy_rates: args.has("P"),
+            verbose: args.verbosity,
+            quiet: args.quiet,
+            help: args.has("help"),
+            version: args.has("version"),
             ..Options::default()
         };
-        let mut positional = Vec::new();
-        let mut index = 0;
-        while index < arguments.len() {
-            let argument = &arguments[index];
-            let mut take_value = |name: &str| -> Result<String, String> {
-                index += 1;
-                arguments
-                    .get(index)
-                    .cloned()
-                    .ok_or_else(|| format!("{name} requires a value"))
-            };
-            match argument.as_str() {
-                "--config" => options.config = Some(take_value("--config")?),
-                "-i" | "--identity" => options.identity = Some(take_value(argument)?),
-                "-j" | "--jail" => options.jail = Some(take_value(argument)?),
-                "-s" | "--save" => options.save = Some(take_value(argument)?),
-                "-a" | "--allowed" => options.allowed.push(take_value(argument)?),
-                "-b" | "--announce" => {
-                    options.announce = Some(
-                        take_value(argument)?
-                            .parse()
-                            .map_err(|_| "announce interval must be an integer".to_string())?,
-                    )
-                }
-                "-w" | "--timeout" => options.timeout = parse_timeout(&take_value(argument)?)?,
-                "-l" | "--listen" => options.listen = true,
-                "-f" | "--fetch" => options.fetch = true,
-                "-F" | "--allow-fetch" => options.allow_fetch = true,
-                "-C" | "--no-compress" => options.no_compress = true,
-                "-n" | "--no-auth" => options.no_auth = true,
-                "-p" | "--print-identity" => options.print_identity = true,
-                "-O" | "--overwrite" => options.overwrite = true,
-                "-S" | "--silent" => options.silent = true,
-                "-P" | "--phy-rates" => options.phy_rates = true,
-                "-v" | "--verbose" => options.verbose = options.verbose.saturating_add(1),
-                "-q" | "--quiet" => options.quiet = options.quiet.saturating_add(1),
-                "-h" | "--help" => options.help = true,
-                "--version" => options.version = true,
-                value if value.starts_with('-') => return Err(format!("unknown option {value}")),
-                value => positional.push(value.to_string()),
-            }
-            index += 1;
-        }
+        let positional = args.positional;
         options.file = positional.first().cloned();
         options.destination = positional.get(1).cloned();
         if positional.len() > 2 {
@@ -726,5 +746,58 @@ mod tests {
         .unwrap();
         assert!(options.fetch && options.overwrite);
         assert_eq!(options.file.as_deref(), Some("remote"));
+    }
+
+    #[test]
+    fn parses_upstream_invocations_as_argparse_does() {
+        let hash = "00".repeat(16);
+        let parse = |argv: &[&str]| {
+            Options::parse(argv.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_else(|e| panic!("{argv:?}: {e}"))
+        };
+        let o = parse(&["-l", "-vv", "-b", "0", "-a", "aa", "-abb", "-s", "/tmp/in"]);
+        assert!(o.listen);
+        assert_eq!(o.verbose, 2);
+        assert_eq!(o.announce, Some(0));
+        assert_eq!(o.allowed, vec!["aa", "bb"]);
+        assert_eq!(o.save.as_deref(), Some("/tmp/in"));
+        let o = parse(&["-lFnb30", "-j", "/srv", "-i", "id", "--config=/c"]);
+        assert!(o.listen && o.allow_fetch && o.no_auth);
+        assert_eq!(o.announce, Some(30));
+        assert_eq!(o.jail.as_deref(), Some("/srv"));
+        assert_eq!(o.identity.as_deref(), Some("id"));
+        assert_eq!(o.config.as_deref(), Some("/c"));
+        let o = parse(&["file.txt", &hash, "-w5", "-CSP"]);
+        assert_eq!(o.file.as_deref(), Some("file.txt"));
+        assert_eq!(o.destination.as_deref(), Some(hash.as_str()));
+        assert_eq!(o.timeout, 5.0);
+        assert!(o.no_compress && o.silent && o.phy_rates);
+        let o = parse(&[
+            "--fetch",
+            "--overwrite",
+            "--save=/d",
+            "remote",
+            &hash,
+            "-qq",
+        ]);
+        assert!(o.fetch && o.overwrite);
+        assert_eq!((o.save.as_deref(), o.quiet), (Some("/d"), 2));
+        let o = parse(&[
+            "--listen",
+            "--no-auth",
+            "--allow",
+            "--print",
+            "--sil",
+            "--phy",
+        ]);
+        assert!(o.listen && o.no_auth && o.allow_fetch && o.print_identity);
+        assert!(o.silent && o.phy_rates);
+        let o = parse(&["-p", "--no-c", "--jail", "/j", "--verbose"]);
+        assert!(o.print_identity && o.no_compress);
+        assert_eq!((o.jail.as_deref(), o.verbose), (Some("/j"), 1));
+        assert!(parse(&["-h"]).help && parse(&["--version"]).version);
+        assert!(Options::parse(vec!["-k".into()]).is_err());
+        assert!(Options::parse(vec!["-s".into()]).is_err());
+        assert!(Options::parse(vec!["a".into(), "b".into(), "c".into()]).is_err());
     }
 }

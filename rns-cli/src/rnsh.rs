@@ -21,6 +21,7 @@ use rns_net::compressor::Bzip2Compressor;
 use rns_net::destination::Destination;
 use rns_net::{Callbacks, ChannelSendError, RnsNode, SendError};
 
+use crate::args::{Args, Opt, OptionSpec};
 use crate::format::{prettyb256rep, prettyhexrep};
 
 const APP_NAME: &str = "rnsh";
@@ -235,161 +236,84 @@ struct CliOptions {
     command: Vec<String>,
 }
 
+/// upstream rnsh's options, and the Rust-only `-Z`/`--base256`.
+const OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("c", "config"),
+        Opt::value("", "rnsconfig"),
+        Opt::value("i", "identity"),
+        Opt::count("v", "verbose"),
+        Opt::count("q", "quiet"),
+        Opt::flag("p", "print-identity"),
+        Opt::flag("l", "listen"),
+        Opt::value("s", "service"),
+        Opt::value("b", "announce"),
+        Opt::value("a", "allowed"),
+        Opt::flag("n", "no-auth"),
+        Opt::flag("A", "remote-command-as-args"),
+        Opt::flag("C", "no-remote-command"),
+        Opt::flag("N", "no-id"),
+        Opt::flag("m", "mirror"),
+        Opt::value("w", "timeout"),
+        Opt::flag("Z", "base256").rust_only(),
+    ],
+};
+
 impl CliOptions {
     fn parse(argv: Vec<String>) -> Result<Self, String> {
-        let mut opts = CliOptions::default();
+        // As upstream, everything after the first `--` is the command.
         let (rnsh_argv, command) = match argv.iter().position(|arg| arg == "--") {
             Some(idx) => (argv[..idx].to_vec(), argv[idx + 1..].to_vec()),
             None => (argv, Vec::new()),
         };
-        opts.command = command;
-
-        let mut i = 0;
-        while i < rnsh_argv.len() {
-            let arg = &rnsh_argv[i];
-            if !arg.starts_with('-') || arg == "-" {
-                if opts.destination.is_some() {
-                    return Err(format!("unexpected positional argument: {arg}"));
-                }
-                opts.destination = Some(arg.clone());
-                i += 1;
-                continue;
-            }
-
-            if let Some(long_option) = arg.strip_prefix("--") {
-                let (name, inline_value) = long_option
-                    .split_once('=')
-                    .map(|(name, value)| (name, Some(value)))
-                    .unwrap_or((long_option, None));
-                match name {
-                    "config" | "rnsconfig" | "identity" | "service" | "announce" | "allowed"
-                    | "timeout" => {
-                        let value = match inline_value {
-                            Some(value) => value.to_string(),
-                            None => {
-                                i += 1;
-                                rnsh_argv
-                                    .get(i)
-                                    .ok_or_else(|| format!("--{name} requires a value"))?
-                                    .clone()
-                            }
-                        };
-                        match name {
-                            "config" => opts.rnsh_config = Some(value),
-                            "rnsconfig" => opts.rns_config = Some(value),
-                            "identity" => opts.identity = Some(value),
-                            "service" => opts.service = Some(value),
-                            "announce" => {
-                                opts.announce_period = Some(value.parse().map_err(|_| {
-                                    "--announce requires an integer period".to_string()
-                                })?)
-                            }
-                            "allowed" => opts.allowed.push(value),
-                            "timeout" => {
-                                opts.timeout = Some(value.parse().map_err(|_| {
-                                    "--timeout requires a numeric value".to_string()
-                                })?)
-                            }
-                            _ => {}
-                        }
-                    }
-                    "verbose" if inline_value.is_none() => {
-                        opts.verbose = opts.verbose.saturating_add(1)
-                    }
-                    "quiet" if inline_value.is_none() => opts.quiet = opts.quiet.saturating_add(1),
-                    "print-identity" if inline_value.is_none() => opts.print_identity = true,
-                    "base256" if inline_value.is_none() => opts.base256 = true,
-                    "version" if inline_value.is_none() => opts.version = true,
-                    "help" if inline_value.is_none() => opts.help = true,
-                    "listen" if inline_value.is_none() => opts.listen = true,
-                    "no-auth" if inline_value.is_none() => opts.no_auth = true,
-                    "remote-command-as-args" if inline_value.is_none() => {
-                        opts.remote_command_as_args = true
-                    }
-                    "no-remote-command" if inline_value.is_none() => opts.no_remote_command = true,
-                    "no-id" if inline_value.is_none() => opts.no_id = true,
-                    "mirror" if inline_value.is_none() => opts.mirror_exit = true,
-                    name if inline_value.is_some()
-                        && matches!(
-                            name,
-                            "verbose"
-                                | "quiet"
-                                | "print-identity"
-                                | "base256"
-                                | "version"
-                                | "help"
-                                | "listen"
-                                | "no-auth"
-                                | "remote-command-as-args"
-                                | "no-remote-command"
-                                | "no-id"
-                                | "mirror"
-                        ) =>
-                    {
-                        return Err(format!("--{name} does not take a value"));
-                    }
-                    _ => return Err(format!("unknown option --{name}")),
-                }
-                i += 1;
-                continue;
-            }
-
-            let chars: Vec<char> = arg[1..].chars().collect();
-            let mut pos = 0;
-            while pos < chars.len() {
-                match chars[pos] {
-                    'c' | 'i' | 's' | 'b' | 'a' | 'w' => {
-                        let key = chars[pos];
-                        let value = if pos + 1 < chars.len() {
-                            chars[pos + 1..].iter().collect::<String>()
-                        } else {
-                            i += 1;
-                            rnsh_argv
-                                .get(i)
-                                .ok_or_else(|| format!("-{key} requires a value"))?
-                                .clone()
-                        };
-                        match key {
-                            'c' => opts.rnsh_config = Some(value),
-                            'i' => opts.identity = Some(value),
-                            's' => opts.service = Some(value),
-                            'b' => {
-                                opts.announce_period = Some(
-                                    value
-                                        .parse()
-                                        .map_err(|_| "-b requires an integer".to_string())?,
-                                )
-                            }
-                            'a' => opts.allowed.push(value),
-                            'w' => {
-                                opts.timeout = Some(
-                                    value
-                                        .parse()
-                                        .map_err(|_| "-w requires a number".to_string())?,
-                                )
-                            }
-                            _ => {}
-                        }
-                        break;
-                    }
-                    'v' => opts.verbose = opts.verbose.saturating_add(1),
-                    'q' => opts.quiet = opts.quiet.saturating_add(1),
-                    'p' => opts.print_identity = true,
-                    'Z' => opts.base256 = true,
-                    'l' => opts.listen = true,
-                    'n' => opts.no_auth = true,
-                    'A' => opts.remote_command_as_args = true,
-                    'C' => opts.no_remote_command = true,
-                    'N' => opts.no_id = true,
-                    'm' => opts.mirror_exit = true,
-                    'h' => opts.help = true,
-                    other => return Err(format!("unknown option -{other}")),
-                }
-                pos += 1;
-            }
-            i += 1;
+        let args = Args::parse_spec_from(rnsh_argv, &OPTIONS);
+        if let Some(option) = args.unknown.first() {
+            return Err(format!("unknown option {option}"));
         }
-
+        if let Some(option) = args.missing.first() {
+            return Err(format!("{option} requires a value"));
+        }
+        if let Some(extra) = args.positional.get(1) {
+            return Err(format!("unexpected positional argument: {extra}"));
+        }
+        let value = |key: &str| args.get(key).map(str::to_string);
+        let mut opts = CliOptions {
+            rnsh_config: value("config"),
+            rns_config: value("rnsconfig"),
+            identity: value("identity"),
+            verbose: args.verbosity,
+            quiet: args.quiet,
+            print_identity: args.has("p"),
+            base256: args.has("Z"),
+            version: args.has("version"),
+            help: args.has("help"),
+            listen: args.has("l"),
+            service: value("service"),
+            announce_period: value("announce")
+                .map(|b| {
+                    b.parse()
+                        .map_err(|_| "--announce requires an integer period".to_string())
+                })
+                .transpose()?,
+            allowed: args
+                .get_all("allowed")
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            no_auth: args.has("n"),
+            remote_command_as_args: args.has("A"),
+            no_remote_command: args.has("C"),
+            no_id: args.has("N"),
+            mirror_exit: args.has("m"),
+            timeout: value("timeout")
+                .map(|w| {
+                    w.parse()
+                        .map_err(|_| "--timeout requires a numeric value".to_string())
+                })
+                .transpose()?,
+            destination: args.positional.first().cloned(),
+            command,
+        };
         if opts.listen && opts.service.is_none() {
             opts.service = Some(DEFAULT_SERVICE_NAME.to_string());
         }
@@ -2920,6 +2844,64 @@ mod tests {
         .unwrap();
         assert_eq!(equals.rnsh_config.as_deref(), Some("/tmp/rnsh-equals"));
         assert_eq!(equals.rns_config.as_deref(), Some("/tmp/rns-equals"));
+    }
+
+    #[test]
+    fn cli_parses_upstream_invocations_as_argparse_does() {
+        let parse = |argv: &[&str]| {
+            CliOptions::parse(argv.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_else(|e| panic!("{argv:?}: {e}"))
+        };
+        let o = parse(&["-l", "-a", "aa", "-abb", "-n", "-b", "60", "-vv"]);
+        assert!(o.listen && o.no_auth);
+        assert_eq!(o.allowed, vec!["aa", "bb"]);
+        assert_eq!((o.announce_period, o.verbose), (Some(60), 2));
+        assert_eq!(o.service.as_deref(), Some(DEFAULT_SERVICE_NAME));
+        let o = parse(&["-lACs", "ops", "-b0", "--", "/bin/bash", "--login"]);
+        assert!(o.listen && o.remote_command_as_args && o.no_remote_command);
+        assert_eq!(
+            (o.service.as_deref(), o.announce_period),
+            (Some("ops"), Some(0))
+        );
+        assert_eq!(o.command, vec!["/bin/bash", "--login"]);
+        let o = parse(&["dest", "-Nm", "-w=2.5", "-i", "id", "-q"]);
+        assert_eq!(o.destination.as_deref(), Some("dest"));
+        assert!(o.no_id && o.mirror_exit);
+        assert_eq!(
+            (o.timeout, o.identity.as_deref(), o.quiet),
+            (Some(2.5), Some("id"), 1)
+        );
+        let o = parse(&[
+            "--listen",
+            "--serv",
+            "ops",
+            "--allowed=aa",
+            "--no-a",
+            "--rnsc",
+            "/r",
+        ]);
+        assert!(o.listen && o.no_auth);
+        assert_eq!(o.service.as_deref(), Some("ops"));
+        assert_eq!(o.allowed, vec!["aa"]);
+        assert_eq!(o.rns_config.as_deref(), Some("/r"));
+        let o = parse(&[
+            "--no-i",
+            "--mirror",
+            "--timeout",
+            "5",
+            "--ident",
+            "id",
+            "dest",
+        ]);
+        assert!(o.no_id && o.mirror_exit);
+        assert_eq!((o.timeout, o.identity.as_deref()), (Some(5.0), Some("id")));
+        assert_eq!(parse(&["-cdir"]).rnsh_config.as_deref(), Some("dir"));
+        assert!(parse(&["-p", "--print"]).print_identity);
+        assert!(parse(&["-h"]).help && parse(&["--version"]).version);
+        // `--no` is ambiguous: --no-auth, --no-remote-command or --no-id.
+        assert!(CliOptions::parse(vec!["--no".into()]).is_err());
+        assert!(CliOptions::parse(vec!["a".into(), "b".into()]).is_err());
+        assert!(CliOptions::parse(vec!["-w".into()]).is_err());
     }
 
     #[test]

@@ -112,6 +112,9 @@ pub struct Args {
     /// Options a tool's [`OptionSpec`] does not know, as given. They are
     /// still parsed as the shared parser would.
     pub unknown: Vec<String>,
+    /// Options given without the value they take (argparse: "expected one
+    /// argument").
+    pub missing: Vec<String>,
 }
 
 /// Long options that never take a value.
@@ -205,6 +208,7 @@ impl Args {
             quiet: 0,
             values: Vec::new(),
             unknown: Vec::new(),
+            missing: Vec::new(),
         };
         let mut iter = args.into_iter().peekable();
 
@@ -238,6 +242,9 @@ impl Args {
                     Some(value) => Some(value),
                     None => Self::take(opt.kind, &mut iter),
                 };
+                if value.is_none() && opt.kind == Kind::Value {
+                    parsed.missing.push(format!("--{}", opt.long));
+                }
                 parsed.store(opt, value);
             } else if arg.len() > 1 && arg.starts_with('-') && !looks_negative(&arg) {
                 let chars: Vec<char> = arg[1..].chars().collect();
@@ -267,6 +274,9 @@ impl Args {
                                 .unwrap_or(attached),
                         )
                     };
+                    if value.is_none() && kind == Kind::Value {
+                        parsed.missing.push(format!("-{c}"));
+                    }
                     match opt {
                         Some(opt) => parsed.store(opt, value),
                         None => parsed.store_key(&c.to_string(), value.unwrap_or("true".into())),
@@ -411,6 +421,7 @@ impl Args {
             quiet,
             values: Vec::new(),
             unknown: Vec::new(),
+            missing: Vec::new(),
         }
     }
 
@@ -547,6 +558,10 @@ mod tests {
         assert_eq!(a.get("k"), Some("v"));
         assert_eq!(a.get("other"), Some("w"));
         assert!(!a.has("execute"));
+        // Value options without a value are reported.
+        assert_eq!(spec(&["-x", "-t"]).missing, vec!["-t"]);
+        assert_eq!(spec(&["--time"]).missing, vec!["--timeout"]);
+        assert!(spec(&["-a"]).missing.is_empty());
     }
 
     #[test]
