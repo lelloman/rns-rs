@@ -47,7 +47,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | 2 | `04585ff2a8af37ee1683aca03d001cd49ae8399a` | Cleanup | Non-runtime | Formatting-only; audit records the diff review |
 | 3 | `6852971d3c8e0e0d055bdb1472b51fa6de87b3a9` | Logging cleanup | Non-runtime | Log-only; no equivalent Rust log line |
 | 4 | `d5f1e014dbec2921d70b8acd15c820601de6525d` | Persist and load announce rate table | Integrated | `storage/announce_rate_table` (`RNSART` v1) save/load; upstream-generated fixture `tests/fixtures/transport/announce_rate_table_d5f1e014.bin`; `announce_rate_block_survives_snapshot_restore` and storage tests |
-| 5 | `01e7ed84433ee3e9a64643e40e892ccfcdb85243` | Refactored traffic accounting | Pending review | Changes `RNS/Interfaces/AX25KISSInterface.py`, `RNS/Interfaces/AutoInterface.py`, `RNS/Interfaces/BackboneInterface.py`, `RNS/Interfaces/I2PInterface.py`, `RNS/Interfaces/KISSInterface.py`, `RNS/Interfaces/LocalInterface.py`, `RNS/Interfaces/PipeInterface.py`, `RNS/Interfaces/RNodeInterface.py`, `RNS/Interfaces/RNodeMultiInterface.py`, `RNS/Interfaces/SerialInterface.py`, `RNS/Interfaces/TCPInterface.py`, `RNS/Interfaces/UDPInterface.py`, `RNS/Interfaces/WeaveInterface.py`, `RNS/Transport.py` |
+| 5 | `01e7ed84433ee3e9a64643e40e892ccfcdb85243` | Refactored traffic accounting | Structurally covered | `every_received_frame_is_charged_once_to_received_or_filtered`; `record_filtered_inbound` doc |
 | 6 | `d183791956f807c92d5eb0a9f9bc9e12f9135cd1` | Refactored traffic accounting | Pending review | Changes `RNS/Transport.py` |
 | 7 | `819076c3783565dc303abb2894c99e6ce6074342` | Track filtered announce count per interface | Pending review | Changes `RNS/Interfaces/Interface.py`, `RNS/Reticulum.py`, `RNS/Transport.py`, `RNS/Utilities/rnstatus.py` |
 | 8 | `daec67a116347b28e2268beb1d7b004f827eebb2` | Cleanup | Pending review | Changes `RNS/Transport.py` |
@@ -101,13 +101,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 5. `01e7ed84` — Refactored traffic accounting
 
-**Upstream change:** Pending review (changes `RNS/Interfaces/AX25KISSInterface.py`, `RNS/Interfaces/AutoInterface.py`, `RNS/Interfaces/BackboneInterface.py`, `RNS/Interfaces/I2PInterface.py`, `RNS/Interfaces/KISSInterface.py`, `RNS/Interfaces/LocalInterface.py`, `RNS/Interfaces/PipeInterface.py`, `RNS/Interfaces/RNodeInterface.py`, `RNS/Interfaces/RNodeMultiInterface.py`, `RNS/Interfaces/SerialInterface.py`, `RNS/Interfaces/TCPInterface.py`, `RNS/Interfaces/UDPInterface.py`, `RNS/Interfaces/WeaveInterface.py`, `RNS/Transport.py`).
+**Upstream change:** Interfaces stop adding received bytes to `rxb` (and to `parent_interface.rxb` or `owner.rxb`) in `process_incoming`. The changed modules are AX.25 KISS, Auto, Backbone, I2P, KISS, Local, Pipe, RNode, RNode Multi, Serial, TCP, UDP and Weave. `Transport.inbound` now charges each frame once: `accepted_inbound` adds to `rxb` (and the parent's) when `preprocess_inbound` accepts, and `filtered_inbound` adds only to `frxb`, no longer subtracting from `rxb`. The non-queued `preprocess_inbound` path no longer returns `_inbound`'s result, so it stops counting accepted packets as filtered; upstream's default `USE_INBOUND_QUEUE = True` already returned `True`. Side effects: AX.25 counts bytes after the 16-byte header, and I2P outbound peers (`parent_count = False`) now add RX bytes to the parent I2P interface (TX unchanged).
 
-**Rust applicability:** Pending review.
+**Rust applicability:** rns-rs counts `rxb`/`rx_packets` once, when a wire frame reaches the driver (`handle_classified_frame_event`). `record_filtered_inbound` moves a frame dropped where `preprocess_inbound` drops it to `frxb`. A deferred signature failure is moved the same way; upstream rejects it inline, with the same end state. The totals therefore equal upstream's new accepted/filtered split, and no interface counts bytes on its own. AX.25 frames reach the driver already stripped by `decode_ui_frame`, matching the new upstream count. There is no non-queued `_inbound` quirk to mirror. Caveat: rns-rs reports no row for the I2P parent interface (its peers are separate dynamic interfaces), so the I2P `parent_count` RX roll-up has no surface. That is a pre-existing representation difference, not introduced here.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Mapping commit refreshes the `record_filtered_inbound` doc to describe upstream's new split. It also moves the misplaced `admit_decoded_inbound` doc back onto its function. New regression `every_received_frame_is_charged_once_to_received_or_filtered` sends accepted, IFAC-flagged and undecodable frames and requires `rxb + frxb` to equal the bytes received, with every filtered frame in `frxb`. The existing 134dc677 filtered-inbound tests still pass. `cargo test -p rns-net`: 1470 passed, 0 failed; fmt and clippy clean.
 
-**Final disposition:** Pending review.
+**Final disposition:** Structurally covered.
 
 ### 6. `d1837919` — Refactored traffic accounting
 

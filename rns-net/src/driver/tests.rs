@@ -4767,6 +4767,38 @@ fn filtered_inbound_moves_the_frame_from_received_to_filtered() {
 }
 
 #[test]
+fn every_received_frame_is_charged_once_to_received_or_filtered() {
+    // Upstream 01e7ed84 moves byte accounting into `Transport.inbound`:
+    // accepted frames count in `rxb`, filtered ones in `frxb`, none in both.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "partition");
+    let mut total = 0u64;
+    let mut filtered = 0u64;
+    for round in 0..3 {
+        // Usually accepted; ingress control may hold a later one back.
+        let announce = build_announce_packet(&Identity::new(&mut OsRng));
+        total += announce.len() as u64;
+        driver.handle_frame_event(InterfaceId(1), announce, None, None);
+
+        // IFAC flag set on an interface without IFAC.
+        let mut flagged = build_announce_packet(&Identity::new(&mut OsRng));
+        flagged[0] |= 0x80;
+        filtered += flagged.len() as u64;
+        driver.handle_frame_event(InterfaceId(1), flagged, None, None);
+
+        // Undecodable.
+        let short = vec![0x00; 2 + round];
+        filtered += short.len() as u64;
+        driver.handle_frame_event(InterfaceId(1), short, None, None);
+    }
+    total += filtered;
+    let (rxb, frxb, rx_packets) = rx_and_filtered(&driver, 1);
+    assert_eq!(rxb + frxb, total);
+    assert!(frxb >= filtered);
+    assert!(rxb > 0 && rx_packets > 0);
+}
+
+#[test]
 fn announce_of_a_blocked_type_is_filtered_inbound() {
     // Dropped by the engine's destination type filter.
     let mut driver = new_test_driver();

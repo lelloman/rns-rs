@@ -28,13 +28,13 @@ impl Driver {
         self.handle_classified_frame_event(interface_id, data.into(), rssi, snr, false);
     }
 
-    /// Inbound admission checks that run on a decoded packet before the
-    /// `PreIngress` hook. They count protocol violations and packet filter hits
-    /// on the receiving interface and return whether the packet may proceed.
-    /// Upstream 134dc677 `Transport.filtered_inbound`: a received frame
-    /// dropped where `preprocess_inbound` drops it moves its bytes from the
-    /// interface's received to its filtered count. Upstream counts a packet
-    /// in `rx_packets` only once it passes, so it leaves that count too.
+    /// Reclassify a received frame as filtered: one dropped where upstream's
+    /// `preprocess_inbound` drops it (134dc677). Since upstream 01e7ed84,
+    /// `Transport.inbound` charges each frame once, to `rxb` through
+    /// `accepted_inbound` or to `frxb` through `filtered_inbound`. rns-rs
+    /// counts the frame as received on arrival and moves it here, which gives
+    /// the same split. Upstream counts a packet in `rx_packets` only once it
+    /// passes, so it leaves that count too.
     pub(crate) fn record_filtered_inbound(&mut self, interface_id: InterfaceId, size: usize) {
         if let Some(entry) = self.interfaces.get_mut(&interface_id) {
             let size = size as u64;
@@ -44,6 +44,9 @@ impl Driver {
         }
     }
 
+    /// Inbound admission checks that run on a decoded packet before the
+    /// `PreIngress` hook. They count protocol violations and packet filter hits
+    /// on the receiving interface and return whether the packet may proceed.
     fn admit_decoded_inbound(
         &mut self,
         interface_id: InterfaceId,
