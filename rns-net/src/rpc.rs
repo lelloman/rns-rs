@@ -60,8 +60,9 @@ pub enum RpcAddr {
     /// A client reaches it as upstream's do on Linux, on the abstract socket
     /// `\0rns/<instance_name>/rpc`; where that socket is not there (another
     /// platform, or a Python instance with `shared_instance_type = tcp`), it
-    /// uses TCP on 127.0.0.1 and `port`. A server listens on TCP; the
-    /// abstract socket has its own `RpcServer::start_abstract_unix`.
+    /// uses TCP on 127.0.0.1 and `port`. A shared instance serves RPC on
+    /// one of the two: the abstract socket (`RpcServer::start_abstract_unix`)
+    /// where it can, else TCP.
     Local {
         instance_name: String,
         port: u16,
@@ -80,6 +81,12 @@ impl RpcAddr {
                 reticulum.instance_control_port,
             )
         }
+    }
+
+    /// Whether a server accepts connections here, without authenticating:
+    /// a readiness check.
+    pub fn accepts_connections(&self) -> io::Result<()> {
+        ClientStream::connect(self).map(drop)
     }
 
     /// The RPC server of the local shared instance; see [`RpcAddr::Local`].

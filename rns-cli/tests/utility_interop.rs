@@ -61,6 +61,7 @@ struct Harness {
     client_home: PathBuf,
     listener_home: PathBuf,
     client_control_port: u16,
+    client_instance: String,
     /// Whether listeners wait until the client daemon learns their path. A
     /// filtering client daemon only learns it once a client asks for it.
     wait_for_client_paths: bool,
@@ -158,10 +159,11 @@ impl Harness {
         drop(listener_control_reservation);
         drop(transport_reservation);
         let mut listener_daemon = spawn_logged(command, &listener_log);
-        wait_for_port(
+        wait_for_rpc(
+            &listener_instance,
             listener_control_port,
             &mut listener_daemon,
-            "listener control port",
+            "listener RPC",
         );
         wait_for_port(transport_port, &mut listener_daemon, "transport listener");
 
@@ -172,10 +174,11 @@ impl Harness {
         drop(client_shared_reservation);
         drop(client_control_reservation);
         let mut client_daemon = spawn_logged(command, &client_log);
-        wait_for_port(
+        wait_for_rpc(
+            &client_instance,
             client_control_port,
             &mut client_daemon,
-            "client control port",
+            "client RPC",
         );
         thread::sleep(Duration::from_millis(250));
 
@@ -186,6 +189,7 @@ impl Harness {
             client_home,
             listener_home,
             client_control_port,
+            client_instance,
             wait_for_client_paths: client_sections.is_empty(),
             _client_daemon: client_daemon,
             _listener_daemon: listener_daemon,
@@ -309,7 +313,7 @@ impl Harness {
                 .get_private_key()
                 .expect("client daemon identity has a private key"),
         );
-        let address = RpcAddr::Tcp("127.0.0.1".into(), self.client_control_port);
+        let address = RpcAddr::local(self.client_instance.clone(), self.client_control_port);
         let deadline = Instant::now() + START_TIMEOUT;
         let mut requested = false;
         loop {
@@ -369,6 +373,25 @@ enum Implementation {
 enum Side {
     Client,
     Listener,
+}
+
+/// Wait for a daemon's RPC server, reached as its clients reach it: the
+/// abstract socket of `instance` on Linux, else TCP `port`.
+fn wait_for_rpc(instance: &str, port: u16, process: &mut ProcessGuard, description: &str) {
+    let address = RpcAddr::local(instance, port);
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        if address.accepts_connections().is_ok() {
+            return;
+        }
+        process.assert_running("rnsd");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description} of {instance}:\n{}",
+            fs::read_to_string(&process.log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn wait_for_port(port: u16, process: &mut ProcessGuard, description: &str) {

@@ -2766,36 +2766,74 @@ impl RnsNode {
 
         // Start the RPC servers if share_instance is enabled: on threads, or
         // on the driver loop when the compact engine folds services.
+        //
+        // As upstream, the RPC server listens on the abstract Unix socket
+        // where the shared instance uses one, and on TCP only otherwise
+        // (`shared_instance_type = tcp`, other platforms, or when the socket
+        // cannot be bound): two instances on the default control port then
+        // do not collide.
         let serve_rpc_threads = config.share_instance && !crate::engine::FOLD_SERVICES;
+        let rpc_on_unix = |bound: io::Result<()>| -> bool {
+            match bound {
+                Ok(()) => {
+                    log::info!(
+                        "RPC server started on abstract Unix socket for {}",
+                        config.instance_name
+                    );
+                    true
+                }
+                Err(e) => {
+                    log::warn!("Abstract Unix RPC socket unavailable ({e}), serving RPC over TCP");
+                    false
+                }
+            }
+        };
         if config.share_instance && crate::engine::FOLD_SERVICES {
             let mut service = crate::driver::RpcService::new(rpc_auth_key, Arc::clone(tx.poller()));
-            match std::net::TcpListener::bind(("127.0.0.1", config.rpc_port)).and_then(|listener| {
-                service.add_listener(crate::driver::RpcListener::Tcp(listener))
-            }) {
-                Ok(()) => log::info!("RPC server started on 127.0.0.1:{}", config.rpc_port),
-                Err(e) => log::error!("Failed to start RPC server: {}", e),
-            }
             #[cfg(target_os = "linux")]
-            match config
-                .shared_instance
-                .use_af_unix
-                .then(|| crate::rpc::bind_abstract_unix(&config.instance_name))
-                .transpose()
-                .and_then(|listener| {
-                    listener.map_or(Ok(()), |listener| {
+            let on_unix = config.shared_instance.use_af_unix
+                && rpc_on_unix(
+                    crate::rpc::bind_abstract_unix(&config.instance_name).and_then(|listener| {
                         service.add_listener(crate::driver::RpcListener::Unix(listener))
-                    })
-                }) {
-                Ok(()) if !config.shared_instance.use_af_unix => {}
-                Ok(()) => log::info!(
-                    "RPC server started on abstract Unix socket for {}",
-                    config.instance_name
-                ),
-                Err(e) => log::error!("Failed to start abstract Unix RPC server: {e}"),
+                    }),
+                );
+            #[cfg(not(target_os = "linux"))]
+            let on_unix = false;
+            if !on_unix {
+                match std::net::TcpListener::bind(("127.0.0.1", config.rpc_port)).and_then(
+                    |listener| service.add_listener(crate::driver::RpcListener::Tcp(listener)),
+                ) {
+                    Ok(()) => log::info!("RPC server started on 127.0.0.1:{}", config.rpc_port),
+                    Err(e) => log::error!("Failed to start RPC server: {}", e),
+                }
             }
             driver.rpc_service = Some(service);
         }
-        let rpc_server = if serve_rpc_threads {
+        #[cfg(target_os = "linux")]
+        let rpc_unix_server = if serve_rpc_threads && config.shared_instance.use_af_unix {
+            let started = crate::rpc::RpcServer::start_abstract_unix(
+                &config.instance_name,
+                rpc_auth_key,
+                tx.clone(),
+            );
+            match started {
+                Ok(server) => rpc_on_unix(Ok(())).then_some(server),
+                Err(e) => {
+                    rpc_on_unix(Err(e));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(target_os = "linux")]
+        let on_unix = rpc_unix_server.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let on_unix = {
+            let _ = rpc_on_unix;
+            false
+        };
+        let rpc_server = if serve_rpc_threads && !on_unix {
             let rpc_addr = crate::rpc::RpcAddr::Tcp("127.0.0.1".into(), config.rpc_port);
             match crate::rpc::RpcServer::start(&rpc_addr, rpc_auth_key, tx.clone()) {
                 Ok(server) => {
@@ -2804,28 +2842,6 @@ impl RnsNode {
                 }
                 Err(e) => {
                     log::error!("Failed to start RPC server: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        #[cfg(target_os = "linux")]
-        let rpc_unix_server = if serve_rpc_threads && config.shared_instance.use_af_unix {
-            match crate::rpc::RpcServer::start_abstract_unix(
-                &config.instance_name,
-                rpc_auth_key,
-                tx.clone(),
-            ) {
-                Ok(server) => {
-                    log::info!(
-                        "RPC server started on abstract Unix socket for {}",
-                        config.instance_name
-                    );
-                    Some(server)
-                }
-                Err(e) => {
-                    log::error!("Failed to start abstract Unix RPC server: {e}");
                     None
                 }
             }
@@ -5176,7 +5192,7 @@ mod tests {
         let key = derive_auth_key(&identity.get_private_key().unwrap());
         let call = |action: &str| {
             let mut client =
-                RpcClient::connect(&RpcAddr::Tcp("127.0.0.1".into(), rpc_port), &key).unwrap();
+                RpcClient::connect(&RpcAddr::local(instance.clone(), rpc_port), &key).unwrap();
             client
                 .call(&PickleValue::Dict(vec![
                     (
@@ -6469,34 +6485,43 @@ enable_transport = False
 
     #[test]
     fn from_config_starts_rpc_when_share_instance_enabled() {
-        let dir = std::env::temp_dir().join(format!("rns-test-rpc-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
+        // As upstream: RPC on the abstract socket where the shared instance
+        // uses one (Linux), on TCP with `shared_instance_type = tcp`, never
+        // both.
+        for tcp_only in [false, true] {
+            let dir = tempdir().unwrap();
+            let rpc_port = crate::test_support::port();
+            let instance = crate::test_support::instance_name("test-rpc-start");
+            let instance_type = if tcp_only {
+                "shared_instance_type = tcp\n"
+            } else {
+                ""
+            };
+            fs::write(
+                dir.path().join("config"),
+                format!(
+                    "[reticulum]\nenable_transport = False\nshare_instance = Yes\n\
+                     instance_name = {instance}\ninstance_control_port = {rpc_port}\n\
+                     shared_instance_port = {}\n{instance_type}\n[interfaces]\n",
+                    crate::test_support::port()
+                ),
+            )
+            .unwrap();
 
-        let rpc_port = crate::test_support::port();
+            let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+            thread::sleep(Duration::from_millis(100));
 
-        let config = format!(
-            r#"
-[reticulum]
-enable_transport = False
-share_instance = Yes
-instance_control_port = {}
-
-[interfaces]
-"#,
-            rpc_port
-        );
-
-        fs::write(dir.join("config"), config).unwrap();
-
-        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
-
-        thread::sleep(Duration::from_millis(100));
-
-        let _client = std::net::TcpStream::connect(format!("127.0.0.1:{}", rpc_port)).unwrap();
-
-        node.shutdown();
-        let _ = fs::remove_dir_all(&dir);
+            let tcp = std::net::TcpStream::connect(("127.0.0.1", rpc_port)).is_ok();
+            if tcp_only || !cfg!(target_os = "linux") {
+                assert!(tcp, "RPC must be served on TCP");
+            } else {
+                assert!(!tcp, "RPC must not also be served on TCP");
+                crate::rpc::RpcAddr::local(instance.clone(), rpc_port)
+                    .accepts_connections()
+                    .expect("RPC on the abstract socket");
+            }
+            node.shutdown();
+        }
     }
 
     #[test]
@@ -6507,12 +6532,14 @@ instance_control_port = {}
         fs::create_dir_all(&dir).unwrap();
 
         let rpc_port = crate::test_support::port();
+        let instance = crate::test_support::instance_name("test-rpc-transport");
 
         let config = format!(
             r#"
 [reticulum]
 enable_transport = True
 share_instance = Yes
+instance_name = {instance}
 instance_control_port = {}
 
 [interfaces]
@@ -6526,7 +6553,9 @@ instance_control_port = {}
 
         thread::sleep(Duration::from_millis(100));
 
-        let _client = std::net::TcpStream::connect(format!("127.0.0.1:{}", rpc_port)).unwrap();
+        crate::rpc::RpcAddr::local(instance, rpc_port)
+            .accepts_connections()
+            .unwrap();
 
         node.shutdown();
         let _ = fs::remove_dir_all(&dir);
@@ -6541,12 +6570,14 @@ instance_control_port = {}
 
         let rpc_port = crate::test_support::port();
         let unreachable_port = crate::test_support::port();
+        let instance = crate::test_support::instance_name("test-rpc-unreachable");
 
         let config = format!(
             r#"
 [reticulum]
 enable_transport = True
 share_instance = Yes
+instance_name = {instance}
 instance_control_port = {}
 
 [interfaces]
@@ -6564,7 +6595,9 @@ instance_control_port = {}
 
         thread::sleep(Duration::from_millis(100));
 
-        let _client = std::net::TcpStream::connect(format!("127.0.0.1:{}", rpc_port)).unwrap();
+        crate::rpc::RpcAddr::local(instance, rpc_port)
+            .accepts_connections()
+            .unwrap();
 
         node.shutdown();
         let _ = fs::remove_dir_all(&dir);

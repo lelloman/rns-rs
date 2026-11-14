@@ -38,7 +38,8 @@ pub struct ServerConfig {
     pub sentineld_bin: PathBuf,
     pub statsd_bin: PathBuf,
     pub http: HttpConfig,
-    pub rnsd_rpc_addr: std::net::SocketAddr,
+    /// Where rnsd serves RPC: as its shared instance clients reach it.
+    pub rnsd_rpc_addr: RpcAddr,
 }
 
 #[derive(Debug, Clone)]
@@ -577,7 +578,7 @@ impl ServerConfig {
         {
             vec![ProcessReadiness {
                 role: Role::Rnsd,
-                target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
+                target: ReadinessTarget::Rpc(self.rnsd_rpc_addr.clone()),
             }]
         }
 
@@ -589,7 +590,7 @@ impl ServerConfig {
         {
             let mut readiness = vec![ProcessReadiness {
                 role: Role::Rnsd,
-                target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
+                target: ReadinessTarget::Rpc(self.rnsd_rpc_addr.clone()),
             }];
 
             readiness.push(ProcessReadiness {
@@ -610,10 +611,7 @@ impl ServerConfig {
         let identity = rns_net::storage::load_rpc_identity(&paths).ok()?;
         let private_key = identity.get_private_key()?;
         Some(RnsdDrainConfig {
-            rpc_addr: RpcAddr::Tcp(
-                self.rnsd_rpc_addr.ip().to_string(),
-                self.rnsd_rpc_addr.port(),
-            ),
+            rpc_addr: self.rnsd_rpc_addr.clone(),
             auth_key: rns_net::rpc::derive_auth_key(&private_key),
             timeout: std::time::Duration::from_secs(3),
             poll_interval: std::time::Duration::from_millis(100),
@@ -701,7 +699,7 @@ impl ServerConfig {
         rns_ctl::args::Args::parse_from(argv)
     }
 
-    fn resolve_rpc_port(config_dir: &Path) -> u16 {
+    fn resolve_rpc_addr(config_dir: &Path) -> RpcAddr {
         let config_file = config_dir.join("config");
         let parsed = if config_file.exists() {
             rns_net::config::parse_file(&config_file).ok()
@@ -711,8 +709,8 @@ impl ServerConfig {
 
         parsed
             .as_ref()
-            .map(|cfg| cfg.reticulum.instance_control_port)
-            .unwrap_or(37429)
+            .map(|cfg| RpcAddr::for_shared_instance(&cfg.reticulum))
+            .unwrap_or_else(|| RpcAddr::local("default", 37429))
     }
 
     fn build(
@@ -799,7 +797,7 @@ impl ServerConfig {
             file_cfg.http.disable_auth.unwrap_or(false)
         };
 
-        let rpc_port = Self::resolve_rpc_port(&resolved_config_dir);
+        let rnsd_rpc_addr = Self::resolve_rpc_addr(&resolved_config_dir);
 
         Self {
             config_path,
@@ -821,9 +819,7 @@ impl ServerConfig {
                 disable_auth: http_disable_auth,
                 daemon_mode: true,
             },
-            rnsd_rpc_addr: format!("127.0.0.1:{rpc_port}")
-                .parse()
-                .unwrap_or(std::net::SocketAddr::from(([127, 0, 0, 1], 37429))),
+            rnsd_rpc_addr,
         }
     }
 
@@ -1173,7 +1169,7 @@ mod tests {
                 disable_auth: false,
                 daemon_mode: true,
             },
-            rnsd_rpc_addr: "127.0.0.1:37429".parse().unwrap(),
+            rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
         }
     }
 
@@ -1654,8 +1650,14 @@ mod tests {
 
         assert_eq!(readiness.len(), 1);
         assert_eq!(readiness[0].role, Role::Rnsd);
-        match readiness[0].target {
-            ReadinessTarget::Tcp(addr) => assert_eq!(addr, "127.0.0.1:37429".parse().unwrap()),
+        match &readiness[0].target {
+            ReadinessTarget::Rpc(rns_net::RpcAddr::Local {
+                instance_name,
+                port,
+            }) => {
+                assert_eq!(instance_name, "default");
+                assert_eq!(*port, 37429);
+            }
             _ => panic!("unexpected rnsd readiness target"),
         }
     }
@@ -1706,7 +1708,7 @@ mod tests {
                 disable_auth: false,
                 daemon_mode: true,
             },
-            rnsd_rpc_addr: "127.0.0.1:37429".parse().unwrap(),
+            rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
         };
 
         config.ensure_runtime_bootstrap().unwrap();

@@ -806,7 +806,7 @@ mod tests {
         let requester = client.destination_types.requester;
         client.shutdown();
         let mut rpc =
-            RpcClient::connect(&RpcAddr::Tcp("127.0.0.1".into(), rpc_port), &auth_key).unwrap();
+            RpcClient::connect(&RpcAddr::local(instance.clone(), rpc_port), &auth_key).unwrap();
         let response = rpc
             .call(&PickleValue::Dict(vec![
                 (
