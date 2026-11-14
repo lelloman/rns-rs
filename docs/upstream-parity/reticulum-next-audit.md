@@ -44,7 +44,7 @@ Every commit in the audited range appears exactly once, in ancestry order.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `54159d1d93237612239f19653f6a99b8a62708b3` | Cleanup | Non-runtime | `InboundFrame::iface` invariant documented (`rns-core/src/transport/mod.rs`) |
-| 2 | `04585ff2a8af37ee1683aca03d001cd49ae8399a` | Cleanup | Pending review | Changes `RNS/Transport.py` |
+| 2 | `04585ff2a8af37ee1683aca03d001cd49ae8399a` | Cleanup | Non-runtime | Formatting-only; audit records the diff review |
 | 3 | `6852971d3c8e0e0d055bdb1472b51fa6de87b3a9` | Logging cleanup | Pending review | Changes `RNS/Identity.py` |
 | 4 | `d5f1e014dbec2921d70b8acd15c820601de6525d` | Persist and load announce rate table | Pending review | Changes `RNS/Storage.py`, `RNS/Transport.py` |
 | 5 | `01e7ed84433ee3e9a64643e40e892ccfcdb85243` | Refactored traffic accounting | Pending review | Changes `RNS/Interfaces/AX25KISSInterface.py`, `RNS/Interfaces/AutoInterface.py`, `RNS/Interfaces/BackboneInterface.py`, `RNS/Interfaces/I2PInterface.py`, `RNS/Interfaces/KISSInterface.py`, `RNS/Interfaces/LocalInterface.py`, `RNS/Interfaces/PipeInterface.py`, `RNS/Interfaces/RNodeInterface.py`, `RNS/Interfaces/RNodeMultiInterface.py`, `RNS/Interfaces/SerialInterface.py`, `RNS/Interfaces/TCPInterface.py`, `RNS/Interfaces/UDPInterface.py`, `RNS/Interfaces/WeaveInterface.py`, `RNS/Transport.py` |
@@ -71,13 +71,13 @@ Every commit in the audited range appears exactly once, in ancestry order.
 
 ### 2. `04585ff2` — Cleanup
 
-**Upstream change:** Pending review (changes `RNS/Transport.py`).
+**Upstream change:** Joins `if packet.destination_type == RNS.Destination.SINGLE: return True` onto one line in `Transport.packet_filter`. The full diff contains no other change and no control-flow change.
 
-**Rust applicability:** Pending review.
+**Rust applicability:** None; Python source formatting.
 
-**Local handling and evidence:** None yet.
+**Local handling and evidence:** Full diff reviewed; no Rust change. Audit-only mapping.
 
-**Final disposition:** Pending review.
+**Final disposition:** Non-runtime.
 
 ### 3. `6852971d` — Logging cleanup
 
