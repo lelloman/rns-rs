@@ -1410,6 +1410,25 @@ pub struct StartContext {
     pub underlay_mark: Option<u32>,
 }
 
+/// A start context with default options, for factory tests.
+#[cfg(test)]
+pub(crate) fn test_start_context(tx: EventSender) -> StartContext {
+    StartContext {
+        tx,
+        next_dynamic_id: Arc::new(AtomicU64::new(1000)),
+        mode: rns_core::constants::MODE_FULL,
+        gravity: 0,
+        recursive_prs: false,
+        announces_from_internal: true,
+        announces_to_internal: None,
+        ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+        stamp_costs: Default::default(),
+        announce_limits: Default::default(),
+        ifac: None,
+        underlay_mark: None,
+    }
+}
+
 /// Opaque interface config data. Each factory downcasts to its concrete type.
 pub trait InterfaceConfigData: Send + Any {
     fn as_any(&self) -> &dyn Any;

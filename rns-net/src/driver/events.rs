@@ -2200,28 +2200,28 @@ impl Driver {
             Err(_) => return,
         };
 
+        // As `Transport.tunnel_synthesize_handler`: the tunnel belongs to
+        // the interface the synthesis arrived on. A synthesis of the wrong
+        // length or with a bad signature is ignored; only one whose key
+        // cannot be loaded, where Python raises, is a protocol violation.
         match rns_core::transport::tunnel::validate_tunnel_synthesize_data(packet.data()) {
             Ok(validated) => {
-                // Find the interface this tunnel belongs to by computing the expected
-                // tunnel_id for each interface with wants_tunnel
-                let iface_id = self
-                    .interfaces
-                    .iter()
-                    .find(|(_, entry)| entry.info.wants_tunnel && entry.online && entry.enabled)
-                    .map(|(id, _)| *id);
-
-                if let Some(iface) = iface_id {
-                    let now = time::now();
-                    let tunnel_actions = self.engine.handle_tunnel(validated.tunnel_id, iface, now);
-                    self.dispatch_all(tunnel_actions);
-                }
+                let now = time::now();
+                let tunnel_actions =
+                    self.engine
+                        .handle_tunnel(validated.tunnel_id, receiving_interface, now);
+                self.dispatch_all(tunnel_actions);
             }
-            Err(e) => {
-                log::debug!("Tunnel synthesis validation failed: {}", e);
+            Err(rns_core::transport::tunnel::TunnelError::InvalidPublicKey) => {
+                log::debug!(
+                    "Invalid tunnel synthesis packet on {:?}",
+                    receiving_interface
+                );
                 if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
                     entry.stats.protocol_violations += 1;
                 }
             }
+            Err(e) => log::debug!("Ignoring tunnel synthesis: {}", e),
         }
     }
 

@@ -57,6 +57,8 @@ pub enum TunnelError {
     InvalidLength,
     /// Ed25519 signature verification failed.
     InvalidSignature,
+    /// The public key cannot be loaded.
+    InvalidPublicKey,
 }
 
 impl core::fmt::Display for TunnelError {
@@ -64,6 +66,7 @@ impl core::fmt::Display for TunnelError {
         match self {
             TunnelError::InvalidLength => write!(f, "Invalid tunnel synthesis data length"),
             TunnelError::InvalidSignature => write!(f, "Invalid tunnel signature"),
+            TunnelError::InvalidPublicKey => write!(f, "Invalid tunnel synthesis public key"),
         }
     }
 }
@@ -147,7 +150,7 @@ pub fn validate_tunnel_synthesize_data(data: &[u8]) -> Result<ValidatedTunnel, T
     // Verify signature over (public_key || interface_hash || random_hash)
     let signed_data = &data[0..112];
     let remote_identity =
-        Identity::from_public_key(&public_key).map_err(|_| TunnelError::InvalidSignature)?;
+        Identity::from_public_key(&public_key).map_err(|_| TunnelError::InvalidPublicKey)?;
     if !remote_identity.verify(&signature, signed_data) {
         return Err(TunnelError::InvalidSignature);
     }

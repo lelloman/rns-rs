@@ -697,6 +697,11 @@ try:
                 emit("python_resource_sending", app_flag=app_flag)
                 kwargs = {"app_flag": True} if app_flag else {}
                 RNS.Resource(bytes((i % 251 for i in range(100000))), rust_link, callback=resource_sent, auto_compress=False, **kwargs)
+        elif command == "tunnels":
+            emit("python_tunnels", tunnels=[
+                {"tunnel_id": tid.hex(), "interface": str(entry[1]),
+                 "interface_tunnel_id": entry[1].tunnel_id.hex() if entry[1] is not None and entry[1].tunnel_id else None}
+                for tid, entry in list(RNS.Transport.tunnels.items())])
         elif command == "stop":
             break
         elif command:
@@ -1119,6 +1124,49 @@ fn python_rns_stamped_link_request_interop() {
 /// per-destination link cost (`Destination.set_link_cost`), announces it in
 /// the stamp extension, Python recalls it and grinds its link request to it,
 /// and the Rust responder, enforcing link request stamps, accepts the link.
+#[test]
+fn python_rns_receives_tunnel_synthesis_from_rust_client() {
+    // A dialing TCP client synthesizes a tunnel; Python records it on the
+    // interface the client connected through.
+    if !rns_available() {
+        eprintln!("Skipping: Python RNS not available");
+        return;
+    }
+
+    let mut python = PythonRns::spawn();
+    let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
+    let port = ready["port"].as_u64().unwrap() as u16;
+    let (rust_tx, _rust_rx) = mpsc::channel();
+    let node = start_rust_node(port, rust_tx);
+    wait_for_interop_interface(&node);
+
+    let deadline = Instant::now() + TIMEOUT;
+    let tunnels = loop {
+        python.command("tunnels");
+        let event = python.wait_for_event(TIMEOUT, |event| event["event"] == "python_tunnels");
+        let tunnels = event["tunnels"].as_array().unwrap().clone();
+        if !tunnels.is_empty() || Instant::now() > deadline {
+            break tunnels;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(
+        tunnels.len(),
+        1,
+        "Python should record one tunnel: {tunnels:?}"
+    );
+    let tunnel = &tunnels[0];
+    assert_nonzero_hex_hash(tunnel["tunnel_id"].as_str().unwrap(), 32);
+    assert_eq!(tunnel["interface_tunnel_id"], tunnel["tunnel_id"]);
+    assert!(
+        tunnel["interface"].as_str().unwrap().contains("TCP"),
+        "tunnel should sit on the spawned TCP interface: {tunnel:?}"
+    );
+
+    python.command("stop");
+    node.shutdown();
+}
+
 #[test]
 fn python_rns_link_cost_announced_by_rust_interop() {
     // Fractional since upstream 796ef2d4, on the 1/256 grid.

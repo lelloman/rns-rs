@@ -539,7 +539,9 @@ impl InterfaceFactory for TcpClientFactory {
             announce_rate_penalty: 0.0,
             announce_cap: rns_core::constants::ANNOUNCE_CAP,
             is_local_client: false,
-            wants_tunnel: false,
+            // A dialing client synthesizes a tunnel on each connect, so the
+            // server can keep its paths across reconnects.
+            wants_tunnel: true,
             tunnel_id: None,
             mtu: super::tcp_hardware_mtu(tcp_config.bitrate, tcp_config.fixed_mtu),
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
@@ -963,5 +965,29 @@ mod tests {
         assert!(result.is_err());
         // Should timeout roughly around 500ms, definitely under 5s
         assert!(elapsed < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn tcp_client_wants_a_tunnel() {
+        // Upstream's TCPClientInterface synthesizes a tunnel on each connect.
+        let port = find_free_port();
+        let _listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, _rx) = crate::event::channel();
+        let mut params = HashMap::new();
+        params.insert("target_host".to_string(), "127.0.0.1".to_string());
+        params.insert("target_port".to_string(), port.to_string());
+        let config = TcpClientFactory
+            .parse_config("dialer", InterfaceId(77), &params)
+            .unwrap();
+        let result = TcpClientFactory
+            .start(config, crate::interface::test_start_context(tx))
+            .unwrap();
+        let StartResult::Simple { info, control, .. } = result else {
+            panic!("expected a simple interface");
+        };
+        assert!(info.wants_tunnel);
+        if let Some(control) = control {
+            control.request_stop();
+        }
     }
 }
