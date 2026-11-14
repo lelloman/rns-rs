@@ -4706,6 +4706,7 @@ fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
         format!(
             r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 discover_interfaces = Yes
 required_discovery_value = 8
@@ -4869,6 +4870,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
         format!(
             r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 discover_interfaces = Yes
 required_discovery_value = 8

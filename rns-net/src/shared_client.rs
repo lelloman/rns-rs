@@ -385,6 +385,12 @@ impl RnsNode {
         Ok(node)
     }
 
+    /// Whether this node is a client of another process's shared instance
+    /// (upstream `Reticulum.is_connected_to_shared_instance`).
+    pub fn is_connected_to_shared_instance(&self) -> bool {
+        self.destination_types.shared_client
+    }
+
     /// Connect to a shared instance, with config loaded from a config directory.
     ///
     /// Reads the config file to determine instance_name and ports.

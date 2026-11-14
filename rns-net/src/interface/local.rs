@@ -278,6 +278,27 @@ mod unix_socket {
 
 // ==================== LOCAL SERVER ====================
 
+/// Whether a shared instance already serves this endpoint.
+///
+/// As upstream (`Reticulum.__start_local_interface`), "running" means the
+/// endpoint cannot be bound: the abstract Unix socket on Linux unless
+/// `use_af_unix` is off, the localhost TCP port otherwise. The probe binds
+/// and immediately releases, so it never shows up as a client connection.
+pub fn shared_instance_running(instance_name: &str, port: u16, use_af_unix: bool) -> bool {
+    #[cfg(target_os = "linux")]
+    if use_af_unix {
+        return matches!(
+            unix_socket::try_bind_unix(instance_name),
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse
+        );
+    }
+    let _ = (instance_name, use_af_unix);
+    matches!(
+        TcpListener::bind(("127.0.0.1", port)),
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse
+    )
+}
+
 /// Start a local server (shared instance).
 /// Tries Unix abstract socket first on Linux, falls back to TCP.
 /// Spawns an acceptor thread. Each client gets a dynamically allocated InterfaceId.
@@ -348,6 +369,10 @@ fn start_server_with_template(
                     })?;
                 return Ok((control, endpoint));
             }
+            // Another shared instance owns the name. Upstream never falls
+            // back to TCP here: serving a second instance would also start
+            // a second set of interfaces on the same devices.
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse => return Err(e),
             Err(e) => {
                 log::info!("Unix socket bind failed ({}), falling back to TCP", e);
             }

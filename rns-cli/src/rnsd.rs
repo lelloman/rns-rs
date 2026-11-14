@@ -220,6 +220,13 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
             std::process::exit(1);
         }
     };
+    if node.is_connected_to_shared_instance() {
+        log::warn!(
+            "Started rnsd version {} connected to another shared local instance, \
+             this is probably NOT what you want!",
+            VERSION
+        );
+    }
 
     let stop_rx = match StopPipe::open() {
         Ok(pipe) => pipe,

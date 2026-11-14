@@ -1340,6 +1340,25 @@ impl RnsNode {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
         let link_mtu_discovery = config::parse_link_mtu_discovery(&config_content)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
+        // Upstream `Reticulum.__start_local_interface`: when another process
+        // already serves this shared instance, attach to it as a client
+        // instead of starting a second instance on the same interfaces.
+        #[cfg(feature = "iface-local")]
+        if !private && rns_config.reticulum.share_instance {
+            let shared =
+                crate::shared_client::SharedClientConfig::from_reticulum(&rns_config.reticulum);
+            if crate::interface::local::shared_instance_running(
+                &shared.instance_name,
+                shared.port,
+                shared.use_af_unix,
+            ) {
+                log::info!(
+                    "Shared instance {} is already running, connecting to it as a client",
+                    shared.instance_name
+                );
+                return Self::connect_shared_from_config(Some(config_dir), callbacks);
+            }
+        }
         // Addresses Backbone listeners refuse, from <config dir>/blocked_ips
         // (upstream 5f2dbc16).
         #[cfg(feature = "iface-backbone")]
@@ -5370,6 +5389,32 @@ mod tests {
         node.shutdown();
     }
 
+    /// Upstream `Reticulum.__start_local_interface`: a second process with
+    /// the same shared instance attaches to the running one as a client,
+    /// instead of serving a second instance (once on TCP, after the Unix
+    /// bind failed) that opened every interface again.
+    #[test]
+    fn second_node_with_same_shared_instance_attaches_as_client() {
+        for instance_type in ["", "shared_instance_type = tcp\n"] {
+            let dir = tempdir().unwrap();
+            let rpc_port = crate::test_support::port();
+            let shared_port = crate::test_support::port();
+            let instance = crate::test_support::instance_name("test-second-node");
+            fs::write(dir.path().join("config"), format!(
+                "[reticulum]\nshare_instance = yes\n{instance_type}instance_name = {instance}\ninstance_control_port = {rpc_port}\nshared_instance_port = {shared_port}\n"
+            )).unwrap();
+            let first = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+            assert!(!first.is_connected_to_shared_instance());
+            let second = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+            assert!(
+                second.is_connected_to_shared_instance(),
+                "second node must attach to the running instance ({instance_type:?})"
+            );
+            second.shutdown();
+            first.shutdown();
+        }
+    }
+
     struct TestWriter;
 
     impl crate::interface::Writer for TestWriter {
@@ -6549,7 +6594,7 @@ share_instance = False
         // Write a minimal config file
         fs::write(
             dir.join("config"),
-            "[reticulum]\nenable_transport = False\n",
+            "[reticulum]\nshare_instance = No\nenable_transport = False\n",
         )
         .unwrap();
 
@@ -6594,7 +6639,7 @@ share_instance = False
 
         fs::write(
             dir.join("config"),
-            "[reticulum]\nenable_transport = False\n",
+            "[reticulum]\nshare_instance = No\nenable_transport = False\n",
         )
         .unwrap();
 
@@ -6619,6 +6664,7 @@ share_instance = False
         let config = format!(
             r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 
 [interfaces]
@@ -6851,6 +6897,7 @@ instance_control_port = {}
 
         let config = r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 
 [interfaces]
@@ -6883,6 +6930,7 @@ enable_transport = False
 
         let config = r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 
 [interfaces]
@@ -7174,6 +7222,7 @@ static_transport_identity = yes
 
         let config = r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 
 [interfaces]
@@ -7211,6 +7260,7 @@ enable_transport = False
 
         let config = r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 
 [interfaces]
@@ -7241,6 +7291,7 @@ enable_transport = False
         let config = format!(
             r#"
 [reticulum]
+share_instance = No
 enable_transport = False
 
 [interfaces]
@@ -8271,7 +8322,7 @@ enable_transport = False
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("config"),
-            "[reticulum]\n\
+            "[reticulum]\nshare_instance = No\n\
              hop_limiter = 12\n\
              [stamps]\n\
              enforce_stamps = yes\n\
