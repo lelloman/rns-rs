@@ -1158,6 +1158,10 @@ pub struct SingleInterfaceStat {
     pub blocked_ip_list: Option<Vec<String>>,
     /// What an I2P interface reports about its own endpoint.
     pub i2p: Option<I2pEndpointStat>,
+    /// The network an auto-connected interface was discovered from: the
+    /// hex of the announcing network's identity hash (upstream's
+    /// `autoconnect_source`).
+    pub autoconnect_source: Option<String>,
     /// Target interval for outgoing announce rate control, in seconds.
     pub announce_rate_target: Option<f64>,
     /// Announce-rate control grace count.

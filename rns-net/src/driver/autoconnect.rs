@@ -50,6 +50,8 @@ struct AutoconnectMember {
     name: String,
     /// `endpoint_hash`: the SHA-256 of `reachable_on:port`.
     endpoint_hash: [u8; 32],
+    /// `autoconnect_source`: the network that announced it, as hex.
+    source: String,
     target: (String, u16),
     #[cfg(feature = "iface-backbone")]
     control: Option<crate::interface::ListenerControl>,
@@ -316,6 +318,7 @@ impl Driver {
                         id,
                         name,
                         endpoint_hash: endpoint_hash(&reachable_on, iface.port),
+                        source: crate::discovery::hex_encode(&iface.network_id),
                         target: (reachable_on, port),
                         control: Some(control),
                         down_since: None,
@@ -433,6 +436,24 @@ impl Driver {
         for id in detach {
             self.teardown_autoconnected(id);
         }
+    }
+
+    /// The network an auto-connected interface was discovered from, as
+    /// upstream reports it (`autoconnect_source`): the hex of the
+    /// announcing network's identity hash.
+    pub(crate) fn autoconnect_source(&self, id: InterfaceId) -> Option<String> {
+        if let Some(member) = self
+            .upstream_autoconnect
+            .as_ref()
+            .and_then(|autoconnect| autoconnect.members.iter().find(|member| member.id == id))
+        {
+            return Some(member.source.clone());
+        }
+        #[cfg(feature = "iface-backbone")]
+        if let Some(network_id) = self.backbone_peer_pool_discovery_network(id) {
+            return Some(crate::discovery::hex_encode(&network_id));
+        }
+        None
     }
 
     /// Whether an interface was auto-connected from a discovery.

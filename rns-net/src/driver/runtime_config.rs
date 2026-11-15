@@ -702,6 +702,7 @@ impl Driver {
                 hops: iface.hops,
                 stamp_value: iface.stamp_value,
                 last_heard: iface.last_heard,
+                network_id: iface.network_id,
             },
         ))
     }
@@ -960,6 +961,7 @@ impl Driver {
         self.interface_ifac_runtime.remove(&name);
         self.interface_ifac_runtime_defaults.remove(&name);
         self.backbone_client_runtime.remove(&name);
+        self.interface_display_names.remove(&id);
         if self.engine.interface_info(&id).is_some() {
             self.engine.deregister_interface(id);
         }
@@ -1078,6 +1080,11 @@ impl Driver {
         self.register_interface_runtime_defaults(&info);
         self.register_interface_ifac_runtime(&name, ifac_runtime);
         self.engine.register_interface(info.clone());
+        // Upstream's `str()` of the BackboneClientInterface it starts.
+        self.interface_display_names.insert(
+            id,
+            crate::interface::display::backbone(&name, &client.target_host, client.target_port),
+        );
         self.interfaces.insert(
             id,
             InterfaceEntry {
@@ -1149,6 +1156,21 @@ impl Driver {
         };
         self.record_backbone_peer_pool_failure(index, "interface down".into());
         self.maintain_backbone_peer_pool();
+    }
+
+    /// The network a peer pool member connected from a discovery was
+    /// announced by.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn backbone_peer_pool_discovery_network(&self, id: InterfaceId) -> Option<[u8; 16]> {
+        self.backbone_peer_pool
+            .as_ref()?
+            .candidates
+            .iter()
+            .find(|candidate| candidate.active_id == Some(id))?
+            .config
+            .discovery
+            .as_ref()
+            .map(|discovery| discovery.network_id)
     }
 
     #[cfg(feature = "iface-backbone")]
