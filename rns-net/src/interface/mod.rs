@@ -703,7 +703,7 @@ impl Writer for UnavailableWriter {
     fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::NotConnected,
-            "interface is waiting for its port",
+            "interface is not connected",
         ))
     }
 }
