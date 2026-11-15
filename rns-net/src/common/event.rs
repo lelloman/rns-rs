@@ -1158,6 +1158,10 @@ pub struct SingleInterfaceStat {
     pub blocked_ip_list: Option<Vec<String>>,
     /// What an I2P interface reports about its own endpoint.
     pub i2p: Option<I2pEndpointStat>,
+    /// The tunnel state of an I2P peer, as upstream's `tunnelstate`
+    /// describes it: `Some` on I2P peers only, which report the key, and
+    /// holding `None` when the peer has no state.
+    pub i2p_tunnel_state: Option<Option<String>>,
     /// The network an auto-connected interface was discovered from: the
     /// hex of the announcing network's identity hash (upstream's
     /// `autoconnect_source`).

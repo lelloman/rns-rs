@@ -9,6 +9,7 @@
 
 mod folded;
 pub mod sam;
+pub mod tunnel;
 
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
@@ -68,6 +69,8 @@ pub struct I2pEndpoint {
     pub online: bool,
     /// `{base32}.b32.i2p`.
     pub b32: Option<String>,
+    /// The tunnels of the connected peers, by their interface.
+    pub tunnels: std::collections::HashMap<InterfaceId, Arc<tunnel::PeerTunnel>>,
 }
 
 impl I2pEndpoint {
@@ -82,6 +85,26 @@ impl I2pEndpoint {
     /// Record that the session accepts connections.
     fn set_accepting(endpoint: &Mutex<I2pEndpoint>) {
         lock_or_recover(endpoint, "i2p endpoint").online = true;
+    }
+
+    /// Start watching the tunnel of peer `id`, connected over `stream`.
+    fn add_tunnel(
+        endpoint: &Mutex<I2pEndpoint>,
+        id: InterfaceId,
+        stream: &std::net::TcpStream,
+    ) -> Arc<tunnel::PeerTunnel> {
+        let tunnel = Arc::new(tunnel::PeerTunnel::new(stream.try_clone().ok()));
+        lock_or_recover(endpoint, "i2p endpoint")
+            .tunnels
+            .insert(id, Arc::clone(&tunnel));
+        tunnel
+    }
+
+    /// Stop watching the tunnel of peer `id`, which disconnected.
+    fn remove_tunnel(endpoint: &Mutex<I2pEndpoint>, id: InterfaceId) {
+        lock_or_recover(endpoint, "i2p endpoint")
+            .tunnels
+            .remove(&id);
     }
 }
 
@@ -378,6 +401,7 @@ fn coordinator(
         let iface_name = config.name.clone();
         let runtime = Arc::clone(&config.runtime);
         let dynamic_template = dynamic_template.clone();
+        let endpoint = Arc::clone(&config.endpoint);
 
         thread::Builder::new()
             .name(format!("i2p-out-{}", peer_addr))
@@ -393,6 +417,7 @@ fn coordinator(
                     ingress_control,
                     dynamic_template,
                     underlay_mark: config.underlay_mark,
+                    endpoint,
                 });
             })
             .ok();
@@ -407,6 +432,7 @@ fn coordinator(
         let session_id2 = session_id.clone();
         let iface_name = config.name.clone();
         let dynamic_template = dynamic_template.clone();
+        let endpoint = Arc::clone(&config.endpoint);
 
         thread::Builder::new()
             .name("i2p-acceptor".into())
@@ -420,6 +446,7 @@ fn coordinator(
                     ingress_control,
                     dynamic_template,
                     underlay_mark: config.underlay_mark,
+                    endpoint,
                 });
             })
             .ok();
@@ -446,6 +473,7 @@ struct OutboundPeerContext {
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
+    endpoint: Arc<Mutex<I2pEndpoint>>,
 }
 
 fn outbound_peer_loop(context: OutboundPeerContext) {
@@ -460,6 +488,7 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
         ingress_control,
         dynamic_template,
         underlay_mark,
+        endpoint,
     } = context;
     loop {
         log::info!("[{}] connecting to I2P peer {}", iface_name, peer_addr);
@@ -505,6 +534,7 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                     stream: writer_stream,
                 });
 
+                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, &stream);
                 let event = peer_up(
                     client_id,
                     writer,
@@ -523,9 +553,11 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                     &iface_name,
                     &tx,
                     template_ifac_size(dynamic_template.as_ref()),
+                    &tunnel,
                 );
 
                 // Disconnected
+                I2pEndpoint::remove_tunnel(&endpoint, client_id);
                 let _ = tx.send(Event::InterfaceDown(client_id));
                 log::warn!(
                     "[{}] I2P peer {} disconnected, reconnecting in {}s",
@@ -560,6 +592,7 @@ struct AcceptorContext {
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
+    endpoint: Arc<Mutex<I2pEndpoint>>,
 }
 
 fn acceptor_loop(context: AcceptorContext) {
@@ -572,6 +605,7 @@ fn acceptor_loop(context: AcceptorContext) {
         ingress_control,
         dynamic_template,
         underlay_mark,
+        endpoint,
     } = context;
 
     loop {
@@ -600,6 +634,7 @@ fn acceptor_loop(context: AcceptorContext) {
                     stream: writer_stream,
                 });
 
+                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, &stream);
                 let event = peer_up(
                     client_id,
                     writer,
@@ -615,10 +650,19 @@ fn acceptor_loop(context: AcceptorContext) {
                 let client_tx = tx.clone();
                 let client_name = iface_name.to_string();
                 let ifac_size = template_ifac_size(dynamic_template.as_ref());
+                let client_endpoint = Arc::clone(&endpoint);
                 thread::Builder::new()
                     .name(format!("i2p-client-{}", client_id.0))
                     .spawn(move || {
-                        peer_reader_loop(stream, client_id, &client_name, &client_tx, ifac_size);
+                        peer_reader_loop(
+                            stream,
+                            client_id,
+                            &client_name,
+                            &client_tx,
+                            ifac_size,
+                            &tunnel,
+                        );
+                        I2pEndpoint::remove_tunnel(&client_endpoint, client_id);
                         let _ = client_tx.send(Event::InterfaceDown(client_id));
                     })
                     .ok();
@@ -651,6 +695,7 @@ fn peer_reader_loop(
     name: &str,
     tx: &EventSender,
     ifac_size: usize,
+    tunnel: &tunnel::PeerTunnel,
 ) {
     let mut decoder = frame_decoder(ifac_size);
     let mut buf = [0u8; 4096];
@@ -662,6 +707,7 @@ fn peer_reader_loop(
                 return;
             }
             Ok(n) => {
+                tunnel.note_read();
                 for frame in decoder.feed(&buf[..n]) {
                     if tx
                         .send(Event::Frame {

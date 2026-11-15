@@ -2717,6 +2717,16 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
                 .unwrap_or(PickleValue::None),
         ));
     }
+    // Only I2P peers report their tunnel state.
+    if let Some(state) = &s.i2p_tunnel_state {
+        dict.push((
+            PickleValue::String("tunnelstate".into()),
+            state
+                .clone()
+                .map(PickleValue::String)
+                .unwrap_or(PickleValue::None),
+        ));
+    }
     // Upstream reports the listener a spawned interface came from.
     if let Some(parent) = &s.parent_display_name {
         dict.push((
@@ -4705,6 +4715,7 @@ mod tests {
                             blocked_ips: None,
                             blocked_ip_list: None,
                             i2p: None,
+                            i2p_tunnel_state: None,
                             autoconnect_source: None,
                             announce_rate_target: Some(3600.0),
                             announce_rate_grace: 5,
@@ -5337,6 +5348,7 @@ mod tests {
                 blocked_ips: Some(2),
                 blocked_ip_list: Some(vec!["192.0.2.1".into(), "203.0.113.2".into()]),
                 i2p: None,
+                i2p_tunnel_state: None,
                 autoconnect_source: None,
                 announce_rate_target: Some(3600.0),
                 announce_rate_grace: 5,
@@ -5459,6 +5471,19 @@ mod tests {
         let i2p = pickle::decode(&pickle::encode(&single_iface_to_pickle(&i2p))).unwrap();
         assert_eq!(i2p.get("i2p_connectable").unwrap().as_bool(), Some(false));
         assert_eq!(i2p.get("i2p_b32"), Some(&PickleValue::None));
+        // Only I2P peers report their tunnel state.
+        assert!(ifaces[0].get("tunnelstate").is_none());
+        let mut peer = stats.interfaces[0].clone();
+        peer.i2p_tunnel_state = Some(Some("Tunnel Active".into()));
+        let peer = pickle::decode(&pickle::encode(&single_iface_to_pickle(&peer))).unwrap();
+        assert_eq!(
+            peer.get("tunnelstate").unwrap().as_str(),
+            Some("Tunnel Active")
+        );
+        let mut peer = stats.interfaces[0].clone();
+        peer.i2p_tunnel_state = Some(None);
+        let peer = pickle::decode(&pickle::encode(&single_iface_to_pickle(&peer))).unwrap();
+        assert_eq!(peer.get("tunnelstate"), Some(&PickleValue::None));
         // Weave statistics only on Weave interfaces: upstream's rnstatus
         // prints "Unknown" lines for a key that is there without a value.
         for key in [

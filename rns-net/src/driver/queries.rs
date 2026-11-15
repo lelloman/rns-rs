@@ -262,6 +262,29 @@ impl Driver {
             .is_some_and(|name| name.starts_with("Connected peer on "))
     }
 
+    /// The tunnel state an I2P peer reports (upstream's `tunnelstate`);
+    /// `None` for any other interface.
+    #[cfg(feature = "iface-i2p")]
+    fn i2p_tunnel_state(&self, entry: &InterfaceEntry) -> Option<Option<String>> {
+        let parent = self.dynamic_interface_parents.get(&entry.info.id)?;
+        self.listener_stats
+            .iter()
+            .find_map(|listener| match &listener.clients {
+                ListenerClients::I2pPeers(i2p) if listener.id == *parent => Some(
+                    crate::interface::lock_or_recover(&i2p.endpoint, "i2p endpoint")
+                        .tunnels
+                        .get(&entry.info.id)
+                        .map(|tunnel| tunnel.state().description().to_string()),
+                ),
+                _ => None,
+            })
+    }
+
+    #[cfg(not(feature = "iface-i2p"))]
+    fn i2p_tunnel_state(&self, _entry: &InterfaceEntry) -> Option<Option<String>> {
+        None
+    }
+
     /// The statistics of a listener without an interface entry of its own:
     /// upstream counts its clients and adds up their bytes.
     fn listener_interface_stat(&self, listener: &ListenerStat) -> SingleInterfaceStat {
@@ -284,10 +307,12 @@ impl Driver {
             }
             #[cfg(feature = "iface-i2p")]
             ListenerClients::I2pPeers(i2p_listener) => {
-                let endpoint =
-                    crate::interface::lock_or_recover(&i2p_listener.endpoint, "i2p endpoint")
-                        .clone();
-                status = endpoint.online;
+                let (online, b32) = {
+                    let endpoint =
+                        crate::interface::lock_or_recover(&i2p_listener.endpoint, "i2p endpoint");
+                    (endpoint.online, endpoint.b32.clone())
+                };
+                status = online;
                 clients = Some(
                     children
                         .iter()
@@ -297,7 +322,7 @@ impl Driver {
                 peers = i2p_listener.configured_peers;
                 i2p = Some(crate::event::I2pEndpointStat {
                     connectable: i2p_listener.connectable,
-                    b32: endpoint.b32,
+                    b32,
                 });
                 accepted_tx_only = true;
             }
@@ -370,6 +395,7 @@ impl Driver {
             blocked_ips: None,
             blocked_ip_list: None,
             i2p,
+            i2p_tunnel_state: None,
             autoconnect_source: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
@@ -511,6 +537,7 @@ impl Driver {
                 blocked_ips: None,
                 blocked_ip_list: None,
                 i2p: None,
+                i2p_tunnel_state: self.i2p_tunnel_state(entry),
                 autoconnect_source: self.autoconnect_source(interface_id),
                 announce_rate_target: entry.info.announce_rate_target,
                 announce_rate_grace: entry.info.announce_rate_grace,
@@ -633,6 +660,7 @@ impl Driver {
                 blocked_ips: Some(blocked_ips),
                 blocked_ip_list: Some(blocked_ip_list),
                 i2p: None,
+                i2p_tunnel_state: None,
                 autoconnect_source: None,
                 announce_rate_target: None,
                 announce_rate_grace: 0,
