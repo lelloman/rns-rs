@@ -148,7 +148,7 @@ fn find_free_port() -> u16 {
 
 fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Option<Vec<u8>> {
     let packet = rns_core::packet::RawPacket::unpack(raw).ok()?;
-    identity.decrypt(&packet.data()).ok()
+    identity.decrypt(packet.data()).ok()
 }
 
 fn wait_for_event<F, T>(
@@ -198,7 +198,7 @@ fn wait_for_delivery(
             dest_hash,
             raw,
             packet_hash,
-        } => Some((dest_hash.clone(), raw.clone(), packet_hash.clone())),
+        } => Some((*dest_hash, raw.clone(), *packet_hash)),
         _ => None,
     })
 }
