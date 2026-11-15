@@ -564,7 +564,7 @@ impl InterfaceFactory for TcpClientFactory {
             announces_to_internal: ctx.announces_to_internal,
             out_capable: true,
             in_capable: true,
-            bitrate: tcp_config.bitrate,
+            bitrate: Some(super::tcp_bitrate(tcp_config.bitrate)),
             airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,

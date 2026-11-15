@@ -58,8 +58,9 @@ own.
 
 ## TCP interface MTU
 
-`TCPClientInterface` and `TCPServerInterface` use a 65,535-byte hardware MTU
-unless one of these keys is set:
+`TCPClientInterface` and `TCPServerInterface` assume a 10 Mbps bitrate, as
+upstream does, which gives a 16,384-byte hardware MTU, unless one of these
+keys is set:
 
 | Key | Meaning |
 |-----|---------|
