@@ -299,7 +299,7 @@ impl LinkManager {
         data: &[u8],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        self.send_request_with_max_response_size(link_id, path, data, None, rng)
+        self.send_request_with_options(link_id, path, data, None, None, rng)
     }
 
     /// Send a request with an optional maximum accepted response size.
@@ -309,6 +309,21 @@ impl LinkManager {
         path: &str,
         data: &[u8],
         max_response_size: Option<usize>,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        self.send_request_with_options(link_id, path, data, max_response_size, None, rng)
+    }
+
+    /// Send a request with an optional maximum accepted response size and
+    /// an optional timeout (upstream `Link.request(timeout=...)`), after
+    /// which it fails; without one, the link's default applies.
+    pub fn send_request_with_options(
+        &mut self,
+        link_id: &LinkId,
+        path: &str,
+        data: &[u8],
+        max_response_size: Option<usize>,
+        timeout: Option<f64>,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, ValueRef};
@@ -362,6 +377,7 @@ impl LinkManager {
                 PendingRequest {
                     deadline: None,
                     max_response_size,
+                    timeout,
                 },
             );
             let adv_actions = Self::start_resource_senders(link, senders, now);
@@ -382,12 +398,17 @@ impl LinkManager {
             let packet_hash = RawPacket::packet_hash_of(constants::HEADER_1, &raw);
             let mut request_id = [0u8; 16];
             request_id.copy_from_slice(&packet_hash[..16]);
-            let deadline = Self::request_response_deadline(link, time::now());
+            let now = time::now();
+            let deadline = match timeout {
+                Some(timeout) => now + timeout,
+                None => Self::request_response_deadline(link, now),
+            };
             link.pending_requests.insert(
                 request_id,
                 PendingRequest {
                     deadline: Some(deadline),
                     max_response_size,
+                    timeout,
                 },
             );
             actions.push(LinkManagerAction::SendPacket {

@@ -58,6 +58,8 @@ pub(super) struct ManagedLink {
 pub(super) struct PendingRequest {
     pub(super) deadline: Option<f64>,
     pub(super) max_response_size: Option<usize>,
+    /// The requester's own timeout, in place of the link's default.
+    pub(super) timeout: Option<f64>,
 }
 
 /// A registered link destination that can accept incoming LINKREQUEST.

@@ -994,6 +994,7 @@ mod tests {
                         PendingRequest {
                             deadline: None,
                             max_response_size: None,
+                            timeout: None,
                         },
                     );
                 sender.send_response_resource(

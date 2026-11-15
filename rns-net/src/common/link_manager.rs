@@ -155,6 +155,8 @@ pub enum RequestResponse {
 pub enum RequestFailure {
     /// The peer advertised or sent a response larger than the configured limit.
     ResponseTooLarge { size: u64, maximum: usize },
+    /// No response arrived before the request's timeout.
+    TimedOut,
 }
 
 impl From<Vec<u8>> for RequestResponse {
@@ -2351,8 +2353,22 @@ impl LinkManager {
             for request_id in failed_request_ids {
                 link.pending_requests.remove(&request_id);
             }
-            link.pending_requests
-                .retain(|_, request| request.deadline.is_none_or(|expires_at| now <= expires_at));
+            // Upstream's request timeout: the receipt fails and the
+            // requester's failed callback runs.
+            let expired: Vec<[u8; 16]> = link
+                .pending_requests
+                .iter()
+                .filter(|(_, request)| request.deadline.is_some_and(|expires_at| now > expires_at))
+                .map(|(request_id, _)| *request_id)
+                .collect();
+            for request_id in expired {
+                link.pending_requests.remove(&request_id);
+                all_actions.push(LinkManagerAction::RequestFailed {
+                    link_id: *link_id,
+                    request_id,
+                    reason: RequestFailure::TimedOut,
+                });
+            }
 
             // Clean up completed/failed resources
             link.outgoing_resources

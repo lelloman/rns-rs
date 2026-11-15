@@ -3554,6 +3554,20 @@ impl RnsNode {
         data: &[u8],
         max_response_size: Option<usize>,
     ) -> Result<(), SendError> {
+        self.send_request_with_options(link_id, path, data, max_response_size, None)
+    }
+
+    /// Send a request that fails (`on_request_failed` with
+    /// `RequestFailure::TimedOut`) when no response arrives within
+    /// `timeout` seconds, upstream's `Link.request(timeout=...)`.
+    pub fn send_request_with_options(
+        &self,
+        link_id: [u8; 16],
+        path: &str,
+        data: &[u8],
+        max_response_size: Option<usize>,
+        timeout: Option<f64>,
+    ) -> Result<(), SendError> {
         self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::SendRequest {
@@ -3561,6 +3575,7 @@ impl RnsNode {
                 path: path.to_string(),
                 data: data.to_vec(),
                 max_response_size,
+                timeout,
             })
             .map_err(|_| SendError)
     }
