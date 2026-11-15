@@ -254,6 +254,17 @@ impl Driver {
         }
     }
 
+    /// Whether `entry` is a subinterface of an RNodeMultiInterface whose
+    /// device is not connected and configured: upstream creates the
+    /// subinterfaces once it configured the device, and removes them when
+    /// the connection fails, so it does not list them meanwhile.
+    fn subinterface_without_device(&self, entry: &InterfaceEntry) -> bool {
+        !entry.online
+            && self.listener_stats.iter().any(|listener| {
+                matches!(&listener.clients, ListenerClients::Subinterfaces(ids) if ids.contains(&entry.info.id))
+            })
+    }
+
     /// Whether an I2P peer connected to this node (upstream's `Connected
     /// peer on {interface}`), rather than this node to it.
     fn i2p_peer_accepted(&self, id: &InterfaceId) -> bool {
@@ -326,10 +337,11 @@ impl Driver {
                 });
                 accepted_tx_only = true;
             }
-            ListenerClients::Subinterfaces(ids) => {
-                // Online while its device is.
+            ListenerClients::Subinterfaces(_) => {
+                // Online while its device is. As upstream, its
+                // subinterfaces exist only while the device is configured.
                 status = children.iter().any(|child| child.online);
-                clients = Some(ids.len() as u64);
+                clients = Some(children.iter().filter(|child| child.online).count() as u64);
             }
         }
         let mut stat = SingleInterfaceStat {
@@ -452,6 +464,9 @@ impl Driver {
                 rx_pps += entry.stats.traffic_rates.rxpps;
                 tx_pps += entry.stats.traffic_rates.txpps;
                 add_traffic(&mut total_traffic, traffic);
+            }
+            if self.subinterface_without_device(entry) {
+                continue;
             }
             let interface_id = entry.info.id;
             interfaces.push(SingleInterfaceStat {

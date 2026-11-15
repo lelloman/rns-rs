@@ -376,7 +376,8 @@ fn start_with_control(
 
     let (reader_file, writer_transport) = if let Some(fd) = config.pre_opened_fd {
         // Pre-opened fd from USB bridge — dup for independent reader/writer handles
-        Transport::open_from_fd(fd)?
+        let (reader, writer) = Transport::open_from_fd(fd)?;
+        (Some(reader), writer)
     } else {
         let serial_config = SerialConfig {
             path: config.port.clone(),
@@ -385,7 +386,26 @@ fn start_with_control(
             parity: Parity::None,
             stop_bits: 1,
         };
-        Transport::open(&serial_config, config.underlay_mark)?
+        match Transport::open(&serial_config, config.underlay_mark) {
+            Ok((reader, writer)) => (Some(reader), writer),
+            // As upstream, the interface still comes up, offline, and
+            // keeps trying to open its device.
+            Err(e) => {
+                let kind = if config.multi {
+                    "RNodeMultiInterface"
+                } else {
+                    "RNodeInterface"
+                };
+                log::error!(
+                    "Could not open serial port for interface {}[{}]",
+                    kind,
+                    config.name
+                );
+                log::error!("The contained exception was: {}", e);
+                log::error!("Reticulum will attempt to bring up this interface periodically");
+                (None, Transport::Offline)
+            }
+        }
     };
     let shared_writer = Arc::new(Mutex::new(if crate::engine::FOLD_IO {
         DeviceWriter::driven(
@@ -512,6 +532,88 @@ fn wait_while_running(running: &AtomicBool, duration: Duration) -> bool {
 
 /// Reader loop: detect device, configure radios, then relay data frames.
 fn reader_loop(
+    reader: Option<Transport>,
+    writer: Arc<Mutex<DeviceWriter>>,
+    config: RNodeConfig,
+    tx: EventSender,
+    flow_states: Vec<Arc<Mutex<SubFlowState>>>,
+    running: Arc<AtomicBool>,
+) {
+    let mut reader = match reader {
+        Some(reader) => reader,
+        None => match open_until_configured(&config, &writer, &flow_states, &running) {
+            Some(reader) => {
+                signal_interface_up(&tx, &config, &writer, &flow_states, true);
+                return reader_loop_connected(reader, writer, config, tx, flow_states, running);
+            }
+            None => return,
+        },
+    };
+    // Initial delay for hardware init (matches Python: sleep(2.0))
+    if !wait_while_running(&running, Duration::from_secs(2)) {
+        return;
+    }
+    if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
+        log::error!("[{}] initial RNode setup failed: {}", config.name, e);
+        return;
+    }
+    signal_interface_up(&tx, &config, &writer, &flow_states, false);
+    reader_loop_connected(reader, writer, config, tx, flow_states, running);
+}
+
+/// Upstream `RNodeInterface.RECONNECT_WAIT`: how long to wait before each
+/// attempt to open a device that could not be opened at start.
+const OPEN_RETRY_WAIT: Duration = Duration::from_secs(5);
+
+/// Open and configure a device that could not be opened at start, as
+/// upstream's `reconnect_port` does: wait, then try, until it works or the
+/// interface stops. Returns the configured connection.
+fn open_until_configured(
+    config: &RNodeConfig,
+    writer: &Arc<Mutex<DeviceWriter>>,
+    flow_states: &[Arc<Mutex<SubFlowState>>],
+    running: &AtomicBool,
+) -> Option<Transport> {
+    loop {
+        if !wait_while_running(running, OPEN_RETRY_WAIT) {
+            return None;
+        }
+        log::debug!(
+            "[{}] attempting to reconnect serial port {}",
+            config.name,
+            config.port
+        );
+        match reopen_connection(config, writer) {
+            Ok(mut reader) => {
+                reset_flow_states(flow_states);
+                // Initial delay for hardware init, as on a first open.
+                if !wait_while_running(running, Duration::from_secs(2)) {
+                    return None;
+                }
+                match detect_and_configure(&mut reader, writer, config) {
+                    Ok(()) => {
+                        log::info!("[{}] reconnected serial port {}", config.name, config.port);
+                        return Some(reader);
+                    }
+                    Err(e) => log::error!(
+                        "[{}] error while reconnecting port, the contained exception was: {}",
+                        config.name,
+                        e
+                    ),
+                }
+            }
+            Err(e) => log::error!(
+                "[{}] error while reconnecting port, the contained exception was: {}",
+                config.name,
+                e
+            ),
+        }
+    }
+}
+
+/// Read a configured device until the interface stops, reconnecting when
+/// the connection is lost.
+fn reader_loop_connected(
     mut reader: Transport,
     writer: Arc<Mutex<DeviceWriter>>,
     config: RNodeConfig,
@@ -521,11 +623,6 @@ fn reader_loop(
 ) {
     const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(200);
     const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
-    // Initial delay for hardware init (matches Python: sleep(2.0))
-    if !wait_while_running(&running, Duration::from_secs(2)) {
-        return;
-    }
-    let mut connected_once = false;
     // RNode is the PHY-stat-capable interface: retain each modem report until
     // the matching frame is enqueued, attach it to that frame, then clear it
     // so later frames cannot inherit stale RSSI or SNR.
@@ -533,12 +630,6 @@ fn reader_loop(
     let mut last_snr: Option<f32> = None;
     // What the device reports about its channel and itself.
     let mut radio = RadioStats::default();
-    if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
-        log::error!("[{}] initial RNode setup failed: {}", config.name, e);
-        return;
-    }
-    signal_interface_up(&tx, &config, &writer, &flow_states, connected_once);
-    connected_once = true;
     while running.load(Ordering::Relaxed) {
         let mut decoder = rnode_kiss::RNodeDecoder::new();
         let mut buf = [0u8; 4096];
@@ -655,7 +746,7 @@ fn reader_loop(
                         backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
                         continue;
                     }
-                    signal_interface_up(&tx, &config, &writer, &flow_states, connected_once);
+                    signal_interface_up(&tx, &config, &writer, &flow_states, true);
                     break;
                 }
                 Err(e) => {
@@ -2344,6 +2435,65 @@ mod tests {
         wait_for_interface_event(&rx, Duration::from_secs(2), |event| {
             matches!(event, Event::InterfaceDown(InterfaceId(43)))
         });
+        control.request_stop();
+    }
+
+    /// As upstream, an RNodeMultiInterface whose device cannot be opened
+    /// still starts, offline, and tries to open it every five seconds.
+    #[test]
+    fn rnode_multi_starts_without_its_device_and_opens_it_later() {
+        let tempdir = tempdir().unwrap();
+        let port_path = tempdir.path().join("rnode-port");
+        let sub = |name: &str, vport: u8| RNodeSubConfig {
+            name: name.into(),
+            vport,
+            outgoing: true,
+            frequency: 868_000_000,
+            bandwidth: 125_000,
+            txpower: 7,
+            spreading_factor: 8,
+            coding_rate: 5,
+            flow_control: false,
+            st_alock: None,
+            lt_alock: None,
+        };
+        let mut config = RNodeConfig {
+            name: "test-multi".into(),
+            port: port_path.display().to_string(),
+            subinterfaces: vec![sub("a", 0), sub("b", 1)],
+            multi: true,
+            base_interface_id: InterfaceId(51),
+            ..RNodeConfig::default()
+        };
+        config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
+        let (tx, rx) = event::channel();
+
+        let started = std::time::Instant::now();
+        let (writers, control) = start_with_control(config, tx).unwrap();
+        // Both subinterfaces have writers, which cannot write yet.
+        assert_eq!(writers.len(), 2);
+
+        // The device appears after start.
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        std::os::unix::fs::symlink(slave_tty_path(slave_fd), &port_path).unwrap();
+        let mut master = unsafe { transport_from_raw_fd(master_fd) };
+        let _slave = unsafe { transport_from_raw_fd(slave_fd) };
+        // Nothing comes up before the first attempt, five seconds in.
+        assert!(rx.recv_timeout(Duration::from_secs(4)).is_err());
+        // The device answers once the port was opened (and the hardware
+        // given its two seconds).
+        thread::sleep(Duration::from_millis(3500));
+        mock_respond_detect(&mut master);
+        for id in [51, 52] {
+            let up = wait_for_interface_event(
+                &rx,
+                Duration::from_secs(5),
+                |event| matches!(event, Event::InterfaceUp(InterfaceId(i), _, _) if *i == id),
+            );
+            // With a writer on the connection now open.
+            assert!(matches!(up, Event::InterfaceUp(_, Some(_), None)));
+        }
+        assert!(started.elapsed() >= OPEN_RETRY_WAIT);
         control.request_stop();
     }
 

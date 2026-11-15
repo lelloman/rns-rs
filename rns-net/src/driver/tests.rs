@@ -16113,12 +16113,26 @@ fn interface_stats_report_peer_spawning_parents() {
 
     let multi = stat(40);
     assert_eq!(multi.display_name, "RNodeMultiInterface[Multi]");
-    assert_eq!(multi.clients, Some(2));
+    assert_eq!(multi.clients, Some(1));
     assert!(multi.status);
     assert_eq!(
-        stat(31).parent_display_name.as_deref(),
+        stat(30).parent_display_name.as_deref(),
         Some("RNodeMultiInterface[Multi]")
     );
+    // As upstream, subinterfaces exist only while their device is
+    // configured: the offline one is not listed.
+    assert!(driver
+        .interface_stats()
+        .interfaces
+        .iter()
+        .all(|stat| stat.id != 31));
+    // Without its device, the RNodeMultiInterface is listed down, alone.
+    driver.interfaces.get_mut(&InterfaceId(30)).unwrap().online = false;
+    let stats = driver.interface_stats().interfaces;
+    let multi = stats.iter().find(|stat| stat.id == 40).unwrap();
+    assert!(!multi.status);
+    assert_eq!(multi.clients, Some(0));
+    assert!(stats.iter().all(|stat| stat.id != 30 && stat.id != 31));
 }
 
 /// The driver runs upstream's I2P peer watchdog on its tick: the tunnel
