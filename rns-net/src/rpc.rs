@@ -2922,7 +2922,8 @@ fn blackholed_to_pickle(entries: &[BlackholeInfo]) -> PickleValue {
     PickleValue::List(list)
 }
 
-fn discovered_interfaces_to_pickle(
+/// Discovered interfaces as the `discovered_interfaces` RPC call returns them.
+pub fn discovered_interfaces_to_pickle(
     interfaces: &[crate::discovery::DiscoveredInterface],
 ) -> PickleValue {
     let list: Vec<PickleValue> = interfaces

@@ -1,0 +1,68 @@
+
+Network   ID : 22222222222222222222222222222222
+Transport ID : 11111111111111111111111111111111
+LXMF address : 33333333333333333333333333333333
+Name         : Backbone North
+Type         : BackboneInterface
+Stack        : RNS 1.6.0
+Status       : Available
+Transport    : Enabled
+Stamp Value  : 24.734
+Costs        : Dst 12.500, PR 0.000
+Distance     : 1 hop
+Discovered   : 1h and 12s ago
+Last Heard   : 12s ago
+Location     : 45.1235, -7.5, 312.0m h
+Address      : 198.51.100.7
+Port         : 4242
+
+Configuration Entry:
+  [[Backbone North]]
+    type = BackboneInterface
+    enabled = yes
+
+===============================================
+
+Network   ID : 22222222222222222222222222222222
+Transport ID : 11111111111111111111111111111111
+Name         : A very long discovered interface name
+Type         : RNodeInterface
+Stack        : Reticulum Rust Implementation 0.9.2
+Status       : Available
+Transport    : Enabled
+Stamp Value  : 24.734
+Costs        : Dst n, PR n
+Distance     : 2 hops
+Discovered   : 1h and 2m ago
+Last Heard   : 2m and 30s ago
+Location     : Unknown
+Frequency    : 868,000,000 Hz
+Bandwidth    : 125,000 Hz
+Sprd. Factor : 8
+Coding Rate  : 5
+
+Configuration Entry:
+  [[A very long discovered interface name]]
+    type = RNodeInterface
+    enabled = yes
+
+===============================================
+
+Transport ID : 44444444444444444444444444444444
+Name         : Same Ids
+Type         : I2PInterface
+Stack        : RNS 1.6.0
+Status       : Available
+Transport    : Enabled
+Stamp Value  : 24.734
+Costs        : Dst n, PR n
+Distance     : 2 hops
+Discovered   : 3h and 1m ago
+Last Heard   : 2h and 1m ago
+Location     : 1, 2.0
+Address      : abc.b32.i2p
+
+Configuration Entry:
+  [[Same Ids]]
+    type = I2PInterface
+    enabled = yes

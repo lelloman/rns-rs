@@ -207,6 +207,73 @@ CASES = {
 }
 
 
+def record(name, type_, status, last_heard_ago, impl=("RNS", "1.6.0"), extra=(), **kw):
+    """A record as list_discovered_interfaces() returns it, in its key order."""
+    r = {"type": type_, "impl_name": impl[0] if impl else None,
+         "version": impl[1] if impl else None, "transport": kw.pop("transport", True),
+         "name": name, "received": NOW - last_heard_ago, "stamp": bytes(range(8)),
+         "value": kw.pop("value", 24.734375), "transport_id": kw.pop("transport_id", "11" * 16),
+         "network_id": kw.pop("network_id", "22" * 16), "dst_cost": kw.pop("dst_cost", None),
+         "pr_cost": kw.pop("pr_cost", None), "hops": kw.pop("hops", 2),
+         "latitude": kw.pop("latitude", None), "longitude": kw.pop("longitude", None),
+         "height": kw.pop("height", None)}
+    for k, v in extra:
+        r[k] = v
+    if kw.pop("config", True):
+        r["config_entry"] = f"[[{name}]]\n  type = {type_}\n  enabled = yes"
+    r["discovery_hash"] = bytes([len(name)] * 32)
+    if "lxmf" in kw:
+        r["operator_lxmf_address"] = kw.pop("lxmf")
+    r["discovered"] = NOW - last_heard_ago - kw.pop("age", 3600)
+    r["last_heard"] = NOW - last_heard_ago
+    r["heard_count"] = kw.pop("heard_count", 4)
+    r["status"] = status
+    r["status_code"] = {"available": 1000, "unknown": 100, "stale": 0}[status]
+    assert not kw, kw
+    return r
+
+
+DISCOVERED = [
+    record("Backbone North", "BackboneInterface", "available", 12, latitude=45.123456,
+           longitude=-7.5, height=312.0, dst_cost=12.5, pr_cost=0, hops=1,
+           lxmf="33" * 16, extra=[("reachable_on", "198.51.100.7"), ("port", 4242)]),
+    record("A very long discovered interface name", "RNodeInterface", "available", 150,
+           impl=("Reticulum Rust Implementation", "0.9.2"),
+           extra=[("frequency", 868000000), ("bandwidth", 125000), ("sf", 8), ("cr", 5)]),
+    record("Stale TCP", "TCPServerInterface", "stale", 4 * 86400, transport=False,
+           extra=[("reachable_on", "example.org"), ("port", 4965)]),
+    record("Old Weave", "WeaveInterface", "unknown", 2 * 86400, impl=None, value=0, config=False,
+           extra=[("frequency", 2400000000.5), ("bandwidth", 1000000), ("channel", 3),
+                  ("modulation", "GFSK")]),
+    record("Same Ids", "I2PInterface", "available", 7300, transport_id="44" * 16,
+           network_id="44" * 16, latitude=1, longitude=2.0,
+           extra=[("reachable_on", "abc.b32.i2p")]),
+    record("Kiss", "KISSInterface", "unknown", 30, impl=("RNS", ""), dst_cost=3.0,
+           pr_cost=None, extra=[("frequency", 144800000), ("bandwidth", 12500),
+                                ("modulation", "AFSK")]),
+]
+
+DISCOVERY_CASES = {
+    "discovered": {},
+    "discovered_stale_unknown": {"show_stale": True, "show_unknown": True},
+    "discovered_filter": {"show_unknown": True, "name_filter": "o"},
+    "discovered_details": {"config_entries": True},
+    "discovered_details_all": {"config_entries": True, "show_stale": True,
+                               "show_unknown": True},
+    "discovered_details_filter": {"config_entries": True, "show_stale": True,
+                                  "name_filter": "STALE"},
+    "discovered_json": {"json": True},
+    "discovered_empty": {"interfaces": []},
+}
+
+
+class FakeDiscovery:
+    records = []
+
+    def __init__(self, discover_interfaces=False): pass
+    def list_discovered_interfaces(self): return copy.deepcopy(FakeDiscovery.records)
+
+
 class FakeReticulum:
     def __init__(self, stats, link_count, active_link_count, profiling):
         self.stats, self.lc, self.alc, self.prof = stats, link_count, active_link_count, profiling
@@ -239,6 +306,22 @@ for case, (st, opts) in CASES.items():
                                rns_instance=fake, profiling=profiling is not None, **kwargs)
     inputs = {"stats": st, "options": kwargs, "link_count": link_count,
               "active_link_count": active_link_count, "profiling": profiling, "now": NOW}
+    (OUT / f"{case}.pickle").write_bytes(pickle.dumps(inputs, protocol=2))
+    (OUT / f"{case}.txt").write_text(buffer.getvalue())
+    print(f"{case}: {len(buffer.getvalue().splitlines())} lines")
+
+rnstatus.RNS.Discovery.InterfaceDiscovery = FakeDiscovery
+for case, opts in DISCOVERY_CASES.items():
+    opts = dict(opts)
+    FakeDiscovery.records = opts.pop("interfaces", DISCOVERED)
+    kwargs = {"discovered_interfaces": True, "config_entries": False, "json": False,
+              "name_filter": None, "show_stale": False, "show_unknown": False}
+    kwargs.update(opts)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rnstatus.program_setup(configdir=None, remote=None, must_exit=False,
+                               rns_instance=FakeReticulum(None, None, None, None), **kwargs)
+    inputs = {"discovered": FakeDiscovery.records, "options": kwargs, "now": NOW}
     (OUT / f"{case}.pickle").write_bytes(pickle.dumps(inputs, protocol=2))
     (OUT / f"{case}.txt").write_text(buffer.getvalue())
     print(f"{case}: {len(buffer.getvalue().splitlines())} lines")

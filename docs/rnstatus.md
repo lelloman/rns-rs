@@ -78,7 +78,11 @@ Discovered-interface views (`-d` and `-D`) show the announcing stack's
 implementation and version as `Running` in the table or `Stack` in the detail
 view. Older announcements without both fields show `Unknown`. By default, stale
 entries and entries without implementation/version information are hidden; pass
-`--show-stale` and/or `--show-unknown` to include them.
+`--show-stale` and/or `--show-unknown` to include them. The views are upstream's,
+byte for byte, `-j` included (fixtures `discovered_*` in
+`tests/fixtures/rnstatus`). The list comes from the instance's
+`discovered_interfaces` RPC call; an instance without it, such as upstream's,
+is read from its stored records, as upstream's `rnstatus` always does.
 
 An optional `FILTER` limits output to interface names containing the supplied
 text. Queue statistics report total, data, announce, path-request, and

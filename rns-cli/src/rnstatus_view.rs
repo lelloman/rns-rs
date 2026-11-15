@@ -1009,6 +1009,339 @@ pub fn format_profiling_results(results: &PickleValue) -> String {
     out
 }
 
+/// `f"{n:,}"` of a Python number.
+fn thousands(n: Num) -> String {
+    let text = n.str();
+    if text.contains('e') || text.contains("inf") || text.contains("nan") {
+        return text;
+    }
+    let (sign, rest) = text
+        .strip_prefix('-')
+        .map_or(("", text.as_str()), |r| ("-", r));
+    let (whole, fraction) = rest
+        .split_once('.')
+        .map_or((rest, None), |(w, f)| (w, Some(f)));
+    let mut grouped = String::new();
+    for (i, c) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    match fraction {
+        Some(f) => format!("{sign}{grouped}.{f}"),
+        None => format!("{sign}{grouped}"),
+    }
+}
+
+fn cost(value: Option<&PickleValue>) -> String {
+    // RNS.prettycost: "n" unless an int or a float (bool is neither).
+    match value {
+        Some(PickleValue::Int(n)) => crate::format::prettycost(Some(*n as f64)),
+        Some(PickleValue::Float(f)) => crate::format::prettycost(Some(*f)),
+        _ => crate::format::prettycost(None),
+    }
+}
+
+/// `round(x, 4)` of a coordinate, printed with `str()`.
+fn coordinate(value: &PickleValue) -> String {
+    match Num::of(value) {
+        Some(n) => pyfmt::round(n, 4).str(),
+        None => str_of(value),
+    }
+}
+
+/// The discovered interfaces view (`-d`, or `-D` for `details`), from
+/// upstream-shaped records ([`upstream_discovery_record`]).
+pub fn render_discovered(
+    ifs: &[PickleValue],
+    details: bool,
+    name_filter: Option<&str>,
+    show_stale: bool,
+    show_unknown: bool,
+    now: f64,
+) -> String {
+    let mut out = String::from("\n");
+    macro_rules! p {
+        ($($arg:tt)*) => {{ out.push_str(&format!($($arg)*)); out.push('\n'); }};
+    }
+    let filtered_ifs: Vec<&PickleValue> = ifs
+        .iter()
+        .filter(|i| match name_filter.filter(|f| !f.is_empty()) {
+            Some(f) => name_of(i).to_lowercase().contains(&f.to_lowercase()),
+            None => true,
+        })
+        .collect();
+    let has_impl_info = |i: &PickleValue| {
+        has(i, "impl_name")
+            && has(i, "version")
+            && truthy(get(i, "impl_name"))
+            && truthy(get(i, "version"))
+    };
+    let impl_str = |i: &PickleValue| {
+        if has_impl_info(i) {
+            format!("{} {}", s(i, "impl_name"), s(i, "version"))
+        } else {
+            "Unknown".to_string()
+        }
+    };
+    let status_of = |i: &PickleValue| s(i, "status");
+
+    if details {
+        for (idx, i) in filtered_ifs.iter().copied().enumerate() {
+            let status = status_of(i);
+            let status_display = match status.as_str() {
+                "available" => "Available".to_string(),
+                "unknown" => "Unknown".to_string(),
+                "stale" => "Stale".to_string(),
+                other => other.to_string(),
+            };
+            if status == "stale" && !show_stale {
+                continue;
+            }
+            if !has_impl_info(i) && !show_unknown {
+                continue;
+            }
+            let dago = now - num(i, "discovered").f();
+            let hago = now - num(i, "last_heard").f();
+            let transport_str = if truthy(get(i, "transport")) {
+                "Enabled"
+            } else {
+                "Disabled"
+            };
+            let has_cost_info = has(i, "dst_cost") && has(i, "pr_cost");
+            let location = if not_none(i, "latitude") && not_none(i, "longitude") {
+                let height = if not_none(i, "height") {
+                    format!(", {}m h", s(i, "height"))
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{}, {}{height}",
+                    coordinate(get(i, "latitude").unwrap()),
+                    coordinate(get(i, "longitude").unwrap())
+                )
+            } else {
+                "Unknown".to_string()
+            };
+            let lxmf_addr = get(i, "operator_lxmf_address");
+            let transport_id = get(i, "transport_id");
+            let network = (has(i, "transport_id")
+                && has(i, "network_id")
+                && get(i, "transport_id") != get(i, "network_id"))
+            .then(|| get(i, "network_id"))
+            .flatten();
+
+            if idx > 0 {
+                p!("\n{}\n", "=".repeat(47));
+            }
+            if truthy(network) {
+                p!("Network   ID : {}", str_of(network.unwrap()));
+            }
+            if truthy(transport_id) {
+                p!("Transport ID : {}", str_of(transport_id.unwrap()));
+            }
+            if truthy(lxmf_addr) {
+                p!("LXMF address : {}", str_of(lxmf_addr.unwrap()));
+            }
+            p!("Name         : {}", s(i, "name"));
+            p!("Type         : {}", s(i, "type"));
+            p!("Stack        : {}", impl_str(i));
+            p!("Status       : {status_display}");
+            p!("Transport    : {transport_str}");
+            p!("Stamp Value  : {}", cost(get(i, "value")));
+            if has_cost_info {
+                p!(
+                    "Costs        : Dst {}, PR {}",
+                    cost(get(i, "dst_cost")),
+                    cost(get(i, "pr_cost"))
+                );
+            }
+            let hops = s(i, "hops");
+            p!(
+                "Distance     : {hops} hop{}",
+                if num(i, "hops") == Num::Int(1) {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+            p!("Discovered   : {} ago", prettytime(Num::Float(dago), true));
+            p!("Last Heard   : {} ago", prettytime(Num::Float(hago), true));
+            p!("Location     : {location}");
+            for (key, label) in [
+                ("frequency", "Frequency    "),
+                ("bandwidth", "Bandwidth    "),
+            ] {
+                if has(i, key) {
+                    let value = opt_num(i, key).map(thousands).unwrap_or_else(|| s(i, key));
+                    p!("{label}: {value} Hz");
+                }
+            }
+            for (key, label) in [
+                ("sf", "Sprd. Factor "),
+                ("cr", "Coding Rate  "),
+                ("modulation", "Modulation   "),
+                ("reachable_on", "Address      "),
+                ("port", "Port         "),
+            ] {
+                if has(i, key) {
+                    p!("{label}: {}", s(i, key));
+                }
+            }
+            p!("\nConfiguration Entry:");
+            // Upstream gives up on the entry when it has none.
+            if let Some(PickleValue::String(entry)) = get(i, "config_entry") {
+                for line in entry.split('\n') {
+                    p!("  {line}");
+                }
+            }
+        }
+    } else {
+        p!(
+            "{:<25} {:<10}   {:<10} {:<12} {:<7} {:<16} {:<15}",
+            "Name",
+            "Type",
+            "Status",
+            "Last Heard",
+            "Value",
+            "Running",
+            "Location"
+        );
+        p!("{}", "-".repeat(110));
+        for i in filtered_ifs {
+            let full = name_of(i);
+            let name = if len(full) > 24 {
+                format!("{}…", full.chars().take(24).collect::<String>())
+            } else {
+                full.to_string()
+            };
+            let mut impl_str = impl_str(i);
+            if len(&impl_str) > 16 {
+                impl_str = format!("{}…", impl_str.chars().take(15).collect::<String>());
+            }
+            let if_type = s(i, "type").replace("Interface", "");
+            let status = status_of(i);
+            let status_display = match status.as_str() {
+                "available" => "✓ Available".to_string(),
+                "unknown" => "? Unknown".to_string(),
+                "stale" => "× Stale".to_string(),
+                other => other.to_string(),
+            };
+            if status == "stale" && !show_stale {
+                continue;
+            }
+            if !has_impl_info(i) && !show_unknown {
+                continue;
+            }
+            let diff = now - num(i, "last_heard").f();
+            let last_heard_display = if diff < 60.0 {
+                "Just now".to_string()
+            } else if diff < 3600.0 {
+                format!("{}m ago", (diff / 60.0) as i64)
+            } else if diff < 86400.0 {
+                format!("{}h ago", (diff / 3600.0) as i64)
+            } else {
+                format!("{}d ago", (diff / 86400.0) as i64)
+            };
+            let value = cost(get(i, "value"));
+            let location = if not_none(i, "latitude") && not_none(i, "longitude") {
+                format!(
+                    "{}, {}",
+                    coordinate(get(i, "latitude").unwrap()),
+                    coordinate(get(i, "longitude").unwrap())
+                )
+            } else {
+                "N/A".to_string()
+            };
+            p!(
+                "{name:<25} {if_type:<10} {status_display:<12} {last_heard_display:<12} {value:<7} {impl_str:<16} {location:<15}"
+            );
+        }
+    }
+    out
+}
+
+/// `-d -j`: upstream's empty line, then `json.dumps` of the records with
+/// their bytes as plain hex.
+pub fn render_discovered_json(ifs: &[PickleValue]) -> String {
+    format!(
+        "\n{}\n",
+        crate::format::python_json(&PickleValue::List(ifs.to_vec()))
+    )
+}
+
+fn key(name: &str) -> PickleValue {
+    PickleValue::String(name.into())
+}
+
+/// A discovered interface from the `discovered_interfaces` RPC as upstream's
+/// `list_discovered_interfaces()` returns it: its keys, in its order, ids as
+/// hex strings, and the type-specific keys only for their types.
+pub fn upstream_discovery_record(rpc: &PickleValue) -> PickleValue {
+    let field = |name: &str| get(rpc, name).cloned().unwrap_or(PickleValue::None);
+    let hex = |name: &str| match get(rpc, name) {
+        Some(PickleValue::Bytes(b)) => PickleValue::String(hexrep(b)),
+        Some(other) => other.clone(),
+        None => PickleValue::None,
+    };
+    let mut record = Vec::new();
+    let mut push = |name: &str, value: PickleValue| record.push((key(name), value));
+    for name in ["type", "impl_name", "version", "transport", "name"] {
+        push(name, field(name));
+    }
+    push("received", field("last_heard"));
+    push("stamp", field("stamp"));
+    push("value", field("value"));
+    push("transport_id", hex("transport_id"));
+    push("network_id", hex("network_id"));
+    for name in [
+        "dst_cost",
+        "pr_cost",
+        "hops",
+        "latitude",
+        "longitude",
+        "height",
+    ] {
+        push(name, field(name));
+    }
+    for name in ["ifac_netname", "ifac_netkey"] {
+        if let Some(PickleValue::String(v)) = get(rpc, name) {
+            if !v.is_empty() {
+                push(name, PickleValue::String(v.clone()));
+            }
+        }
+    }
+    let type_keys: &[&str] = match s(rpc, "type").as_str() {
+        "BackboneInterface" | "TCPServerInterface" => &["reachable_on", "port"],
+        "I2PInterface" => &["reachable_on"],
+        "RNodeInterface" => &["frequency", "bandwidth", "sf", "cr"],
+        "WeaveInterface" => &["frequency", "bandwidth", "channel", "modulation"],
+        "KISSInterface" => &["frequency", "bandwidth", "modulation"],
+        _ => &[],
+    };
+    for name in type_keys {
+        push(name, field(name));
+    }
+    if not_none(rpc, "config_entry") {
+        push("config_entry", field("config_entry"));
+    }
+    push("discovery_hash", field("discovery_hash"));
+    if not_none(rpc, "operator_lxmf_address") {
+        push("operator_lxmf_address", field("operator_lxmf_address"));
+    }
+    for name in ["discovered", "last_heard", "heard_count", "status"] {
+        push(name, field(name));
+    }
+    let status_code = match s(rpc, "status").as_str() {
+        "available" => 1000,
+        "unknown" => 100,
+        _ => 0,
+    };
+    push("status_code", PickleValue::Int(status_code));
+    PickleValue::Dict(record)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1052,21 +1385,38 @@ mod tests {
         for path in cases {
             let inputs = rns_net::pickle::decode(&std::fs::read(&path).unwrap()).unwrap();
             let expected = std::fs::read_to_string(path.with_extension("txt")).unwrap();
-            let profiling = inputs
-                .get("profiling")
-                .filter(|v| !matches!(v, PickleValue::None));
-            let extras = Extras {
-                link_count: inputs.get("link_count").and_then(Num::of),
-                active_link_count: inputs.get("active_link_count").and_then(Num::of),
-                profiling_results: profiling,
-            };
             let now = inputs.get("now").and_then(Num::of).unwrap().f();
-            let rendered = render(
-                inputs.get("stats").unwrap(),
-                &options_from(inputs.get("options").unwrap()),
-                &extras,
-                now,
-            );
+            let options = inputs.get("options").unwrap();
+            let rendered = if let Some(PickleValue::List(records)) = inputs.get("discovered") {
+                let flag = |key: &str| truthy(options.get(key));
+                if flag("json") {
+                    render_discovered_json(records)
+                } else {
+                    render_discovered(
+                        records,
+                        flag("config_entries"),
+                        options.get("name_filter").and_then(|v| v.as_str()),
+                        flag("show_stale"),
+                        flag("show_unknown"),
+                        now,
+                    )
+                }
+            } else {
+                let profiling = inputs
+                    .get("profiling")
+                    .filter(|v| !matches!(v, PickleValue::None));
+                let extras = Extras {
+                    link_count: inputs.get("link_count").and_then(Num::of),
+                    active_link_count: inputs.get("active_link_count").and_then(Num::of),
+                    profiling_results: profiling,
+                };
+                render(
+                    inputs.get("stats").unwrap(),
+                    &options_from(options),
+                    &extras,
+                    now,
+                )
+            };
             if rendered != expected {
                 let line = rendered
                     .lines()
