@@ -12,7 +12,9 @@ pub struct X25519PublicKey {
 }
 
 pub struct X25519PrivateKey {
-    bytes: [u8; 32], // clamped scalar
+    /// As given: serialized back unchanged, as upstream's (pyca's)
+    /// `private_bytes()` does; clamped where it is used.
+    bytes: [u8; 32],
 }
 
 impl Drop for X25519PrivateKey {
@@ -23,9 +25,7 @@ impl Drop for X25519PrivateKey {
 
 impl X25519PrivateKey {
     pub fn from_bytes(data: &[u8; 32]) -> Self {
-        X25519PrivateKey {
-            bytes: clamp(*data),
-        }
+        X25519PrivateKey { bytes: *data }
     }
 
     pub fn generate(rng: &mut dyn Rng) -> Self {
@@ -43,10 +43,10 @@ impl X25519PrivateKey {
             feature = "x25519-aws-lc",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
-        if let Some(bytes) = aws_lc::public_key(&self.bytes) {
+        if let Some(bytes) = aws_lc::public_key(&clamp(self.bytes)) {
             return X25519PublicKey { bytes };
         }
-        let secret = x25519_dalek::StaticSecret::from(self.bytes);
+        let secret = x25519_dalek::StaticSecret::from(clamp(self.bytes));
         let public = x25519_dalek::PublicKey::from(&secret);
         X25519PublicKey {
             bytes: *public.as_bytes(),
@@ -58,10 +58,10 @@ impl X25519PrivateKey {
             feature = "x25519-aws-lc",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
-        if let Some(shared) = aws_lc::exchange(&self.bytes, &peer.bytes) {
+        if let Some(shared) = aws_lc::exchange(&clamp(self.bytes), &peer.bytes) {
             return shared;
         }
-        let secret = x25519_dalek::StaticSecret::from(self.bytes);
+        let secret = x25519_dalek::StaticSecret::from(clamp(self.bytes));
         let peer_public = x25519_dalek::PublicKey::from(peer.bytes);
         *secret.diffie_hellman(&peer_public).as_bytes()
     }
@@ -117,15 +117,23 @@ mod tests {
 
     #[test]
     fn test_x25519_clamping() {
-        let bytes = [0xFF; 32];
-        let key = X25519PrivateKey::from_bytes(&bytes);
-        let scalar_bytes = key.private_bytes();
+        let scalar_bytes = clamp([0xFF; 32]);
         // Bits 0-2 should be cleared
         assert_eq!(scalar_bytes[0] & 7, 0);
         // Bit 255 (byte 31 bit 7) should be cleared
         assert_eq!(scalar_bytes[31] & 0x80, 0);
         // Bit 254 (byte 31 bit 6) should be set
         assert_eq!(scalar_bytes[31] & 0x40, 0x40);
+        // The key itself keeps the bytes it was given, and clamping them
+        // gives the same key.
+        let key = X25519PrivateKey::from_bytes(&[0xFF; 32]);
+        assert_eq!(key.private_bytes(), [0xFF; 32]);
+        assert_eq!(
+            key.public_key().public_bytes(),
+            X25519PrivateKey::from_bytes(&scalar_bytes)
+                .public_key()
+                .public_bytes()
+        );
     }
 
     #[test]
@@ -167,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn test_x25519_private_serialization_is_clamped_and_idempotent() {
+    fn test_x25519_private_serialization_round_trips() {
         for input in [[0; 32], [0xff; 32], [0x55; 32], [0xaa; 32]] {
             let first = X25519PrivateKey::from_bytes(&input);
             let serialized = first.private_bytes();
