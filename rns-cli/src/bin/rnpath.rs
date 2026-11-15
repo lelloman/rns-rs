@@ -241,7 +241,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                 process::exit(1);
             }
         };
-        lookup_path(&connect, &hash_str, timeout);
+        // As upstream, a Reticulum client: whether a path is known, and its
+        // hops, come from this program's own path table, which the
+        // instance's announces fill; the next hop and its interface from
+        // the instance.
+        let node =
+            rns_net::RnsNode::connect_shared_from_config(Some(&config_dir), Box::new(NoCallbacks))
+                .ok();
+        lookup_path(&connect, node.as_ref(), &hash_str, timeout);
+        if let Some(node) = node {
+            node.shutdown();
+        }
     } else {
         print_usage(usage_name);
     }
@@ -868,7 +878,20 @@ fn hops_to(connect: &dyn Fn() -> RpcClient, dest_hash: &[u8; 16]) -> i64 {
 /// wait up to `timeout` (at least the instance's medium path timeout) for
 /// it, and show where it leads.
 /// Each RPC connection serves one call, so every query opens one.
-fn lookup_path(connect: &dyn Fn() -> RpcClient, hash_str: &str, timeout: f64) {
+struct NoCallbacks;
+
+impl rns_net::Callbacks for NoCallbacks {
+    fn on_announce(&mut self, _: rns_net::AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _: rns_net::DestHash, _: u8) {}
+    fn on_local_delivery(&mut self, _: rns_net::DestHash, _: Vec<u8>, _: rns_net::PacketHash) {}
+}
+
+fn lookup_path(
+    connect: &dyn Fn() -> RpcClient,
+    node: Option<&rns_net::RnsNode>,
+    hash_str: &str,
+    timeout: f64,
+) {
     if hash_str.len() != 32 {
         println!("Destination length is invalid, must be 32 hexadecimal characters (16 bytes).");
         process::exit(1);
@@ -880,17 +903,27 @@ fn lookup_path(connect: &dyn Fn() -> RpcClient, hash_str: &str, timeout: f64) {
     let mut dest_hash = [0u8; 16];
     dest_hash.copy_from_slice(&hash_bytes);
     let pretty = format!("<{}>", prettyhexrep(&dest_hash));
-    let has_path = || {
-        get_for(connect, "next_hop", &dest_hash)
+    let has_path = || match node {
+        Some(node) => node
+            .has_path(&rns_net::DestHash(dest_hash))
+            .unwrap_or(false),
+        None => get_for(connect, "next_hop", &dest_hash)
             .as_bytes()
-            .is_some()
+            .is_some(),
     };
 
     if !has_path() {
-        let _ = connect().call(&PickleValue::Dict(vec![(
-            PickleValue::String("request_path".into()),
-            PickleValue::Bytes(dest_hash.to_vec()),
-        )]));
+        match node {
+            Some(node) => {
+                let _ = node.request_path(&rns_net::DestHash(dest_hash));
+            }
+            None => {
+                let _ = connect().call(&PickleValue::Dict(vec![(
+                    PickleValue::String("request_path".into()),
+                    PickleValue::Bytes(dest_hash.to_vec()),
+                )]));
+            }
+        }
         print!("Path to {pretty} requested   ");
         let _ = std::io::stdout().flush();
     }
@@ -914,23 +947,33 @@ fn lookup_path(connect: &dyn Fn() -> RpcClient, hash_str: &str, timeout: f64) {
         i = (i + 1) % syms.len();
     }
 
-    match get_for(connect, "next_hop", &dest_hash).as_bytes() {
-        Some(next_hop) => {
-            let next_hop = format!("<{}>", prettyhexrep(next_hop));
-            let interface = get_for(connect, "next_hop_if_name", &dest_hash)
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| "None".into());
-            let hops = hops_to(connect, &dest_hash);
-            let ms = if hops != 1 { "s" } else { "" };
-            println!(
-                "\rPath found, destination {pretty} is {hops} hop{ms} away via {next_hop} on {interface}"
-            );
-        }
-        None => {
-            println!("\r                                                       \rPath not found");
+    if has_path() {
+        let hops = match node {
+            Some(node) => node
+                .hops_to(&rns_net::DestHash(dest_hash))
+                .ok()
+                .flatten()
+                .map(i64::from)
+                .unwrap_or(rns_core::constants::PATHFINDER_M as i64),
+            None => hops_to(connect, &dest_hash),
+        };
+        let next_hop = get_for(connect, "next_hop", &dest_hash);
+        let Some(next_hop) = next_hop.as_bytes() else {
+            println!("\r                                                       \rError: Invalid path data returned");
             process::exit(1);
-        }
+        };
+        let next_hop = format!("<{}>", prettyhexrep(next_hop));
+        let interface = get_for(connect, "next_hop_if_name", &dest_hash)
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| "None".into());
+        let ms = if hops != 1 { "s" } else { "" };
+        println!(
+            "\rPath found, destination {pretty} is {hops} hop{ms} away via {next_hop} on {interface}"
+        );
+    } else {
+        println!("\r                                                       \rPath not found");
+        process::exit(1);
     }
 }
 
