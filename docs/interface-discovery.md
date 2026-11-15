@@ -18,6 +18,12 @@ discovered interface list (`rnstatus -d` and `-D`, and the `discovered_interface
 call) and removed by the periodic discovery cleanup, so they are no longer
 auto-connected.
 
+Discovered interfaces are stored under `storage/discovery/interfaces`, one
+file per interface, in upstream's format (same keys, ids as hex strings,
+named by upstream's discovery hash), so either implementation can read the
+other's records. Records written by releases before that format are read
+too, and moved to upstream's file names when listed.
+
 ## What a discoverable interface announces
 
 These per-interface keys work as upstream's:

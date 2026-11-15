@@ -676,10 +676,8 @@ pub fn parse_interface_announce_with_identity(
 
 /// Compute the discovery hash for storage
 pub fn compute_discovery_hash(transport_id: &[u8; 16], name: &str) -> [u8; 32] {
-    let mut material = Vec::with_capacity(16 + name.len());
-    material.extend_from_slice(transport_id);
-    material.extend_from_slice(name.as_bytes());
-    sha256(&material)
+    // Upstream: full_hash((hexrep(transport_id) + name).encode("utf-8")).
+    sha256(format!("{}{name}", hex_encode(transport_id)).as_bytes())
 }
 
 /// Mark a discovered transport interface config entry for gateway mode.
@@ -889,6 +887,18 @@ pub fn sanitize_discovered_name(name: &str) -> Option<String> {
 }
 
 /// Encode bytes as hex string (no delimiters)
+/// Plain lower- or upper-case hex, as `bytes.fromhex` reads it without
+/// whitespace.
+pub fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
 pub fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
@@ -960,7 +970,7 @@ pub fn filter_and_sort_interfaces(
     let now = time::now();
 
     // Update status and filter
-    interfaces.retain(|iface| {
+    interfaces.retain_mut(|iface| {
         if !is_discoverable_type(&iface.interface_type) {
             return false;
         }
@@ -979,6 +989,7 @@ pub fn filter_and_sort_interfaces(
 
         // Update status
         let status = iface.compute_status();
+        iface.status = status;
 
         // Apply filters
         if only_available && status != DiscoveredStatus::Available {
