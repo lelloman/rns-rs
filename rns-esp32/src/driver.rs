@@ -41,7 +41,12 @@ const NVS_KEY_SETTINGS: &str = "settings";
 const TX_QUEUE_MAX_FRAMES: usize = 32;
 
 /// Event wait with nothing queued; bridge detection is polled this often.
-const EVENT_WAIT_IDLE_MS: u64 = 250;
+/// A host gives the board 200 ms to answer DETECT (upstream's
+/// RNodeInterface), and the switch to bridge mode must fit in that too.
+const EVENT_WAIT_IDLE_MS: u64 = 20;
+
+/// How often mode-specific threads check for shutdown.
+pub const SHUTDOWN_POLL_MS: u64 = 20;
 
 /// Events processed by the driver loop.
 pub enum Event {
@@ -837,13 +842,22 @@ pub fn spawn_tick_thread(
     std::thread::Builder::new()
         .name("tick".into())
         .stack_size(2048)
-        .spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(interval_ms));
-            if shutdown.load(Ordering::SeqCst) {
-                break;
-            }
-            if tx.send(Event::Tick).is_err() {
-                break;
+        .spawn(move || {
+            let interval = Duration::from_millis(interval_ms);
+            let mut last = std::time::Instant::now();
+            loop {
+                // Short sleeps, so a mode switch does not wait out a tick.
+                std::thread::sleep(Duration::from_millis(SHUTDOWN_POLL_MS));
+                if shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                if last.elapsed() < interval {
+                    continue;
+                }
+                last = std::time::Instant::now();
+                if tx.send(Event::Tick).is_err() {
+                    break;
+                }
             }
         })
         .expect("failed to spawn tick thread")
