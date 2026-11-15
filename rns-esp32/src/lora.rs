@@ -667,7 +667,9 @@ pub fn reader_loop(
         }
 
         if dio1.enable_interrupt().is_ok() {
-            let _ = notification.wait(TickType::new_millis(100).ticks());
+            // Short, so a mode switch is not held up (see driver::SHUTDOWN_POLL_MS).
+            let _ =
+                notification.wait(TickType::new_millis(crate::driver::SHUTDOWN_POLL_MS).ticks());
         } else {
             thread::sleep(Duration::from_millis(10));
         }
