@@ -542,6 +542,20 @@ pub fn python_int_ok(s: &str) -> bool {
         && python_digits(digits).is_some()
 }
 
+/// Python's `int(s)`, for values [`python_int_ok`] accepts that fit an i64.
+pub fn python_int(s: &str) -> Option<i64> {
+    python_int_ok(s)
+        .then(|| s.trim().replace('_', "").parse().ok())
+        .flatten()
+}
+
+/// Python's `float(s)`.
+pub fn python_float(s: &str) -> Option<f64> {
+    python_float_ok(s)
+        .then(|| python_digits(s.trim())?.parse().ok())
+        .flatten()
+}
+
 fn action_for<'p>(parser: &'p Parser, opt: &crate::args::Opt) -> Option<&'p Action> {
     let long = (!opt.long.is_empty()).then(|| format!("--{}", opt.long));
     let short = (!opt.short.is_empty()).then(|| format!("-{}", opt.short));

@@ -1,4 +1,4 @@
-//! Leaving quietly when stdout is closed.
+//! Leaving quietly when stdout is closed or on an interrupt.
 //!
 //! Rust ignores SIGPIPE, so `println!` to a closed pipe (`rnstatus | head`)
 //! panics with "failed printing to stdout: Broken pipe". Restoring SIGPIPE's
@@ -19,6 +19,25 @@ pub fn exit_quietly_on_closed_stdout() {
         }
         default(info);
     }));
+}
+
+static INTERRUPT_EXIT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn exit_now(_: libc::c_int) {
+    // `_exit` is async-signal-safe; stdout is flushed after every write
+    // that matters, as upstream's `os._exit` does not flush either.
+    unsafe { libc::_exit(INTERRUPT_EXIT.load(std::sync::atomic::Ordering::Relaxed)) }
+}
+
+/// Exit at once with `code` on SIGINT or SIGTERM, printing nothing: what an
+/// upstream utility does once it has started Reticulum, whose handlers call
+/// `RNS.exit()` (`os._exit(0)`).
+pub fn exit_on_interrupt(code: i32) {
+    INTERRUPT_EXIT.store(code, std::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        libc::signal(libc::SIGINT, exit_now as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, exit_now as *const () as libc::sighandler_t);
+    }
 }
 
 fn panic_message<'a>(info: &'a std::panic::PanicHookInfo<'_>) -> &'a str {
