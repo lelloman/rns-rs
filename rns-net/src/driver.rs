@@ -848,6 +848,11 @@ pub struct Driver {
     /// Listeners with no interface entry of their own, reported in
     /// interface statistics as upstream lists them.
     pub(crate) listener_stats: Vec<ListenerStat>,
+    /// Upstream's `Transport.interfaces` order: by bitrate, recomputed
+    /// every `INTERFACE_JOBS_INTERVAL`; interfaces added since are listed
+    /// after it.
+    pub(crate) interface_priority: Vec<u64>,
+    pub(crate) interface_priority_at: f64,
     /// Previous cumulative counters used to calculate current one-second rates.
     pub(crate) traffic_samples: HashMap<InterfaceId, TrafficSample>,
     pub(crate) rng: OsRng,
@@ -1194,6 +1199,8 @@ impl Driver {
             interface_display_names: HashMap::new(),
             interface_short_names: HashMap::new(),
             listener_stats: Vec::new(),
+            interface_priority: Vec::new(),
+            interface_priority_at: 0.0,
             traffic_samples: HashMap::new(),
             rng: OsRng,
             rx,

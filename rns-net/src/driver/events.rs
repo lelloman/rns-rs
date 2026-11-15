@@ -662,6 +662,7 @@ impl Driver {
         }
         #[cfg(feature = "iface-i2p")]
         self.watch_i2p_tunnels();
+        self.prioritize_interfaces();
         #[cfg(feature = "hooks")]
         {
             let ctx = HookContext::Tick;
