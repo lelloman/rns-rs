@@ -507,8 +507,14 @@ pub(crate) const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
     }
 }
 
-/// Hardware MTU of a TCP interface unless `bitrate` or `fixed_mtu` is configured.
-pub(crate) const TCP_DEFAULT_MTU: u32 = 65535;
+/// Bitrate a TCP interface assumes when `bitrate` is not configured:
+/// upstream's `TCPClientInterface` / `TCPServerInterface` `BITRATE_GUESS`.
+pub(crate) const TCP_BITRATE_GUESS: u64 = 10_000_000;
+
+/// Bitrate of a TCP interface: the configured one, else [`TCP_BITRATE_GUESS`].
+pub(crate) fn tcp_bitrate(bitrate: Option<u64>) -> u64 {
+    bitrate.unwrap_or(TCP_BITRATE_GUESS)
+}
 
 /// The optional `bitrate` and `fixed_mtu` keys of a TCP interface, with
 /// upstream's meaning: `fixed_mtu` sets the hardware MTU and must be at least
@@ -566,17 +572,13 @@ pub(crate) fn parse_flush_after(
 }
 
 /// Hardware MTU of a TCP interface: `fixed_mtu` when configured, else
-/// upstream's autoconfiguration tier for a configured `bitrate`, else
-/// [`TCP_DEFAULT_MTU`]. Below the lowest tier upstream sets no hardware MTU,
-/// which leaves links at the base MTU.
+/// upstream's autoconfiguration tier for its bitrate ([`tcp_bitrate`]).
+/// Below the lowest tier upstream sets no hardware MTU, which leaves links
+/// at the base MTU.
 pub(crate) fn tcp_hardware_mtu(bitrate: Option<u64>, fixed_mtu: Option<u32>) -> u32 {
-    match (fixed_mtu, bitrate) {
-        (Some(mtu), _) => mtu,
-        (None, Some(bitrate)) => {
-            auto_mtu_for_bitrate(bitrate).unwrap_or(rns_core::constants::MTU as u32)
-        }
-        (None, None) => TCP_DEFAULT_MTU,
-    }
+    fixed_mtu.unwrap_or_else(|| {
+        auto_mtu_for_bitrate(tcp_bitrate(bitrate)).unwrap_or(rns_core::constants::MTU as u32)
+    })
 }
 
 pub(crate) fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexGuard<'a, T> {
@@ -1727,7 +1729,9 @@ mod tests {
 
     #[test]
     fn tcp_hardware_mtu_follows_fixed_mtu_then_the_bitrate_tier() {
-        assert_eq!(tcp_hardware_mtu(None, None), TCP_DEFAULT_MTU);
+        // Unconfigured: upstream's 10 Mbps guess and its tier.
+        assert_eq!(tcp_bitrate(None), 10_000_000);
+        assert_eq!(tcp_hardware_mtu(None, None), 16_384);
         assert_eq!(tcp_hardware_mtu(Some(10_000_000), None), 16_384);
         assert_eq!(tcp_hardware_mtu(Some(1_000_000_000), None), 524_288);
         assert_eq!(tcp_hardware_mtu(Some(1_000_000_000), Some(500)), 500);

@@ -571,7 +571,7 @@ impl ConfiguredDisplay {
                     mode: config.mode,
                     gravity: config.gravity,
                     announces_to_internal: config.announces_to_internal,
-                    bitrate: Some(tcp.bitrate.unwrap_or(TCP_SERVER_BITRATE_GUESS)),
+                    bitrate: Some(crate::interface::tcp_bitrate(tcp.bitrate)),
                     // The MTU its clients get.
                     mtu: crate::interface::tcp_hardware_mtu(tcp.bitrate, tcp.fixed_mtu),
                     ifac: ifac.cloned(),
@@ -639,10 +639,6 @@ impl ConfiguredDisplay {
         }
     }
 }
-
-/// Upstream `TCPServerInterface.BITRATE_GUESS`.
-#[cfg(feature = "iface-tcp")]
-const TCP_SERVER_BITRATE_GUESS: u64 = 10_000_000;
 
 /// The display name of a subinterface a `Multi` start registers.
 pub(crate) fn subinterface_display_name(

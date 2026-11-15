@@ -149,7 +149,7 @@ fn start_with_template(
         .unwrap_or(0);
     let runtime = Arc::clone(&config.runtime);
     let ingress_control = config.ingress_control;
-    let bitrate = config.bitrate;
+    let bitrate = Some(super::tcp_bitrate(config.bitrate));
     let mtu = super::tcp_hardware_mtu(config.bitrate, config.fixed_mtu);
     let active_connections = Arc::new(AtomicUsize::new(0));
     let control = ListenerControl::new();
@@ -1026,7 +1026,7 @@ mod tests {
             runtime: Arc::clone(&config.runtime),
             ingress_control: config.ingress_control,
             bitrate: None,
-            mtu: crate::interface::TCP_DEFAULT_MTU,
+            mtu: crate::interface::tcp_hardware_mtu(None, None),
             flush_after: None,
             active_connections: Arc::new(AtomicUsize::new(0)),
             control: ListenerControl::new(),
