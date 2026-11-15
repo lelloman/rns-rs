@@ -3713,6 +3713,7 @@ fn dynamic_interface_inherits_parent_announce_cap() {
             telemetry: event::InterfaceTelemetry::default(),
             ifac: None,
             display_name: None,
+            short_name: None,
         },
     );
 
@@ -3761,6 +3762,7 @@ fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
                 telemetry: event::InterfaceTelemetry::default(),
                 ifac: None,
                 display_name: None,
+                short_name: None,
             },
         );
         let registered = driver
@@ -15854,6 +15856,7 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
             telemetry: event::InterfaceTelemetry::default(),
             ifac: None,
             display_name: Some("TCPInterface[Client on Server/10.0.0.2:50000]".into()),
+            short_name: Some("Client on Server".into()),
         },
     );
     driver
@@ -15916,6 +15919,11 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
     assert_eq!(shared.interface_type, "LocalServerInterface");
     assert_eq!(shared.clients, Some(2));
     assert_eq!(by_id(21).display_name, "LocalInterface[rns/default]");
+    // Upstream names a client on the Unix socket after the number of
+    // clients served before it.
+    assert_eq!(by_id(21).name, "0@\0rns/default");
+    assert_eq!(by_id(22).name, "1@\0rns/default");
+    assert_eq!(by_id(11).name, "Client on Server");
     assert_eq!(
         by_id(21).parent_display_name.as_deref(),
         Some("Shared Instance[rns/default]")
@@ -15941,6 +15949,7 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
     assert!(!driver
         .interface_display_names
         .contains_key(&InterfaceId(11)));
+    assert!(!driver.interface_short_names.contains_key(&InterfaceId(11)));
     assert_eq!(driver.interface_stats().interfaces.len(), 6);
     let stats = driver.interface_stats();
     let server = stats.interfaces.iter().find(|stat| stat.id == 10).unwrap();

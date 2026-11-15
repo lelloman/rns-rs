@@ -523,18 +523,14 @@ fn unix_server_loop(
             transmit_buffer: TransmitBuffer::new(),
         });
 
-        let event = if let Some(template) = &dynamic_template {
-            let mut registration = template.registration(info);
-            registration.display_name = Some(unix_client_display_name(&name));
-            Event::DynamicInterfaceUp {
-                id: client_id,
-                writer,
-                registration: Box::new(registration),
-            }
-        } else {
-            Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
-        };
-        if tx.send(event).is_err() {
+        let events = client_up_events(
+            client_id,
+            writer,
+            info,
+            dynamic_template.as_ref(),
+            ClientNames::Unix(unix_client_display_name(&name)),
+        );
+        if events.into_iter().any(|event| tx.send(event).is_err()) {
             return;
         }
 
@@ -644,13 +640,72 @@ fn unix_client_display_name(name: &str) -> String {
     super::display::local_client(&super::display::LocalEndpoint::Unix(instance.to_string()))
 }
 
-/// Upstream's display name for a client of the local server on TCP: it
-/// names the client after its port.
-fn tcp_client_display_name(stream: &TcpStream) -> Option<String> {
-    let peer = stream.peer_addr().ok()?;
-    Some(super::display::local_client(
-        &super::display::LocalEndpoint::Tcp(peer.port()),
-    ))
+/// Upstream's names for a client the local server accepted.
+pub(crate) enum ClientNames {
+    /// On the abstract Unix socket: its display name. Upstream names the
+    /// client itself `{clients}@\0rns/{instance}` after the number of
+    /// clients the server has, which the driver counts.
+    #[cfg(target_os = "linux")]
+    Unix(String),
+    /// On TCP: upstream names the client after its port, `{port}`, shown
+    /// as `LocalInterface[{port}]`. Unknown when the peer address is.
+    Tcp(Option<u16>),
+}
+
+impl ClientNames {
+    pub(crate) fn tcp(stream: &TcpStream) -> Self {
+        ClientNames::Tcp(stream.peer_addr().ok().map(|peer| peer.port()))
+    }
+}
+
+/// The events that bring up a client the local server accepted, named as
+/// upstream names it.
+pub(crate) fn client_up_events(
+    client_id: InterfaceId,
+    writer: Box<dyn Writer>,
+    info: InterfaceInfo,
+    template: Option<&super::DynamicInterfaceTemplate>,
+    names: ClientNames,
+) -> Vec<Event> {
+    let (display_name, short_name) = match names {
+        #[cfg(target_os = "linux")]
+        ClientNames::Unix(display_name) => (Some(display_name), None),
+        ClientNames::Tcp(Some(port)) => (
+            Some(super::display::local_client(
+                &super::display::LocalEndpoint::Tcp(port),
+            )),
+            Some(port.to_string()),
+        ),
+        ClientNames::Tcp(None) => (None, None),
+    };
+    match template {
+        Some(template) => {
+            let mut registration = template.registration(info);
+            registration.display_name = display_name;
+            registration.short_name = short_name;
+            vec![Event::DynamicInterfaceUp {
+                id: client_id,
+                writer,
+                registration: Box::new(registration),
+            }]
+        }
+        None => {
+            let mut events = Vec::with_capacity(2);
+            if short_name.is_some() {
+                events.push(Event::InterfaceNames {
+                    id: client_id,
+                    display_name: None,
+                    short_name,
+                });
+            }
+            events.push(Event::InterfaceUp(
+                client_id,
+                Some(writer),
+                Some(Box::new(info)),
+            ));
+            events
+        }
+    }
 }
 
 /// Spawn handler threads for a connected TCP local client.
@@ -676,18 +731,14 @@ fn spawn_local_client_handler(
         transmit_buffer: TransmitBuffer::new(),
     });
 
-    let event = if let Some(template) = dynamic_template {
-        let mut registration = template.registration(info);
-        registration.display_name = tcp_client_display_name(&stream);
-        Event::DynamicInterfaceUp {
-            id: client_id,
-            writer,
-            registration: Box::new(registration),
-        }
-    } else {
-        Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info)))
-    };
-    if tx.send(event).is_err() {
+    let events = client_up_events(
+        client_id,
+        writer,
+        info,
+        dynamic_template,
+        ClientNames::tcp(&stream),
+    );
+    if events.into_iter().any(|event| tx.send(event).is_err()) {
         return;
     }
 
@@ -1281,6 +1332,39 @@ mod tests {
                 assert!(writer.is_some());
                 assert!(info.is_some());
             }
+            other => panic!("expected InterfaceUp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tcp_server_names_clients_after_their_port() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(7120));
+        let config = LocalServerConfig {
+            instance_name: crate::test_support::instance_name("test-tcp-names"),
+            port,
+            interface_id: InterfaceId(72),
+            use_af_unix: false,
+        };
+        start_server(config, tx, next_id).unwrap();
+
+        let client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let client_port = client.local_addr().unwrap().port();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::InterfaceNames {
+                id,
+                display_name,
+                short_name,
+            } => {
+                assert_eq!(id, InterfaceId(7120));
+                assert_eq!(display_name, None);
+                assert_eq!(short_name, Some(client_port.to_string()));
+            }
+            other => panic!("expected InterfaceNames, got {:?}", other),
+        }
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::InterfaceUp(id, Some(_), Some(_)) => assert_eq!(id, InterfaceId(7120)),
             other => panic!("expected InterfaceUp, got {:?}", other),
         }
     }

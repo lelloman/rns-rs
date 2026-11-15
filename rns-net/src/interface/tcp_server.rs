@@ -356,6 +356,7 @@ impl ListenerSource {
             registration.display_name = peer_addr.map(|peer| {
                 crate::interface::display::tcp_server_client(name, peer.ip(), peer.port())
             });
+            registration.short_name = Some(crate::interface::display::spawned_client_name(name));
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,

@@ -1494,6 +1494,8 @@ fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
             ifname,
             &peer_key.link_local_addr,
         ));
+        // Upstream's `AutoInterfacePeer` never sets a name.
+        registration.short_name = Some(crate::interface::display::UNNAMED.into());
         Event::DynamicInterfaceUp {
             id: peer_id,
             writer: driver_writer,

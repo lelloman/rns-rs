@@ -163,18 +163,19 @@ fn peer_info(
 }
 
 /// The event that brings up a connected peer's interface, reported under
-/// upstream's display name `display_name`.
+/// upstream's peer name `name` (see [`super::display::i2p_peer_name`]).
 fn peer_up(
     client_id: InterfaceId,
     writer: Box<dyn Writer>,
     info: InterfaceInfo,
     template: Option<&super::DynamicInterfaceTemplate>,
-    display_name: String,
+    name: String,
 ) -> Event {
     match template {
         Some(template) => {
             let mut registration = template.registration(info);
-            registration.display_name = Some(display_name);
+            registration.display_name = Some(format!("I2PInterfacePeer[{name}]"));
+            registration.short_name = Some(name);
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,
@@ -477,7 +478,7 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                     writer,
                     peer_info(client_id, &peer_addr, ingress_control, true),
                     dynamic_template.as_ref(),
-                    crate::interface::display::i2p_peer(&iface_name, &peer_addr, true),
+                    crate::interface::display::i2p_peer_name(&iface_name, &peer_addr, true),
                 );
                 if tx.send(event).is_err() {
                     return; // Driver shut down
@@ -572,7 +573,7 @@ fn acceptor_loop(context: AcceptorContext) {
                     writer,
                     peer_info(client_id, &remote_b32, ingress_control, false),
                     dynamic_template.as_ref(),
-                    crate::interface::display::i2p_peer(&iface_name, &remote_b32, false),
+                    crate::interface::display::i2p_peer_name(&iface_name, &remote_b32, false),
                 );
                 if tx.send(event).is_err() {
                     return; // Driver shut down

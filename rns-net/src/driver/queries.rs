@@ -177,6 +177,31 @@ impl Driver {
         )
     }
 
+    /// Name a client the shared instance accepted on its abstract Unix
+    /// socket, before it is added, as upstream does: `{clients}@\0rns/{instance}`,
+    /// after the number of clients the instance serves (on TCP the
+    /// listener names its clients after their port).
+    pub(crate) fn name_local_client(&mut self, id: InterfaceId) {
+        if self.interface_short_names.contains_key(&id) {
+            return;
+        }
+        let Some(ListenerStat {
+            clients:
+                ListenerClients::Local(crate::interface::display::LocalEndpoint::Unix(instance)),
+            ..
+        }) = self.shared_instance_listener()
+        else {
+            return;
+        };
+        let clients = self
+            .interfaces
+            .values()
+            .filter(|entry| entry.info.is_local_client && entry.dynamic && entry.info.id != id)
+            .count();
+        let short_name = format!("{clients}@\0rns/{instance}");
+        self.interface_short_names.insert(id, short_name);
+    }
+
     /// The display name of the listener that spawned an interface.
     fn parent_display_name(&self, entry: &InterfaceEntry) -> Option<String> {
         let parent_id = match self.dynamic_interface_parents.get(&entry.info.id) {
@@ -342,7 +367,11 @@ impl Driver {
             let interface_id = entry.info.id;
             interfaces.push(SingleInterfaceStat {
                 id: interface_id.0,
-                name: entry.info.name.clone(),
+                name: self
+                    .interface_short_names
+                    .get(&interface_id)
+                    .cloned()
+                    .unwrap_or_else(|| entry.info.name.clone()),
                 display_name: self.interface_display_name(entry),
                 parent_display_name: self.parent_display_name(entry),
                 tunnel_id: self

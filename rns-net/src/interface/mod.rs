@@ -1532,6 +1532,7 @@ impl DynamicInterfaceTemplate {
             telemetry: crate::event::InterfaceTelemetry::default(),
             ifac: self.ifac.clone(),
             display_name: None,
+            short_name: None,
         }
     }
 }

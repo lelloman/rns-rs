@@ -685,6 +685,8 @@ impl WeaveSession {
                 },
                 ifac: self.ifac.clone(),
                 display_name: Some(crate::interface::display::weave_peer(&endpoint)),
+                // Upstream's `WeaveInterfacePeer` never sets a name.
+                short_name: Some(crate::interface::display::UNNAMED.into()),
             }),
         });
         self.publish_parent_telemetry();

@@ -1003,6 +1003,7 @@ impl Server {
             registration.display_name = Some(crate::interface::display::backbone_server_client(
                 name, peer_ip, peer_port,
             ));
+            registration.short_name = Some(crate::interface::display::spawned_client_name(name));
             Event::DynamicInterfaceUp {
                 id: client_id,
                 writer,

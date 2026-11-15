@@ -1035,6 +1035,9 @@ impl Driver {
             self.register_interface_runtime_defaults(&info);
             self.engine.register_interface(info.clone());
             if let Some(writer) = new_writer {
+                if info.is_local_client {
+                    self.name_local_client(id);
+                }
                 let (writer, async_writer_metrics) =
                     self.wrap_interface_writer(id, &info.name, writer);
                 self.interfaces.insert(
@@ -1171,10 +1174,14 @@ impl Driver {
         let interface_type = registration.interface_type;
         let telemetry = registration.telemetry;
         let display_name = registration.display_name;
+        let short_name = registration.short_name;
         self.handle_interface_up_event(id, Some(writer), Some(registration.info));
         if let Some(entry) = self.interfaces.get_mut(&id) {
             if let Some(display_name) = display_name {
                 self.interface_display_names.insert(id, display_name);
+            }
+            if let Some(short_name) = short_name {
+                self.interface_short_names.insert(id, short_name);
             }
             self.dynamic_interface_parents.insert(id, parent_id);
             self.event_tx.register_dynamic_parent(id, parent_id);
@@ -1267,6 +1274,7 @@ impl Driver {
                 self.interfaces.remove(&id);
                 self.dynamic_interface_parents.remove(&id);
                 self.interface_display_names.remove(&id);
+                self.interface_short_names.remove(&id);
             } else {
                 log::info!("[{}] interface offline", id.0);
                 if let Some(entry) = self.interfaces.get_mut(&id) {
@@ -1557,6 +1565,18 @@ impl Driver {
                     writer,
                     registration,
                 } => self.handle_dynamic_interface_up_event(id, writer, *registration),
+                Event::InterfaceNames {
+                    id,
+                    display_name,
+                    short_name,
+                } => {
+                    if let Some(display_name) = display_name {
+                        self.interface_display_names.insert(id, display_name);
+                    }
+                    if let Some(short_name) = short_name {
+                        self.interface_short_names.insert(id, short_name);
+                    }
+                }
                 Event::InterfaceTelemetry {
                     interface_id,
                     telemetry,
