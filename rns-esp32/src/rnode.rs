@@ -17,7 +17,7 @@ use esp_idf_hal::uart::UartDriver;
 use crate::display::SharedStats;
 use crate::lora::SharedRadio;
 use crate::version;
-use rns_esp32::channel::{airtime_limit, Airtime, Csma};
+use rns_esp32::channel::{airtime_limit, TxChannel};
 use rns_esp32::protocol::{
     kiss_encode, reception_stat_frames, validate_radio_config, DetectBuffer, KissDecoder,
     KissFrame, RadioConfig, CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT, CMD_FREQUENCY,
@@ -139,16 +139,9 @@ pub struct RNodeBridge<T: BridgeTransport> {
     pending_power: Option<i8>,
     /// The host switched the radio on.
     radio_on: bool,
-    /// Frames from the host waiting for the channel, oldest first.
-    tx_queue: std::collections::VecDeque<Vec<u8>>,
-    /// Listen before talk for the configured channel.
-    csma: Csma,
-    /// This node's own airtime and the host's limits on it.
-    airtime: Airtime,
-    short_term_limit: Option<f64>,
-    long_term_limit: Option<f64>,
-    /// The configured channel, for airtime accounting.
-    channel: RadioConfig,
+    /// Frames from the host waiting for the channel (listen before talk
+    /// and the host's airtime limits).
+    tx: TxChannel,
     /// Origin of the millisecond clock the channel logic runs on.
     epoch: Instant,
     /// KISS decoder for the host's bytes.
@@ -175,21 +168,12 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             pending_cr: None,
             pending_power: None,
             radio_on: false,
-            tx_queue: std::collections::VecDeque::new(),
-            csma: Csma::new(
+            tx: TxChannel::new(
                 crate::config::LORA_SPREADING_FACTOR,
                 crate::config::LORA_BANDWIDTH,
+                crate::config::LORA_CODING_RATE,
+                TX_QUEUE_MAX_FRAMES,
             ),
-            airtime: Airtime::new(),
-            short_term_limit: None,
-            long_term_limit: None,
-            channel: RadioConfig {
-                frequency: crate::config::LORA_FREQUENCY,
-                bandwidth: crate::config::LORA_BANDWIDTH,
-                spreading_factor: crate::config::LORA_SPREADING_FACTOR,
-                coding_rate: crate::config::LORA_CODING_RATE,
-                tx_power: crate::config::LORA_TX_POWER,
-            },
             epoch: Instant::now(),
             decoder: KissDecoder::new(),
         }
@@ -382,7 +366,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 if frame.data.len() >= 2 {
                     let value = (frame.data[0] as u16) << 8 | frame.data[1] as u16;
                     log::info!("RNode: set ST airtime lock {}%", value as f32 / 100.0);
-                    self.short_term_limit = airtime_limit(value);
+                    self.tx.set_short_term_limit(airtime_limit(value));
                     let resp = kiss_encode(CMD_ST_ALOCK, &frame.data[..2]);
                     self.transport.write(&resp)?;
                 }
@@ -391,7 +375,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 if frame.data.len() >= 2 {
                     let value = (frame.data[0] as u16) << 8 | frame.data[1] as u16;
                     log::info!("RNode: set LT airtime lock {}%", value as f32 / 100.0);
-                    self.long_term_limit = airtime_limit(value);
+                    self.tx.set_long_term_limit(airtime_limit(value));
                     let resp = kiss_encode(CMD_LT_ALOCK, &frame.data[..2]);
                     self.transport.write(&resp)?;
                 }
@@ -411,9 +395,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 if !frame.data.is_empty() {
                     // Queued for the channel; upstream refuses frames while
                     // its queue is full.
-                    if self.tx_queue.len() < TX_QUEUE_MAX_FRAMES {
-                        self.tx_queue.push_back(frame.data);
-                    } else {
+                    if !self.tx.push(frame.data) {
                         log::warn!("RNode: TX queue full, dropping a frame");
                     }
                 }
@@ -434,37 +416,26 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     /// `tx_queue_handler`: nothing while an airtime limit is reached; else
     /// wait for listen before talk, then send everything queued.
     fn service_tx_queue(&mut self) -> io::Result<()> {
-        if self.tx_queue.is_empty() || !self.radio_on {
+        if self.tx.is_empty() || !self.radio_on {
             return Ok(());
         }
         let now = self.now_ms();
-        if self
-            .airtime
-            .locked(now, self.short_term_limit, self.long_term_limit)
-        {
+        let radio = &self.radio;
+        let Some(frames) = self.tx.take_ready(
+            now,
+            || !radio.lock().unwrap().carrier_detected(),
+            &mut crate::rng::random_range,
+        ) else {
             return Ok(());
-        }
-        let short_term = self.airtime.short_term(now);
-        self.csma.set_airtime(short_term);
-        let channel_free = !self.radio.lock().unwrap().carrier_detected();
-        let mut random = |lo: u32, hi: u32| {
-            // SAFETY: esp_random reads the hardware random number generator.
-            let r = unsafe { esp_idf_sys::esp_random() };
-            lo + r % (hi - lo + 1)
         };
-        if !self.csma.may_transmit(now, channel_free, &mut random) {
-            return Ok(());
-        }
-        // One channel access sends everything queued, as upstream's
-        // flush_queue.
-        while let Some(frame) = self.tx_queue.pop_front() {
+        for frame in frames {
             log::debug!("RNode: TX {} bytes over LoRa", frame.len());
             if let Some(ref stats) = self.stats {
                 stats.lock().unwrap().bridge_tx_bytes += frame.len() as u32;
             }
             let result = self.radio.lock().unwrap().send(&frame);
             let sent_at = self.now_ms();
-            self.airtime.add(sent_at, self.frame_airtime_ms(&frame));
+            self.tx.record_sent(sent_at, &frame);
             match result {
                 Ok(()) => {
                     let resp = kiss_encode(CMD_READY, &[0x01]);
@@ -475,29 +446,6 @@ impl<T: BridgeTransport> RNodeBridge<T> {
         }
         self.radio.lock().unwrap().set_rx_continuous();
         Ok(())
-    }
-
-    /// Airtime of a frame: one LoRa packet, or two for a split frame.
-    fn frame_airtime_ms(&self, frame: &[u8]) -> f64 {
-        let channel = self.channel;
-        let preamble = rns_esp32::modem::preamble_symbols(
-            channel.spreading_factor,
-            channel.bandwidth,
-            channel.coding_rate,
-        );
-        rns_esp32::airframe::packets(frame, 0)
-            .unwrap_or_default()
-            .iter()
-            .map(|packet| {
-                rns_esp32::channel::packet_airtime_ms(
-                    packet.len(),
-                    channel.spreading_factor,
-                    channel.bandwidth,
-                    channel.coding_rate,
-                    preamble,
-                )
-            })
-            .sum()
     }
 
     /// Apply pending radio configuration to the SX1262.
@@ -520,8 +468,11 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             return false;
         }
 
-        self.channel = config;
-        self.csma = Csma::new(config.spreading_factor, config.bandwidth);
+        self.tx.reconfigure(
+            config.spreading_factor,
+            config.bandwidth,
+            config.coding_rate,
+        );
         let mut radio = self.radio.lock().unwrap();
         radio.reconfigure(
             config.frequency,

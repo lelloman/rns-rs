@@ -12,7 +12,7 @@ Reticulum LoRa transport node firmware for **Heltec WiFi LoRa 32 (V3)** with SX1
 ## Features
 
 - **Dual mode operation**:
-  - **Standalone**: Runs a full Reticulum transport node over LoRa
+  - **Standalone**: Runs a full Reticulum transport node over LoRa, sending with listen before talk as RNode firmware does (see RNode Bridge Mode)
   - **RNode Bridge**: Acts as a KISS interface over USB serial for a PC running `rns-net`
 - LoRa packet transport for Reticulum network, framed on air as RNode firmware frames it (a header byte per packet, frames up to 508 bytes split over two packets), so it interoperates with RNode-based Reticulum nodes
 - OLED display with multiple info pages (cycled via short-press PRG button)

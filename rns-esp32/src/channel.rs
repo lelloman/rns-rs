@@ -1,9 +1,12 @@
-//! When the bridge may transmit, as upstream RNode firmware decides it:
+//! When the node may transmit, as upstream RNode firmware decides it:
 //! listen before talk (CSMA with a DIFS and a random backoff that pauses
-//! while the channel is busy) and the host's airtime limits.
+//! while the channel is busy) and airtime limits. Used by both the RNode
+//! bridge and the standalone node.
 //!
 //! Pure logic over millisecond timestamps, so it runs in host tests; the
 //! firmware feeds it the radio's carrier detect and a random source.
+
+use std::collections::VecDeque;
 
 use crate::modem;
 
@@ -215,6 +218,125 @@ impl Csma {
     }
 }
 
+/// Frames waiting for the channel, as upstream's TX queue: nothing goes
+/// while an airtime limit is reached; otherwise, once listen before talk
+/// allows, everything queued goes in one channel access.
+pub struct TxChannel {
+    queue: VecDeque<Vec<u8>>,
+    max_frames: usize,
+    csma: Csma,
+    airtime: Airtime,
+    short_limit: Option<f64>,
+    long_limit: Option<f64>,
+    spreading_factor: u8,
+    bandwidth: u32,
+    coding_rate: u8,
+}
+
+impl TxChannel {
+    /// A queue of up to `max_frames` frames on the given LoRa channel.
+    pub fn new(spreading_factor: u8, bandwidth: u32, coding_rate: u8, max_frames: usize) -> Self {
+        Self {
+            queue: VecDeque::new(),
+            max_frames,
+            csma: Csma::new(spreading_factor, bandwidth),
+            airtime: Airtime::new(),
+            short_limit: None,
+            long_limit: None,
+            spreading_factor,
+            bandwidth,
+            coding_rate,
+        }
+    }
+
+    /// Switch to another LoRa channel. Accounted airtime and limits stay.
+    pub fn reconfigure(&mut self, spreading_factor: u8, bandwidth: u32, coding_rate: u8) {
+        self.csma = Csma::new(spreading_factor, bandwidth);
+        self.spreading_factor = spreading_factor;
+        self.bandwidth = bandwidth;
+        self.coding_rate = coding_rate;
+    }
+
+    /// Short-term airtime limit, a fraction of time (`None`: no limit).
+    pub fn set_short_term_limit(&mut self, limit: Option<f64>) {
+        self.short_limit = limit;
+    }
+
+    /// Long-term airtime limit, a fraction of time (`None`: no limit).
+    pub fn set_long_term_limit(&mut self, limit: Option<f64>) {
+        self.long_limit = limit;
+    }
+
+    /// Queue a frame; `false` when the queue is full and the frame dropped,
+    /// as upstream refuses frames then.
+    pub fn push(&mut self, frame: Vec<u8>) -> bool {
+        if self.queue.len() >= self.max_frames {
+            return false;
+        }
+        self.queue.push_back(frame);
+        true
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    /// How often to call [`Self::take_ready`] while frames are queued.
+    pub fn poll_interval_ms(&self) -> u64 {
+        (self.csma.slot_ms() / 4).max(1)
+    }
+
+    /// The queued frames, when the channel lets them go now. Call it
+    /// repeatedly while frames are queued; `channel_free` (carrier detect)
+    /// is only asked when the airtime limits allow sending. Account each
+    /// frame sent with [`Self::record_sent`].
+    pub fn take_ready(
+        &mut self,
+        now_ms: u64,
+        channel_free: impl FnOnce() -> bool,
+        random: &mut impl FnMut(u32, u32) -> u32,
+    ) -> Option<VecDeque<Vec<u8>>> {
+        if self.queue.is_empty()
+            || self
+                .airtime
+                .locked(now_ms, self.short_limit, self.long_limit)
+        {
+            return None;
+        }
+        let short_term = self.airtime.short_term(now_ms);
+        self.csma.set_airtime(short_term);
+        if !self.csma.may_transmit(now_ms, channel_free(), random) {
+            return None;
+        }
+        Some(std::mem::take(&mut self.queue))
+    }
+
+    /// Account the airtime of a frame sent, ending at `now_ms`.
+    pub fn record_sent(&mut self, now_ms: u64, frame: &[u8]) {
+        let airtime = self.frame_airtime_ms(frame);
+        self.airtime.add(now_ms, airtime);
+    }
+
+    /// Airtime of a frame: one LoRa packet, or two for a split frame.
+    pub fn frame_airtime_ms(&self, frame: &[u8]) -> f64 {
+        let preamble =
+            modem::preamble_symbols(self.spreading_factor, self.bandwidth, self.coding_rate);
+        crate::airframe::packets(frame, 0)
+            .unwrap_or_default()
+            .iter()
+            .map(|packet| {
+                packet_airtime_ms(
+                    packet.len(),
+                    self.spreading_factor,
+                    self.bandwidth,
+                    self.coding_rate,
+                    preamble,
+                )
+            })
+            .sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +438,82 @@ mod tests {
         assert_eq!(csma.window(), (15, 29));
         csma.set_airtime(0.99);
         assert_eq!(csma.window(), (45, 59));
+    }
+
+    fn first_slot(_lo: u32, _hi: u32) -> u32 {
+        0
+    }
+
+    #[test]
+    fn tx_channel_sends_everything_queued_after_the_difs() {
+        let mut tx = TxChannel::new(8, 125_000, 5, 4);
+        let difs = 2 * Csma::new(8, 125_000).slot_ms();
+        assert!(tx.take_ready(0, || true, &mut first_slot).is_none());
+        assert!(tx.push(vec![1; 10]));
+        assert!(tx.push(vec![2; 10]));
+        assert!(tx.take_ready(0, || true, &mut first_slot).is_none());
+        let frames = tx.take_ready(difs, || true, &mut first_slot).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert!(tx.is_empty());
+    }
+
+    #[test]
+    fn tx_channel_waits_while_the_channel_is_busy() {
+        let mut tx = TxChannel::new(8, 125_000, 5, 4);
+        let difs = 2 * Csma::new(8, 125_000).slot_ms();
+        tx.push(vec![1; 10]);
+        assert!(tx.take_ready(0, || false, &mut first_slot).is_none());
+        assert!(tx.take_ready(difs, || false, &mut first_slot).is_none());
+        // Free from here: the DIFS starts over.
+        assert!(tx.take_ready(difs + 1, || true, &mut first_slot).is_none());
+        assert!(tx
+            .take_ready(2 * difs + 1, || true, &mut first_slot)
+            .is_some());
+    }
+
+    #[test]
+    fn tx_channel_queue_is_bounded() {
+        let mut tx = TxChannel::new(8, 125_000, 5, 2);
+        assert!(tx.push(vec![1]));
+        assert!(tx.push(vec![2]));
+        assert!(!tx.push(vec![3]));
+    }
+
+    #[test]
+    fn tx_channel_holds_frames_while_an_airtime_limit_is_reached() {
+        let mut tx = TxChannel::new(8, 125_000, 5, 4);
+        let difs = 2 * Csma::new(8, 125_000).slot_ms();
+        tx.set_short_term_limit(Some(0.1));
+        // 2 s of airtime in the last 15 s is over 10 %.
+        tx.airtime.add(0, 2_000.0);
+        tx.push(vec![1; 10]);
+        let mut asked = false;
+        assert!(tx
+            .take_ready(
+                difs,
+                || {
+                    asked = true;
+                    true
+                },
+                &mut first_slot
+            )
+            .is_none());
+        assert!(!asked, "carrier detect is not read while locked");
+        // Two bins later the airtime has aged out.
+        let later = 2 * AIRTIME_BINLEN_MS;
+        assert!(tx.take_ready(later, || true, &mut first_slot).is_none());
+        assert!(tx
+            .take_ready(later + difs, || true, &mut first_slot)
+            .is_some());
+    }
+
+    #[test]
+    fn tx_channel_accounts_split_frames_as_two_packets() {
+        let mut tx = TxChannel::new(8, 125_000, 5, 4);
+        let one = tx.frame_airtime_ms(&[0; 200]);
+        let two = tx.frame_airtime_ms(&[0; 400]);
+        assert!(two > 1.8 * one, "{one} {two}");
+        tx.record_sent(1_000, &[0; 200]);
+        assert!((tx.airtime.short_term(1_000) - one / 15_000.0).abs() < 1e-9);
     }
 }
