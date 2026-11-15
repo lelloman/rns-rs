@@ -207,6 +207,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
         let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
+        let _instance_client = attach_to_instance(&config_dir);
         let Ok(mut client) = RpcClient::connect(&rpc_addr, &auth_key) else {
             println!("No shared RNS instance available to get status from");
             process::exit(1);
@@ -270,6 +271,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
+    let _instance_client = attach_to_instance(&config_dir);
     if let Some((operation, name)) = management_actions.first().copied() {
         let Ok(mut client) = RpcClient::connect(&rpc_addr, &auth_key) else {
             println!("No shared RNS instance available to get status from");
@@ -366,6 +368,24 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             monitor_started.elapsed(),
         ));
     }
+}
+
+struct NoCallbacks;
+
+impl rns_net::Callbacks for NoCallbacks {
+    fn on_announce(&mut self, _: rns_net::AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _: rns_net::DestHash, _: u8) {}
+    fn on_local_delivery(&mut self, _: rns_net::DestHash, _: Vec<u8>, _: rns_net::PacketHash) {}
+}
+
+/// Start Reticulum as a client of the shared instance, as upstream's
+/// rnstatus does (`require_shared_instance`): the instance then serves it
+/// as one of its programs, which its "Serving" count leaves out by
+/// subtracting one, and lists it among its local clients. Kept for as
+/// long as rnstatus runs; whether the instance answers is the RPC's to
+/// tell.
+fn attach_to_instance(config_dir: &Path) -> Option<rns_net::RnsNode> {
+    rns_net::RnsNode::connect_shared_from_config(Some(config_dir), Box::new(NoCallbacks)).ok()
 }
 
 fn monitor_sleep_duration(interval_secs: f64, elapsed: Duration) -> Duration {
