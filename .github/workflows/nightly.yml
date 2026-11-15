@@ -1,13 +1,14 @@
 name: Nightly
 
 # Slow analyses that do not gate changes: line coverage against per-crate
-# floors (nightly) and mutation testing of rns-core (weekly). The full CI
+# floors and Miri over rns-core's unsafe code (nightly), and mutation
+# testing of rns-core (weekly). The full CI
 # suite also runs nightly (ci.yml), and fuzzing has its own workflow
 # (fuzz.yml).
 
 on:
   schedule:
-    # Nightly: coverage.
+    # Nightly: coverage and Miri.
     - cron: "23 3 * * *"
     # Weekly, Sunday: mutation testing as well.
     - cron: "23 4 * * 0"
@@ -59,6 +60,36 @@ jobs:
           path: |
             lcov.info
             coverage.txt
+
+  # Miri runs the tests that drive rns-core's unsafe code (packing into
+  # uninitialised shared buffers, the dedup table's MaybeUninit slots) and
+  # fails on undefined behaviour: reads of uninitialised memory, out of
+  # bounds accesses, aliasing violations. It interprets every access, so
+  # only those modules run.
+  miri:
+    name: Miri (rns-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+
+      - name: Set up Miri
+        run: cargo miri setup
+
+      - name: Test
+        run: cargo miri test -p rns-core --lib -- transport::dedup packet::tests
 
   mutants:
     name: Mutants (rns-core, shard ${{ matrix.shard }}/16)
