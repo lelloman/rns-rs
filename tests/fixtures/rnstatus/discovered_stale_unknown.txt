@@ -1,0 +1,9 @@
+
+Name                      Type         Status     Last Heard   Value   Running          Location       
+--------------------------------------------------------------------------------------------------------------
+Backbone North            Backbone   ✓ Available  Just now     24.734  RNS 1.6.0        45.1235, -7.5  
+A very long discovered i… RNode      ✓ Available  2m ago       24.734  Reticulum Rust … N/A            
+Stale TCP                 TCPServer  × Stale      4d ago       24.734  RNS 1.6.0        N/A            
+Old Weave                 Weave      ? Unknown    2d ago       0.000   Unknown          N/A            
+Same Ids                  I2P        ✓ Available  2h ago       24.734  RNS 1.6.0        1, 2.0         
+Kiss                      KISS       ? Unknown    Just now     24.734  Unknown          N/A            

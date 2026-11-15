@@ -1,0 +1,21 @@
+
+Network   ID : 22222222222222222222222222222222
+Transport ID : 11111111111111111111111111111111
+Name         : Stale TCP
+Type         : TCPServerInterface
+Stack        : RNS 1.6.0
+Status       : Stale
+Transport    : Disabled
+Stamp Value  : 24.734
+Costs        : Dst n, PR n
+Distance     : 2 hops
+Discovered   : 4d and 1h ago
+Last Heard   : 4d ago
+Location     : Unknown
+Address      : example.org
+Port         : 4965
+
+Configuration Entry:
+  [[Stale TCP]]
+    type = TCPServerInterface
+    enabled = yes

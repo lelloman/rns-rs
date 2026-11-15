@@ -7,9 +7,11 @@ use std::process;
 use std::time::{Duration, Instant};
 
 use rns_cli::args::{Args, Opt, OptionSpec};
-use rns_cli::format::{prettycost, prettyhexrep, upstream_prettytime_compact};
 use rns_cli::pyfmt::Num;
-use rns_cli::rnstatus_view::{render, Extras, ViewOptions};
+use rns_cli::rnstatus_view::{
+    render, render_discovered, render_discovered_json, upstream_discovery_record, Extras,
+    ViewOptions,
+};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
@@ -203,13 +205,9 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
         let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
-        let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Could not connect to rnsd: {}", e);
-                eprintln!("Is rnsd running?");
-                process::exit(1);
-            }
+        let Ok(mut client) = RpcClient::connect(&rpc_addr, &auth_key) else {
+            println!("No shared RNS instance available to get status from");
+            process::exit(1);
         };
 
         show_discovered_interfaces(
@@ -218,6 +216,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             json_output,
             show_stale,
             show_unknown,
+            filter.as_deref(),
+            &paths.discovered_interfaces,
         );
         return;
     }
@@ -475,335 +475,46 @@ fn show_discovered_interfaces(
     json_output: bool,
     show_stale: bool,
     show_unknown: bool,
+    name_filter: Option<&str>,
+    discovered_dir: &Path,
 ) {
-    let response = match client.call(&PickleValue::Dict(vec![(
-        PickleValue::String("get".into()),
-        PickleValue::String("discovered_interfaces".into()),
-    )])) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("RPC error: {}", e);
-            process::exit(1);
-        }
-    };
+    let response = client
+        .call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("discovered_interfaces".into()),
+        )]))
+        .ok()
+        .filter(|response| response.as_list().is_some())
+        .unwrap_or_else(|| {
+            // An instance without this call (upstream's has none): read the
+            // stored records, as upstream's rnstatus always does.
+            let mut interfaces =
+                rns_net::discovery::DiscoveredInterfaceStorage::new(discovered_dir.to_path_buf())
+                    .list()
+                    .unwrap_or_default();
+            rns_net::discovery::filter_and_sort_interfaces(&mut interfaces, false, false);
+            rns_net::rpc::discovered_interfaces_to_pickle(&interfaces)
+        });
 
+    let records: Vec<PickleValue> = response
+        .as_list()
+        .map(|list| list.iter().map(upstream_discovery_record).collect())
+        .unwrap_or_default();
     if json_output {
-        print_json(&response);
-        return;
-    }
-
-    let interfaces = match response.as_list() {
-        Some(list) => list,
-        None => {
-            println!("No discovered interfaces found.");
-            return;
-        }
-    };
-
-    if interfaces.is_empty() {
-        println!("No discovered interfaces found.");
-        return;
-    }
-
-    // Default output hides stale entries and entries with no implementation
-    // information, matching upstream rnstatus. The flags opt them back in.
-    let filtered: Vec<&PickleValue> = interfaces
-        .iter()
-        .filter(|iface| {
-            let status = iface
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            if status == "stale" && !show_stale {
-                return false;
-            }
-            if !discovered_has_impl_info(iface) && !show_unknown {
-                return false;
-            }
-            true
-        })
-        .collect();
-
-    if show_config {
-        // Detailed view with config entries
-        for (idx, iface) in filtered.iter().copied().enumerate() {
-            if idx > 0 {
-                println!("{}", "=".repeat(DISCOVERY_DETAIL_SEPARATOR_WIDTH));
-            }
-
-            let name = iface
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown");
-            let if_type = iface
-                .get("type")
-                .and_then(|v| v.as_str())
-                .or_else(|| iface.get("interface_type").and_then(|v| v.as_str()))
-                .unwrap_or("Unknown");
-            let status = iface
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let transport = iface
-                .get("transport")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let hops = iface.get("hops").and_then(|v| v.as_int()).unwrap_or(0);
-            let value = discovered_stamp_value(iface);
-            let last_heard = iface
-                .get("last_heard")
-                .and_then(|v| v.as_float())
-                .unwrap_or(0.0);
-            let discovered = iface
-                .get("discovered")
-                .and_then(|v| v.as_float())
-                .unwrap_or(0.0);
-
-            let transport_id = iface
-                .get("transport_id")
-                .and_then(|v| v.as_bytes())
-                .map(|b| prettyhexrep(&b[..b.len().min(8)]))
-                .unwrap_or_default();
-            let network_id = iface
-                .get("network_id")
-                .and_then(|v| v.as_bytes())
-                .map(|b| prettyhexrep(&b[..b.len().min(8)]))
-                .unwrap_or_default();
-
-            if !network_id.is_empty() {
-                println!("Network   ID : {}", network_id);
-            }
-            if !transport_id.is_empty() {
-                println!("Transport ID : {}", transport_id);
-            }
-            if let Some(address) = discovered_operator_lxmf_address(iface) {
-                println!("LXMF address : {}", address);
-            }
-
-            println!("Name         : {}", name);
-            println!("Type         : {}", if_type);
-            println!("Stack        : {}", discovered_stack(iface));
-            println!("Status       : {}", status);
-            println!(
-                "Transport    : {}",
-                if transport { "Enabled" } else { "Disabled" }
-            );
-            println!("Stamp Value  : {}", value);
-            if let Some(costs) = discovered_costs(iface) {
-                println!("Costs        : {}", costs);
-            }
-            println!(
-                "Distance     : {} hop{}",
-                hops,
-                if hops == 1 { "" } else { "s" }
-            );
-
-            let now = rns_net::time::now();
-            if discovered > 0.0 {
-                println!(
-                    "Discovered   : {} ago",
-                    upstream_prettytime_compact(now - discovered)
-                );
-            }
-            if last_heard > 0.0 {
-                println!(
-                    "Last Heard   : {} ago",
-                    upstream_prettytime_compact(now - last_heard)
-                );
-            }
-
-            // Location
-            let lat = iface.get("latitude").and_then(|v| v.as_float());
-            let lon = iface.get("longitude").and_then(|v| v.as_float());
-            let height = iface.get("height").and_then(|v| v.as_float());
-            if let (Some(lat), Some(lon)) = (lat, lon) {
-                let height_str = height.map(|h| format!(", {}m h", h)).unwrap_or_default();
-                println!("Location     : {:.4}, {:.4}{}", lat, lon, height_str);
-            }
-
-            // Interface-specific fields
-            if let Some(freq) = iface.get("frequency").and_then(|v| v.as_int()) {
-                println!("Frequency    : {} Hz", freq);
-            }
-            if let Some(bw) = iface.get("bandwidth").and_then(|v| v.as_int()) {
-                println!("Bandwidth    : {} Hz", bw);
-            }
-            if let Some(sf) = iface
-                .get("sf")
-                .or_else(|| iface.get("spreading_factor"))
-                .and_then(|v| v.as_int())
-            {
-                println!("Sprd. Factor : {}", sf);
-            }
-            if let Some(cr) = iface
-                .get("cr")
-                .or_else(|| iface.get("coding_rate"))
-                .and_then(|v| v.as_int())
-            {
-                println!("Coding Rate  : {}", cr);
-            }
-            if let Some(modulation) = iface.get("modulation").and_then(|v| v.as_str()) {
-                println!("Modulation   : {}", modulation);
-            }
-            if let Some(reachable) = iface.get("reachable_on").and_then(|v| v.as_str()) {
-                println!("Address      : {}", reachable);
-            }
-            if let Some(port) = iface.get("port").and_then(|v| v.as_int()) {
-                println!("Port         : {}", port);
-            }
-
-            // Config entry
-            if let Some(config) = iface.get("config_entry").and_then(|v| v.as_str()) {
-                println!("\nConfiguration Entry:");
-                for line in config.lines() {
-                    println!("  {}", line);
-                }
-            }
-
-            println!();
-        }
+        print!("{}", render_discovered_json(&records));
     } else {
-        // Table view
-        println!(
-            "{:<25} {:<10} {:<12} {:<12} {:<7} {:<16} {:<15}",
-            "Name", "Type", "Status", "Last Heard", "Value", "Running", "Location"
+        print!(
+            "{}",
+            render_discovered(
+                &records,
+                show_config,
+                name_filter,
+                show_stale,
+                show_unknown,
+                rns_net::time::now(),
+            )
         );
-        println!("{}", "-".repeat(110));
-
-        let now = rns_net::time::now();
-
-        for iface in filtered.iter().copied() {
-            let name_full = iface
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown");
-            let name = if name_full.len() > 24 {
-                format!("{}...", &name_full[..21])
-            } else {
-                name_full.to_string()
-            };
-
-            let if_type = iface
-                .get("type")
-                .and_then(|v| v.as_str())
-                .or_else(|| iface.get("interface_type").and_then(|v| v.as_str()))
-                .unwrap_or("Unknown")
-                .replace("Interface", "");
-
-            let status = iface
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let status_display = match status {
-                "available" => "Available",
-                "unknown" => "Unknown",
-                "stale" => "Stale",
-                _ => status,
-            };
-
-            let last_heard = iface
-                .get("last_heard")
-                .and_then(|v| v.as_float())
-                .unwrap_or(0.0);
-            let last_heard_display = if last_heard > 0.0 {
-                let diff = now - last_heard;
-                if diff < 60.0 {
-                    "Just now".to_string()
-                } else if diff < 3600.0 {
-                    format!("{}m ago", (diff / 60.0) as i32)
-                } else if diff < 86400.0 {
-                    format!("{}h ago", (diff / 3600.0) as i32)
-                } else {
-                    format!("{}d ago", (diff / 86400.0) as i32)
-                }
-            } else {
-                "N/A".to_string()
-            };
-
-            let value = discovered_stamp_value(iface);
-            let stack = discovered_stack(iface);
-            let stack = if stack.chars().count() > 16 {
-                format!("{}…", stack.chars().take(15).collect::<String>())
-            } else {
-                stack
-            };
-
-            let lat = iface.get("latitude").and_then(|v| v.as_float());
-            let lon = iface.get("longitude").and_then(|v| v.as_float());
-            let location = match (lat, lon) {
-                (Some(lat), Some(lon)) => format!("{:.4}, {:.4}", lat, lon),
-                _ => "N/A".to_string(),
-            };
-
-            println!(
-                "{:<25} {:<10} {:<12} {:<12} {:<7} {:<16} {:<15}",
-                name, if_type, status_display, last_heard_display, value, stack, location
-            );
-        }
     }
-}
-
-const DISCOVERY_DETAIL_SEPARATOR_WIDTH: usize = 47;
-
-/// A number from an RPC value, as `RNS.prettycost` accepts it: a float or
-/// an integer (older daemons send whole-bit integer values), anything else
-/// is no number.
-fn pickle_number(value: Option<&PickleValue>) -> Option<f64> {
-    value.and_then(|value| {
-        value
-            .as_float()
-            .or_else(|| value.as_int().map(|v| v as f64))
-    })
-}
-
-/// A discovered interface's stamp value as upstream prints it since rgit
-/// `21170877`, with `RNS.prettycost` (`24.730`).
-fn discovered_stamp_value(iface: &PickleValue) -> String {
-    prettycost(pickle_number(
-        iface.get("value").or_else(|| iface.get("stamp_value")),
-    ))
-}
-
-/// The announced destination and path request costs, printed only when the
-/// daemon reports both keys (upstream `21170877` `has_cost_info`); a cost the
-/// interface did not announce prints as `n`.
-fn discovered_costs(iface: &PickleValue) -> Option<String> {
-    let dst_cost = iface.get("dst_cost")?;
-    let pr_cost = iface.get("pr_cost")?;
-    Some(format!(
-        "Dst {}, PR {}",
-        prettycost(pickle_number(Some(dst_cost))),
-        prettycost(pickle_number(Some(pr_cost)))
-    ))
-}
-
-fn discovered_stack(iface: &PickleValue) -> String {
-    match (
-        iface.get("impl_name").and_then(PickleValue::as_str),
-        iface.get("version").and_then(PickleValue::as_str),
-    ) {
-        (Some(name), Some(version)) if !name.is_empty() && !version.is_empty() => {
-            format!("{name} {version}")
-        }
-        _ => "Unknown".into(),
-    }
-}
-
-fn discovered_has_impl_info(iface: &PickleValue) -> bool {
-    iface
-        .get("impl_name")
-        .and_then(PickleValue::as_str)
-        .is_some_and(|name| !name.is_empty())
-        && iface
-            .get("version")
-            .and_then(PickleValue::as_str)
-            .is_some_and(|version| !version.is_empty())
-}
-
-fn discovered_operator_lxmf_address(iface: &PickleValue) -> Option<&str> {
-    iface
-        .get("operator_lxmf_address")
-        .and_then(|value| value.as_str())
 }
 
 fn print_usage(usage_name: &str) {
@@ -937,122 +648,6 @@ mod tests {
         }
         let args = Args::parse_spec_from(vec!["-vv".into()], &OPTIONS);
         assert_eq!(args.verbosity, 2);
-    }
-
-    #[test]
-    fn discovered_interface_extracts_operator_lxmf_address() {
-        let iface = PickleValue::Dict(vec![(
-            PickleValue::String("operator_lxmf_address".into()),
-            PickleValue::String("a5".repeat(16)),
-        )]);
-
-        assert_eq!(
-            discovered_operator_lxmf_address(&iface),
-            Some("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
-        );
-        assert_eq!(
-            discovered_operator_lxmf_address(&PickleValue::Dict(Vec::new())),
-            None
-        );
-        assert_eq!("=".repeat(DISCOVERY_DETAIL_SEPARATOR_WIDTH).len(), 47);
-    }
-
-    #[test]
-    fn discovered_stamp_value_prints_like_python_prettycost() {
-        let iface = |value: PickleValue| {
-            PickleValue::Dict(vec![(PickleValue::String("value".into()), value)])
-        };
-        assert_eq!(
-            discovered_stamp_value(&iface(PickleValue::Float(24.73046875))),
-            "24.730"
-        );
-        assert_eq!(
-            discovered_stamp_value(&iface(PickleValue::Float(24.0))),
-            "24.000"
-        );
-        assert_eq!(
-            discovered_stamp_value(&iface(PickleValue::Int(24))),
-            "24.000"
-        );
-        assert_eq!(discovered_stamp_value(&iface(PickleValue::None)), "n");
-        assert_eq!(discovered_stamp_value(&PickleValue::Dict(Vec::new())), "n");
-    }
-
-    #[test]
-    fn discovered_costs_need_both_keys_and_print_unknown_as_question_mark() {
-        let key = |name: &str, value: PickleValue| (PickleValue::String(name.into()), value);
-        assert_eq!(
-            discovered_costs(&PickleValue::Dict(vec![
-                key("dst_cost", PickleValue::Float(23.5)),
-                key("pr_cost", PickleValue::Float(15.80078125)),
-            ])),
-            Some("Dst 23.500, PR 15.801".into())
-        );
-        assert_eq!(
-            discovered_costs(&PickleValue::Dict(vec![
-                key("dst_cost", PickleValue::None),
-                key("pr_cost", PickleValue::None),
-            ])),
-            Some("Dst n, PR n".into())
-        );
-        assert_eq!(
-            discovered_costs(&PickleValue::Dict(vec![key(
-                "dst_cost",
-                PickleValue::Float(23.5)
-            )])),
-            None
-        );
-    }
-
-    #[test]
-    fn discovered_stack_uses_both_fields_or_unknown_fallback() {
-        let complete = PickleValue::Dict(vec![
-            (
-                PickleValue::String("impl_name".into()),
-                PickleValue::String("Reticulum".into()),
-            ),
-            (
-                PickleValue::String("version".into()),
-                PickleValue::String("1.5.5".into()),
-            ),
-        ]);
-        assert_eq!(discovered_stack(&complete), "Reticulum 1.5.5");
-        assert_eq!(discovered_stack(&PickleValue::Dict(Vec::new())), "Unknown");
-    }
-
-    #[test]
-    fn discovered_has_impl_info_requires_both_nonempty_fields() {
-        let complete = PickleValue::Dict(vec![
-            (
-                PickleValue::String("impl_name".into()),
-                PickleValue::String("RNS".into()),
-            ),
-            (
-                PickleValue::String("version".into()),
-                PickleValue::String("1.5.5".into()),
-            ),
-        ]);
-        assert!(discovered_has_impl_info(&complete));
-
-        for missing in [
-            PickleValue::Dict(Vec::new()),
-            PickleValue::Dict(vec![(
-                PickleValue::String("impl_name".into()),
-                PickleValue::String("RNS".into()),
-            )]),
-            PickleValue::Dict(vec![
-                (
-                    PickleValue::String("impl_name".into()),
-                    PickleValue::String("RNS".into()),
-                ),
-                (
-                    PickleValue::String("version".into()),
-                    PickleValue::String(String::new()),
-                ),
-            ]),
-        ] {
-            assert!(!discovered_has_impl_info(&missing));
-        }
     }
 
     #[test]
