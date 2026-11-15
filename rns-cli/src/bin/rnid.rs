@@ -108,6 +108,7 @@ fn main() {
 }
 
 pub fn run_with_args(mut args: Args, usage_name: &str, version_name: &str) {
+    rns_cli::argparse::enforce(&args, "rnid", usage_name);
     for (short, long) in ALIASES {
         if let Some(value) = args.flags.get(*short).cloned() {
             args.flags.entry(long.to_string()).or_insert(value);
@@ -1814,49 +1815,7 @@ fn die(message: &str, code: i32) -> ! {
 }
 
 fn print_usage(usage_name: &str) {
-    println!("Usage: {usage_name} [OPTIONS]");
-    println!();
-    println!("Identity:");
-    println!("  -g FILE            Generate private identity and save to file");
-    println!("  -i FILE|HASH       Load private identity file or require identity hash");
-    println!("  -m KEY|FILE        Import public identity from hex/base32/base64 or .pub file");
-    println!("  -M KEY|FILE        Import private identity from hex/base32/base64 or .rid file");
-    println!("  -w FILE            Write identity or operation output");
-    println!("  -x                 Export public identity");
-    println!("  -X                 Export private identity");
-    println!("  -p                 Print identity info");
-    println!("  -P                 Print private key when printing identity info");
-    println!();
-    println!("Operations:");
-    println!("  -H APP.ASPECT      Compute destination hash");
-    println!("  -e FILE...         Encrypt one or more files to .rfe");
-    println!("  -d FILE.rfe...     Decrypt one or more files");
-    println!("  -s FILE...         Sign one or more files to .rsg");
-    println!("  -S MESSAGE         Create embedded signed message");
-    println!("  -E, --embed-meta FILE  Embed ConfigObj metadata in signed message");
-    println!("  -r, --read FILE    Read embedded signed message content from file");
-    println!("  -V FILE[.rsg]...   Validate one or more signatures");
-    println!("  --raw              Create legacy raw 64-byte signature");
-    println!("  -a [APP.ASPECT]    Announce the identity's destination (default rns.id)");
-    println!("  -R                 Request unknown identity from the local daemon");
-    println!("  -t SECONDS         Identity request timeout");
-    println!("  -N                 Do not use cache/network identity resolution");
-    println!();
-    println!("Formatting and I/O:");
-    println!("  -b                 Use base64 for identity import/export");
-    println!("  -B                 Use base32 for identity import/export");
-    println!("  -F, --hex          Use hex for RSG signature output");
-    println!("  -U, --base256      Use base256 for RSG output and hash display (also -Z)");
-    println!("  -f, --force        Force overwrite existing files");
-    println!("  -I, --stdin        Read operation input from stdin");
-    println!("  -O, --stdout       Write operation output to stdout");
-    println!("  --meta             Show RSM metadata when validating signed messages");
-    println!("  --meta-spec FILE   Validate embedded metadata with a ConfigObj-style spec");
-    println!("  --config DIR       Reticulum config directory");
-    println!("  -v, --verbose      Increase verbosity");
-    println!("  -q, --quiet        Decrease verbosity");
-    println!("  --version          Print version and exit");
-    println!("  --help, -h         Print this help");
+    rns_cli::argparse::print_help("rnid", usage_name);
 }
 
 #[cfg(test)]

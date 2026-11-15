@@ -72,32 +72,68 @@ pub struct OptionSpec {
 
 const IMPLIED: &[Opt] = &[Opt::flag("h", "help"), Opt::flag("", "version")];
 
+/// What a long name stands for.
+enum LongMatch {
+    Opt(&'static Opt),
+    /// An abbreviation of more than one upstream option.
+    Ambiguous,
+    None,
+}
+
 impl OptionSpec {
-    fn all(&self) -> impl Iterator<Item = &Opt> {
-        self.options.iter().chain(IMPLIED.iter())
+    fn all(&self) -> impl Iterator<Item = &'static Opt> {
+        let options: &'static [Opt] = self.options;
+        options.iter().chain(IMPLIED.iter())
     }
 
-    fn short(&self, c: char) -> Option<&Opt> {
+    fn short(&self, c: char) -> Option<&'static Opt> {
         self.all().find(|o| o.short.chars().eq(std::iter::once(c)))
+    }
+
+    /// The upstream long options `name` abbreviates, as `--name`s.
+    pub fn abbreviated(&self, name: &str) -> Vec<String> {
+        self.all()
+            .filter(|o| o.upstream && !o.long.is_empty() && o.long.starts_with(name))
+            .map(|o| format!("--{}", o.long))
+            .collect()
     }
 
     /// The option a long name stands for: an exact match, or as argparse
     /// does, the one upstream option it is an unambiguous prefix of.
-    fn long(&self, name: &str) -> Option<&Opt> {
+    fn long(&self, name: &str) -> LongMatch {
         if name.is_empty() {
-            return None;
+            return LongMatch::None;
         }
         if let Some(opt) = self.all().find(|o| o.long == name) {
-            return Some(opt);
+            return LongMatch::Opt(opt);
         }
         let mut matches = self
             .all()
             .filter(|o| o.upstream && !o.long.is_empty() && o.long.starts_with(name));
         match (matches.next(), matches.next()) {
-            (Some(opt), None) => Some(opt),
-            _ => None,
+            (Some(opt), None) => LongMatch::Opt(opt),
+            (Some(_), Some(_)) => LongMatch::Ambiguous,
+            _ => LongMatch::None,
         }
     }
+}
+
+/// One thing the parser saw on the command line, in order, for argparse's
+/// error reporting ([`crate::argparse::check`]).
+#[derive(Clone, Debug)]
+pub enum Seen {
+    /// A known option, with the value it took.
+    Option(&'static Opt, Option<String>),
+    /// An option that takes a value, given without one.
+    Missing(&'static Opt),
+    /// A flag given an explicit value (`--all=1`, `-a=1`, `-aZ`).
+    Ignored(&'static Opt, String),
+    /// An abbreviation of more than one option: the argument and the
+    /// options it could stand for.
+    Ambiguous(String, Vec<String>),
+    /// An option the tool does not have, as given.
+    Unknown(String),
+    Positional(String),
 }
 
 /// Parsed command-line arguments.
@@ -115,6 +151,8 @@ pub struct Args {
     /// Options given without the value they take (argparse: "expected one
     /// argument").
     pub missing: Vec<String>,
+    /// Everything [`Args::parse_spec_from`] saw, in order.
+    pub trace: Vec<Seen>,
 }
 
 /// Long options that never take a value.
@@ -209,34 +247,47 @@ impl Args {
             values: Vec::new(),
             unknown: Vec::new(),
             missing: Vec::new(),
+            trace: Vec::new(),
         };
         let mut iter = args.into_iter().peekable();
 
         while let Some(arg) = iter.next() {
             if arg == "--" {
-                parsed.positional.extend(iter);
+                for rest in iter.by_ref() {
+                    parsed.trace.push(Seen::Positional(rest.clone()));
+                    parsed.positional.push(rest);
+                }
                 break;
             } else if let Some(key) = arg.strip_prefix("--") {
                 let (name, inline) = match key.split_once('=') {
                     Some((name, value)) => (name, Some(value.to_string())),
                     None => (key, None),
                 };
-                let Some(opt) = spec.long(name) else {
-                    // Not one of the tool's options: parse it as the shared
-                    // parser does.
-                    parsed.unknown.push(arg.clone());
-                    let value = match inline {
-                        Some(value) => value,
-                        None if BOOLEAN_LONG.contains(&name) => "true".into(),
-                        None => iter.next().unwrap_or_else(|| "true".into()),
-                    };
-                    parsed.store_key(name, value);
-                    continue;
+                let opt = match spec.long(name) {
+                    LongMatch::Opt(opt) => opt,
+                    LongMatch::Ambiguous => {
+                        parsed.unknown.push(arg.clone());
+                        parsed
+                            .trace
+                            .push(Seen::Ambiguous(arg.clone(), spec.abbreviated(name)));
+                        continue;
+                    }
+                    LongMatch::None => {
+                        // Not one of the tool's options. As argparse, it
+                        // takes no value: what follows is parsed on its own.
+                        parsed.unknown.push(arg.clone());
+                        parsed.trace.push(Seen::Unknown(arg.clone()));
+                        parsed.store_key(name, inline.unwrap_or_else(|| "true".into()));
+                        continue;
+                    }
                 };
-                if inline.is_some() && matches!(opt.kind, Kind::Flag | Kind::Count) {
-                    // argparse: "ignored explicit argument".
-                    parsed.unknown.push(arg.clone());
-                    continue;
+                if matches!(opt.kind, Kind::Flag | Kind::Count) {
+                    if let Some(value) = inline {
+                        // argparse: "ignored explicit argument".
+                        parsed.unknown.push(arg.clone());
+                        parsed.trace.push(Seen::Ignored(opt, value));
+                        continue;
+                    }
                 }
                 let value = match inline {
                     Some(value) => Some(value),
@@ -244,46 +295,70 @@ impl Args {
                 };
                 if value.is_none() && opt.kind == Kind::Value {
                     parsed.missing.push(format!("--{}", opt.long));
+                    parsed.trace.push(Seen::Missing(opt));
+                } else {
+                    parsed.trace.push(Seen::Option(opt, value.clone()));
                 }
                 parsed.store(opt, value);
             } else if arg.len() > 1 && arg.starts_with('-') && !looks_negative(&arg) {
                 let chars: Vec<char> = arg[1..].chars().collect();
-                for (i, &c) in chars.iter().enumerate() {
-                    let opt = spec.short(c);
-                    let kind = match opt {
-                        Some(opt) => opt.kind,
-                        None => {
-                            parsed.unknown.push(format!("-{c}"));
-                            Kind::Value
-                        }
+                if spec.short(chars[0]).is_none() {
+                    // argparse: the whole argument is unrecognized.
+                    parsed.unknown.push(arg.clone());
+                    parsed.trace.push(Seen::Unknown(arg.clone()));
+                    continue;
+                }
+                // As argparse's consume_optional: each flag of a group takes
+                // the rest of the argument as its explicit argument, which
+                // must start with another option letter; `=` after a letter
+                // separates an explicit value.
+                let mut i = 0;
+                while let Some(opt) = chars.get(i).and_then(|c| spec.short(*c)) {
+                    let rest: String = chars[i + 1..].iter().collect();
+                    let (sep, explicit) = match rest.strip_prefix('=') {
+                        Some(value) => (true, value.to_string()),
+                        None => (false, rest.clone()),
                     };
-                    if matches!(kind, Kind::Flag | Kind::Count) {
-                        parsed.store(opt.unwrap(), None);
+                    if matches!(opt.kind, Kind::Flag | Kind::Count) {
+                        if rest.is_empty() {
+                            parsed.trace.push(Seen::Option(opt, None));
+                            parsed.store(opt, None);
+                            break;
+                        }
+                        if sep || explicit.starts_with('-') || explicit.is_empty() {
+                            parsed.unknown.push(arg.clone());
+                            parsed.trace.push(Seen::Ignored(opt, explicit));
+                            break;
+                        }
+                        parsed.trace.push(Seen::Option(opt, None));
+                        parsed.store(opt, None);
+                        if spec.short(chars[i + 1]).is_none() {
+                            let extra = format!("-{rest}");
+                            parsed.unknown.push(extra.clone());
+                            parsed.trace.push(Seen::Unknown(extra));
+                            break;
+                        }
+                        i += 1;
                         continue;
                     }
                     // A value option ends a group, its value the rest of the
                     // argument (`-t5`, `-t=5`) or the next one: `-t 5`.
-                    let attached: String = chars[i + 1..].iter().collect();
-                    let value = if attached.is_empty() {
-                        Self::take(kind, &mut iter)
+                    let value = if rest.is_empty() {
+                        Self::take(opt.kind, &mut iter)
                     } else {
-                        Some(
-                            attached
-                                .strip_prefix('=')
-                                .map(str::to_string)
-                                .unwrap_or(attached),
-                        )
+                        Some(explicit)
                     };
-                    if value.is_none() && kind == Kind::Value {
-                        parsed.missing.push(format!("-{c}"));
+                    if value.is_none() && opt.kind == Kind::Value {
+                        parsed.missing.push(format!("-{}", chars[i]));
+                        parsed.trace.push(Seen::Missing(opt));
+                    } else {
+                        parsed.trace.push(Seen::Option(opt, value.clone()));
                     }
-                    match opt {
-                        Some(opt) => parsed.store(opt, value),
-                        None => parsed.store_key(&c.to_string(), value.unwrap_or("true".into())),
-                    }
+                    parsed.store(opt, value);
                     break;
                 }
             } else {
+                parsed.trace.push(Seen::Positional(arg.clone()));
                 parsed.positional.push(arg);
             }
         }
@@ -298,7 +373,8 @@ impl Args {
     ) -> Option<String> {
         match kind {
             Kind::Flag | Kind::Count => None,
-            Kind::Value => iter.next(),
+            // As argparse, an option-like argument is not a value.
+            Kind::Value => iter.next_if(is_value),
             Kind::Optional => match iter.peek() {
                 Some(next) if is_value(next) => iter.next(),
                 _ => None,
@@ -422,6 +498,7 @@ impl Args {
             values: Vec::new(),
             unknown: Vec::new(),
             missing: Vec::new(),
+            trace: Vec::new(),
         }
     }
 
@@ -552,12 +629,19 @@ mod tests {
         let a = spec(&["-i", "one", "-itwo"]);
         assert_eq!(a.get_all("i"), vec!["one", "two"]);
         assert_eq!(a.get("i"), Some("two"));
-        // Unknown options are reported, and parsed as the shared parser does.
+        // Unknown options are reported and, as argparse, take no value.
         let a = spec(&["-k", "v", "--other", "w", "--execute=1"]);
         assert_eq!(a.unknown, vec!["-k", "--other", "--execute=1"]);
-        assert_eq!(a.get("k"), Some("v"));
-        assert_eq!(a.get("other"), Some("w"));
+        assert_eq!(a.positional, vec!["v", "w"]);
         assert!(!a.has("execute"));
+        // A flag group ending in an unknown letter keeps its flags and
+        // reports the rest; `=` after a flag is an ignored explicit value.
+        let a = spec(&["-xvZq"]);
+        assert!(a.has("x") && a.verbosity == 1);
+        assert_eq!(a.unknown, vec!["-Zq"]);
+        assert!(matches!(spec(&["-x=1"]).trace[..], [Seen::Ignored(_, ref v)] if v == "1"));
+        // A value option does not take an option as its value.
+        assert_eq!(spec(&["-t", "-x"]).missing, vec!["-t"]);
         // Value options without a value are reported.
         assert_eq!(spec(&["-x", "-t"]).missing, vec!["-t"]);
         assert_eq!(spec(&["--time"]).missing, vec!["--timeout"]);

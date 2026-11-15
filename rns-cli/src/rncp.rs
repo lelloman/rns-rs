@@ -54,7 +54,7 @@ struct Options {
 }
 
 /// upstream rncp's options, and Rust-only long names for -i, -a, -b and -w.
-const OPTIONS: OptionSpec = OptionSpec {
+pub(crate) const OPTIONS: OptionSpec = OptionSpec {
     options: &[
         Opt::value("", "config"),
         Opt::count("v", "verbose"),
@@ -254,7 +254,13 @@ impl Callbacks for RncpCallbacks {
 }
 
 pub fn main() -> i32 {
-    let options = match Options::parse(std::env::args().skip(1).collect()) {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    crate::argparse::enforce(
+        &Args::parse_spec_from(arguments.clone(), &OPTIONS),
+        "rncp",
+        "rncp",
+    );
+    let options = match Options::parse(arguments) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
@@ -710,7 +716,7 @@ fn init_logging(options: &Options) {
 }
 
 fn usage() {
-    println!("Usage:\n  rncp [options] <file> <destination>\n  rncp --fetch [options] <remote-file> <destination>\n  rncp --listen [options]\n\nOptions:\n  -l, --listen              Listen for transfers\n  -f, --fetch               Fetch instead of send\n  -F, --allow-fetch         Serve authenticated fetch requests\n  -j, --jail DIR            Restrict fetches to DIR\n  -s, --save DIR            Save received files in DIR\n  -O, --overwrite           Replace an existing destination\n  -a, --allowed HASH        Allow identity (repeatable)\n  -n, --no-auth             Accept unauthenticated peers\n  -i, --identity PATH       Identity file\n      --config DIR          Reticulum config directory\n  -b, --announce SECONDS    Announce once/periodically\n  -C, --no-compress         Disable Resource compression\n  -w, --timeout SECONDS     Path/link/transfer timeout\n  -S, --silent              Hide progress\n  -p, --print-identity      Print identity and destination\n      --version             Print version");
+    crate::argparse::print_help("rncp", "rncp");
 }
 
 #[cfg(test)]
