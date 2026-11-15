@@ -70,6 +70,12 @@ pub struct RNodeConfig {
     pub multi: bool,
     pub id_interval: Option<u32>,
     pub id_callsign: Option<Vec<u8>>,
+    /// The interface's own id. An `RNodeMultiInterface` is listed under it
+    /// while its subinterfaces take the ids after it, from
+    /// `base_interface_id` on, in the order upstream adds them; a single
+    /// RNode's only subinterface is the interface itself.
+    pub interface_id: InterfaceId,
+    /// The id of the first subinterface; the others follow it.
     pub base_interface_id: InterfaceId,
     /// Pre-opened file descriptor (e.g. from a USB bridge socketpair on Android).
     /// When set, `start()` uses this fd directly instead of opening `port`.
@@ -126,6 +132,7 @@ impl Default for RNodeConfig {
             multi: false,
             id_interval: None,
             id_callsign: None,
+            interface_id: InterfaceId(0),
             base_interface_id: InterfaceId(0),
             pre_opened_fd: None,
             underlay_mark: None,
@@ -1357,6 +1364,7 @@ impl InterfaceFactory for RNodeFactory {
             multi: false,
             id_interval,
             id_callsign,
+            interface_id: id,
             base_interface_id: id,
             pre_opened_fd,
             underlay_mark: None,
@@ -1582,6 +1590,9 @@ impl InterfaceFactory for RNodeMultiFactory {
             return Err("RNodeMultiInterface requires at least one enabled subinterface".into());
         }
         config.multi = true;
+        // Upstream adds the interface, then each subinterface once its
+        // device is configured: they take the ids after its own.
+        config.base_interface_id = InterfaceId(id.0 + 1);
         config.subinterfaces = subinterfaces;
         *lock_or_recover(&config.runtime, "rnode runtime") = RNodeRuntime::from_config(&config);
         Ok(Box::new(config))
@@ -2363,6 +2374,7 @@ mod tests {
                 st_alock: None,
                 lt_alock: None,
             }],
+            interface_id: InterfaceId(43),
             base_interface_id: InterfaceId(43),
             ..Default::default()
         };
@@ -2531,6 +2543,7 @@ mod tests {
             multi: false,
             id_interval: None,
             id_callsign: None,
+            interface_id: InterfaceId(41),
             base_interface_id: InterfaceId(41),
             pre_opened_fd: None,
             underlay_mark: None,

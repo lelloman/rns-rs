@@ -60,6 +60,7 @@ fn main() {
         name: format!("RNode {}", port),
         port: port.clone(),
         speed: 115200,
+        interface_id: InterfaceId(1),
         base_interface_id: InterfaceId(1),
         subinterfaces: vec![RNodeSubConfig {
             name: "LoRa".into(),

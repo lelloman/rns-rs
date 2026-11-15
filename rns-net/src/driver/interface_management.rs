@@ -175,7 +175,9 @@ impl Driver {
         };
         let iface = parsed.interfaces.iter().find(|iface| iface.name == name)?;
         let registry = InterfaceRegistry::with_builtins();
-        let reserved_ids = iface.subinterfaces.len().max(1) as u64;
+        // Its own id and, for an RNodeMultiInterface, one per subinterface
+        // after it (at most one per configured subinterface section).
+        let reserved_ids = 1 + iface.subinterfaces.len() as u64;
         let id = InterfaceId(
             self.next_dynamic_interface_id
                 .fetch_add(reserved_ids, Ordering::Relaxed),
@@ -301,6 +303,8 @@ impl Driver {
                         display_name,
                     });
                 }
+                // Listed under its own id, as when configured at start.
+                display.register_subinterfaces(self, ids.clone());
                 (control, ids)
             }
         };

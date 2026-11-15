@@ -629,9 +629,8 @@ impl ConfiguredDisplay {
             if rnode.multi {
                 return Self {
                     listener_stat: Some(crate::driver::ListenerStat {
-                        // Its subinterfaces take the configured id and the
-                        // ones after it; it gets its own once they start.
-                        id: rnode.base_interface_id,
+                        // Its subinterfaces take the ids after its own.
+                        id: rnode.interface_id,
                         name: config.name.clone(),
                         display_name: display::typed("RNodeMultiInterface", name),
                         interface_type: "RNodeMultiInterface".into(),
@@ -694,16 +693,14 @@ impl ConfiguredDisplay {
         Self::default()
     }
 
-    /// Register an interface whose subinterfaces `ids` started, under
-    /// `id`, as a listener serving them.
+    /// Register an interface whose subinterfaces `ids` started as a
+    /// listener serving them.
     pub(crate) fn register_subinterfaces(
         &mut self,
         driver: &mut Driver,
-        id: rns_core::transport::types::InterfaceId,
         ids: Vec<rns_core::transport::types::InterfaceId>,
     ) {
         if let Some(listener) = self.listener_stat.as_mut() {
-            listener.id = id;
             listener.clients = crate::driver::ListenerClients::Subinterfaces(ids);
         }
         self.register_listener(driver);
@@ -1196,6 +1193,19 @@ pub(crate) fn parse_interface_announce_limits(
     })
 }
 
+/// How many ids a configured interface takes: its own, and for an
+/// `RNodeMultiInterface` one per subinterface after it.
+pub(crate) fn reserved_interface_ids(data: &dyn crate::interface::InterfaceConfigData) -> u64 {
+    #[cfg(feature = "iface-rnode")]
+    if let Some(rnode) = data.as_any().downcast_ref::<RNodeConfig>() {
+        if rnode.multi {
+            return 1 + rnode.subinterfaces.len() as u64;
+        }
+    }
+    let _ = data;
+    1
+}
+
 pub(crate) fn parse_managed_interface(
     iface: &config::ParsedInterface,
     parsed: &config::RnsConfig,
@@ -1658,6 +1668,10 @@ impl RnsNode {
                     continue;
                 }
             };
+            // Ids are handed out in the order interfaces are added; an
+            // RNodeMultiInterface's subinterfaces take the ones after its
+            // own.
+            next_id_val = iface_id.0 + reserved_interface_ids(config_data.as_ref());
 
             interface_configs.push(InterfaceConfig {
                 name: iface.name.clone(),
@@ -2702,13 +2716,7 @@ impl RnsNode {
                         driver.register_listener_control(control);
                     }
                     let static_ids: Vec<_> = subs.iter().map(|sub| sub.id).collect();
-                    if display.listener_stat.is_some() {
-                        // The subinterfaces hold the configured ids.
-                        let id = rns_core::transport::types::InterfaceId(
-                            next_dynamic_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                        );
-                        display.register_subinterfaces(&mut driver, id, static_ids.clone());
-                    }
+                    display.register_subinterfaces(&mut driver, static_ids.clone());
                     if let Some(parent_id) = managed_id {
                         driver.managed_interfaces.insert(
                             iface_config.name.clone(),
@@ -5488,6 +5496,66 @@ mod tests {
             QueryResponse::InterfaceManagement(None)
         ));
         node.shutdown();
+    }
+
+    /// An RNodeMultiInterface takes an id for itself and one per
+    /// subinterface; interfaces configured after it get ids of their own,
+    /// in the order they are added.
+    #[cfg(all(feature = "iface-rnode", feature = "iface-udp"))]
+    #[test]
+    fn interface_ids_stay_unique_after_a_multi_interface() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing-rnode-port");
+        let sub = |name: &str, vport: u8| {
+            format!(
+                "    [[[{name}]]]\n      interface_enabled = yes\n      vport = {vport}\n      frequency = 868000000\n      bandwidth = 125000\n      txpower = 7\n      spreadingfactor = 8\n      codingrate = 5\n"
+            )
+        };
+        let udp = |name: &str, port: u16| {
+            format!(
+                "  [[{name}]]\n    type = UDPInterface\n    enabled = yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n    forward_ip = 127.0.0.1\n    forward_port = {port}\n"
+            )
+        };
+        fs::write(
+            dir.path().join("config"),
+            format!(
+                "[reticulum]\nshare_instance = no\n\n[interfaces]\n{}  [[Multi]]\n    type = RNodeMultiInterface\n    enabled = yes\n    port = {}\n{}{}{}",
+                udp("Before", crate::test_support::port()),
+                missing.display(),
+                sub("A", 0),
+                sub("B", 1),
+                udp("After", crate::test_support::port()),
+            ),
+        )
+        .unwrap();
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let QueryResponse::InterfaceStats(stats) =
+            node.query(QueryRequest::InterfaceStats).unwrap()
+        else {
+            panic!("expected interface stats");
+        };
+        node.shutdown();
+        let after_stat = stats
+            .interfaces
+            .iter()
+            .find(|stat| stat.name == "After")
+            .unwrap();
+        // Not taken for a subinterface of the RNodeMultiInterface.
+        assert_eq!(after_stat.parent_display_name, None);
+        let ids: HashMap<String, u64> = stats
+            .interfaces
+            .iter()
+            .map(|stat| (stat.name.clone(), stat.id))
+            .collect();
+        // The subinterfaces are not listed without their device; the driver
+        // still knows them by their ids.
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        let before = ids["Before"];
+        let multi = ids["Multi"];
+        let after = ids["After"];
+        // Before, the RNodeMultiInterface, its two subinterfaces, After.
+        assert!(before < multi, "{ids:?}");
+        assert_eq!(after, multi + 3, "{ids:?}");
     }
 
     #[test]
