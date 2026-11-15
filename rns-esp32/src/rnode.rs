@@ -17,12 +17,14 @@ use esp_idf_hal::uart::UartDriver;
 use crate::display::SharedStats;
 use crate::lora::SharedRadio;
 use crate::version;
-use rns_esp32::channel::{airtime_limit, TxChannel};
+use rns_esp32::channel::{airtime_limit, ChannelMonitor, TxChannel};
 use rns_esp32::protocol::{
-    kiss_encode, reception_stat_frames, validate_radio_config, DetectBuffer, KissDecoder,
+    channel_stats_frame, csma_stats_frame, kiss_encode, packet_count_frame, phy_stats_frame,
+    reception_stat_frames, validate_radio_config, ChannelReport, DetectBuffer, KissDecoder,
     KissFrame, RadioConfig, CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT, CMD_FREQUENCY,
     CMD_FW_DETAIL, CMD_FW_VERSION, CMD_LEAVE, CMD_LT_ALOCK, CMD_MCU, CMD_PLATFORM, CMD_RADIO_STATE,
-    CMD_READY, CMD_SF, CMD_ST_ALOCK, CMD_TXPOWER, DETECT_REQ, DETECT_RESP, RADIO_STATE_ON,
+    CMD_READY, CMD_SF, CMD_STAT_RX, CMD_STAT_TX, CMD_ST_ALOCK, CMD_TXPOWER, DETECT_REQ,
+    DETECT_RESP, RADIO_STATE_ON,
 };
 
 /// Transport-agnostic serial interface for the RNode bridge.
@@ -142,6 +144,15 @@ pub struct RNodeBridge<T: BridgeTransport> {
     /// Frames from the host waiting for the channel (listen before talk
     /// and the host's airtime limits).
     tx: TxChannel,
+    /// The configured channel, for the PHY parameters report.
+    channel: RadioConfig,
+    /// Channel load, noise floor and interference, reported to the host.
+    monitor: ChannelMonitor,
+    /// Contention window band last reported to the host.
+    reported_band: Option<u32>,
+    /// Frames received from and sent over LoRa, for CMD_STAT_RX / TX.
+    rx_count: u32,
+    tx_count: u32,
     /// Origin of the millisecond clock the channel logic runs on.
     epoch: Instant,
     /// KISS decoder for the host's bytes.
@@ -174,6 +185,17 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 crate::config::LORA_CODING_RATE,
                 TX_QUEUE_MAX_FRAMES,
             ),
+            channel: RadioConfig {
+                frequency: crate::config::LORA_FREQUENCY,
+                bandwidth: crate::config::LORA_BANDWIDTH,
+                spreading_factor: crate::config::LORA_SPREADING_FACTOR,
+                coding_rate: crate::config::LORA_CODING_RATE,
+                tx_power: crate::config::LORA_TX_POWER,
+            },
+            monitor: ChannelMonitor::new(),
+            reported_band: None,
+            rx_count: 0,
+            tx_count: 0,
             epoch: Instant::now(),
             decoder: KissDecoder::new(),
         }
@@ -255,6 +277,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             };
             if let Some((data, (rssi, snr))) = received {
                 log::debug!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
+                self.rx_count = self.rx_count.wrapping_add(1);
                 if let Some(ref stats) = self.stats {
                     stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
                 }
@@ -270,6 +293,10 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             }
 
             if let Err(err) = self.service_tx_queue() {
+                log::warn!("RNode bridge: serial transport failed: {}", err);
+                break BridgeExit::TransportError;
+            }
+            if let Err(err) = self.sample_channel() {
                 log::warn!("RNode bridge: serial transport failed: {}", err);
                 break BridgeExit::TransportError;
             }
@@ -388,8 +415,17 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                         self.transport.write(&resp)?;
                         let ready = kiss_encode(CMD_READY, &[0x01]);
                         self.transport.write(&ready)?;
+                        self.report_phy_stats()?;
                     }
                 }
+            }
+            CMD_STAT_RX => {
+                self.transport
+                    .write(&packet_count_frame(CMD_STAT_RX, self.rx_count))?;
+            }
+            CMD_STAT_TX => {
+                self.transport
+                    .write(&packet_count_frame(CMD_STAT_TX, self.tx_count))?;
             }
             CMD_DATA => {
                 if !frame.data.is_empty() {
@@ -436,6 +472,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             let result = self.radio.lock().unwrap().send(&frame);
             let sent_at = self.now_ms();
             self.tx.record_sent(sent_at, &frame);
+            self.tx_count = self.tx_count.wrapping_add(1);
             match result {
                 Ok(()) => {
                     let resp = kiss_encode(CMD_READY, &[0x01]);
@@ -445,7 +482,73 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             }
         }
         self.radio.lock().unwrap().set_rx_continuous();
+        // As upstream after a flush: report the airtime it added.
+        self.report_channel_stats()
+    }
+
+    /// Sample the channel every few milliseconds while the radio is on, and
+    /// report its state once a second, as RNode firmware does.
+    fn sample_channel(&mut self) -> io::Result<()> {
+        if !self.radio_on {
+            return Ok(());
+        }
+        let now = self.now_ms();
+        if !self.monitor.sample_due(now) {
+            return Ok(());
+        }
+        let (carrier, rssi) = {
+            let mut radio = self.radio.lock().unwrap();
+            (radio.carrier_detected(), radio.current_rssi())
+        };
+        let (airtime_short, _) = self.tx.airtime(now);
+        if self.monitor.sample(now, carrier, rssi, airtime_short) {
+            self.report_channel_stats()?;
+        }
         Ok(())
+    }
+
+    /// CMD_STAT_CHTM, and CMD_STAT_CSMA when the contention window changed.
+    fn report_channel_stats(&mut self) -> io::Result<()> {
+        let (airtime_short, airtime_long) = self.tx.airtime(self.now_ms());
+        let mut out = channel_stats_frame(&ChannelReport {
+            airtime_short,
+            airtime_long,
+            channel_load_short: self.monitor.channel_load(),
+            channel_load_long: self.monitor.long_term_channel_load(),
+            current_rssi: self.monitor.current_rssi(),
+            noise_floor: self.monitor.noise_floor(),
+            interference: self.monitor.interference(),
+        });
+        let csma = self.tx.csma();
+        if self.reported_band != Some(csma.band()) {
+            let (window_min, window_max) = csma.window();
+            out.extend_from_slice(&csma_stats_frame(
+                csma.band() as u8,
+                window_min as u8,
+                window_max as u8,
+            ));
+            self.reported_band = Some(csma.band());
+        }
+        self.transport.write(&out)
+    }
+
+    /// CMD_STAT_PHYPRM for the configured channel.
+    fn report_phy_stats(&mut self) -> io::Result<()> {
+        let channel = self.channel;
+        let preamble = rns_esp32::modem::preamble_symbols(
+            channel.spreading_factor,
+            channel.bandwidth,
+            channel.coding_rate,
+        );
+        let csma = self.tx.csma();
+        let frame = phy_stats_frame(
+            channel.spreading_factor,
+            channel.bandwidth,
+            preamble,
+            csma.slot_ms(),
+            csma.difs_ms(),
+        );
+        self.transport.write(&frame)
     }
 
     /// Apply pending radio configuration to the SX1262.
@@ -468,6 +571,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             return false;
         }
 
+        self.channel = config;
         self.tx.reconfigure(
             config.spreading_factor,
             config.bandwidth,
