@@ -56,7 +56,7 @@ struct Options {
 
 /// upstream rnx's options, and the Rust-only long names this
 /// implementation has accepted.
-const OPTIONS: OptionSpec = OptionSpec {
+pub(crate) const OPTIONS: OptionSpec = OptionSpec {
     options: &[
         Opt::value("", "config"),
         Opt::count("v", "verbose"),
@@ -210,7 +210,13 @@ impl Callbacks for RnxCallbacks {
 }
 
 pub fn main() -> i32 {
-    let options = match Options::parse(std::env::args().skip(1).collect()) {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    crate::argparse::enforce(
+        &Args::parse_spec_from(arguments.clone(), &OPTIONS),
+        "rnx",
+        "rnx",
+    );
+    let options = match Options::parse(arguments) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
@@ -884,7 +890,7 @@ fn init_logging(options: &Options) {
 }
 
 fn usage() {
-    println!("Usage:\n  rnx [options] <destination> <command>\n  rnx --listen [options]\n  rnx --interactive [options] <destination>\n\nOptions:\n  -l, --listen              Listen for commands\n  -x, --interactive         Interactive command prompt\n  -a, --allowed HASH        Allow identity (repeatable)\n  -n, --noauth              Accept unauthenticated commands\n  -N, --noid                Do not identify to listener\n  -b, --no-announce         Do not announce listener\n  -d, --detailed            Show execution and transfer details\n  -m, --mirror              Mirror remote exit status\n  -w, --timeout SECONDS     Connect and command timeout\n  -W, --result-timeout SEC  Maximum result download time\n      --stdin TEXT          Pass command stdin\n      --stdout BYTES        Maximum returned stdout\n      --stderr BYTES        Maximum returned stderr\n  -i, --identity PATH       Identity file\n      --config DIR          Reticulum config directory\n  -p, --print-identity      Print identity and destination\n      --version             Print version");
+    crate::argparse::print_help("rnx", "rnx");
 }
 
 #[cfg(test)]

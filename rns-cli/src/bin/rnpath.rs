@@ -66,6 +66,7 @@ fn flag_target(args: &Args, short: &str) -> Option<String> {
 }
 
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
+    rns_cli::argparse::enforce(&args, "rnpath", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
@@ -1125,31 +1126,7 @@ fn parse_fixed_hash(s: &str, label: &str) -> Result<[u8; 16], String> {
 }
 
 fn print_usage(usage_name: &str) {
-    println!("Usage: {usage_name} [OPTIONS] [DESTINATION_HASH]");
-    println!();
-    println!("Options:");
-    println!("  --config PATH, -c PATH  Path to config directory");
-    println!("  -t, --table             Show all known paths");
-    println!("  -u, --usage             Show and sort by last path use");
-    println!("  -m, --max HOPS          Filter path table by max hops");
-    println!("  -r, --rates             Show announce rate info");
-    println!("  -d, --drop              Drop the path to DESTINATION_HASH");
-    println!("  -x, --drop-via          Drop all paths via transport DESTINATION_HASH");
-    println!("  -D, --drop-announces    Drop all queued announces");
-    println!("  -b, --blackholed        List blackholed identities");
-    println!("  -p, --blackholed-list   View the blackhole list published by DESTINATION_HASH");
-    println!("  -B, --blackhole         Blackhole identity DESTINATION_HASH");
-    println!("  -U, --unblackhole       Lift the blackhole of identity DESTINATION_HASH");
-    println!("  --duration HOURS        Blackhole duration (default: permanent)");
-    println!("  --reason TEXT           Reason for blackholing");
-    println!("  -R HASH                 Query remote transport identity via management link");
-    println!("  -i PATH                 Identity file for remote management");
-    println!("  -w SECONDS              Path request timeout (default 15)");
-    println!("  -W SECONDS              Timeout for remote path queries");
-    println!("  -j, --json              JSON output");
-    println!("  -v, --verbose           Increase verbosity");
-    println!("  --version               Print version and exit");
-    println!("  --help, -h              Print this help");
+    rns_cli::argparse::print_help("rnpath", usage_name);
 }
 
 #[cfg(test)]

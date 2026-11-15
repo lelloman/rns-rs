@@ -12,41 +12,60 @@ lists its own `LocalInterface` and counts itself as a served program, while
 this one asks over RPC only.
 
 ```text
-Usage: rnstatus [OPTIONS] [FILTER]
+usage: rnstatus [-h] [--config CONFIG] [--version] [--attach name]
+                [--detach name] [--reload name] [-a] [-A] [-P] [-F] [-l] [-B]
+                [-b] [-t] [-T] [-p] [-q] [-z] [-s SORT] [-r] [-j] [-R hash]
+                [-i path] [-w seconds] [-d] [-D] [--show-stale]
+                [--show-unknown] [-m] [-I seconds] [-v]
+                [filter]
 
-Options:
-  --config PATH, -c PATH  Path to config directory
-  --attach NAME           Attach a configured interface
-  --detach NAME           Detach a running interface
-  --reload NAME           Reload a running interface from config
-  -a                      Show all interfaces
-  -j                      JSON output
-  -s SORT                 Sort by: rate, traffic, rx, tx, frx, ftx,
-                          frxs, ftxs, prx, ptx, arxc, atxc, afrxc, prxc, ptxc,
-                          pvs, ivs, flt
-  -r                      Reverse sort order
-  -t                      Show traffic totals
-  -l                      Show link count
-  -A                      Show announce statistics
-  -P, --pr-stats          Show path request statistics
-  -F, --filter-stats      Show filtered traffic statistics
-  -T, --tunnels           Show tunnel information
-  -B, --burst             Only show interfaces with active burst limiting
-  -b, --blocked-ips       Show blocked IPs per interface
-  -q, --queues            Show inbound queue pressure statistics
-  -d                      Show discovered interfaces
-  -D                      Show discovered interfaces with config entries
-  --show-stale            Include stale discovery entries
-  --show-unknown          Include discovery entries without version info
-  -m                      Monitor mode (loop)
-  -I SECONDS              Monitor interval (default: 1.0)
-  -R HASH                 Query remote transport identity via management link
-  -i PATH                 Identity file for remote management
-  -w SECONDS              Timeout for remote queries
-  -v                      Increase verbosity
-  --version               Print version and exit
-  --help, -h              Print this help
+Reticulum Network Stack Status
+
+positional arguments:
+  filter                only display interfaces with names including filter
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG       path to alternative Reticulum config directory
+  --version             show program's version number and exit
+  --attach name         Attach interface by name
+  --detach name         Detach interface by name
+  --reload name         Reload interface by name
+  -a, --all             show all interfaces
+  -A, --announce-stats  show announce stats
+  -P, --pr-stats        show path request stats
+  -F, --filter-stats    show filtered traffic stats
+  -l, --link-stats      show link stats
+  -B, --burst           only show interfaces with active bursts
+  -b, --blocked-ips     show blocked IPs per interface
+  -t, --totals          display traffic totals
+  -T, --tunnels         display tunnel information
+  -p, --pps             display packets per second in totals
+  -q, --queues          display queue stats
+  -z, --profiling       display live profiling results
+  -s SORT, --sort SORT  sort interfaces by [rate, traffic, rx, tx, rxs, txs,
+                        frx, ftx, anns, arx, atx, arxc, atxc, afrxc, held,
+                        prx, ptx, prxc, ptxc, pvs, ivs, flt, txdrp, txdrb,
+                        txbuf]
+  -r, --reverse         reverse sorting
+  -j, --json            output in JSON format
+  -R hash               transport identity hash of remote instance to get
+                        status from
+  -i path               path to identity used for remote management
+  -w seconds            timeout before giving up on remote queries
+  -d, --discovered      list discovered interfaces
+  -D                    show details and config entries for discovered
+                        interfaces
+  --show-stale          show stale discovery entries
+  --show-unknown        show discovery entries without version info
+  -m, --monitor         continuously monitor status
+  -I seconds, --monitor-interval seconds
+                        refresh interval for monitor mode (default: 1)
+  -v, --verbose
 ```
+
+Also accepted, not listed: `-c PATH` for `--config` and `--identity PATH`
+for `-i`.
 
 `--attach` reads the named interface from the current config file, including
 sections marked disabled. `--reload` detaches it and reads that section again,

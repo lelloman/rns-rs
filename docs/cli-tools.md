@@ -31,16 +31,27 @@ All tools accept `--config DIR` to select the config directory (default
 ## `rnsd`
 
 ```text
-Usage: rnsd [OPTIONS]
+usage: rnsd [-h] [--config CONFIG] [-v] [-q] [-s] [-i] [--exampleconfig]
+            [--version]
 
-Options:
-  --config PATH, -c PATH  Path to config directory
-  -s                      Service mode (log to file)
-  --exampleconfig         Print example config and exit
-  -v                      Increase verbosity (can repeat)
-  -q                      Decrease verbosity (can repeat)
-  --version               Print version and exit
+Reticulum Network Stack Daemon
+
+options:
+  -h, --help         show this help message and exit
+  --config CONFIG    path to alternative Reticulum config directory
+  -v, --verbose
+  -q, --quiet
+  -s, --service      rnsd is running as a service and should log to file
+  -i, --interactive  drop into interactive shell after initialisation
+  --exampleconfig    print verbose configuration example to stdout and exit
+  --version          show program's version number and exit
 ```
+
+Every tool's `--help` and its errors for invalid command lines are upstream's
+byte for byte, printed as argparse does at the terminal's width (tests
+compare them with upstream's own parsers, `tests/fixtures/argparse`). Options
+only this implementation has are accepted but not listed: `-c` for
+`--config`, and the ones each tool's page names.
 
 In service mode the log goes to `<config dir>/logfile`, rotated at 5 MiB with
 one archive kept, and the configured log level is used as is. In the

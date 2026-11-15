@@ -33,9 +33,8 @@ pub struct Placeholder {
 /// upstream rnpkg's example configuration.
 pub const RNPKG_EXAMPLE_CONFIG: &str = "# This is an example package manager configuration file.\n";
 
-/// upstream rnir's and rnpkg's options (rnir has no `--exampleconfig`), and
-/// the Rust-only `-c` for `--config`.
-const OPTIONS: OptionSpec = OptionSpec {
+/// upstream rnpkg's options, and the Rust-only `-c` for `--config`.
+pub(crate) const OPTIONS: OptionSpec = OptionSpec {
     options: &[
         Opt::value("", "config"),
         Opt::count("v", "verbose"),
@@ -45,24 +44,30 @@ const OPTIONS: OptionSpec = OptionSpec {
     ],
 };
 
+/// upstream rnir's options: rnpkg's without `--exampleconfig`.
+pub(crate) const RNIR_OPTIONS: OptionSpec = OptionSpec {
+    options: &[
+        Opt::value("", "config"),
+        Opt::count("v", "verbose"),
+        Opt::count("q", "quiet"),
+        Opt::value("c", ""),
+    ],
+};
+
 pub fn main(placeholder: &Placeholder) -> i32 {
-    let args = Args::parse_spec(&OPTIONS);
+    let spec = if placeholder.example_config.is_some() {
+        &OPTIONS
+    } else {
+        &RNIR_OPTIONS
+    };
+    let args = Args::parse_spec(spec);
+    crate::argparse::enforce(&args, placeholder.name, placeholder.name);
     if args.has("version") {
         println!("{} {VERSION}", placeholder.name);
         return 0;
     }
     if args.has("help") {
-        let example = if placeholder.example_config.is_some() {
-            "\n  --exampleconfig  Print verbose configuration example to stdout and exit"
-        } else {
-            ""
-        };
-        println!(
-            "usage: {} [-h] [--config CONFIG] [-v] [-q]{} [--version]\n\n{}\n\noptions:\n  -h, --help       Show this help message and exit\n  --config CONFIG  Path to alternative Reticulum config directory\n  -v, --verbose\n  -q, --quiet{example}\n  --version        Show program's version number and exit",
-            placeholder.name,
-            if placeholder.example_config.is_some() { " [--exampleconfig]" } else { "" },
-            placeholder.description,
-        );
+        crate::argparse::print_help(placeholder.name, placeholder.name);
         return 0;
     }
     if let (true, Some(example)) = (args.has("exampleconfig"), placeholder.example_config) {

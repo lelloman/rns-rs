@@ -70,6 +70,7 @@ impl Callbacks for ProbeCallbacks {
 }
 
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
+    rns_cli::argparse::enforce(&args, "rnprobe", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
@@ -557,29 +558,7 @@ fn parse_dest_hash(hex: &str) -> Option<[u8; 16]> {
 }
 
 fn print_usage(usage_name: &str) {
-    println!(
-        "usage: {usage_name} [-h] [--config CONFIG] [-s SIZE] [-n PROBES] [-t seconds] [-w seconds] [--version] [-v] [full_name] [destination_hash]"
-    );
-    println!();
-    println!("Reticulum Probe Utility");
-    println!();
-    println!("positional arguments:");
-    println!("  full_name             full destination name in dotted notation");
-    println!("                        (with a lone hash: {DEFAULT_FULL_NAME})");
-    println!("  destination_hash      hexadecimal hash of the destination");
-    println!();
-    println!("options:");
-    println!("  -h, --help            show this help message and exit");
-    println!("  --config CONFIG       path to alternative Reticulum config directory");
-    println!(
-        "  -s, --size SIZE       size of probe packet payload in bytes (max {MAX_PROBE_PAYLOAD_SIZE})"
-    );
-    println!("  -n, --probes PROBES   number of probes to send");
-    println!("  -t, --timeout seconds");
-    println!("                        timeout before giving up");
-    println!("  -w, --wait seconds    time between each probe");
-    println!("  --version             show program's version number and exit");
-    println!("  -v, --verbose");
+    rns_cli::argparse::print_help("rnprobe", usage_name);
 }
 
 #[cfg(test)]

@@ -149,6 +149,7 @@ pub fn main_entry_from_named(args: Args, usage_name: &str, version_name: &str) {
 }
 
 fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_level: log::Level) {
+    crate::argparse::enforce(&args, "rnsd", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
@@ -366,16 +367,7 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
 }
 
 fn print_usage(usage_name: &str) {
-    println!("Usage: {usage_name} [OPTIONS]");
-    println!();
-    println!("Options:");
-    println!("  --config PATH, -c PATH  Path to config directory");
-    println!("  -s, --service           Service mode (log to file)");
-    println!("  --exampleconfig         Print example config and exit");
-    println!("  -v, --verbose           Increase verbosity (can repeat)");
-    println!("  -q, --quiet             Decrease verbosity (can repeat)");
-    println!("  --version               Print version and exit");
-    println!("  --help, -h              Print this help");
+    crate::argparse::print_help("rnsd", usage_name);
 }
 
 const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.

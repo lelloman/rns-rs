@@ -67,6 +67,7 @@ fn main() {
 }
 
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
+    rns_cli::argparse::enforce(&args, "rnstatus", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
@@ -634,40 +635,7 @@ fn show_discovered_interfaces(
 }
 
 fn print_usage(usage_name: &str) {
-    println!("Usage: {usage_name} [OPTIONS] [FILTER]");
-    println!();
-    println!("Options:");
-    println!("  --config PATH, -c PATH  Path to config directory");
-    println!("  --attach NAME           Attach a configured interface");
-    println!("  --detach NAME           Detach a running interface");
-    println!("  --reload NAME           Reload a running interface from config");
-    println!("  -a, --all               Show all interfaces");
-    println!("  -j, --json              JSON output");
-    println!("  -s, --sort SORT         Sort by: rate, traffic, rx, tx, frx, ftx, frxs, ftxs, prx, ptx, arxc, atxc, afrxc, prxc, ptxc, txdrp, txdrb, txbuf");
-    println!("  -r, --reverse           Reverse sort order");
-    println!("  -t, --totals            Show traffic totals");
-    println!("  -p, --pps               Show packets per second in traffic totals");
-    println!("  -l, --link-stats        Show link count");
-    println!("  -A, --announce-stats    Show announce statistics");
-    println!("  -P, --pr-stats          Show path request statistics");
-    println!("  -F, --filter-stats      Show filtered traffic statistics");
-    println!("  -T, --tunnels           Show tunnel information");
-    println!("  -B, --burst             Only show interfaces with active burst limiting");
-    println!("  -b, --blocked-ips       Show blocked IPs per interface");
-    println!("  -q, --queues            Show inbound queue pressure statistics");
-    println!("  -z, --profiling         Show live profiling results");
-    println!("  -d, --discovered        Show discovered interfaces");
-    println!("  -D                      Show discovered interfaces with config entries");
-    println!("  --show-stale            Include stale discovery entries");
-    println!("  --show-unknown          Include discovery entries without version info");
-    println!("  -m, --monitor           Monitor mode (loop)");
-    println!("  -I, --monitor-interval SECONDS  Monitor interval (default: 1.0)");
-    println!("  -R HASH                 Query remote transport identity via management link");
-    println!("  -i PATH                 Identity file for remote management");
-    println!("  -w SECONDS              Timeout for remote queries");
-    println!("  -v, --verbose           Increase verbosity");
-    println!("  --version               Print version and exit");
-    println!("  --help, -h              Print this help");
+    rns_cli::argparse::print_help("rnstatus", usage_name);
 }
 
 #[cfg(test)]

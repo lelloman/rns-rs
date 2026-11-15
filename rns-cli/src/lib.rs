@@ -3,6 +3,7 @@
 extern crate self as rns_cli;
 
 pub mod app;
+pub mod argparse;
 pub mod args;
 pub mod format;
 pub mod placeholder;
@@ -27,3 +28,4 @@ pub mod sentineld;
 #[cfg(feature = "sidecars")]
 pub mod statsd;
 pub mod stdout;
+pub mod upstream_parsers;
