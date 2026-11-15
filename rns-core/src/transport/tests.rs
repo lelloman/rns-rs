@@ -7125,3 +7125,60 @@ fn local_link_request_mtu_is_clamped_to_receiving_interface() {
         assert_eq!(signalled_mtu(raw), Some(expected), "mtu={mtu}");
     }
 }
+
+/// Regression: an announce that arrives with PATHFINDER_M - 1 hops carries
+/// PATHFINDER_M once counted, which no node decodes (upstream's
+/// `Packet.unpack` rejects it and counts a protocol violation on the
+/// receiving interface). It still updates the path table, but is neither
+/// rebroadcast nor forwarded to local clients, as upstream's `Packet.send`
+/// refuses it; its retries are spent as usual.
+#[test]
+fn announce_reaching_pathfinder_m_hops_is_not_sent_on() {
+    let (packet, _) = signed_announce_packet(0x64, None);
+    let dest = packet.destination_hash;
+    let mut raw = packet.raw.clone();
+    raw[1] = constants::PATHFINDER_M - 1;
+
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    let mut local_client = make_interface(3, constants::MODE_FULL);
+    local_client.is_local_client = true;
+    engine.register_interface(local_client);
+
+    let mut rng = rns_crypto::FixedRng::new(&[0x77; 32]);
+    let actions = engine.handle_inbound(
+        InboundFrame {
+            raw: &raw,
+            iface: InterfaceId(1),
+            now: 1000.0,
+            rx: RxMetadata::default(),
+        },
+        &mut rng,
+    );
+    assert_eq!(engine.hops_to(&dest), Some(constants::PATHFINDER_M));
+    assert!(announce_received(&actions).is_some());
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, TransportAction::ForwardToLocalClients { .. })));
+
+    let mut now = 1000.0;
+    for _ in 0..=constants::PATHFINDER_R {
+        now += constants::PATHFINDER_G + constants::PATHFINDER_RW + 1.0;
+        let actions = engine.tick(now, &mut rng);
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                TransportAction::SendOnInterface { .. }
+                    | TransportAction::BroadcastOnAllInterfaces { .. }
+                    | TransportAction::AnnounceRetransmit { .. }
+            )),
+            "announce with {} hops was sent: {:?}",
+            constants::PATHFINDER_M,
+            actions
+        );
+    }
+    now += constants::PATHFINDER_G + constants::PATHFINDER_RW + 1.0;
+    engine.tick(now, &mut rng);
+    assert_eq!(engine.announce_table_count(), 0);
+}
