@@ -15950,15 +15950,16 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
     );
     assert_eq!(by_id(1).parent_display_name, None);
 
-    // Interfaces are listed by display name.
-    let names: Vec<_> = stats
-        .interfaces
-        .iter()
-        .map(|stat| stat.display_name.as_str())
-        .collect();
-    let mut sorted = names.clone();
+    // As upstream: in the order they were added, the shared instance
+    // first.
+    let ids: Vec<_> = stats.interfaces.iter().map(|stat| stat.id).collect();
+    assert_eq!(
+        stats.interfaces[0].display_name,
+        "Shared Instance[rns/default]"
+    );
+    let mut sorted = ids[1..].to_vec();
     sorted.sort();
-    assert_eq!(names, sorted);
+    assert_eq!(ids[1..], sorted[..]);
 
     // A spawned interface's display name goes with it.
     driver.handle_interface_down_event(InterfaceId(11));

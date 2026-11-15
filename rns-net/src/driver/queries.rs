@@ -647,7 +647,10 @@ impl Driver {
         for listener in &self.listener_stats {
             interfaces.push(self.listener_interface_stat(listener));
         }
-        interfaces.sort_by(|a, b| a.display_name.cmp(&b.display_name).then(a.id.cmp(&b.id)));
+        // Upstream lists interfaces in the order they were added: the
+        // shared instance first, then the others; ids are handed out in
+        // that order.
+        interfaces.sort_by_key(|i| (i.interface_type != "LocalServerInterface", i.id));
         let (path_pool_total, path_pool_unused) = self.engine.path_pool_counts();
         let total_links = self.engine.link_table_count() + self.link_manager.link_count();
         let active_links = self.engine.active_link_count() + self.link_manager.active_link_count();
