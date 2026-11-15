@@ -4567,6 +4567,7 @@ impl RnsNode {
     ) -> Result<bool, SendError> {
         // Upstream `Reticulum._retain_identity`: a shared instance client
         // asks the instance, which holds the known destinations.
+        #[cfg(feature = "iface-local")]
         if self.destination_types.is_client_with_rpc() {
             use crate::pickle::PickleValue;
             let request = PickleValue::Dict(vec![
