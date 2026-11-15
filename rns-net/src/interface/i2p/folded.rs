@@ -78,11 +78,9 @@ pub(super) fn setup(
         sam::session_create_with_mark(&sam_addr, &session_id, &priv_b64, config.underlay_mark)?;
     match sam::naming_lookup_on(&mut control, "ME") {
         Ok(our_dest) => {
-            log::info!(
-                "[{}] I2P address: {}",
-                config.name,
-                our_dest.base32_address()
-            );
+            let b32 = our_dest.base32_address();
+            log::info!("[{}] I2P address: {}", config.name, b32);
+            super::I2pEndpoint::set_address(&config.endpoint, config.connectable, b32);
         }
         Err(e) => {
             log::warn!("[{}] could not look up own destination: {}", config.name, e);
@@ -129,6 +127,7 @@ pub(super) fn setup(
 
     if config.connectable {
         session.arm_accept();
+        super::I2pEndpoint::set_accepting(&config.endpoint);
     }
     Ok(())
 }

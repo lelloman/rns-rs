@@ -540,7 +540,9 @@ pub(crate) struct ConfiguredDisplay {
     /// A listener without an interface entry of its own: its id and
     /// display name.
     pub(crate) listener: Option<(rns_core::transport::types::InterfaceId, String)>,
-    /// The statistics entry of a TCP server listener.
+    /// The statistics entry of a listener: a TCP server, an interface
+    /// spawning peers, or an `RNodeMultiInterface`, whose subinterfaces
+    /// fill it in once started.
     pub(crate) listener_stat: Option<crate::driver::ListenerStat>,
 }
 
@@ -579,6 +581,72 @@ impl ConfiguredDisplay {
                 }),
                 ..Self::default()
             };
+        }
+        #[cfg(feature = "iface-auto")]
+        if let Some(auto) = data.downcast_ref::<AutoConfig>() {
+            return Self {
+                listener_stat: Some(crate::driver::ListenerStat {
+                    id: auto.interface_id,
+                    name: config.name.clone(),
+                    display_name: display::typed("AutoInterface", name),
+                    interface_type: "AutoInterface".into(),
+                    mode: config.mode,
+                    gravity: config.gravity,
+                    announces_to_internal: config.announces_to_internal,
+                    bitrate: Some(auto.configured_bitrate),
+                    mtu: crate::interface::auto::HW_MTU as u32,
+                    ifac: ifac.cloned(),
+                    clients: crate::driver::ListenerClients::AutoPeers,
+                }),
+                ..Self::default()
+            };
+        }
+        #[cfg(feature = "iface-i2p")]
+        if let Some(i2p) = data.downcast_ref::<I2pConfig>() {
+            return Self {
+                listener_stat: Some(crate::driver::ListenerStat {
+                    id: i2p.interface_id,
+                    name: config.name.clone(),
+                    display_name: display::typed("I2PInterface", name),
+                    interface_type: "I2PInterface".into(),
+                    mode: config.mode,
+                    gravity: config.gravity,
+                    announces_to_internal: config.announces_to_internal,
+                    bitrate: Some(crate::interface::i2p::BITRATE_GUESS),
+                    mtu: crate::interface::i2p::HW_MTU as u32,
+                    ifac: ifac.cloned(),
+                    clients: crate::driver::ListenerClients::I2pPeers(crate::driver::I2pListener {
+                        connectable: i2p.connectable,
+                        configured_peers: (!i2p.peers.is_empty()).then_some(i2p.peers.len()),
+                        endpoint: std::sync::Arc::clone(&i2p.endpoint),
+                    }),
+                }),
+                ..Self::default()
+            };
+        }
+        #[cfg(feature = "iface-rnode")]
+        if let Some(rnode) = data.downcast_ref::<RNodeConfig>() {
+            if rnode.multi {
+                return Self {
+                    listener_stat: Some(crate::driver::ListenerStat {
+                        // Its subinterfaces take the configured id and the
+                        // ones after it; it gets its own once they start.
+                        id: rnode.base_interface_id,
+                        name: config.name.clone(),
+                        display_name: display::typed("RNodeMultiInterface", name),
+                        interface_type: "RNodeMultiInterface".into(),
+                        mode: config.mode,
+                        gravity: config.gravity,
+                        announces_to_internal: config.announces_to_internal,
+                        // Upstream's RNodeMultiInterface keeps a bitrate of 0.
+                        bitrate: Some(0),
+                        mtu: crate::interface::rnode::HW_MTU,
+                        ifac: ifac.cloned(),
+                        clients: crate::driver::ListenerClients::Subinterfaces(Vec::new()),
+                    }),
+                    ..Self::default()
+                };
+            }
         }
         #[cfg(feature = "iface-udp")]
         if let Some(udp) = data.downcast_ref::<UdpConfig>() {
@@ -624,6 +692,21 @@ impl ConfiguredDisplay {
             };
         }
         Self::default()
+    }
+
+    /// Register an interface whose subinterfaces `ids` started, under
+    /// `id`, as a listener serving them.
+    pub(crate) fn register_subinterfaces(
+        &mut self,
+        driver: &mut Driver,
+        id: rns_core::transport::types::InterfaceId,
+        ids: Vec<rns_core::transport::types::InterfaceId>,
+    ) {
+        if let Some(listener) = self.listener_stat.as_mut() {
+            listener.id = id;
+            listener.clients = crate::driver::ListenerClients::Subinterfaces(ids);
+        }
+        self.register_listener(driver);
     }
 
     /// Register the display names of a listener that started.
@@ -2618,7 +2701,14 @@ impl RnsNode {
                     if let Some(control) = control {
                         driver.register_listener_control(control);
                     }
-                    let static_ids = subs.iter().map(|sub| sub.id).collect();
+                    let static_ids: Vec<_> = subs.iter().map(|sub| sub.id).collect();
+                    if display.listener_stat.is_some() {
+                        // The subinterfaces hold the configured ids.
+                        let id = rns_core::transport::types::InterfaceId(
+                            next_dynamic_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                        );
+                        display.register_subinterfaces(&mut driver, id, static_ids.clone());
+                    }
                     if let Some(parent_id) = managed_id {
                         driver.managed_interfaces.insert(
                             iface_config.name.clone(),

@@ -54,8 +54,14 @@ impl Driver {
         }
         let managed = self.managed_interfaces.remove(name).expect("checked above");
         self.retired_interface_parents.insert(managed.parent_id);
-        self.listener_stats
-            .retain(|listener| listener.id != managed.parent_id);
+        self.listener_stats.retain(|listener| {
+            listener.id != managed.parent_id
+                && !matches!(
+                    &listener.clients,
+                    super::ListenerClients::Subinterfaces(ids)
+                        if ids.iter().any(|id| managed.static_ids.contains(id))
+                )
+        });
         if let Some(control) = &managed.control {
             control.request_stop();
             control.finish();

@@ -2699,6 +2699,21 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::List(blocked.iter().cloned().map(PickleValue::String).collect()),
         ));
     }
+    // Only an I2P interface reports its endpoint, with `i2p_b32` None
+    // until its address is known.
+    if let Some(i2p) = &s.i2p {
+        dict.push((
+            PickleValue::String("i2p_connectable".into()),
+            PickleValue::Bool(i2p.connectable),
+        ));
+        dict.push((
+            PickleValue::String("i2p_b32".into()),
+            i2p.b32
+                .clone()
+                .map(PickleValue::String)
+                .unwrap_or(PickleValue::None),
+        ));
+    }
     // Upstream reports the listener a spawned interface came from.
     if let Some(parent) = &s.parent_display_name {
         dict.push((
@@ -4686,6 +4701,7 @@ mod tests {
                             clients: Some(2),
                             blocked_ips: None,
                             blocked_ip_list: None,
+                            i2p: None,
                             announce_rate_target: Some(3600.0),
                             announce_rate_grace: 5,
                             announce_rate_penalty: 0.0,
@@ -5316,6 +5332,7 @@ mod tests {
                 clients: Some(3),
                 blocked_ips: Some(2),
                 blocked_ip_list: Some(vec!["192.0.2.1".into(), "203.0.113.2".into()]),
+                i2p: None,
                 announce_rate_target: Some(3600.0),
                 announce_rate_grace: 5,
                 announce_rate_penalty: 0.0,
@@ -5413,6 +5430,18 @@ mod tests {
             spawned.get("ifac_signature").unwrap().as_bytes(),
             Some(&[9u8; 64][..])
         );
+        // Only an I2P interface reports its endpoint, its address None
+        // until known.
+        assert!(ifaces[0].get("i2p_connectable").is_none());
+        assert!(ifaces[0].get("i2p_b32").is_none());
+        let mut i2p = stats.interfaces[0].clone();
+        i2p.i2p = Some(crate::event::I2pEndpointStat {
+            connectable: false,
+            b32: None,
+        });
+        let i2p = pickle::decode(&pickle::encode(&single_iface_to_pickle(&i2p))).unwrap();
+        assert_eq!(i2p.get("i2p_connectable").unwrap().as_bool(), Some(false));
+        assert_eq!(i2p.get("i2p_b32"), Some(&PickleValue::None));
         // Weave statistics only on Weave interfaces: upstream's rnstatus
         // prints "Unknown" lines for a key that is there without a value.
         for key in [
