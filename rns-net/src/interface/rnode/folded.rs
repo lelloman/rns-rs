@@ -21,9 +21,10 @@ use super::transport::Transport;
 use super::DeviceWriter;
 use super::{
     clear_pending_rx_metadata, detect_and_configure, phy_telemetry, process_flow_queue,
-    reopen_connection, reset_flow_states, signal_interface_up, update_pending_rx_metadata,
-    wait_while_running, RNodeConfig, SubFlowState,
+    radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
+    update_pending_rx_metadata, update_radio_stats, wait_while_running, RNodeConfig, SubFlowState,
 };
+use crate::common::interface_stats::RadioStats;
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::lock_or_recover;
 use crate::interface::stream_read::{set_nonblocking, STREAM_READ_BUDGET};
@@ -119,6 +120,7 @@ impl RNodeLink {
                 decoder: rnode_kiss::RNodeDecoder::new(),
                 last_rssi: None,
                 last_snr: None,
+                radio: RadioStats::default(),
                 keepalive_at: Instant::now() + KEEPALIVE_INTERVAL,
                 link: Arc::clone(self),
             }),
@@ -200,6 +202,8 @@ struct RNodeSource {
     /// thread's `reader_loop`).
     last_rssi: Option<i16>,
     last_snr: Option<f32>,
+    /// What the device reports about its channel and itself.
+    radio: RadioStats,
     keepalive_at: Instant,
     link: Arc<RNodeLink>,
 }
@@ -244,13 +248,17 @@ impl RNodeSource {
             read += n;
             let mut events = Vec::new();
             for event in self.decoder.feed(&cx.buf[..n]) {
+                if update_radio_stats(&event, &mut self.radio, crate::time::now(), &config.name) {
+                    events.extend(radio_telemetry(config, &self.radio));
+                    continue;
+                }
                 let phy_stat = matches!(
                     &event,
                     rnode_kiss::RNodeEvent::StatRssi(_) | rnode_kiss::RNodeEvent::StatSnr(_)
                 );
                 if update_pending_rx_metadata(&event, &mut self.last_rssi, &mut self.last_snr) {
                     if phy_stat {
-                        events.extend(phy_telemetry(config, self.last_rssi, self.last_snr));
+                        events.extend(phy_telemetry(config, self.last_rssi, self.last_snr, None));
                     }
                     continue;
                 }

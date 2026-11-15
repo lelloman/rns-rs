@@ -453,6 +453,30 @@ pub fn handle_status_request(
         if let Some(modulation) = stats.modulation.as_ref() {
             ifstats.push(("modulation", Value::Str(modulation.clone())));
         }
+        if let Some(radio) = stats.radio.as_ref() {
+            let dbm = |v: Option<i16>| v.map_or(Value::Nil, |v| Value::Int(i64::from(v)));
+            ifstats.push(("airtime_short", Value::Float(radio.airtime_short)));
+            ifstats.push(("airtime_long", Value::Float(radio.airtime_long)));
+            ifstats.push(("channel_load_short", Value::Float(radio.channel_load_short)));
+            ifstats.push(("channel_load_long", Value::Float(radio.channel_load_long)));
+            ifstats.push(("noise_floor", dbm(radio.noise_floor)));
+            ifstats.push(("interference", dbm(radio.interference)));
+            if let Some((ts, rssi)) = radio.interference_last {
+                ifstats.push(("interference_last_ts", Value::Float(ts)));
+                ifstats.push(("interference_last_dbm", Value::Int(i64::from(rssi))));
+            }
+            ifstats.push(("cpu_temp", dbm(radio.temperature)));
+            if radio.battery_state != 0 {
+                ifstats.push((
+                    "battery_state",
+                    Value::Str(radio.battery_state_name().to_string()),
+                ));
+            }
+            ifstats.push((
+                "battery_percent",
+                Value::UInt(u64::from(radio.battery_percent)),
+            ));
+        }
 
         // IFAC info
         ifstats.push(("ifac_signature", Value::Nil));

@@ -10,6 +10,44 @@ pub const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 2;
 /// Minimum number of incoming path request samples before frequency is meaningful.
 pub const INCOMING_PATH_REQUEST_MIN_SAMPLE: usize = 2;
 
+/// What an RNode reports about its channel and itself (upstream
+/// `RNodeInterface`'s `r_airtime_*`, `r_channel_load_*`, `r_noise_floor`,
+/// `r_interference`, battery and temperature), as interface statistics
+/// carry it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RadioStats {
+    /// This device's airtime over 15 s and 1 h, percent.
+    pub airtime_short: f64,
+    pub airtime_long: f64,
+    /// Channel load over 15 s and 1 h, percent.
+    pub channel_load_short: f64,
+    pub channel_load_long: f64,
+    /// dBm, once reported.
+    pub current_rssi: Option<i16>,
+    pub noise_floor: Option<i16>,
+    /// RSSI of interference on the channel now, if any.
+    pub interference: Option<i16>,
+    /// When interference was last seen (Unix time) and its RSSI.
+    pub interference_last: Option<(f64, i16)>,
+    /// 0 unknown, 1 discharging, 2 charging, 3 charged.
+    pub battery_state: u8,
+    pub battery_percent: u8,
+    /// Device temperature, °C, when it reports one.
+    pub temperature: Option<i16>,
+}
+
+impl RadioStats {
+    /// Upstream `get_battery_state_string`.
+    pub fn battery_state_name(&self) -> &'static str {
+        match self.battery_state {
+            0x01 => "discharging",
+            0x02 => "charging",
+            0x03 => "charged",
+            _ => "unknown",
+        }
+    }
+}
+
 /// Traffic statistics for an interface.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TrafficRates {
@@ -77,6 +115,8 @@ pub struct InterfaceStats {
     pub coding_rate: Option<u8>,
     pub channel: Option<u32>,
     pub modulation: Option<String>,
+    /// Channel and device state an RNode reports.
+    pub radio: Option<RadioStats>,
     pub started: f64,
     /// Recent incoming announce timestamps (bounded).
     pub ia_timestamps: Vec<f64>,

@@ -1221,6 +1221,9 @@ impl Driver {
         if telemetry.channel.is_some() {
             entry.stats.channel = telemetry.channel;
         }
+        if telemetry.radio.is_some() {
+            entry.stats.radio = telemetry.radio;
+        }
         if telemetry.modulation.is_some() {
             entry.stats.modulation = telemetry.modulation;
         }

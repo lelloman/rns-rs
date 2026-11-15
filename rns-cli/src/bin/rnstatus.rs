@@ -8,7 +8,10 @@ use std::process;
 use std::time::{Duration, Instant};
 
 use rns_cli::args::{Args, Opt, OptionSpec};
-use rns_cli::format::{prettycost, prettyfrequency, prettyhexrep, prettytime, size_str, speed_str};
+use rns_cli::format::{
+    prettycost, prettyfrequency, prettyhexrep, prettytime, python_float, size_str, speed_str,
+    upstream_prettytime_compact,
+};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
@@ -568,6 +571,9 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                     println!("{line}");
                 }
             }
+            for line in device_status_lines(iface, rns_net::time::now()) {
+                println!("{line}");
+            }
             println!(
                 "    Traffic   : {}{} \u{2191}  {} \u{2193}",
                 size_str(txb),
@@ -1095,6 +1101,108 @@ fn interface_has_active_burst(iface: &PickleValue) -> bool {
             .get("pr_burst_active")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
+}
+
+/// A statistics value as upstream prints it with `str()`.
+fn python_str(value: &PickleValue) -> String {
+    match value {
+        PickleValue::Float(f) => python_float(*f),
+        PickleValue::Int(i) => i.to_string(),
+        PickleValue::String(s) => s.clone(),
+        PickleValue::None => "None".to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// What a device behind the interface reports, as upstream's `rnstatus`
+/// prints it: an RNode's noise floor, interference, temperature, battery,
+/// airtime and channel load; a Weave device's CPU and memory load, switch
+/// and endpoint ids and peers. A key present without a value prints as
+/// unknown. Upstream prints a missing temperature as "CPU load : Unknown"
+/// and gates memory on the CPU load; these lines name what they show.
+fn device_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
+    let mut lines = Vec::new();
+    let present = |key: &str| iface.get(key).filter(|v| !matches!(v, PickleValue::None));
+    let has = |key: &str| iface.get(key).is_some();
+
+    if has("noise_floor") {
+        match present("noise_floor") {
+            Some(floor) => {
+                let mut line = format!("    Noise Fl. : {} dBm", python_str(floor));
+                if has("interference") {
+                    if let Some(rssi) =
+                        present("interference").filter(|v| v.as_number() != Some(0.0))
+                    {
+                        line.push_str(&format!("\n    Intrfrnc. : {} dBm", python_str(rssi)));
+                    } else if let (Some(ts), Some(rssi)) = (
+                        present("interference_last_ts").and_then(|v| v.as_number()),
+                        present("interference_last_dbm"),
+                    ) {
+                        line.push_str(&format!(
+                            "\n    Intrfrnc. : {} dBm {} ago",
+                            python_str(rssi),
+                            upstream_prettytime_compact(now - ts)
+                        ));
+                    } else {
+                        line.push_str(", no interference");
+                    }
+                }
+                lines.push(line);
+            }
+            None => lines.push("    Noise Fl. : Unknown".to_string()),
+        }
+    }
+    let mut value_line = |key: &str, label: &str, unit: &str| {
+        if has(key) {
+            lines.push(match present(key) {
+                Some(v) => format!("    {label} : {}{unit}", python_str(v)),
+                None => format!("    {label} : Unknown"),
+            });
+        }
+    };
+    value_line("cpu_load", "CPU load ", " %");
+    value_line("cpu_temp", "CPU temp ", "\u{b0}C");
+    value_line("mem_load", "Mem usage", " %");
+    if let (Some(percent), Some(state)) = (
+        present("battery_percent").and_then(|v| v.as_number()),
+        present("battery_state"),
+    ) {
+        lines.push(format!(
+            "    Battery   : {}% ({})",
+            percent as i64,
+            python_str(state)
+        ));
+    }
+    let pair = |short: &str, long: &str| Some((present(short)?, present(long)?));
+    if let Some((short, long)) = pair("airtime_short", "airtime_long") {
+        lines.push(format!(
+            "    Airtime   : {}% (15s), {}% (1h)",
+            python_str(short),
+            python_str(long)
+        ));
+    }
+    if let Some((short, long)) = pair("channel_load_short", "channel_load_long") {
+        lines.push(format!(
+            "    Ch. Load  : {}% (15s), {}% (1h)",
+            python_str(short),
+            python_str(long)
+        ));
+    }
+    let mut value_line = |key: &str, label: &str| {
+        if has(key) {
+            lines.push(match present(key) {
+                Some(v) => format!("    {label} : {}", python_str(v)),
+                None => format!("    {label} : Unknown"),
+            });
+        }
+    };
+    value_line("switch_id", "Switch ID");
+    value_line("endpoint_id", "Endpoint ");
+    value_line("via_switch_id", "Via      ");
+    if let Some(peers) = present("peers") {
+        lines.push(format!("    Peers     : {} reachable", python_str(peers)));
+    }
+    lines
 }
 
 /// Upstream 3281e283 `-T`: the interface's tunnel, when the instance
@@ -2804,6 +2912,89 @@ mod tests {
                 "                 1.0/h in  2.0/h out",
             ]
         );
+    }
+
+    #[test]
+    fn device_status_lines_match_upstream() {
+        let dict = |entries: Vec<(&str, PickleValue)>| {
+            PickleValue::Dict(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (PickleValue::String(k.into()), v))
+                    .collect(),
+            )
+        };
+        // An RNode, as a Python 1.6.0 rnsd reports one: no interference,
+        // no temperature, battery state unknown.
+        let rnode = dict(vec![
+            ("noise_floor", PickleValue::Int(-99)),
+            ("interference", PickleValue::None),
+            ("cpu_temp", PickleValue::None),
+            ("battery_percent", PickleValue::Int(0)),
+            ("airtime_short", PickleValue::Float(0.0)),
+            ("airtime_long", PickleValue::Float(2.52)),
+            ("channel_load_short", PickleValue::Float(11.13)),
+            ("channel_load_long", PickleValue::Float(2.54)),
+            ("peers", PickleValue::None),
+        ]);
+        assert_eq!(
+            device_status_lines(&rnode, 0.0),
+            vec![
+                "    Noise Fl. : -99 dBm, no interference",
+                "    CPU temp  : Unknown",
+                "    Airtime   : 0.0% (15s), 2.52% (1h)",
+                "    Ch. Load  : 11.13% (15s), 2.54% (1h)",
+            ]
+        );
+        let busy = dict(vec![
+            ("noise_floor", PickleValue::Int(-99)),
+            ("interference", PickleValue::Int(-80)),
+            ("cpu_temp", PickleValue::Int(58)),
+            ("battery_percent", PickleValue::Int(91)),
+            ("battery_state", PickleValue::String("discharging".into())),
+        ]);
+        assert_eq!(
+            device_status_lines(&busy, 0.0),
+            vec![
+                "    Noise Fl. : -99 dBm\n    Intrfrnc. : -80 dBm",
+                "    CPU temp  : 58\u{b0}C",
+                "    Battery   : 91% (discharging)",
+            ]
+        );
+        let earlier = dict(vec![
+            ("noise_floor", PickleValue::Int(-99)),
+            ("interference", PickleValue::None),
+            ("interference_last_ts", PickleValue::Float(1_000.0)),
+            ("interference_last_dbm", PickleValue::Int(-80)),
+        ]);
+        assert_eq!(
+            device_status_lines(&earlier, 1_065.0),
+            vec!["    Noise Fl. : -99 dBm\n    Intrfrnc. : -80 dBm 1m and 5s ago"]
+        );
+        let unknown = dict(vec![("noise_floor", PickleValue::None)]);
+        assert_eq!(
+            device_status_lines(&unknown, 0.0),
+            vec!["    Noise Fl. : Unknown"]
+        );
+        // A Weave device.
+        let weave = dict(vec![
+            ("cpu_load", PickleValue::Int(12)),
+            ("mem_load", PickleValue::Float(40.5)),
+            ("switch_id", PickleValue::String("01:02:03:04".into())),
+            ("endpoint_id", PickleValue::None),
+            ("peers", PickleValue::Int(3)),
+        ]);
+        assert_eq!(
+            device_status_lines(&weave, 0.0),
+            vec![
+                "    CPU load  : 12 %",
+                "    Mem usage : 40.5 %",
+                "    Switch ID : 01:02:03:04",
+                "    Endpoint  : Unknown",
+                "    Peers     : 3 reachable",
+            ]
+        );
+        assert!(device_status_lines(&dict(vec![]), 0.0).is_empty());
     }
 
     #[test]
