@@ -533,6 +533,12 @@ pub struct LoRaWriter {
 }
 
 impl LoRaWriter {
+    /// Whether a LoRa transmission is on the channel (preamble or header
+    /// detected), for listen before talk.
+    pub fn carrier_detected(&self) -> bool {
+        self.radio.lock().unwrap().carrier_detected()
+    }
+
     pub fn send_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
         let mut radio = self.radio.lock().unwrap();
         let result = radio.send(data);

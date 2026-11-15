@@ -24,6 +24,7 @@ use crate::ifac::{self, IfacState};
 use crate::lora::LoRaWriter;
 use crate::rng::EspRng;
 use crate::util::hex;
+use rns_esp32::channel::TxChannel;
 use rns_esp32::control::{
     authorize_request, compiled_controller_keys, control_destination, control_reply_destination,
     encode_response, AuthorizedControlRequest, ControlAuthError, ControlBody, ControlCommand,
@@ -35,6 +36,12 @@ use rns_esp32::settings_store::DeviceSettings;
 
 const NVS_NAMESPACE: &str = "rns";
 const NVS_KEY_SETTINGS: &str = "settings";
+
+/// Frames held per interface while the channel is busy, as the bridge.
+const TX_QUEUE_MAX_FRAMES: usize = 32;
+
+/// Event wait with nothing queued; bridge detection is polled this often.
+const EVENT_WAIT_IDLE_MS: u64 = 250;
 
 /// Events processed by the driver loop.
 pub enum Event {
@@ -69,6 +76,8 @@ struct InterfaceEntry {
     writer: LoRaWriter,
     online: bool,
     ifac: Option<IfacState>,
+    /// Frames waiting for the channel (listen before talk).
+    tx: TxChannel,
 }
 
 /// The transport driver: owns the engine, interfaces, and event loop.
@@ -204,6 +213,12 @@ impl Driver {
             writer,
             online: true,
             ifac,
+            tx: TxChannel::new(
+                self.active_radio_config.spreading_factor,
+                self.active_radio_config.bandwidth,
+                self.active_radio_config.coding_rate,
+                TX_QUEUE_MAX_FRAMES,
+            ),
         });
 
         log::info!("Interface {:?} registered", id);
@@ -220,7 +235,8 @@ impl Driver {
         let mut detect_state = crate::rnode::BridgeDetectState::new();
 
         let exit = loop {
-            let event = match self.rx.recv_timeout(Duration::from_millis(250)) {
+            self.service_tx();
+            let event = match self.rx.recv_timeout(self.event_wait()) {
                 Ok(e) => e,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if let Some(frames) = detect_state.poll(uart) {
@@ -434,6 +450,11 @@ impl Driver {
                 self.active_radio_config = config;
                 if let Some(entry) = self.interfaces.first_mut() {
                     entry.writer.apply_config(config);
+                    entry.tx.reconfigure(
+                        config.spreading_factor,
+                        config.bandwidth,
+                        config.coding_rate,
+                    );
                 }
                 if let Some(ref stats) = self.stats {
                     let mut stats = stats.lock().unwrap();
@@ -754,15 +775,53 @@ impl Driver {
             raw.to_vec()
         };
 
-        match entry.writer.send_frame(&frame) {
-            Ok(()) => {
-                log::debug!("TX {} bytes on {:?}", frame.len(), id);
-                if let Some(ref stats) = self.stats {
-                    stats.lock().unwrap().tx_bytes += frame.len() as u32;
-                }
+        if !entry.tx.push(frame) {
+            log::warn!("TX queue full on {:?}, dropping a frame", id);
+        }
+    }
+
+    /// How long the event loop waits for an event: a fraction of a CSMA
+    /// slot while frames are queued, so listen before talk is timely.
+    fn event_wait(&self) -> Duration {
+        let queued = self
+            .interfaces
+            .iter()
+            .filter(|e| e.online && !e.tx.is_empty())
+            .map(|e| e.tx.poll_interval_ms())
+            .min();
+        Duration::from_millis(queued.unwrap_or(EVENT_WAIT_IDLE_MS))
+    }
+
+    /// Send queued frames on each interface once its channel allows: listen
+    /// before talk, then everything queued in one channel access, as RNode
+    /// firmware does.
+    fn service_tx(&mut self) {
+        for entry in self.interfaces.iter_mut().filter(|e| e.online) {
+            if entry.tx.is_empty() {
+                continue;
             }
-            Err(e) => {
-                log::error!("TX error on {:?}: {}", id, e);
+            let writer = &entry.writer;
+            let Some(frames) = entry.tx.take_ready(
+                now_ms(),
+                || !writer.carrier_detected(),
+                &mut crate::rng::random_range,
+            ) else {
+                continue;
+            };
+            for frame in frames {
+                let result = entry.writer.send_frame(&frame);
+                entry.tx.record_sent(now_ms(), &frame);
+                match result {
+                    Ok(()) => {
+                        log::debug!("TX {} bytes on {:?}", frame.len(), entry.id);
+                        if let Some(ref stats) = self.stats {
+                            stats.lock().unwrap().tx_bytes += frame.len() as u32;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("TX error on {:?}: {}", entry.id, e);
+                    }
+                }
             }
         }
     }
@@ -788,6 +847,12 @@ pub fn spawn_tick_thread(
             }
         })
         .expect("failed to spawn tick thread")
+}
+
+/// Milliseconds since boot (monotonic), for the channel logic.
+fn now_ms() -> u64 {
+    let ticks = unsafe { esp_idf_sys::esp_timer_get_time() };
+    (ticks / 1_000) as u64
 }
 
 /// Get current time as seconds since boot (monotonic).

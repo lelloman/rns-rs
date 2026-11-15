@@ -15,3 +15,11 @@ impl rns_crypto::Rng for EspRng {
         }
     }
 }
+
+/// A number in `lo..=hi` from the hardware random number generator, for
+/// the CSMA backoff.
+pub fn random_range(lo: u32, hi: u32) -> u32 {
+    // SAFETY: esp_random reads the hardware random number generator.
+    let r = unsafe { esp_idf_sys::esp_random() };
+    lo + r % (hi - lo + 1)
+}
