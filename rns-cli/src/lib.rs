@@ -6,6 +6,7 @@ pub mod app;
 pub mod args;
 pub mod format;
 pub mod placeholder;
+pub mod pyfmt;
 pub mod readiness;
 pub mod remote;
 pub mod rncp;
@@ -19,6 +20,7 @@ pub mod rnsd;
 pub mod rnsh;
 #[path = "bin/rnstatus.rs"]
 pub mod rnstatus_command;
+pub mod rnstatus_view;
 pub mod rnx;
 #[cfg(feature = "sidecars")]
 pub mod sentineld;

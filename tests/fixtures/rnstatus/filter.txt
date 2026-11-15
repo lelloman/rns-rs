@@ -1,0 +1,47 @@
+
+ RNodeInterface[LoRa]
+    Status    : Up
+    Mode      : Access Point
+    Rate      : 3.12 kbps, MTU 508
+    Noise Fl. : -99 dBm
+    Intrfrnc. : -71 dBm 1h and 2m ago
+    CPU load  : Unknown
+    Battery   : 87% (charging)
+    Airtime   : 0.53% (15s), 1% (1h)
+    Ch. Load  : 12.25% (15s), 0.0% (1h)
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ RNodeInterface[LoRa2]
+    Status    : Up
+    Mode      : Roaming
+    Rate      : 1.95 kbps, MTU 508
+    Noise Fl. : -104 dBm
+    Intrfrnc. : -80 dBm
+    CPU load  : Unknown
+    CPU temp  : 41°C
+    Mem usage : Unknown
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ RNodeInterface[LoRa3]
+    Status    : Up
+    Mode      : Boundary
+    Noise Fl. : Unknown
+    CPU load  : 17.5 %
+    Mem usage : 33.25 %
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ RNodeInterface[LoRa4]
+    Status    : Up
+    Mode      : Point-to-Point
+    Noise Fl. : -120 dBm, no interference
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ Transport Instance <000102030405060708090a0b0c0d0e0f> running
+ Network Identity   <101112131415161718191a1b1c1d1e1f>
+ Probe responder at <202122232425262728292a2b2c2d2e2f> active
+ Uptime is 1d, 2h, 3m and 4.5s
+

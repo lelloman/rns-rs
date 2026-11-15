@@ -1,0 +1,26 @@
+
+ Profiling    :
+   root
+     Samples  : 120 from 1 thread
+                      Mean       |     Median      |       Min       |       Max       |     St. dev     |      Total     
+     Stats    : (    12.0µs      |   1ms 500.0µs   |       0us       |    1s 250ms     |      -----      |    2s 12.5µs   )
+      0-1m    : (     500ms      |      250ms      |      100ms      |      900ms      |      10ms       |    1s 500ms    )
+    30-60m    : (      3s        |       3s        |       3s        |       3s        |       0us       |       3s       )
+
+     child
+       Samples  : 7 from 0 thread
+                        Mean       |     Median      |       Min       |       Max       |     St. dev     |      Total     
+       Stats    : (      2ms       |       2ms       |       1ms       |       4ms       |     500.0µs     |      14ms      )
+
+   other
+     Samples  : 1 from 4 threads
+                      Mean       |     Median      |       Min       |       Max       |     St. dev     |      Total     
+     Stats    : (      61s       |       61s       |       61s       |       61s       |       0us       |       61s      )
+
+
+
+ Transport Instance <000102030405060708090a0b0c0d0e0f> running
+ Network Identity   <101112131415161718191a1b1c1d1e1f>
+ Probe responder at <202122232425262728292a2b2c2d2e2f> active
+ Uptime is 1d, 2h, 3m and 4.5s
+
