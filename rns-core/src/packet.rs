@@ -995,7 +995,78 @@ mod tests {
         ));
     }
 
+    /// The shared packers build their bytes in uninitialised memory; this
+    /// pins every boundary case of that code (empty payloads, a payload the
+    /// fill leaves alone, both header types, a packet exactly at the MTU) so
+    /// Miri can check each one for reads of uninitialised bytes.
     #[test]
+    fn shared_packing_initialises_every_byte() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let header2 = PacketFlags {
+            header_type: constants::HEADER_2,
+            ..flags
+        };
+        let dest = [0x11; 16];
+        let tid = [0x22; 16];
+        for (flags, tid, header_len) in [(flags, None, 19), (header2, Some(&tid), 35)] {
+            for len in [0usize, 1, 7] {
+                let zeros = alloc::vec![0u8; len];
+                let mtu = header_len + len;
+                let owned =
+                    RawPacket::pack_raw_with_max_mtu(flags, 1, &dest, tid, 0x05, &zeros, mtu)
+                        .unwrap();
+                let shared = RawPacket::pack_raw_shared_with_max_mtu(
+                    flags, 1, &dest, tid, 0x05, &zeros, mtu,
+                )
+                .unwrap();
+                let mut seen = None;
+                let untouched = RawPacket::pack_raw_shared_filled_with_max_mtu(
+                    flags,
+                    1,
+                    &dest,
+                    tid,
+                    0x05,
+                    len,
+                    mtu,
+                    |payload| seen = Some(payload.to_vec()),
+                )
+                .unwrap();
+                // The fill sees the payload zeroed, and leaving it alone
+                // yields the same bytes as packing zeros.
+                assert_eq!(seen.as_deref(), Some(&zeros[..]));
+                assert_eq!(shared.len(), mtu);
+                assert_eq!(&owned[..], &shared[..]);
+                assert_eq!(&owned[..], &untouched[..]);
+                // A clone shares the allocation and outlives the original.
+                let clone = PacketBytes::clone(&shared);
+                drop(shared);
+                assert_eq!(&clone[..], &owned[..]);
+                assert!(matches!(
+                    RawPacket::pack_raw_shared_with_max_mtu(
+                        flags,
+                        1,
+                        &dest,
+                        tid,
+                        0x05,
+                        &zeros,
+                        mtu - 1
+                    ),
+                    Err(PacketError::ExceedsMtu)
+                ));
+            }
+        }
+    }
+
+    // Owned packing only, no unsafe code: hashing its 16 KiB payloads takes
+    // minutes under Miri for nothing Miri checks.
+    #[test]
+    #[cfg_attr(miri, ignore)]
     fn raw_only_packing_preserves_wire_layout_and_limits() {
         for header in [constants::HEADER_1, constants::HEADER_2] {
             for transport in [None, Some([0xBB; 16])] {
