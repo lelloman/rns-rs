@@ -14,7 +14,8 @@ use rns_cli::args::{Args, Opt, OptionSpec, Seen};
 use rns_cli::configobj::{self, Entry};
 use rns_cli::pyfmt::{hexrep, prettyhexrep, prettysize};
 use rns_cli::pylog::{
-    self, b32decode, b32encode, fromhex, oserror, urlsafe_b64decode, urlsafe_b64encode, LOG_ERROR,
+    self, b32decode, b32encode, expanduser, fromhex, identity_from_file, key_to_file, oserror,
+    urlsafe_b64decode, urlsafe_b64encode,
 };
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
@@ -324,41 +325,6 @@ impl Namespace {
     }
 }
 
-/// `os.path.expanduser`.
-fn expanduser(path: &str) -> String {
-    if !path.starts_with('~') {
-        return path.to_string();
-    }
-    let end = path[1..].find('/').map_or(path.len(), |i| i + 1);
-    let home = if end == 1 {
-        match std::env::var("HOME") {
-            Ok(home) => home,
-            Err(_) => return path.to_string(),
-        }
-    } else {
-        match home_of(&path[1..end]) {
-            Some(home) => home,
-            None => return path.to_string(),
-        }
-    };
-    let joined = format!("{}{}", home.trim_end_matches('/'), &path[end..]);
-    if joined.is_empty() {
-        "/".into()
-    } else {
-        joined
-    }
-}
-
-fn home_of(user: &str) -> Option<String> {
-    let name = std::ffi::CString::new(user).ok()?;
-    let entry = unsafe { libc::getpwnam(name.as_ptr()) };
-    if entry.is_null() {
-        return None;
-    }
-    let dir = unsafe { std::ffi::CStr::from_ptr((*entry).pw_dir) };
-    Some(dir.to_string_lossy().into_owned())
-}
-
 fn isfile(path: &str) -> bool {
     Path::new(path).is_file()
 }
@@ -371,55 +337,6 @@ fn id_str(identity: &Identity) -> String {
 /// Python's `str()` of an exception reading or writing `path`.
 fn io_error(err: &std::io::Error, path: &str) -> String {
     oserror(err, path)
-}
-
-/// `Identity.load_private_key`, logging as upstream when the bytes are
-/// not a key.
-fn identity_from_bytes(bytes: &[u8]) -> Option<Identity> {
-    match <&[u8; KEYSIZE]>::try_from(bytes) {
-        Ok(key) => Some(Identity::from_private_key(key)),
-        Err(_) => {
-            let which = if bytes.len() < KEYSIZE / 2 {
-                "An X25519 private key is 32 bytes long"
-            } else {
-                "An Ed25519 private key is 32 bytes long"
-            };
-            pylog::log(
-                &format!("Failed to load identity key, the contained exception was: {which}"),
-                LOG_ERROR,
-            );
-            None
-        }
-    }
-}
-
-/// `Identity.from_file`.
-fn identity_from_file(path: &str) -> Option<Identity> {
-    match fs::read(path) {
-        Ok(bytes) => identity_from_bytes(&bytes),
-        Err(e) => {
-            pylog::log(
-                &format!("Error while loading identity from {path}"),
-                LOG_ERROR,
-            );
-            pylog::log(
-                &format!("The contained exception was: {}", io_error(&e, path)),
-                LOG_ERROR,
-            );
-            None
-        }
-    }
-}
-
-/// `Identity.to_file` / `pub_to_file`: failures are logged, not raised.
-fn key_to_file(key: &[u8], path: &str) {
-    if let Err(e) = fs::write(path, key) {
-        pylog::log(&format!("Error while saving identity to {path}"), LOG_ERROR);
-        pylog::log(
-            &format!("The contained exception was: {}", io_error(&e, path)),
-            pylog::LOG_NOTICE,
-        );
-    }
 }
 
 /// `RNS.Destination.hash_from_name_and_identity`.

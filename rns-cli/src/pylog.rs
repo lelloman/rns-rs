@@ -182,6 +182,143 @@ fn strerror(err: &std::io::Error) -> String {
     }
 }
 
+/// `RNS.Identity.from_file`: the identity in a file of private key bytes,
+/// or `None`, logged as upstream logs it, when it holds none.
+pub fn identity_from_file(path: &str) -> Option<rns_crypto::identity::Identity> {
+    match std::fs::read(path) {
+        Ok(bytes) => identity_from_bytes(&bytes),
+        Err(e) => {
+            log(
+                &format!("Error while loading identity from {path}"),
+                LOG_ERROR,
+            );
+            log(
+                &format!("The contained exception was: {}", oserror(&e, path)),
+                LOG_ERROR,
+            );
+            None
+        }
+    }
+}
+
+/// `RNS.Identity.from_bytes` (`load_private_key`).
+pub fn identity_from_bytes(bytes: &[u8]) -> Option<rns_crypto::identity::Identity> {
+    match <&[u8; 64]>::try_from(bytes) {
+        Ok(key) => Some(rns_crypto::identity::Identity::from_private_key(key)),
+        Err(_) => {
+            let which = if bytes.len() < 32 {
+                "An X25519 private key is 32 bytes long"
+            } else {
+                "An Ed25519 private key is 32 bytes long"
+            };
+            log(
+                &format!("Failed to load identity key, the contained exception was: {which}"),
+                LOG_ERROR,
+            );
+            None
+        }
+    }
+}
+
+/// `RNS.Identity.to_file` / `pub_to_file`: a failure is logged, not
+/// raised.
+pub fn key_to_file(key: &[u8], path: &str) {
+    if let Err(e) = std::fs::write(path, key) {
+        log(&format!("Error while saving identity to {path}"), LOG_ERROR);
+        log(
+            &format!("The contained exception was: {}", oserror(&e, path)),
+            LOG_NOTICE,
+        );
+    }
+}
+
+/// `os.path.expanduser`.
+pub fn expanduser(path: &str) -> String {
+    if !path.starts_with('~') {
+        return path.to_string();
+    }
+    let end = path[1..].find('/').map_or(path.len(), |i| i + 1);
+    let home = if end == 1 {
+        match std::env::var("HOME") {
+            Ok(home) => home,
+            Err(_) => return path.to_string(),
+        }
+    } else {
+        match home_of(&path[1..end]) {
+            Some(home) => home,
+            None => return path.to_string(),
+        }
+    };
+    let joined = format!("{}{}", home.trim_end_matches('/'), &path[end..]);
+    if joined.is_empty() {
+        "/".into()
+    } else {
+        joined
+    }
+}
+
+fn home_of(user: &str) -> Option<String> {
+    let name = std::ffi::CString::new(user).ok()?;
+    let entry = unsafe { libc::getpwnam(name.as_ptr()) };
+    if entry.is_null() {
+        return None;
+    }
+    let dir = unsafe { std::ffi::CStr::from_ptr((*entry).pw_dir) };
+    Some(dir.to_string_lossy().into_owned())
+}
+
+/// `os.path.normpath` (POSIX): `.` and `..` resolved by name, not by
+/// following links.
+pub fn normpath(path: &str) -> String {
+    if path.is_empty() {
+        return ".".into();
+    }
+    let initial = if path.starts_with("//") && !path.starts_with("///") {
+        2
+    } else if path.starts_with('/') {
+        1
+    } else {
+        0
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if initial == 0 && (parts.is_empty() || parts.last() == Some(&"..")) {
+                    parts.push("..");
+                } else if !parts.is_empty() {
+                    parts.pop();
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let joined = format!("{}{}", "/".repeat(initial), parts.join("/"));
+    if joined.is_empty() {
+        ".".into()
+    } else {
+        joined
+    }
+}
+
+/// `os.path.abspath`.
+pub fn abspath(path: &str) -> String {
+    if path.starts_with('/') {
+        normpath(path)
+    } else {
+        let cwd = std::env::current_dir()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        normpath(&format!("{cwd}/{path}"))
+    }
+}
+
+/// `os.path.basename`.
+pub fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 /// `bytes.fromhex(s)`, with Python's error message.
 pub fn fromhex(s: &str) -> Result<Vec<u8>, String> {
     let chars: Vec<char> = s.chars().collect();
@@ -340,6 +477,18 @@ mod tests {
         assert_eq!(urlsafe_b64decode("garbage"), None);
         assert_eq!(urlsafe_b64encode(&[0xfb, 0xff]), "-_8=");
         assert_eq!(b32encode(b"foo"), "MZXW6===");
+    }
+
+    #[test]
+    fn paths_as_python_handles_them() {
+        assert_eq!(normpath("/a/./b/../c//d/"), "/a/c/d");
+        assert_eq!(normpath("a/../../b"), "../b");
+        assert_eq!(normpath("/../a"), "/a");
+        assert_eq!(normpath(""), ".");
+        assert_eq!(normpath("//a"), "//a");
+        assert_eq!(basename("/x/y.txt"), "y.txt");
+        assert_eq!(basename("y/"), "");
+        assert_eq!(expanduser("a/~"), "a/~");
     }
 
     #[test]
