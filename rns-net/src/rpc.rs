@@ -4163,16 +4163,9 @@ fn parse_hook_list(response: &PickleValue) -> io::Result<Vec<HookInfo>> {
 }
 
 fn default_hook_type() -> &'static str {
-    #[cfg(feature = "rns-hooks-native")]
-    {
+    if cfg!(feature = "rns-hooks-native") {
         "native"
-    }
-    #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
-    {
-        return "wasm";
-    }
-    #[cfg(all(not(feature = "rns-hooks-native"), not(feature = "rns-hooks-wasm")))]
-    {
+    } else {
         "wasm"
     }
 }
