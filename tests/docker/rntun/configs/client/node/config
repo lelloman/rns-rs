@@ -5,5 +5,6 @@ share_instance = No
 [interfaces]
   [[rntun TCP client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 172.31.76.3
     target_port = 4242

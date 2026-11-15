@@ -7,5 +7,6 @@ instance_control_port = 37429
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = daemon
     target_port = 4965

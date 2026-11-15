@@ -1193,6 +1193,7 @@ fn server_rns_config(port: u16) -> String {
 [interfaces]
   [[RNGit Server TCP]]
     type = TCPServerInterface
+    enabled = yes
     listen_ip = 127.0.0.1
     listen_port = {port}
     mode = full

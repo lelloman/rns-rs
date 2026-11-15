@@ -322,13 +322,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         fs::write(
             directory.path().join("config"),
-            "[interfaces]\n  [[uplink]]\n    type = TCPClientInterface\n    target_host = example.com\n    target_port = 4242\n",
+            "[interfaces]\n  [[uplink]]\n    type = TCPClientInterface\n    enabled = yes\n    target_host = example.com\n    target_port = 4242\n",
         )
         .unwrap();
         assert!(validate_full_tunnel_node_config(directory.path()).is_err());
         fs::write(
             directory.path().join("config"),
-            "[interfaces]\n  [[pipe]]\n    type = PipeInterface\n    command = /bin/false\n",
+            "[interfaces]\n  [[pipe]]\n    type = PipeInterface\n    enabled = yes\n    command = /bin/false\n",
         )
         .unwrap();
         assert!(validate_full_tunnel_node_config(directory.path()).is_err());

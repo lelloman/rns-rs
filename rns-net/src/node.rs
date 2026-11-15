@@ -6502,6 +6502,7 @@ share_instance = False
 [interfaces]
   [[Persistence Test]]
     type = UDPInterface
+    enabled = yes
     forward_ip = 127.0.0.1
     forward_port = 9
     interface_mode = full
@@ -6950,6 +6951,7 @@ enable_transport = False
 [interfaces]
   [[Test TCP Server]]
     type = TCPServerInterface
+    enabled = yes
     listen_ip = 127.0.0.1
     listen_port = {}
 "#,
@@ -7070,6 +7072,7 @@ instance_control_port = {}
 [interfaces]
   [[Unreachable Upstream]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = {}
 "#,
@@ -7183,6 +7186,7 @@ enable_transport = False
 [interfaces]
   [[Test Serial Port]]
     type = SerialInterface
+    enabled = yes
     port = /dev/nonexistent_rns_test_serial
     speed = 115200
     databits = 8
@@ -7216,6 +7220,7 @@ enable_transport = False
 [interfaces]
   [[Test KISS TNC]]
     type = KISSInterface
+    enabled = yes
     port = /dev/nonexistent_rns_test_kiss
     speed = 9600
     preamble = 500
@@ -7247,6 +7252,7 @@ enable_transport = True
 [interfaces]
   [[Recursive Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = 4242
     interface_mode = full
@@ -7254,6 +7260,7 @@ enable_transport = True
 
   [[Default Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = 4243
     interface_mode = gateway
@@ -7285,6 +7292,7 @@ enable_transport = True
 [interfaces]
   [[Filtered Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = 4242
     interface_mode = gateway
@@ -7292,6 +7300,7 @@ enable_transport = True
 
   [[Default Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = 4243
     interface_mode = full
@@ -7322,18 +7331,21 @@ enable_transport = True
 [interfaces]
   [[Allowed Boundary]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = 4242
     announces_to_internal = yes
 
   [[Blocked Boundary]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = 4243
     announces_to_internal = no
 
   [[Default Boundary]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = 4244
 "#;
@@ -7508,6 +7520,7 @@ enable_transport = False
 [interfaces]
   [[Test RNode]]
     type = RNodeInterface
+    enabled = yes
     port = /dev/nonexistent_rns_test_rnode
     frequency = 867200000
     bandwidth = 125000
@@ -7546,6 +7559,7 @@ enable_transport = False
 [interfaces]
   [[Test Pipe]]
     type = PipeInterface
+    enabled = yes
     command = cat
     respawn_delay = 5000
     interface_mode = full
@@ -7577,6 +7591,7 @@ enable_transport = False
 [interfaces]
   [[Test Backbone]]
     type = BackboneInterface
+    enabled = yes
     listen_ip = 127.0.0.1
     listen_port = {}
     interface_mode = full

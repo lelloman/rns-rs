@@ -22,9 +22,13 @@ includes an example of every interface type.
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = amsterdam.connect.reticulum.network
     target_port = 4965
 ```
+
+As upstream, an interface section runs only with `enabled = yes` (or
+`interface_enabled = yes`); without either it is skipped.
 
 Interface types: `AutoInterface`, `TCPClientInterface`, `TCPServerInterface`,
 `UDPInterface`, `SerialInterface`, `KISSInterface`, `AX25KISSInterface`,
@@ -86,6 +90,7 @@ that many microseconds:
 ```ini
 [[Backbone link]]
   type = TCPClientInterface
+  enabled = yes
   target_host = 10.0.0.2
   target_port = 4242
   flush_after_us = 25
@@ -281,6 +286,7 @@ required of traffic received on it (upstream `9b464382`):
 [interfaces]
   [[Constrained Radio]]
     type = RNodeInterface
+    enabled = yes
     destination_cost = 26.5
     pr_cost = 18
 ```
@@ -361,6 +367,7 @@ the same keys as Python Reticulum:
 ```ini
   [[Public Gateway]]
     type = BackboneInterface
+    enabled = yes
     listen_on = 0.0.0.0
     port = 4242
     announce_rate_target = 600
@@ -449,6 +456,7 @@ This example sets custom thresholds and timings:
 ```ini
   [[TCP Server]]
     type = TCPServerInterface
+    enabled = yes
     listen_ip = 0.0.0.0
     listen_port = 4965
     ingress_control = Yes

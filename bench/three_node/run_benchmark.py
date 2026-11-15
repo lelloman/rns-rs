@@ -410,6 +410,7 @@ class BenchmarkHarness:
             [interfaces]
               [[Middle]]
                 type = TCPClientInterface
+                enabled = yes
                 target_host = 127.0.0.1
                 target_port = {self.middle_tcp_port}
             """
@@ -423,6 +424,7 @@ class BenchmarkHarness:
             [interfaces]
               [[Ingress]]
                 type = TCPServerInterface
+                enabled = yes
                 listen_ip = 127.0.0.1
                 listen_port = {self.middle_tcp_port}
                 max_connections = 128

@@ -55,6 +55,7 @@ network:
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = amsterdam.connect.reticulum.network
     target_port = 4965
 ```

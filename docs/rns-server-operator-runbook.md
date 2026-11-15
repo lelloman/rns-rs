@@ -294,6 +294,7 @@ can be changed at runtime with `rns-ctl`:
 ```ini
 [[Backbone Listener]]
   type = BackboneInterface
+  enabled = yes
   listen_port = 4242
   client_limit = 500
 ```
