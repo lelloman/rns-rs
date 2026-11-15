@@ -166,6 +166,42 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     }
 }
 
+/// IFAC state for the standalone LoRa interface from the build-time
+/// settings in [`crate::config`], or `None` when IFAC is not configured.
+pub fn from_build_config() -> Option<IfacState> {
+    from_settings(
+        crate::config::IFAC_NETNAME,
+        crate::config::IFAC_PASSPHRASE,
+        crate::config::IFAC_SIZE,
+    )
+}
+
+/// IFAC state from a network name and/or passphrase, or `None` when
+/// neither is given (the interface is then open).
+pub fn from_settings(
+    netname: Option<&str>,
+    passphrase: Option<&str>,
+    size: usize,
+) -> Option<IfacState> {
+    if netname.is_none() && passphrase.is_none() {
+        return None;
+    }
+    Some(derive_ifac(netname, passphrase, size))
+}
+
+/// The packet an inbound frame carries, or `None` to drop the frame.
+///
+/// Matches `Transport.py:1241-1303`: on an interface with IFAC, the frame
+/// must carry a valid access code, which is removed; on an interface
+/// without IFAC, a frame with the IFAC flag set is dropped.
+pub fn inbound(raw: &[u8], state: Option<&IfacState>) -> Option<Vec<u8>> {
+    match state {
+        Some(state) => unmask_inbound(raw, state),
+        None if raw.first().is_some_and(|flags| flags & 0x80 == 0x80) => None,
+        None => Some(raw.to_vec()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,4 +295,53 @@ mod tests {
         let result = unmask_inbound(&raw, &state);
         assert!(result.is_none());
     }
+
+    #[test]
+    fn no_settings_means_no_ifac() {
+        assert!(from_settings(None, None, 8).is_none());
+        assert!(from_settings(Some("net"), None, 8).is_some());
+        assert!(from_settings(None, Some("key"), 8).is_some());
+    }
+
+    #[test]
+    fn open_interface_passes_plain_frames_and_drops_flagged_ones() {
+        let plain = vec![0x00, 0x01, 0x42, 0x43];
+        assert_eq!(inbound(&plain, None), Some(plain.clone()));
+
+        let state = derive_ifac(Some("testnet"), None, 8);
+        let masked = mask_outbound(&plain, &state);
+        assert_eq!(inbound(&masked, None), None);
+    }
+
+    #[test]
+    fn ifac_interface_needs_the_same_access_code() {
+        let mut raw = vec![0x00, 0x01];
+        raw.extend_from_slice(&[0x42u8; 32]);
+        let ours = derive_ifac(Some("testnet"), Some("password"), 8);
+        let theirs = derive_ifac(Some("testnet"), Some("other"), 8);
+
+        assert_eq!(
+            inbound(&mask_outbound(&raw, &ours), Some(&ours)),
+            Some(raw.clone())
+        );
+        assert_eq!(inbound(&mask_outbound(&raw, &theirs), Some(&ours)), None);
+        assert_eq!(inbound(&raw, Some(&ours)), None);
+    }
+
+    #[test]
+    fn masked_frame_matches_reticulum_reference() {
+        // Reticulum 1.6.0's Transport.transmit on an interface with
+        // network_name = "testnet", passphrase = "password", ifac_size = 64.
+        let mut raw = vec![0x00, 0x01];
+        raw.extend_from_slice(&[0x42u8; 32]);
+        let state = derive_ifac(Some("testnet"), Some("password"), 8);
+        assert_eq!(util_hex(&mask_outbound(&raw, &state)), REFERENCE_MASKED);
+    }
+
+    fn util_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    const REFERENCE_MASKED: &str =
+        "9857655e6da92ac321035b4a6b13a706436f85c8b1fe928fde48790149bb645a279c18d341a75e48f4aa";
 }
