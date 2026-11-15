@@ -487,7 +487,7 @@ pub fn format_usage(parser: &Parser, prog: &str, columns: usize) -> String {
 }
 
 /// Python's `repr()` of a string.
-fn repr(s: &str) -> String {
+pub fn repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') {
         '"'
     } else {

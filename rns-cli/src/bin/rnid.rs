@@ -1,55 +1,66 @@
-//! rnid - Reticulum identity, encryption and signature utility.
+//! rnid - Reticulum Identity & Encryption Utility.
+//!
+//! Ported statement by statement from upstream's rnid: the same messages
+//! (on stdout, as upstream prints them, `RNS.log` lines included), exit
+//! codes, file formats and order of operations.
 
-use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{self, Command};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process;
+use std::time::{Duration, Instant};
 
-use rns_cli::args::{Args, Opt, OptionSpec};
-use rns_cli::format::{
-    b256_to_bytes, b256rep, base32_decode, base32_encode, prettyb256rep, prettyhexrep,
+use rns_cli::args::{Args, Opt, OptionSpec, Seen};
+use rns_cli::configobj::{self, Entry};
+use rns_cli::pyfmt::{hexrep, prettyhexrep, prettysize};
+use rns_cli::pylog::{
+    self, b32decode, b32encode, fromhex, oserror, urlsafe_b64decode, urlsafe_b64encode, LOG_ERROR,
 };
-use rns_core::destination::destination_hash;
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
-use rns_crypto::sha256::sha256;
+use rns_crypto::sha256::{sha256, Sha256};
 use rns_crypto::OsRng;
-use rns_net::event::KnownDestinationEntry;
-use rns_net::rpc::derive_auth_key;
-use rns_net::{config, storage, RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
-const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024;
+
 const DEFAULT_ASPECTS: &str = "rns.id";
 const PUB_EXT: &str = "pub";
 const SIG_EXT: &str = "rsg";
 const MSG_EXT: &str = "rsm";
 const ENCRYPT_EXT: &str = "rfe";
-const SIG_LEN: usize = 64;
+const CHUNK_BLOCKS: usize = 1024 * 1024;
+const ENC_CHUNK: usize = CHUNK_BLOCKS * 16;
+const DEC_CHUNK: usize = ENC_CHUNK + rns_core::constants::TOKEN_OVERHEAD * 2;
+const SIGLEN: usize = 64;
+const KEYSIZE: usize = 64;
+/// `RNS.Transport.PATH_REQUEST_TIMEOUT`, the default of `-t`.
+const PATH_REQUEST_TIMEOUT: f64 = 15.0;
+
+const R_OK: i32 = 0;
+const R_NO_IDENTITY: i32 = 2;
+const R_NO_PUBKEY: i32 = 3;
+const R_NO_PRVKEY: i32 = 4;
+const R_NO_KEYS: i32 = 5;
+const R_NO_FILE: i32 = 6;
+const R_INVALID_FILE: i32 = 7;
+const R_INVALID_IDENTITY: i32 = 8;
+const R_INVALID_ASPECTS: i32 = 9;
+const R_INVALID_SIGNATURE: i32 = 10;
+const R_FILE_EXISTS: i32 = 11;
+const R_DECRYPT_FAILED: i32 = 12;
+const R_INVALID_ARGS: i32 = 250;
+const R_READ_ERROR: i32 = 252;
+const R_WRITE_ERROR: i32 = 253;
+const R_UNKNOWN_ERROR: i32 = 254;
+const R_INTERRUPTED: i32 = 255;
+
 const RSG_ASCII_HEADER: &str = "#### Start of rsg data ";
 const RSG_ASCII_FOOTER: &str = " End of rsg data ####";
 const RSG_ASCII_ROW_WIDTH: usize = 64;
 
-enum IdentityRef {
-    Identity(Box<Identity>),
-    Hash([u8; 16]),
-}
-
-#[derive(Clone, Copy)]
-enum RsgOutputFormat {
-    Binary,
-    Hex,
-    Base32,
-    Base256,
-    Base64,
-}
-
 /// upstream rnid's options. `-d`, `-e`, `-V` and `-s` take any number of
-/// paths (`nargs="*"`): the first is the option's value, and the rest are
-/// positional, where [`operation_paths`] collects them.
+/// paths (`nargs="*"`): the first is the option's value and the rest
+/// follow it as positionals in the parser's trace.
 pub const OPTIONS: OptionSpec = OptionSpec {
     options: &[
         Opt::value("", "config"),
@@ -91,2064 +102,1948 @@ pub const OPTIONS: OptionSpec = OptionSpec {
     ],
 };
 
-/// upstream's short names for options this implementation reads by their
-/// long (or older short) names.
-const ALIASES: &[(&str, &str)] = &[
-    ("U", "base256"),
-    ("F", "hex"),
-    ("I", "stdin"),
-    ("O", "stdout"),
-    ("a", "announce"),
-];
-
 #[allow(dead_code)]
 fn main() {
     rns_cli::stdout::exit_quietly_on_closed_stdout();
     run_with_args(Args::parse_spec(&OPTIONS), "rnid", "rnid");
 }
 
-pub fn run_with_args(mut args: Args, usage_name: &str, version_name: &str) {
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     rns_cli::argparse::enforce(&args, "rnid", usage_name);
-    for (short, long) in ALIASES {
-        if let Some(value) = args.flags.get(*short).cloned() {
-            args.flags.entry(long.to_string()).or_insert(value);
-        }
-    }
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
     }
-
     if args.has("help") || args.has("h") {
-        print_usage(usage_name);
+        rns_cli::argparse::print_help("rnid", usage_name);
         return;
     }
+    // `except KeyboardInterrupt: print(""); exit(R_INTERRUPTED)`, until a
+    // Reticulum instance installs its own handler.
+    rns_cli::stdout::exit_on_interrupt_after_newline(R_INTERRUPTED);
+    let mut rnid = Rnid {
+        args: Namespace::from_args(&args),
+        node: None,
+    };
+    rnid.main(usage_name);
+}
 
-    validate_args(&args).unwrap_or_else(|e| die(&e, 1));
+/// `-S` without a message is upstream's `NO_MESSAGE`.
+#[derive(Clone, Debug, PartialEq)]
+enum MessageArg {
+    NoMessage,
+    Text(String),
+}
 
-    let needs_identity = args.has("announce")
-        || args.has("p")
-        || args.has("print-identity")
-        || args.has("x")
-        || args.has("export-pub")
-        || args.has("X")
-        || args.has("export-prv")
-        || args.has("s")
-        || args.has("sign")
-        || args.has("S")
-        || args.has("sign-message")
-        || args.has("e")
-        || args.has("encrypt")
-        || args.has("d")
-        || args.has("decrypt")
-        || (args.has("w")
-            && !args.has("e")
-            && !args.has("encrypt")
-            && !args.has("d")
-            && !args.has("decrypt")
-            && !args.has("s")
-            && !args.has("sign")
-            && !args.has("S")
-            && !args.has("sign-message"))
-        || args.has("generate")
-        || args.has("g");
+/// `-E` without a path is upstream's `NO_META`.
+#[derive(Clone, Debug, PartialEq)]
+enum MetaArg {
+    NoMeta,
+    Path(String),
+}
 
-    let identity_ref = load_identity_ref(&args, !needs_identity).unwrap_or_else(|e| die(&e, 1));
-    let mut operated = false;
+/// upstream's argparse namespace.
+#[derive(Debug, Default)]
+struct Namespace {
+    config: Option<String>,
+    identity: Option<String>,
+    generate: Option<String>,
+    import_pub: Option<String>,
+    import_prv: Option<String>,
+    export_pub: bool,
+    export_prv: bool,
+    verbose: i32,
+    quiet: i32,
+    announce: Option<String>,
+    hash: Option<String>,
+    decrypt: Option<Vec<String>>,
+    encrypt: Option<Vec<String>>,
+    validate: Option<Vec<String>>,
+    sign: Option<Vec<String>>,
+    sign_message: Option<MessageArg>,
+    embed_meta: Option<MetaArg>,
+    meta_spec: Option<String>,
+    raw: bool,
+    write: Option<String>,
+    read: Option<String>,
+    force: bool,
+    stdout: bool,
+    request: bool,
+    no_cache: bool,
+    t: f64,
+    print_identity: bool,
+    print_private: bool,
+    base32: bool,
+    base64: bool,
+    base256: bool,
+    hex: bool,
+    meta: bool,
+}
 
-    if args.has("p") || args.has("print-identity") {
-        let identity = require_identity(identity_ref.as_ref());
-        print_identity_information(&args, identity);
-        operated = true;
-    }
+/// Python's truthiness of an optional string.
+fn truthy(value: &Option<String>) -> bool {
+    value.as_deref().is_some_and(|v| !v.is_empty())
+}
 
-    if let Some(aspects) = args.get("H").or_else(|| args.get("hash")) {
-        print_hash_information(aspects, identity_ref.as_ref()).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
-    }
+fn truthy_list(value: &Option<Vec<String>>) -> bool {
+    value.as_ref().is_some_and(|v| !v.is_empty())
+}
 
-    if args.has("x") || args.has("export-pub") {
-        let identity = require_identity(identity_ref.as_ref());
-        export_public_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
-    }
-
-    if args.has("X") || args.has("export-prv") {
-        let identity = require_identity(identity_ref.as_ref());
-        export_private_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
-    }
-
-    if let Some(aspects) = args.get("announce") {
-        let aspects = if aspects == "true" {
-            DEFAULT_ASPECTS
-        } else {
-            aspects
+impl Namespace {
+    /// The namespace argparse builds, from what the parser saw: the last
+    /// occurrence of an option wins, and the arguments after a `nargs="*"`
+    /// option are its values.
+    fn from_args(args: &Args) -> Self {
+        let mut ns = Namespace {
+            t: PATH_REQUEST_TIMEOUT,
+            verbose: i32::from(args.verbosity),
+            quiet: i32::from(args.quiet),
+            ..Default::default()
         };
-        announce(&args, require_identity(identity_ref.as_ref()), aspects);
-        operated = true;
+        let mut collecting: Option<&'static str> = None;
+        for seen in &args.trace {
+            match seen {
+                Seen::Option(opt, value) => {
+                    collecting = ns.set(opt, value.clone());
+                }
+                Seen::Missing(opt) => {
+                    collecting = ns.set(opt, None);
+                }
+                Seen::Positional(value) => {
+                    if let Some(list) = collecting.and_then(|dest| ns.list_mut(dest)) {
+                        list.push(value.clone());
+                    }
+                }
+                _ => collecting = None,
+            }
+        }
+        ns
     }
 
-    if args.has("V") || args.has("validate") {
-        let paths = operation_paths(&args, "V", "validate").unwrap_or_else(|e| die(&e, 1));
-        validate_signatures(&paths, identity_ref.as_ref(), &args).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
+    fn list_mut(&mut self, dest: &str) -> Option<&mut Vec<String>> {
+        match dest {
+            "decrypt" => self.decrypt.as_mut(),
+            "encrypt" => self.encrypt.as_mut(),
+            "validate" => self.validate.as_mut(),
+            "sign" => self.sign.as_mut(),
+            _ => None,
+        }
     }
 
-    if args.has("s") || args.has("sign") {
-        let identity = require_identity(identity_ref.as_ref());
-        let paths = operation_paths(&args, "s", "sign").unwrap_or_else(|e| die(&e, 1));
-        sign_files(&paths, identity, &args).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
+    /// Store one option; returns the list it collects into, if any.
+    fn set(&mut self, opt: &Opt, value: Option<String>) -> Option<&'static str> {
+        let name = if opt.long.is_empty() {
+            opt.short
+        } else {
+            opt.long
+        };
+        let list = |value: Option<String>| Some(value.into_iter().collect::<Vec<_>>());
+        match name {
+            "config" => self.config = value,
+            "identity" => self.identity = value,
+            "generate" => self.generate = value,
+            "import-pub" => self.import_pub = value,
+            "import-prv" => self.import_prv = value,
+            "export-pub" => self.export_pub = true,
+            "export-prv" => self.export_prv = true,
+            "announce" => self.announce = Some(value.unwrap_or_else(|| DEFAULT_ASPECTS.into())),
+            "hash" => self.hash = value,
+            "decrypt" => {
+                self.decrypt = list(value);
+                return Some("decrypt");
+            }
+            "encrypt" => {
+                self.encrypt = list(value);
+                return Some("encrypt");
+            }
+            "validate" => {
+                self.validate = list(value);
+                return Some("validate");
+            }
+            "sign" => {
+                self.sign = list(value);
+                return Some("sign");
+            }
+            "sign-message" => {
+                self.sign_message = Some(value.map_or(MessageArg::NoMessage, MessageArg::Text))
+            }
+            "embed-meta" => self.embed_meta = Some(value.map_or(MetaArg::NoMeta, MetaArg::Path)),
+            "meta-spec" => self.meta_spec = value,
+            "raw" => self.raw = true,
+            "write" => self.write = value,
+            "read" => self.read = value,
+            "force" => self.force = true,
+            "stdout" => self.stdout = true,
+            "request" => self.request = true,
+            "no-cache" => self.no_cache = true,
+            "t" => {
+                if let Some(t) = value.as_deref().and_then(rns_cli::argparse::python_float) {
+                    self.t = t;
+                }
+            }
+            "print-identity" => self.print_identity = true,
+            "print-private" => self.print_private = true,
+            "base32" => self.base32 = true,
+            "base64" => self.base64 = true,
+            "base256" | "Z" => self.base256 = true,
+            "hex" => self.hex = true,
+            "meta" => self.meta = true,
+            _ => {}
+        }
+        None
     }
 
-    if args.has("S") || args.has("sign-message") {
-        let identity = require_identity(identity_ref.as_ref());
-        sign_message(identity, &args).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
+    fn sign_message_truthy(&self) -> bool {
+        match &self.sign_message {
+            Some(MessageArg::NoMessage) => true,
+            Some(MessageArg::Text(text)) => !text.is_empty(),
+            None => false,
+        }
     }
 
-    if args.has("e") || args.has("encrypt") {
-        let identity = require_identity(identity_ref.as_ref());
-        let paths = operation_paths(&args, "e", "encrypt").unwrap_or_else(|e| die(&e, 1));
-        encrypt_files(&paths, identity, &args).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
+    fn embed_meta_truthy(&self) -> bool {
+        match &self.embed_meta {
+            Some(MetaArg::NoMeta) => true,
+            Some(MetaArg::Path(path)) => !path.is_empty(),
+            None => false,
+        }
     }
 
-    if args.has("d") || args.has("decrypt") {
-        let identity = require_identity(identity_ref.as_ref());
-        let paths = operation_paths(&args, "d", "decrypt").unwrap_or_else(|e| die(&e, 1));
-        decrypt_files(&paths, identity, &args).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
-    }
-
-    if args.has("w")
-        && !args.has("e")
-        && !args.has("encrypt")
-        && !args.has("d")
-        && !args.has("decrypt")
-        && !args.has("s")
-        && !args.has("sign")
-        && !args.has("S")
-        && !args.has("sign-message")
-    {
-        let identity = require_identity(identity_ref.as_ref());
-        write_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
-        operated = true;
-    }
-
-    if args.has("g") || args.has("generate") {
-        operated = true;
-    }
-
-    if !operated {
-        print_usage(usage_name);
+    fn output(&self) -> &'static str {
+        if self.base32 {
+            "base32"
+        } else if self.base64 {
+            "base64"
+        } else if self.base256 {
+            "base256"
+        } else if self.hex {
+            "hex"
+        } else {
+            "bin"
+        }
     }
 }
 
-fn validate_args(args: &Args) -> Result<(), String> {
-    let operations = [
-        args.has("e") || args.has("encrypt"),
-        args.has("d") || args.has("decrypt"),
-        args.has("s") || args.has("sign"),
-        args.has("S") || args.has("sign-message"),
-        args.has("V") || args.has("validate"),
-    ]
-    .into_iter()
-    .filter(|v| *v)
-    .count();
-    if operations > 1 {
-        return Err(
-            "Only one of encrypt, decrypt, sign, sign-message or validate is supported per invocation"
-                .into(),
+/// `os.path.expanduser`.
+fn expanduser(path: &str) -> String {
+    if !path.starts_with('~') {
+        return path.to_string();
+    }
+    let end = path[1..].find('/').map_or(path.len(), |i| i + 1);
+    let home = if end == 1 {
+        match std::env::var("HOME") {
+            Ok(home) => home,
+            Err(_) => return path.to_string(),
+        }
+    } else {
+        match home_of(&path[1..end]) {
+            Some(home) => home,
+            None => return path.to_string(),
+        }
+    };
+    let joined = format!("{}{}", home.trim_end_matches('/'), &path[end..]);
+    if joined.is_empty() {
+        "/".into()
+    } else {
+        joined
+    }
+}
+
+fn home_of(user: &str) -> Option<String> {
+    let name = std::ffi::CString::new(user).ok()?;
+    let entry = unsafe { libc::getpwnam(name.as_ptr()) };
+    if entry.is_null() {
+        return None;
+    }
+    let dir = unsafe { std::ffi::CStr::from_ptr((*entry).pw_dir) };
+    Some(dir.to_string_lossy().into_owned())
+}
+
+fn isfile(path: &str) -> bool {
+    Path::new(path).is_file()
+}
+
+/// `str(identity)`.
+fn id_str(identity: &Identity) -> String {
+    prettyhexrep(identity.hash())
+}
+
+/// Python's `str()` of an exception reading or writing `path`.
+fn io_error(err: &std::io::Error, path: &str) -> String {
+    oserror(err, path)
+}
+
+/// `Identity.load_private_key`, logging as upstream when the bytes are
+/// not a key.
+fn identity_from_bytes(bytes: &[u8]) -> Option<Identity> {
+    match <&[u8; KEYSIZE]>::try_from(bytes) {
+        Ok(key) => Some(Identity::from_private_key(key)),
+        Err(_) => {
+            let which = if bytes.len() < KEYSIZE / 2 {
+                "An X25519 private key is 32 bytes long"
+            } else {
+                "An Ed25519 private key is 32 bytes long"
+            };
+            pylog::log(
+                &format!("Failed to load identity key, the contained exception was: {which}"),
+                LOG_ERROR,
+            );
+            None
+        }
+    }
+}
+
+/// `Identity.from_file`.
+fn identity_from_file(path: &str) -> Option<Identity> {
+    match fs::read(path) {
+        Ok(bytes) => identity_from_bytes(&bytes),
+        Err(e) => {
+            pylog::log(
+                &format!("Error while loading identity from {path}"),
+                LOG_ERROR,
+            );
+            pylog::log(
+                &format!("The contained exception was: {}", io_error(&e, path)),
+                LOG_ERROR,
+            );
+            None
+        }
+    }
+}
+
+/// `Identity.to_file` / `pub_to_file`: failures are logged, not raised.
+fn key_to_file(key: &[u8], path: &str) {
+    if let Err(e) = fs::write(path, key) {
+        pylog::log(&format!("Error while saving identity to {path}"), LOG_ERROR);
+        pylog::log(
+            &format!("The contained exception was: {}", io_error(&e, path)),
+            pylog::LOG_NOTICE,
         );
     }
-
-    let identity_sources = [
-        args.has("g") || args.has("generate"),
-        args.has("i") || args.has("identity"),
-        args.has("m") || args.has("import-pub"),
-        args.has("M") || args.has("import-prv"),
-    ]
-    .into_iter()
-    .filter(|v| *v)
-    .count();
-    if identity_sources > 1 {
-        return Err("The -i, -g, -m and -M options are mutually exclusive".into());
-    }
-
-    let output_formats = [
-        args.has("b") || args.has("base64"),
-        args.has("B") || args.has("base32"),
-        args.has("Z") || args.has("base256"),
-        args.has("hex"),
-    ]
-    .into_iter()
-    .filter(|v| *v)
-    .count();
-    if output_formats > 1 {
-        return Err("The -b, -B, --base256 and --hex options are mutually exclusive".into());
-    }
-
-    Ok(())
 }
 
-fn operation_paths<'a>(args: &'a Args, short: &str, long: &str) -> Result<Vec<&'a str>, String> {
-    let mut paths = Vec::new();
-    if let Some(path) = args.get(short).or_else(|| args.get(long)) {
-        if path != "true" {
-            paths.push(path);
-        }
-    }
-    paths.extend(args.positional.iter().map(String::as_str));
-    if paths.is_empty() {
-        Err("missing operation path".into())
-    } else {
-        Ok(paths)
-    }
+/// `RNS.Destination.hash_from_name_and_identity`.
+fn hash_from_name_and_identity(full_name: &str, identity_hash: &[u8]) -> [u8; 16] {
+    let name_hash = sha256(full_name.as_bytes());
+    let mut material = name_hash[..10].to_vec();
+    material.extend_from_slice(identity_hash);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&sha256(&material)[..16]);
+    out
 }
 
-fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef>, String> {
-    if let Some(path) = args.get("g").or_else(|| args.get("generate")) {
-        let identity = generate_identity(path, args)?;
-        return Ok(Some(IdentityRef::Identity(Box::new(identity))));
+/// What upstream passes as the identity to `-H` and `-V`: an Identity,
+/// or the `-i` string when it did not resolve to one.
+enum Target<'a> {
+    Identity(&'a Identity),
+    Str(String),
+    None,
+}
+
+/// A required signer, once a string was turned into bytes.
+enum Signer<'a> {
+    Identity(&'a Identity),
+    Hash(Vec<u8>),
+    None,
+}
+
+impl Signer<'_> {
+    fn is_truthy(&self) -> bool {
+        match self {
+            Signer::Identity(_) => true,
+            Signer::Hash(h) => !h.is_empty(),
+            Signer::None => false,
+        }
     }
 
-    if let Some(spec) = args.get("i").or_else(|| args.get("identity")) {
-        let expanded = Path::new(spec);
-        if expanded.exists() {
-            return load_private_identity_file(expanded)
-                .map(|id| Some(IdentityRef::Identity(Box::new(id))));
+    /// `RNS.prettyhexrep(identity) if type(identity) == bytes else f"{identity}"`.
+    fn describe(&self) -> String {
+        match self {
+            Signer::Identity(identity) => id_str(identity),
+            Signer::Hash(hash) => prettyhexrep(hash),
+            Signer::None => "None".into(),
         }
-
-        let hash = parse_identity_hash(spec)?;
-        if args.has("N") || args.has("no-cache") {
-            return Ok(Some(IdentityRef::Hash(hash)));
-        }
-
-        if args.has("R") || args.has("request") {
-            if let Some(identity) = request_identity(args, hash)? {
-                return Ok(Some(IdentityRef::Identity(Box::new(identity))));
-            }
-        }
-
-        if allow_none {
-            return Ok(Some(IdentityRef::Hash(hash)));
-        }
-
-        return Err(format!(
-            "Could not resolve identity {}. Use -R to request it from the network.",
-            prettyhexrep(&hash)
-        ));
-    }
-
-    if let Some(spec) = args.get("m").or_else(|| args.get("import-pub")) {
-        let public_key = load_or_decode_key(spec, 64, args)?;
-        let key: [u8; 64] = public_key
-            .as_slice()
-            .try_into()
-            .map_err(|_| "Invalid public identity length".to_string())?;
-        let identity = Identity::from_public_key(&key)
-            .map_err(|_| "Invalid public identity key".to_string())?;
-        return Ok(Some(IdentityRef::Identity(Box::new(identity))));
-    }
-
-    if let Some(spec) = args.get("M").or_else(|| args.get("import-prv")) {
-        let private_key = load_or_decode_key(spec, 64, args)?;
-        let key: [u8; 64] = private_key
-            .as_slice()
-            .try_into()
-            .map_err(|_| "Invalid private identity length".to_string())?;
-        return Ok(Some(IdentityRef::Identity(Box::new(
-            Identity::from_private_key(&key),
-        ))));
-    }
-
-    if allow_none {
-        Ok(None)
-    } else {
-        Err("Could not get working identity".into())
     }
 }
 
-fn generate_identity(path: &str, args: &Args) -> Result<Identity, String> {
-    let force = args.has("f") || args.has("force");
-    let path = Path::new(path);
-    if path.exists() && !force {
-        return Err(format!("Identity file {} already exists", path.display()));
-    }
-
-    let identity = Identity::new(&mut OsRng);
-    let private_key = identity
-        .get_private_key()
-        .ok_or_else(|| "Generated identity is missing a private key".to_string())?;
-    fs::write(path, private_key).map_err(|e| format!("Error writing identity: {}", e))?;
-
-    println!("Generated new identity");
-    println!("  Hash : {}", prettyhexrep(identity.hash()));
-    if args.has("Z") || args.has("base256") {
-        println!("  B256 : {}", prettyb256rep(identity.hash()));
-    }
-    println!("  Saved: {}", path.display());
-    Ok(identity)
+/// What a signature is computed over.
+enum RsgMessage<'a> {
+    Bytes(&'a [u8]),
+    File(&'a str),
 }
-
-fn load_private_identity_file(path: &Path) -> Result<Identity, String> {
-    let data = fs::read(path).map_err(|e| format!("Error reading identity: {}", e))?;
-    let key = if data.len() == 64 {
-        data
-    } else if data.len() == 128 {
-        data[..64].to_vec()
-    } else {
-        return Err(format!(
-            "Unknown private identity file format ({} bytes)",
-            data.len()
-        ));
-    };
-    let key: [u8; 64] = key
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid private identity length".to_string())?;
-    Ok(Identity::from_private_key(&key))
-}
-
-fn load_or_decode_key(spec: &str, expected_len: usize, args: &Args) -> Result<Vec<u8>, String> {
-    let path = Path::new(spec);
-    if path.exists() {
-        let data = fs::read(path).map_err(|e| format!("Error reading identity: {}", e))?;
-        if data.len() == expected_len {
-            return Ok(data);
-        }
-        return Err(format!(
-            "Invalid identity file length: expected {} bytes, got {}",
-            expected_len,
-            data.len()
-        ));
-    }
-
-    let decoded = if args.has("B") || args.has("base32") {
-        base32_decode(spec).ok_or_else(|| "Invalid base32 identity data".to_string())?
-    } else if args.has("b") || args.has("base64") {
-        base64_decode(spec).ok_or_else(|| "Invalid base64 identity data".to_string())?
-    } else {
-        parse_hex(spec).ok_or_else(|| "Invalid hexadecimal identity data".to_string())?
-    };
-
-    if decoded.len() != expected_len {
-        return Err(format!(
-            "Invalid identity length: expected {} bytes, got {}",
-            expected_len,
-            decoded.len()
-        ));
-    }
-    Ok(decoded)
-}
-
-fn request_identity(args: &Args, requested_hash: [u8; 16]) -> Result<Option<Identity>, String> {
-    let mut default_parts = DEFAULT_ASPECTS.split('.');
-    let app_name = default_parts.next().unwrap_or("rns");
-    let aspects: Vec<&str> = default_parts.collect();
-    let id_dest_hash = destination_hash(app_name, &aspects, Some(&requested_hash));
-
-    rpc_client(args)?
-        .call(&rns_net::pickle::PickleValue::Dict(vec![(
-            rns_net::pickle::PickleValue::String("request_path".into()),
-            rns_net::pickle::PickleValue::Bytes(requested_hash.to_vec()),
-        )]))
-        .map_err(|e| format!("Could not request destination path: {}", e))?;
-    rpc_client(args)?
-        .call(&rns_net::pickle::PickleValue::Dict(vec![(
-            rns_net::pickle::PickleValue::String("request_path".into()),
-            rns_net::pickle::PickleValue::Bytes(id_dest_hash.to_vec()),
-        )]))
-        .map_err(|e| format!("Could not request identity path: {}", e))?;
-
-    let timeout_secs = args
-        .get("t")
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(5.0);
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs);
-
-    loop {
-        let entries = rpc_client(args)?
-            .known_destinations()
-            .map_err(|e| format!("Could not query known destinations: {}", e))?;
-        if let Some(entry) = find_identity_entry(&entries, requested_hash) {
-            let retained = rpc_client(args)?
-                .retain_identity(entry.identity_hash)
-                .unwrap_or(false);
-            if retained {
-                println!("Retained Identity {}", prettyhexrep(&entry.identity_hash));
-            }
-            return Identity::from_public_key(&entry.public_key)
-                .map(Some)
-                .map_err(|_| "Recalled identity has an invalid public key".to_string());
-        }
-        if Instant::now() >= deadline {
-            return Ok(None);
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// Exit codes upstream's rnid uses for an announce.
-const R_NO_PRVKEY: i32 = 4;
-const R_INVALID_ASPECTS: i32 = 9;
-const R_UNKNOWN_ERROR: i32 = 254;
 
 struct NoCallbacks;
 
 impl rns_net::Callbacks for NoCallbacks {
-    fn on_announce(&mut self, _announced: rns_net::AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
-    fn on_local_delivery(
-        &mut self,
-        _dest_hash: rns_net::DestHash,
-        _raw: Vec<u8>,
-        _packet_hash: rns_net::PacketHash,
-    ) {
-    }
+    fn on_announce(&mut self, _: rns_net::AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _: rns_net::DestHash, _: u8) {}
+    fn on_local_delivery(&mut self, _: rns_net::DestHash, _: Vec<u8>, _: rns_net::PacketHash) {}
 }
 
-/// `-a`: announce the identity's inbound destination for `aspects`
-/// (`app.aspect...`) through the shared instance.
-fn announce(args: &Args, identity: &Identity, aspects: &str) {
-    let mut parts = aspects.split('.');
-    let app_name = parts.next().unwrap_or_default();
-    let rest: Vec<&str> = parts.collect();
-    if rest.is_empty() {
-        println!("Invalid destination aspects specified");
-        process::exit(R_INVALID_ASPECTS);
-    }
-    let Some(private_key) = identity.get_private_key() else {
-        println!("Cannot announce this destination, since the private key is not held");
-        process::exit(R_NO_PRVKEY);
-    };
-    let level = (3i16 + args.verbosity as i16 - args.quiet as i16).clamp(0, 5);
-    let filter = ["off", "error", "warn", "info", "debug", "trace"][level as usize];
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
-        .try_init();
-
-    let destination =
-        rns_net::Destination::single_in(app_name, &rest, rns_net::IdentityHash(*identity.hash()));
-    let sent = (|| -> Result<(), String> {
-        let node = rns_net::RnsNode::connect_shared_from_config(
-            Some(&rns_cli::app::rns_config(args.config_path())),
-            Box::new(NoCallbacks),
-        )
-        .map_err(|e| e.to_string())?;
-        node.register_destination_with_proof(&destination, Some(private_key))
-            .map_err(|_| "the shared instance connection closed".to_string())?;
-        println!(
-            "Announcing {aspects} destination <{}> for identity <{}>",
-            prettyhexrep(&destination.hash.0),
-            prettyhexrep(identity.hash())
-        );
-        node.announce_queued(&destination, identity, None)
-            .map_err(|_| "the shared instance connection closed".to_string())?;
-        thread::sleep(Duration::from_millis(250));
-        node.shutdown();
-        Ok(())
-    })();
-    if let Err(e) = sent {
-        println!("An error ocurred while attempting to send the announce: {e}");
-        process::exit(R_UNKNOWN_ERROR);
-    }
+struct Rnid {
+    args: Namespace,
+    node: Option<rns_net::RnsNode>,
 }
 
-fn find_identity_entry(
-    entries: &[KnownDestinationEntry],
-    requested_hash: [u8; 16],
-) -> Option<&KnownDestinationEntry> {
-    entries
+impl Rnid {
+    fn exit(&mut self, code: i32) -> ! {
+        let _ = std::io::stdout().flush();
+        if let Some(node) = self.node.take() {
+            node.shutdown();
+        }
+        process::exit(code)
+    }
+
+    fn validate_args(&mut self) {
+        let a = &self.args;
+        let ops = [
+            truthy_list(&a.encrypt),
+            truthy_list(&a.decrypt),
+            truthy_list(&a.validate),
+            truthy_list(&a.sign),
+            a.sign_message_truthy(),
+        ]
         .iter()
-        .find(|entry| entry.identity_hash == requested_hash || entry.dest_hash == requested_hash)
-}
-
-fn rpc_client(args: &Args) -> Result<RpcClient, String> {
-    let config_dir = storage::resolve_config_dir(args.config_path().map(Path::new));
-    let config_file = config_dir.join("config");
-    let rns_config = if config_file.exists() {
-        config::parse_file(&config_file).map_err(|e| format!("Error reading config: {}", e))?
-    } else {
-        config::parse("").map_err(|e| format!("Error parsing default config: {}", e))?
-    };
-    let paths = storage::ensure_storage_dirs(&config_dir).map_err(|e| e.to_string())?;
-    let identity = storage::load_rpc_identity(&paths).map_err(|e| e.to_string())?;
-    let auth_key = rns_config
-        .reticulum
-        .rpc_key
-        .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
-    let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
-    RpcClient::connect(&rpc_addr, &auth_key)
-        .map_err(|e| format!("Could not connect to rnsd: {}", e))
-}
-
-fn require_identity(identity_ref: Option<&IdentityRef>) -> &Identity {
-    match identity_ref {
-        Some(IdentityRef::Identity(identity)) => identity,
-        Some(IdentityRef::Hash(hash)) => die(
-            &format!(
-                "Identity {} was specified by hash only and has no key data",
-                prettyhexrep(hash)
-            ),
-            1,
-        ),
-        None => die("Could not get working identity", 1),
-    }
-}
-
-fn print_identity_information(args: &Args, identity: &Identity) {
-    println!("Identity Hash : {}", prettyhexrep(identity.hash()));
-    if let Some(public_key) = identity.get_public_key() {
-        println!("Public Key    : {}", encode_key(args, &public_key));
-    }
-    if identity.get_private_key().is_some() {
-        if args.has("P") || args.has("print-private") {
-            println!(
-                "Private Key   : {}",
-                encode_key(args, &identity.get_private_key().unwrap())
-            );
-        } else {
-            println!("Private Key   : Hidden");
+        .filter(|o| **o)
+        .count();
+        if ops > 1 {
+            println!("This utility currently only supports one of the encrypt, decrypt, sign or verify operations per invocation");
+            self.exit(1);
+        }
+        let g = [
+            truthy(&a.import_pub),
+            truthy(&a.import_prv),
+            truthy(&a.identity),
+            truthy(&a.generate),
+        ]
+        .iter()
+        .filter(|o| **o)
+        .count();
+        if g > 1 {
+            println!("The -i, -g, -m and -M args are mutually exclusive");
+            self.exit(1);
+        }
+        let g = [a.base64, a.base32, a.base256, a.hex]
+            .iter()
+            .filter(|o| **o)
+            .count();
+        if g > 1 {
+            println!("The -b, -B, --hex and --base256 args are mutually exclusive");
+            self.exit(1);
         }
     }
-}
 
-fn print_hash_information(aspects: &str, identity_ref: Option<&IdentityRef>) -> Result<(), String> {
-    let identity_hash = match identity_ref {
-        Some(IdentityRef::Identity(identity)) => *identity.hash(),
-        Some(IdentityRef::Hash(hash)) => *hash,
-        None => return Err("No identity or identity hash specified".into()),
-    };
-    let mut parts = aspects.split('.');
-    let app_name = parts
-        .next()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "Invalid destination aspects".to_string())?;
-    let aspects: Vec<&str> = parts.collect();
-    let dest_hash = destination_hash(app_name, &aspects, Some(&identity_hash));
-    println!(
-        "The {} destination for this Identity is {}",
-        app_name_and_aspects(app_name, &aspects),
-        prettyhexrep(&dest_hash)
-    );
-    Ok(())
-}
-
-fn app_name_and_aspects(app_name: &str, aspects: &[&str]) -> String {
-    if aspects.is_empty() {
-        app_name.to_string()
-    } else {
-        format!("{}.{}", app_name, aspects.join("."))
-    }
-}
-
-fn export_public_identity(args: &Args, identity: &Identity) -> Result<(), String> {
-    let public_key = identity
-        .get_public_key()
-        .ok_or_else(|| "Identity does not hold a public key".to_string())?;
-    println!("{}", encode_key(args, &public_key));
-    Ok(())
-}
-
-fn export_private_identity(args: &Args, identity: &Identity) -> Result<(), String> {
-    let private_key = identity
-        .get_private_key()
-        .ok_or_else(|| "Identity does not hold a private key".to_string())?;
-    println!("{}", encode_key(args, &private_key));
-    Ok(())
-}
-
-fn write_identity(args: &Args, identity: &Identity) -> Result<(), String> {
-    let force = args.has("f") || args.has("force");
-    let output = args
-        .get("w")
-        .or_else(|| args.get("write"))
-        .ok_or_else(|| "Missing output path".to_string())?;
-
-    if args.has("X") || args.has("export-prv") {
-        let private_key = identity
-            .get_private_key()
-            .ok_or_else(|| "Identity does not hold a private key".to_string())?;
-        write_file_checked(output, &private_key, force)?;
-        println!("Wrote private identity to {}", output);
-        return Ok(());
-    }
-
-    let public_key = identity
-        .get_public_key()
-        .ok_or_else(|| "Identity does not hold a public key".to_string())?;
-    let output = if output
-        .to_ascii_lowercase()
-        .ends_with(&format!(".{}", PUB_EXT))
-    {
-        output.to_string()
-    } else {
-        format!("{}.{}", output, PUB_EXT)
-    };
-    write_file_checked(&output, &public_key, force)?;
-    println!("Wrote public identity to {}", output);
-    Ok(())
-}
-
-fn sign_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String> {
-    let data = read_input(path, args)?;
-    let output_path = args
-        .get("w")
-        .or_else(|| args.get("write"))
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{}.{}", path, SIG_EXT));
-    let output_format = rsg_output_format(args);
-
-    let signature = if args.has("raw") {
-        identity.sign(&data).map(|sig| sig.to_vec()).map_err(|_| {
-            format!(
-                "Cannot sign {}, the identity does not hold a private key",
-                path
-            )
-        })?
-    } else {
-        create_rsg(identity, &data)?
-    };
-
-    if !args.has("raw") && !matches!(output_format, RsgOutputFormat::Binary) {
-        println!("{}", wrap_rsg_ascii(&encode_rsg(&signature, output_format)));
-        println!(
-            "Signed file {} with {}",
-            path,
-            prettyhexrep(identity.hash())
-        );
-    } else if args.has("stdout") {
-        io::stdout()
-            .write_all(&signature)
-            .map_err(|e| format!("Error writing to stdout: {}", e))?;
-    } else {
-        write_file_checked(&output_path, &signature, args.has("f") || args.has("force"))?;
-        println!(
-            "Signed file {} with {}",
-            path,
-            prettyhexrep(identity.hash())
-        );
-    }
-    Ok(())
-}
-
-fn sign_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), String> {
-    for path in paths {
-        sign_file(path, identity, args)?;
-    }
-    Ok(())
-}
-
-fn validate_signature(
-    path: &str,
-    required: Option<&IdentityRef>,
-    args: &Args,
-) -> Result<(), String> {
-    if path
-        .to_ascii_lowercase()
-        .ends_with(&format!(".{}", MSG_EXT))
-    {
-        return validate_message_signature(path, required, args);
-    }
-    let sig_ext = format!(".{}", SIG_EXT);
-    let (signature_path, file_path) = if path.to_ascii_lowercase().ends_with(&sig_ext) {
-        (
-            path.to_string(),
-            path[..path.len() - sig_ext.len()].to_string(),
-        )
-    } else {
-        (format!("{}.{}", path, SIG_EXT), path.to_string())
-    };
-
-    let message = fs::read(&file_path)
-        .map_err(|e| format!("Could not read validation target {}: {}", file_path, e))?;
-    let signature_input = fs::read(&signature_path)
-        .map_err(|e| format!("Could not read signature {}: {}", signature_path, e))?;
-    let signature = decode_rsg_data(&signature_input).ok_or_else(|| {
-        format!(
-            "Invalid signature {} for file {}",
-            signature_path, file_path
-        )
-    })?;
-
-    if signature.len() == SIG_LEN {
-        let Some(IdentityRef::Identity(identity)) = required else {
-            return Err(
-                "Cannot validate legacy rsg signatures without an explicit required identity"
-                    .into(),
-            );
+    fn main(&mut self, usage_name: &str) -> ! {
+        self.validate_args();
+        let a = &self.args;
+        let op_requires_identity = truthy_list(&a.sign)
+            || a.sign_message_truthy()
+            || truthy_list(&a.encrypt)
+            || truthy_list(&a.decrypt)
+            || truthy(&a.announce)
+            || truthy(&a.write)
+            || a.print_identity
+            || a.export_pub
+            || a.export_prv;
+        let no_cache = a.no_cache;
+        let identity = self.get_operating_identity(!op_requires_identity, no_cache);
+        if identity.is_none() && op_requires_identity {
+            println!("Could not get working identity");
+            self.exit(R_NO_IDENTITY);
+        }
+        let mut op = false;
+        // `identity or args.identity`.
+        let target = match (&identity, &self.args.identity) {
+            (Some(identity), _) => Target::Identity(identity),
+            (None, Some(s)) if !s.is_empty() => Target::Str(s.clone()),
+            _ => Target::None,
         };
-        let sig: [u8; SIG_LEN] = signature.as_slice().try_into().unwrap();
-        if identity.verify(&sig, &message) {
-            println!(
-                "Signature is valid, the file {} was signed by {}",
-                file_path,
-                prettyhexrep(identity.hash())
-            );
+        let id = identity.as_ref();
+        if self.args.print_identity {
+            self.print_identity_information(id.expect("required"));
+            op = true;
+        }
+        if self.args.export_pub {
+            self.export_pub_identity(id.expect("required"));
+            op = true;
+        }
+        if self.args.export_prv {
+            self.export_prv_identity(id.expect("required"));
+            op = true;
+        }
+        if truthy(&self.args.hash) {
+            self.print_hash_information(&target);
+            op = true;
+        }
+        if truthy(&self.args.announce) {
+            self.announce(id.expect("required"));
+            op = true;
+        }
+        if truthy_list(&self.args.validate) {
+            for path in self.args.validate.clone().unwrap_or_default() {
+                self.validate(&path, &target);
+            }
+            self.exit(R_OK);
+        }
+        if truthy_list(&self.args.sign) {
+            for path in self.args.sign.clone().unwrap_or_default() {
+                self.sign(&path, id.expect("required"));
+            }
+            self.exit(R_OK);
+        }
+        if self.args.sign_message_truthy() {
+            self.sign_message(id.expect("required"));
+        }
+        if truthy_list(&self.args.encrypt) {
+            for path in self.args.encrypt.clone().unwrap_or_default() {
+                self.encrypt(&path, id.expect("required"));
+            }
+            self.exit(R_OK);
+        }
+        if truthy_list(&self.args.decrypt) {
+            for path in self.args.decrypt.clone().unwrap_or_default() {
+                self.decrypt(&path, id.expect("required"));
+            }
+            self.exit(R_OK);
+        }
+        if truthy(&self.args.write) {
+            self.write_identity(id.expect("required"));
+            op = true;
+        }
+        if truthy(&self.args.generate) {
+            op = true;
+        }
+        if !op {
+            rns_cli::argparse::print_help("rnid", usage_name);
+        }
+        self.exit(R_OK)
+    }
+
+    // Reticulum helpers
+
+    fn ensure_reticulum(&mut self) -> Result<(), String> {
+        if self.node.is_some() {
             return Ok(());
         }
-        return Err(format!(
-            "Invalid signature {} for file {}",
-            signature_path, file_path
-        ));
+        let mut level = 4;
+        if self.args.verbose != 0 || self.args.quiet != 0 {
+            level = level + self.args.verbose - self.args.quiet;
+        }
+        let filter = match level {
+            i32::MIN..=1 => "error",
+            2..=4 => "warn",
+            5 => "info",
+            6 => "debug",
+            _ => "trace",
+        };
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
+            .try_init();
+        let config_dir =
+            rns_net::storage::resolve_config_dir(self.args.config.as_deref().map(Path::new));
+        let node = match rns_net::RnsNode::connect_shared_from_config(
+            Some(&config_dir),
+            Box::new(NoCallbacks),
+        ) {
+            Ok(node) => node,
+            Err(_) => rns_net::RnsNode::from_config(Some(&config_dir), Box::new(NoCallbacks))
+                .map_err(|e| e.to_string())?,
+        };
+        self.node = Some(node);
+        pylog::set_loglevel(level);
+        if self.args.stdout {
+            pylog::set_loglevel(pylog::LOG_NONE);
+        }
+        // Reticulum's own handler: exit quietly with 0.
+        rns_cli::stdout::exit_on_interrupt(0);
+        Ok(())
     }
 
-    let required_hash = match required {
-        Some(IdentityRef::Identity(identity)) => Some(*identity.hash()),
-        Some(IdentityRef::Hash(hash)) => Some(*hash),
-        None => None,
-    };
-
-    match validate_rsg(&signature, &message, required_hash)? {
-        RsgValidation::Valid { signer_hash } => {
-            println!(
-                "Signature is valid, the file {} was signed by {}",
-                file_path,
-                prettyhexrep(&signer_hash)
-            );
-            Ok(())
-        }
-        RsgValidation::WrongSigner { signer_hash } => {
-            let required = required_hash.map(|h| prettyhexrep(&h)).unwrap_or_default();
-            Err(format!(
-                "Invalid signature {} for file {}\nThis file was NOT signed by {} (actual signer {})",
-                signature_path,
-                file_path,
-                required,
-                prettyhexrep(&signer_hash)
-            ))
-        }
-        RsgValidation::Invalid => Err(format!(
-            "Invalid signature {} for file {}",
-            signature_path, file_path
-        )),
-    }
-}
-
-fn validate_message_signature(
-    path: &str,
-    required: Option<&IdentityRef>,
-    args: &Args,
-) -> Result<(), String> {
-    let signature_input =
-        fs::read(path).map_err(|e| format!("Could not read signature {}: {}", path, e))?;
-    let signature =
-        decode_rsg_data(&signature_input).ok_or_else(|| format!("Invalid signature {}", path))?;
-    let value = rsg_envelope(&signature)?.ok_or_else(|| format!("Invalid signature {}", path))?;
-    let Some(message) = rsg_embedded_message(&value) else {
-        return Err(format!("No embedded message in {}", path));
-    };
-    let required_hash = match required {
-        Some(IdentityRef::Identity(identity)) => Some(*identity.hash()),
-        Some(IdentityRef::Hash(hash)) => Some(*hash),
-        None => None,
-    };
-
-    match validate_rsg(&signature, &message, required_hash)? {
-        RsgValidation::Valid { signer_hash } => {
-            let text = String::from_utf8(message)
-                .map_err(|e| format!("Embedded message in {} is not UTF-8: {}", path, e))?;
-            if args.has("meta") {
-                println!("RSM Metadata\n============\n");
-                if let Some(meta) = value.map_get("meta") {
-                    print_rsm_metadata(meta);
-                }
-                println!("\nValidation\n==========");
-                println!(
-                    "\nSignature is valid, the message was signed by {}\n",
-                    prettyhexrep(&signer_hash)
-                );
-                println!("Message\n=======\n");
+    /// `RNS.Identity.recall(hash)`, or with `from_identity_hash` by the
+    /// identity's own hash.
+    fn recall(&self, hash: &[u8], from_identity_hash: bool) -> Option<Identity> {
+        let entries = self.node.as_ref()?.known_destinations().ok()?;
+        let entry = entries.iter().find(|e| {
+            if from_identity_hash {
+                e.identity_hash[..] == *hash
             } else {
+                e.dest_hash[..] == *hash
+            }
+        })?;
+        Identity::from_public_key(&entry.public_key).ok()
+    }
+
+    fn recall_any(&self, hash: &[u8]) -> Option<Identity> {
+        self.recall(hash, false).or_else(|| self.recall(hash, true))
+    }
+
+    // Identity loading and resolution
+
+    fn get_operating_identity(&mut self, allow_none: bool, no_cache: bool) -> Option<Identity> {
+        if let Some(path) = self.args.generate.clone().filter(|p| !p.is_empty()) {
+            let identity = Identity::new(&mut OsRng);
+            if !self.args.force && isfile(&path) {
+                println!("Identity file {path} already exists. Not overwriting.");
+                self.exit(R_FILE_EXISTS);
+            }
+            key_to_file(&identity.get_private_key().unwrap_or([0; KEYSIZE]), &path);
+            println!("New identity {} written to {path}", id_str(&identity));
+            return Some(identity);
+        }
+        if let Some(given) = self.args.identity.clone().filter(|p| !p.is_empty()) {
+            let load_path = expanduser(&given);
+            if isfile(&load_path) {
+                match identity_from_file(&load_path) {
+                    Some(identity) => {
+                        println!("Loaded Identity {} from {load_path}", id_str(&identity));
+                        return Some(identity);
+                    }
+                    None => {
+                        println!("Loaded Identity None from {load_path}");
+                        println!("Could not load Identity from specified file: 'NoneType' object has no attribute 'get_private_key'");
+                        self.exit(R_INVALID_IDENTITY);
+                    }
+                }
+            } else if no_cache {
+                if allow_none {
+                    return None;
+                }
+                println!("Could not resolve identity");
+                self.exit(R_NO_IDENTITY);
+            } else if given.chars().count() == 32 {
+                return self.recall_identity(&given, allow_none);
+            }
+            return None;
+        }
+        if truthy(&self.args.import_pub) || truthy(&self.args.import_prv) {
+            let (spec, private) = match &self.args.import_pub {
+                Some(spec) if !spec.is_empty() => (spec.clone(), false),
+                _ => (self.args.import_prv.clone().unwrap_or_default(), true),
+            };
+            let Some(bytes) = self.import_bytes(&spec) else {
+                let which = if private { "private" } else { "public" };
+                println!("Could not decode specified data to a valid {which} Reticulum Identity");
+                self.exit(R_INVALID_IDENTITY);
+            };
+            let key: &[u8; KEYSIZE] = bytes.as_slice().try_into().expect("checked length");
+            if private {
+                return Some(Identity::from_private_key(key));
+            }
+            return match Identity::from_public_key(key) {
+                Ok(identity) => Some(identity),
+                Err(e) => {
+                    println!("Could not create Reticulum identity from specified data: {e:?}");
+                    self.exit(R_INVALID_IDENTITY);
+                }
+            };
+        }
+        None
+    }
+
+    /// The key bytes `-m`/`-M` names: a file of exactly the key's size,
+    /// else hex, base32 or base64 text of it.
+    fn import_bytes(&self, spec: &str) -> Option<Vec<u8>> {
+        let import_path = expanduser(spec);
+        if isfile(&import_path) {
+            if let Ok(input) = fs::read(&import_path) {
+                if input.len() == KEYSIZE {
+                    println!("Reticulum Identity imported from {import_path}");
+                    return Some(input);
+                }
+            }
+        }
+        if spec.chars().count() == KEYSIZE * 2 {
+            if let Ok(bytes) = fromhex(spec) {
+                if !bytes.is_empty() {
+                    println!("Reticulum Identity imported from hex input");
+                    // Hex with spaces in it decodes to fewer bytes; upstream
+                    // then fails creating the identity.
+                    return Some(bytes).filter(|b| b.len() == KEYSIZE);
+                }
+            }
+        }
+        if let Some(bytes) = b32decode(spec).filter(|b| b.len() == KEYSIZE) {
+            println!("Reticulum Identity imported from base32 input");
+            return Some(bytes);
+        }
+        if let Some(bytes) = urlsafe_b64decode(spec).filter(|b| b.len() == KEYSIZE) {
+            println!("Reticulum Identity imported from base64 input");
+            return Some(bytes);
+        }
+        None
+    }
+
+    /// `-i` with a 32-character hash: recalled from what the instance
+    /// knows, or with `-R` requested from the network.
+    fn recall_identity(&mut self, given: &str, allow_none: bool) -> Option<Identity> {
+        match self.try_recall_identity(given, allow_none) {
+            Ok(identity) => identity,
+            Err(e) => {
+                println!("Invalid hexadecimal hash provided: {e}");
+                self.exit(R_INVALID_IDENTITY);
+            }
+        }
+    }
+
+    fn try_recall_identity(
+        &mut self,
+        given: &str,
+        allow_none: bool,
+    ) -> Result<Option<Identity>, String> {
+        self.ensure_reticulum()?;
+        let requested_hash = fromhex(given)?;
+        let mut identity = self.recall_any(&requested_hash);
+        match &identity {
+            None if allow_none && !self.args.request => return Ok(None),
+            None if !self.args.request => {
                 println!(
-                    "\nSignature is valid, the following message was signed by {}:\n",
-                    prettyhexrep(&signer_hash)
+                    "Could not recall Identity for {}.",
+                    prettyhexrep(&requested_hash)
                 );
+                println!("You can query the network for unknown Identities with the -R option.");
+                self.exit(R_NO_IDENTITY);
             }
-            println!("{}", text);
-            Ok(())
-        }
-        RsgValidation::WrongSigner { signer_hash } => {
-            let required = required_hash.map(|h| prettyhexrep(&h)).unwrap_or_default();
-            Err(format!(
-                "Invalid signature in {}\nThe message was NOT signed by {} (actual signer {})",
-                path,
-                required,
-                prettyhexrep(&signer_hash)
-            ))
-        }
-        RsgValidation::Invalid => Err(format!("Invalid signature in {}", path)),
-    }
-}
-
-fn print_rsm_metadata(meta: &Value) {
-    if let Some(entries) = meta.as_map() {
-        for (key, value) in entries {
-            let key = rsm_meta_key(key);
-            if should_print_rsm_meta_entry(&key, value) {
-                print_rsm_metadata_entry(value, &key, 0);
+            None => {
+                let id_destination_hash =
+                    hash_from_name_and_identity(DEFAULT_ASPECTS, &requested_hash);
+                if let Some(node) = &self.node {
+                    if let Ok(hash) = <[u8; 16]>::try_from(requested_hash.as_slice()) {
+                        let _ = node.request_path(&rns_net::DestHash(hash));
+                    }
+                    let _ = node.request_path(&rns_net::DestHash(id_destination_hash));
+                }
+                let message = format!(
+                    "Requesting unknown Identity for {}",
+                    prettyhexrep(&requested_hash)
+                );
+                spin(
+                    || self.recall_any(&requested_hash).is_some(),
+                    &message,
+                    Some(self.args.t),
+                );
+                match self.recall_any(&requested_hash) {
+                    None => {
+                        println!("Identity request timed out");
+                        if !allow_none {
+                            self.exit(R_NO_IDENTITY);
+                        }
+                        return Ok(None);
+                    }
+                    Some(received) => {
+                        println!(
+                            "Received Identity {} for destination {} from the network",
+                            id_str(&received),
+                            prettyhexrep(&requested_hash)
+                        );
+                        identity = Some(received);
+                    }
+                }
+            }
+            Some(recalled) => {
+                let ident_str = id_str(recalled);
+                let hash_str = prettyhexrep(&requested_hash);
+                if ident_str == hash_str {
+                    println!("Recalled Identity {ident_str}");
+                } else {
+                    println!("Recalled Identity {ident_str} for destination {hash_str}");
+                }
             }
         }
-    } else {
-        print_rsm_metadata_entry(meta, "meta", 0);
+        if let (Some(identity), Some(node)) = (&identity, &self.node) {
+            let _ = node.retain_identity(&rns_net::IdentityHash(*identity.hash()));
+        }
+        Ok(identity)
     }
-}
 
-fn print_rsm_metadata_entry(value: &Value, key: &str, level: usize) {
-    let indent = "  ".repeat(level);
-    if let Some(entries) = value.as_map() {
-        println!("d{}{}:", indent, key);
-        for (child_key, child_value) in entries {
-            let child_key = rsm_meta_key(child_key);
-            if should_print_rsm_meta_entry(&child_key, child_value) {
-                print_rsm_metadata_entry(child_value, &child_key, level + 1);
+    // Network operations
+
+    fn announce(&mut self, identity: &Identity) {
+        if let Err(e) = self.try_announce(identity) {
+            println!("An error ocurred while attempting to send the announce: {e}");
+            self.exit(R_UNKNOWN_ERROR);
+        }
+    }
+
+    fn try_announce(&mut self, identity: &Identity) -> Result<(), String> {
+        let announce = self.args.announce.clone().unwrap_or_default();
+        self.ensure_reticulum()?;
+        let mut parts = announce.split('.');
+        let app_name = parts.next().unwrap_or_default().to_string();
+        let aspects: Vec<&str> = parts.collect();
+        if aspects.is_empty() {
+            println!("Invalid destination aspects specified");
+            self.exit(R_INVALID_ASPECTS);
+        }
+        let Some(private_key) = identity.get_private_key() else {
+            println!("Cannot announce this destination, since the private key is not held");
+            self.exit(R_NO_PRVKEY);
+        };
+        let node = self.node.as_ref().expect("started");
+        let destination = rns_net::Destination::single_in(
+            &app_name,
+            &aspects,
+            rns_net::IdentityHash(*identity.hash()),
+        );
+        node.register_destination_with_proof(&destination, Some(private_key))
+            .map_err(|_| "the instance is not running".to_string())?;
+        println!(
+            "Announcing {announce} destination {} for identity {}",
+            prettyhexrep(&destination.hash.0),
+            id_str(identity)
+        );
+        node.announce_queued(&destination, identity, None)
+            .map_err(|_| "the instance is not running".to_string())?;
+        std::thread::sleep(Duration::from_millis(250));
+        Ok(())
+    }
+
+    // Signing and validation
+
+    /// The required signer of `-V`: a string must be an identity hash.
+    fn signer_from<'a>(&mut self, target: &'a Target<'a>) -> Signer<'a> {
+        match target {
+            Target::Identity(identity) => Signer::Identity(identity),
+            Target::Str(s) => {
+                if s.chars().count() != 32 {
+                    println!("Invalid identity hash length");
+                    self.exit(R_INVALID_IDENTITY);
+                }
+                match fromhex(s) {
+                    Ok(hash) => Signer::Hash(hash),
+                    Err(e) => {
+                        println!("Invalid identity hash: {e}");
+                        self.exit(R_INVALID_IDENTITY);
+                    }
+                }
+            }
+            Target::None => Signer::None,
+        }
+    }
+
+    fn validate(&mut self, path: &str, target: &Target) {
+        let msg_ext = format!(".{MSG_EXT}");
+        let sig_ext = format!(".{SIG_EXT}");
+        let validate_path = expanduser(path);
+        let lower = validate_path.to_lowercase();
+        let path_is_msgfile = lower.ends_with(&msg_ext);
+        let path_is_sigfile = lower.ends_with(&sig_ext);
+        let (signature_path, file_path) = if path_is_sigfile {
+            let cut = validate_path.len() - sig_ext.len();
+            (validate_path.clone(), validate_path[..cut].to_string())
+        } else {
+            (format!("{validate_path}{sig_ext}"), validate_path.clone())
+        };
+        if path_is_msgfile {
+            return self.validate_message(&validate_path, target);
+        }
+        if !isfile(&file_path) {
+            println!("The validation target \"{file_path}\" does not exist");
+            self.exit(R_NO_FILE);
+        }
+        if !isfile(&signature_path) {
+            println!("No signature file exists for \"{file_path}\"");
+            self.exit(R_NO_FILE);
+        }
+        let rsg = match fs::read(&signature_path) {
+            Ok(rsg) => rsg,
+            Err(e) => {
+                println!(
+                    "Could not detect rsg format: {}",
+                    io_error(&e, &signature_path)
+                );
+                self.exit(R_UNKNOWN_ERROR);
+            }
+        };
+        if rsg.len() != SIGLEN {
+            let signer = self.signer_from(target);
+            if let Err(e) = fs::File::open(&file_path) {
+                println!("Could not read {file_path}: {}", io_error(&e, &file_path));
+                self.exit(R_READ_ERROR);
+            }
+            match validate_rsg(&rsg, RsgMessage::File(&file_path), &signer) {
+                Err(e) => {
+                    println!("Error while validating {signature_path}: {e}");
+                    self.exit(R_UNKNOWN_ERROR);
+                }
+                Ok((valid, _, signing_identity)) => {
+                    let signer_description = if signer.is_truthy() {
+                        format!("\nThis file was NOT signed by {}", signer.describe())
+                    } else {
+                        String::new()
+                    };
+                    if !valid {
+                        println!(
+                            "Invalid signature {signature_path} for file {file_path}{signer_description}"
+                        );
+                        self.exit(R_INVALID_SIGNATURE);
+                    }
+                    println!(
+                        "Signature is valid, the file {file_path} was signed by {}",
+                        signing_identity.as_ref().map_or("None".into(), id_str)
+                    );
+                }
+            }
+        } else {
+            let Target::Identity(identity) = target else {
+                println!(
+                    "Cannot validate legacy rsg signatures without an explicit required identity"
+                );
+                self.exit(R_NO_IDENTITY);
+            };
+            let data = match fs::read(&file_path) {
+                Ok(data) => data,
+                Err(e) => {
+                    println!("Could not validate signature: {}", io_error(&e, &file_path));
+                    self.exit(R_READ_ERROR);
+                }
+            };
+            let signature: &[u8; SIGLEN] = rsg.as_slice().try_into().expect("legacy length");
+            if !identity.verify(signature, &data) {
+                println!(
+                    "Invalid signature {signature_path} for file {file_path}\nThis file was NOT signed by {}",
+                    id_str(identity)
+                );
+                self.exit(R_INVALID_SIGNATURE);
+            }
+            println!(
+                "Signature is valid, the file {file_path} was signed by {}",
+                id_str(identity)
+            );
+            self.exit(R_OK);
+        }
+    }
+
+    fn validate_message(&mut self, signature_path: &str, target: &Target) {
+        if !isfile(signature_path) {
+            println!("The signature file \"{signature_path}\" does not exist");
+            self.exit(R_NO_FILE);
+        }
+        let rsg = match fs::read(signature_path) {
+            Ok(rsg) => rsg,
+            Err(e) => {
+                println!("Could not read rsg: {}", io_error(&e, signature_path));
+                self.exit(R_READ_ERROR);
+            }
+        };
+        let signer = self.signer_from(target);
+        if let Err(e) = self.try_validate_message(signature_path, &rsg, &signer) {
+            println!("Error while validating {signature_path}: {e}");
+            self.exit(R_UNKNOWN_ERROR);
+        }
+    }
+
+    fn try_validate_message(
+        &mut self,
+        signature_path: &str,
+        rsg: &[u8],
+        signer: &Signer,
+    ) -> Result<(), String> {
+        let contents = extract_signed_rsg_data(rsg);
+        let message = match &contents {
+            None => return Err("argument of type 'NoneType' is not iterable".into()),
+            Some(Value::Map(entries)) => map_get(entries, "message"),
+            Some(Value::Array(_) | Value::Str(_)) => None,
+            Some(other) => return Err(not_iterable(other)),
+        };
+        let Some(message) = message else {
+            println!("No embedded message in {signature_path}");
+            self.exit(R_INVALID_SIGNATURE);
+        };
+        let message_bytes = match message {
+            Value::Bin(b) => b.clone(),
+            Value::Str(s) => s.clone().into_bytes(),
+            other => {
+                return Err(format!(
+                    "Invalid input type <class '{}'> for rsg creation",
+                    type_name(other)
+                ))
+            }
+        };
+        let (valid, signed_data, signing_identity) =
+            validate_rsg(rsg, RsgMessage::Bytes(&message_bytes), signer)?;
+        let signer_description = if signer.is_truthy() {
+            format!("\nThe message was NOT signed by {}", signer.describe())
+        } else {
+            String::new()
+        };
+        if !valid {
+            println!("Invalid signature in {signature_path}{signer_description}");
+            self.exit(R_INVALID_SIGNATURE);
+        }
+        let Some(Value::Map(signed)) = signed_data else {
+            return Err("invalid signed data".into());
+        };
+        if self.args.meta {
+            println!("RSM Metadata\n============\n");
+            if let Some(Value::Map(meta)) = map_get(&signed, "meta") {
+                for (key, entry) in meta {
+                    recurse(entry, &py_str(key), 1);
+                }
+            }
+            println!("\nValidation\n==========");
+        }
+        let c = if !self.args.meta { ":" } else { "" };
+        let f = if !self.args.meta { " following" } else { "" };
+        println!(
+            "\nSignature is valid, the{f} message was signed by {}{c}\n",
+            signing_identity.as_ref().map_or("None".into(), id_str)
+        );
+        if self.args.meta {
+            println!("Message\n=======\n");
+        }
+        match map_get(&signed, "message") {
+            Some(Value::Bin(bytes)) => println!("{}", decode_utf8(bytes)?),
+            Some(Value::Str(_)) => return Err("'str' object has no attribute 'decode'".into()),
+            _ => return Err("'NoneType' object has no attribute 'decode'".into()),
+        }
+        self.exit(R_OK)
+    }
+
+    fn sign(&mut self, path: &str, identity: &Identity) {
+        let sign_path = expanduser(path);
+        let rsg_path = format!("{sign_path}.{SIG_EXT}");
+        let file_exists = isfile(&sign_path);
+        let signature_exists = isfile(&rsg_path);
+        let output = self.args.output();
+        if identity.get_private_key().is_none() {
+            println!("Cannot sign \"{sign_path}\", the identity does not hold a private key");
+            self.exit(R_NO_PRVKEY);
+        }
+        if !file_exists {
+            println!("The file \"{sign_path}\" does not exist");
+            self.exit(R_NO_FILE);
+        }
+        if output == "bin" && signature_exists && !self.args.force {
+            println!("The signature file \"{rsg_path}\" already exists, not overwriting");
+            self.exit(R_FILE_EXISTS);
+        }
+        if let Err(e) = self.try_sign(&sign_path, &rsg_path, identity, output) {
+            println!("Could not sign {sign_path}: {e}");
+            self.exit(R_UNKNOWN_ERROR);
+        }
+    }
+
+    fn try_sign(
+        &mut self,
+        sign_path: &str,
+        rsg_path: &str,
+        identity: &Identity,
+        output: &str,
+    ) -> Result<(), String> {
+        if self.args.raw {
+            let data = fs::read(sign_path).map_err(|e| io_error(&e, sign_path))?;
+            let signature = identity.sign(&data).map_err(|e| format!("{e:?}"))?;
+            fs::write(rsg_path, signature).map_err(|e| io_error(&e, rsg_path))?;
+        } else {
+            fs::File::open(sign_path).map_err(|e| io_error(&e, sign_path))?;
+            match create_rsg(identity, RsgMessage::File(sign_path), false, None, output)? {
+                Rsg::Bin(bytes) => {
+                    fs::write(rsg_path, bytes).map_err(|e| io_error(&e, rsg_path))?
+                }
+                Rsg::Text(text) => println!("\n{}\n", wrap_rsg(&text)),
             }
         }
-        return;
+        println!("Signed file {sign_path} with {}", id_str(identity));
+        Ok(())
     }
 
-    println!(
-        "{}{}{}={}",
-        rsm_meta_type(value),
-        indent,
-        key,
-        rsm_meta_value(value)
-    );
+    fn sign_message(&mut self, identity: &Identity) -> ! {
+        let mut message = self.args.sign_message.clone().expect("checked");
+        let output = self.args.output();
+        if output == "bin" && !truthy(&self.args.write) {
+            println!("No write path specified");
+            self.exit(R_INVALID_ARGS);
+        }
+        if identity.get_private_key().is_none() {
+            println!("Cannot sign, the identity does not hold a private key");
+            self.exit(R_NO_PRVKEY);
+        }
+        if let Some(read) = self.args.read.clone().filter(|r| !r.is_empty()) {
+            if message != MessageArg::NoMessage {
+                println!(
+                    "Both an input file and command-line provided message was specified, aborting"
+                );
+                self.exit(R_INVALID_ARGS);
+            }
+            let sign_path = expanduser(&read);
+            if !isfile(&sign_path) {
+                println!("The file {sign_path} does not exist");
+                self.exit(R_NO_FILE);
+            }
+            // Read as text, outside upstream's error handling: a failure is
+            // an uncaught exception there.
+            match fs::read(&sign_path).map(String::from_utf8) {
+                Ok(Ok(read)) => message = MessageArg::Text(read),
+                Ok(Err(e)) => {
+                    let _ = std::io::stdout().flush();
+                    eprintln!(
+                        "UnicodeDecodeError: {}",
+                        utf8_error(e.as_bytes(), e.utf8_error())
+                    );
+                    self.exit(1);
+                }
+                Err(e) => {
+                    let _ = std::io::stdout().flush();
+                    eprintln!("{}", io_error(&e, &sign_path));
+                    self.exit(1);
+                }
+            }
+        }
+        // Text is hashed as UTF-8; the editor's content is bytes already.
+        let message_bytes = match &message {
+            MessageArg::NoMessage => self.get_editor_content(),
+            MessageArg::Text(text) => text.as_bytes().to_vec(),
+        };
+        if message_bytes.is_empty() {
+            println!("No message specified");
+            self.exit(R_INVALID_ARGS);
+        }
+        let mut meta = None;
+        if self.args.embed_meta_truthy() {
+            let meta_path = match self.args.embed_meta.clone() {
+                Some(MetaArg::Path(path)) => expanduser(&path),
+                _ => {
+                    let _ = std::io::stdout().flush();
+                    eprintln!("TypeError: expected str, bytes or os.PathLike object, not int");
+                    self.exit(1);
+                }
+            };
+            let meta_spec_path = match self.args.meta_spec.clone().filter(|s| !s.is_empty()) {
+                Some(spec) => spec,
+                None => format!("{meta_path}.spec"),
+            };
+            if !isfile(&meta_path) {
+                println!("Metadata file {meta_path} does not exist");
+                self.exit(R_NO_FILE);
+            }
+            let meta_spec_path = Some(meta_spec_path).filter(|p| isfile(p));
+            let spec_info = meta_spec_path
+                .as_deref()
+                .map(|p| format!(" using spec from {p}"))
+                .unwrap_or_default();
+            println!("Embedding metadata from {meta_path}{spec_info}");
+            match rsg_meta_from_file(&meta_path, meta_spec_path.as_deref()) {
+                Ok(parsed) => meta = Some(parsed),
+                Err(e) => {
+                    println!("Could not load metadata from {meta_path}: {e}");
+                    self.exit(R_UNKNOWN_ERROR);
+                }
+            }
+        }
+        if let Err(e) = self.try_sign_message(identity, &message_bytes, meta.as_ref(), output) {
+            println!("Could not sign message: {e}");
+        }
+        self.exit(R_UNKNOWN_ERROR)
+    }
+
+    fn try_sign_message(
+        &mut self,
+        identity: &Identity,
+        message: &[u8],
+        meta: Option<&Vec<(String, Entry)>>,
+        output: &str,
+    ) -> Result<(), String> {
+        match create_rsg(identity, RsgMessage::Bytes(message), true, meta, output)? {
+            Rsg::Bin(rsg) => {
+                let sig_ext = format!(".{MSG_EXT}");
+                let mut rsg_path = expanduser(self.args.write.as_deref().unwrap_or_default());
+                if !rsg_path.ends_with(&sig_ext) {
+                    rsg_path.push_str(&sig_ext);
+                }
+                if isfile(&rsg_path) && !self.args.force {
+                    println!("The signature file \"{rsg_path}\" already exists, not overwriting");
+                    self.exit(R_FILE_EXISTS);
+                }
+                fs::write(&rsg_path, rsg).map_err(|e| io_error(&e, &rsg_path))?;
+                println!(
+                    "Message signed with {} saved to {rsg_path}",
+                    id_str(identity)
+                );
+                self.exit(R_OK);
+            }
+            Rsg::Text(text) => println!("\n{}\n", wrap_rsg(&text)),
+        }
+        println!("Message signed with {}", id_str(identity));
+        self.exit(R_OK)
+    }
+
+    // Encryption and decryption
+
+    fn encrypt(&mut self, path: &str, identity: &Identity) {
+        let encrypt_path = expanduser(path);
+        let rfe_path = match self.args.write.clone().filter(|w| !w.is_empty()) {
+            Some(write) => write,
+            None => format!("{encrypt_path}.{ENCRYPT_EXT}"),
+        };
+        if identity.get_public_key().is_none() {
+            println!("Cannot encrypt \"{encrypt_path}\", the identity does not hold a public key");
+            self.exit(R_NO_PUBKEY);
+        }
+        if !isfile(&encrypt_path) {
+            println!("The file \"{encrypt_path}\" does not exist");
+            self.exit(R_NO_FILE);
+        }
+        if isfile(&rfe_path) && !self.args.force {
+            println!("The encryption output file \"{rfe_path}\" already exists, not overwriting");
+            self.exit(R_FILE_EXISTS);
+        }
+        let mut input = match fs::File::open(&encrypt_path) {
+            Ok(file) => file,
+            Err(e) => {
+                println!(
+                    "\nError reading {encrypt_path} for encryption: {}",
+                    io_error(&e, &encrypt_path)
+                );
+                self.exit(R_WRITE_ERROR);
+            }
+        };
+        let mut output = match fs::File::create(&rfe_path) {
+            Ok(file) => file,
+            Err(e) => {
+                println!(
+                    "\nError writing encrypted output to {rfe_path}: {}",
+                    io_error(&e, &rfe_path)
+                );
+                self.exit(R_WRITE_ERROR);
+            }
+        };
+        let mut wrote = 0usize;
+        loop {
+            let chunk = match read_chunk(&mut input, ENC_CHUNK) {
+                Ok(chunk) => chunk,
+                Err(e) => {
+                    println!(
+                        "\nError writing encrypted output to {rfe_path}: {}",
+                        io_error(&e, &encrypt_path)
+                    );
+                    self.exit(R_WRITE_ERROR);
+                }
+            };
+            let done = chunk.is_empty();
+            if !done {
+                let written = identity
+                    .encrypt(&chunk, &mut OsRng)
+                    .map_err(|e| format!("{e:?}"))
+                    .and_then(|token| {
+                        output
+                            .write_all(&token)
+                            .map(|_| token.len())
+                            .map_err(|e| io_error(&e, &rfe_path))
+                    });
+                match written {
+                    Ok(n) => wrote += n,
+                    Err(e) => {
+                        println!("\nError writing encrypted output to {rfe_path}: {e}");
+                        self.exit(R_WRITE_ERROR);
+                    }
+                }
+            }
+            print!("\rWrote {} to {rfe_path}   ", prettysize(wrote as f64, "B"));
+            if done {
+                break;
+            }
+        }
+        println!(
+            "\nFile {encrypt_path} encrypted for {} to {rfe_path}",
+            id_str(identity)
+        );
+    }
+
+    fn decrypt(&mut self, path: &str, identity: &Identity) {
+        let enc_ext = format!(".{ENCRYPT_EXT}");
+        let rfe_path = expanduser(path);
+        if !rfe_path.ends_with(&enc_ext) {
+            println!("The file {rfe_path} does not appear to be a Reticulum encrypted file");
+            self.exit(R_INVALID_FILE);
+        }
+        let decrypt_path = match self.args.write.clone().filter(|w| !w.is_empty()) {
+            Some(write) => expanduser(&write),
+            None => rfe_path[..rfe_path.len() - enc_ext.len()].to_string(),
+        };
+        if decrypt_path.is_empty() {
+            println!("Invalid output filename");
+            self.exit(R_INVALID_FILE);
+        }
+        if identity.get_private_key().is_none() {
+            println!("Cannot decrypt \"{rfe_path}\", the identity does not hold a private key");
+            self.exit(R_NO_PRVKEY);
+        }
+        if !isfile(&rfe_path) {
+            println!("The file \"{rfe_path}\" does not exist");
+            self.exit(R_NO_FILE);
+        }
+        if isfile(&decrypt_path) && !self.args.force {
+            println!(
+                "The decryption output file \"{decrypt_path}\" already exists, not overwriting"
+            );
+            self.exit(R_FILE_EXISTS);
+        }
+        let mut input = match fs::File::open(&rfe_path) {
+            Ok(file) => file,
+            Err(e) => {
+                println!(
+                    "\nError reading {rfe_path} for decryption: {}",
+                    io_error(&e, &rfe_path)
+                );
+                self.exit(R_WRITE_ERROR);
+            }
+        };
+        let mut output = match fs::File::create(&decrypt_path) {
+            Ok(file) => file,
+            Err(e) => {
+                println!(
+                    "\nError writing decrypted output to {decrypt_path}: {}",
+                    io_error(&e, &decrypt_path)
+                );
+                self.exit(R_WRITE_ERROR);
+            }
+        };
+        let mut wrote = 0usize;
+        loop {
+            let chunk = match read_chunk(&mut input, DEC_CHUNK) {
+                Ok(chunk) => chunk,
+                Err(e) => {
+                    println!(
+                        "\nError writing decrypted output to {decrypt_path}: {}",
+                        io_error(&e, &rfe_path)
+                    );
+                    self.exit(R_WRITE_ERROR);
+                }
+            };
+            if chunk.is_empty() {
+                break;
+            }
+            // `if not decrypted`: an empty plaintext reads as a failure too.
+            match identity.decrypt(&chunk) {
+                Ok(plain) if !plain.is_empty() => {
+                    if let Err(e) = output.write_all(&plain) {
+                        println!(
+                            "\nError writing decrypted output to {decrypt_path}: {}",
+                            io_error(&e, &decrypt_path)
+                        );
+                        self.exit(R_WRITE_ERROR);
+                    }
+                    wrote += plain.len();
+                }
+                _ => {
+                    println!("The provided identity could not decrypt the file");
+                    self.exit(R_DECRYPT_FAILED);
+                }
+            }
+            print!(
+                "\rWrote {} to {decrypt_path}   ",
+                prettysize(wrote as f64, "B")
+            );
+        }
+        println!("\nFile {rfe_path} decrypted to {decrypt_path}");
+    }
+
+    // File output
+
+    fn write_identity(&mut self, identity: &Identity) {
+        let mut wp = expanduser(self.args.write.as_deref().unwrap_or_default());
+        if let (Some(private), true) = (identity.get_private_key(), self.args.export_prv) {
+            if !isfile(&wp) || self.args.force {
+                key_to_file(&private, &wp);
+                println!("Wrote private identity to {wp}");
+            } else {
+                println!("File {wp} already exists, not overwriting");
+                self.exit(R_FILE_EXISTS);
+            }
+        } else if let Some(public) = identity.get_public_key() {
+            if !wp.to_lowercase().ends_with(&format!(".{PUB_EXT}")) {
+                wp.push_str(&format!(".{PUB_EXT}"));
+            }
+            if !isfile(&wp) || self.args.force {
+                key_to_file(&public, &wp);
+                println!("Wrote public identity to {wp}");
+            } else {
+                println!("File {wp} already exists, not overwriting");
+                self.exit(R_FILE_EXISTS);
+            }
+        } else {
+            println!("Identity holds neither a public nor private key");
+            self.exit(R_NO_KEYS);
+        }
+    }
+
+    // Terminal output
+
+    fn encode_key(&self, key: &[u8]) -> String {
+        if self.args.base64 {
+            urlsafe_b64encode(key)
+        } else if self.args.base32 {
+            b32encode(key)
+        } else {
+            hexrep(key)
+        }
+    }
+
+    fn print_identity_information(&self, identity: &Identity) {
+        println!("Identity Hash : {}", id_str(identity));
+        let public = identity.get_public_key().unwrap_or([0; KEYSIZE]);
+        println!("Public Key    : {}", self.encode_key(&public));
+        if let Some(private) = identity.get_private_key() {
+            if self.args.print_private {
+                println!("Private Key   : {}", self.encode_key(&private));
+            } else {
+                println!("Private Key   : Hidden");
+            }
+        }
+    }
+
+    fn print_hash_information(&mut self, target: &Target) {
+        let hash = self.args.hash.clone().unwrap_or_default();
+        let (identity_hash, destination) = match target {
+            Target::None => {
+                println!("Invalid identity");
+                self.exit(R_INVALID_IDENTITY);
+            }
+            Target::Str(s) => {
+                if s.chars().count() != 32 {
+                    println!("Invalid identity hash length");
+                    self.exit(R_INVALID_IDENTITY);
+                }
+                match fromhex(s) {
+                    Ok(hash) => (hash, None),
+                    Err(e) => {
+                        println!("Invalid identity: {e}");
+                        self.exit(R_INVALID_IDENTITY);
+                    }
+                }
+            }
+            Target::Identity(identity) => {
+                // `str(RNS.Destination(identity, OUT, SINGLE, app, *aspects))`.
+                let destination_hash = hash_from_name_and_identity(&hash, identity.hash());
+                let full = format!(
+                    "<{hash}.{}:{}>",
+                    hexrep(identity.hash()),
+                    hexrep(&destination_hash)
+                );
+                (identity.hash().to_vec(), Some(full))
+            }
+        };
+        let destination_hash = hash_from_name_and_identity(&hash, &identity_hash);
+        println!(
+            "The {hash} destination for this Identity is {}",
+            prettyhexrep(&destination_hash)
+        );
+        if let Some(destination) = destination {
+            println!("The full destination specifier is {destination}");
+        }
+    }
+
+    fn export_pub_identity(&mut self, identity: &Identity) {
+        match identity.get_public_key() {
+            None => {
+                println!("Identity doesn't hold a public key, cannot export");
+                self.exit(R_NO_PUBKEY);
+            }
+            Some(key) => println!("Public Identity Keys  : {}", self.encode_key(&key)),
+        }
+    }
+
+    fn export_prv_identity(&mut self, identity: &Identity) {
+        match identity.get_private_key() {
+            None => {
+                println!("Identity doesn't hold a private key, cannot export");
+                self.exit(R_NO_PRVKEY);
+            }
+            Some(key) => println!("Private Identity Keys : {}", self.encode_key(&key)),
+        }
+    }
+
+    // Helpers
+
+    fn get_editor_content(&mut self) -> Vec<u8> {
+        let mut editor = std::env::var("EDITOR").unwrap_or_default();
+        if editor.is_empty() {
+            for fallback in ["nano", "vim", "vi"] {
+                let found = process::Command::new("which")
+                    .arg(fallback)
+                    .stdout(process::Stdio::null())
+                    .stderr(process::Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                if found {
+                    editor = fallback.into();
+                    break;
+                }
+            }
+        }
+        if editor.is_empty() {
+            println!("Could not launch editor");
+            self.exit(R_READ_ERROR);
+        }
+        let tmp = std::env::temp_dir().join(format!("tmp-rnid-{}.tmp", process::id()));
+        let tmp_name = tmp.to_string_lossy().into_owned();
+        if let Err(e) = fs::write(&tmp, b"") {
+            println!(
+                "Could not get content from editor: {}",
+                io_error(&e, &tmp_name)
+            );
+            self.exit(R_READ_ERROR);
+        }
+        let status = match process::Command::new(&editor).arg(&tmp).status() {
+            Ok(status) => status,
+            Err(e) => {
+                println!(
+                    "Could not get content from editor: {}",
+                    io_error(&e, &editor)
+                );
+                self.exit(R_READ_ERROR);
+            }
+        };
+        if !status.success() {
+            println!(
+                "Editor exited with error code {}",
+                status.code().unwrap_or(-1)
+            );
+            let _ = fs::remove_file(&tmp);
+            self.exit(R_READ_ERROR);
+        }
+        let content = fs::read(&tmp);
+        let _ = fs::remove_file(&tmp);
+        match content {
+            Ok(content) => content,
+            Err(e) => {
+                println!(
+                    "Could not get content from editor: {}",
+                    io_error(&e, &tmp_name)
+                );
+                self.exit(R_READ_ERROR);
+            }
+        }
+    }
 }
 
-fn should_print_rsm_meta_entry(key: &str, value: &Value) -> bool {
-    !(key == "note" && matches!(value, Value::Nil))
+fn read_chunk(input: &mut fs::File, size: usize) -> std::io::Result<Vec<u8>> {
+    let mut chunk = Vec::new();
+    input.take(size as u64).read_to_end(&mut chunk)?;
+    Ok(chunk)
 }
 
-fn rsm_meta_key(value: &Value) -> String {
+/// upstream's spinner: `msg` while waiting for `until`, cleared after.
+fn spin(until: impl Fn() -> bool, msg: &str, timeout: Option<f64>) -> bool {
+    const SYMS: [char; 7] = ['⢄', '⢂', '⢁', '⡁', '⡈', '⡐', '⡠'];
+    let deadline =
+        timeout.map(|t| Instant::now() + Duration::try_from_secs_f64(t).unwrap_or(Duration::ZERO));
+    print!("{msg}   ");
+    let mut i = 0;
+    while deadline.is_none_or(|d| Instant::now() < d) && !until() {
+        std::thread::sleep(Duration::from_millis(100));
+        print!("\u{8}\u{8}{} ", SYMS[i]);
+        let _ = std::io::stdout().flush();
+        i = (i + 1) % SYMS.len();
+    }
+    print!("\r{}  \r", " ".repeat(msg.chars().count()));
+    deadline.is_none_or(|d| Instant::now() <= d)
+}
+
+/// A created signature: written as bytes, or printed as text.
+enum Rsg {
+    Bin(Vec<u8>),
+    Text(String),
+}
+
+/// `get_rsg_hash`.
+fn rsg_hash(message: &RsgMessage) -> Result<[u8; 32], String> {
+    match message {
+        RsgMessage::Bytes(bytes) => Ok(sha256(bytes)),
+        RsgMessage::File(path) => {
+            let mut file = fs::File::open(path).map_err(|e| io_error(&e, path))?;
+            let mut hasher = Sha256::new();
+            let mut buf = vec![0u8; 1 << 16];
+            loop {
+                let n = file.read(&mut buf).map_err(|e| io_error(&e, path))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+            }
+            Ok(hasher.digest())
+        }
+    }
+}
+
+fn map_get<'a>(entries: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
+    entries
+        .iter()
+        .find(|(k, _)| matches!(k, Value::Str(s) if s == key))
+        .map(|(_, v)| v)
+}
+
+fn type_name(value: &Value) -> &'static str {
     match value {
-        Value::Str(value) => value.clone(),
-        Value::Bin(value) => hex(value),
-        Value::UInt(value) => value.to_string(),
-        Value::Int(value) => value.to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::Float(value) => value.to_string(),
-        Value::Nil => "nil".into(),
-        Value::Array(_) => "array".into(),
-        Value::Map(_) => "map".into(),
+        Value::Nil => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::UInt(_) | Value::Int(_) => "int",
+        Value::Float(_) => "float",
+        Value::Bin(_) => "bytes",
+        Value::Str(_) => "str",
+        Value::Array(_) => "list",
+        Value::Map(_) => "dict",
     }
 }
 
-fn rsm_meta_type(value: &Value) -> char {
-    match value {
-        Value::Str(_) => 's',
-        Value::Bin(_) => 'b',
-        Value::Array(_) => 'l',
-        Value::Map(_) => 'd',
-        Value::UInt(_) | Value::Int(_) => 'i',
-        Value::Float(_) => 'f',
-        Value::Nil => 'N',
-        Value::Bool(_) => 'u',
+fn not_iterable(value: &Value) -> String {
+    format!("argument of type '{}' is not iterable", type_name(value))
+}
+
+fn clone_identity(identity: &Identity) -> Identity {
+    match (identity.get_private_key(), identity.get_public_key()) {
+        (Some(private), _) => Identity::from_private_key(&private),
+        (None, Some(public)) => Identity::from_public_key(&public).expect("a loaded key"),
+        (None, None) => unreachable!("an identity holds a key"),
     }
 }
 
-fn rsm_meta_value(value: &Value) -> String {
-    match value {
-        Value::Nil => "None".into(),
-        Value::Bool(value) => value.to_string(),
-        Value::UInt(value) => value.to_string(),
-        Value::Int(value) => value.to_string(),
-        Value::Float(value) => value.to_string(),
-        Value::Bin(value) => hex(value),
-        Value::Str(value) => value.clone(),
-        Value::Array(values) => format!("{:?}", values),
-        Value::Map(values) => format!("{:?}", values),
-    }
-}
-
-#[allow(dead_code)]
-fn check_release_rsm_structure(signed_data: &Value) -> Result<(), &'static str> {
-    let Some(release_meta) = signed_data.map_get("meta") else {
-        return Err("No release metadata in manifest");
+/// `create_rsg`.
+fn create_rsg(
+    signer: &Identity,
+    message: RsgMessage,
+    embed: bool,
+    meta: Option<&Vec<(String, Entry)>>,
+    output: &str,
+) -> Result<Rsg, String> {
+    let (Some(_), Some(public)) = (signer.get_private_key(), signer.get_public_key()) else {
+        return Err(format!("{} does not hold a private key", id_str(signer)));
     };
-    let release_name = release_meta.map_get("name").and_then(Value::as_str);
-    let release_version = release_meta.map_get("version").and_then(Value::as_str);
-    let release_origin = release_meta.map_get("origin");
-    let release_origin_path = release_meta.map_get("path").and_then(Value::as_str);
-
-    let Some(release_name) = release_name.filter(|value| !value.is_empty()) else {
-        return Err("Incomplete package data in manifest");
-    };
-    let Some(release_version) = release_version.filter(|value| !value.is_empty()) else {
-        return Err("Incomplete package data in manifest");
-    };
-    let Some(release_origin) = release_origin else {
-        return Err("Incomplete release origin data in manifest");
-    };
-    let Some(_release_origin_path) = release_origin_path.filter(|value| !value.is_empty()) else {
-        return Err("Incomplete release origin data in manifest");
-    };
-
-    if release_name.contains('/') || release_version.contains('/') {
-        return Err("Invalid data in release manifest");
-    }
-    let origin_len = match release_origin {
-        Value::Bin(bytes) => bytes.len(),
-        Value::Str(value) => value.len(),
-        _ => return Err("Invalid origin hash in manifest"),
-    };
-    if origin_len != 16 {
-        return Err("Invalid origin hash length in manifest");
-    }
-    if !matches!(release_origin, Value::Bin(_)) {
-        return Err("Invalid origin hash in manifest");
-    }
-    Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{:02x}", byte)).collect()
-}
-
-fn validate_signatures(
-    paths: &[&str],
-    required: Option<&IdentityRef>,
-    args: &Args,
-) -> Result<(), String> {
-    for path in paths {
-        validate_signature(path, required, args)?;
-    }
-    Ok(())
-}
-
-fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
-    create_rsg_with_embed_and_meta(identity, message, false, None)
-}
-
-fn create_rsg_with_embed_and_meta(
-    identity: &Identity,
-    message: &[u8],
-    embed_message: bool,
-    extra_meta: Option<Vec<(String, Value)>>,
-) -> Result<Vec<u8>, String> {
-    let public_key = identity
-        .get_public_key()
-        .ok_or_else(|| "Identity does not hold a public key".to_string())?;
-    let mut meta_items = vec![
+    let mut meta_map = vec![
         (
             Value::Str("signer".into()),
-            Value::Bin(identity.hash().to_vec()),
+            Value::Bin(signer.hash().to_vec()),
         ),
-        (Value::Str("pubkey".into()), Value::Bin(public_key.to_vec())),
+        (Value::Str("pubkey".into()), Value::Bin(public.to_vec())),
     ];
-    if let Some(extra_meta) = extra_meta {
-        for (key, value) in extra_meta {
-            if !meta_items
-                .iter()
-                .any(|(existing, _)| matches!(existing, Value::Str(existing) if existing == &key))
-            {
-                meta_items.push((Value::Str(key), value));
+    if let Some(meta) = meta.filter(|m| !m.is_empty()) {
+        for (key, entry) in meta {
+            if key != "signer" && key != "pubkey" {
+                meta_map.push((Value::Str(key.clone()), entry_value(entry)));
             }
         }
     }
-
-    let mut envelope_items = vec![
+    let mut signed = vec![
         (Value::Str("hashtype".into()), Value::Str("sha256".into())),
         (
             Value::Str("hash".into()),
-            Value::Bin(sha256(message).to_vec()),
+            Value::Bin(rsg_hash(&message)?.to_vec()),
         ),
-        (Value::Str("meta".into()), Value::Map(meta_items)),
+        (Value::Str("meta".into()), Value::Map(meta_map)),
     ];
-    if embed_message {
-        envelope_items.push((Value::Str("message".into()), Value::Bin(message.to_vec())));
-    }
-    let envelope = Value::Map(envelope_items);
-    let envelope = msgpack::pack(&envelope);
-    let signature = identity
-        .sign(&envelope)
-        .map_err(|_| "Identity does not hold a private key".to_string())?;
-    let mut rsg = Vec::with_capacity(SIG_LEN + envelope.len());
-    rsg.extend_from_slice(&signature);
-    rsg.extend_from_slice(&envelope);
-    Ok(rsg)
-}
-
-#[derive(Debug, Clone)]
-enum MetaNode {
-    Scalar(String),
-    Section(BTreeMap<String, MetaNode>),
-}
-
-fn sign_message_metadata(args: &Args) -> Result<Option<Vec<(String, Value)>>, String> {
-    let Some(meta_path) = args.get("E").or_else(|| args.get("embed-meta")) else {
-        return Ok(None);
-    };
-    if meta_path == "true" {
-        return Err("No metadata path specified".into());
-    }
-    let mut meta = parse_configobj_file(meta_path)?;
-    let spec_path = args
-        .get("meta-spec")
-        .filter(|path| *path != "true")
-        .map(str::to_string)
-        .or_else(|| {
-            let candidate = format!("{meta_path}.spec");
-            Path::new(&candidate).is_file().then_some(candidate)
-        });
-    if let Some(spec_path) = spec_path {
-        let spec = parse_configobj_file(&spec_path)?;
-        validate_metadata_spec(&mut meta, &spec)?;
-    }
-    Ok(Some(meta_nodes_to_values(meta)))
-}
-
-fn parse_configobj_file(path: &str) -> Result<BTreeMap<String, MetaNode>, String> {
-    let input = fs::read_to_string(path).map_err(|e| format!("Error reading {path}: {e}"))?;
-    parse_configobj(&input)
-}
-
-fn parse_configobj(input: &str) -> Result<BTreeMap<String, MetaNode>, String> {
-    let mut root = BTreeMap::new();
-    let mut section: Option<String> = None;
-    for (index, raw) in input.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            let name = line.trim_matches(&['[', ']'][..]).trim();
-            if name.is_empty() {
-                return Err(format!("Invalid empty section on line {}", index + 1));
-            }
-            section = Some(name.to_string());
-            root.entry(name.to_string())
-                .or_insert_with(|| MetaNode::Section(BTreeMap::new()));
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            return Err(format!("Invalid metadata line {}", index + 1));
+    if embed {
+        let bytes = match message {
+            RsgMessage::Bytes(bytes) => bytes.to_vec(),
+            RsgMessage::File(path) => fs::read(path).map_err(|e| io_error(&e, path))?,
         };
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(format!("Invalid empty key on line {}", index + 1));
-        }
-        let value = MetaNode::Scalar(unquote_config_value(value.trim()).to_string());
-        if let Some(section) = section.as_ref() {
-            let entry = root
-                .entry(section.clone())
-                .or_insert_with(|| MetaNode::Section(BTreeMap::new()));
-            let MetaNode::Section(entries) = entry else {
-                return Err(format!("Section {section} conflicts with scalar value"));
-            };
-            entries.insert(key.to_string(), value);
-        } else {
-            root.insert(key.to_string(), value);
-        }
+        signed.push((Value::Str("message".into()), Value::Bin(bytes)));
     }
-    Ok(root)
+    let envelope = msgpack::pack(&Value::Map(signed));
+    let signature = signer.sign(&envelope).map_err(|e| format!("{e:?}"))?;
+    let mut rsg_data = signature.to_vec();
+    rsg_data.extend_from_slice(&envelope);
+    Ok(match output {
+        "hex" => Rsg::Text(hexrep(&rsg_data)),
+        "base32" => Rsg::Text(b32encode(&rsg_data)),
+        "base64" => Rsg::Text(urlsafe_b64encode(&rsg_data)),
+        "base256" => Rsg::Text(rns_core::display::b256rep(&rsg_data)),
+        _ => Rsg::Bin(rsg_data),
+    })
 }
 
-fn unquote_config_value(value: &str) -> &str {
-    if value.len() >= 2 {
-        let bytes = value.as_bytes();
-        if matches!(
-            (bytes[0], bytes[value.len() - 1]),
-            (b'\'', b'\'') | (b'"', b'"')
-        ) {
-            return &value[1..value.len() - 1];
-        }
-    }
-    value
-}
-
-fn validate_metadata_spec(
-    meta: &mut BTreeMap<String, MetaNode>,
-    spec: &BTreeMap<String, MetaNode>,
-) -> Result<(), String> {
-    for (key, spec_node) in spec {
-        let Some(meta_node) = meta.get_mut(key) else {
-            return Err(format!(
-                "Metadata did not pass spec validation: missing {key}"
-            ));
-        };
-        validate_metadata_node(key, meta_node, spec_node)?;
-    }
-    Ok(())
-}
-
-fn validate_metadata_node(key: &str, meta: &mut MetaNode, spec: &MetaNode) -> Result<(), String> {
-    match (meta, spec) {
-        (MetaNode::Scalar(value), MetaNode::Scalar(check)) => {
-            let converted = validate_metadata_scalar(key, value, check)?;
-            *value = converted;
-            Ok(())
-        }
-        (MetaNode::Section(meta_entries), MetaNode::Section(spec_entries)) => {
-            validate_metadata_spec(meta_entries, spec_entries)
-        }
-        _ => Err(format!(
-            "Metadata did not pass spec validation: type mismatch for {key}"
-        )),
-    }
-}
-
-fn validate_metadata_scalar(key: &str, value: &str, check: &str) -> Result<String, String> {
-    let (name, params) = parse_spec_check(check);
-    match name.as_str() {
-        "string" | "str" => {
-            let len = value.chars().count() as i64;
-            validate_len_or_range(key, len, params.get("min"), params.get("max"))?;
-            Ok(value.to_string())
-        }
-        "integer" | "int" => {
-            let parsed = value.parse::<i64>().map_err(|_| {
-                format!("Metadata did not pass spec validation: {key} is not an integer")
-            })?;
-            validate_len_or_range(key, parsed, params.get("min"), params.get("max"))?;
-            Ok(parsed.to_string())
-        }
-        "float" => {
-            let parsed = value.parse::<f64>().map_err(|_| {
-                format!("Metadata did not pass spec validation: {key} is not a float")
-            })?;
-            if let Some(min) = params.get("min").and_then(|v| v.parse::<f64>().ok()) {
-                if parsed < min {
-                    return Err(format!(
-                        "Metadata did not pass spec validation: {key} is too small"
-                    ));
-                }
-            }
-            if let Some(max) = params.get("max").and_then(|v| v.parse::<f64>().ok()) {
-                if parsed > max {
-                    return Err(format!(
-                        "Metadata did not pass spec validation: {key} is too big"
-                    ));
-                }
-            }
-            Ok(parsed.to_string())
-        }
-        "boolean" | "bool" => parse_config_bool(value)
-            .map(|v| v.to_string())
-            .ok_or_else(|| {
-                format!("Metadata did not pass spec validation: {key} is not a boolean")
-            }),
-        "" | "pass" => Ok(value.to_string()),
-        _ => Err(format!(
-            "Metadata did not pass spec validation: unknown check {name} for {key}"
-        )),
-    }
-}
-
-fn parse_spec_check(check: &str) -> (String, BTreeMap<String, String>) {
-    let trimmed = check.trim();
-    let Some(open) = trimmed.find('(') else {
-        return (trimmed.to_string(), BTreeMap::new());
-    };
-    let name = trimmed[..open].trim().to_string();
-    let close = trimmed.rfind(')').unwrap_or(trimmed.len());
-    let mut params = BTreeMap::new();
-    for part in trimmed[open + 1..close].split(',') {
-        let part = part.trim();
-        if let Some((key, value)) = part.split_once('=') {
-            params.insert(
-                key.trim().to_string(),
-                unquote_config_value(value.trim()).to_string(),
-            );
-        }
-    }
-    (name, params)
-}
-
-fn validate_len_or_range(
-    key: &str,
-    value: i64,
-    min: Option<&String>,
-    max: Option<&String>,
-) -> Result<(), String> {
-    if let Some(min) = min.and_then(|v| v.parse::<i64>().ok()) {
-        if value < min {
-            return Err(format!(
-                "Metadata did not pass spec validation: {key} is too small"
-            ));
-        }
-    }
-    if let Some(max) = max.and_then(|v| v.parse::<i64>().ok()) {
-        if value > max {
-            return Err(format!(
-                "Metadata did not pass spec validation: {key} is too big"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn parse_config_bool(value: &str) -> Option<bool> {
-    match value.to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
-
-fn meta_nodes_to_values(nodes: BTreeMap<String, MetaNode>) -> Vec<(String, Value)> {
-    nodes
-        .into_iter()
-        .map(|(key, node)| (key, meta_node_to_value(node)))
-        .collect()
-}
-
-fn meta_node_to_value(node: MetaNode) -> Value {
-    match node {
-        MetaNode::Scalar(value) => Value::Str(value),
-        MetaNode::Section(entries) => Value::Map(
-            entries
-                .into_iter()
-                .map(|(key, node)| (Value::Str(key), meta_node_to_value(node)))
+/// A ConfigObj value as umsgpack packs it.
+fn entry_value(entry: &Entry) -> Value {
+    match entry {
+        Entry::Str(s) => Value::Str(s.clone()),
+        Entry::Int(n) if *n >= 0 => Value::UInt(*n as u64),
+        Entry::Int(n) => Value::Int(*n),
+        Entry::Float(f) => Value::Float(*f),
+        Entry::Bool(b) => Value::Bool(*b),
+        Entry::List(items) => Value::Array(items.iter().map(entry_value).collect()),
+        Entry::Section(section) => Value::Map(
+            section
+                .entries()
+                .iter()
+                .map(|(k, v)| (Value::Str(k.clone()), entry_value(v)))
                 .collect(),
         ),
     }
 }
 
-fn sign_message_read_path(args: &Args) -> Option<&str> {
-    args.get("read").or_else(|| match args.get("r") {
-        Some("true") => args.positional.first().map(String::as_str),
-        other => other,
-    })
-}
-
-fn sign_message(identity: &Identity, args: &Args) -> Result<(), String> {
-    let cli_message = args
-        .get("S")
-        .or_else(|| args.get("sign-message"))
-        .unwrap_or("true");
-    let read_path = sign_message_read_path(args);
-    let message = if let Some(path) = read_path {
-        if cli_message != "true" {
-            return Err(
-                "Both an input file and command-line provided message was specified".into(),
-            );
-        }
-        fs::read(path).map_err(|e| format!("Error reading {}: {}", path, e))?
-    } else if cli_message == "true" {
-        editor_content()?
-    } else {
-        cli_message.as_bytes().to_vec()
-    };
-    if message.is_empty() {
-        return Err("No message specified".into());
-    }
-
-    let output_format = rsg_output_format(args);
-    let extra_meta = sign_message_metadata(args)?;
-    let rsg = create_rsg_with_embed_and_meta(identity, &message, true, extra_meta)?;
-    if matches!(output_format, RsgOutputFormat::Binary) {
-        let Some(output) = args.get("w").or_else(|| args.get("write")) else {
-            return Err("No write path specified".into());
-        };
-        let output = if output
-            .to_ascii_lowercase()
-            .ends_with(&format!(".{}", MSG_EXT))
-        {
-            output.to_string()
-        } else {
-            format!("{}.{}", output, MSG_EXT)
-        };
-        write_file_checked(&output, &rsg, args.has("f") || args.has("force"))?;
-        println!(
-            "Message signed with {} saved to {}",
-            prettyhexrep(identity.hash()),
-            output
-        );
-    } else {
-        println!("{}", wrap_rsg_ascii(&encode_rsg(&rsg, output_format)));
-        println!("Message signed with {}", prettyhexrep(identity.hash()));
-    }
-    Ok(())
-}
-
-fn rsg_output_format(args: &Args) -> RsgOutputFormat {
-    if args.has("hex") {
-        RsgOutputFormat::Hex
-    } else if args.has("Z") || args.has("base256") {
-        RsgOutputFormat::Base256
-    } else if args.has("B") || args.has("base32") {
-        RsgOutputFormat::Base32
-    } else if args.has("b") || args.has("base64") {
-        RsgOutputFormat::Base64
-    } else {
-        RsgOutputFormat::Binary
-    }
-}
-
-fn encode_rsg(rsg: &[u8], format: RsgOutputFormat) -> String {
-    match format {
-        RsgOutputFormat::Binary => String::from_utf8_lossy(rsg).into_owned(),
-        RsgOutputFormat::Hex => prettyhexrep(rsg),
-        RsgOutputFormat::Base32 => base32_encode(rsg),
-        RsgOutputFormat::Base256 => b256rep(rsg),
-        RsgOutputFormat::Base64 => base64_encode(rsg),
-    }
-}
-
-fn wrap_rsg_ascii(encoded: &str) -> String {
-    let header = format!(
-        "{}{}",
-        RSG_ASCII_HEADER,
-        "#".repeat(RSG_ASCII_ROW_WIDTH - RSG_ASCII_HEADER.len())
+/// `wrap_rsg`: rows of 64 characters between a header and a footer, the
+/// last row padded with `=`.
+fn wrap_rsg(rsg: &str) -> String {
+    let header_len = RSG_ASCII_HEADER.chars().count();
+    let footer_len = RSG_ASCII_FOOTER.chars().count();
+    let mut wrapped = format!(
+        "{RSG_ASCII_HEADER}{}\n",
+        "#".repeat(RSG_ASCII_ROW_WIDTH - header_len)
     );
-    let footer = format!(
-        "{}{}",
-        "#".repeat(RSG_ASCII_ROW_WIDTH - RSG_ASCII_FOOTER.len()),
-        RSG_ASCII_FOOTER
-    );
-    let mut out = String::new();
-    out.push_str(&header);
-    out.push('\n');
-    let mut line = String::new();
-    let mut line_chars = 0usize;
-    for ch in encoded.chars() {
-        line.push(ch);
-        line_chars += 1;
-        if line_chars == RSG_ASCII_ROW_WIDTH {
-            out.push_str(&line);
-            out.push('\n');
-            line.clear();
-            line_chars = 0;
-        }
+    let chars: Vec<char> = rsg.chars().collect();
+    for chunk in chars.chunks(RSG_ASCII_ROW_WIDTH) {
+        let mut row: String = chunk.iter().collect();
+        row.push_str(&"=".repeat(RSG_ASCII_ROW_WIDTH - chunk.len()));
+        wrapped.push_str(&row);
+        wrapped.push('\n');
     }
-    if line_chars > 0 {
-        if line_chars < RSG_ASCII_ROW_WIDTH {
-            line.push_str(&"=".repeat(RSG_ASCII_ROW_WIDTH - line_chars));
-        }
-        out.push_str(&line);
-        out.push('\n');
-    }
-    out.push_str(&footer);
-    out
+    wrapped.push_str(&"#".repeat(RSG_ASCII_ROW_WIDTH - footer_len));
+    wrapped.push_str(RSG_ASCII_FOOTER);
+    wrapped
 }
 
-fn unwrap_rsg_ascii(input: &str) -> Option<String> {
-    let mut out = String::new();
-    for line in input.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        out.push_str(line);
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out.trim_end_matches('=').to_string())
-    }
+/// `extract_signed_rsg_data`.
+fn extract_signed_rsg_data(rsg: &[u8]) -> Option<Value> {
+    msgpack::unpack_exact(rsg.get(SIGLEN..)?).ok()
 }
 
-fn decode_rsg_data(input: &[u8]) -> Option<Vec<u8>> {
-    if input.len() == SIG_LEN {
-        return Some(input.to_vec());
-    }
-    let Ok(text) = std::str::from_utf8(input) else {
-        return Some(input.to_vec());
-    };
-    let wrapped = text.contains(RSG_ASCII_HEADER);
-    let encoded = unwrap_rsg_ascii(text).unwrap_or_else(|| {
-        text.chars()
-            .filter(|ch| !ch.is_whitespace())
-            .collect::<String>()
-    });
-    if encoded.is_empty() {
-        return None;
-    }
-    if !encoded.is_ascii() {
-        return b256_to_bytes(&encoded)
-            .or_else(|| if wrapped { None } else { Some(input.to_vec()) });
-    }
-    if !wrapped
-        && !encoded
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '-' | '_' | '='))
-    {
-        return Some(input.to_vec());
-    }
-    let encoded = encoded.trim_end_matches('=').to_string();
-    if encoded.len().is_multiple_of(2) && encoded.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        if let Some(decoded) = parse_hex(&encoded) {
-            return Some(decoded);
-        }
-    }
-    if encoded
-        .chars()
-        .all(|ch| matches!(ch, 'A'..='Z' | 'a'..='z' | '2'..='7'))
-    {
-        if let Some(decoded) = base32_decode(&encoded) {
-            return Some(decoded);
-        }
-    }
-    base64_decode(&encoded).or_else(|| if wrapped { None } else { Some(input.to_vec()) })
-}
-
-enum RsgValidation {
-    Valid { signer_hash: [u8; 16] },
-    WrongSigner { signer_hash: [u8; 16] },
-    Invalid,
-}
-
-fn rsg_envelope(rsg: &[u8]) -> Result<Option<Value>, String> {
-    if rsg.len() <= SIG_LEN {
-        return Ok(None);
-    }
-    let envelope = &rsg[SIG_LEN..];
-    msgpack::unpack_exact(envelope)
-        .map(Some)
-        .map_err(|e| format!("Invalid rsg envelope: {}", e))
-}
-
-fn rsg_embedded_message(value: &Value) -> Option<Vec<u8>> {
-    if let Some(message) = value.map_get("message").and_then(Value::as_bin) {
-        Some(message.to_vec())
-    } else {
-        value
-            .map_get("message")
-            .and_then(Value::as_str)
-            .map(|message| message.as_bytes().to_vec())
-    }
-}
-
+/// `validate_rsg`: whether the signature is valid, the signed data and
+/// the identity that signed it.
 fn validate_rsg(
-    rsg: &[u8],
-    message: &[u8],
-    required_signer: Option<[u8; 16]>,
-) -> Result<RsgValidation, String> {
-    if rsg.len() <= SIG_LEN {
-        return Ok(RsgValidation::Invalid);
-    }
-    let signature: [u8; SIG_LEN] = rsg[..SIG_LEN].try_into().unwrap();
-    let envelope = &rsg[SIG_LEN..];
-    let Some(value) = rsg_envelope(rsg)? else {
-        return Ok(RsgValidation::Invalid);
-    };
-
-    if value.map_get("hashtype").and_then(Value::as_str) != Some("sha256") {
-        return Ok(RsgValidation::Invalid);
-    }
-    let Some(signed_hash) = value.map_get("hash").and_then(Value::as_bin) else {
-        return Ok(RsgValidation::Invalid);
-    };
-    if signed_hash != sha256(message) {
-        return Ok(RsgValidation::Invalid);
-    }
-    let Some(meta) = value.map_get("meta") else {
-        return Ok(RsgValidation::Invalid);
-    };
-    let Some(pubkey_bytes) = meta.map_get("pubkey").and_then(Value::as_bin) else {
-        return Ok(RsgValidation::Invalid);
-    };
-    let Ok(public_key) = <[u8; 64]>::try_from(pubkey_bytes) else {
-        return Ok(RsgValidation::Invalid);
-    };
-    let Ok(identity) = Identity::from_public_key(&public_key) else {
-        return Ok(RsgValidation::Invalid);
-    };
-    let signer_hash = *identity.hash();
-
-    let Some(meta_signer) = meta.map_get("signer").and_then(Value::as_bin) else {
-        return Ok(RsgValidation::Invalid);
-    };
-    if meta_signer != signer_hash {
-        return Ok(RsgValidation::Invalid);
-    }
-
-    if let Some(required) = required_signer {
-        if signer_hash != required {
-            return Ok(RsgValidation::WrongSigner { signer_hash });
+    rsg_data: &[u8],
+    message: RsgMessage,
+    required_signer: &Signer,
+) -> Result<(bool, Option<Value>, Option<Identity>), String> {
+    if let RsgMessage::Bytes(bytes) = &message {
+        if bytes.is_empty() {
+            return Err("No message specified for rsg validation".into());
         }
     }
-
-    if identity.verify(&signature, envelope) {
-        Ok(RsgValidation::Valid { signer_hash })
-    } else {
-        Ok(RsgValidation::Invalid)
+    let rsg_hash = rsg_hash(&message)?;
+    if rsg_data.len() == SIGLEN {
+        return Err("Cannot validate legacy rsg format".into());
     }
-}
-
-fn encrypt_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String> {
-    let plaintext = read_input(path, args)?;
-    let ciphertext = identity.encrypt(&plaintext, &mut OsRng).map_err(|_| {
-        format!(
-            "Cannot encrypt {}, the identity does not hold a public key",
-            path
-        )
-    })?;
-    let output = args
-        .get("w")
-        .or_else(|| args.get("write"))
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{}.{}", path, ENCRYPT_EXT));
-    if args.has("stdout") {
-        io::stdout()
-            .write_all(&ciphertext)
-            .map_err(|e| format!("Error writing to stdout: {}", e))?;
-    } else {
-        write_file_checked(&output, &ciphertext, args.has("f") || args.has("force"))?;
-        println!("File {} encrypted to {}", path, output);
+    if rsg_data.len() < SIGLEN + 1 {
+        return Ok((false, None, None));
     }
-    Ok(())
-}
-
-fn encrypt_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), String> {
-    for path in paths {
-        encrypt_file(path, identity, args)?;
+    let signature: &[u8; SIGLEN] = rsg_data[..SIGLEN].try_into().expect("length");
+    let envelope = &rsg_data[SIGLEN..];
+    let Ok(signed_data) = msgpack::unpack_exact(envelope) else {
+        return Ok((false, None, None));
+    };
+    let signed = match &signed_data {
+        Value::Map(entries) => entries,
+        Value::Array(_) | Value::Str(_) => return Ok((false, None, None)),
+        other => return Err(not_iterable(other)),
+    };
+    let (Some(hashtype), Some(hash)) = (map_get(signed, "hashtype"), map_get(signed, "hash"))
+    else {
+        return Ok((false, None, None));
+    };
+    if !matches!(hashtype, Value::Str(s) if s == "sha256") {
+        return Ok((false, None, None));
     }
-    Ok(())
-}
-
-fn decrypt_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String> {
-    if !path
-        .to_ascii_lowercase()
-        .ends_with(&format!(".{}", ENCRYPT_EXT))
-    {
-        return Err(format!(
-            "The file {} does not appear to be a Reticulum encrypted file",
-            path
-        ));
+    let meta = match map_get(signed, "meta") {
+        None => return Ok((false, None, None)),
+        Some(Value::Map(meta)) => meta,
+        Some(Value::Array(_) | Value::Str(_)) => return Ok((false, None, None)),
+        Some(other) => return Err(not_iterable(other)),
+    };
+    if map_get(meta, "signer").is_none() {
+        return Ok((false, None, None));
     }
-    let ciphertext = read_input(path, args)?;
-    let plaintext = identity.decrypt(&ciphertext).map_err(|_| {
-        format!(
-            "Cannot decrypt {}, the identity does not hold a private key",
-            path
-        )
-    })?;
-    let output = args
-        .get("w")
-        .or_else(|| args.get("write"))
-        .map(str::to_string)
-        .unwrap_or_else(|| path[..path.len() - ENCRYPT_EXT.len() - 1].to_string());
-    if args.has("stdout") {
-        io::stdout()
-            .write_all(&plaintext)
-            .map_err(|e| format!("Error writing to stdout: {}", e))?;
-    } else {
-        write_file_checked(&output, &plaintext, args.has("f") || args.has("force"))?;
-        println!("File {} decrypted to {}", path, output);
-    }
-    Ok(())
-}
-
-fn decrypt_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), String> {
-    for path in paths {
-        decrypt_file(path, identity, args)?;
-    }
-    Ok(())
-}
-
-fn editor_content() -> Result<Vec<u8>, String> {
-    let editor = std::env::var("EDITOR").map_err(|_| "Could not launch editor".to_string())?;
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("System clock error: {}", e))?
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("rnid-message-{}-{timestamp}.tmp", process::id()));
-    fs::write(&path, "").map_err(|e| format!("Could not create editor buffer: {}", e))?;
-    let status = Command::new(&editor)
-        .arg(&path)
-        .status()
-        .map_err(|e| format!("Could not launch editor {}: {}", editor, e))?;
-    if !status.success() {
-        let _ = fs::remove_file(&path);
-        return Err(format!("Editor exited with status {}", status));
-    }
-    let content = fs::read(&path).map_err(|e| format!("Could not read editor buffer: {}", e))?;
-    let _ = fs::remove_file(&path);
-    Ok(content)
-}
-
-fn read_input(path: &str, args: &Args) -> Result<Vec<u8>, String> {
-    if args.has("stdin") {
-        let mut buf = Vec::new();
-        io::stdin()
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("Error reading stdin: {}", e))?;
-        return Ok(buf);
-    }
-    check_file_size(path);
-    fs::read(path).map_err(|e| format!("Error reading {}: {}", path, e))
-}
-
-fn check_file_size(file: &str) {
-    if let Ok(meta) = fs::metadata(file) {
-        if meta.len() > LARGE_FILE_WARN {
-            eprintln!(
-                "Warning: file is {} - encryption is done in-memory",
-                rns_cli::format::size_str(meta.len()),
-            );
-        }
-    }
-}
-
-fn write_file_checked(path: &str, data: &[u8], force: bool) -> Result<(), String> {
-    let p = Path::new(path);
-    if p.exists() && !force {
-        return Err(format!(
-            "File already exists: {} (use -f to overwrite)",
-            path
-        ));
-    }
-    fs::write(p, data).map_err(|e| format!("Error writing {}: {}", path, e))
-}
-
-fn parse_identity_hash(s: &str) -> Result<[u8; 16], String> {
-    let data = parse_hex(s).ok_or_else(|| "Invalid hexadecimal identity hash".to_string())?;
-    data.as_slice()
-        .try_into()
-        .map_err(|_| "Invalid identity hash length".to_string())
-}
-
-fn parse_hex(s: &str) -> Option<Vec<u8>> {
-    let s = s.trim();
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(s.len() / 2);
-    for i in (0..s.len()).step_by(2) {
-        match u8::from_str_radix(&s[i..i + 2], 16) {
-            Ok(b) => bytes.push(b),
-            Err(_) => return None,
-        }
-    }
-    Some(bytes)
-}
-
-fn encode_key(args: &Args, key: &[u8]) -> String {
-    if args.has("B") || args.has("base32") {
-        base32_encode(key)
-    } else if args.has("b") || args.has("base64") {
-        base64_encode(key)
-    } else {
-        prettyhexrep(key)
-    }
-}
-
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::new();
-    let mut i = 0;
-    while i < data.len() {
-        let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() {
-            data[i + 1] as u32
-        } else {
-            0
-        };
-        let b2 = if i + 2 < data.len() {
-            data[i + 2] as u32
-        } else {
-            0
-        };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[((triple >> 18) & 0x3f) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3f) as usize] as char);
-        if i + 1 < data.len() {
-            result.push(CHARS[((triple >> 6) & 0x3f) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if i + 2 < data.len() {
-            result.push(CHARS[(triple & 0x3f) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        i += 3;
-    }
-    result
-}
-
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let mut chars: Vec<char> = s.trim().chars().filter(|c| !c.is_whitespace()).collect();
-    if chars.len() % 4 == 1 {
-        return None;
-    }
-    while !chars.len().is_multiple_of(4) {
-        chars.push('=');
-    }
-
-    let mut out = Vec::with_capacity(chars.len() / 4 * 3);
-    for chunk in chars.chunks(4) {
-        let mut pad = 0usize;
-        let mut sextets = [0u8; 4];
-        for (i, c) in chunk.iter().copied().enumerate() {
-            if c == '=' {
-                pad += 1;
-                sextets[i] = 0;
-                continue;
-            }
-            if pad > 0 {
-                return None;
-            }
-            sextets[i] = match c {
-                'A'..='Z' => c as u8 - b'A',
-                'a'..='z' => c as u8 - b'a' + 26,
-                '0'..='9' => c as u8 - b'0' + 52,
-                '+' | '-' => 62,
-                '/' | '_' => 63,
-                _ => return None,
+    let Some(pubkey) = map_get(meta, "pubkey") else {
+        return Ok((false, None, None));
+    };
+    let signing_identity = match required_signer {
+        Signer::Identity(identity) => clone_identity(identity),
+        _ => {
+            let Value::Bin(pubkey) = pubkey else {
+                return Ok((false, None, None));
             };
+            let Ok(key) = <&[u8; KEYSIZE]>::try_from(pubkey.as_slice()) else {
+                return Ok((false, None, None));
+            };
+            match Identity::from_public_key(key) {
+                Ok(identity) => identity,
+                Err(_) => return Ok((false, None, None)),
+            }
         }
-        if pad > 2 {
-            return None;
-        }
-        let triple = ((sextets[0] as u32) << 18)
-            | ((sextets[1] as u32) << 12)
-            | ((sextets[2] as u32) << 6)
-            | (sextets[3] as u32);
-        out.push(((triple >> 16) & 0xff) as u8);
-        if pad < 2 {
-            out.push(((triple >> 8) & 0xff) as u8);
-        }
-        if pad < 1 {
-            out.push((triple & 0xff) as u8);
+    };
+    let required_hash = match required_signer {
+        Signer::Hash(hash) => hash.clone(),
+        _ => signing_identity.hash().to_vec(),
+    };
+    if signing_identity.hash()[..] != required_hash[..] {
+        return Ok((false, None, Some(signing_identity)));
+    }
+    if !matches!(hash, Value::Bin(h) if h[..] == rsg_hash[..]) {
+        return Ok((false, None, Some(signing_identity)));
+    }
+    let valid = signing_identity.verify(signature, envelope);
+    Ok((valid, Some(signed_data.clone()), Some(signing_identity)))
+}
+
+/// `rsg_meta_from_file`.
+fn rsg_meta_from_file(path: &str, spec_path: Option<&str>) -> Result<Vec<(String, Entry)>, String> {
+    let read = |p: &str| fs::read_to_string(p).map_err(|e| io_error(&e, p));
+    let spec = match spec_path {
+        Some(spec_path) => Some(configobj::parse(&read(spec_path)?)?),
+        None => None,
+    };
+    let mut parsed = configobj::parse(&read(path)?)?;
+    if let Some(spec) = spec {
+        if !configobj::validate(&mut parsed, &spec) {
+            return Err("Metadata did not pass spec validation".into());
         }
     }
-    Some(out)
+    Ok(parsed.entries())
 }
 
-fn die(message: &str, code: i32) -> ! {
-    eprintln!("{}", message);
-    process::exit(code);
+/// Python's `str()` of a msgpack value.
+fn py_str(value: &Value) -> String {
+    match value {
+        Value::Str(s) => s.clone(),
+        other => py_repr(other),
+    }
 }
 
-fn print_usage(usage_name: &str) {
-    rns_cli::argparse::print_help("rnid", usage_name);
+/// Python's `repr()` of a msgpack value.
+fn py_repr(value: &Value) -> String {
+    match value {
+        Value::Nil => "None".into(),
+        Value::Bool(true) => "True".into(),
+        Value::Bool(false) => "False".into(),
+        Value::UInt(n) => n.to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(f) => rns_cli::format::python_float(*f),
+        Value::Str(s) => rns_cli::argparse::repr(s),
+        Value::Bin(b) => rns_cli::pyfmt::str_of(&rns_net::pickle::PickleValue::Bytes(b.clone())),
+        Value::Array(items) => format!(
+            "[{}]",
+            items.iter().map(py_repr).collect::<Vec<_>>().join(", ")
+        ),
+        Value::Map(entries) => format!(
+            "{{{}}}",
+            entries
+                .iter()
+                .map(|(k, v)| format!("{}: {}", py_repr(k), py_repr(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// The `--meta` view of one metadata entry.
+fn recurse(entry: &Value, key: &str, level: usize) {
+    let indent = "  ".repeat(level);
+    if let Value::Map(entries) = entry {
+        println!("d{indent}{key}:");
+        for (k, v) in entries {
+            recurse(v, &py_str(k), level + 1);
+        }
+        return;
+    }
+    let etype = match entry {
+        Value::Str(_) => 's',
+        Value::Bin(_) => 'b',
+        Value::Array(_) => 'l',
+        Value::UInt(_) | Value::Int(_) => 'i',
+        Value::Float(_) => 'f',
+        Value::Nil => 'N',
+        _ => 'u',
+    };
+    if key == "note" && *entry == Value::Nil {
+        return;
+    }
+    let text = match entry {
+        Value::Bin(bytes) => hexrep(bytes),
+        other => py_str(other),
+    };
+    let leadin = format!("{etype}{indent}{key}=");
+    let leadln = leadin.chars().count();
+    let chars: Vec<char> = text.chars().collect();
+    let mut chunks = chars.chunks(64);
+    let first: String = chunks
+        .next()
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    println!("{leadin}{first}");
+    for chunk in chunks {
+        println!("{}{}", " ".repeat(leadln), chunk.iter().collect::<String>());
+    }
+}
+
+/// Python's message for bytes that are not UTF-8.
+fn utf8_error(bytes: &[u8], e: std::str::Utf8Error) -> String {
+    let at = e.valid_up_to();
+    let byte = bytes.get(at).copied().unwrap_or(0);
+    let reason = match e.error_len() {
+        None => "unexpected end of data",
+        Some(_) if (0x80..0xc2).contains(&byte) || byte >= 0xf5 => "invalid start byte",
+        Some(_) => "invalid continuation byte",
+    };
+    format!("'utf-8' codec can't decode byte 0x{byte:02x} in position {at}: {reason}")
+}
+
+fn decode_utf8(bytes: &[u8]) -> Result<String, String> {
+    std::str::from_utf8(bytes)
+        .map(str::to_string)
+        .map_err(|e| utf8_error(bytes, e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rns_crypto::FixedRng;
 
-    fn parse(argv: &[&str]) -> Args {
-        Args::parse_spec_from(argv.iter().map(|s| s.to_string()).collect(), &OPTIONS)
+    fn ns(argv: &[&str]) -> Namespace {
+        Namespace::from_args(&Args::parse_spec_from(
+            argv.iter().map(|s| s.to_string()).collect(),
+            &OPTIONS,
+        ))
     }
 
     #[test]
-    fn parses_upstream_invocations_as_argparse_does() {
-        // (argv, options expected with their values, positionals)
-        type Case<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)], &'a [&'a str]);
-        let cases: &[Case] = &[
-            (
-                &["-i", "id", "-p"],
-                &[("identity", "id"), ("p", "true")],
-                &[],
-            ),
-            (
-                &["-iid", "-pP"],
-                &[("i", "id"), ("print-private", "true")],
-                &[],
-            ),
-            (
-                &["--identity=id", "-x"],
-                &[("i", "id"), ("export-pub", "true")],
-                &[],
-            ),
-            (
-                &["-g", "new.id", "-B"],
-                &[("generate", "new.id"), ("base32", "true")],
-                &[],
-            ),
-            (&["-i", "id", "-a"], &[("announce", "true")], &[]),
-            (&["-i", "id", "-a", "app.x"], &[("announce", "app.x")], &[]),
-            (
-                &["-a", "-i", "id"],
-                &[("announce", "true"), ("i", "id")],
-                &[],
-            ),
-            (&["-i", "id", "-H", "app.x"], &[("hash", "app.x")], &[]),
-            // nargs="*": no path, then other options.
-            (
-                &["-i", "id", "-d", "-w", "out", "-r", "in"],
-                &[("d", "true"), ("w", "out"), ("read", "in")],
-                &[],
-            ),
-            (
-                &["-i", "id", "-e", "a", "b", "-f"],
-                &[("encrypt", "a"), ("force", "true")],
-                &["b"],
-            ),
-            (
-                &["-i", "id", "-s", "a", "-V", "a.rsg"],
-                &[("sign", "a"), ("validate", "a.rsg")],
-                &[],
-            ),
-            (
-                &["-i", "id", "-S", "-r", "msg"],
-                &[("sign-message", "true"), ("r", "msg")],
-                &[],
-            ),
-            (
-                &["-i", "id", "-S", "hello", "-E"],
-                &[("S", "hello"), ("embed-meta", "true")],
-                &[],
-            ),
-            (
-                &["-i", "id", "-E", "m.cfg", "--meta-spec"],
-                &[("E", "m.cfg"), ("meta-spec", "true")],
-                &[],
-            ),
-            (
-                &["-i", "id", "-V", "f", "--meta", "--raw"],
-                &[("meta", "true"), ("raw", "true")],
-                &[],
-            ),
-            (
-                &["-i", "hash", "-R", "-t", "5"],
-                &[("request", "true"), ("t", "5")],
-                &[],
-            ),
-            (
-                &["-i", "hash", "-RNt5"],
-                &[("R", "true"), ("no-cache", "true"), ("t", "5")],
-                &[],
-            ),
-            (
-                &["-m", "key", "-b"],
-                &[("import-pub", "key"), ("base64", "true")],
-                &[],
-            ),
-            (
-                &["-M", "key", "-U", "-F"],
-                &[("import-prv", "key"), ("base256", "true"), ("hex", "true")],
-                &[],
-            ),
-            (
-                &["-i", "id", "-X", "-w", "f", "-f"],
-                &[("export-prv", "true"), ("write", "f")],
-                &[],
-            ),
-            (
-                &["-i", "id", "-e", "-I", "-O"],
-                &[("stdin", "true"), ("stdout", "true")],
-                &[],
-            ),
-            (&["--config", "dir", "-i", "id"], &[("config", "dir")], &[]),
-            // Abbreviated long options.
-            (
-                &["--ident", "id", "--print-i"],
-                &[("i", "id"), ("print-identity", "true")],
-                &[],
-            ),
-        ];
-        for (argv, expected, positional) in cases {
-            let args = parse(argv);
-            for (key, value) in *expected {
-                assert_eq!(args.get(key), Some(*value), "{argv:?}: {key}");
-            }
-            assert_eq!(args.positional, *positional, "{argv:?}");
-            assert!(args.unknown.is_empty(), "{argv:?}: {:?}", args.unknown);
-        }
-        let args = parse(&["-vvq", "-v", "-i", "id"]);
-        assert_eq!((args.verbosity, args.quiet), (3, 1));
-        let args = parse(&["-i", "id", "-e", "a", "b"]);
+    fn namespace_is_argparses() {
+        let parsed = ns(&["-i", "x", "-e", "a", "b", "-f"]);
+        assert_eq!(parsed.encrypt, Some(vec!["a".into(), "b".into()]));
+        assert!(parsed.force);
+        assert_eq!(ns(&["-e"]).encrypt, Some(vec![]));
+        assert_eq!(ns(&["-a"]).announce.as_deref(), Some("rns.id"));
+        assert_eq!(ns(&["-S"]).sign_message, Some(MessageArg::NoMessage));
         assert_eq!(
-            operation_paths(&args, "e", "encrypt").unwrap(),
-            vec!["a", "b"]
+            ns(&["-S", "hi"]).sign_message,
+            Some(MessageArg::Text("hi".into()))
         );
-    }
-
-    fn test_identity(seed: u8) -> Identity {
-        let bytes = (0..64).map(|i| seed.wrapping_add(i)).collect::<Vec<u8>>();
-        let mut rng = FixedRng::new(&bytes);
-        Identity::new(&mut rng)
-    }
-
-    #[test]
-    fn rsg_roundtrip_validates_without_required_signer() {
-        let identity = test_identity(1);
-        let message = b"message";
-        let rsg = create_rsg(&identity, message).unwrap();
-        match validate_rsg(&rsg, message, None).unwrap() {
-            RsgValidation::Valid { signer_hash } => assert_eq!(signer_hash, *identity.hash()),
-            _ => panic!("expected valid rsg"),
-        }
+        assert_eq!(ns(&["-E"]).embed_meta, Some(MetaArg::NoMeta));
+        assert_eq!(ns(&["-t", "2.5"]).t, 2.5);
+        assert_eq!(ns(&[]).t, 15.0);
+        assert!(ns(&["-Z"]).base256);
+        assert_eq!(ns(&["-s", "a", "-s", "b"]).sign, Some(vec!["b".into()]));
     }
 
     #[test]
-    fn rsg_validation_rejects_wrong_message() {
-        let identity = test_identity(2);
-        let rsg = create_rsg(&identity, b"message").unwrap();
-        assert!(matches!(
-            validate_rsg(&rsg, b"other", None).unwrap(),
-            RsgValidation::Invalid
-        ));
-    }
-
-    #[test]
-    fn rsg_validation_reports_wrong_required_signer() {
-        let identity = test_identity(3);
-        let other = test_identity(4);
-        let rsg = create_rsg(&identity, b"message").unwrap();
-        assert!(matches!(
-            validate_rsg(&rsg, b"message", Some(*other.hash())).unwrap(),
-            RsgValidation::WrongSigner { .. }
-        ));
-    }
-
-    #[test]
-    fn created_rsg_metadata_omits_legacy_note_field() {
-        let identity = test_identity(5);
-        let rsg = create_rsg(&identity, b"message").unwrap();
-        let envelope = rsg_envelope(&rsg).unwrap().unwrap();
-        let meta = envelope.map_get("meta").unwrap();
-        assert!(meta.map_get("signer").is_some());
-        assert!(meta.map_get("pubkey").is_some());
-        assert!(meta.map_get("note").is_none());
-    }
-
-    #[test]
-    fn rsm_metadata_output_hides_legacy_nil_note() {
-        assert!(!should_print_rsm_meta_entry("note", &Value::Nil));
-        assert!(should_print_rsm_meta_entry(
-            "note",
-            &Value::Str("kept".into())
-        ));
-        assert!(should_print_rsm_meta_entry("other", &Value::Nil));
-    }
-
-    #[test]
-    fn release_rsm_structure_accepts_canonical_manifest_metadata() {
-        let manifest = Value::Map(vec![(
-            Value::Str("meta".into()),
-            Value::Map(vec![
-                (Value::Str("name".into()), Value::Str("pkg".into())),
-                (Value::Str("version".into()), Value::Str("v1".into())),
-                (Value::Str("origin".into()), Value::Bin(vec![0x11; 16])),
-                (Value::Str("path".into()), Value::Str("group/repo".into())),
-            ]),
-        )]);
-
-        assert_eq!(check_release_rsm_structure(&manifest), Ok(()));
-    }
-
-    #[test]
-    fn release_rsm_structure_rejects_incomplete_or_unsafe_metadata() {
-        let valid_meta = vec![
-            (Value::Str("name".into()), Value::Str("pkg".into())),
-            (Value::Str("version".into()), Value::Str("v1".into())),
-            (Value::Str("origin".into()), Value::Bin(vec![0x11; 16])),
-            (Value::Str("path".into()), Value::Str("group/repo".into())),
-        ];
-        let manifest = |meta: Vec<(Value, Value)>| {
-            Value::Map(vec![(Value::Str("meta".into()), Value::Map(meta))])
-        };
-
-        let mut missing_version = valid_meta.clone();
-        missing_version.retain(|(key, _)| !matches!(key, Value::Str(key) if key == "version"));
-        assert_eq!(
-            check_release_rsm_structure(&manifest(missing_version)),
-            Err("Incomplete package data in manifest")
-        );
-
-        let mut unsafe_name = valid_meta.clone();
-        unsafe_name[0].1 = Value::Str("group/pkg".into());
-        assert_eq!(
-            check_release_rsm_structure(&manifest(unsafe_name)),
-            Err("Invalid data in release manifest")
-        );
-
-        let mut short_origin = valid_meta.clone();
-        short_origin[2].1 = Value::Bin(vec![0x11; 15]);
-        assert_eq!(
-            check_release_rsm_structure(&manifest(short_origin)),
-            Err("Invalid origin hash length in manifest")
-        );
-
-        let mut string_origin = valid_meta;
-        string_origin[2].1 = Value::Str("0123456789abcdef".into());
-        assert_eq!(
-            check_release_rsm_structure(&manifest(string_origin)),
-            Err("Invalid origin hash in manifest")
-        );
-    }
-
-    #[test]
-    fn rsg_ascii_wrapping_pads_rows_and_decodes() {
-        let wrapped = wrap_rsg_ascii("abcdef");
+    fn rsg_wrapping_is_upstreams() {
+        let wrapped = wrap_rsg("abc");
         let lines: Vec<&str> = wrapped.lines().collect();
-
-        assert_eq!(lines[0].len(), RSG_ASCII_ROW_WIDTH);
-        assert_eq!(lines[1].len(), RSG_ASCII_ROW_WIDTH);
-        assert_eq!(lines[2].len(), RSG_ASCII_ROW_WIDTH);
-        assert_eq!(unwrap_rsg_ascii(&wrapped).unwrap(), "abcdef");
+        assert_eq!(
+            lines[0],
+            "#### Start of rsg data #########################################"
+        );
+        assert_eq!(lines[1], format!("abc{}", "=".repeat(61)));
+        assert_eq!(
+            lines[2],
+            "########################################### End of rsg data ####"
+        );
     }
 
     #[test]
-    fn rsg_validation_accepts_wrapped_ascii_formats() {
-        let identity = test_identity(5);
-        let message = b"message";
-        let rsg = create_rsg(&identity, message).unwrap();
-
-        for format in [
-            RsgOutputFormat::Hex,
-            RsgOutputFormat::Base32,
-            RsgOutputFormat::Base256,
-            RsgOutputFormat::Base64,
-        ] {
-            let encoded = encode_rsg(&rsg, format);
-            let wrapped = wrap_rsg_ascii(&encoded);
-            let decoded = decode_rsg_data(wrapped.as_bytes()).unwrap();
-            assert!(matches!(
-                validate_rsg(&decoded, message, None).unwrap(),
-                RsgValidation::Valid { .. }
-            ));
-        }
+    fn destination_names_hash_as_upstream() {
+        // The identity of private key bytes 0..64.
+        let identity = Identity::from_private_key(&std::array::from_fn(|i| i as u8));
+        assert_eq!(hexrep(identity.hash()), "aca31af0441d81dbec71e82da0b4b5f5");
+        assert_eq!(
+            hexrep(&hash_from_name_and_identity("app.aspect", identity.hash())),
+            "e246e72c1cc4c414f117c4d9630b9444"
+        );
     }
 
     #[test]
-    fn rsg_ascii_wrapping_preserves_multibyte_base256_glyphs() {
-        let raw = (0u8..=96).collect::<Vec<_>>();
-        let encoded = b256rep(&raw);
-        let wrapped = wrap_rsg_ascii(&encoded);
-        let lines: Vec<&str> = wrapped.lines().collect();
-
-        assert_eq!(lines[1].chars().count(), RSG_ASCII_ROW_WIDTH);
-        assert_eq!(lines[2].chars().count(), RSG_ASCII_ROW_WIDTH);
-        assert_eq!(decode_rsg_data(wrapped.as_bytes()).unwrap(), raw);
-    }
-
-    #[test]
-    fn find_identity_entry_matches_identity_or_destination_hash() {
-        let entry = KnownDestinationEntry {
-            dest_hash: [0x11; 16],
-            identity_hash: [0x22; 16],
-            public_key: [0x33; 64],
-            app_data: None,
-            hops: 1,
-            received_at: 0.0,
-            receiving_interface: rns_core::transport::types::InterfaceId(1),
-            was_used: false,
-            last_used_at: None,
-            retained: false,
-            stamp: None,
-            stamp_value: rns_core::stamp::StampValue::ZERO,
-            lr_cost: None,
-        };
-        assert!(find_identity_entry(std::slice::from_ref(&entry), [0x22; 16]).is_some());
-        assert!(find_identity_entry(std::slice::from_ref(&entry), [0x11; 16]).is_some());
-        assert!(find_identity_entry(&[entry], [0x44; 16]).is_none());
-    }
-
-    #[test]
-    fn base64_roundtrip() {
-        let data = b"abcdefg";
-        assert_eq!(base64_decode(&base64_encode(data)).unwrap(), data);
-        assert_eq!(base64_decode(&base64_encode(b"ab")).unwrap(), b"ab");
-        assert_eq!(base64_decode(&base64_encode(b"a")).unwrap(), b"a");
-    }
-
-    #[test]
-    fn parse_identity_hash_requires_16_bytes() {
-        assert!(parse_identity_hash("000102030405060708090a0b0c0d0e0f").is_ok());
-        assert!(parse_identity_hash("000102").is_err());
-    }
-
-    #[test]
-    fn default_aspects_are_stable() {
-        assert_eq!(DEFAULT_ASPECTS, "rns.id");
+    fn expanduser_is_pythons() {
+        assert_eq!(expanduser("a/~"), "a/~");
+        assert_eq!(expanduser("~nosuchuser12345/a"), "~nosuchuser12345/a");
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(
+            expanduser("~/a"),
+            format!("{}/a", home.trim_end_matches('/'))
+        );
     }
 }
