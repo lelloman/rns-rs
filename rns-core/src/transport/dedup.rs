@@ -151,6 +151,8 @@ impl RawHashSlots {
             for slot in &mut slots {
                 // Volatile writes make eager page prefaulting an observable side
                 // effect that release-mode optimization cannot remove.
+                // SAFETY: `slot` is a live, aligned, writable `Key`-sized
+                // slot of `slots`; writing does not read its old contents.
                 unsafe { core::ptr::write_volatile(slot.as_mut_ptr(), [0; 16]) };
             }
         }
@@ -623,6 +625,17 @@ mod tests {
         }
     }
 
+    /// Steps of a randomised model test: the full count natively, and a
+    /// fraction under Miri, which interprets every access, enough for the
+    /// small capacities to fill, wrap and compact many times over.
+    fn model_steps(native: usize) -> usize {
+        if cfg!(miri) {
+            native / 40
+        } else {
+            native
+        }
+    }
+
     fn policies() -> [PacketHashlistAllocation; 2] {
         [
             PacketHashlistAllocation::Eager,
@@ -758,7 +771,7 @@ mod tests {
                 }
                 let mut model: VecDeque<[u8; 32]> = VecDeque::new();
                 let mut rng = 0x2545_f491_4f6c_dd1du64 ^ capacity as u64;
-                for _ in 0..20_000 {
+                for _ in 0..model_steps(20_000) {
                     rng ^= rng << 13;
                     rng ^= rng >> 7;
                     rng ^= rng << 17;
@@ -834,6 +847,79 @@ mod tests {
         }
     }
 
+    /// The queue reads its uninitialised slots only inside its logical
+    /// range. Drive every slot through writes, wrapped reads, in-place
+    /// compaction and reuse after emptying, so Miri sees each read land on
+    /// a written slot.
+    #[test]
+    fn queue_reads_only_written_slots_through_wraparound_and_compaction() {
+        for policy in policies() {
+            for capacity in [1usize, 2, 5] {
+                let mut queue = PacketHashQueue::new(capacity, policy);
+                assert_eq!(queue.pop_front(), None);
+                let key = |n: usize| key_of(&make_hash(n as u8 + 1));
+                // Fill, then slide the window round the ring twice.
+                for n in 0..capacity {
+                    queue.push_back(key(n));
+                }
+                for n in capacity..3 * capacity {
+                    assert_eq!(queue.pop_front(), Some(key(n - capacity)));
+                    queue.push_back(key(n));
+                }
+                // Remove from the middle (compaction across the wrap), the
+                // back and the front, then drain.
+                let mut model: Vec<Key> = (2 * capacity..3 * capacity).map(key).collect();
+                for victim in [capacity / 2, model.len() - 1, 0] {
+                    if victim < model.len() {
+                        let hash = model.remove(victim);
+                        assert!(queue.remove(&hash));
+                        assert!(!queue.remove(&hash));
+                    }
+                }
+                assert_eq!(queue.len(), model.len());
+                for hash in model {
+                    assert_eq!(queue.pop_front(), Some(hash));
+                }
+                assert_eq!(queue.pop_front(), None);
+                // An emptied queue restarts at slot 0 and reuses old slots.
+                queue.push_back(key(99));
+                assert_eq!(*queue.entries.get(0), key(99));
+            }
+        }
+    }
+
+    #[test]
+    fn zero_capacity_queue_never_touches_slots() {
+        for policy in policies() {
+            let mut queue = PacketHashQueue::new(0, policy);
+            assert_eq!(queue.len(), 0);
+            assert_eq!(queue.pop_front(), None);
+            assert!(!queue.remove(&key_of(&make_hash(1))));
+        }
+    }
+
+    /// Prefetching is a hint on a bucket the lookup would read anyway; it
+    /// must be safe on empty, unallocated and full tables alike.
+    #[test]
+    fn prefetch_is_harmless_on_any_table() {
+        for (policy, seed) in seeded_policies() {
+            for capacity in [0usize, 1, 4] {
+                let mut list = PacketHashlist::with_allocation(capacity, policy);
+                if let Some(seed) = seed {
+                    list.seed_hashing(seed);
+                }
+                list.prefetch(&make_hash(7));
+                // Filling to capacity prefetches the next eviction's bucket.
+                for n in 0..=capacity as u8 {
+                    list.add(make_hash(n));
+                    list.prefetch(&make_hash(n));
+                }
+                assert_eq!(list.len(), capacity);
+                assert_eq!(list.is_duplicate(&make_hash(capacity as u8)), capacity > 0);
+            }
+        }
+    }
+
     // --- AnnounceSignatureCache tests ---
 
     #[test]
@@ -853,44 +939,57 @@ mod tests {
     #[test]
     fn mixed_operations_match_fifo_model_through_growth_and_wraparound() {
         use alloc::collections::VecDeque;
+        const IDS: u64 = 400;
+        let hash_of = |id: u64| {
+            let mut hash = [0; 32];
+            hash[..8].copy_from_slice(&id.to_le_bytes());
+            hash
+        };
         for (policy, seed) in seeded_policies() {
             for limit in [0, 1, 3, 63, 64, 65, 127, 129, 257] {
                 let mut table = PacketHashlist::with_allocation(limit, policy);
                 if let Some(seed) = seed {
                     table.seed_hashing(seed);
                 }
-                let mut model = VecDeque::new();
+                // The model keeps ids, in FIFO order and as a membership
+                // table, so checking against it stays cheap under Miri.
+                let mut model: VecDeque<u64> = VecDeque::new();
+                let mut retained = [false; IDS as usize];
                 let mut random = 0x123456789abcdefu64;
-                for step in 0..10_000 {
+                for step in 0..model_steps(10_000) {
                     random ^= random << 13;
                     random ^= random >> 7;
                     random ^= random << 17;
-                    let id = random % 400;
-                    let mut hash = [0; 32];
-                    hash[..8].copy_from_slice(&id.to_le_bytes());
+                    let id = random % IDS;
+                    let hash = hash_of(id);
                     if step % 5 == 0 {
-                        let position = model.iter().position(|h| h == &hash);
-                        assert_eq!(table.remove(&hash), position.is_some());
-                        if let Some(position) = position {
-                            model.remove(position);
+                        assert_eq!(table.remove(&hash), retained[id as usize]);
+                        if retained[id as usize] {
+                            model.retain(|&kept| kept != id);
+                            retained[id as usize] = false;
                         }
                     } else {
                         table.add(hash);
-                        if limit > 0 && !model.contains(&hash) {
+                        if limit > 0 && !retained[id as usize] {
                             if model.len() == limit {
-                                model.pop_front();
+                                let oldest = model.pop_front().unwrap();
+                                retained[oldest as usize] = false;
                             }
-                            model.push_back(hash);
+                            model.push_back(id);
+                            retained[id as usize] = true;
                         }
                     }
                     assert_eq!(table.len(), model.len());
-                    assert_eq!(table.is_duplicate(&hash), model.contains(&hash));
-                    assert!(table.iter().eq(model.iter().copied().map(stored)));
+                    assert_eq!(table.is_duplicate(&hash), retained[id as usize]);
+                    // Walking the whole queue is most of the work under
+                    // Miri, which interprets every access; there, walk it
+                    // every few steps.
+                    if !cfg!(miri) || step % 16 == 0 {
+                        assert!(table.iter().eq(model.iter().map(|&id| stored(hash_of(id)))));
+                    }
                     if step % 100 == 0 {
-                        for id in 0u64..400 {
-                            let mut hash = [0; 32];
-                            hash[..8].copy_from_slice(&id.to_le_bytes());
-                            assert_eq!(table.is_duplicate(&hash), model.contains(&hash));
+                        for id in 0..IDS {
+                            assert_eq!(table.is_duplicate(&hash_of(id)), retained[id as usize]);
                         }
                     }
                 }
