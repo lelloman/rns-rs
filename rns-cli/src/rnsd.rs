@@ -85,7 +85,15 @@ impl Callbacks for DaemonCallbacks {
             Some(x) => format!(", snr:{}", x),
             None => "".to_string(),
         };
+        // rns-ctl's daemon reports announces at the default level (as a
+        // Notice); rnsd, as upstream, only when debugging.
+        let target = if self.announce_level == log::Level::Info {
+            crate::pylog::NOTICE_TARGET
+        } else {
+            module_path!()
+        };
         log::log!(
+            target: target,
             self.announce_level,
             "Announce received for {} (hops: {}{}{})",
             hex(&announced.dest_hash.0),
