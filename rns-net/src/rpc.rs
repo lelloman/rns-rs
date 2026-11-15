@@ -1735,6 +1735,12 @@ fn hook_result_to_pickle(result: Result<(), String>) -> PickleValue {
 
 // --- Pickle response builders ---
 
+/// The `interface_stats` dict as msgpack, as remote management's `/status`
+/// carries it.
+pub(crate) fn interface_stats_msgpack(stats: &InterfaceStatsResponse) -> MsgpackValue {
+    pickle_to_msgpack(&interface_stats_to_pickle(stats))
+}
+
 fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
     let mut ifaces = Vec::new();
     for iface in &stats.interfaces {

@@ -1395,8 +1395,6 @@ fn async_writer_loop(
 
 pub use crate::common::interface_stats::{InterfaceStats, TrafficRates, ANNOUNCE_SAMPLE_MAX};
 
-use crate::common::management::InterfaceStatusView;
-
 /// Everything the driver tracks per interface.
 pub struct InterfaceEntry {
     pub id: InterfaceId,
@@ -1583,44 +1581,6 @@ pub trait InterfaceFactory: Send + Sync {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult>;
-}
-
-impl InterfaceStatusView for InterfaceEntry {
-    fn id(&self) -> InterfaceId {
-        self.id
-    }
-    fn info(&self) -> &InterfaceInfo {
-        &self.info
-    }
-    fn online(&self) -> bool {
-        self.online
-    }
-    fn stats(&self) -> &InterfaceStats {
-        &self.stats
-    }
-    fn tx_drops(&self) -> u64 {
-        self.async_writer_metrics
-            .as_ref()
-            .map(AsyncWriterMetrics::tx_drops)
-            .unwrap_or(0)
-    }
-    fn tx_dropped_bytes(&self) -> u64 {
-        self.async_writer_metrics
-            .as_ref()
-            .map(AsyncWriterMetrics::tx_dropped_bytes)
-            .unwrap_or(0)
-    }
-    fn tx_stalled(&self) -> bool {
-        self.async_writer_metrics
-            .as_ref()
-            .is_some_and(AsyncWriterMetrics::tx_stalled)
-    }
-    fn tx_buffered(&self) -> usize {
-        self.async_writer_metrics
-            .as_ref()
-            .map(AsyncWriterMetrics::tx_buffered)
-            .unwrap_or(0)
-    }
 }
 
 #[cfg(test)]
