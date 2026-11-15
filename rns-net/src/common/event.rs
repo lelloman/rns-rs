@@ -368,6 +368,8 @@ pub enum Event<W: Send> {
         path: String,
         data: Vec<u8>,
         max_response_size: Option<usize>,
+        /// Fail the request after this many seconds without a response.
+        timeout: Option<f64>,
     },
     /// Complete a request previously delivered to a deferred handler.
     SendDeferredResponse {

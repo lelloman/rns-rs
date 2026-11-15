@@ -1567,11 +1567,36 @@ fn unanswered_packet_request_expires_from_pending_set() {
         .get_mut(&request_id)
         .unwrap()
         .deadline = Some(time::now() - 1.0);
-    init_mgr.tick(&mut rng);
+    let actions = init_mgr.tick(&mut rng);
 
     assert!(!init_mgr.links[&link_id]
         .pending_requests
         .contains_key(&request_id));
+    // As upstream, the requester learns the request failed.
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        LinkManagerAction::RequestFailed {
+            request_id: id,
+            reason: RequestFailure::TimedOut,
+            ..
+        } if *id == request_id
+    )));
+}
+
+#[test]
+fn a_request_timeout_replaces_the_default_deadline() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let actions =
+        init_mgr.send_request_with_options(&link_id, "/t", b"x", None, Some(0.0), &mut rng);
+    let raw = extract_any_send_packet(&actions);
+    let request_id = RawPacket::unpack(&raw).unwrap().get_truncated_hash();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let actions = init_mgr.tick(&mut rng);
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        LinkManagerAction::RequestFailed { request_id: id, .. } if *id == request_id
+    )));
 }
 
 #[test]
@@ -3684,6 +3709,7 @@ fn resource_cancellation_preserves_unrelated_pending_requests() {
                 PendingRequest {
                     deadline: None,
                     max_response_size: None,
+                    timeout: None,
                 },
             );
             if context == constants::CONTEXT_RESOURCE_ICL {

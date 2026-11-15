@@ -1764,18 +1764,20 @@ impl Driver {
                     path,
                     data,
                     max_response_size,
+                    timeout,
                 } => {
                     if self.is_draining() {
                         self.reject_new_work("send link request");
-                        let _ = (link_id, path, data, max_response_size);
+                        let _ = (link_id, path, data, max_response_size, timeout);
                         continue;
                     }
                     self.finish_resource_preparations_for(&link_id);
-                    let link_actions = self.link_manager.send_request_with_max_response_size(
+                    let link_actions = self.link_manager.send_request_with_options(
                         &link_id,
                         &path,
                         &data,
                         max_response_size,
+                        timeout,
                         &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);

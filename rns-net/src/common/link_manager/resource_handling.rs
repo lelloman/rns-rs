@@ -1604,9 +1604,9 @@ impl LinkManager {
         }
 
         if let Some(request_id) = completed_request_id {
-            let deadline = Self::request_response_deadline(link, now);
+            let default_deadline = Self::request_response_deadline(link, now);
             if let Some(entry) = link.pending_requests.get_mut(&request_id) {
-                entry.deadline = Some(deadline);
+                entry.deadline = Some(entry.timeout.map_or(default_deadline, |t| now + t));
             }
         }
         if let Some(request_id) = failed_request_id {

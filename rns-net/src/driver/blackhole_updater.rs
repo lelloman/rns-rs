@@ -168,6 +168,7 @@ impl Driver {
             path: "/list".into(),
             data: Vec::new(),
             max_response_size: None,
+            timeout: None,
         };
         if let Err(error) = self.get_event_sender().send(request) {
             log::warn!("Could not request a blackhole list: {error:?}");
