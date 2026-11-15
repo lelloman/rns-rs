@@ -263,7 +263,36 @@ fn start_with_ifac_control(
     ifac_size: usize,
     underlay_mark: Option<u32>,
 ) -> io::Result<(Box<dyn Writer>, ListenerControl)> {
-    let stream = try_connect(&config, underlay_mark)?;
+    let control = ListenerControl::new();
+    let stream = match try_connect(&config, underlay_mark) {
+        Ok(stream) => stream,
+        Err(error) => {
+            // Like upstream, an unreachable target leaves the interface
+            // registered but offline and keeps retrying in the background;
+            // the reconnect brings the writer in with its InterfaceUp.
+            log::error!(
+                "Initial connection for {} could not be established: {}",
+                config.name,
+                error
+            );
+            let wait = lock_or_recover(&config.runtime, "tcp client runtime").reconnect_wait;
+            log::error!(
+                "Leaving unconnected and retrying connection in {} seconds.",
+                wait.as_secs_f64()
+            );
+            let link = Arc::new(ClientLink {
+                config,
+                tx,
+                ifac_size,
+                underlay_mark,
+                control: control.clone(),
+            });
+            thread::Builder::new()
+                .name(format!("tcp-reconn-{}", link.config.interface_id.0))
+                .spawn(move || link.reconnect_loop())?;
+            return Ok((Box::new(super::UnavailableWriter), control));
+        }
+    };
     let writer_stream = stream.try_clone()?;
 
     let id = config.interface_id;
@@ -271,7 +300,6 @@ fn start_with_ifac_control(
     // Initial connect: writer is None because it's returned directly to the caller
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
-    let control = ListenerControl::new();
     let link = Arc::new(ClientLink {
         config,
         tx,
@@ -661,6 +689,34 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(!reconnecting());
+    }
+
+    #[test]
+    fn an_unreachable_target_at_startup_is_retried_in_the_background() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let config = TcpClientConfig {
+            interface_id: InterfaceId(77),
+            max_reconnect_tries: None,
+            runtime: Arc::new(Mutex::new(TcpClientRuntime {
+                max_reconnect_tries: None,
+                ..TcpClientRuntime::from_config(&make_config(port))
+            })),
+            ..make_config(port)
+        };
+        let mut writer = start(config, tx).unwrap();
+        assert_eq!(
+            writer.send_frame(b"x").unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (_server, _) = listener.accept().unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(77), Some(_), None)
+        ));
     }
 
     use std::net::TcpListener;
