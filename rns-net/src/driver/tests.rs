@@ -16217,3 +16217,52 @@ fn driver_watches_i2p_peer_tunnels() {
     assert_eq!(state(21), Some(Some("Tunnel Active".into())));
     assert_eq!(state(22), Some(Some("Tunnel Unresponsive".into())));
 }
+
+/// Upstream auto-connects a discovered Backbone interface as a
+/// BackboneClientInterface added with a configured bitrate of 5 Mbps,
+/// which sets its hardware MTU to 8192, and which synthesizes a tunnel.
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn autoconnected_backbone_client_is_configured_as_upstream() {
+    // 127.0.0.1 is never auto-connected to; the rest of 127/8 is loopback.
+    let listener = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.enable_upstream_autoconnect(1, Vec::new(), Vec::new());
+    driver.autoconnect_discovered(&make_discovered_backbone(
+        "discovered",
+        "127.0.0.2",
+        Some(port),
+        0x7c,
+        1,
+        20,
+        time::now(),
+    ));
+
+    let id = driver
+        .interfaces
+        .iter()
+        .find(|(_, entry)| entry.info.name == "discovered")
+        .map(|(id, _)| *id)
+        .expect("the discovered interface is auto-connected");
+    let entry = &driver.interfaces[&id];
+    assert_eq!(entry.info.bitrate, Some(5_000_000));
+    assert_eq!(entry.info.mtu, 8192);
+    assert!(entry.info.wants_tunnel);
+    assert_eq!(entry.interface_type, "BackboneClientInterface");
+    let stat = driver
+        .interface_stats()
+        .interfaces
+        .into_iter()
+        .find(|stat| stat.id == id.0)
+        .unwrap();
+    assert_eq!(stat.interface_type, "BackboneClientInterface");
+    assert_eq!(stat.bitrate, Some(5_000_000));
+    assert_eq!(stat.mtu, Some(8192));
+    assert_eq!(
+        stat.display_name,
+        format!("BackboneInterface[discovered/127.0.0.2:{port}]")
+    );
+    drop(listener);
+}

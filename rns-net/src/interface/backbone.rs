@@ -1480,7 +1480,18 @@ pub struct BackboneClientConfig {
     pub max_reconnect_tries: Option<u32>,
     pub connect_timeout: Duration,
     pub transport_identity: Option<String>,
+    /// The client's bitrate, which sets its hardware MTU as upstream's
+    /// `optimise_mtu` does: [`CLIENT_BITRATE_GUESS`] unless it was
+    /// configured, as for an auto-connected client.
+    pub bitrate: u64,
     pub runtime: Arc<Mutex<BackboneClientRuntime>>,
+}
+
+impl BackboneClientConfig {
+    /// The hardware MTU upstream selects for the client's bitrate.
+    pub(crate) fn hw_mtu(&self) -> usize {
+        auto_mtu_for_bitrate(self.bitrate).map_or(1_048_576, |mtu| mtu as usize)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1518,6 +1529,7 @@ impl Default for BackboneClientConfig {
             max_reconnect_tries: None,
             connect_timeout: Duration::from_secs(5),
             transport_identity: None,
+            bitrate: CLIENT_BITRATE_GUESS,
             runtime: Arc::new(Mutex::new(BackboneClientRuntime {
                 reconnect_wait: Duration::from_secs(5),
                 max_reconnect_tries: None,
@@ -1701,7 +1713,7 @@ impl ClientLink {
     fn serve(self: &Arc<Self>, stream: TcpStream) -> io::Result<()> {
         let source = ClientSource {
             stream,
-            decoder: hdlc::Decoder::reticulum(HW_MTU, self.ifac_size),
+            decoder: hdlc::Decoder::reticulum(self.config.hw_mtu(), self.ifac_size),
             link: Arc::clone(self),
         };
         self.tx.register_source(
@@ -2189,7 +2201,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     announces_to_internal: ctx.announces_to_internal,
                     out_capable: true,
                     in_capable: true,
-                    bitrate: Some(CLIENT_BITRATE_GUESS),
+                    bitrate: Some(cfg.bitrate),
                     airtime_profile: None,
                     announce_rate_target: None,
                     announce_rate_grace: 0,
@@ -2200,7 +2212,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     // BackboneClientInterface does.
                     wants_tunnel: true,
                     tunnel_id: None,
-                    mtu: HW_MTU as u32,
+                    mtu: cfg.hw_mtu() as u32,
                     mtu_upgradable: true,
                     ingress_control: ctx.ingress_control,
                     ia_freq: 0.0,
@@ -2793,6 +2805,15 @@ mod tests {
     }
 
     #[test]
+    fn client_hw_mtu_follows_its_bitrate() {
+        let mut config = BackboneClientConfig::default();
+        assert_eq!(config.hw_mtu(), HW_MTU);
+        // An auto-connected client, configured at 5 Mbps.
+        config.bitrate = 5_000_000;
+        assert_eq!(config.hw_mtu(), 8192);
+    }
+
+    #[test]
     fn auto_mtu_thresholds_include_exact_bitrate_boundaries() {
         for (bitrate, mtu) in [
             (1_000_000_000, Some(524_288)),
@@ -3197,6 +3218,7 @@ mod tests {
             max_reconnect_tries: Some(2),
             connect_timeout: Duration::from_secs(2),
             transport_identity: None,
+            bitrate: CLIENT_BITRATE_GUESS,
             runtime: Arc::new(Mutex::new(BackboneClientRuntime {
                 reconnect_wait: Duration::from_millis(100),
                 max_reconnect_tries: Some(2),

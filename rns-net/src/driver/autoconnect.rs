@@ -25,6 +25,10 @@ pub(crate) const MONITOR_INTERVAL: f64 = 5.0;
 /// detached (`DETACH_THRESHOLD`).
 pub(crate) const DETACH_THRESHOLD: f64 = 12.0;
 
+/// The bitrate upstream configures on an auto-connected interface
+/// (`_add_interface(..., configured_bitrate=5E6)`).
+pub(crate) const AUTOCONNECT_BITRATE: u64 = 5_000_000;
+
 /// Addresses upstream never auto-connects to (`INVALID_IP_ADDRESSES`).
 const INVALID_IP_ADDRESSES: [&str; 2] = ["127.0.0.1", "0.0.0.0"];
 
@@ -271,6 +275,9 @@ impl Driver {
             target_port: port,
             interface_id: id,
             transport_identity: Some(crate::discovery::hex_encode(&iface.transport_id)),
+            // Upstream adds it with `configured_bitrate=5E6`, which also
+            // sets its hardware MTU (8192).
+            bitrate: AUTOCONNECT_BITRATE,
             ..BackboneClientConfig::default()
         };
         client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&client)));
@@ -299,7 +306,8 @@ impl Driver {
             stamp_costs: Default::default(),
             ifac_runtime,
             ifac_enabled,
-            interface_type_name: "BackboneInterface".to_string(),
+            // Upstream auto-connects a BackboneClientInterface.
+            interface_type_name: "BackboneClientInterface".to_string(),
             source: BackbonePeerPoolCandidateSource::Discovered,
             priority: BACKBONE_PEER_POOL_DISCOVERED_PRIORITY,
             discovery: None,
