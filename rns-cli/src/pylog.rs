@@ -48,6 +48,97 @@ pub fn log(msg: &str, level: i32) {
     println!("[{}] {} {}", timestamp(), loglevelname(level), msg);
 }
 
+/// Log target for messages upstream logs at `LOG_NOTICE`: shown at the
+/// default level, where this implementation's `info` messages are not.
+pub const NOTICE_TARGET: &str = "rns::notice";
+
+/// The RNS level of a `log` record: errors, warnings, notices (by target),
+/// pathing (by target); `info` is upstream's Verbose, `debug` its Debug,
+/// `trace` its Extreme. Upstream's default level 4 then shows what it
+/// shows, not every `info` line.
+pub fn rns_level(metadata: &log::Metadata) -> i32 {
+    if metadata.target() == NOTICE_TARGET {
+        return LOG_NOTICE;
+    }
+    if metadata.target() == rns_net::logging::PATHING_LOG_TARGET {
+        return 7;
+    }
+    match metadata.level() {
+        log::Level::Error => LOG_ERROR,
+        log::Level::Warn => LOG_WARNING,
+        log::Level::Info => LOG_VERBOSE,
+        log::Level::Debug => LOG_DEBUG,
+        log::Level::Trace => 8,
+    }
+}
+
+/// A `log` logger writing `RNS.log`'s lines: `[timestamp] [Level]    msg`
+/// (without the timestamp when `logtimestamps` is off), up to `level`.
+pub struct RnsLogger {
+    level: i32,
+    timestamps: bool,
+    out: std::sync::Mutex<Box<dyn std::io::Write + Send>>,
+}
+
+impl RnsLogger {
+    /// Install it as the global logger.
+    pub fn install(
+        level: i32,
+        timestamps: bool,
+        out: Box<dyn std::io::Write + Send>,
+    ) -> Result<(), log::SetLoggerError> {
+        let max = match level {
+            i32::MIN..=1 => log::LevelFilter::Error,
+            2 => log::LevelFilter::Warn,
+            3..=5 => log::LevelFilter::Info,
+            6 => log::LevelFilter::Debug,
+            _ => log::LevelFilter::Trace,
+        };
+        log::set_boxed_logger(Box::new(RnsLogger {
+            level,
+            timestamps,
+            out: std::sync::Mutex::new(out),
+        }))?;
+        log::set_max_level(max);
+        Ok(())
+    }
+
+    fn line(&self, level: i32, msg: &std::fmt::Arguments) -> String {
+        if self.timestamps {
+            format!("[{}] {} {}\n", timestamp(), loglevelname(level), msg)
+        } else {
+            format!("{} {}\n", loglevelname(level), msg)
+        }
+    }
+}
+
+impl log::Log for RnsLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        rns_level(metadata) <= self.level
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let line = self.line(rns_level(record.metadata()), record.args());
+        let mut out = self
+            .out
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = out.write_all(line.as_bytes());
+        let _ = out.flush();
+    }
+
+    fn flush(&self) {
+        let _ = self
+            .out
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .flush();
+    }
+}
+
 /// `time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())`.
 fn timestamp() -> String {
     let now = std::time::SystemTime::now()
@@ -249,6 +340,23 @@ mod tests {
         assert_eq!(urlsafe_b64decode("garbage"), None);
         assert_eq!(urlsafe_b64encode(&[0xfb, 0xff]), "-_8=");
         assert_eq!(b32encode(b"foo"), "MZXW6===");
+    }
+
+    #[test]
+    fn rns_levels_of_log_records() {
+        let meta = |level, target| log::Metadata::builder().level(level).target(target).build();
+        assert_eq!(
+            rns_level(&meta(log::Level::Info, NOTICE_TARGET)),
+            LOG_NOTICE
+        );
+        assert_eq!(
+            rns_level(&meta(log::Level::Info, "rns_net::node")),
+            LOG_VERBOSE
+        );
+        assert_eq!(rns_level(&meta(log::Level::Warn, "x")), LOG_WARNING);
+        assert_eq!(rns_level(&meta(log::Level::Error, "x")), LOG_ERROR);
+        assert_eq!(rns_level(&meta(log::Level::Trace, "x")), 8);
+        assert_eq!(loglevelname(LOG_NOTICE), "[Notice]  ");
     }
 
     #[test]

@@ -54,7 +54,11 @@ error; see [Building](building.md#selecting-interfaces).
 
 Log levels run from `0` (critical only) to `8` (extreme); `7` adds path
 logging. `logtimestamps = no` drops timestamps when an external logger adds its
-own.
+own. `rnsd` writes upstream's log lines (`[2026-11-15 19:10:15] [Notice]
+Started rnsd version …`) to stdout, or with `-s` to `logfile` in the config
+directory. At the default level `4` it prints what upstream prints; this
+implementation's own informational messages appear from level `5`
+(Verbose), its debug messages from `6`.
 
 ## TCP interface MTU
 
