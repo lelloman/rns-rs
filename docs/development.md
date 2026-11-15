@@ -96,6 +96,16 @@ first build compiles the dependencies.
 ./tests/docker/rntun/run.sh                               # needs privileged containers
 ```
 
+### Soak test
+
+A long-running mixed mesh of Rust and upstream nodes under continuous
+announce, probe, `rncp` and `rnx` load, tracking stalls, memory growth and
+path table churn. See [Mixed-Mesh Soak Test](soak-test.md).
+
+```bash
+scripts/mixed_mesh_soak.py --duration 24h --workdir /var/tmp/rns-soak
+```
+
 ### Python tooling tests
 
 The operator scripts have their own tests, run by CI with
