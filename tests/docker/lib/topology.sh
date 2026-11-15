@@ -39,6 +39,7 @@ gen_rns_config() {
       echo ""
       echo "  [[${iface_name}]]"
       echo "    type = ${iface_type}"
+      echo "    enabled = yes"
     } >> "$config_file"
 
     # Parse key=value pairs separated by ':'
