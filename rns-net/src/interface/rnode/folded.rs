@@ -20,8 +20,8 @@ use rns_core::transport::types::InterfaceId;
 use super::transport::Transport;
 use super::DeviceWriter;
 use super::{
-    clear_pending_rx_metadata, detect_and_configure, phy_telemetry, process_flow_queue,
-    radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
+    clear_pending_rx_metadata, detect_and_configure, open_until_configured, phy_telemetry,
+    process_flow_queue, radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
     update_pending_rx_metadata, update_radio_stats, wait_while_running, RNodeConfig, SubFlowState,
 };
 use crate::common::interface_stats::RadioStats;
@@ -68,11 +68,30 @@ impl RNodeLink {
     }
 
     /// Detect and configure the device on a setup thread, then serve it.
-    pub(super) fn start(self: Arc<Self>, reader: Transport) -> io::Result<()> {
+    /// Without a connection (the device could not be opened), keep trying
+    /// to open it first.
+    pub(super) fn start(self: Arc<Self>, reader: Option<Transport>) -> io::Result<()> {
         thread::Builder::new()
             .name(format!("rnode-setup-{}", self.config.base_interface_id.0))
             .spawn(move || {
-                let mut reader = reader;
+                let Some(mut reader) = reader else {
+                    if let Some(reader) = open_until_configured(
+                        &self.config,
+                        &self.writer,
+                        &self.flow_states,
+                        &self.running,
+                    ) {
+                        signal_interface_up(
+                            &self.tx,
+                            &self.config,
+                            &self.writer,
+                            &self.flow_states,
+                            true,
+                        );
+                        self.serve_or_reconnect(reader);
+                    }
+                    return;
+                };
                 // Initial delay for hardware init (matches Python: sleep(2.0))
                 if !wait_while_running(&self.running, Duration::from_secs(2)) {
                     return;

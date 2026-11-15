@@ -11,6 +11,13 @@ const DEFAULT_PORT: u32 = 7633;
 pub enum Transport {
     Serial(std::fs::File),
     Tcp(TcpStream),
+    /// No connection: the device could not be opened yet. Reads and
+    /// writes fail; its descriptor is -1.
+    Offline,
+}
+
+fn offline() -> io::Error {
+    io::Error::new(io::ErrorKind::NotConnected, "the device is not open")
 }
 
 impl Transport {
@@ -62,6 +69,7 @@ impl Read for Transport {
         match self {
             Transport::Serial(f) => f.read(buf),
             Transport::Tcp(s) => s.read(buf),
+            Transport::Offline => Err(offline()),
         }
     }
 }
@@ -71,12 +79,14 @@ impl Write for Transport {
         match self {
             Transport::Serial(f) => f.write(buf),
             Transport::Tcp(s) => s.write(buf),
+            Transport::Offline => Err(offline()),
         }
     }
     fn flush(&mut self) -> io::Result<()> {
         match self {
             Transport::Serial(f) => f.flush(),
             Transport::Tcp(s) => s.flush(),
+            Transport::Offline => Ok(()),
         }
     }
 }
@@ -86,6 +96,7 @@ impl AsRawFd for Transport {
         match self {
             Transport::Serial(f) => f.as_raw_fd(),
             Transport::Tcp(s) => s.as_raw_fd(),
+            Transport::Offline => -1,
         }
     }
 }

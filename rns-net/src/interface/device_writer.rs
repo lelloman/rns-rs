@@ -84,6 +84,13 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
         let Some(driven) = &mut self.driven else {
             return;
         };
+        driven.want_writable = false;
+        if fd < 0 {
+            // No connection yet: nothing can be written until one replaces
+            // it.
+            driven.failed = true;
+            return;
+        }
         // SAFETY: the transport is kept open until `unregister` (called on
         // replacement and in `Drop`) removes the registration.
         match unsafe { driven.poller.add(fd, crate::poll::Event::none(driven.key)) } {
@@ -97,7 +104,6 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
                 error
             ),
         }
-        driven.want_writable = false;
     }
 
     /// Write to a reopened connection from now on, dropping whatever was
