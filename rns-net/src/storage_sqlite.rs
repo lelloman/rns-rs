@@ -86,17 +86,32 @@ impl KnownDestinationsStore {
 
     pub fn load_all(&self) -> io::Result<Vec<([u8; 16], KnownDestination)>> {
         let conn = self.lock();
-        let mut statement = conn
-            .prepare(
-                "SELECT k.destination_hash, k.last_heard, k.public_key, k.app_data,
-                        k.used, k.identity_hash, COALESCE(m.hops, 0),
-                        COALESCE(m.receiving_interface, 0), COALESCE(m.retained, 0),
-                        k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost
-                 FROM known_destinations k
-                 LEFT JOIN known_destination_meta m
-                   ON m.destination_hash = k.destination_hash",
+        // `known_destination_meta` is this implementation's own table: a
+        // database an upstream instance wrote, read without writing to
+        // it, has none.
+        let has_meta: bool = conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master
+                                WHERE type = 'table' AND name = 'known_destination_meta')",
+                [],
+                |row| row.get(0),
             )
             .map_err(sql_error)?;
+        let query = if has_meta {
+            "SELECT k.destination_hash, k.last_heard, k.public_key, k.app_data,
+                    k.used, k.identity_hash, COALESCE(m.hops, 0),
+                    COALESCE(m.receiving_interface, 0), COALESCE(m.retained, 0),
+                    k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost
+             FROM known_destinations k
+             LEFT JOIN known_destination_meta m
+               ON m.destination_hash = k.destination_hash"
+        } else {
+            "SELECT k.destination_hash, k.last_heard, k.public_key, k.app_data,
+                    k.used, k.identity_hash, 0, 0, 0,
+                    k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost
+             FROM known_destinations k"
+        };
+        let mut statement = conn.prepare(query).map_err(sql_error)?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
@@ -219,6 +234,48 @@ impl KnownDestinationsStore {
             rejected.insert(*destination_hash);
         }
         Ok(destinations.len() - rejects.len())
+    }
+
+    /// Write what changed since the last save: rows to insert or update,
+    /// and rows to delete, as upstream's periodic flush of dirty entries.
+    pub fn save_changes(
+        &self,
+        upserts: &[([u8; 16], &KnownDestination)],
+        deletes: &[[u8; 16]],
+    ) -> io::Result<()> {
+        if self.read_only || (upserts.is_empty() && deletes.is_empty()) {
+            return Ok(());
+        }
+        let mut conn = self.lock();
+        let mut tx = conn.transaction().map_err(sql_error)?;
+        for hash in deletes {
+            tx.execute(
+                "DELETE FROM known_destinations WHERE destination_hash = ?1",
+                params![hash.to_vec()],
+            )
+            .map_err(sql_error)?;
+            tx.execute(
+                "DELETE FROM known_destination_meta WHERE destination_hash = ?1",
+                params![hash.to_vec()],
+            )
+            .map_err(sql_error)?;
+        }
+        for (hash, destination) in upserts {
+            let row = tx.savepoint().map_err(sql_error)?;
+            match upsert_destination(&row, *hash, destination) {
+                Ok(()) => row.commit().map_err(sql_error)?,
+                Err(error) if is_rejected_row(&error) => {
+                    drop(row);
+                    log::debug!(
+                        "invalid known destination data for {} at flush: {}",
+                        hex_16(hash),
+                        error
+                    );
+                }
+                Err(error) => return Err(sql_error(error)),
+            }
+        }
+        tx.commit().map_err(sql_error)
     }
 
     /// Import a legacy msgpack known-destinations file from Python or older
@@ -1178,6 +1235,29 @@ mod tests {
             .current(&[0x56; 16], 2_000.0, 5_000.0)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn reads_a_database_without_this_implementations_meta_table() {
+        // As upstream's instance writes it: no known_destination_meta.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_destinations.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&known_destinations_table("known_destinations"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO known_destinations (destination_hash, last_heard, public_key, used, identity_hash)
+             VALUES (?1, 5.0, ?2, 0, ?3)",
+            params![vec![1u8; 16], vec![2u8; 64], vec![3u8; 16]],
+        )
+        .unwrap();
+        drop(conn);
+        let store = KnownDestinationsStore::open_read_only(&path, 16).unwrap();
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, [1u8; 16]);
+        assert_eq!(loaded[0].1.identity_hash, [3u8; 16]);
+        assert_eq!(loaded[0].1.hops, 0);
     }
 
     #[test]

@@ -28,7 +28,7 @@ pub struct StoragePaths {
 }
 
 /// A known destination entry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct KnownDestination {
     pub identity_hash: [u8; 16],
     pub public_key: [u8; 64],

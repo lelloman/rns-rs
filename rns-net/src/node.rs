@@ -1256,6 +1256,9 @@ pub struct RnsNode {
     verify_shutdown: Arc<crate::driver::WorkSignal>,
     persist_handle: Option<JoinHandle<()>>,
     persist_stop: Option<std::sync::mpsc::Sender<()>>,
+    /// Upstream's periodic flush of changed known destinations.
+    kd_flush_handle: Option<JoinHandle<()>>,
+    kd_flush_stop: Option<std::sync::mpsc::Sender<()>>,
     rpc_server: Option<crate::rpc::RpcServer>,
     #[cfg(target_os = "linux")]
     rpc_unix_server: Option<crate::rpc::RpcServer>,
@@ -1967,31 +1970,11 @@ impl RnsNode {
 
         node.known_destinations_path = Some(known_destinations_path.clone());
         node.known_destinations_store = known_destinations_store;
+        let flushed: std::collections::HashMap<[u8; 16], storage::KnownDestination> =
+            known_destinations.clone().into_iter().collect();
         node.set_stamp_store(crate::stamps::DestinationStampStore::new(&paths.storage));
-        for (dest_hash, known) in known_destinations {
-            let _ = node.query(QueryRequest::RestoreKnownDestination(
-                crate::event::KnownDestinationEntry {
-                    dest_hash,
-                    identity_hash: known.identity_hash,
-                    public_key: known.public_key,
-                    app_data: known.app_data,
-                    hops: known.hops,
-                    received_at: known.received_at,
-                    receiving_interface: rns_core::transport::types::InterfaceId(
-                        known.receiving_interface,
-                    ),
-                    was_used: known.was_used,
-                    last_used_at: known.last_used_at,
-                    retained: known.retained,
-                    stamp: known
-                        .stamp
-                        .as_deref()
-                        .and_then(|stamp| stamp.try_into().ok()),
-                    stamp_value: known.stamp_value,
-                    lr_cost: known.lr_cost,
-                },
-            ));
-        }
+        node.restore_known_destinations(known_destinations);
+        node.start_known_destinations_flush(flushed);
 
         Ok(node)
     }
@@ -3138,6 +3121,8 @@ impl RnsNode {
             verify_shutdown,
             persist_handle,
             persist_stop,
+            kd_flush_handle: None,
+            kd_flush_stop: None,
             rpc_server,
             #[cfg(target_os = "linux")]
             rpc_unix_server,
@@ -4565,11 +4550,62 @@ impl RnsNode {
         &self,
         identity_hash: &rns_core::types::IdentityHash,
     ) -> Result<bool, SendError> {
+        // Upstream `Reticulum._retain_identity`: a shared instance client
+        // asks the instance, which holds the known destinations.
+        if self.destination_types.is_client_with_rpc() {
+            use crate::pickle::PickleValue;
+            let request = PickleValue::Dict(vec![
+                (
+                    PickleValue::String("identity_data".into()),
+                    PickleValue::String("retain".into()),
+                ),
+                (
+                    PickleValue::String("identity_hash".into()),
+                    PickleValue::Bytes(identity_hash.0.to_vec()),
+                ),
+            ]);
+            return Ok(self
+                .destination_types
+                .call(&request)
+                .and_then(|r| r.as_bool())
+                .unwrap_or(false));
+        }
         match self.query(QueryRequest::RetainIdentity {
             identity_hash: identity_hash.0,
         })? {
             QueryResponse::RetainIdentity(ok) => Ok(ok),
             _ => Ok(false),
+        }
+    }
+
+    /// Put known destinations loaded from storage back into the driver.
+    pub(crate) fn restore_known_destinations(
+        &self,
+        known_destinations: impl IntoIterator<Item = ([u8; 16], storage::KnownDestination)>,
+    ) {
+        for (dest_hash, known) in known_destinations {
+            let _ = self.query(QueryRequest::RestoreKnownDestination(
+                crate::event::KnownDestinationEntry {
+                    dest_hash,
+                    identity_hash: known.identity_hash,
+                    public_key: known.public_key,
+                    app_data: known.app_data,
+                    hops: known.hops,
+                    received_at: known.received_at,
+                    receiving_interface: rns_core::transport::types::InterfaceId(
+                        known.receiving_interface,
+                    ),
+                    was_used: known.was_used,
+                    last_used_at: known.last_used_at,
+                    retained: known.retained,
+                    stamp: known
+                        .stamp
+                        .as_deref()
+                        .and_then(|stamp| stamp.try_into().ok()),
+                    stamp_value: known.stamp_value,
+                    lr_cost: known.lr_cost,
+                },
+            ));
         }
     }
 
@@ -4603,34 +4639,9 @@ impl RnsNode {
         if self.known_destinations_store.is_none() && self.known_destinations_path.is_none() {
             return;
         }
-
-        let Ok(entries) = self.known_destinations() else {
+        let Some(destinations) = known_destinations_snapshot(&self.tx) else {
             return;
         };
-
-        let destinations: std::collections::HashMap<[u8; 16], storage::KnownDestination> = entries
-            .into_iter()
-            .map(|entry| {
-                (
-                    entry.dest_hash,
-                    storage::KnownDestination {
-                        identity_hash: entry.identity_hash,
-                        public_key: entry.public_key,
-                        app_data: entry.app_data,
-                        hops: entry.hops,
-                        received_at: entry.received_at,
-                        receiving_interface: entry.receiving_interface.0,
-                        was_used: entry.was_used,
-                        last_used_at: entry.last_used_at,
-                        retained: entry.retained,
-                        stamp: entry.stamp.map(|stamp| stamp.to_vec()),
-                        stamp_value: entry.stamp_value,
-                        lr_cost: entry.lr_cost,
-                    },
-                )
-            })
-            .collect();
-
         if let Some(store) = self.known_destinations_store.as_ref() {
             if let Err(err) = store.save_all(&destinations) {
                 log::warn!("failed to persist known destinations: {}", err);
@@ -4639,6 +4650,52 @@ impl RnsNode {
             if let Err(err) = storage::save_known_destinations(&destinations, path) {
                 log::warn!("failed to persist known destinations: {}", err);
             }
+        }
+    }
+
+    /// Write changed known destinations to the database every
+    /// `KD_FLUSH_INTERVAL`, as upstream's transport jobs do, so shared
+    /// instance clients, which read it, see what the instance learns.
+    fn start_known_destinations_flush(
+        &mut self,
+        mut last: std::collections::HashMap<[u8; 16], storage::KnownDestination>,
+    ) {
+        let Some(store) = self.known_destinations_store.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let handle = thread::Builder::new()
+            .name("rns-kd-flush".into())
+            .spawn(move || loop {
+                match stop_rx.recv_timeout(KD_FLUSH_INTERVAL) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                let Some(current) = known_destinations_snapshot(&tx) else {
+                    break;
+                };
+                let upserts: Vec<([u8; 16], &storage::KnownDestination)> = current
+                    .iter()
+                    .filter(|(hash, entry)| last.get(*hash) != Some(*entry))
+                    .map(|(hash, entry)| (*hash, entry))
+                    .collect();
+                let deletes: Vec<[u8; 16]> = last
+                    .keys()
+                    .filter(|hash| !current.contains_key(*hash))
+                    .copied()
+                    .collect();
+                match store.save_changes(&upserts, &deletes) {
+                    Ok(()) => last = current,
+                    Err(err) => log::warn!("failed to flush known destinations: {}", err),
+                }
+            });
+        match handle {
+            Ok(handle) => {
+                self.kd_flush_handle = Some(handle);
+                self.kd_flush_stop = Some(stop_tx);
+            }
+            Err(err) => log::warn!("could not start the known destinations flush: {}", err),
         }
     }
 
@@ -4861,6 +4918,8 @@ impl RnsNode {
             verify_shutdown: Arc::default(),
             persist_handle: None,
             persist_stop: None,
+            kd_flush_handle: None,
+            kd_flush_stop: None,
             rpc_server,
             #[cfg(target_os = "linux")]
             rpc_unix_server: None,
@@ -4943,6 +5002,12 @@ impl RnsNode {
         #[cfg(target_os = "linux")]
         if let Some(mut rpc) = self.rpc_unix_server.take() {
             rpc.stop();
+        }
+        if let Some(stop) = self.kd_flush_stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(handle) = self.kd_flush_handle.take() {
+            let _ = handle.join();
         }
         self.persist_known_destinations();
         self.persist_transport_state();
@@ -5164,6 +5229,45 @@ impl Drop for RnsNode {
     fn drop(&mut self) {
         self.shutdown_inner();
     }
+}
+
+/// `RNS.Transport.kd_flush_interval`.
+const KD_FLUSH_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The driver's known destinations, as storage keeps them.
+fn known_destinations_snapshot(
+    tx: &EventSender,
+) -> Option<std::collections::HashMap<[u8; 16], storage::KnownDestination>> {
+    let (response_tx, response_rx) = std::sync::mpsc::channel();
+    tx.send(Event::query(QueryRequest::KnownDestinations, response_tx))
+        .ok()?;
+    let QueryResponse::KnownDestinations(entries) = response_rx.recv().ok()? else {
+        return None;
+    };
+    Some(
+        entries
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.dest_hash,
+                    storage::KnownDestination {
+                        identity_hash: entry.identity_hash,
+                        public_key: entry.public_key,
+                        app_data: entry.app_data,
+                        hops: entry.hops,
+                        received_at: entry.received_at,
+                        receiving_interface: entry.receiving_interface.0,
+                        was_used: entry.was_used,
+                        last_used_at: entry.last_used_at,
+                        retained: entry.retained,
+                        stamp: entry.stamp.map(|stamp| stamp.to_vec()),
+                        stamp_value: entry.stamp_value,
+                        lr_cost: entry.lr_cost,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -5783,6 +5887,8 @@ mod tests {
             verify_shutdown: Arc::default(),
             persist_handle: None,
             persist_stop: None,
+            kd_flush_handle: None,
+            kd_flush_stop: None,
             rpc_server: None,
             #[cfg(target_os = "linux")]
             rpc_unix_server: None,

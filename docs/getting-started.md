@@ -25,8 +25,10 @@ default is `~/.reticulum`; pass `--config PATH` to use another location.
 
 Known destinations and received ratchets are persisted in
 `storage/known_destinations.db`, and cached announces in `cache/announces.db`.
-Legacy msgpack and per-file storage is imported on first start; the older file
-stores remain the fallback if SQLite cannot be opened.
+Changes to known destinations are written every 10 seconds, as upstream does;
+programs attached to the shared instance read them from there when they
+start. Legacy msgpack and per-file storage is imported on first start; the
+older file stores remain the fallback if SQLite cannot be opened.
 
 A node started without a `config` file writes upstream's default one (an
 `AutoInterface`, no transport) and runs with it, as Python Reticulum does.
