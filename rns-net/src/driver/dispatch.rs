@@ -2352,6 +2352,17 @@ impl Driver {
                     self.callbacks
                         .on_resource_failed(rns_core::types::LinkId(link_id), error);
                 }
+                LinkManagerAction::ResourceStarted {
+                    link_id,
+                    resource_hash,
+                    data_size,
+                } => {
+                    self.callbacks.on_resource_started(
+                        rns_core::types::LinkId(link_id),
+                        resource_hash,
+                        data_size,
+                    );
+                }
                 LinkManagerAction::ResourceProgress {
                     link_id,
                     received,

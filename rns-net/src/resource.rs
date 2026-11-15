@@ -241,6 +241,13 @@ impl Drop for ReceivedResourceFile {
 
 fn sync_parent(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {
+        // A bare file name's parent is the empty path: the current
+        // directory.
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
         File::open(parent)?.sync_all()?;
     }
     Ok(())
@@ -289,6 +296,16 @@ fn read_declared(mut reader: impl Read, length: u64) -> io::Result<Vec<u8>> {
         ));
     }
     Ok(data)
+}
+
+#[cfg(test)]
+mod sync_parent_tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_file_name_syncs_the_current_directory() {
+        assert!(sync_parent(Path::new("file-in-cwd")).is_ok());
+    }
 }
 
 #[cfg(test)]

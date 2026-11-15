@@ -70,6 +70,11 @@ pub trait Callbacks: Send {
     /// Called when a resource transfer fails.
     fn on_resource_failed(&mut self, _link_id: LinkId, _error: String) {}
 
+    /// Called when an incoming resource is accepted and its transfer
+    /// starts (upstream's `resource_started` callback), with its hash and
+    /// the uncompressed data size it advertised.
+    fn on_resource_started(&mut self, _link_id: LinkId, _resource_hash: Vec<u8>, _data_size: u64) {}
+
     /// Called with resource transfer progress updates.
     fn on_resource_progress(&mut self, _link_id: LinkId, _received: usize, _total: usize) {}
 

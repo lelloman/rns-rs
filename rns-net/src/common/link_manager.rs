@@ -256,6 +256,14 @@ pub enum LinkManagerAction {
     ResourceCompleted { link_id: LinkId },
     /// Resource transfer failed.
     ResourceFailed { link_id: LinkId, error: String },
+    /// An incoming resource was accepted and its transfer starts
+    /// (upstream's `resource_started` callback): its hash and the
+    /// uncompressed data size it advertised.
+    ResourceStarted {
+        link_id: LinkId,
+        resource_hash: Vec<u8>,
+        data_size: u64,
+    },
     /// Resource transfer progress update.
     ResourceProgress {
         link_id: LinkId,

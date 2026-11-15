@@ -690,9 +690,16 @@ impl LinkManager {
                 }
                 link.incoming_resources.push(receiver);
                 let idx = link.incoming_resources.len() - 1;
+                let started = LinkManagerAction::ResourceStarted {
+                    link_id: *link_id,
+                    resource_hash: link.incoming_resources[idx].resource_hash.clone(),
+                    data_size: link.incoming_resources[idx].data_size,
+                };
                 let resource_actions = link.incoming_resources[idx].accept(now);
                 let _ = link;
-                self.process_resource_actions(link_id, resource_actions, rng)
+                let mut actions = vec![started];
+                actions.extend(self.process_resource_actions(link_id, resource_actions, rng));
+                actions
             }
             ResourceStrategy::AcceptApp => {
                 link.incoming_resources.push(receiver);
@@ -773,14 +780,21 @@ impl LinkManager {
             }
         }
 
+        let mut actions = Vec::new();
         let resource_actions = if accept {
+            actions.push(LinkManagerAction::ResourceStarted {
+                link_id: *link_id,
+                resource_hash: link.incoming_resources[idx].resource_hash.clone(),
+                data_size: link.incoming_resources[idx].data_size,
+            });
             link.incoming_resources[idx].accept(now)
         } else {
             link.incoming_resources[idx].reject()
         };
 
         let _ = link;
-        self.process_resource_actions(link_id, resource_actions, rng)
+        actions.extend(self.process_resource_actions(link_id, resource_actions, rng));
+        actions
     }
 
     /// Handle resource request (CONTEXT_RESOURCE_REQ) — feed to sender,
