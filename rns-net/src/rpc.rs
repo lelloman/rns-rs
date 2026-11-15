@@ -2699,6 +2699,15 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::List(blocked.iter().cloned().map(PickleValue::String).collect()),
         ));
     }
+    // Every interface reports where it was auto-connected from, None for
+    // one that was not.
+    dict.push((
+        PickleValue::String("autoconnect_source".into()),
+        s.autoconnect_source
+            .clone()
+            .map(PickleValue::String)
+            .unwrap_or(PickleValue::None),
+    ));
     // Only an I2P interface reports its endpoint, with `i2p_b32` None
     // until its address is known.
     if let Some(i2p) = &s.i2p {
@@ -4702,6 +4711,7 @@ mod tests {
                             blocked_ips: None,
                             blocked_ip_list: None,
                             i2p: None,
+                            autoconnect_source: None,
                             announce_rate_target: Some(3600.0),
                             announce_rate_grace: 5,
                             announce_rate_penalty: 0.0,
@@ -5333,6 +5343,7 @@ mod tests {
                 blocked_ips: Some(2),
                 blocked_ip_list: Some(vec!["192.0.2.1".into(), "203.0.113.2".into()]),
                 i2p: None,
+                autoconnect_source: None,
                 announce_rate_target: Some(3600.0),
                 announce_rate_grace: 5,
                 announce_rate_penalty: 0.0,
@@ -5429,6 +5440,18 @@ mod tests {
         assert_eq!(
             spawned.get("ifac_signature").unwrap().as_bytes(),
             Some(&[9u8; 64][..])
+        );
+        assert_eq!(
+            ifaces[0].get("autoconnect_source"),
+            Some(&PickleValue::None)
+        );
+        let mut discovered = stats.interfaces[0].clone();
+        discovered.autoconnect_source = Some("ab".repeat(16));
+        let discovered =
+            pickle::decode(&pickle::encode(&single_iface_to_pickle(&discovered))).unwrap();
+        assert_eq!(
+            discovered.get("autoconnect_source").unwrap().as_str(),
+            Some("ab".repeat(16).as_str())
         );
         // Only an I2P interface reports its endpoint, its address None
         // until known.

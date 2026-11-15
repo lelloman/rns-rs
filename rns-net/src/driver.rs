@@ -355,6 +355,8 @@ pub(crate) struct BackbonePeerPoolDiscoveryCandidate {
     pub(crate) hops: u8,
     pub(crate) stamp_value: rns_core::stamp::StampValue,
     pub(crate) last_heard: f64,
+    /// The network that announced it (upstream's `network_id`).
+    pub(crate) network_id: [u8; 16],
 }
 
 #[cfg(feature = "iface-backbone")]

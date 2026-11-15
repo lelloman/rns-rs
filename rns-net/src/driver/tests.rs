@@ -744,6 +744,22 @@ fn backbone_peer_pool_discovered_fill_target_after_configured() {
     assert_eq!(status.members[0].source, "configured");
     assert_eq!(status.members[1].source, "discovered");
     assert_eq!(status.members[1].remote, format!("127.0.0.1:{port_b}"));
+
+    // As upstream, a discovered interface reports the network it was
+    // discovered from; a configured one none.
+    let source = |id: Option<u64>| driver.autoconnect_source(InterfaceId(id.unwrap()));
+    assert_eq!(source(status.members[0].interface_id), None);
+    assert_eq!(
+        source(status.members[1].interface_id).as_deref(),
+        Some("55".repeat(16).as_str())
+    );
+    // Named as upstream names the BackboneClientInterface it starts.
+    let discovered = InterfaceId(status.members[1].interface_id.unwrap());
+    let name = &driver.interfaces[&discovered].info.name;
+    assert_eq!(
+        driver.interface_display_names[&discovered],
+        format!("BackboneInterface[{name}/127.0.0.1:{port_b}]")
+    );
 }
 
 #[cfg(feature = "iface-backbone")]
