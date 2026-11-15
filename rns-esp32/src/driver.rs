@@ -80,6 +80,8 @@ pub struct Driver {
     stats: Option<SharedStats>,
     identity: Option<Identity>,
     control_dest_hash: Option<[u8; 16]>,
+    /// `rnstransport.path.request`, where path requests arrive.
+    path_request_dest: [u8; 16],
     replay_window: ReplayWindow,
     active_radio_config: RadioConfig,
     device_settings: DeviceSettings,
@@ -95,6 +97,11 @@ impl Driver {
         // Key the engine's tables so a sender cannot grind packet hashes
         // into colliding slots.
         engine.seed_table_hashing(&mut EspRng);
+        // Path requests arrive as packets for this plain destination; it must
+        // be registered for the engine to deliver them.
+        let path_request_dest =
+            rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
+        engine.register_destination(path_request_dest, constants::DESTINATION_PLAIN);
         Driver {
             engine,
             interfaces: Vec::new(),
@@ -103,6 +110,7 @@ impl Driver {
             stats: None,
             identity: None,
             control_dest_hash: None,
+            path_request_dest,
             replay_window: ReplayWindow::new(),
             active_radio_config: RadioConfig {
                 frequency: crate::config::LORA_FREQUENCY,
@@ -314,6 +322,30 @@ impl Driver {
                     for id in ids {
                         self.send_on_interface(id, &raw);
                     }
+                }
+                TransportAction::DeliverLocal {
+                    destination_hash,
+                    raw,
+                    receiving_interface,
+                    ..
+                } if destination_hash == self.path_request_dest => {
+                    // The engine answers for a destination of its own or a
+                    // path it knows, and forwards the request otherwise.
+                    if let Ok(packet) = RawPacket::unpack(&raw) {
+                        let actions = self.engine.handle_path_request(
+                            packet.data(),
+                            receiving_interface,
+                            now(),
+                        );
+                        self.dispatch_all(actions);
+                    }
+                }
+                TransportAction::AnnounceLocalPathResponse {
+                    destination_hash,
+                    interface,
+                    ..
+                } => {
+                    self.answer_local_path_request(destination_hash, interface);
                 }
                 TransportAction::DeliverLocal {
                     destination_hash,
@@ -610,16 +642,38 @@ impl Driver {
     /// Build and broadcast a Reticulum announce for this node's identity.
     fn handle_send_announce(&mut self) {
         log::info!("Sending announce");
-        self.send_announce_for_aspects(&["transport"]);
+        self.send_announce_for_aspects(&["transport"], None);
         if self.control_dest_hash.is_some() {
-            self.send_announce_for_aspects(&["control"]);
+            self.send_announce_for_aspects(&["control"], None);
         }
         if let Some(ref stats) = self.stats {
             stats.lock().unwrap().set_status("Announce sent!");
         }
     }
 
-    fn send_announce_for_aspects(&mut self, aspects: &[&str]) {
+    /// Answer a path request for one of this node's destinations with a
+    /// path-response announce on the interface it came in on
+    /// (`Transport.py:3450-3457`).
+    fn answer_local_path_request(&mut self, destination_hash: [u8; 16], interface: InterfaceId) {
+        let Some(identity_hash) = self.identity.as_ref().map(|id| *id.hash()) else {
+            return;
+        };
+        let transport = rns_core::destination::destination_hash(
+            "rns_esp32",
+            &["transport"],
+            Some(&identity_hash),
+        );
+        if destination_hash == transport {
+            self.send_announce_for_aspects(&["transport"], Some(interface));
+        } else if Some(destination_hash) == self.control_dest_hash {
+            self.send_announce_for_aspects(&["control"], Some(interface));
+        }
+    }
+
+    /// Announce this node's `rns_esp32.<aspects>` destination: a broadcast
+    /// on every interface, or, with `path_response`, a `PATH_RESPONSE`
+    /// announce on that interface only.
+    fn send_announce_for_aspects(&mut self, aspects: &[&str], path_response: Option<InterfaceId>) {
         let identity = match &self.identity {
             Some(id) => id,
             None => {
@@ -661,18 +715,22 @@ impl Driver {
                     0,
                     &dest_hash,
                     None,
-                    constants::CONTEXT_NONE,
+                    if path_response.is_some() {
+                        constants::CONTEXT_PATH_RESPONSE
+                    } else {
+                        constants::CONTEXT_NONE
+                    },
                     &announce_data,
                 ) {
                     Ok(packet) => {
                         let actions = self.engine.handle_outbound(
                             &packet,
                             constants::DESTINATION_SINGLE,
-                            None,
+                            path_response,
                             now(),
                         );
                         self.dispatch_all(actions);
-                        log::info!("Announce broadcast for dest={}", hex(&dest_hash));
+                        log::info!("Announce sent for dest={}", hex(&dest_hash));
                     }
                     Err(err) => log::error!("Failed to pack announce: {:?}", err),
                 }
