@@ -36,7 +36,8 @@ pub enum RemoteManagementError {
     RecallTimeout([u8; 16]),
     LinkTimeout([u8; 16]),
     RequestTimeout(String),
-    LinkClosed,
+    /// The link closed, by the reason the remote side gave if any.
+    LinkClosed(Option<TeardownReason>),
     SendFailed,
     MalformedResponse(String),
     Unsupported(String),
@@ -68,7 +69,7 @@ impl fmt::Display for RemoteManagementError {
             }
             Self::LinkTimeout(hash) => write!(f, "timed out establishing link to {}", hex(hash)),
             Self::RequestTimeout(path) => write!(f, "remote request to {path} timed out"),
-            Self::LinkClosed => write!(f, "remote link closed before request completed"),
+            Self::LinkClosed(_) => write!(f, "remote link closed before request completed"),
             Self::SendFailed => write!(f, "could not send remote management request"),
             Self::MalformedResponse(e) => write!(f, "malformed remote response: {e}"),
             Self::Unsupported(e) => write!(f, "{e}"),
@@ -77,6 +78,18 @@ impl fmt::Display for RemoteManagementError {
 }
 
 impl std::error::Error for RemoteManagementError {}
+
+/// The stages of a remote request a tool reports as it goes, as upstream's
+/// utilities print them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteProgress {
+    /// No path to the remote destination was known; one was requested.
+    PathRequested([u8; 16]),
+    /// The path is known and a new link is being set up.
+    EstablishingLink,
+    /// The link is up and the request goes out.
+    SendingRequest,
+}
 
 #[derive(Debug, Clone)]
 pub struct RemoteStatus {
@@ -88,7 +101,7 @@ pub struct RemoteStatus {
 struct RemoteCallbacks {
     link_established_tx: mpsc::Sender<LinkId>,
     response_tx: mpsc::Sender<(LinkId, [u8; 16], Vec<u8>)>,
-    link_closed_tx: mpsc::Sender<LinkId>,
+    link_closed_tx: mpsc::Sender<(LinkId, Option<TeardownReason>)>,
 }
 
 impl Callbacks for RemoteCallbacks {
@@ -122,7 +135,7 @@ impl Callbacks for RemoteCallbacks {
         if reason == Some(TeardownReason::InitiatorClosed) {
             return;
         }
-        let _ = self.link_closed_tx.send(link_id);
+        let _ = self.link_closed_tx.send((link_id, reason));
     }
 }
 
@@ -132,7 +145,8 @@ pub struct RemoteManagementClient {
     timeout: Duration,
     link_rx: mpsc::Receiver<LinkId>,
     response_rx: mpsc::Receiver<(LinkId, [u8; 16], Vec<u8>)>,
-    closed_rx: mpsc::Receiver<LinkId>,
+    closed_rx: mpsc::Receiver<(LinkId, Option<TeardownReason>)>,
+    progress: Option<Box<dyn FnMut(RemoteProgress) + Send>>,
     management_link: Arc<Mutex<Option<[u8; 16]>>>,
     blackhole_link: Arc<Mutex<Option<[u8; 16]>>>,
 }
@@ -186,9 +200,21 @@ impl RemoteManagementClient {
             link_rx,
             response_rx,
             closed_rx,
+            progress: None,
             management_link: Arc::new(Mutex::new(None)),
             blackhole_link: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Report each stage of the requests that follow to `progress`.
+    pub fn set_progress(&mut self, progress: impl FnMut(RemoteProgress) + Send + 'static) {
+        self.progress = Some(Box::new(progress));
+    }
+
+    fn report(&mut self, stage: RemoteProgress) {
+        if let Some(progress) = self.progress.as_mut() {
+            progress(stage);
+        }
     }
 
     pub fn status(
@@ -313,7 +339,11 @@ impl RemoteManagementClient {
             *lock_link(&link_slot) = None;
         }
 
+        if !self.node.has_path(&DestHash(dest_hash)).unwrap_or(false) {
+            self.report(RemoteProgress::PathRequested(dest_hash));
+        }
         let announced = self.wait_for_destination(dest_hash)?;
+        self.report(RemoteProgress::EstablishingLink);
         let sig_pub: [u8; 32] = announced.public_key[32..64]
             .try_into()
             .expect("slice length checked");
@@ -322,6 +352,7 @@ impl RemoteManagementClient {
             .create_link(dest_hash, sig_pub)
             .map_err(|_| RemoteManagementError::LinkTimeout(dest_hash))?;
         self.wait_for_link_established(link_id, dest_hash)?;
+        self.report(RemoteProgress::SendingRequest);
 
         if identify_on_new_link {
             let prv_key = identity_prv_key.ok_or(RemoteManagementError::MissingIdentity)?;
@@ -372,9 +403,9 @@ impl RemoteManagementClient {
     ) -> Result<(), RemoteManagementError> {
         let deadline = Instant::now() + self.timeout;
         loop {
-            if let Ok(closed) = self.closed_rx.try_recv() {
+            if let Ok((closed, reason)) = self.closed_rx.try_recv() {
                 if closed.0 == expected_link_id {
-                    return Err(RemoteManagementError::LinkClosed);
+                    return Err(RemoteManagementError::LinkClosed(reason));
                 }
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -401,9 +432,9 @@ impl RemoteManagementClient {
     ) -> Result<Vec<u8>, RemoteManagementError> {
         let deadline = Instant::now() + self.timeout;
         loop {
-            if let Ok(closed) = self.closed_rx.try_recv() {
+            if let Ok((closed, reason)) = self.closed_rx.try_recv() {
                 if closed.0 == link_id {
-                    return Err(RemoteManagementError::LinkClosed);
+                    return Err(RemoteManagementError::LinkClosed(reason));
                 }
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -467,8 +498,8 @@ fn decode_status_response(data: &[u8]) -> Result<RemoteStatus, RemoteManagementE
     let stats = arr
         .first()
         .ok_or_else(|| RemoteManagementError::MalformedResponse("missing status dict".into()))?;
-    let mut stats = msgpack_to_pickle(stats);
-    normalize_remote_status(&mut stats);
+    // Passed on as received, as upstream's rnstatus prints it.
+    let stats = msgpack_to_pickle(stats);
     let link_count = arr.get(1).and_then(|v| v.as_integer());
     let profiling_results = arr
         .get(2)
@@ -479,48 +510,6 @@ fn decode_status_response(data: &[u8]) -> Result<RemoteStatus, RemoteManagementE
         link_count,
         profiling_results,
     })
-}
-
-fn normalize_remote_status(value: &mut PickleValue) {
-    let PickleValue::Dict(entries) = value else {
-        return;
-    };
-    if !entries
-        .iter()
-        .any(|(k, _)| string_key(k) == Some("transport_enabled"))
-    {
-        entries.push((
-            PickleValue::String("transport_enabled".into()),
-            PickleValue::Bool(true),
-        ));
-    }
-    if let Some((_, PickleValue::List(ifaces))) = entries
-        .iter_mut()
-        .find(|(k, _)| string_key(k) == Some("interfaces"))
-    {
-        for iface in ifaces {
-            normalize_remote_interface(iface);
-        }
-    }
-}
-
-fn normalize_remote_interface(value: &mut PickleValue) {
-    let PickleValue::Dict(entries) = value else {
-        return;
-    };
-    copy_key(entries, "incoming_announce_freq", "ia_freq");
-    copy_key(entries, "outgoing_announce_freq", "oa_freq");
-    copy_key(entries, "incoming_path_request_freq", "ip_freq");
-    copy_key(entries, "outgoing_path_request_freq", "op_freq");
-}
-
-fn copy_key(entries: &mut Vec<(PickleValue, PickleValue)>, from: &str, to: &str) {
-    if entries.iter().any(|(k, _)| string_key(k) == Some(to)) {
-        return;
-    }
-    if let Some((_, value)) = entries.iter().find(|(k, _)| string_key(k) == Some(from)) {
-        entries.push((PickleValue::String(to.into()), value.clone()));
-    }
 }
 
 fn blackhole_map_to_list(value: &Value) -> PickleValue {
@@ -558,13 +547,6 @@ fn lock_link<'a>(
     }
 }
 
-fn string_key(value: &PickleValue) -> Option<&str> {
-    match value {
-        PickleValue::String(s) => Some(s),
-        _ => None,
-    }
-}
-
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -592,37 +574,15 @@ mod tests {
     }
 
     #[test]
-    fn status_response_normalizes_renderer_keys() {
+    fn status_response_passes_the_stats_on_as_received() {
         let status = Value::Map(vec![
-            (
-                Value::Str("interfaces".into()),
-                Value::Array(vec![Value::Map(vec![
-                    (Value::Str("name".into()), Value::Str("if0".into())),
-                    (
-                        Value::Str("incoming_announce_freq".into()),
-                        Value::Float(1.5),
-                    ),
-                ])]),
-            ),
+            (Value::Str("interfaces".into()), Value::Array(Vec::new())),
             (Value::Str("rxb".into()), Value::UInt(1)),
-            (Value::Str("txb".into()), Value::UInt(2)),
         ]);
-        let data = msgpack::pack(&Value::Array(vec![status, Value::UInt(7)]));
+        let data = msgpack::pack(&Value::Array(vec![status.clone(), Value::UInt(7)]));
         let decoded = decode_status_response(&data).unwrap();
         assert_eq!(decoded.link_count, Some(7));
-        assert_eq!(
-            decoded
-                .stats
-                .get("transport_enabled")
-                .and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        let iface = &decoded
-            .stats
-            .get("interfaces")
-            .and_then(|v| v.as_list())
-            .unwrap()[0];
-        assert_eq!(iface.get("ia_freq").and_then(|v| v.as_float()), Some(1.5));
+        assert_eq!(decoded.stats, msgpack_to_pickle(&status));
     }
 
     #[test]

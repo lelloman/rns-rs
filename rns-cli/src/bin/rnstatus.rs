@@ -7,7 +7,7 @@ use std::process;
 use std::time::{Duration, Instant};
 
 use rns_cli::args::{Args, Opt, OptionSpec};
-use rns_cli::pyfmt::Num;
+use rns_cli::pyfmt::{prettyhexrep, Num};
 use rns_cli::rnstatus_view::{
     render, render_discovered, render_discovered_json, upstream_discovery_record, Extras,
     ViewOptions,
@@ -16,6 +16,7 @@ use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
+use rns_net::TeardownReason;
 use rns_net::{RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
@@ -389,6 +390,41 @@ fn show_status(stats: &PickleValue, view: &ViewOptions, extras: &Extras<'_>) {
     print!("{}", render(stats, view, extras, rns_net::time::now()));
 }
 
+/// upstream's `"\r" + 58 spaces + "\r"`, which clears its progress line.
+const CLEAR_LINE: &str = "\r                                                          \r";
+
+/// Where `-R` progress goes: straight to stdout, or, in monitor mode, into
+/// the frame printed after the screen is cleared, as upstream buffers it.
+#[derive(Clone, Default)]
+struct ProgressOut(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+impl ProgressOut {
+    fn write(&self, text: &str) {
+        let mut buffer = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        match buffer.as_mut() {
+            Some(buffer) => buffer.push_str(text),
+            None => {
+                print!("{text}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+        }
+    }
+
+    fn buffer(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(String::new());
+    }
+
+    fn take(&self) -> String {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(String::new())
+            .unwrap_or_default()
+    }
+}
+
+/// `-R`: upstream's `get_remote_status` and the remote branch of
+/// `program_setup`, with its progress lines, messages and exit codes.
 #[allow(clippy::too_many_arguments)]
 fn remote_status(
     hash_str: &str,
@@ -401,41 +437,108 @@ fn remote_status(
     view: &ViewOptions,
     show_profiling: bool,
 ) {
-    let show_links = view.lstats;
-    let transport_hash = match rns_net::remote_management::parse_transport_identity_hash(hash_str) {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("{e}");
-            process::exit(1);
-        }
+    use rns_net::remote_management::{RemoteManagementError as E, RemoteProgress};
+
+    let fail = |message: &str| -> ! {
+        println!("{message}");
+        process::exit(20);
     };
     let Some(identity_path) = management_identity else {
-        eprintln!(
-            "{}",
-            rns_net::remote_management::RemoteManagementError::MissingIdentity
-        );
-        process::exit(1);
+        fail("Remote management requires an identity file. Use -i to specify the path to a management identity.");
     };
+    if hash_str.chars().count() != 32 {
+        fail("Destination length is invalid, must be 32 hexadecimal characters (16 bytes).");
+    }
+    let Ok(transport_hash) = rns_net::remote_management::parse_transport_identity_hash(hash_str)
+    else {
+        fail("Invalid destination entered. Check your input.");
+    };
+    let identity_path = rns_cli::app::expand_path(identity_path);
     let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
     let mut client = match rns_net::remote_management::RemoteManagementClient::connect(
         config_path.map(Path::new),
-        Some(Path::new(identity_path)),
+        Some(identity_path.as_path()),
         timeout,
     ) {
         Ok(client) => client,
-        Err(e) => {
-            eprintln!("{e}");
+        Err(E::IdentityLoad(_)) => fail(&format!(
+            "Could not load management identity from {}",
+            management_identity.unwrap_or_default()
+        )),
+        Err(_) => {
+            println!("No shared RNS instance available to get status from");
             process::exit(1);
         }
     };
 
+    let out = ProgressOut::default();
+    if monitor_mode {
+        out.buffer();
+    }
+    // upstream's get_remote_status prints nothing of its progress for -j.
+    if !json_output {
+        let progress = out.clone();
+        client.set_progress(move |stage| match stage {
+            RemoteProgress::PathRequested(dest) => {
+                progress.write(&format!("Path to {} requested ", prettyhexrep(&dest)));
+            }
+            RemoteProgress::EstablishingLink => progress.write(&format!(
+                "{CLEAR_LINE}Establishing link with remote transport instance... "
+            )),
+            RemoteProgress::SendingRequest => {
+                progress.write(&format!("{CLEAR_LINE}Sending request... "));
+            }
+        });
+    }
+
     loop {
         let monitor_started = Instant::now();
-        match client.status_with_profiling(transport_hash, show_links, show_profiling) {
+        let result = client.status_with_profiling(transport_hash, view.lstats, show_profiling);
+        let quiet = json_output;
+        let say = |line: &str| {
+            if !quiet {
+                out.write(&format!("{CLEAR_LINE}{line}\n"));
+            }
+        };
+        let remote = match result {
             Ok(remote) => {
+                out.write(CLEAR_LINE);
+                Some(remote)
+            }
+            Err(E::PathTimeout(_) | E::RecallTimeout(_)) => {
+                say("Path request timed out");
+                finish_frame(&out, monitor_mode);
+                process::exit(12);
+            }
+            Err(E::LinkTimeout(_)) | Err(E::LinkClosed(Some(TeardownReason::Timeout))) => {
+                say("The link timed out, exiting now");
+                finish_frame(&out, monitor_mode);
+                process::exit(10);
+            }
+            Err(E::LinkClosed(Some(TeardownReason::DestinationClosed))) => {
+                say("The link was closed by the server, exiting now");
+                finish_frame(&out, monitor_mode);
+                process::exit(10);
+            }
+            Err(E::LinkClosed(_)) => {
+                say("Link closed unexpectedly, exiting now");
+                finish_frame(&out, monitor_mode);
+                process::exit(10);
+            }
+            Err(E::RequestTimeout(_) | E::SendFailed) => {
+                say("The remote status request failed. Likely authentication failure.");
+                None
+            }
+            Err(_) => None,
+        };
+
+        match remote {
+            Some(remote) => {
+                let frame = out.take();
                 if monitor_mode {
                     print!("\x1b[H\x1b[2J");
                 }
+                print!("{frame}");
                 if json_output {
                     print_json(&remote.stats);
                 } else {
@@ -450,21 +553,34 @@ fn remote_status(
                     );
                 }
             }
-            Err(e) => {
-                eprintln!("Remote status error: {e}");
+            None => {
+                out.write(&format!(
+                    "Could not get RNS status from remote transport instance {}\n",
+                    prettyhexrep(&transport_hash)
+                ));
                 if !monitor_mode {
-                    process::exit(1);
+                    process::exit(2);
                 }
+                finish_frame(&out, monitor_mode);
             }
         }
 
         if !monitor_mode {
             break;
         }
+        out.buffer();
         std::thread::sleep(monitor_sleep_duration(
             monitor_interval,
             monitor_started.elapsed(),
         ));
+    }
+}
+
+/// In monitor mode, show what was buffered for this frame.
+fn finish_frame(out: &ProgressOut, monitor_mode: bool) {
+    if monitor_mode {
+        print!("\x1b[H\x1b[2J{}", out.take());
+        let _ = std::io::Write::flush(&mut std::io::stdout());
     }
 }
 
