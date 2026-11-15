@@ -160,8 +160,9 @@ impl Driver {
         if let Some(display_name) = self.interface_display_names.get(&entry.info.id) {
             return display_name.clone();
         }
-        // The shared instance's clients, which its listener spawns
-        // unnamed: upstream names them after the shared instance socket.
+        // The shared instance's clients on its Unix socket, which its
+        // listener spawns unnamed: upstream names them after the socket.
+        // (On TCP the listener names them after their port.)
         if entry.info.is_local_client && entry.dynamic {
             if let Some(ListenerStat {
                 clients: ListenerClients::Local(endpoint),
