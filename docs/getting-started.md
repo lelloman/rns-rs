@@ -88,7 +88,7 @@ instance:
 ```bash
 ./target/release/rnstatus              # interface status and traffic counters
 ./target/release/rnpath -t             # path table
-./target/release/rnprobe <dest_hash>   # probe a destination and measure RTT
+./target/release/rnprobe rnstransport.probe <dest_hash>   # probe a transport node and measure RTT
 ```
 
 Build those binaries with `cargo build --release -p rns-cli` if you only built
