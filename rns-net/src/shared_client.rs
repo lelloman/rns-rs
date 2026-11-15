@@ -131,6 +131,24 @@ impl DestinationTypeRequester {
         }
     }
 
+    /// Whether this is a shared instance client that knows the instance's
+    /// RPC server.
+    pub(crate) fn is_client_with_rpc(&self) -> bool {
+        self.shared_client && self.shared_rpc.is_some()
+    }
+
+    /// One call to the shared instance's RPC server, when it is known.
+    pub(crate) fn call(&self, request: &PickleValue) -> Option<PickleValue> {
+        let (addr, auth_key) = self.shared_rpc.as_ref()?;
+        match RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(request)) {
+            Ok(response) => Some(response),
+            Err(e) => {
+                log::error!("Shared instance RPC failed: {e}");
+                None
+            }
+        }
+    }
+
     /// Withdraw this application's registrations from the shared instance,
     /// as the Python exit handler does.
     pub(crate) fn withdraw_from_shared_instance(&self) {
@@ -264,6 +282,10 @@ impl RnsNode {
         driver.connected_to_shared_instance = true;
         // Received ratchets: without a store, packets to destinations that
         // enforce ratchets would go out encrypted to the identity key alone.
+        let known_destinations = instance_storage
+            .as_deref()
+            .map(load_instance_known_destinations)
+            .unwrap_or_default();
         let ratchet_store: Arc<dyn storage::RatchetStore> =
             Arc::new(storage::SharedClientRatchetStore::new(instance_storage));
         driver.ratchet_store = Some(Arc::clone(&ratchet_store));
@@ -382,6 +404,7 @@ impl RnsNode {
             RnsNode::from_parts(tx, driver_handle, None, tick_interval_ms, accepting_work);
         node.destination_types.shared_client = true;
         node.ratchet_store = Some(ratchet_store);
+        node.restore_known_destinations(known_destinations);
         Ok(node)
     }
 
@@ -753,6 +776,36 @@ pub fn bench_shared_client_replay_once(
     let _ = driver_handle.join();
 
     Ok(frames.len())
+}
+
+/// `Identity.load_known_destinations` on a shared instance client: what
+/// the instance knows, read from its database without writing to it (or
+/// from its older snapshot file).
+fn load_instance_known_destinations(
+    storage_dir: &std::path::Path,
+) -> Vec<([u8; 16], storage::KnownDestination)> {
+    let db = crate::storage_sqlite::default_path(storage_dir);
+    if db.is_file() {
+        match crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db, 16)
+            .and_then(|store| store.load_all())
+        {
+            Ok(entries) => {
+                log::debug!(
+                    "Loaded {} known destinations from shared instance database",
+                    entries.len()
+                );
+                return entries;
+            }
+            Err(e) => {
+                log::error!("Could not load known destinations from shared instance database, continuing with an empty table. The contained exception was: {e}");
+                return Vec::new();
+            }
+        }
+    }
+    match storage::load_known_destinations(&storage_dir.join("known_destinations")) {
+        Ok(entries) => entries.into_iter().collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[cfg(test)]
