@@ -22,10 +22,15 @@ pub fn exit_quietly_on_closed_stdout() {
 }
 
 static INTERRUPT_EXIT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static INTERRUPT_NEWLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 extern "C" fn exit_now(_: libc::c_int) {
-    // `_exit` is async-signal-safe; stdout is flushed after every write
-    // that matters, as upstream's `os._exit` does not flush either.
+    // `write` and `_exit` are async-signal-safe; stdout is flushed after
+    // every write that matters, as upstream's `os._exit` does not flush
+    // either.
+    if INTERRUPT_NEWLINE.load(std::sync::atomic::Ordering::Relaxed) {
+        unsafe { libc::write(1, b"\n".as_ptr().cast(), 1) };
+    }
     unsafe { libc::_exit(INTERRUPT_EXIT.load(std::sync::atomic::Ordering::Relaxed)) }
 }
 
@@ -33,11 +38,20 @@ extern "C" fn exit_now(_: libc::c_int) {
 /// upstream utility does once it has started Reticulum, whose handlers call
 /// `RNS.exit()` (`os._exit(0)`).
 pub fn exit_on_interrupt(code: i32) {
+    INTERRUPT_NEWLINE.store(false, std::sync::atomic::Ordering::Relaxed);
     INTERRUPT_EXIT.store(code, std::sync::atomic::Ordering::Relaxed);
     unsafe {
         libc::signal(libc::SIGINT, exit_now as *const () as libc::sighandler_t);
         libc::signal(libc::SIGTERM, exit_now as *const () as libc::sighandler_t);
     }
+}
+
+/// Print a newline and exit with `code` on SIGINT or SIGTERM: a utility's
+/// own `except KeyboardInterrupt: print(""); exit(code)`, before it has
+/// started Reticulum.
+pub fn exit_on_interrupt_after_newline(code: i32) {
+    exit_on_interrupt(code);
+    INTERRUPT_NEWLINE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn panic_message<'a>(info: &'a std::panic::PanicHookInfo<'_>) -> &'a str {

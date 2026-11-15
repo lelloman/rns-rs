@@ -44,21 +44,6 @@ fn assert_success(output: Output) -> String {
     String::from_utf8(output.stdout).expect("utf8 stdout")
 }
 
-fn assert_failure(output: Output) -> String {
-    if output.status.success() {
-        panic!(
-            "rnid unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
 fn tempdir() -> tempfile::TempDir {
     tempfile::tempdir().expect("tempdir")
 }
@@ -67,50 +52,8 @@ fn path_str(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn last_hex_line(stdout: &str, bytes: usize) -> String {
-    stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| line.len() == bytes * 2 && line.chars().all(|c| c.is_ascii_hexdigit()))
-        .unwrap_or_else(|| panic!("no {}-byte hex line in:\n{}", bytes, stdout))
-        .to_string()
-}
-
-fn identity_hash_from_output(stdout: &str) -> String {
-    stdout
-        .lines()
-        .find_map(|line| {
-            let (_, rhs) = line.split_once(':')?;
-            let value = rhs.trim();
-            if value.len() == 32 && value.chars().all(|c| c.is_ascii_hexdigit()) {
-                Some(value.to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| panic!("no identity hash in:\n{}", stdout))
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-fn rsg_ascii_block(stdout: &str) -> String {
-    let mut block = Vec::new();
-    let mut in_block = false;
-    for line in stdout.lines() {
-        if line.starts_with("#### Start of rsg data ") {
-            in_block = true;
-        }
-        if in_block {
-            block.push(line);
-        }
-        if line.ends_with(" End of rsg data ####") {
-            break;
-        }
-    }
-    assert!(!block.is_empty(), "no wrapped rsg block in:\n{}", stdout);
-    block.join("\n")
 }
 
 fn free_port() -> u16 {
@@ -173,443 +116,148 @@ fn inject_identity(node: &RnsNode, dest_hash: [u8; 16], identity: &Identity) {
     assert!(matches!(response, QueryResponse::InjectIdentity(true)));
 }
 
+/// Wait for the instance's periodic flush to write `dest_hash` to its
+/// known destinations database, which shared instance clients read.
+fn wait_for_flush(dir: &Path, dest_hash: [u8; 16]) {
+    let db = dir.join("storage").join("known_destinations.db");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let flushed = rns_net::storage_sqlite::KnownDestinationsStore::open_read_only(&db, 16)
+            .and_then(|store| store.load_all())
+            .is_ok_and(|entries| entries.iter().any(|(hash, _)| *hash == dest_hash));
+        if flushed {
+            return;
+        }
+        assert!(Instant::now() < deadline, "known destination never flushed");
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn write_private_identity(path: &Path, identity: &Identity) {
     fs::write(path, identity.get_private_key().unwrap()).unwrap();
 }
 
+/// Lines `RNS.log` writes: `[YYYY-MM-DD HH:MM:SS] ...`.
+fn is_log_line(line: &str) -> bool {
+    let b = line.as_bytes();
+    b.len() > 22
+        && b[0] == b'['
+        && b[1..5].iter().all(u8::is_ascii_digit)
+        && b[5] == b'-'
+        && b[20] == b']'
+}
+
+fn normalize(stdout: &str, root: &str) -> String {
+    stdout
+        .replace(root, "ROOT")
+        .split_inclusive('\n')
+        .filter(|line| !is_log_line(line))
+        .collect()
+}
+
+fn snapshot(root: &Path) -> serde_json::Map<String, serde_json::Value> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if rel == "cfg" || rel == ".reticulum" {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else {
+                let data = fs::read(&path).unwrap();
+                let value = if rel.ends_with(".rfe") {
+                    format!("size:{}", data.len())
+                } else {
+                    hex(&rns_crypto::sha256::sha256(&data))
+                };
+                out.push((rel, value));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(root, root, &mut files);
+    files.sort();
+    files
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect()
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// Every case `tests/generate_rnid_fixtures.py` recorded from upstream's
+/// rnid: the same stdout and exit code at every step, and the same files
+/// left behind.
 #[test]
-fn public_and_private_identity_import_export_and_write() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let rid_s = path_str(&rid);
-
-    let generated = assert_success(rnid(&["-g", &rid_s]));
-    assert!(generated.contains("Generated new identity"));
-    assert_eq!(fs::read(&rid).unwrap().len(), 64);
-
-    let public_hex = last_hex_line(&assert_success(rnid(&["-i", &rid_s, "-x"])), 64);
-    let private_hex = last_hex_line(&assert_success(rnid(&["-i", &rid_s, "-X"])), 64);
-    assert_ne!(public_hex, private_hex);
-
-    let public_stem = dir.path().join("alice-public");
-    let public_stem_s = path_str(&public_stem);
-    assert_success(rnid(&["-m", &public_hex, "-w", &public_stem_s]));
-    let public_file = dir.path().join("alice-public.pub");
-    assert_eq!(fs::read(&public_file).unwrap().len(), 64);
-
-    let reexported = last_hex_line(
-        &assert_success(rnid(&["-m", &path_str(&public_file), "-x"])),
-        64,
+fn rnid_matches_upstream() {
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/rnid/cases.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut failures = Vec::new();
+    for case in fixture["cases"].as_array().unwrap() {
+        let dir = tempdir();
+        let root = dir.path().canonicalize().unwrap();
+        for (rel, data) in fixture["files"].as_object().unwrap() {
+            let path = root.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, unhex(data.as_str().unwrap())).unwrap();
+        }
+        let root_s = path_str(&root);
+        for step in case["steps"].as_array().unwrap() {
+            let argv: Vec<&str> = step["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap())
+                .collect();
+            let out = Command::new(env!("CARGO_BIN_EXE_rnid"))
+                .args(&argv)
+                .current_dir(&root)
+                .env("HOME", &root)
+                .env("COLUMNS", "80")
+                .env_remove("RUST_LOG")
+                .output()
+                .unwrap();
+            let stdout = normalize(&String::from_utf8_lossy(&out.stdout), &root_s);
+            let expected = step["stdout"].as_str().unwrap();
+            let code = out.status.code();
+            let expected_code = step["code"].as_i64().map(|c| c as i32);
+            if stdout != expected || code != expected_code {
+                failures.push(format!(
+                    "{argv:?}\n  expected ({expected_code:?}): {expected:?}\n  got      ({code:?}): {stdout:?}\n  stderr: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+        let files = snapshot(&root);
+        if serde_json::Value::Object(files.clone()) != case["files"] {
+            failures.push(format!(
+                "{}\n  files expected: {}\n  files got:      {:?}",
+                case["steps"][0]["argv"], case["files"], files
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} differences from upstream:\n{}",
+        failures.len(),
+        failures.join("\n")
     );
-    assert_eq!(reexported, public_hex);
-
-    let imported_rid = dir.path().join("imported.rid");
-    assert_success(rnid(&[
-        "-M",
-        &private_hex,
-        "-X",
-        "-w",
-        &path_str(&imported_rid),
-    ]));
-    assert_eq!(fs::read(imported_rid).unwrap().len(), 64);
-}
-
-#[test]
-fn rsg_sign_validate_and_tamper_detection() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg = dir.path().join("message.txt");
-    let rid_s = path_str(&rid);
-    let msg_s = path_str(&msg);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg, b"hello signed world").unwrap();
-
-    assert_success(rnid(&["-i", &rid_s, "-s", &msg_s]));
-    let sig = dir.path().join("message.txt.rsg");
-    assert!(fs::read(&sig).unwrap().len() > 64);
-
-    assert_success(rnid(&["-V", &path_str(&sig)]));
-    fs::write(&msg, b"tampered").unwrap();
-    let failure = assert_failure(rnid(&["-V", &path_str(&sig)]));
-    assert!(failure.contains("Invalid signature"));
-}
-
-#[test]
-fn rsg_validate_accepts_multiple_paths() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg1 = dir.path().join("message-one.txt");
-    let msg2 = dir.path().join("message-two.txt");
-    let rid_s = path_str(&rid);
-    let msg1_s = path_str(&msg1);
-    let msg2_s = path_str(&msg2);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg1, b"first signed message").unwrap();
-    fs::write(&msg2, b"second signed message").unwrap();
-
-    assert_success(rnid(&["-i", &rid_s, "-s", &msg1_s]));
-    assert_success(rnid(&["-i", &rid_s, "-s", &msg2_s]));
-    let sig1_s = path_str(&msg1.with_extension("txt.rsg"));
-    let sig2_s = path_str(&msg2.with_extension("txt.rsg"));
-
-    let output = assert_success(rnid(&["-V", &sig1_s, &sig2_s]));
-    assert_eq!(output.matches("Signature is valid").count(), 2);
-}
-
-#[test]
-fn rsg_sign_accepts_multiple_paths() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg1 = dir.path().join("batch-one.txt");
-    let msg2 = dir.path().join("batch-two.txt");
-    let rid_s = path_str(&rid);
-    let msg1_s = path_str(&msg1);
-    let msg2_s = path_str(&msg2);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg1, b"first batch message").unwrap();
-    fs::write(&msg2, b"second batch message").unwrap();
-
-    let output = assert_success(rnid(&["-i", &rid_s, "-s", &msg1_s, &msg2_s]));
-    assert_eq!(output.matches("Signed file").count(), 2);
-
-    let sig1_s = path_str(&msg1.with_extension("txt.rsg"));
-    let sig2_s = path_str(&msg2.with_extension("txt.rsg"));
-    assert!(Path::new(&sig1_s).exists());
-    assert!(Path::new(&sig2_s).exists());
-    assert_success(rnid(&["-V", &sig1_s, &sig2_s]));
-}
-
-#[test]
-fn embedded_message_sign_validate_and_display() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let output = dir.path().join("signed-message");
-    let rid_s = path_str(&rid);
-    let output_s = path_str(&output);
-    assert_success(rnid(&["-g", &rid_s]));
-
-    assert_success(rnid(&[
-        "-i",
-        &rid_s,
-        "-S",
-        "hello embedded message",
-        "-w",
-        &output_s,
-    ]));
-    let message_file = dir.path().join("signed-message.rsm");
-    assert!(message_file.exists());
-
-    let validated = assert_success(rnid(&["-V", &path_str(&message_file)]));
-    assert!(validated.contains("Signature is valid"));
-    assert!(validated.contains("hello embedded message"));
-}
-
-#[test]
-fn embedded_message_can_be_signed_from_file() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let input = dir.path().join("message.txt");
-    let output = dir.path().join("signed-from-file");
-    let rid_s = path_str(&rid);
-    let input_s = path_str(&input);
-    let output_s = path_str(&output);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&input, "hello from file\nsecond line").unwrap();
-
-    assert_success(rnid(&["-i", &rid_s, "-S", "-r", &input_s, "-w", &output_s]));
-    let message_file = dir.path().join("signed-from-file.rsm");
-    assert!(message_file.exists());
-
-    let validated = assert_success(rnid(&["-V", &path_str(&message_file)]));
-    assert!(validated.contains("Signature is valid"));
-    assert!(validated.contains("hello from file"));
-    assert!(validated.contains("second line"));
-}
-
-#[test]
-fn embedded_message_validation_can_print_metadata() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let output = dir.path().join("signed-message");
-    let rid_s = path_str(&rid);
-    let output_s = path_str(&output);
-    assert_success(rnid(&["-g", &rid_s]));
-
-    assert_success(rnid(&[
-        "-i",
-        &rid_s,
-        "-S",
-        "metadata message",
-        "-w",
-        &output_s,
-    ]));
-    let message_file = dir.path().join("signed-message.rsm");
-
-    let validated = assert_success(rnid(&["--meta", "-V", &path_str(&message_file)]));
-    assert!(validated.contains("RSM Metadata"));
-    assert!(validated.contains("bsigner="));
-    assert!(validated.contains("bpubkey="));
-    assert!(!validated.contains("nnote="));
-    assert!(validated.contains("Validation"));
-    assert!(validated.contains("Message"));
-    assert!(validated.contains("metadata message"));
-}
-
-#[test]
-fn embedded_message_can_embed_metadata_from_file() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let meta = dir.path().join("message.meta");
-    let output = dir.path().join("signed-with-meta");
-    let rid_s = path_str(&rid);
-    let meta_s = path_str(&meta);
-    let output_s = path_str(&output);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(
-        &meta,
-        "project = rns-rs\ncount = 7\n[origin]\nrepo = alpha\n",
-    )
-    .unwrap();
-
-    assert_success(rnid(&[
-        "-i",
-        &rid_s,
-        "-S",
-        "message with metadata",
-        "-E",
-        &meta_s,
-        "-w",
-        &output_s,
-    ]));
-    let message_file = dir.path().join("signed-with-meta.rsm");
-
-    let validated = assert_success(rnid(&["--meta", "-V", &path_str(&message_file)]));
-    assert!(validated.contains("sproject=rns-rs"));
-    assert!(validated.contains("scount=7"));
-    assert!(validated.contains("dorigin:"));
-    assert!(validated.contains("s  repo=alpha"));
-    assert!(validated.contains("message with metadata"));
-}
-
-#[test]
-fn embedded_message_metadata_spec_rejects_invalid_values() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let meta = dir.path().join("message.meta");
-    let spec = dir.path().join("message.spec");
-    let rid_s = path_str(&rid);
-    let meta_s = path_str(&meta);
-    let spec_s = path_str(&spec);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&meta, "project = rns-rs\ncount = nope\n").unwrap();
-    fs::write(
-        &spec,
-        "project = string()\ncount = integer(min=1, max=10)\n",
-    )
-    .unwrap();
-
-    let failure = assert_failure(rnid(&[
-        "-i",
-        &rid_s,
-        "-S",
-        "bad metadata",
-        "-E",
-        &meta_s,
-        "--meta-spec",
-        &spec_s,
-        "--hex",
-    ]));
-    assert!(failure.contains("Metadata did not pass spec validation"));
-}
-
-#[test]
-fn embedded_message_rejects_file_and_cli_message_together() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let input = dir.path().join("message.txt");
-    let rid_s = path_str(&rid);
-    let input_s = path_str(&input);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&input, "hello").unwrap();
-
-    let failure = assert_failure(rnid(&["-i", &rid_s, "-S", "inline", "-r", &input_s]));
-    assert!(failure.contains("Both an input file and command-line provided message"));
-}
-
-#[test]
-fn rsg_ascii_output_formats_validate_and_do_not_overwrite_signature_file() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg = dir.path().join("message.txt");
-    let sig = dir.path().join("message.txt.rsg");
-    let rid_s = path_str(&rid);
-    let msg_s = path_str(&msg);
-    let sig_s = path_str(&sig);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg, b"ascii wrapped signatures").unwrap();
-    fs::write(&sig, b"keep existing binary signature").unwrap();
-
-    let hex_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "--hex"]));
-    assert_eq!(fs::read(&sig).unwrap(), b"keep existing binary signature");
-    fs::write(&sig, rsg_ascii_block(&hex_stdout)).unwrap();
-    assert_success(rnid(&["-V", &sig_s]));
-
-    let base32_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "-B"]));
-    fs::write(&sig, rsg_ascii_block(&base32_stdout)).unwrap();
-    assert_success(rnid(&["-V", &sig_s]));
-
-    let base64_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "-b"]));
-    fs::write(&sig, rsg_ascii_block(&base64_stdout)).unwrap();
-    assert_success(rnid(&["-V", &sig_s]));
-
-    let base256_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "--base256"]));
-    fs::write(&sig, rsg_ascii_block(&base256_stdout)).unwrap();
-    assert_success(rnid(&["-V", &sig_s]));
-}
-
-#[test]
-fn hex_base32_base64_and_base256_rsg_flags_are_mutually_exclusive() {
-    let failure = assert_failure(rnid(&["--hex", "-b"]));
-    assert!(failure.contains("-b, -B, --base256 and --hex"));
-}
-
-#[test]
-fn legacy_raw_rsg_requires_explicit_identity() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg = dir.path().join("legacy.bin");
-    let rid_s = path_str(&rid);
-    let msg_s = path_str(&msg);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg, b"legacy signature payload").unwrap();
-
-    assert_success(rnid(&["-i", &rid_s, "--raw", "-s", &msg_s]));
-    let sig = dir.path().join("legacy.bin.rsg");
-    assert_eq!(fs::read(&sig).unwrap().len(), 64);
-
-    let no_identity = assert_failure(rnid(&["-V", &path_str(&sig)]));
-    assert!(no_identity.contains("legacy"));
-    assert_success(rnid(&["-i", &rid_s, "-V", &path_str(&sig)]));
-}
-
-#[test]
-fn public_only_encrypts_but_cannot_decrypt_or_sign() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg = dir.path().join("secret.txt");
-    let decrypted = dir.path().join("secret.out");
-    let rid_s = path_str(&rid);
-    let msg_s = path_str(&msg);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg, b"quiet plaintext").unwrap();
-    let public_hex = last_hex_line(&assert_success(rnid(&["-i", &rid_s, "-x"])), 64);
-
-    assert_success(rnid(&["-m", &public_hex, "-e", &msg_s]));
-    let encrypted = dir.path().join("secret.txt.rfe");
-    assert!(encrypted.exists());
-
-    let public_decrypt = assert_failure(rnid(&["-m", &public_hex, "-d", &path_str(&encrypted)]));
-    assert!(public_decrypt.contains("private key"));
-
-    let public_sign = assert_failure(rnid(&["-m", &public_hex, "-s", &msg_s, "-f"]));
-    assert!(public_sign.contains("private key"));
-
-    assert_success(rnid(&[
-        "-i",
-        &rid_s,
-        "-d",
-        &path_str(&encrypted),
-        "-w",
-        &path_str(&decrypted),
-    ]));
-    assert_eq!(fs::read(decrypted).unwrap(), b"quiet plaintext");
-}
-
-#[test]
-fn encrypt_accepts_multiple_paths() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg1 = dir.path().join("secret-one.txt");
-    let msg2 = dir.path().join("secret-two.txt");
-    let out1 = dir.path().join("secret-one.out");
-    let out2 = dir.path().join("secret-two.out");
-    let rid_s = path_str(&rid);
-    let msg1_s = path_str(&msg1);
-    let msg2_s = path_str(&msg2);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg1, b"first secret").unwrap();
-    fs::write(&msg2, b"second secret").unwrap();
-
-    let output = assert_success(rnid(&["-i", &rid_s, "-e", &msg1_s, &msg2_s]));
-    assert_eq!(output.matches("encrypted to").count(), 2);
-
-    let encrypted1 = path_str(&msg1.with_extension("txt.rfe"));
-    let encrypted2 = path_str(&msg2.with_extension("txt.rfe"));
-    assert!(Path::new(&encrypted1).exists());
-    assert!(Path::new(&encrypted2).exists());
-
-    assert_success(rnid(&[
-        "-i",
-        &rid_s,
-        "-d",
-        &encrypted1,
-        "-w",
-        &path_str(&out1),
-    ]));
-    assert_success(rnid(&[
-        "-i",
-        &rid_s,
-        "-d",
-        &encrypted2,
-        "-w",
-        &path_str(&out2),
-    ]));
-    assert_eq!(fs::read(out1).unwrap(), b"first secret");
-    assert_eq!(fs::read(out2).unwrap(), b"second secret");
-}
-
-#[test]
-fn decrypt_accepts_multiple_paths() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg1 = dir.path().join("sealed-one.txt");
-    let msg2 = dir.path().join("sealed-two.txt");
-    let rid_s = path_str(&rid);
-    let msg1_s = path_str(&msg1);
-    let msg2_s = path_str(&msg2);
-    assert_success(rnid(&["-g", &rid_s]));
-    fs::write(&msg1, b"first sealed message").unwrap();
-    fs::write(&msg2, b"second sealed message").unwrap();
-    assert_success(rnid(&["-i", &rid_s, "-e", &msg1_s, &msg2_s]));
-    let encrypted1 = path_str(&msg1.with_extension("txt.rfe"));
-    let encrypted2 = path_str(&msg2.with_extension("txt.rfe"));
-    fs::remove_file(&msg1).unwrap();
-    fs::remove_file(&msg2).unwrap();
-
-    let output = assert_success(rnid(&["-i", &rid_s, "-d", &encrypted1, &encrypted2]));
-    assert_eq!(output.matches("decrypted to").count(), 2);
-    assert_eq!(fs::read(msg1).unwrap(), b"first sealed message");
-    assert_eq!(fs::read(msg2).unwrap(), b"second sealed message");
-}
-
-#[test]
-fn rsg_validation_accepts_required_signer_identity_hash() {
-    let dir = tempdir();
-    let rid = dir.path().join("alice.rid");
-    let msg = dir.path().join("message.txt");
-    let rid_s = path_str(&rid);
-    let msg_s = path_str(&msg);
-    let generated = assert_success(rnid(&["-g", &rid_s]));
-    let identity_hash = identity_hash_from_output(&generated);
-    fs::write(&msg, b"required signer").unwrap();
-
-    assert_success(rnid(&["-i", &rid_s, "-s", &msg_s]));
-    let sig = dir.path().join("message.txt.rsg");
-    assert_success(rnid(&["-i", &identity_hash, "-V", &path_str(&sig)]));
-
-    let wrong_hash = "000102030405060708090a0b0c0d0e0f";
-    let failure = assert_failure(rnid(&["-i", wrong_hash, "-V", &path_str(&sig)]));
-    assert!(failure.contains(wrong_hash));
 }
 
 #[test]
@@ -626,6 +274,8 @@ fn request_identity_over_rpc_encrypts_and_retains_all_matching_destinations() {
     let secondary_dest = [0xA7; 16];
     inject_identity(&node, primary_dest, &identity);
     inject_identity(&node, secondary_dest, &identity);
+    wait_for_flush(dir.path(), primary_dest);
+    wait_for_flush(dir.path(), secondary_dest);
 
     let message = dir.path().join("network-secret.txt");
     let encrypted = dir.path().join("network-secret.txt.rfe");
@@ -648,7 +298,10 @@ fn request_identity_over_rpc_encrypts_and_retains_all_matching_destinations() {
         "-e",
         &message_s,
     ]));
-    assert!(stdout.contains("Retained Identity"));
+    assert!(
+        stdout.contains(&format!("Recalled Identity <{}>", hex(&identity_hash))),
+        "{stdout}"
+    );
     assert!(encrypted.exists());
 
     assert_success(rnid(&[
@@ -689,6 +342,7 @@ fn request_identity_over_rpc_validates_required_signer_by_destination_hash() {
     let identity_hash = *identity.hash();
     let dest_hash = destination_hash("rns", &["id"], Some(&identity_hash));
     inject_identity(&node, dest_hash, &identity);
+    wait_for_flush(dir.path(), dest_hash);
 
     let private_rid = dir.path().join("signer.rid");
     let message = dir.path().join("required-signer.txt");
@@ -783,51 +437,4 @@ fn announce_sends_the_identity_destination_through_the_shared_instance() {
             }
         }
     }
-}
-
-#[test]
-fn announce_rejects_bad_aspects_and_public_identities() {
-    let dir = tempdir();
-    let identity = Identity::new(&mut OsRng);
-    let private_rid = dir.path().join("announcer.rid");
-    write_private_identity(&private_rid, &identity);
-    let out = rnid(&["-i", &path_str(&private_rid), "-a", "single"]);
-    assert_eq!(out.status.code(), Some(9));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("Invalid destination aspects specified"));
-
-    let public = hex(&identity.get_public_key().unwrap());
-    let out = rnid(&["-m", &public, "-a"]);
-    assert_eq!(out.status.code(), Some(4));
-    assert!(String::from_utf8_lossy(&out.stdout)
-        .contains("Cannot announce this destination, since the private key is not held"));
-}
-
-#[test]
-fn upstream_short_options_are_accepted() {
-    let dir = tempdir();
-    let identity = Identity::new(&mut OsRng);
-    let private_rid = dir.path().join("id.rid");
-    write_private_identity(&private_rid, &identity);
-    let message = dir.path().join("message.txt");
-    fs::write(&message, b"signed").unwrap();
-    // -F (hex) and -U (base256) as upstream names them; -O to stdout.
-    let hex_out = assert_success(rnid(&[
-        "-i",
-        &path_str(&private_rid),
-        "-s",
-        &path_str(&message),
-        "-F",
-        "-O",
-    ]));
-    assert!(hex_out.chars().any(|c| c.is_ascii_hexdigit()));
-    let out = rnid(&[
-        "-i",
-        &path_str(&private_rid),
-        "-p",
-        "-v",
-        "--verbose",
-        "-q",
-        "--quiet",
-    ]);
-    assert!(out.status.success());
 }
