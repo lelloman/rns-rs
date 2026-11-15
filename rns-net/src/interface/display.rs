@@ -24,6 +24,16 @@ pub fn typed(interface_type: &str, name: &str) -> String {
     format!("{interface_type}[{name}]")
 }
 
+/// The `interface.name` of an upstream interface class that never sets
+/// one (`AutoInterfacePeer`, `WeaveInterfacePeer`): `str(None)`.
+pub const UNNAMED: &str = "None";
+
+/// The name upstream gives a client a TCP or Backbone listener accepted:
+/// `Client on {listener}`, the same for every client of the listener.
+pub fn spawned_client_name(listener_name: &str) -> String {
+    format!("Client on {listener_name}")
+}
+
 /// `TCPClientInterface`: `TCPInterface[{name}/{target_ip}:{target_port}]`.
 pub fn tcp_client(name: &str, target_host: &str, target_port: u16) -> String {
     format!("TCPInterface[{name}/{}:{target_port}]", host(target_host))
@@ -38,7 +48,7 @@ pub fn tcp_server(name: &str, bind_ip: &str, bind_port: u16) -> String {
 /// named `Client on {listener}` that targets the peer.
 pub fn tcp_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u16) -> String {
     tcp_client(
-        &format!("Client on {listener_name}"),
+        &spawned_client_name(listener_name),
         &peer_ip.to_string(),
         peer_port,
     )
@@ -61,7 +71,7 @@ pub fn backbone(name: &str, ip: &str, port: u16) -> String {
 /// `Client on {listener}`, targeting the peer.
 pub fn backbone_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u16) -> String {
     backbone(
-        &format!("Client on {listener_name}"),
+        &spawned_client_name(listener_name),
         &peer_ip.to_string(),
         peer_port,
     )
@@ -114,14 +124,14 @@ pub fn auto_peer(ifname: &str, addr: &str) -> String {
     format!("AutoInterfacePeer[{ifname}/{addr}]")
 }
 
-/// An `I2PInterface` peer: `I2PInterfacePeer[{name} to {peer}]` when this
-/// node connected out, `I2PInterfacePeer[Connected peer on {name}]` when it
-/// accepted the connection.
-pub fn i2p_peer(interface_name: &str, peer: &str, outbound: bool) -> String {
+/// The `interface.name` of an `I2PInterface` peer: `{name} to {peer}` when
+/// this node connected out, `Connected peer on {name}` when it accepted the
+/// connection. Its display name is `I2PInterfacePeer[{that name}]`.
+pub fn i2p_peer_name(interface_name: &str, peer: &str, outbound: bool) -> String {
     if outbound {
-        format!("I2PInterfacePeer[{interface_name} to {peer}]")
+        format!("{interface_name} to {peer}")
     } else {
-        format!("I2PInterfacePeer[Connected peer on {interface_name}]")
+        format!("Connected peer on {interface_name}")
     }
 }
 
@@ -199,13 +209,14 @@ mod tests {
             "AutoInterfacePeer[eth0/fe80::1]"
         );
         assert_eq!(
-            i2p_peer("I2P", "abc.b32.i2p", true),
-            "I2PInterfacePeer[I2P to abc.b32.i2p]"
+            i2p_peer_name("I2P", "abc.b32.i2p", true),
+            "I2P to abc.b32.i2p"
         );
         assert_eq!(
-            i2p_peer("I2P", "abc.b32.i2p", false),
-            "I2PInterfacePeer[Connected peer on I2P]"
+            i2p_peer_name("I2P", "abc.b32.i2p", false),
+            "Connected peer on I2P"
         );
+        assert_eq!(spawned_client_name("Server"), "Client on Server");
         assert_eq!(typed("KISSInterface", "Radio"), "KISSInterface[Radio]");
         assert_eq!(
             weave_peer(&[0x01, 0xab, 0x00, 0xff]),

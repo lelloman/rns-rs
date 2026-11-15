@@ -87,6 +87,7 @@ impl Driver {
             }
             self.event_tx.remove_interface(id);
             self.interface_display_names.remove(&id);
+            self.interface_short_names.remove(&id);
             if self.engine.interface_info(&id).is_some() {
                 self.engine.deregister_interface(id);
             }

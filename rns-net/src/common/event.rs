@@ -91,6 +91,11 @@ pub struct DynamicInterfaceRegistration {
     /// Upstream's `str(interface)` for this interface, reported as its
     /// `name` in interface statistics; when unset, `{type}[{name}]`.
     pub display_name: Option<String>,
+    /// Upstream's `interface.name` for this interface, reported as its
+    /// `short_name` in interface statistics; when unset, `info.name`.
+    /// Upstream gives spawned interfaces names that need not be unique
+    /// (`Client on {listener}`), so it is kept apart from `info.name`.
+    pub short_name: Option<String>,
 }
 
 /// Policy for handling incoming direct-connect proposals.
@@ -256,6 +261,15 @@ pub enum Event<W: Send> {
         id: InterfaceId,
         writer: W,
         registration: Box<DynamicInterfaceRegistration>,
+    },
+    /// Upstream's names for an interface about to come up through
+    /// `InterfaceUp`, which carries none: its `str(interface)` and its
+    /// `interface.name`, reported as `name` and `short_name` in interface
+    /// statistics. Each, when unset, follows from the interface.
+    InterfaceNames {
+        id: InterfaceId,
+        display_name: Option<String>,
+        short_name: Option<String>,
     },
     /// Update optional device/interface telemetry without replacing counters.
     InterfaceTelemetry {
@@ -1336,6 +1350,16 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("id", id)
                 .field("type", &registration.interface_type)
                 .field("parent_id", &registration.parent_id)
+                .finish(),
+            Event::InterfaceNames {
+                id,
+                display_name,
+                short_name,
+            } => f
+                .debug_struct("InterfaceNames")
+                .field("id", id)
+                .field("display_name", display_name)
+                .field("short_name", short_name)
                 .finish(),
             Event::InterfaceTelemetry {
                 interface_id,

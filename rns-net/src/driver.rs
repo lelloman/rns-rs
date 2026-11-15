@@ -815,6 +815,10 @@ pub struct Driver {
     /// Upstream's display names (`str(interface)`) of interfaces whose
     /// name shows more than `{type}[{name}]`: addresses, parents.
     pub(crate) interface_display_names: HashMap<InterfaceId, String>,
+    /// Upstream's `interface.name` of spawned interfaces whose upstream
+    /// name differs from their own (`Client on {listener}`), reported as
+    /// their `short_name`.
+    pub(crate) interface_short_names: HashMap<InterfaceId, String>,
     /// Listeners with no interface entry of their own, reported in
     /// interface statistics as upstream lists them.
     pub(crate) listener_stats: Vec<ListenerStat>,
@@ -1162,6 +1166,7 @@ impl Driver {
             interfaces: Default::default(),
             dynamic_interface_parents: HashMap::new(),
             interface_display_names: HashMap::new(),
+            interface_short_names: HashMap::new(),
             listener_stats: Vec::new(),
             traffic_samples: HashMap::new(),
             rng: OsRng,
