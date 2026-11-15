@@ -267,7 +267,10 @@ impl AnnounceQueues {
                 }
             }
 
-            if queue.entries.is_empty() {
+            // An empty queue still holds the interface's bandwidth budget
+            // until `announce_allowed_at`: dropping it earlier would let the
+            // next announce out at once, however recently the last one left.
+            if queue.entries.is_empty() && queue.is_allowed(now) {
                 empty_queues.push(*iface_id);
             }
         }
@@ -797,7 +800,15 @@ mod tests {
             TransportAction::SendOnInterface { interface, .. } if *interface == InterfaceId(1)
         ));
 
-        // Queue should be pruned now that it is empty
+        // The emptied queue still holds the bandwidth budget of the
+        // announce just released, and is pruned once that has elapsed.
+        let queue = queues.queue_for(&InterfaceId(1)).unwrap();
+        assert!(queue.entries.is_empty());
+        assert!(queue.announce_allowed_at > allowed_at + 1.0);
+        let released_until = queue.announce_allowed_at;
+        assert!(queues
+            .process_queues(released_until, &interfaces)
+            .is_empty());
         assert!(queues.queue_for(&InterfaceId(1)).is_none());
     }
 
@@ -905,8 +916,54 @@ mod tests {
 
         let actions = queues.process_queues(allowed_at + 1.0, &interfaces);
         assert_eq!(actions.len(), 1);
+        let released_until = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
+        assert_eq!(queues.queue_count(), 1);
+
+        assert!(queues
+            .process_queues(released_until, &interfaces)
+            .is_empty());
         assert!(queues.queue_for(&InterfaceId(1)).is_none());
         assert_eq!(queues.queue_count(), 0);
+    }
+
+    /// Regression: emptying a queue dropped it together with its
+    /// `announce_allowed_at`, so the next announce left at once although the
+    /// one just released had used up the interface's announce cap. Every
+    /// tick empties and drops such queues, so the cap only held for
+    /// announces arriving between two ticks.
+    #[test]
+    fn released_announce_holds_the_cap_after_its_queue_empties() {
+        let mut queues = AnnounceQueues::new(1024);
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1, Some(1000)));
+        let gate = |queues: &mut AnnounceQueues, dest: u8, now: f64| {
+            queues.gate_announce(
+                InterfaceId(1),
+                vec![dest; 100].into(),
+                [dest; 16],
+                2,
+                now,
+                now,
+                Some(1000),
+                None,
+                constants::ANNOUNCE_CAP,
+            )
+        };
+
+        // 100 bytes at 1000 bit/s under a 2% cap: 40 s per announce.
+        assert!(gate(&mut queues, 1, 0.0).is_some());
+        assert!(gate(&mut queues, 2, 1.0).is_none());
+        // The tick that releases the queued announce empties the queue.
+        assert_eq!(queues.process_queues(40.0, &interfaces).len(), 1);
+        assert!(queues.process_queues(41.0, &interfaces).is_empty());
+
+        // The next announce waits out the released one's 40 s.
+        assert!(gate(&mut queues, 3, 41.0).is_none());
+        assert!(queues.process_queues(79.0, &interfaces).is_empty());
+        assert_eq!(queues.process_queues(80.0, &interfaces).len(), 1);
     }
 
     #[test]
