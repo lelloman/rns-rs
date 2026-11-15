@@ -11,14 +11,12 @@ use crate::hmac::HmacSha256;
 #[derive(Debug, PartialEq)]
 pub enum HkdfError {
     InvalidLength,
-    EmptyInput,
 }
 
 impl fmt::Display for HkdfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HkdfError::InvalidLength => write!(f, "Invalid output key length"),
-            HkdfError::EmptyInput => write!(f, "Cannot derive key from empty input material"),
         }
     }
 }
@@ -27,6 +25,9 @@ impl fmt::Display for HkdfError {
 /// `hkdf` crate, with two reference quirks kept. An empty salt counts as no
 /// salt (32 zero bytes, which RFC 5869 also gives), and past RFC 5869's
 /// 255-block limit the block counter wraps modulo 256 instead of failing.
+/// Empty input key material is accepted, as upstream accepts empty bytes
+/// (it only refuses `None` and the empty `str`, neither of which a byte
+/// slice can be).
 pub fn hkdf(
     length: usize,
     derive_from: &[u8],
@@ -35,9 +36,6 @@ pub fn hkdf(
 ) -> Result<Vec<u8>, HkdfError> {
     if length < 1 {
         return Err(HkdfError::InvalidLength);
-    }
-    if derive_from.is_empty() {
-        return Err(HkdfError::EmptyInput);
     }
     let salt = salt.filter(|salt| !salt.is_empty());
     let context = context.unwrap_or(b"");
@@ -203,8 +201,35 @@ mod tests {
         assert_eq!(hkdf(0, b"ikm", None, None), Err(HkdfError::InvalidLength));
     }
 
+    /// Vectors from upstream `RNS.Cryptography.HKDF.hkdf`, which derives
+    /// from empty bytes like any other input.
     #[test]
     fn test_hkdf_empty_ikm() {
-        assert_eq!(hkdf(32, b"", None, None), Err(HkdfError::EmptyInput));
+        assert_eq!(
+            hkdf(32, b"", None, None).unwrap(),
+            decode_hex("eb70f01dede9afafa449eee1b1286504e1f62388b3f7dd4f956697b0e828fe18")
+        );
+        assert_eq!(
+            hkdf(64, b"", Some(b"salt"), Some(b"ctx")).unwrap(),
+            decode_hex(
+                "d13422313a8b417a19a4a577d1bfdcdf0e468e1e6e1f2b2829ed98192d1d5fb4\
+                 c4ca2b9b5cc746d6ea490b1607ffeec27152851128c134f18e21a34a8c9c89cb"
+            )
+        );
+    }
+
+    #[test]
+    fn test_hkdf_matches_upstream() {
+        assert_eq!(
+            hkdf(32, b"input key material", None, None).unwrap(),
+            decode_hex("d8f0bede4b652933c32a92eccf7723f7eeb4701744c81325dc3f0fa9fda24499")
+        );
+        assert_eq!(
+            hkdf(64, b"input key material", Some(b"salt"), Some(b"ctx")).unwrap(),
+            decode_hex(
+                "3ea42ab25dcdd73063df4616c13dc21a4e15987821ea4be2ebca073c705f42cb\
+                 2e9b928b0bff1defa52f7fc35561ee3a68d84884d1376d845cf133f9d0d10d15"
+            )
+        );
     }
 }
