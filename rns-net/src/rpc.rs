@@ -1757,10 +1757,6 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::Bool(stats.transport_enabled),
         ),
         (
-            PickleValue::String("transport_uptime".into()),
-            PickleValue::Float(stats.transport_uptime),
-        ),
-        (
             PickleValue::String("rxb".into()),
             PickleValue::Int(stats.total_rxb as i64),
         ),
@@ -1916,15 +1912,33 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         ),
     ];
 
-    if let Some(tid) = stats.transport_id {
+    // As upstream: the transport's identity, network, uptime and probe
+    // responder only when transport is enabled.
+    if stats.transport_enabled {
         dict.push((
             PickleValue::String("transport_id".into()),
-            PickleValue::Bytes(tid.to_vec()),
+            stats
+                .transport_id
+                .map(|tid| PickleValue::Bytes(tid.to_vec()))
+                .unwrap_or(PickleValue::None),
         ));
-    } else {
         dict.push((
-            PickleValue::String("transport_id".into()),
-            PickleValue::None,
+            PickleValue::String("network_id".into()),
+            stats
+                .network_id
+                .map(|id| PickleValue::Bytes(id.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ));
+        dict.push((
+            PickleValue::String("transport_uptime".into()),
+            PickleValue::Float(stats.transport_uptime),
+        ));
+        dict.push((
+            PickleValue::String("probe_responder".into()),
+            stats
+                .probe_responder
+                .map(|pr| PickleValue::Bytes(pr.to_vec()))
+                .unwrap_or(PickleValue::None),
         ));
     }
 
@@ -1935,26 +1949,6 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             .map(|bytes| PickleValue::Int(bytes as i64))
             .unwrap_or(PickleValue::None),
     ));
-
-    dict.push((
-        PickleValue::String("network_id".into()),
-        stats
-            .network_id
-            .map(|id| PickleValue::Bytes(id.to_vec()))
-            .unwrap_or(PickleValue::None),
-    ));
-
-    if let Some(pr) = stats.probe_responder {
-        dict.push((
-            PickleValue::String("probe_responder".into()),
-            PickleValue::Bytes(pr.to_vec()),
-        ));
-    } else {
-        dict.push((
-            PickleValue::String("probe_responder".into()),
-            PickleValue::None,
-        ));
-    }
 
     if let Some(pool) = &stats.backbone_peer_pool {
         let members = pool
