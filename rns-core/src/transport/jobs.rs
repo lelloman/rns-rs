@@ -46,12 +46,22 @@ pub fn process_pending_announces(
             entry.retransmit_timeout = now + constants::PATHFINDER_G + constants::PATHFINDER_RW;
             entry.retries += 1;
 
-            // Build retransmit packet
-            let raw = build_retransmit_announce(entry, transport_identity_hash);
-            Some((raw, entry.attached_interface, entry.hops))
+            // An announce that arrived with PATHFINDER_M - 1 hops reaches
+            // PATHFINDER_M here, which no node decodes. Upstream builds the
+            // packet and `Packet.send` refuses it; the retry still counts.
+            if entry.hops >= constants::PATHFINDER_M {
+                None
+            } else {
+                let raw = build_retransmit_announce(entry, transport_identity_hash);
+                Some((raw, entry.attached_interface, entry.hops))
+            }
         } else {
             None
         };
+
+        if let Some(held) = held_announces.remove(&dest_hash) {
+            announce_table.insert(dest_hash, held);
+        }
 
         if let Some((raw, attached_interface, hops)) = retransmit {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
@@ -77,11 +87,6 @@ pub fn process_pending_announces(
                 hops,
                 interface: attached_interface,
             });
-
-            // Check for held announces to reinsert
-            if let Some(held) = held_announces.remove(&dest_hash) {
-                announce_table.insert(dest_hash, held);
-            }
         }
     }
 

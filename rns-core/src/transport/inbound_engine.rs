@@ -1333,8 +1333,13 @@ impl TransportEngine {
             interface: ctx.iface,
         });
 
+        // An announce arriving with PATHFINDER_M - 1 hops now carries
+        // PATHFINDER_M, which no node decodes: it updates the path table but
+        // is not sent on (upstream's `Packet.send` refuses it).
+        let sendable = ctx.packet.hops < constants::PATHFINDER_M;
+
         // Forward announce to local clients if any are connected
-        if self.has_local_clients() {
+        if sendable && self.has_local_clients() {
             actions.push(TransportAction::ForwardToLocalClients {
                 raw: self.announce_raw_for_local_clients(ctx.packet),
                 exclude: Some(ctx.iface),
@@ -1360,7 +1365,7 @@ impl TransportEngine {
                 block_rebroadcasts: true,
                 attached_interface: requesting_interfaces.first().copied(),
             };
-            if let Some(identity_hash) = self.config.identity_hash {
+            if let Some(identity_hash) = self.config.identity_hash.filter(|_| sendable) {
                 let raw = announce_proc::build_retransmit_announce(&entry, &identity_hash);
                 for interface in requesting_interfaces.iter().skip(1) {
                     actions.push(TransportAction::SendOnInterface {
