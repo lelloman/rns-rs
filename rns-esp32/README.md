@@ -19,7 +19,7 @@ Reticulum LoRa transport node firmware for **Heltec WiFi LoRa 32 (V3)** with SX1
 - Identity persistence via NVS (Non-Volatile Storage)
 - Signed control-plane support over LoRa for up to 3 build-time controller identities
 - Persistent BLE-open policy backed by NVS, with a compile-time default
-- IFAC cryptographic helpers are implemented, but runtime IFAC configuration is not wired up yet
+- Interface access codes (IFAC) on the LoRa interface in standalone mode, set at build time (see Configuration)
 - Button gestures:
   - **Short press**: Cycle display page
   - **Double press**: Send ping broadcast
@@ -173,6 +173,10 @@ The LoRa channel defaults to 868 MHz, 125 kHz, SF8, CR 4/5, 14 dBm (`src/config.
 
 - `RNS_ESP32_LORA_FREQUENCY` (Hz), `RNS_ESP32_LORA_BANDWIDTH` (Hz), `RNS_ESP32_LORA_SF`, `RNS_ESP32_LORA_CR` (5 to 8), `RNS_ESP32_LORA_TXPOWER` (dBm)
 - `RNS_ESP32_ANNOUNCE_INTERVAL`: announce the node's destinations every this many seconds from boot; unset or 0 announces only on a long button press
+- `RNS_ESP32_IFAC_NETNAME`, `RNS_ESP32_IFAC_PASSPHRASE`: the interface access code, as `network_name` and `passphrase` on a Reticulum interface; either or both enable IFAC, and then only nodes with the same values can exchange packets with this one. Neither (the default) leaves the interface open, and frames that carry an access code are dropped, as Reticulum does
+- `RNS_ESP32_IFAC_SIZE`: the access code length in bits, as `ifac_size` (8 to 512; default 64, RNode interfaces' default)
+
+IFAC applies to standalone mode only. In bridge mode the host applies its own interface's IFAC, as with any RNode.
 
 The preamble length and low data rate optimization follow from the channel exactly as RNode firmware derives them (`src/modem.rs`), and the SX1262 is set up as RNode firmware sets it up (sync word `0x1424`, boosted RX gain, the IQ and modulation-quality errata), so the node shares a channel with RNodes and with [creticulum](https://github.com/lelloman/creticulum)'s ESP32 node.
 

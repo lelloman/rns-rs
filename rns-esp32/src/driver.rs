@@ -276,7 +276,7 @@ impl Driver {
         exit
     }
 
-    /// Process an inbound frame: IFAC unmask → engine.handle_inbound → dispatch.
+    /// Process an inbound frame: IFAC check → engine.handle_inbound → dispatch.
     fn handle_frame(&mut self, interface_id: InterfaceId, data: Vec<u8>) {
         // Find the interface entry for IFAC processing
         let ifac_state = self
@@ -285,17 +285,10 @@ impl Driver {
             .find(|e| e.id == interface_id)
             .and_then(|e| e.ifac.as_ref());
 
-        // IFAC unmask if configured
-        let raw = if let Some(state) = ifac_state {
-            match ifac::unmask_inbound(&data, state) {
-                Some(unmasked) => unmasked,
-                None => {
-                    log::debug!("IFAC unmask failed, dropping frame");
-                    return;
-                }
-            }
-        } else {
-            data
+        // IFAC: remove a valid access code, or drop the frame
+        let Some(raw) = ifac::inbound(&data, ifac_state) else {
+            log::debug!("IFAC check failed, dropping frame");
+            return;
         };
 
         let actions = self.engine.handle_inbound(

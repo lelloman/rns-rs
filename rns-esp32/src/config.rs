@@ -56,6 +56,39 @@ pub const LORA_TX_POWER: i8 = env_number(option_env!("RNS_ESP32_LORA_TXPOWER"), 
 pub const ANNOUNCE_INTERVAL_SECS: u64 =
     env_number(option_env!("RNS_ESP32_ANNOUNCE_INTERVAL"), 0) as u64;
 
+/// A build-time string setting: `None` when the variable is unset or empty.
+const fn env_text(value: Option<&'static str>) -> Option<&'static str> {
+    match value {
+        Some(text) if !text.is_empty() => Some(text),
+        _ => None,
+    }
+}
+
+/// Interface access code (IFAC) for the node's LoRa interface in
+/// standalone mode, as `network_name` and `passphrase` set it on a
+/// Reticulum interface: `RNS_ESP32_IFAC_NETNAME` and
+/// `RNS_ESP32_IFAC_PASSPHRASE` at build time. Either or both enable IFAC;
+/// neither, the default, leaves the interface open. Bridge mode is not
+/// affected: there the host applies its own IFAC.
+pub const IFAC_NETNAME: Option<&str> = env_text(option_env!("RNS_ESP32_IFAC_NETNAME"));
+
+/// See [`IFAC_NETNAME`].
+pub const IFAC_PASSPHRASE: Option<&str> = env_text(option_env!("RNS_ESP32_IFAC_PASSPHRASE"));
+
+/// IFAC length in bits (`RNS_ESP32_IFAC_SIZE`, as `ifac_size` in a
+/// Reticulum interface config). The default, 64, is RNode interfaces'
+/// default of 8 bytes. It must be 8 to 512; it is rounded down to whole
+/// bytes.
+pub const IFAC_SIZE_BITS: i64 = env_number(option_env!("RNS_ESP32_IFAC_SIZE"), 64);
+
+const _: () = assert!(
+    IFAC_SIZE_BITS >= 8 && IFAC_SIZE_BITS <= 512,
+    "RNS_ESP32_IFAC_SIZE must be 8 to 512 bits"
+);
+
+/// IFAC length in bytes.
+pub const IFAC_SIZE: usize = (IFAC_SIZE_BITS / 8) as usize;
+
 /// Enable CRC on LoRa packets.
 pub const LORA_CRC_ON: bool = true;
 

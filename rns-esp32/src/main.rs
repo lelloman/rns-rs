@@ -173,7 +173,12 @@ fn main() {
     driver_inst.set_identity(identity);
     driver_inst.set_settings_partition(nvs_partition.clone());
     driver_inst.set_device_settings(settings);
-    driver_inst.add_interface(interface_id, writer, None);
+    let ifac = ifac::from_build_config();
+    match &ifac {
+        Some(state) => log::info!("IFAC enabled on LoRa ({} bytes)", state.size),
+        None => log::info!("IFAC not configured; LoRa interface is open"),
+    }
+    driver_inst.add_interface(interface_id, writer, ifac);
 
     // Initialize BLE NUS (NimBLE host stack + GATT service). Does not start advertising.
     ble::init(&format!("RNS-{}", &identity_hex[..8]));
