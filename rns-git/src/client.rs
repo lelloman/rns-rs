@@ -989,6 +989,7 @@ mod tests {
 [interfaces]
   [[Python RNGit Test TCP]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 127.0.0.1
     target_port = {port}
     mode = full

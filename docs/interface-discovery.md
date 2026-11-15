@@ -32,6 +32,7 @@ These per-interface keys work as upstream's:
 [interfaces]
   [[Public Backbone]]
     type = BackboneInterface
+    enabled = yes
     discoverable = yes
     reachable_on = node.example.com
     network_name = mynet
@@ -76,6 +77,7 @@ Upstream's behaviour. Nothing is auto-connected unless
 [interfaces]
   [[Bootstrap Hub]]
     type = TCPClientInterface
+    enabled = yes
     target_host = hub.example.com
     target_port = 4242
     bootstrap_only = yes

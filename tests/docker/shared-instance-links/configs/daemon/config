@@ -10,5 +10,6 @@ instance_control_port = 37429
 [interfaces]
   [[TCP Server]]
     type = TCPServerInterface
+    enabled = yes
     listen_ip = 0.0.0.0
     listen_port = 4965

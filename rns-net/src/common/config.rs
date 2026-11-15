@@ -795,10 +795,14 @@ fn build_parsed_interface(
     subinterfaces: Vec<ParsedSubinterface>,
 ) -> ParsedInterface {
     let interface_type = kvs.remove("type").unwrap_or_default();
-    let enabled = kvs
-        .remove("enabled")
-        .and_then(|v| parse_bool(&v))
-        .unwrap_or(true);
+    // As upstream: an interface runs only when `interface_enabled` or
+    // `enabled` says so; without either it is skipped.
+    let interface_enabled = kvs.remove("interface_enabled");
+    let enabled_key = kvs.remove("enabled");
+    let enabled = [interface_enabled, enabled_key]
+        .iter()
+        .flatten()
+        .any(|v| parse_bool(v) == Some(true));
     // Python checks `interface_mode` first, then falls back to `mode`
     let mode = kvs
         .remove("interface_mode")
@@ -1942,6 +1946,23 @@ provider_overflow_policy = drop_oldest
     }
 
     #[test]
+    fn an_interface_runs_only_when_enabled_says_so() {
+        let config = parse(
+            "[interfaces]\n  [[A]]\n    type = UDPInterface\n  [[B]]\n    type = UDPInterface\n    enabled = no\n  [[C]]\n    type = UDPInterface\n    enabled = yes\n  [[D]]\n    type = UDPInterface\n    interface_enabled = true\n",
+        )
+        .unwrap();
+        let enabled: Vec<_> = config
+            .interfaces
+            .iter()
+            .map(|i| (i.name.as_str(), i.enabled))
+            .collect();
+        assert_eq!(
+            enabled,
+            vec![("A", false), ("B", false), ("C", true), ("D", true)]
+        );
+    }
+
+    #[test]
     fn parse_default_config() {
         // The default config from Python's __default_rns_config__, with the
         // commented-out [stamps] section added in upstream f57fa265.
@@ -2531,11 +2552,13 @@ destination_timeout_secs = 777
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 10.0.0.1
     target_port = 4242
 
   [[UDP Broadcast]]
     type = UDPInterface
+    enabled = yes
     listen_ip = 0.0.0.0
     listen_port = 5555
     forward_ip = 255.255.255.255
@@ -2604,6 +2627,7 @@ instance_name = test
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     interface_mode = access_point
     target_host = 10.0.0.1
     target_port = 4242
@@ -2619,6 +2643,7 @@ instance_name = test
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     mode = gateway
     target_host = 10.0.0.1
     target_port = 4242
@@ -2634,6 +2659,7 @@ instance_name = test
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     interface_mode = roaming
     mode = boundary
     target_host = 10.0.0.1
@@ -2723,6 +2749,7 @@ instance_name = test
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 10.0.0.1
     target_port = 4242
     networkname = testnet
@@ -2740,6 +2767,7 @@ instance_name = test
 [interfaces]
   [[TCP Client]]
     type = TCPClientInterface
+    enabled = yes
     target_host = 10.0.0.1
     target_port = 4242
     passphrase = secret123

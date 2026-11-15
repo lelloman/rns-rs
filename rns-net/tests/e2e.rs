@@ -900,6 +900,7 @@ fn config_file_ingress_control_knobs_apply_to_runtime_interface() {
 [interfaces]
   [[Config Knobs TCP]]
     type = TCPServerInterface
+    enabled = yes
     listen_ip = 127.0.0.1
     listen_port = {}
     ingress_control = No
