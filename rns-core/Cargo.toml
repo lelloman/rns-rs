@@ -22,6 +22,7 @@ foldhash = { version = "0.2", default-features = false }
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
+proptest = { version = "1.9", default-features = false, features = ["std"] }
 
 [[bench]]
 name = "transport_hot_paths"
