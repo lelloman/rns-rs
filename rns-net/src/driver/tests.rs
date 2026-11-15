@@ -15955,3 +15955,137 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
     let server = stats.interfaces.iter().find(|stat| stat.id == 10).unwrap();
     assert_eq!(server.clients, Some(0));
 }
+
+/// Upstream lists the interfaces that spawn peers or subinterfaces as
+/// interfaces of their own.
+#[cfg(feature = "iface-i2p")]
+#[test]
+fn interface_stats_report_peer_spawning_parents() {
+    let (callbacks, ..) = MockCallbacks::new();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+    let listener = |id: u64, name: &str, kind: &str, clients| ListenerStat {
+        id: InterfaceId(id),
+        name: name.into(),
+        display_name: format!("{kind}[{name}]"),
+        interface_type: kind.into(),
+        mode: constants::MODE_FULL,
+        gravity: 0,
+        announces_to_internal: None,
+        bitrate: Some(1000),
+        mtu: 1064,
+        ifac: None,
+        clients,
+    };
+    let spawn = |driver: &mut Driver, id: u64, parent: u64, short_name: &str, rxb, txb| {
+        let (writer, _) = MockWriter::new();
+        driver.handle_dynamic_interface_up_event(
+            InterfaceId(id),
+            Box::new(writer),
+            event::DynamicInterfaceRegistration {
+                info: make_interface_info(id),
+                interface_type: "Peer".into(),
+                parent_id: InterfaceId(parent),
+                telemetry: event::InterfaceTelemetry::default(),
+                ifac: None,
+                display_name: None,
+                short_name: Some(short_name.into()),
+            },
+        );
+        let stats = &mut driver.interfaces.get_mut(&InterfaceId(id)).unwrap().stats;
+        stats.rxb = rxb;
+        stats.txb = txb;
+    };
+
+    // An AutoInterface with two peers.
+    driver.listener_stats.push(listener(
+        10,
+        "Auto",
+        "AutoInterface",
+        ListenerClients::AutoPeers,
+    ));
+    spawn(&mut driver, 11, 10, "None", 1, 2);
+    spawn(&mut driver, 12, 10, "None", 3, 4);
+
+    // A connectable I2PInterface with one peer it connected to and one
+    // that connected to it.
+    let endpoint = Arc::new(Mutex::new(crate::interface::i2p::I2pEndpoint::default()));
+    driver.listener_stats.push(listener(
+        20,
+        "I2P",
+        "I2PInterface",
+        ListenerClients::I2pPeers(I2pListener {
+            connectable: true,
+            configured_peers: Some(1),
+            endpoint: Arc::clone(&endpoint),
+        }),
+    ));
+    spawn(&mut driver, 21, 20, "I2P to peer.b32.i2p", 10, 20);
+    spawn(&mut driver, 22, 20, "Connected peer on I2P", 30, 40);
+
+    // An RNodeMultiInterface with two subinterfaces, one online.
+    for (id, online) in [(30, true), (31, false)] {
+        let (writer, _) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(id), make_entry(id, Box::new(writer), online));
+    }
+    driver.listener_stats.push(listener(
+        40,
+        "Multi",
+        "RNodeMultiInterface",
+        ListenerClients::Subinterfaces(vec![InterfaceId(30), InterfaceId(31)]),
+    ));
+
+    let stat = |id: u64| {
+        driver
+            .interface_stats()
+            .interfaces
+            .into_iter()
+            .find(|stat| stat.id == id)
+            .unwrap_or_else(|| panic!("no stats for interface {id}"))
+    };
+
+    let auto = stat(10);
+    assert_eq!(auto.display_name, "AutoInterface[Auto]");
+    assert_eq!((auto.clients, auto.peers), (None, Some(2)));
+    assert_eq!((auto.rxb, auto.txb), (4, 6));
+    assert!(auto.status);
+    assert_eq!(auto.i2p, None);
+    assert_eq!(
+        stat(11).parent_display_name.as_deref(),
+        Some("AutoInterface[Auto]")
+    );
+    assert_eq!(stat(11).name, "None");
+
+    // Offline until its session accepts connections.
+    let i2p = stat(20);
+    assert!(!i2p.status);
+    assert_eq!(
+        i2p.i2p,
+        Some(event::I2pEndpointStat {
+            connectable: true,
+            b32: None
+        })
+    );
+    // Only the peer that connected to it is a client, and only its
+    // transmitted bytes add up.
+    assert_eq!((i2p.clients, i2p.peers), (Some(1), Some(1)));
+    assert_eq!((i2p.rxb, i2p.txb), (40, 40));
+    *endpoint.lock().unwrap() = crate::interface::i2p::I2pEndpoint {
+        online: true,
+        b32: Some("abc.b32.i2p".into()),
+    };
+    let i2p = stat(20);
+    assert!(i2p.status);
+    assert_eq!(i2p.i2p.unwrap().b32.as_deref(), Some("abc.b32.i2p"));
+
+    let multi = stat(40);
+    assert_eq!(multi.display_name, "RNodeMultiInterface[Multi]");
+    assert_eq!(multi.clients, Some(2));
+    assert!(multi.status);
+    assert_eq!(
+        stat(31).parent_display_name.as_deref(),
+        Some("RNodeMultiInterface[Multi]")
+    );
+}

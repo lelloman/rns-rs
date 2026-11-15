@@ -633,8 +633,10 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
 }
 
 /// A listener reported in interface statistics: upstream lists a TCP
-/// server and the shared instance's local server as interfaces of their
-/// own, with the clients they serve.
+/// server, the shared instance's local server and the interfaces that
+/// spawn peers or subinterfaces (`AutoInterface`, `I2PInterface`,
+/// `RNodeMultiInterface`) as interfaces of their own, with the interfaces
+/// they serve.
 #[derive(Debug, Clone)]
 pub(crate) struct ListenerStat {
     pub(crate) id: InterfaceId,
@@ -652,13 +654,35 @@ pub(crate) struct ListenerStat {
     pub(crate) clients: ListenerClients,
 }
 
-/// Which interfaces a [`ListenerStat`] serves.
+/// Which interfaces a [`ListenerStat`] serves, and how upstream reports
+/// them.
 #[derive(Debug, Clone)]
 pub(crate) enum ListenerClients {
-    /// The interfaces registered with this listener as their parent.
+    /// The interfaces registered with this listener as their parent,
+    /// counted as its `clients`.
     Spawned,
     /// The shared instance's local clients, on this endpoint.
     Local(crate::interface::display::LocalEndpoint),
+    /// An `AutoInterface`'s peers, registered with it as their parent:
+    /// upstream counts them as its `peers` and reports no `clients`.
+    AutoPeers,
+    /// An `I2PInterface`'s peers, registered with it as their parent.
+    #[cfg(feature = "iface-i2p")]
+    I2pPeers(I2pListener),
+    /// An `RNodeMultiInterface`'s subinterfaces, counted as its `clients`.
+    Subinterfaces(Vec<InterfaceId>),
+}
+
+/// An `I2PInterface` as its statistics report it. Upstream counts only the
+/// peers that connected to it as its `clients`, and only their transmitted
+/// bytes add up on it.
+#[cfg(feature = "iface-i2p")]
+#[derive(Debug, Clone)]
+pub(crate) struct I2pListener {
+    pub(crate) connectable: bool,
+    /// How many peers it is configured to connect to (`peers`).
+    pub(crate) configured_peers: Option<usize>,
+    pub(crate) endpoint: Arc<Mutex<crate::interface::i2p::I2pEndpoint>>,
 }
 
 /// Infer the interface type string from a dynamic interface's name.

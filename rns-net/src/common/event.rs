@@ -1056,6 +1056,16 @@ pub struct BackbonePeerPoolMemberStatus {
     pub cooldown_remaining_seconds: Option<f64>,
 }
 
+/// What an `I2PInterface` reports about its own endpoint (upstream's
+/// `i2p_connectable` and `i2p_b32`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct I2pEndpointStat {
+    /// Whether it accepts connections.
+    pub connectable: bool,
+    /// Its address, `{base32}.b32.i2p`, once known.
+    pub b32: Option<String>,
+}
+
 /// Statistics for a single interface.
 #[derive(Debug, Clone)]
 pub struct SingleInterfaceStat {
@@ -1146,6 +1156,8 @@ pub struct SingleInterfaceStat {
     pub blocked_ips: Option<u64>,
     /// Sorted textual IP addresses currently blocked for fast flapping.
     pub blocked_ip_list: Option<Vec<String>>,
+    /// What an I2P interface reports about its own endpoint.
+    pub i2p: Option<I2pEndpointStat>,
     /// Target interval for outgoing announce rate control, in seconds.
     pub announce_rate_target: Option<f64>,
     /// Announce-rate control grace count.

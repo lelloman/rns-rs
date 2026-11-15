@@ -28,10 +28,10 @@ use crate::interface::{lock_or_recover, Writer};
 use self::sam::{Destination, SamError};
 
 /// Hardware MTU for I2P streams (matches Python I2PInterface).
-const HW_MTU: usize = 1064;
+pub(crate) const HW_MTU: usize = 1064;
 
 /// Estimated bitrate for I2P tunnels (256 kbps, matches Python).
-const BITRATE_GUESS: u64 = 256_000;
+pub(crate) const BITRATE_GUESS: u64 = 256_000;
 
 /// Wait time before reconnecting to an outbound peer.
 const RECONNECT_WAIT: Duration = Duration::from_secs(15);
@@ -54,6 +54,35 @@ pub struct I2pConfig {
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     pub underlay_mark: Option<u32>,
     pub runtime: Arc<Mutex<I2pRuntime>>,
+    /// The state of this interface's own endpoint, which interface
+    /// statistics report.
+    pub endpoint: Arc<Mutex<I2pEndpoint>>,
+}
+
+/// The state of an I2P interface's own endpoint, as upstream's
+/// `I2PInterface` keeps it: a connectable interface learns its address
+/// (`b32`) from its keys and is online once its session accepts
+/// connections; one that is not connectable stays offline.
+#[derive(Debug, Clone, Default)]
+pub struct I2pEndpoint {
+    pub online: bool,
+    /// `{base32}.b32.i2p`.
+    pub b32: Option<String>,
+}
+
+impl I2pEndpoint {
+    /// Record the session's own address, which upstream knows only for a
+    /// connectable interface.
+    fn set_address(endpoint: &Mutex<I2pEndpoint>, connectable: bool, b32: String) {
+        if connectable {
+            lock_or_recover(endpoint, "i2p endpoint").b32 = Some(b32);
+        }
+    }
+
+    /// Record that the session accepts connections.
+    fn set_accepting(endpoint: &Mutex<I2pEndpoint>) {
+        lock_or_recover(endpoint, "i2p endpoint").online = true;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +120,7 @@ impl Default for I2pConfig {
             runtime: Arc::new(Mutex::new(I2pRuntime {
                 reconnect_wait: RECONNECT_WAIT,
             })),
+            endpoint: Arc::default(),
         };
         let startup = I2pRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));
@@ -327,6 +357,7 @@ fn coordinator(
         Ok(our_dest) => {
             let b32 = our_dest.base32_address();
             log::info!("[{}] I2P address: {}", config.name, b32);
+            I2pEndpoint::set_address(&config.endpoint, config.connectable, b32);
         }
         Err(e) => {
             log::warn!("[{}] could not look up own destination: {}", config.name, e);
@@ -369,6 +400,7 @@ fn coordinator(
 
     // Spawn acceptor thread if connectable
     if config.connectable {
+        I2pEndpoint::set_accepting(&config.endpoint);
         let tx2 = tx.clone();
         let next_id2 = next_id.clone();
         let sam_addr2 = sam_addr;
@@ -714,6 +746,7 @@ impl InterfaceFactory for I2pFactory {
             runtime: Arc::new(Mutex::new(I2pRuntime {
                 reconnect_wait: RECONNECT_WAIT,
             })),
+            endpoint: Arc::default(),
         }))
     }
 

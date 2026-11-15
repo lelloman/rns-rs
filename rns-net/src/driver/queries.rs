@@ -213,7 +213,16 @@ impl Driver {
                     .shared_instance_listener()
                     .map(|listener| listener.display_name.clone());
             }
-            None => return None,
+            // Subinterfaces are configured, not spawned.
+            None => {
+                return self
+                    .listener_stats
+                    .iter()
+                    .find(|listener| {
+                        matches!(&listener.clients, ListenerClients::Subinterfaces(ids) if ids.contains(&entry.info.id))
+                    })
+                    .map(|listener| listener.display_name.clone());
+            }
         };
         if let Some(listener) = self
             .listener_stats
@@ -236,19 +245,68 @@ impl Driver {
             .find(|listener| matches!(listener.clients, ListenerClients::Local(_)))
     }
 
+    /// Whether `entry` is one of the interfaces `listener` serves.
+    fn listener_serves(&self, listener: &ListenerStat, entry: &InterfaceEntry) -> bool {
+        match &listener.clients {
+            ListenerClients::Local(_) => entry.info.is_local_client && entry.dynamic,
+            ListenerClients::Subinterfaces(ids) => ids.contains(&entry.info.id),
+            _ => self.dynamic_interface_parents.get(&entry.info.id) == Some(&listener.id),
+        }
+    }
+
+    /// Whether an I2P peer connected to this node (upstream's `Connected
+    /// peer on {interface}`), rather than this node to it.
+    fn i2p_peer_accepted(&self, id: &InterfaceId) -> bool {
+        self.interface_short_names
+            .get(id)
+            .is_some_and(|name| name.starts_with("Connected peer on "))
+    }
+
     /// The statistics of a listener without an interface entry of its own:
     /// upstream counts its clients and adds up their bytes.
     fn listener_interface_stat(&self, listener: &ListenerStat) -> SingleInterfaceStat {
         let children: Vec<&InterfaceEntry> = self
             .interfaces
             .values()
-            .filter(|entry| match listener.clients {
-                ListenerClients::Spawned => {
-                    self.dynamic_interface_parents.get(&entry.info.id) == Some(&listener.id)
-                }
-                ListenerClients::Local(_) => entry.info.is_local_client && entry.dynamic,
-            })
+            .filter(|entry| self.listener_serves(listener, entry))
             .collect();
+        let mut status = true;
+        let mut clients = Some(children.len() as u64);
+        let mut peers = None;
+        let mut i2p = None;
+        // Whether only accepted peers' transmitted bytes add up on it.
+        let mut accepted_tx_only = false;
+        match &listener.clients {
+            ListenerClients::Spawned | ListenerClients::Local(_) => {}
+            ListenerClients::AutoPeers => {
+                clients = None;
+                peers = Some(children.len());
+            }
+            #[cfg(feature = "iface-i2p")]
+            ListenerClients::I2pPeers(i2p_listener) => {
+                let endpoint =
+                    crate::interface::lock_or_recover(&i2p_listener.endpoint, "i2p endpoint")
+                        .clone();
+                status = endpoint.online;
+                clients = Some(
+                    children
+                        .iter()
+                        .filter(|child| self.i2p_peer_accepted(&child.info.id))
+                        .count() as u64,
+                );
+                peers = i2p_listener.configured_peers;
+                i2p = Some(crate::event::I2pEndpointStat {
+                    connectable: i2p_listener.connectable,
+                    b32: endpoint.b32,
+                });
+                accepted_tx_only = true;
+            }
+            ListenerClients::Subinterfaces(ids) => {
+                // Online while its device is.
+                status = children.iter().any(|child| child.online);
+                clients = Some(ids.len() as u64);
+            }
+        }
         let mut stat = SingleInterfaceStat {
             id: listener.id.0,
             name: listener.name.clone(),
@@ -257,7 +315,7 @@ impl Driver {
             // A listener's tunnels belong to its spawned clients.
             tunnel_id: None,
             remote_transport_id: None,
-            status: true,
+            status,
             mode: listener.mode,
             gravity: listener.gravity,
             announces_to_internal: listener.announces_to_internal,
@@ -280,7 +338,7 @@ impl Driver {
             switch_id: None,
             endpoint_id: None,
             via_switch_id: None,
-            peers: None,
+            peers,
             rssi: None,
             snr: None,
             signal_quality: None,
@@ -294,7 +352,7 @@ impl Driver {
             radio: None,
             bitrate: match listener.clients {
                 ListenerClients::Local(_) => self.forced_local_bitrate.or(listener.bitrate),
-                ListenerClients::Spawned => listener.bitrate,
+                _ => listener.bitrate,
             },
             mtu: Some(listener.mtu),
             ifac_size: listener.ifac.as_ref().map(|ifac| ifac.size),
@@ -308,9 +366,10 @@ impl Driver {
             burst_activated: 0.0,
             pr_burst_active: false,
             pr_burst_activated: 0.0,
-            clients: Some(children.len() as u64),
+            clients,
             blocked_ips: None,
             blocked_ip_list: None,
+            i2p,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
@@ -325,9 +384,11 @@ impl Driver {
         // theirs, and summing all interfaces' counters counts each once.
         for child in children {
             stat.rxb += child.stats.rxb;
-            stat.txb += child.stats.txb;
             stat.traffic.rxs += child.stats.traffic_rates.rxs;
-            stat.traffic.txs += child.stats.traffic_rates.txs;
+            if !accepted_tx_only || self.i2p_peer_accepted(&child.info.id) {
+                stat.txb += child.stats.txb;
+                stat.traffic.txs += child.stats.traffic_rates.txs;
+            }
         }
         stat
     }
@@ -448,6 +509,7 @@ impl Driver {
                 clients: None,
                 blocked_ips: None,
                 blocked_ip_list: None,
+                i2p: None,
                 announce_rate_target: entry.info.announce_rate_target,
                 announce_rate_grace: entry.info.announce_rate_grace,
                 announce_rate_penalty: entry.info.announce_rate_penalty,
@@ -568,6 +630,7 @@ impl Driver {
                 clients: Some(clients),
                 blocked_ips: Some(blocked_ips),
                 blocked_ip_list: Some(blocked_ip_list),
+                i2p: None,
                 announce_rate_target: None,
                 announce_rate_grace: 0,
                 announce_rate_penalty: 0.0,
