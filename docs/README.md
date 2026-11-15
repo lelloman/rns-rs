@@ -60,6 +60,7 @@ want to do, then follow the links from there. The repository
 |------|--------|
 | [Building](building.md) | Feature flags, interface selection, hook backends, stripping, cross-building |
 | [Development](development.md) | Tests, lint, Docker end-to-end suites, interop tests, CI, benchmarks |
+| [Mixed-Mesh Soak Test](soak-test.md) | Long-running Rust and Python mesh under load: stalls, memory growth, path churn |
 | [Benchmarking](../bench/README.md) | The benchmark runner, profiles, and recorded findings |
 | [Dependency Upgrades 2026](dependency-upgrades-2026.md) | Audit of manifest-incompatible dependency updates |
 | [crates.io Publish Runbook](crates-io-publish-runbook.md) | How workspace crates are published and tagged |
