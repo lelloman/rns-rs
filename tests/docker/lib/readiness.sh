@@ -9,7 +9,11 @@ wait_for_up_interfaces() {
 
   while (( SECONDS < deadline )); do
     count=$(curl -sf "http://localhost:${port}/api/interfaces" 2>/dev/null \
-      | jq -r '[.interfaces[] | select(.status == "up")] | length' 2>/dev/null) || true
+      | jq -r '[.interfaces[] | select(.status == "up")
+               # Listeners are listed as upstream lists them (the shared
+               # instance, TCP servers); count the connected peers.
+               | select(.interface_type | test("ServerInterface$") | not)]
+             | length' 2>/dev/null) || true
     if [[ -n "$count" && "$count" == "$expected" ]]; then
       return 0
     fi
