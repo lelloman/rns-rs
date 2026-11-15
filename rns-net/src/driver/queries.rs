@@ -436,6 +436,26 @@ impl Driver {
         QueryResponse::InterfaceStats(self.interface_stats())
     }
 
+    /// Upstream's `Transport.prioritize_interfaces`, run with its interface
+    /// jobs every 5 seconds: a stable sort of the current order by bitrate,
+    /// highest first.
+    pub(crate) fn prioritize_interfaces(&mut self) {
+        const INTERFACE_JOBS_INTERVAL: f64 = 5.0;
+        let now = crate::time::now();
+        if now < self.interface_priority_at + INTERFACE_JOBS_INTERVAL {
+            return;
+        }
+        self.interface_priority_at = now;
+        let mut order: Vec<(u64, u64)> = self
+            .interface_stats()
+            .interfaces
+            .iter()
+            .map(|i| (i.id, i.bitrate.unwrap_or(0)))
+            .collect();
+        order.sort_by_key(|(_, bitrate)| std::cmp::Reverse(*bitrate));
+        self.interface_priority = order.into_iter().map(|(id, _)| id).collect();
+    }
+
     pub(crate) fn interface_stats(&self) -> InterfaceStatsResponse {
         let now = time::now();
         let mut interfaces = Vec::new();
@@ -690,10 +710,18 @@ impl Driver {
         for listener in &self.listener_stats {
             interfaces.push(self.listener_interface_stat(listener));
         }
-        // Upstream lists interfaces in the order they were added: the
-        // shared instance first, then the others; ids are handed out in
-        // that order.
-        interfaces.sort_by_key(|i| (i.interface_type != "LocalServerInterface", i.id));
+        // In upstream's Transport.interfaces order: as last prioritized,
+        // then the interfaces added since, in the order they were added
+        // (ids are handed out in that order).
+        interfaces.sort_by_key(|i| {
+            (
+                self.interface_priority
+                    .iter()
+                    .position(|id| *id == i.id)
+                    .unwrap_or(usize::MAX),
+                i.id,
+            )
+        });
         let (path_pool_total, path_pool_unused) = self.engine.path_pool_counts();
         let total_links = self.engine.link_table_count() + self.link_manager.link_count();
         let active_links = self.engine.active_link_count() + self.link_manager.active_link_count();

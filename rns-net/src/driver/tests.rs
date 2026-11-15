@@ -15950,16 +15950,22 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
     );
     assert_eq!(by_id(1).parent_display_name, None);
 
-    // As upstream: in the order they were added, the shared instance
-    // first.
+    // Until prioritized, in the order they were added; after upstream's
+    // prioritize_interfaces, by bitrate, highest first, then that order.
     let ids: Vec<_> = stats.interfaces.iter().map(|stat| stat.id).collect();
-    assert_eq!(
-        stats.interfaces[0].display_name,
-        "Shared Instance[rns/default]"
-    );
-    let mut sorted = ids[1..].to_vec();
+    let mut sorted_ids = ids.clone();
+    sorted_ids.sort();
+    assert_eq!(ids, sorted_ids);
+    driver.prioritize_interfaces();
+    let stats = driver.interface_stats();
+    let keys: Vec<_> = stats
+        .interfaces
+        .iter()
+        .map(|stat| (std::cmp::Reverse(stat.bitrate.unwrap_or(0)), stat.id))
+        .collect();
+    let mut sorted = keys.clone();
     sorted.sort();
-    assert_eq!(ids[1..], sorted[..]);
+    assert_eq!(keys, sorted);
 
     // A spawned interface's display name goes with it.
     driver.handle_interface_down_event(InterfaceId(11));
