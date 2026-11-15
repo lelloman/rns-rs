@@ -77,6 +77,8 @@ pub struct InterfaceTelemetry {
     pub coding_rate: Option<u8>,
     pub channel: Option<u32>,
     pub modulation: Option<String>,
+    /// Channel and device state an RNode reports; replaces the previous.
+    pub radio: Option<crate::common::interface_stats::RadioStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -1097,6 +1099,8 @@ pub struct SingleInterfaceStat {
     pub coding_rate: Option<u8>,
     pub channel: Option<u32>,
     pub modulation: Option<String>,
+    /// Channel and device state an RNode reports.
+    pub radio: Option<crate::common::interface_stats::RadioStats>,
     pub bitrate: Option<u64>,
     /// Hardware MTU advertised for this interface, when known.
     pub mtu: Option<u32>,

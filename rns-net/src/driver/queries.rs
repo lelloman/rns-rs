@@ -265,6 +265,7 @@ impl Driver {
             coding_rate: None,
             channel: None,
             modulation: None,
+            radio: None,
             bitrate: match listener.clients {
                 ListenerClients::Local(_) => self.forced_local_bitrate.or(listener.bitrate),
                 ListenerClients::Spawned => listener.bitrate,
@@ -400,6 +401,7 @@ impl Driver {
                 coding_rate: entry.stats.coding_rate,
                 channel: entry.stats.channel,
                 modulation: entry.stats.modulation.clone(),
+                radio: entry.stats.radio,
                 bitrate: entry.info.bitrate,
                 mtu: Some(entry.info.mtu),
                 ifac_size: entry.ifac.as_ref().map(|s| s.size),
@@ -519,6 +521,7 @@ impl Driver {
                 coding_rate: None,
                 channel: None,
                 modulation: None,
+                radio: None,
                 bitrate: Some(crate::interface::backbone::SERVER_BITRATE_GUESS),
                 mtu: Some(crate::interface::backbone::HW_MTU as u32),
                 ifac_size: None,

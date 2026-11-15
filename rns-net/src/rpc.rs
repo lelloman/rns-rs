@@ -2289,6 +2289,52 @@ fn weave_stats_to_pickle(s: &SingleInterfaceStat, dict: &mut Vec<(PickleValue, P
     }
 }
 
+/// What an RNode reports about its channel and itself, under upstream's
+/// keys and only on RNode interfaces, as upstream's `interface_stats`:
+/// airtime and channel load (percent), noise floor, interference and its
+/// last sighting, temperature (`cpu_temp`) and battery (the state only
+/// once known).
+fn radio_stats_to_pickle(s: &SingleInterfaceStat, dict: &mut Vec<(PickleValue, PickleValue)>) {
+    let Some(radio) = s.radio.as_ref() else {
+        return;
+    };
+    let key = |name: &str| PickleValue::String(name.into());
+    let dbm = |v: Option<i16>| v.map_or(PickleValue::None, |v| PickleValue::Int(i64::from(v)));
+    dict.push((
+        key("airtime_short"),
+        PickleValue::Float(radio.airtime_short),
+    ));
+    dict.push((key("airtime_long"), PickleValue::Float(radio.airtime_long)));
+    dict.push((
+        key("channel_load_short"),
+        PickleValue::Float(radio.channel_load_short),
+    ));
+    dict.push((
+        key("channel_load_long"),
+        PickleValue::Float(radio.channel_load_long),
+    ));
+    dict.push((key("noise_floor"), dbm(radio.noise_floor)));
+    dict.push((key("interference"), dbm(radio.interference)));
+    if let Some((ts, rssi)) = radio.interference_last {
+        dict.push((key("interference_last_ts"), PickleValue::Float(ts)));
+        dict.push((
+            key("interference_last_dbm"),
+            PickleValue::Int(i64::from(rssi)),
+        ));
+    }
+    dict.push((key("cpu_temp"), dbm(radio.temperature)));
+    if radio.battery_state != 0 {
+        dict.push((
+            key("battery_state"),
+            PickleValue::String(radio.battery_state_name().into()),
+        ));
+    }
+    dict.push((
+        key("battery_percent"),
+        PickleValue::Int(i64::from(radio.battery_percent)),
+    ));
+}
+
 fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
     let mut dict = vec![
         (
@@ -2632,6 +2678,7 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         ),
     ];
     weave_stats_to_pickle(s, &mut dict);
+    radio_stats_to_pickle(s, &mut dict);
     // Only listeners that block addresses report them: upstream's rnstatus
     // compares `blocked_ips` with 0 whenever the key is present.
     if let Some(blocked) = s.blocked_ips {
@@ -4622,6 +4669,7 @@ mod tests {
                             coding_rate: None,
                             channel: None,
                             modulation: None,
+                            radio: None,
                             bitrate: Some(10_000_000),
                             mtu: Some(262_144),
                             ifac_size: None,
@@ -5251,6 +5299,7 @@ mod tests {
                 coding_rate: Some(5),
                 channel: Some(3),
                 modulation: Some("LoRa".into()),
+                radio: None,
                 bitrate: Some(1000000),
                 mtu: Some(131_072),
                 ifac_size: Some(16),
@@ -5628,6 +5677,56 @@ mod tests {
                 .unwrap(),
             0.25
         );
+
+        // Only RNode interfaces carry upstream's channel and device keys.
+        assert!(ifaces[0].get("noise_floor").is_none());
+        let mut rnode = stats.interfaces[0].clone();
+        rnode.radio = Some(crate::common::interface_stats::RadioStats {
+            airtime_short: 6.97,
+            airtime_long: 0.02,
+            channel_load_short: 11.13,
+            channel_load_long: 0.04,
+            current_rssi: Some(-110),
+            noise_floor: Some(-99),
+            interference: None,
+            interference_last: Some((1_700_000_000.5, -80)),
+            battery_state: 0x01,
+            battery_percent: 91,
+            temperature: Some(58),
+        });
+        let rnode = pickle::decode(&pickle::encode(&single_iface_to_pickle(&rnode))).unwrap();
+        for (key, value) in [
+            ("airtime_short", 6.97),
+            ("airtime_long", 0.02),
+            ("channel_load_short", 11.13),
+            ("channel_load_long", 0.04),
+            ("interference_last_ts", 1_700_000_000.5),
+        ] {
+            assert_eq!(rnode.get(key).unwrap().as_float(), Some(value), "{key}");
+        }
+        assert_eq!(rnode.get("noise_floor").unwrap().as_int(), Some(-99));
+        assert!(matches!(rnode.get("interference"), Some(PickleValue::None)));
+        assert_eq!(
+            rnode.get("interference_last_dbm").unwrap().as_int(),
+            Some(-80)
+        );
+        assert_eq!(rnode.get("cpu_temp").unwrap().as_int(), Some(58));
+        assert_eq!(
+            rnode.get("battery_state").unwrap().as_str(),
+            Some("discharging")
+        );
+        assert_eq!(rnode.get("battery_percent").unwrap().as_int(), Some(91));
+        // Upstream sends the battery state only once the device reports one.
+        let mut unknown = stats.interfaces[0].clone();
+        unknown.radio = Some(Default::default());
+        let unknown = pickle::decode(&pickle::encode(&single_iface_to_pickle(&unknown))).unwrap();
+        assert!(unknown.get("battery_state").is_none());
+        assert!(unknown.get("interference_last_ts").is_none());
+        assert!(matches!(
+            unknown.get("noise_floor"),
+            Some(PickleValue::None)
+        ));
+        assert_eq!(unknown.get("battery_percent").unwrap().as_int(), Some(0));
     }
 
     #[test]

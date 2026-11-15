@@ -23,6 +23,11 @@ pub const CMD_READY: u8 = 0x0F;
 pub const CMD_SEL_INT: u8 = 0x1F;
 pub const CMD_STAT_RSSI: u8 = 0x23;
 pub const CMD_STAT_SNR: u8 = 0x24;
+pub const CMD_STAT_CHTM: u8 = 0x25;
+pub const CMD_STAT_PHYPRM: u8 = 0x26;
+pub const CMD_STAT_BAT: u8 = 0x27;
+pub const CMD_STAT_CSMA: u8 = 0x28;
+pub const CMD_STAT_TEMP: u8 = 0x29;
 pub const CMD_RANDOM: u8 = 0x40;
 pub const CMD_PLATFORM: u8 = 0x48;
 pub const CMD_MCU: u8 = 0x49;
@@ -106,6 +111,39 @@ pub enum RNodeEvent {
     StatRssi(u8),
     /// Reported SNR (signed, multiply by 0.25 for dB).
     StatSnr(i8),
+    /// Channel state (`CMD_STAT_CHTM`): airtime and channel load in
+    /// hundredths of a percent, RSSI values plus 157 (interference 0xFF:
+    /// none).
+    ChannelStats {
+        airtime_short: u16,
+        airtime_long: u16,
+        channel_load_short: u16,
+        channel_load_long: u16,
+        current_rssi: u8,
+        noise_floor: u8,
+        interference: u8,
+    },
+    /// Radio timing (`CMD_STAT_PHYPRM`): symbol time in µs, symbol rate,
+    /// preamble in symbols and ms, CSMA slot and DIFS in ms.
+    PhyStats {
+        symbol_time_us: u16,
+        symbol_rate: u16,
+        preamble_symbols: u16,
+        preamble_ms: u16,
+        csma_slot_ms: u16,
+        difs_ms: u16,
+    },
+    /// CSMA contention window (`CMD_STAT_CSMA`): band and bounds in slots.
+    CsmaStats {
+        band: u8,
+        window_min: u8,
+        window_max: u8,
+    },
+    /// Battery (`CMD_STAT_BAT`): state (0 unknown, 1 discharging,
+    /// 2 charging, 3 charged) and percent.
+    Battery { state: u8, percent: u8 },
+    /// Device temperature (`CMD_STAT_TEMP`), °C plus 120.
+    Temperature(u8),
     /// Reported short-term airtime lock (percent * 100).
     StAlock(u16),
     /// Reported long-term airtime lock (percent * 100).
@@ -345,6 +383,65 @@ impl RNodeDecoder {
             CMD_STAT_SNR => {
                 if !buf.is_empty() {
                     events.push(RNodeEvent::StatSnr(buf[0] as i8));
+                    self.command = kiss::CMD_UNKNOWN;
+                    self.in_frame = false;
+                }
+            }
+            CMD_STAT_CHTM => {
+                if buf.len() >= 11 {
+                    let be = |i: usize| u16::from_be_bytes([buf[i], buf[i + 1]]);
+                    events.push(RNodeEvent::ChannelStats {
+                        airtime_short: be(0),
+                        airtime_long: be(2),
+                        channel_load_short: be(4),
+                        channel_load_long: be(6),
+                        current_rssi: buf[8],
+                        noise_floor: buf[9],
+                        interference: buf[10],
+                    });
+                    self.command = kiss::CMD_UNKNOWN;
+                    self.in_frame = false;
+                }
+            }
+            CMD_STAT_PHYPRM => {
+                if buf.len() >= 12 {
+                    let be = |i: usize| u16::from_be_bytes([buf[i], buf[i + 1]]);
+                    events.push(RNodeEvent::PhyStats {
+                        symbol_time_us: be(0),
+                        symbol_rate: be(2),
+                        preamble_symbols: be(4),
+                        preamble_ms: be(6),
+                        csma_slot_ms: be(8),
+                        difs_ms: be(10),
+                    });
+                    self.command = kiss::CMD_UNKNOWN;
+                    self.in_frame = false;
+                }
+            }
+            CMD_STAT_CSMA => {
+                if buf.len() >= 3 {
+                    events.push(RNodeEvent::CsmaStats {
+                        band: buf[0],
+                        window_min: buf[1],
+                        window_max: buf[2],
+                    });
+                    self.command = kiss::CMD_UNKNOWN;
+                    self.in_frame = false;
+                }
+            }
+            CMD_STAT_BAT => {
+                if buf.len() >= 2 {
+                    events.push(RNodeEvent::Battery {
+                        state: buf[0],
+                        percent: buf[1],
+                    });
+                    self.command = kiss::CMD_UNKNOWN;
+                    self.in_frame = false;
+                }
+            }
+            CMD_STAT_TEMP => {
+                if !buf.is_empty() {
+                    events.push(RNodeEvent::Temperature(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
                 }
@@ -628,6 +725,82 @@ mod tests {
                 2,
                 3,
                 kiss::FEND,
+            ]
+        );
+    }
+
+    #[test]
+    fn decoder_device_reports() {
+        // Bytes as RNode firmware 1.86 sends them (kiss_indicate_*), an
+        // escaped FEND inside the channel stats.
+        let mut stream = vec![
+            kiss::FEND,
+            CMD_STAT_CHTM,
+            0x00,
+            0x7B,
+            0x13,
+            0x88,
+            0x09,
+            0xC4,
+            0x27,
+            0x10,
+            47,
+            kiss::FESC,
+            kiss::TFEND,
+            0xFF,
+            kiss::FEND,
+        ];
+        stream.extend_from_slice(&[
+            kiss::FEND,
+            CMD_STAT_PHYPRM,
+            0x08,
+            0x00,
+            0x01,
+            0xE8,
+            0,
+            18,
+            0,
+            37,
+            0,
+            24,
+            0,
+            48,
+            kiss::FEND,
+        ]);
+        stream.extend_from_slice(&[kiss::FEND, CMD_STAT_CSMA, 1, 0, 14, kiss::FEND]);
+        stream.extend_from_slice(&[kiss::FEND, CMD_STAT_BAT, 1, 91, kiss::FEND]);
+        stream.extend_from_slice(&[kiss::FEND, CMD_STAT_TEMP, 178, kiss::FEND]);
+        let events = RNodeDecoder::new().feed(&stream);
+        assert_eq!(
+            events,
+            vec![
+                RNodeEvent::ChannelStats {
+                    airtime_short: 123,
+                    airtime_long: 5000,
+                    channel_load_short: 2500,
+                    channel_load_long: 10_000,
+                    current_rssi: 47,
+                    noise_floor: kiss::FEND,
+                    interference: 0xFF,
+                },
+                RNodeEvent::PhyStats {
+                    symbol_time_us: 2048,
+                    symbol_rate: 488,
+                    preamble_symbols: 18,
+                    preamble_ms: 37,
+                    csma_slot_ms: 24,
+                    difs_ms: 48,
+                },
+                RNodeEvent::CsmaStats {
+                    band: 1,
+                    window_min: 0,
+                    window_max: 14,
+                },
+                RNodeEvent::Battery {
+                    state: 1,
+                    percent: 91,
+                },
+                RNodeEvent::Temperature(178),
             ]
         );
     }
