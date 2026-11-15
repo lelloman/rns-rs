@@ -55,7 +55,7 @@ When a PC connects via USB serial and sends an RNode DETECT handshake, the devic
 - Queues frames from the host and sends them with listen before talk (DIFS plus random backoff, carrier detect from the SX1262's preamble/header flags), as RNode firmware does
 - Enforces the host's short- and long-term airtime limits (`airtime_limit_short` / `airtime_limit_long`)
 - Stays in bridge mode once the host has switched the radio on, until the host sends LEAVE, a BLE host disconnects or the board resets; before that, 30 seconds without host serial activity reverts it to standalone mode
-- Does not answer the optional RNode statistics commands (channel utilisation, PHY parameters, battery)
+- Reports radio statistics as RNode firmware does: channel load, airtime, noise floor and interference about once a second (`CMD_STAT_CHTM`), the PHY timing when the radio comes on (`CMD_STAT_PHYPRM`), the CSMA contention window when it changes (`CMD_STAT_CSMA`), and packet counts on request (`CMD_STAT_RX` / `CMD_STAT_TX`); not battery or temperature, which this board does not measure
 
 Use the `rnode_lora` example from `rns-net` to connect from a PC:
 

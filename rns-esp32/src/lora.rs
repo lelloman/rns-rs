@@ -40,6 +40,7 @@ const OPCODE_SET_RX: u8 = 0x82;
 const OPCODE_SET_TX: u8 = 0x83;
 const OPCODE_GET_RX_BUFFER_STATUS: u8 = 0x13;
 const OPCODE_GET_PACKET_STATUS: u8 = 0x14;
+const OPCODE_GET_RSSI_INST: u8 = 0x15;
 const OPCODE_SET_DIO3_AS_TCXO_CTRL: u8 = 0x97;
 const OPCODE_CALIBRATE: u8 = 0x89;
 const OPCODE_SET_REGULATOR_MODE: u8 = 0x96;
@@ -462,6 +463,12 @@ impl Radio {
         }
         self.preamble_since = None;
         false
+    }
+
+    /// Signal strength on the channel right now, in dBm (GetRssiInst).
+    pub fn current_rssi(&mut self) -> i16 {
+        let rssi = self.cmd_read(OPCODE_GET_RSSI_INST, &[], 1);
+        -(rssi[0] as i16) / 2
     }
 
     /// RSSI (dBm) and raw SNR (quarter dB) of the last packet received; for

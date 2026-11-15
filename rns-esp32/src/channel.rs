@@ -146,7 +146,8 @@ impl Csma {
     /// two slots.
     pub fn new(spreading_factor: u8, bandwidth: u32) -> Self {
         let symbols_ms = modem::symbol_time_ms(spreading_factor, bandwidth) * CSMA_SLOT_SYMBOLS;
-        let slot_ms = (symbols_ms.round() as u64).clamp(CSMA_SLOT_MIN_MS, CSMA_SLOT_MAX_MS);
+        // Truncated, as upstream stores it in an int.
+        let slot_ms = (symbols_ms as u64).clamp(CSMA_SLOT_MIN_MS, CSMA_SLOT_MAX_MS);
         Self {
             slot_ms,
             difs_ms: 2 * slot_ms,
@@ -160,6 +161,15 @@ impl Csma {
 
     pub fn slot_ms(&self) -> u64 {
         self.slot_ms
+    }
+
+    pub fn difs_ms(&self) -> u64 {
+        self.difs_ms
+    }
+
+    /// The contention window band, 1 to 4.
+    pub fn band(&self) -> u32 {
+        self.band
     }
 
     /// Widen the contention window as this node's own airtime grows: band 1
@@ -281,6 +291,19 @@ impl TxChannel {
         self.queue.is_empty()
     }
 
+    /// Listen before talk for the current channel.
+    pub fn csma(&self) -> &Csma {
+        &self.csma
+    }
+
+    /// This node's short- and long-term airtime, fractions of time; also
+    /// updates the contention window, which widens with airtime.
+    pub fn airtime(&mut self, now_ms: u64) -> (f64, f64) {
+        let short_term = self.airtime.short_term(now_ms);
+        self.csma.set_airtime(short_term);
+        (short_term, self.airtime.long_term(now_ms))
+    }
+
     /// How often to call [`Self::take_ready`] while frames are queued.
     pub fn poll_interval_ms(&self) -> u64 {
         (self.csma.slot_ms() / 4).max(1)
@@ -337,6 +360,174 @@ impl TxChannel {
     }
 }
 
+/// RNode firmware `STATUS_INTERVAL_MS`: how often the channel is sampled.
+pub const SAMPLE_INTERVAL_MS: u64 = 3;
+/// RNode firmware `DCD_SAMPLES`: carrier samples behind the channel load.
+const DCD_SAMPLES: usize = 2_500;
+/// RNode firmware `UTIL_UPDATE_INTERVAL_MS`.
+const UTIL_UPDATE_INTERVAL_MS: u64 = 1_000;
+/// RNode firmware `NOISE_FLOOR_SAMPLES`.
+const NOISE_FLOOR_SAMPLES: usize = 128;
+/// RNode firmware `CSMA_INFR_THRESHOLD_DB`, `CSMA_RFENV_RECAL_MS`,
+/// `CSMA_RFENV_RECAL_LIMIT_DB`.
+const INTERFERENCE_THRESHOLD_DB: i16 = 11;
+const RF_ENV_RECAL_MS: u64 = 2_500;
+const RF_ENV_RECAL_LIMIT_DB: i16 = -83;
+/// RNode firmware's value for an RSSI not measured yet.
+const RSSI_UNKNOWN: i16 = -292;
+
+/// What the channel looks like, as RNode firmware measures it: carrier
+/// detect and RSSI sampled every [`SAMPLE_INTERVAL_MS`] give the channel
+/// load (busy samples plus this node's airtime), the noise floor (mean RSSI
+/// of quiet samples) and interference (RSSI well above the noise floor
+/// with no LoRa carrier).
+pub struct ChannelMonitor {
+    busy: Vec<bool>,
+    busy_next: usize,
+    last_sample_ms: Option<u64>,
+    last_update_ms: Option<u64>,
+    /// Peak channel load per airtime bin, over the last hour.
+    load_bins: Vec<f64>,
+    load_bin: u64,
+    channel_load: f64,
+    current_rssi: i16,
+    noise: [i16; NOISE_FLOOR_SAMPLES],
+    noise_next: usize,
+    noise_sampled: bool,
+    noise_floor: i16,
+    interference: bool,
+    interference_since: Option<u64>,
+}
+
+impl Default for ChannelMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ChannelMonitor {
+    pub fn new() -> Self {
+        Self {
+            busy: vec![false; DCD_SAMPLES],
+            busy_next: 0,
+            last_sample_ms: None,
+            last_update_ms: None,
+            load_bins: vec![0.0; AIRTIME_BINS],
+            load_bin: 0,
+            channel_load: 0.0,
+            current_rssi: RSSI_UNKNOWN,
+            noise: [0; NOISE_FLOOR_SAMPLES],
+            noise_next: 0,
+            noise_sampled: false,
+            noise_floor: RSSI_UNKNOWN,
+            interference: false,
+            interference_since: None,
+        }
+    }
+
+    /// Whether the next sample is due.
+    pub fn sample_due(&self, now_ms: u64) -> bool {
+        self.last_sample_ms
+            .is_none_or(|last| now_ms.saturating_sub(last) >= SAMPLE_INTERVAL_MS)
+    }
+
+    /// Record a sample: whether a LoRa carrier is on the channel, and the
+    /// RSSI. Returns `true` once a second, when the channel load is
+    /// updated (with `airtime_short`, this node's own share): the moment
+    /// RNode firmware reports channel stats.
+    pub fn sample(&mut self, now_ms: u64, carrier: bool, rssi: i16, airtime_short: f64) -> bool {
+        self.last_sample_ms = Some(now_ms);
+        self.current_rssi = rssi;
+        self.update_interference(now_ms, carrier, rssi);
+        self.update_noise_floor(carrier, rssi);
+        self.busy[self.busy_next] = carrier;
+        self.busy_next = (self.busy_next + 1) % DCD_SAMPLES;
+
+        if self
+            .last_update_ms
+            .is_some_and(|last| now_ms.saturating_sub(last) < UTIL_UPDATE_INTERVAL_MS)
+        {
+            return false;
+        }
+        self.last_update_ms = Some(now_ms);
+        let busy = self.busy.iter().filter(|&&b| b).count() as f64 / DCD_SAMPLES as f64;
+        self.channel_load = (busy + airtime_short).min(1.0);
+        self.advance_load_bins(now_ms);
+        let bin = (self.load_bin % AIRTIME_BINS as u64) as usize;
+        if self.channel_load > self.load_bins[bin] {
+            self.load_bins[bin] = self.channel_load;
+        }
+        true
+    }
+
+    fn update_interference(&mut self, now_ms: u64, carrier: bool, rssi: i16) {
+        // Not before the floor is measured: against RNode firmware's initial
+        // -292 dBm every sample would count.
+        self.interference =
+            self.noise_sampled && !carrier && rssi > self.noise_floor + INTERFERENCE_THRESHOLD_DB;
+        // Persistent "interference" at a low level is more likely a changed
+        // RF environment (antenna, LNA, location): sample the floor anew.
+        if self.interference && rssi < RF_ENV_RECAL_LIMIT_DB {
+            let since = *self.interference_since.get_or_insert(now_ms);
+            if now_ms.saturating_sub(since) >= RF_ENV_RECAL_MS {
+                self.noise_sampled = false;
+                self.interference_since = None;
+            }
+        } else {
+            self.interference_since = None;
+        }
+    }
+
+    fn update_noise_floor(&mut self, carrier: bool, rssi: i16) {
+        if carrier || (self.noise_sampled && rssi >= self.noise_floor + INTERFERENCE_THRESHOLD_DB) {
+            return;
+        }
+        self.noise[self.noise_next] = rssi;
+        self.noise_next += 1;
+        if self.noise_next >= NOISE_FLOOR_SAMPLES {
+            self.noise_next = 0;
+            self.noise_sampled = true;
+            let sum: i32 = self.noise.iter().map(|&n| n as i32).sum();
+            self.noise_floor = (sum / NOISE_FLOOR_SAMPLES as i32) as i16;
+        }
+    }
+
+    fn advance_load_bins(&mut self, now_ms: u64) {
+        let bin = now_ms / AIRTIME_BINLEN_MS;
+        if bin <= self.load_bin {
+            return;
+        }
+        let elapsed = (bin - self.load_bin).min(AIRTIME_BINS as u64);
+        for step in 1..=elapsed {
+            self.load_bins[((self.load_bin + step) % AIRTIME_BINS as u64) as usize] = 0.0;
+        }
+        self.load_bin = bin;
+    }
+
+    /// Channel load over the last 7.5 s, this node's airtime included.
+    pub fn channel_load(&self) -> f64 {
+        self.channel_load
+    }
+
+    /// Mean of the peak load per airtime bin over the last hour.
+    pub fn long_term_channel_load(&self) -> f64 {
+        self.load_bins.iter().sum::<f64>() / AIRTIME_BINS as f64
+    }
+
+    pub fn current_rssi(&self) -> i16 {
+        self.current_rssi
+    }
+
+    pub fn noise_floor(&self) -> i16 {
+        self.noise_floor
+    }
+
+    /// The RSSI of interference on the channel, if any.
+    pub fn interference(&self) -> Option<i16> {
+        self.interference.then_some(self.current_rssi)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,35 +581,36 @@ mod tests {
 
     #[test]
     fn slot_is_twelve_symbols_clamped() {
-        assert_eq!(Csma::new(8, 125_000).slot_ms(), 25); // 24.6 ms
+        assert_eq!(Csma::new(8, 125_000).slot_ms(), 24); // 24.6 ms, truncated
+        assert_eq!(Csma::new(9, 125_000).slot_ms(), 49); // 49.2 ms
         assert_eq!(Csma::new(7, 125_000).slot_ms(), 24); // 12.3 ms, at least 24
         assert_eq!(Csma::new(12, 125_000).slot_ms(), 100); // 393 ms, at most 100
     }
 
     #[test]
     fn waits_difs_then_backoff_on_a_free_channel() {
-        let mut csma = Csma::new(8, 125_000); // slot 25, DIFS 50
-        let mut random = |_, _| 3; // 75 ms backoff
+        let mut csma = Csma::new(8, 125_000); // slot 24, DIFS 48
+        let mut random = |_, _| 3; // 72 ms backoff
         assert!(!csma.may_transmit(0, true, &mut random));
-        assert!(!csma.may_transmit(49, true, &mut random));
-        assert!(!csma.may_transmit(50, true, &mut random)); // backoff starts
-        assert!(!csma.may_transmit(124, true, &mut random));
-        assert!(csma.may_transmit(125, true, &mut random));
+        assert!(!csma.may_transmit(47, true, &mut random));
+        assert!(!csma.may_transmit(48, true, &mut random)); // backoff starts
+        assert!(!csma.may_transmit(119, true, &mut random));
+        assert!(csma.may_transmit(120, true, &mut random));
     }
 
     #[test]
     fn busy_channel_restarts_difs_but_keeps_backoff_counted() {
         let mut csma = Csma::new(8, 125_000);
-        let mut random = |_, _| 4; // 100 ms backoff
+        let mut random = |_, _| 4; // 96 ms backoff
         csma.may_transmit(0, true, &mut random);
-        csma.may_transmit(50, true, &mut random);
-        csma.may_transmit(110, true, &mut random); // 60 ms counted
+        csma.may_transmit(48, true, &mut random);
+        csma.may_transmit(108, true, &mut random); // 60 ms counted
         assert!(!csma.may_transmit(120, false, &mut random)); // carrier
         assert!(!csma.may_transmit(500, false, &mut random));
         assert!(!csma.may_transmit(510, true, &mut random)); // DIFS again
-        assert!(!csma.may_transmit(560, true, &mut random)); // DIFS over, resume
-        assert!(!csma.may_transmit(599, true, &mut random)); // 99 ms
-        assert!(csma.may_transmit(600, true, &mut random)); // 100 ms
+        assert!(!csma.may_transmit(558, true, &mut random)); // DIFS over, resume
+        assert!(!csma.may_transmit(593, true, &mut random)); // 95 ms
+        assert!(csma.may_transmit(594, true, &mut random)); // 96 ms
     }
 
     #[test]
@@ -515,5 +707,77 @@ mod tests {
         assert!(two > 1.8 * one, "{one} {two}");
         tx.record_sent(1_000, &[0; 200]);
         assert!((tx.airtime.short_term(1_000) - one / 15_000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn monitor_samples_every_interval_and_reports_each_second() {
+        let mut monitor = ChannelMonitor::new();
+        assert!(monitor.sample_due(0));
+        assert!(monitor.sample(0, false, -120, 0.0), "first sample reports");
+        assert!(!monitor.sample_due(SAMPLE_INTERVAL_MS - 1));
+        assert!(monitor.sample_due(SAMPLE_INTERVAL_MS));
+        assert!(!monitor.sample(500, false, -120, 0.0));
+        assert!(monitor.sample(1_000, false, -120, 0.0));
+    }
+
+    #[test]
+    fn channel_load_counts_busy_samples_and_own_airtime() {
+        let mut monitor = ChannelMonitor::new();
+        let mut now = 0;
+        // A quarter of the window busy.
+        for i in 0..DCD_SAMPLES {
+            monitor.sample(now, i % 4 == 0, -120, 0.0);
+            now += SAMPLE_INTERVAL_MS;
+        }
+        monitor.sample(now + UTIL_UPDATE_INTERVAL_MS, false, -120, 0.1);
+        assert!(
+            (monitor.channel_load() - 0.35).abs() < 0.01,
+            "{}",
+            monitor.channel_load()
+        );
+        assert!(monitor.long_term_channel_load() > 0.0);
+    }
+
+    #[test]
+    fn noise_floor_is_the_mean_of_quiet_samples() {
+        let mut monitor = ChannelMonitor::new();
+        assert_eq!(monitor.noise_floor(), RSSI_UNKNOWN);
+        for i in 0..NOISE_FLOOR_SAMPLES as u64 {
+            // Carrier samples do not count.
+            monitor.sample(i * 10, true, -50, 0.0);
+            monitor.sample(i * 10 + 5, false, if i % 2 == 0 { -118 } else { -120 }, 0.0);
+        }
+        assert_eq!(monitor.noise_floor(), -119);
+        assert_eq!(monitor.interference(), None);
+    }
+
+    #[test]
+    fn strong_signal_without_carrier_is_interference() {
+        let mut monitor = ChannelMonitor::new();
+        for i in 0..NOISE_FLOOR_SAMPLES as u64 {
+            monitor.sample(i * 5, false, -120, 0.0);
+        }
+        monitor.sample(1_000, false, -95, 0.0);
+        assert_eq!(monitor.interference(), Some(-95));
+        // A LoRa carrier is not interference, and does not move the floor.
+        monitor.sample(1_005, true, -60, 0.0);
+        assert_eq!(monitor.interference(), None);
+        assert_eq!(monitor.noise_floor(), -120);
+    }
+
+    #[test]
+    fn persistent_low_level_interference_resamples_the_noise_floor() {
+        let mut monitor = ChannelMonitor::new();
+        for i in 0..NOISE_FLOOR_SAMPLES as u64 {
+            monitor.sample(i * 5, false, -120, 0.0);
+        }
+        // The environment changed: -100 dBm everywhere from now on.
+        let mut now = 1_000;
+        while now < 1_000 + RF_ENV_RECAL_MS + 2 * NOISE_FLOOR_SAMPLES as u64 * 5 {
+            monitor.sample(now, false, -100, 0.0);
+            now += 5;
+        }
+        assert_eq!(monitor.noise_floor(), -100);
+        assert_eq!(monitor.interference(), None);
     }
 }
