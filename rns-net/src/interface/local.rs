@@ -669,7 +669,9 @@ pub(crate) fn client_up_events(
 ) -> Vec<Event> {
     let (display_name, short_name) = match names {
         #[cfg(target_os = "linux")]
-        ClientNames::Unix(display_name) => (Some(display_name), None),
+        ClientNames::Unix(display_name) if template.is_some() => (Some(display_name), None),
+        #[cfg(target_os = "linux")]
+        ClientNames::Unix(_) => (None, None),
         ClientNames::Tcp(Some(port)) => (
             Some(super::display::local_client(
                 &super::display::LocalEndpoint::Tcp(port),
@@ -691,10 +693,12 @@ pub(crate) fn client_up_events(
         }
         None => {
             let mut events = Vec::with_capacity(2);
-            if short_name.is_some() {
+            // A Unix socket client's display name follows from the shared
+            // instance's endpoint, its name from its number.
+            if display_name.is_some() || short_name.is_some() {
                 events.push(Event::InterfaceNames {
                     id: client_id,
-                    display_name: None,
+                    display_name,
                     short_name,
                 });
             }
@@ -1358,7 +1362,7 @@ mod tests {
                 short_name,
             } => {
                 assert_eq!(id, InterfaceId(7120));
-                assert_eq!(display_name, None);
+                assert_eq!(display_name, Some(format!("LocalInterface[{client_port}]")));
                 assert_eq!(short_name, Some(client_port.to_string()));
             }
             other => panic!("expected InterfaceNames, got {:?}", other),
