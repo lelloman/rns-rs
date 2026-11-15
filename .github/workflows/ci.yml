@@ -149,7 +149,9 @@ jobs:
         run: cargo test --workspace
       - name: Test the compact engine
         # The workspace build above runs the parallel engine (rns-cli asks for
-        # it); rns-net built alone runs the compact one.
+        # it); rns-net built alone runs the compact one. Between them, every
+        # rns-net test, the e2e suites included, runs under each I/O model:
+        # parallel, compact folded and compact with its helper threads kept.
         run: |
           cargo test -p rns-net
           cargo test -p rns-net --features compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io
@@ -228,7 +230,13 @@ jobs:
           RETICULUM_UPSTREAM_DIR: ${{ github.workspace }}/reticulum-upstream
         run: |
           python3 -c 'import RNS; assert RNS.__version__ == "${{ matrix.reticulum.version }}", RNS.__version__'
+          # rns-net's interop under each I/O model (docs/engines.md): the
+          # compact engine with every helper folded into the driver loop,
+          # the compact engine with its helper threads kept, and the
+          # parallel engine.
           cargo test -p rns-net --test python_interop -- --nocapture
+          cargo test -p rns-net --features compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io --test python_interop -- --nocapture
+          cargo test -p rns-net --features engine-parallel --test python_interop -- --nocapture
           cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
           cargo test -p rns-cli --test placeholders -- --ignored --nocapture
           cargo test -p rns-rnodeconf --test rnodeconf -- --ignored --nocapture
@@ -256,9 +264,18 @@ jobs:
       - name: Run workspace tests with rns-hooks
         run: cargo test --workspace --features rns-hooks
 
-      - name: Run built-in hook integration tests
+      # The workspace run above builds native hooks only, which leaves
+      # e2e_hooks (WASM and built-in hooks) out; run it here under each I/O
+      # model (docs/engines.md): compact folded, compact with its helper
+      # threads kept, and parallel.
+      - name: Run hook integration tests under each engine
         run: |
-          cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin --test e2e_hooks builtin
+          cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin --test e2e_hooks
+          cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin,compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io --test e2e_hooks
+          cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin,engine-parallel --test e2e_hooks
+
+      - name: Run built-in hook rns-ctl test
+        run: |
           cargo test -p rns-ctl --features rns-hooks-builtin test_hook_api_loads_reloads_lists_and_unloads_builtin_hook
 
   cargo-test-rns-ctl-tls:
