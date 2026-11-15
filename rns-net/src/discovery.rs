@@ -64,14 +64,17 @@ impl DiscoveredInterfaceStorage {
                 iface.heard_count = existing.heard_count.saturating_add(1);
             }
             Ok(None) => {
+                // Upstream starts a new record at 0.
                 iface.discovered = iface.last_heard;
-                iface.heard_count = 1;
+                iface.heard_count = 0;
             }
             Err(err) => {
                 log::error!(
                     "Error while reading existing data for discovered interface, re-creating data: {}",
                     err
                 );
+                // As upstream: an unreadable record counts from 0 and this
+                // receipt adds one.
                 iface.discovered = iface.last_heard;
                 iface.heard_count = 1;
             }
@@ -124,7 +127,9 @@ impl DiscoveredInterfaceStorage {
             match fs::read(&path) {
                 Ok(data) => {
                     if let Ok(iface) = self.deserialize_interface(&data) {
-                        interfaces.push(iface);
+                        if let Some(iface) = self.migrate_discovery_hash(&path, iface) {
+                            interfaces.push(iface);
+                        }
                     }
                 }
                 Err(_) => continue,
@@ -135,6 +140,29 @@ impl DiscoveredInterfaceStorage {
     }
 
     /// Remove a discovered interface by its discovery hash
+    /// Earlier releases hashed the raw transport id instead of its hex
+    /// string, as upstream does. Move such a record to upstream's file name,
+    /// or drop it when the interface has been heard since under that name.
+    fn migrate_discovery_hash(
+        &self,
+        path: &std::path::Path,
+        mut iface: DiscoveredInterface,
+    ) -> Option<DiscoveredInterface> {
+        let expected = compute_discovery_hash(&iface.transport_id, &iface.name);
+        if iface.discovery_hash == expected {
+            return Some(iface);
+        }
+        let _ = fs::remove_file(path);
+        if self.base_path.join(hex_encode(&expected)).exists() {
+            return None;
+        }
+        iface.discovery_hash = expected;
+        if let Err(error) = self.store_unlocked(&iface) {
+            log::warn!("could not migrate discovered interface record: {error}");
+        }
+        Some(iface)
+    }
+
     pub fn remove(&self, discovery_hash: &[u8; 32]) -> io::Result<()> {
         let _guard = discovery_storage_guard();
         self.remove_unlocked(discovery_hash)
@@ -225,112 +253,95 @@ impl DiscoveredInterfaceStorage {
         Ok(removed)
     }
 
-    /// Serialize an interface to msgpack
+    /// Serialize an interface to msgpack as upstream persists it: its keys
+    /// in its order, ids and the operator address as hex strings, absent
+    /// optional fields as nil, and the type's own fields only.
     fn serialize_interface(&self, iface: &DiscoveredInterface) -> io::Result<Vec<u8>> {
+        fn opt<T>(value: Option<T>, f: impl FnOnce(T) -> Value) -> Value {
+            value.map(f).unwrap_or(Value::Nil)
+        }
+        let key = |name: &str| Value::Str(name.into());
         let mut entries: Vec<(Value, Value)> = vec![
+            (key("type"), Value::Str(iface.interface_type.clone())),
+            (key("impl_name"), opt(iface.impl_name.clone(), Value::Str)),
+            (key("version"), opt(iface.impl_version.clone(), Value::Str)),
+            (key("transport"), Value::Bool(iface.transport)),
+            (key("name"), Value::Str(iface.name.clone())),
+            (key("received"), Value::Float(iface.last_heard)),
+            (key("stamp"), Value::Bin(iface.stamp.clone())),
+            (key("value"), Value::Float(iface.stamp_value.as_f64())),
             (
-                Value::Str("type".into()),
-                Value::Str(iface.interface_type.clone()),
+                key("transport_id"),
+                Value::Str(hex_encode(&iface.transport_id)),
             ),
-            (Value::Str("transport".into()), Value::Bool(iface.transport)),
-            (Value::Str("name".into()), Value::Str(iface.name.clone())),
+            (key("network_id"), Value::Str(hex_encode(&iface.network_id))),
             (
-                Value::Str("discovered".into()),
-                Value::Float(iface.discovered),
-            ),
-            (
-                Value::Str("last_heard".into()),
-                Value::Float(iface.last_heard),
-            ),
-            (
-                Value::Str("heard_count".into()),
-                Value::UInt(iface.heard_count as u64),
-            ),
-            (
-                Value::Str("status".into()),
-                Value::Str(iface.status.as_str().into()),
-            ),
-            (Value::Str("stamp".into()), Value::Bin(iface.stamp.clone())),
-            (
-                Value::Str("value".into()),
-                Value::Float(iface.stamp_value.as_f64()),
+                key("dst_cost"),
+                opt(iface.dst_cost, |c| Value::Float(c.as_f64())),
             ),
             (
-                Value::Str("transport_id".into()),
-                Value::Bin(iface.transport_id.to_vec()),
+                key("pr_cost"),
+                opt(iface.pr_cost, |c| Value::Float(c.as_f64())),
             ),
-            (
-                Value::Str("network_id".into()),
-                Value::Bin(iface.network_id.to_vec()),
-            ),
-            (Value::Str("hops".into()), Value::UInt(iface.hops as u64)),
+            (key("hops"), Value::UInt(iface.hops as u64)),
+            (key("latitude"), opt(iface.latitude, Value::Float)),
+            (key("longitude"), opt(iface.longitude, Value::Float)),
+            (key("height"), opt(iface.height, Value::Float)),
         ];
-
-        if let Some(v) = iface.latitude {
-            entries.push((Value::Str("latitude".into()), Value::Float(v)));
+        for (name, value) in [
+            ("ifac_netname", &iface.ifac_netname),
+            ("ifac_netkey", &iface.ifac_netkey),
+        ] {
+            if let Some(value) = value.as_ref().filter(|v| !v.is_empty()) {
+                entries.push((key(name), Value::Str(value.clone())));
+            }
         }
-        if let Some(ref value) = iface.impl_name {
-            entries.push((Value::Str("impl_name".into()), Value::Str(value.clone())));
+        let uint = |v: Option<u64>| opt(v, Value::UInt);
+        let text = |v: &Option<String>| opt(v.clone(), Value::Str);
+        let type_fields: Vec<(&str, Value)> = match iface.interface_type.as_str() {
+            "BackboneInterface" | "TCPServerInterface" => vec![
+                ("reachable_on", text(&iface.reachable_on)),
+                ("port", uint(iface.port.map(u64::from))),
+            ],
+            "I2PInterface" => vec![("reachable_on", text(&iface.reachable_on))],
+            "RNodeInterface" => vec![
+                ("frequency", uint(iface.frequency.map(u64::from))),
+                ("bandwidth", uint(iface.bandwidth.map(u64::from))),
+                ("sf", uint(iface.spreading_factor.map(u64::from))),
+                ("cr", uint(iface.coding_rate.map(u64::from))),
+            ],
+            "WeaveInterface" => vec![
+                ("frequency", uint(iface.frequency.map(u64::from))),
+                ("bandwidth", uint(iface.bandwidth.map(u64::from))),
+                ("channel", uint(iface.channel.map(u64::from))),
+                ("modulation", text(&iface.modulation)),
+            ],
+            "KISSInterface" => vec![
+                ("frequency", uint(iface.frequency.map(u64::from))),
+                ("bandwidth", uint(iface.bandwidth.map(u64::from))),
+                ("modulation", text(&iface.modulation)),
+            ],
+            _ => Vec::new(),
+        };
+        for (name, value) in type_fields {
+            entries.push((key(name), value));
         }
-        if let Some(ref value) = iface.impl_version {
-            entries.push((Value::Str("version".into()), Value::Str(value.clone())));
+        if let Some(ref entry) = iface.config_entry {
+            entries.push((key("config_entry"), Value::Str(entry.clone())));
         }
-        if let Some(cost) = iface.dst_cost {
-            entries.push((Value::Str("dst_cost".into()), Value::Float(cost.as_f64())));
-        }
-        if let Some(cost) = iface.pr_cost {
-            entries.push((Value::Str("pr_cost".into()), Value::Float(cost.as_f64())));
-        }
-        if let Some(v) = iface.longitude {
-            entries.push((Value::Str("longitude".into()), Value::Float(v)));
-        }
-        if let Some(v) = iface.height {
-            entries.push((Value::Str("height".into()), Value::Float(v)));
-        }
-        if let Some(v) = iface.operator_lxmf_address {
-            entries.push((
-                Value::Str("operator_lxmf_address".into()),
-                Value::Bin(v.to_vec()),
-            ));
-        }
-        if let Some(ref v) = iface.reachable_on {
-            entries.push((Value::Str("reachable_on".into()), Value::Str(v.clone())));
-        }
-        if let Some(v) = iface.port {
-            entries.push((Value::Str("port".into()), Value::UInt(v as u64)));
-        }
-        if let Some(v) = iface.frequency {
-            entries.push((Value::Str("frequency".into()), Value::UInt(v as u64)));
-        }
-        if let Some(v) = iface.bandwidth {
-            entries.push((Value::Str("bandwidth".into()), Value::UInt(v as u64)));
-        }
-        if let Some(v) = iface.spreading_factor {
-            entries.push((Value::Str("sf".into()), Value::UInt(v as u64)));
-        }
-        if let Some(v) = iface.coding_rate {
-            entries.push((Value::Str("cr".into()), Value::UInt(v as u64)));
-        }
-        if let Some(ref v) = iface.modulation {
-            entries.push((Value::Str("modulation".into()), Value::Str(v.clone())));
-        }
-        if let Some(v) = iface.channel {
-            entries.push((Value::Str("channel".into()), Value::UInt(v as u64)));
-        }
-        if let Some(ref v) = iface.ifac_netname {
-            entries.push((Value::Str("ifac_netname".into()), Value::Str(v.clone())));
-        }
-        if let Some(ref v) = iface.ifac_netkey {
-            entries.push((Value::Str("ifac_netkey".into()), Value::Str(v.clone())));
-        }
-        if let Some(ref v) = iface.config_entry {
-            entries.push((Value::Str("config_entry".into()), Value::Str(v.clone())));
-        }
-
         entries.push((
-            Value::Str("discovery_hash".into()),
+            key("discovery_hash"),
             Value::Bin(iface.discovery_hash.to_vec()),
         ));
+        if let Some(address) = iface.operator_lxmf_address {
+            entries.push((
+                key("operator_lxmf_address"),
+                Value::Str(hex_encode(&address)),
+            ));
+        }
+        entries.push((key("discovered"), Value::Float(iface.discovered)));
+        entries.push((key("last_heard"), Value::Float(iface.last_heard)));
+        entries.push((key("heard_count"), Value::UInt(iface.heard_count as u64)));
 
         Ok(msgpack::pack(&Value::Map(entries)))
     }
@@ -391,8 +402,18 @@ impl DiscoveredInterfaceStorage {
                 })
         };
 
+        // Upstream stores the ids as hex strings; earlier releases of this
+        // implementation stored raw bytes.
+        let id_bytes = |key: &str| -> io::Result<Vec<u8>> {
+            match value.map_get(key) {
+                Some(Value::Str(text)) => hex_decode(text).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("{} not hex", key))
+                }),
+                _ => get_bytes(&value, key),
+            }
+        };
         let fixed_bytes = |key: &str, expected_len: usize| -> io::Result<Vec<u8>> {
-            let bytes = get_bytes(&value, key)?;
+            let bytes = id_bytes(key)?;
             if bytes.len() != expected_len {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -414,11 +435,11 @@ impl DiscoveredInterfaceStorage {
         let mut discovery_hash = [0u8; 32];
         discovery_hash.copy_from_slice(&discovery_hash_bytes);
 
-        let status_str = get_str(&value, "status")?;
-        let status = match status_str.as_str() {
-            "available" => DiscoveredStatus::Available,
-            "unknown" => DiscoveredStatus::Unknown,
-            "stale" => DiscoveredStatus::Stale,
+        // Upstream does not persist the status; it follows from last_heard
+        // when listed.
+        let status = match get_opt_str(&value, "status").as_deref() {
+            Some("available") => DiscoveredStatus::Available,
+            Some("stale") => DiscoveredStatus::Stale,
             _ => DiscoveredStatus::Unknown,
         };
 
@@ -459,13 +480,12 @@ impl DiscoveredInterfaceStorage {
             latitude: get_opt_float(&value, "latitude"),
             longitude: get_opt_float(&value, "longitude"),
             height: get_opt_float(&value, "height"),
-            operator_lxmf_address: value
-                .map_get("operator_lxmf_address")
-                .and_then(Value::as_bin)
+            operator_lxmf_address: id_bytes("operator_lxmf_address")
+                .ok()
                 .filter(|bytes| bytes.len() == 16)
                 .map(|bytes| {
                     let mut address = [0u8; 16];
-                    address.copy_from_slice(bytes);
+                    address.copy_from_slice(&bytes);
                     address
                 }),
             reachable_on: get_opt_str(&value, "reachable_on"),
@@ -1681,6 +1701,135 @@ mod tests {
             config_entry: Some("test config".into()),
             discovery_hash: compute_discovery_hash(&[0x01u8; 16], name),
         }
+    }
+
+    fn upstream_record(name: &str) -> Vec<u8> {
+        fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/fixtures/discovery")
+                .join(format!("{name}.msgpack")),
+        )
+        .unwrap()
+    }
+
+    /// Records written by upstream (tests/generate_discovery_record_fixtures.py)
+    /// load, and serialize back to the very same bytes.
+    #[test]
+    fn upstream_records_load_and_serialize_byte_for_byte() {
+        let storage = DiscoveredInterfaceStorage::new(std::env::temp_dir());
+        for name in ["upstream_backbone_record", "upstream_rnode_record"] {
+            let bytes = upstream_record(name);
+            let iface = storage.deserialize_interface(&bytes).unwrap();
+            assert_eq!(
+                storage.serialize_interface(&iface).unwrap(),
+                bytes,
+                "{name}"
+            );
+        }
+
+        let backbone = storage
+            .deserialize_interface(&upstream_record("upstream_backbone_record"))
+            .unwrap();
+        assert_eq!(backbone.name, "Backbone North");
+        assert_eq!(backbone.transport_id, [0x01; 16]);
+        assert_eq!(backbone.network_id, [0x02; 16]);
+        assert_eq!(backbone.operator_lxmf_address, Some([0xa5; 16]));
+        assert_eq!(backbone.reachable_on.as_deref(), Some("example.com"));
+        assert_eq!(backbone.port, Some(4242));
+        assert_eq!(backbone.heard_count, 5);
+        assert_eq!(backbone.impl_name.as_deref(), Some("RNS"));
+        assert_eq!(
+            backbone.discovery_hash,
+            compute_discovery_hash(&[0x01; 16], "Backbone North")
+        );
+        let rnode = storage
+            .deserialize_interface(&upstream_record("upstream_rnode_record"))
+            .unwrap();
+        assert_eq!(rnode.frequency, Some(868_000_000));
+        assert_eq!(rnode.spreading_factor, Some(8));
+        assert_eq!(rnode.impl_name, None);
+        assert_eq!(rnode.latitude, None);
+    }
+
+    /// A record stored under the earlier, raw-byte discovery hash moves to
+    /// upstream's file name when listed, or goes when that name exists.
+    #[test]
+    fn records_under_the_earlier_discovery_hash_are_migrated() {
+        let dir = std::env::temp_dir().join(format!(
+            "rns-discovery-hash-migration-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+        let old_hash = |iface: &DiscoveredInterface| {
+            let mut material = iface.transport_id.to_vec();
+            material.extend_from_slice(iface.name.as_bytes());
+            sha256(&material)
+        };
+
+        let mut moved = test_discovered_interface("Moved");
+        moved.discovery_hash = old_hash(&moved);
+        storage.store(&moved).unwrap();
+        let mut stale_copy = test_discovered_interface("Twice");
+        storage.store(&stale_copy).unwrap();
+        stale_copy.discovery_hash = old_hash(&stale_copy);
+        storage.store(&stale_copy).unwrap();
+
+        let mut listed: Vec<String> = storage
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|i| i.name)
+            .collect();
+        listed.sort();
+        assert_eq!(listed, ["Moved", "Twice"]);
+        let mut files: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        files.sort();
+        let mut expected = vec![
+            hex_encode(&compute_discovery_hash(&moved.transport_id, "Moved")),
+            hex_encode(&compute_discovery_hash(&stale_copy.transport_id, "Twice")),
+        ];
+        expected.sort();
+        assert_eq!(files, expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Records this implementation wrote before it used upstream's format
+    /// (raw-byte ids, a stored status) still load.
+    #[test]
+    fn records_in_the_earlier_format_still_load() {
+        let iface = test_discovered_interface("Legacy");
+        let key = |name: &str| Value::Str(name.into());
+        let legacy = msgpack::pack(&Value::Map(vec![
+            (key("type"), Value::Str(iface.interface_type.clone())),
+            (key("transport"), Value::Bool(true)),
+            (key("name"), Value::Str("Legacy".into())),
+            (key("discovered"), Value::Float(1.0)),
+            (key("last_heard"), Value::Float(2.0)),
+            (key("heard_count"), Value::UInt(3)),
+            (key("status"), Value::Str("stale".into())),
+            (key("stamp"), Value::Bin(vec![0x42; 64])),
+            (key("value"), Value::Float(18.0)),
+            (key("transport_id"), Value::Bin(vec![0x01; 16])),
+            (key("network_id"), Value::Bin(vec![0x02; 16])),
+            (key("hops"), Value::UInt(2)),
+            (key("operator_lxmf_address"), Value::Bin(vec![0xa5; 16])),
+            (
+                key("discovery_hash"),
+                Value::Bin(iface.discovery_hash.to_vec()),
+            ),
+        ]));
+        let storage = DiscoveredInterfaceStorage::new(std::env::temp_dir());
+        let loaded = storage.deserialize_interface(&legacy).unwrap();
+        assert_eq!(loaded.transport_id, [0x01; 16]);
+        assert_eq!(loaded.network_id, [0x02; 16]);
+        assert_eq!(loaded.operator_lxmf_address, Some([0xa5; 16]));
+        assert_eq!(loaded.status, DiscoveredStatus::Stale);
+        assert_eq!(loaded.heard_count, 3);
     }
 
     #[test]
