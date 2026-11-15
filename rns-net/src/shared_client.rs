@@ -400,7 +400,9 @@ impl RnsNode {
     ) -> io::Result<Self> {
         let config_dir = storage::resolve_config_dir(config_path);
 
-        // Parse config file for instance settings
+        // Parse config file for instance settings; as upstream, starting
+        // without one writes the default config.
+        storage::ensure_config_file(&config_dir)?;
         let config_file = config_dir.join("config");
         let rns_config = if config_file.exists() {
             crate::config::parse_file(&config_file)
