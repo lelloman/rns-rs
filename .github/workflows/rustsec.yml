@@ -43,4 +43,8 @@ jobs:
 
       - name: Audit dependencies
         working-directory: ${{ matrix.working-directory }}
+        # rns-esp32's rust-toolchain.toml names the `esp` toolchain, which
+        # is not installed here; auditing a lockfile needs no target.
+        env:
+          RUSTUP_TOOLCHAIN: stable
         run: cargo audit --deny warnings
