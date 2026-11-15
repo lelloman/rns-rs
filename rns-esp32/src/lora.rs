@@ -42,6 +42,7 @@ const OPCODE_GET_RX_BUFFER_STATUS: u8 = 0x13;
 const OPCODE_GET_PACKET_STATUS: u8 = 0x14;
 const OPCODE_GET_RSSI_INST: u8 = 0x15;
 const OPCODE_SET_DIO3_AS_TCXO_CTRL: u8 = 0x97;
+const OPCODE_SET_DIO2_AS_RF_SWITCH_CTRL: u8 = 0x9D;
 const OPCODE_CALIBRATE: u8 = 0x89;
 const OPCODE_SET_REGULATOR_MODE: u8 = 0x96;
 const OPCODE_WRITE_REGISTER: u8 = 0x0D;
@@ -55,6 +56,9 @@ const REG_RX_GAIN: u16 = 0x08AC;
 /// Modulation quality; bit 2 set for every bandwidth but 500 kHz (SX1262
 /// errata 15.1), as RNode firmware does.
 const REG_TX_MODULATION: u16 = 0x0889;
+/// TX clamp; bits 4:1 set for better resistance to antenna mismatch
+/// (SX1262 errata 15.2), as RNode firmware does.
+const REG_TX_CLAMP: u16 = 0x08D8;
 
 // IRQ masks
 const IRQ_TX_DONE: u16 = 0x0001;
@@ -245,6 +249,12 @@ impl Radio {
         // Set packet type to LoRa
         self.cmd(OPCODE_SET_PACKET_TYPE, &[PACKET_TYPE_LORA]);
 
+        // The Heltec V3's antenna switch is driven by DIO2: the SX1262 must
+        // switch it to the PA while transmitting, as RNode firmware sets up
+        // (DIO2_AS_RF_SWITCH). Without it the board transmits through the
+        // receive path, about 25 dB down.
+        self.cmd(OPCODE_SET_DIO2_AS_RF_SWITCH_CTRL, &[0x01]);
+
         // Set RF frequency
         let frf = ((config::LORA_FREQUENCY as u64) << 25) / 32_000_000;
         self.cmd(
@@ -258,6 +268,8 @@ impl Radio {
         );
 
         // PA config for SX1262: paDutyCycle=0x04, hpMax=0x07, deviceSel=0x00 (SX1262), paLut=0x01
+        let clamp = self.read_register(REG_TX_CLAMP);
+        self.write_register(REG_TX_CLAMP, clamp | (0x0F << 1));
         self.cmd(OPCODE_SET_PA_CONFIG, &[0x04, 0x07, 0x00, 0x01]);
 
         // TX params: power, rampTime (0x04 = 200us)
@@ -386,6 +398,8 @@ impl Radio {
         );
 
         // PA config for SX1262
+        let clamp = self.read_register(REG_TX_CLAMP);
+        self.write_register(REG_TX_CLAMP, clamp | (0x0F << 1));
         self.cmd(OPCODE_SET_PA_CONFIG, &[0x04, 0x07, 0x00, 0x01]);
 
         // TX params
