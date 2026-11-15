@@ -169,36 +169,24 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     let config_path = args.config_path().map(|s| s.to_string());
     let logging = configured_logging(config_path.as_deref());
     let log_level = effective_log_level(logging.loglevel, args.verbosity, args.quiet, service_mode);
-    let log_filter = rns_net::logging::numeric_log_filter(log_level);
 
-    if service_mode {
+    // `RNS.log` lines: on stdout, or with -s in the config directory's
+    // logfile.
+    let out: Box<dyn Write + Send> = if service_mode {
         let config_dir =
             storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
         let logfile_path = config_dir.join("logfile");
-        let writer = RotatingLogWriter::new(logfile_path.clone(), LOG_MAX_FILE_BYTES);
-        match writer {
-            Ok(writer) => {
-                let mut builder = env_logger::Builder::new();
-                builder
-                    .filter_level(log_filter.default)
-                    .filter_module(rns_net::logging::PATHING_LOG_TARGET, log_filter.pathing)
-                    .target(env_logger::Target::Pipe(Box::new(writer)));
-                apply_log_timestamp_format(&mut builder, logging.logtimestamps);
-                builder.init();
-            }
+        match RotatingLogWriter::new(logfile_path.clone(), LOG_MAX_FILE_BYTES) {
+            Ok(writer) => Box::new(writer),
             Err(e) => {
                 eprintln!("Could not open logfile {}: {}", logfile_path.display(), e);
                 std::process::exit(1);
             }
         }
     } else {
-        let mut builder = env_logger::Builder::new();
-        builder
-            .filter_level(log_filter.default)
-            .filter_module(rns_net::logging::PATHING_LOG_TARGET, log_filter.pathing);
-        apply_log_timestamp_format(&mut builder, logging.logtimestamps);
-        builder.init();
-    }
+        Box::new(std::io::stdout())
+    };
+    let _ = crate::pylog::RnsLogger::install(i32::from(log_level), logging.logtimestamps, out);
 
     log::info!("Starting rnsd {}", VERSION);
     if args.has("interactive") {
@@ -227,6 +215,8 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
              this is probably NOT what you want!",
             VERSION
         );
+    } else {
+        log::info!(target: crate::pylog::NOTICE_TARGET, "Started rnsd version {}", VERSION);
     }
 
     let stop_rx = match StopPipe::open() {
@@ -247,7 +237,6 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
             signal_handler as *const () as libc::sighandler_t,
         );
     }
-    log::info!("rnsd started");
 
     // Until SIGINT or SIGTERM.
     stop_rx.wait();
@@ -282,14 +271,6 @@ fn effective_log_level(configured: u8, verbosity: u8, quietness: u8, service_mod
         configured.min(rns_net::logging::LOG_EXTREME)
     } else {
         rns_net::logging::adjust_log_level(configured, verbosity, quietness)
-    }
-}
-
-fn apply_log_timestamp_format(builder: &mut env_logger::Builder, include_timestamps: bool) {
-    if include_timestamps {
-        builder.format_timestamp_secs();
-    } else {
-        builder.format_timestamp(None);
     }
 }
 
@@ -370,206 +351,9 @@ fn print_usage(usage_name: &str) {
     crate::argparse::print_help("rnsd", usage_name);
 }
 
-const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
-# It can be used as a starting point for your own configuration.
-
-[reticulum]
-  enable_transport = false
-  # When transport is disabled, the transport-facing identity is ephemeral by
-  # default. Set this to true to reuse the stored identity across restarts.
-  static_transport_identity = false
-  # Mask local zero-hop SINGLE/LINK traffic on external interfaces.
-  local_hops_delta = false
-  share_instance = true
-  shared_instance_port = 37428
-  instance_control_port = 37429
-  # Set to false to block rnstatus --attach/--detach/--reload.
-  # enable_interface_management = false
-  panic_on_interface_error = false
-
-  # Packet deduplication uses a bounded table. "lazy" grows its storage
-  # as packets arrive; "eager" holds the full table's memory from startup.
-  packet_hashlist_max_entries = 250000
-  packet_hashlist_allocation = lazy
-
-  # Global gravity for interfaces without a specific gravity option.
-  # default_gravity = 0
-
-  # Optional mode for interfaces created from discovery announces.
-  # autoconnect_interface_mode = gateway
-
-  # Gravity assigned to interfaces created from discovery announces.
-  # autoconnect_interface_gravity = 0
-
-  # Allow auto-connected interfaces to propagate announces to internal mode.
-  # autoconnect_announces_to_internal = yes
-
-  # Allow auto-connecting discovered interfaces from unverified or experimental
-  # implementations. Dangerous; leave disabled unless you understand the risk.
-  # autoconnect_unverified_implementations = no
-
-[stamps]
-  # This section configures stamping behaviour and defaults.
-  # In most cases, you do not need to change this, but on
-  # constrained systems especially, tuning these parameters
-  # can be very beneficial.
-
-  # During the 1.6.x phased transition to network stamp usage,
-  # it is possible to enable early opt-in on stamp generation
-  # and enforcement. Stamps are validated, while generation,
-  # emission and enforcement are disabled by default for
-  # destinations and path requests. Link requests are already
-  # stamped if the destination announced a cost. Upstream 1.6.1
-  # will enable generation and emission by default, and 1.6.2
-  # will activate enforcement. Any option can be enabled early
-  # by configuration; setting one to "no" keeps the default
-  # rather than forcing it off.
-  # stamp_destinations = yes
-  # stamp_prs = yes
-  # enforce_stamps = yes
-
-  # Also stamp link requests to destinations that announced no
-  # link request cost, at the default link request cost below.
-  # always_stamp_lrs = yes
-
-
-  # The default required stamp cost for an announce, and its
-  # destination to be considered valid. This applies both to
-  # announces received directly, and transported by this node,
-  # if transport is enabled. Any announced destination not
-  # meeting the cost will be ignored once stamps are enforced.
-  # destination_cost = 23.5
-
-  # The default value this instance will target when generating
-  # new destination stamps. An application may set a higher
-  # target, but applications requesting a lower value than the
-  # default will always generate at least the default value.
-  # Destination stamps are cached and reused, so a one-time
-  # high-value generation is usually a good idea.
-  # destination_value = 25.0
-
-  # The default required path request stamp cost. Path requests
-  # that do not meet the requirement are ignored once stamps
-  # are enforced.
-  # pr_cost = 15.8
-
-  # The default target value of path request stamps generated
-  # by this instance.
-  # pr_value = 15.8
-
-  # The default link request stamp cost to announce for local
-  # destinations that do not set their own (0 to 40), and to
-  # stamp with when always_stamp_lrs is set.
-  # lr_cost = 12.5
-
-  # The maximum amount of time to spend attempting to generate
-  # link request and path request stamps, in seconds.
-  # lr_stamp_timeout = 15
-  # pr_stamp_timeout = 15
-
-[filter]
-  # You can enable a hop limiter, that will drop all packets
-  # exceeding the specified maximum hop count (0 to 128).
-  # hop_limiter = 16
-
-  # Destination types can be ignored instance-wide, or, with
-  # required_only, allowed only when listed in allowed_types.
-  # ignored_types = application.that.spams, traffic.heavy.service
-  # required_only = no
-  # allowed_types = lxst.telephony
-
-[logging]
-  # Valid log levels are 0 through 8:
-  #   0: Critical information only
-  #   1: Errors
-  #   2: Warnings
-  #   3: Notices
-  #   4: Information (default)
-  #   5: Verbose logging
-  #   6: Debug logging
-  #   7: Path logging
-  #   8: Extreme logging
-  loglevel = 4
-
-  # Disable timestamp inclusion when an external logging tool
-  # provides its own timestamps or formatting.
-  # logtimestamps = no
-
-# ─── Interface examples ──────────────────────────────────────────────
-
-# TCP client: connect to a remote transport node
-#
-# [[TCP Client]]
-#   type = TCPClientInterface
-#   target_host = amsterdam.connect.reticulum.network
-#   target_port = 4965
-
-# TCP server: accept incoming connections
-#
-# [[TCP Server]]
-#   type = TCPServerInterface
-#   listen_ip = 0.0.0.0
-#   listen_port = 4965
-
-# UDP interface: broadcast on LAN
-#
-# [[UDP Interface]]
-#   type = UDPInterface
-#   listen_ip = 0.0.0.0
-#   listen_port = 4242
-#   forward_ip = 255.255.255.255
-#   forward_port = 4242
-
-# Serial interface: point-to-point serial port
-#
-# [[Serial Interface]]
-#   type = SerialInterface
-#   port = /dev/ttyUSB0
-#   speed = 115200
-#   databits = 8
-#   parity = none
-#   stopbits = 1
-
-# KISS interface: for TNC modems
-#
-# [[KISS Interface]]
-#   type = KISSInterface
-#   port = /dev/ttyUSB1
-#   speed = 115200
-#   databits = 8
-#   parity = none
-#   stopbits = 1
-#   preamble = 350
-#   txtail = 20
-#   persistence = 64
-#   slottime = 20
-#   flow_control = false
-
-# RNode LoRa interface
-#
-# [[RNode LoRa Interface]]
-#   type = RNodeInterface
-#   port = /dev/ttyACM0
-#   frequency = 867200000
-#   bandwidth = 125000
-#   txpower = 7
-#   spreadingfactor = 8
-#   codingrate = 5
-
-# Pipe interface: stdin/stdout of a subprocess
-#
-# [[Pipe Interface]]
-#   type = PipeInterface
-#   command = cat
-
-# Backbone interface: TCP mesh
-#
-# [[Backbone]]
-#   type = BackboneInterface
-#   listen_ip = 0.0.0.0
-#   listen_port = 4243
-#   peers = 10.0.0.1:4243, 10.0.0.2:4243
-"#;
+/// What upstream's `rnsd --exampleconfig` prints, byte for byte
+/// (`tests/generate_example_config.py`).
+const EXAMPLE_CONFIG: &str = include_str!("example_config");
 
 #[cfg(test)]
 mod tests {
@@ -651,43 +435,19 @@ mod tests {
     }
 
     #[test]
-    fn example_config_documents_and_parses_the_stamps_and_filter_sections() {
+    fn example_config_is_upstreams_and_parses_to_the_defaults() {
+        assert!(EXAMPLE_CONFIG.starts_with("# This is an example Reticulum config file.\n"));
         for key in [
-            "hop_limiter",
             "stamp_destinations",
-            "stamp_prs",
-            "always_stamp_lrs",
             "enforce_stamps",
             "destination_cost",
-            "destination_value",
-            "pr_cost",
-            "pr_value",
-            "lr_cost",
             "lr_stamp_timeout",
             "pr_stamp_timeout",
         ] {
-            assert!(
-                EXAMPLE_CONFIG.contains(&format!("# {key} = ")),
-                "{key} is not documented"
-            );
+            assert!(EXAMPLE_CONFIG.contains(&format!("# {key} = ")), "{key}");
         }
-        // Every option is commented out, so the example keeps the defaults.
         let config = rns_net::config::parse(EXAMPLE_CONFIG).unwrap();
         assert_eq!(config.stamps, rns_net::config::StampsSection::default());
-        assert_eq!(config.filter, rns_net::config::FilterSection::default());
-        // `hop_limiter` belongs to `[filter]` (upstream 01aef5bc).
-        let filter = EXAMPLE_CONFIG.find("\n[filter]").unwrap();
-        assert!(EXAMPLE_CONFIG.find("# hop_limiter = ").unwrap() > filter);
-        assert_eq!(
-            config.reticulum.hop_limiter,
-            rns_core::constants::HOP_LIMITER
-        );
-    }
-
-    #[test]
-    fn example_config_documents_all_supported_logging_levels() {
-        assert!(EXAMPLE_CONFIG.contains("Valid log levels are 0 through 8"));
-        assert!(EXAMPLE_CONFIG.contains("7: Path logging"));
         assert!(EXAMPLE_CONFIG.contains("8: Extreme logging"));
     }
 
