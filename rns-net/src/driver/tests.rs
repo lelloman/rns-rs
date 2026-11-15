@@ -16039,6 +16039,10 @@ fn interface_stats_report_peer_spawning_parents() {
     ));
     spawn(&mut driver, 21, 20, "I2P to peer.b32.i2p", 10, 20);
     spawn(&mut driver, 22, 20, "Connected peer on I2P", 30, 40);
+    endpoint.lock().unwrap().tunnels.insert(
+        InterfaceId(21),
+        Arc::new(crate::interface::i2p::tunnel::PeerTunnel::new(None)),
+    );
 
     // An RNodeMultiInterface with two subinterfaces, one online.
     for (id, online) in [(30, true), (31, false)] {
@@ -16089,13 +16093,23 @@ fn interface_stats_report_peer_spawning_parents() {
     // transmitted bytes add up.
     assert_eq!((i2p.clients, i2p.peers), (Some(1), Some(1)));
     assert_eq!((i2p.rxb, i2p.txb), (40, 40));
-    *endpoint.lock().unwrap() = crate::interface::i2p::I2pEndpoint {
-        online: true,
-        b32: Some("abc.b32.i2p".into()),
-    };
+    {
+        let mut endpoint = endpoint.lock().unwrap();
+        endpoint.online = true;
+        endpoint.b32 = Some("abc.b32.i2p".into());
+    }
     let i2p = stat(20);
     assert!(i2p.status);
     assert_eq!(i2p.i2p.unwrap().b32.as_deref(), Some("abc.b32.i2p"));
+    // Only I2P peers report their tunnel state: one being created, and
+    // none for a peer without a tunnel.
+    assert_eq!(i2p.i2p_tunnel_state, None);
+    assert_eq!(
+        stat(21).i2p_tunnel_state,
+        Some(Some("Creating Tunnel".to_string()))
+    );
+    assert_eq!(stat(22).i2p_tunnel_state, Some(None));
+    assert_eq!(stat(11).i2p_tunnel_state, None);
 
     let multi = stat(40);
     assert_eq!(multi.display_name, "RNodeMultiInterface[Multi]");
@@ -16105,4 +16119,101 @@ fn interface_stats_report_peer_spawning_parents() {
         stat(31).parent_display_name.as_deref(),
         Some("RNodeMultiInterface[Multi]")
     );
+}
+
+/// The driver runs upstream's I2P peer watchdog on its tick: the tunnel
+/// state follows the peer's reads, and an idle peer gets keepalives.
+#[cfg(feature = "iface-i2p")]
+#[test]
+fn driver_watches_i2p_peer_tunnels() {
+    use crate::interface::i2p::tunnel::{PeerTunnel, TunnelState};
+    use std::time::{Duration, Instant};
+
+    let (callbacks, ..) = MockCallbacks::new();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+    let endpoint = Arc::new(Mutex::new(crate::interface::i2p::I2pEndpoint::default()));
+    driver.listener_stats.push(ListenerStat {
+        id: InterfaceId(20),
+        name: "I2P".into(),
+        display_name: "I2PInterface[I2P]".into(),
+        interface_type: "I2PInterface".into(),
+        mode: constants::MODE_FULL,
+        gravity: 0,
+        announces_to_internal: None,
+        bitrate: Some(1000),
+        mtu: 1064,
+        ifac: None,
+        clients: ListenerClients::I2pPeers(I2pListener {
+            connectable: true,
+            configured_peers: None,
+            endpoint: Arc::clone(&endpoint),
+        }),
+    });
+    let mut sent = Vec::new();
+    for id in [21, 22] {
+        let (writer, writes) = MockWriter::new();
+        sent.push(writes);
+        driver.handle_dynamic_interface_up_event(
+            InterfaceId(id),
+            Box::new(writer),
+            event::DynamicInterfaceRegistration {
+                info: make_interface_info(id),
+                interface_type: "I2PInterfacePeer".into(),
+                parent_id: InterfaceId(20),
+                telemetry: event::InterfaceTelemetry::default(),
+                ifac: None,
+                display_name: None,
+                short_name: Some("Connected peer on I2P".into()),
+            },
+        );
+    }
+    let ago = |secs| {
+        Instant::now()
+            .checked_sub(Duration::from_secs(secs))
+            .unwrap()
+    };
+    // Connected 15 s ago and silent since: still active, but idle.
+    let idle = Arc::new(PeerTunnel::at(ago(15), None));
+    // Connected 25 s ago and silent since: unresponsive.
+    let silent = Arc::new(PeerTunnel::at(ago(25), None));
+    {
+        let mut endpoint = endpoint.lock().unwrap();
+        endpoint.tunnels.insert(InterfaceId(21), Arc::clone(&idle));
+        endpoint
+            .tunnels
+            .insert(InterfaceId(22), Arc::clone(&silent));
+    }
+    // A peer that transmitted meanwhile is not idle.
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(22))
+        .unwrap()
+        .stats
+        .txb = 100;
+
+    driver.handle_tick_event();
+
+    assert_eq!(idle.state(), TunnelState::Active);
+    assert_eq!(silent.state(), TunnelState::Stale);
+    // The keepalive is an empty frame (two HDLC flags on the wire); the
+    // writer may send it from a thread of its own.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sent[0].lock().unwrap().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(*sent[0].lock().unwrap(), vec![Vec::<u8>::new()]);
+    assert!(sent[1].lock().unwrap().is_empty());
+    let stats = driver.interface_stats();
+    let state = |id: u64| {
+        stats
+            .interfaces
+            .iter()
+            .find(|stat| stat.id == id)
+            .unwrap()
+            .i2p_tunnel_state
+            .clone()
+    };
+    assert_eq!(state(21), Some(Some("Tunnel Active".into())));
+    assert_eq!(state(22), Some(Some("Tunnel Unresponsive".into())));
 }

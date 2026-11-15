@@ -23,9 +23,10 @@ use std::time::Duration;
 use rns_core::transport::types::InterfaceId;
 
 use super::sam::{self, Destination, SamError};
+use super::tunnel::PeerTunnel;
 use super::{
     frame_decoder, load_or_generate_keypair, peer_info, peer_up, sanitize_name, template_ifac_size,
-    I2pConfig, I2pRuntime, I2pWriter,
+    I2pConfig, I2pEndpoint, I2pRuntime, I2pWriter,
 };
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
@@ -51,6 +52,7 @@ struct Session {
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<crate::interface::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
+    endpoint: Arc<Mutex<I2pEndpoint>>,
 }
 
 /// Set the SAM session up and serve it on the driver loop. Runs on a setup
@@ -97,6 +99,7 @@ pub(super) fn setup(
         ingress_control: config.ingress_control,
         dynamic_template,
         underlay_mark: config.underlay_mark,
+        endpoint: Arc::clone(&config.endpoint),
     });
 
     // The session lasts as long as its control socket stays open.
@@ -187,8 +190,8 @@ impl Session {
                 peer,
                 id.0
             );
-            let event = match self.writer(&stream, id, &peer, true) {
-                Ok(event) => event,
+            let (event, tunnel) = match self.writer(&stream, id, &peer, true) {
+                Ok(up) => up,
                 Err(e) => {
                     log::warn!("[{}] failed to clone stream: {}", self.name, e);
                     continue;
@@ -199,44 +202,49 @@ impl Session {
             }
             let source = StreamSource {
                 stream,
-                state: State::Peer(self.peer(id, Some(peer.clone()))),
+                state: State::Peer(self.peer(id, Some(peer.clone()), tunnel)),
                 session: Arc::clone(&self),
             };
             match self.tx.register_source(read_key(id), Box::new(source)) {
                 Ok(()) => return,
                 Err(e) => {
                     log::warn!("[{}] cannot read I2P peer {}: {}", self.name, peer, e);
+                    I2pEndpoint::remove_tunnel(&self.endpoint, id);
                     let _ = self.tx.send(Event::InterfaceDown(id));
                 }
             }
         }
     }
 
-    /// The event bringing up a peer whose writer writes `stream`.
+    /// The event bringing up a peer whose writer writes `stream`, and the
+    /// peer's tunnel, now watched.
     fn writer(
         &self,
         stream: &TcpStream,
         id: InterfaceId,
         remote: &str,
         outbound: bool,
-    ) -> io::Result<Event> {
+    ) -> io::Result<(Event, Arc<PeerTunnel>)> {
         let writer = Box::new(I2pWriter {
             stream: stream.try_clone()?,
         });
-        Ok(peer_up(
+        let tunnel = I2pEndpoint::add_tunnel(&self.endpoint, id, stream);
+        let up = peer_up(
             id,
             writer,
             peer_info(id, remote, self.ingress_control, outbound),
             self.dynamic_template.as_ref(),
             crate::interface::display::i2p_peer_name(&self.name, remote, outbound),
-        ))
+        );
+        Ok((up, tunnel))
     }
 
-    fn peer(&self, id: InterfaceId, outbound: Option<String>) -> Peer {
+    fn peer(&self, id: InterfaceId, outbound: Option<String>, tunnel: Arc<PeerTunnel>) -> Peer {
         Peer {
             id,
             decoder: frame_decoder(template_ifac_size(self.dynamic_template.as_ref())),
             outbound,
+            tunnel,
         }
     }
 
@@ -336,6 +344,7 @@ struct Peer {
     decoder: hdlc::Decoder,
     /// The address an outbound peer is reconnected to.
     outbound: Option<String>,
+    tunnel: Arc<PeerTunnel>,
 }
 
 enum State {
@@ -423,14 +432,14 @@ impl StreamSource {
             remote,
             id.0
         );
-        let up = match session.writer(&self.stream, id, &remote, false) {
+        let (up, tunnel) = match session.writer(&self.stream, id, &remote, false) {
             Ok(up) => up,
             Err(e) => {
                 log::warn!("[{}] failed to clone accepted stream: {}", session.name, e);
                 return Some(SourceStatus::Remove);
             }
         };
-        let mut peer = session.peer(id, None);
+        let mut peer = session.peer(id, None, tunnel);
         let frames = peer
             .decoder
             .feed(&data)
@@ -454,6 +463,7 @@ impl StreamSource {
 
     fn peer_lost(&self, peer: &Peer) {
         let session = &self.session;
+        I2pEndpoint::remove_tunnel(&session.endpoint, peer.id);
         let _ = session.tx.push_from_loop([Event::InterfaceDown(peer.id)]);
         let Some(address) = peer.outbound.clone() else {
             // Accepted peers are not reconnected.
@@ -499,7 +509,7 @@ impl LoopSource for StreamSource {
             &session.tx,
             peer.id,
             &session.name,
-            |_, _| {},
+            |_, _| peer.tunnel.note_read(),
         ) {
             StreamRead::Rearm => SourceStatus::Rearm,
             StreamRead::Suspend => SourceStatus::Suspend,
@@ -563,6 +573,7 @@ mod tests {
         }
         let bridge = TcpListener::bind("127.0.0.1:0").unwrap();
         let (tx, rx) = crate::event::channel();
+        let endpoint: Arc<Mutex<I2pEndpoint>> = Arc::default();
         let session = Arc::new(Session {
             sam_addr: bridge.local_addr().unwrap(),
             session_id: "test".into(),
@@ -575,6 +586,7 @@ mod tests {
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             dynamic_template: None,
             underlay_mark: None,
+            endpoint: Arc::clone(&endpoint),
         });
         let (accepts_tx, accepts) = mpsc::channel();
         thread::spawn(move || {
@@ -616,6 +628,9 @@ mod tests {
             }
             other => panic!("expected Frame, got {other:?}"),
         }
+        // Its tunnel is watched, being created until the driver checks it.
+        let tunnel = Arc::clone(&lock_or_recover(&endpoint, "test").tunnels[&InterfaceId(700)]);
+        assert_eq!(tunnel.state(), super::super::tunnel::TunnelState::Init);
         // The next incoming connection was asked for.
         let _second = accepts.recv_timeout(Duration::from_secs(2)).unwrap();
 
@@ -635,6 +650,7 @@ mod tests {
             Event::InterfaceDown(InterfaceId(700)) => {}
             other => panic!("expected InterfaceDown, got {other:?}"),
         }
+        assert!(lock_or_recover(&endpoint, "test").tunnels.is_empty());
     }
 
     #[test]
@@ -644,6 +660,7 @@ mod tests {
         }
         let bridge = TcpListener::bind("127.0.0.1:0").unwrap();
         let (tx, rx) = crate::event::channel();
+        let endpoint: Arc<Mutex<I2pEndpoint>> = Arc::default();
         let session = Arc::new(Session {
             sam_addr: bridge.local_addr().unwrap(),
             session_id: "test".into(),
@@ -656,6 +673,7 @@ mod tests {
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             dynamic_template: None,
             underlay_mark: None,
+            endpoint: Arc::clone(&endpoint),
         });
         let (connections_tx, connections) = mpsc::channel();
         thread::spawn(move || {
@@ -693,6 +711,9 @@ mod tests {
             }
             other => panic!("expected Frame, got {other:?}"),
         }
+        assert!(lock_or_recover(&endpoint, "test")
+            .tunnels
+            .contains_key(&InterfaceId(800)));
 
         // The peer dropping brings it down, and it is connected again.
         drop(stream);
@@ -700,6 +721,9 @@ mod tests {
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             Event::InterfaceDown(InterfaceId(800))
         ));
+        assert!(!lock_or_recover(&endpoint, "test")
+            .tunnels
+            .contains_key(&InterfaceId(800)));
         let _again = connections.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),

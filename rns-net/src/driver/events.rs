@@ -612,6 +612,40 @@ impl Driver {
         }
     }
 
+    /// Upstream's I2P peer watchdog: track each peer's tunnel state, keep
+    /// idle tunnels alive with empty frames, and restart those that stopped
+    /// answering (see [`crate::interface::i2p::tunnel`]).
+    #[cfg(feature = "iface-i2p")]
+    pub(crate) fn watch_i2p_tunnels(&mut self) {
+        for listener in &self.listener_stats {
+            let ListenerClients::I2pPeers(i2p) = &listener.clients else {
+                continue;
+            };
+            let tunnels: Vec<_> = crate::interface::lock_or_recover(&i2p.endpoint, "i2p endpoint")
+                .tunnels
+                .iter()
+                .map(|(id, tunnel)| (*id, std::sync::Arc::clone(tunnel)))
+                .collect();
+            for (id, tunnel) in tunnels {
+                let Some(entry) = self.interfaces.get_mut(&id) else {
+                    continue;
+                };
+                let Some(found) = tunnel.watch(entry.stats.txb) else {
+                    continue;
+                };
+                if found.keepalive && !found.restart {
+                    if let Err(e) = entry.writer.send_frame(&[]) {
+                        log::error!(
+                            "An error ocurred while sending I2P keepalive. The contained exception was: {}",
+                            e
+                        );
+                        tunnel.shutdown();
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn handle_tick_event(&mut self) {
         if crate::engine::FOLD_TIMERS {
             self.queue_folded_persistence();
@@ -626,6 +660,8 @@ impl Driver {
         for entry in self.interfaces.values_mut() {
             entry.writer.tick();
         }
+        #[cfg(feature = "iface-i2p")]
+        self.watch_i2p_tunnels();
         #[cfg(feature = "hooks")]
         {
             let ctx = HookContext::Tick;
