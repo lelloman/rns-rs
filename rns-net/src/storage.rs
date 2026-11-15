@@ -349,6 +349,29 @@ impl RatchetStore for SharedClientRatchetStore {
     }
 }
 
+/// The config file upstream's `Reticulum()` writes when there is none:
+/// `__default_rns_config__` as ConfigObj writes it, byte for byte
+/// (`tests/generate_default_config.py`). It enables an AutoInterface.
+pub const DEFAULT_CONFIG: &[u8] = include_bytes!("common/default_config");
+
+/// Create `<config_dir>/config` with [`DEFAULT_CONFIG`] when it does not
+/// exist, as upstream does on starting any instance. Returns whether it
+/// was created.
+pub fn ensure_config_file(config_dir: &Path) -> io::Result<bool> {
+    let config_file = config_dir.join("config");
+    if config_file.exists() {
+        return Ok(false);
+    }
+    log::info!("Could not load config file, creating default configuration file...");
+    fs::create_dir_all(config_dir)?;
+    fs::write(&config_file, DEFAULT_CONFIG)?;
+    log::info!(
+        "Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.",
+        config_dir.display()
+    );
+    Ok(true)
+}
+
 pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
     let storage = config_dir.join("storage");
     let cache = config_dir.join("cache");

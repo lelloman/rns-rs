@@ -28,6 +28,9 @@ Known destinations and received ratchets are persisted in
 Legacy msgpack and per-file storage is imported on first start; the older file
 stores remain the fallback if SQLite cannot be opened.
 
+A node started without a `config` file writes upstream's default one (an
+`AutoInterface`, no transport) and runs with it, as Python Reticulum does.
+
 Start from the example config shipped with `rnsd`:
 
 ```bash

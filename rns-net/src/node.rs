@@ -1325,7 +1325,11 @@ impl RnsNode {
         let paths = storage::ensure_storage_dirs(state_dir)?;
         let known_destinations_path = paths.storage.join("known_destinations");
 
-        // Parse config file
+        // Parse config file, upstream's default one when there is none
+        // (private nodes run on what they were given).
+        if !private {
+            storage::ensure_config_file(config_dir)?;
+        }
         let config_file = config_dir.join("config");
         let config_content = if config_file.exists() {
             std::fs::read_to_string(&config_file)?
