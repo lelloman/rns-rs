@@ -312,7 +312,7 @@ shared instance). Ignored types are dropped in every case.
 
 `hop_limiter` in the same section (default `128`) drops every inbound packet
 whose hop count has reached the limit, before any other check, and counts it
-per interface as `hop_limiter_hits` (`rnstatus` "Hop Limit"). It is clamped to
+per interface as `hop_limiter_hits` (in `rnstatus -j`). It is clamped to
 0-128, so `0` drops all inbound packets. Paths with more hops than the limit
 are removed from the path table (upstream `f96cef7e`), so lowering it also
 drops longer paths learned before. Upstream moved the option here from

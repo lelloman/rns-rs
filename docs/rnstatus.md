@@ -3,6 +3,14 @@
 `rnstatus` displays and controls interfaces on a local `rnsd` instance, or
 displays statistics from a remote transport instance with `-R`.
 
+The status display is upstream's, byte for byte: the same lines, order,
+number formatting and quirks, rendered from the same statistics. The tests
+check it against upstream's own output (`tests/fixtures/rnstatus`, generated
+by `tests/generate_rnstatus_fixtures.py`). One difference is inherent: upstream's
+`rnstatus` connects to the shared instance as a client, so with `-a` it also
+lists its own `LocalInterface` and counts itself as a served program, while
+this one asks over RPC only.
+
 ```text
 Usage: rnstatus [OPTIONS] [FILTER]
 
@@ -86,11 +94,11 @@ filtered announces when there are any, and the `afrxc` sort key orders by it.
 An announce is filtered when ingress control drops it or uses it to replace an
 announce it already holds, when `required_destinations_only` rejects its type,
 or when its identity is blackholed or its stamp fails. `pvs`, `ivs`, and `flt` sort by protocol, IFAC, and
-duplicate-filter violations respectively. A `Hop Limit` line counts frames
-dropped because their hop count reached the transport hop limiter configured
-with `[filter] hop_limiter`; these are reported separately from protocol
-violations and appear only when nonzero. With the default limiter of 128 the
-line stays empty: hop counts of 128 and above are malformed and counted as
+duplicate-filter violations respectively. Frames dropped because their hop
+count reached the transport hop limiter (`[filter] hop_limiter`) are counted
+separately from protocol violations, as `hop_limiter_hits` in `-j` output;
+upstream's display has no line for them. With the default limiter of 128 the
+count stays zero: hop counts of 128 and above are malformed and counted as
 protocol violations, as upstream.
 
 With `-F`, each interface shows a `Filtered` line, and with `-t` the totals

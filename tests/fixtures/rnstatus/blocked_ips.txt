@@ -1,0 +1,141 @@
+
+ Shared Instance[rns/default]
+    Status    : Up
+    Serving   : 2 programs
+    Rate      : 1.00 Gbps, MTU 262144
+    Traffic   : ↑8.19 KB    64 bps
+                ↓4.10 KB    1.20 Kbps
+
+ TCPServerInterface[Server/0.0.0.0:4242]
+    Network   : testnet
+    Status    : Up, gravity 3
+    Clients   : 1
+    Blocked   : 2 IPs
+                10.0.0.1
+                10.0.0.2
+    Mode      : Full (a>i)
+    TX Drops  : 4 (2.05 KB)
+    Rate      : 10.00 Mbps, MTU 16384
+    Access    : 128-bit IFAC by <…3b3c3d3e3f>
+    Violatns. : 2 protocol
+    Flt. Hits : 17
+    Traffic   : ↑1.00 KB    81.23 Kbps (1.50 KB waiting, stalled)
+                ↓999 B      8 bps
+
+ TCPInterface[Uplink/192.0.2.1:4242]
+    Source    : Auto-connect via <aabbccddeeff00112233445566778899>
+    Status    : Down
+    Mode      : Gateway
+    Rate      : 10.00 Mbps, MTU 16384
+    Violatns. : 0 protocol, 3 IFAC
+    Traffic   : ↑1.00 KB    0 bps
+                ↓1.50 TB    0 bps
+
+ RNodeInterface[LoRa]
+    Status    : Up
+    Mode      : Access Point
+    Rate      : 3.12 kbps, MTU 508
+    Noise Fl. : -99 dBm
+    Intrfrnc. : -71 dBm 1h and 2m ago
+    CPU load  : Unknown
+    Battery   : 87% (charging)
+    Airtime   : 0.53% (15s), 1% (1h)
+    Ch. Load  : 12.25% (15s), 0.0% (1h)
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ RNodeInterface[LoRa2]
+    Status    : Up
+    Mode      : Roaming
+    Rate      : 1.95 kbps, MTU 508
+    Noise Fl. : -104 dBm
+    Intrfrnc. : -80 dBm
+    CPU load  : Unknown
+    CPU temp  : 41°C
+    Mem usage : Unknown
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ RNodeInterface[LoRa3]
+    Status    : Up
+    Mode      : Boundary
+    Noise Fl. : Unknown
+    CPU load  : 17.5 %
+    Mem usage : 33.25 %
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ RNodeInterface[LoRa4]
+    Status    : Up
+    Mode      : Point-to-Point
+    Noise Fl. : -120 dBm, no interference
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ WeaveInterface[Weave]
+    Status    : Up
+    Mode      : Full
+    Rate      : 2.00 Mbps, MTU 1064
+    Switch ID : sw1
+    Endpoint  : Unknown
+    Via       : sw0
+    Peers     : 4 reachable
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ AutoInterface[Default]
+    Status    : Up, gravity -1
+    Mode      : Full
+    Rate      : 10.00 Mbps, MTU 1196
+    Peers     : 0 reachable
+    Traffic   : ↑0 B        0 bps
+                ↓12 B       0 bps
+
+ I2PInterface[I2P]
+    Status    : Up
+    Peers     : 1 connected I2P endpoint
+    Mode      : Full
+    Rate      : 256.00 kbps, MTU 1064
+    I2P       : Tunnel active
+    I2P B32   : abcdefghijklmnop.b32.i2p
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ I2PInterface[I2P2]
+    Status    : Up
+    Peers     : 3 connected I2P endpoints
+    Mode      : Full
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ UDPInterface[UDP]
+    Status    : Up
+    Mode      : Full
+    Rate      : 10.00 Mbps, MTU 1064
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ SerialInterface[Serial]
+    Status    : Up
+    Mode      : Full
+    Rate      : 9.60 kbps, MTU 564
+    Traffic   : ↑6 B      
+                ↓5 B      
+
+ Shared Instance[rns/other]
+    Status    : Up
+    Serving   : 1 program
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ Shared Instance[rns/empty]
+    Status    : Up
+    Serving   : 0 programs
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ Transport Instance <000102030405060708090a0b0c0d0e0f> running
+ Network Identity   <101112131415161718191a1b1c1d1e1f>
+ Probe responder at <202122232425262728292a2b2c2d2e2f> active
+ Uptime is 1d, 2h, 3m and 4.5s
+
