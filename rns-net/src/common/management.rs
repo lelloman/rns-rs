@@ -11,31 +11,7 @@ use rns_core::constants;
 use rns_core::destination::destination_hash;
 use rns_core::hash::truncated_hash;
 use rns_core::msgpack::{self, Value};
-use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use rns_core::transport::TransportEngine;
-
-use super::interface_stats::InterfaceStats;
-use super::time;
-
-/// View trait for interface status, decoupling management from InterfaceEntry.
-pub trait InterfaceStatusView {
-    fn id(&self) -> InterfaceId;
-    fn info(&self) -> &InterfaceInfo;
-    fn online(&self) -> bool;
-    fn stats(&self) -> &InterfaceStats;
-    fn tx_drops(&self) -> u64 {
-        0
-    }
-    fn tx_dropped_bytes(&self) -> u64 {
-        0
-    }
-    fn tx_stalled(&self) -> bool {
-        false
-    }
-    fn tx_buffered(&self) -> usize {
-        0
-    }
-}
 
 /// Get the path hash for "/status".
 pub fn status_path_hash() -> [u8; 16] {
@@ -251,338 +227,34 @@ pub struct ManagementConfig {
     pub blackhole_update_interval: Option<f64>,
 }
 
-/// Handle a `/status` request.
-///
-/// Request data: msgpack([include_lstats, include_profiling]) where both are bool.
-/// Response: msgpack([interface_stats_dict, link_count?, profiling_results?])
-/// matching Python format.
+/// Handle a `/status` request as upstream's `remote_status_handler` does:
+/// for request data `[include_lstats, include_profiling?]` answer
+/// `[interface_stats, link_count?, profiling_results?]`, where
+/// `interface_stats` is the dict the shared-instance RPC returns for
+/// `interface_stats`. Anything but a non-empty list gets no answer.
 pub fn handle_status_request(
     data: &[u8],
-    engine: &TransportEngine,
-    interfaces: &[&dyn InterfaceStatusView],
-    started: f64,
-    probe_responder_hash: Option<[u8; 16]>,
+    interface_stats: Value,
+    link_count: usize,
 ) -> Option<Vec<u8>> {
-    // Decode request data
-    let (include_lstats, include_profiling) = match msgpack::unpack_exact(data) {
-        Ok(Value::Array(arr)) if !arr.is_empty() => (
-            arr[0].as_bool().unwrap_or(false),
-            arr.get(1).and_then(Value::as_bool).unwrap_or(false),
-        ),
-        _ => (false, false),
+    let Ok(Value::Array(request)) = msgpack::unpack_exact(data) else {
+        return None;
     };
-
-    // Build interface stats
-    let mut iface_list = Vec::new();
-    let mut total_rxb: u64 = 0;
-    let mut total_txb: u64 = 0;
-    let mut total_rxpps = 0.0;
-    let mut total_txpps = 0.0;
-    let mut total_rx_packets: u64 = 0;
-    let mut total_tx_packets: u64 = 0;
-    let mut total_announce_rx: u64 = 0;
-    let mut total_announce_tx: u64 = 0;
-    let mut total_path_request_rx: u64 = 0;
-    let mut total_path_request_tx: u64 = 0;
-    let mut total_arxb: u64 = 0;
-    let mut total_atxb: u64 = 0;
-    let mut total_arxc: u64 = 0;
-    let mut total_atxc: u64 = 0;
-    let mut total_prxb: u64 = 0;
-    let mut total_ptxb: u64 = 0;
-    let mut total_prxc: u64 = 0;
-    let mut total_ptxc: u64 = 0;
-    let mut total_rxs = 0.0;
-    let mut total_txs = 0.0;
-    let mut total_frxb: u64 = 0;
-    let mut total_ftxb: u64 = 0;
-    let mut total_frxs = 0.0;
-    let mut total_ftxs = 0.0;
-    let mut total_arxs = 0.0;
-    let mut total_atxs = 0.0;
-    let mut total_prxs = 0.0;
-    let mut total_ptxs = 0.0;
-    let mut total_arxf = 0.0;
-    let mut total_atxf = 0.0;
-    let mut total_prxf = 0.0;
-    let mut total_ptxf = 0.0;
-
-    for entry in interfaces {
-        let id = entry.id();
-        let info = entry.info();
-        let stats = entry.stats();
-
-        if !info.is_local_client {
-            total_rxb += stats.rxb;
-            total_txb += stats.txb;
-            total_rxpps += stats.traffic_rates.rxpps;
-            total_txpps += stats.traffic_rates.txpps;
-            total_rx_packets += stats.rx_packets;
-            total_tx_packets += stats.tx_packets;
-            total_announce_rx += stats.arxc;
-            total_announce_tx += stats.atxc;
-            total_path_request_rx += stats.prxc;
-            total_path_request_tx += stats.ptxc;
-            total_arxb += stats.arxb;
-            total_atxb += stats.atxb;
-            total_arxc += stats.arxc;
-            total_atxc += stats.atxc;
-            total_prxb += stats.prxb;
-            total_ptxb += stats.ptxb;
-            total_prxc += stats.prxc;
-            total_ptxc += stats.ptxc;
-            total_rxs += stats.traffic_rates.rxs;
-            total_txs += stats.traffic_rates.txs;
-            total_frxb += stats.frxb;
-            total_ftxb += stats.ftxb;
-            total_frxs += stats.traffic_rates.frxs;
-            total_ftxs += stats.traffic_rates.ftxs;
-            total_arxs += stats.traffic_rates.arxs;
-            total_atxs += stats.traffic_rates.atxs;
-            total_prxs += stats.traffic_rates.prxs;
-            total_ptxs += stats.traffic_rates.ptxs;
-            total_arxf += stats.incoming_announce_freq();
-            total_atxf += stats.outgoing_announce_freq();
-            total_prxf += stats.incoming_path_request_freq();
-            total_ptxf += stats.outgoing_path_request_freq();
-        }
-
-        let mut ifstats: Vec<(&str, Value)> = vec![
-            ("name", Value::Str(info.name.clone())),
-            ("short_name", Value::Str(info.name.clone())),
-            (
-                "tunnel_id",
-                engine
-                    .interface_info(&id)
-                    .and_then(|info| info.tunnel_id)
-                    // Upstream 3281e283: else the tunnel this node synthesized.
-                    .or_else(|| engine.local_tunnel_id(&id))
-                    .map(|tunnel_id| Value::Bin(tunnel_id.to_vec()))
-                    .unwrap_or(Value::Nil),
-            ),
-            (
-                "remote_transport_id",
-                engine
-                    .remote_transport(&id)
-                    .map(|identity_hash| Value::Bin(identity_hash.to_vec()))
-                    .unwrap_or(Value::Nil),
-            ),
-            ("status", Value::Bool(entry.online())),
-            ("mode", Value::UInt(info.mode as u64)),
-            ("rxb", Value::UInt(stats.rxb)),
-            ("txb", Value::UInt(stats.txb)),
-            ("txdrp", Value::UInt(entry.tx_drops())),
-            ("txdrb", Value::UInt(entry.tx_dropped_bytes())),
-            ("txstalled", Value::Bool(entry.tx_stalled())),
-            ("txbuffered", Value::UInt(entry.tx_buffered() as u64)),
-            ("rxs", Value::Float(stats.traffic_rates.rxs)),
-            ("txs", Value::Float(stats.traffic_rates.txs)),
-            ("frxb", Value::UInt(stats.frxb)),
-            ("ftxb", Value::UInt(stats.ftxb)),
-            ("frxs", Value::Float(stats.traffic_rates.frxs)),
-            ("ftxs", Value::Float(stats.traffic_rates.ftxs)),
-            ("arxb", Value::UInt(stats.arxb)),
-            ("atxb", Value::UInt(stats.atxb)),
-            ("arxc", Value::UInt(stats.arxc)),
-            ("atxc", Value::UInt(stats.atxc)),
-            ("afrxc", Value::UInt(stats.afrxc)),
-            ("arxs", Value::Float(stats.traffic_rates.arxs)),
-            ("atxs", Value::Float(stats.traffic_rates.atxs)),
-            ("prxb", Value::UInt(stats.prxb)),
-            ("ptxb", Value::UInt(stats.ptxb)),
-            ("prxc", Value::UInt(stats.prxc)),
-            ("ptxc", Value::UInt(stats.ptxc)),
-            ("prxs", Value::Float(stats.traffic_rates.prxs)),
-            ("ptxs", Value::Float(stats.traffic_rates.ptxs)),
-            (
-                "protocol_violations",
-                Value::UInt(stats.protocol_violations),
-            ),
-            ("ifac_violations", Value::UInt(stats.ifac_violations)),
-            ("packet_filter_hits", Value::UInt(stats.packet_filter_hits)),
-            ("hop_limiter_hits", Value::UInt(stats.hop_limiter_hits)),
-            (
-                "stamped_path_requests",
-                Value::UInt(stats.stamped_path_requests),
-            ),
-        ];
-        if let Some(br) = info.bitrate {
-            ifstats.push(("bitrate", Value::UInt(br)));
-        } else {
-            ifstats.push(("bitrate", Value::Nil));
-        }
-        ifstats.push((
-            "incoming_announce_freq",
-            Value::Float(stats.incoming_announce_freq()),
-        ));
-        ifstats.push((
-            "outgoing_announce_freq",
-            Value::Float(stats.outgoing_announce_freq()),
-        ));
-        ifstats.push((
-            "held_announces",
-            Value::UInt(engine.held_announce_count(&id) as u64),
-        ));
-        if let Some(rssi) = stats.rssi {
-            ifstats.push(("rssi", Value::Int(i64::from(rssi))));
-        }
-        if let Some(snr) = stats.snr {
-            ifstats.push(("snr", Value::Float(f64::from(snr))));
-        }
-        if let Some(quality) = stats.signal_quality {
-            ifstats.push(("signal_quality", Value::Float(quality)));
-        }
-        if let Some(frequency) = stats.frequency {
-            ifstats.push(("frequency", Value::UInt(u64::from(frequency))));
-        }
-        if let Some(bandwidth) = stats.bandwidth {
-            ifstats.push(("bandwidth", Value::UInt(u64::from(bandwidth))));
-        }
-        if let Some(txpower) = stats.txpower {
-            ifstats.push(("txpower", Value::Int(i64::from(txpower))));
-        }
-        if let Some(sf) = stats.spreading_factor {
-            ifstats.push(("sf", Value::UInt(u64::from(sf))));
-        }
-        if let Some(cr) = stats.coding_rate {
-            ifstats.push(("cr", Value::UInt(u64::from(cr))));
-        }
-        if let Some(channel) = stats.channel {
-            ifstats.push(("channel", Value::UInt(u64::from(channel))));
-        }
-        if let Some(modulation) = stats.modulation.as_ref() {
-            ifstats.push(("modulation", Value::Str(modulation.clone())));
-        }
-        if let Some(radio) = stats.radio.as_ref() {
-            let dbm = |v: Option<i16>| v.map_or(Value::Nil, |v| Value::Int(i64::from(v)));
-            ifstats.push(("airtime_short", Value::Float(radio.airtime_short)));
-            ifstats.push(("airtime_long", Value::Float(radio.airtime_long)));
-            ifstats.push(("channel_load_short", Value::Float(radio.channel_load_short)));
-            ifstats.push(("channel_load_long", Value::Float(radio.channel_load_long)));
-            ifstats.push(("noise_floor", dbm(radio.noise_floor)));
-            ifstats.push(("interference", dbm(radio.interference)));
-            if let Some((ts, rssi)) = radio.interference_last {
-                ifstats.push(("interference_last_ts", Value::Float(ts)));
-                ifstats.push(("interference_last_dbm", Value::Int(i64::from(rssi))));
-            }
-            ifstats.push(("cpu_temp", dbm(radio.temperature)));
-            if radio.battery_state != 0 {
-                ifstats.push((
-                    "battery_state",
-                    Value::Str(radio.battery_state_name().to_string()),
-                ));
-            }
-            ifstats.push((
-                "battery_percent",
-                Value::UInt(u64::from(radio.battery_percent)),
-            ));
-        }
-
-        // IFAC info
-        ifstats.push(("ifac_signature", Value::Nil));
-        ifstats.push((
-            "ifac_size",
-            if info.bitrate.is_some() {
-                Value::UInt(0)
-            } else {
-                Value::Nil
-            },
-        ));
-        ifstats.push(("ifac_netname", Value::Nil));
-
-        // Unused by Rust but expected by Python clients
-        ifstats.push(("clients", Value::Nil));
-        ifstats.push(("announce_queue", Value::Nil));
-
-        // Build as map
-        let map = ifstats
-            .into_iter()
-            .map(|(k, v)| (Value::Str(k.into()), v))
-            .collect();
-        iface_list.push(Value::Map(map));
+    let flag = |i: usize| match request.get(i) {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::UInt(1)) | Some(Value::Int(1)) => true,
+        _ => false,
+    };
+    if request.is_empty() {
+        return None;
     }
-
-    // Build top-level stats dict
-    let mut stats: Vec<(&str, Value)> = vec![
-        ("interfaces", Value::Array(iface_list)),
-        ("rxb", Value::UInt(total_rxb)),
-        ("txb", Value::UInt(total_txb)),
-        ("rxpps", Value::Float(total_rxpps)),
-        ("txpps", Value::Float(total_txpps)),
-        ("rxpkts", Value::UInt(total_rx_packets)),
-        ("txpkts", Value::UInt(total_tx_packets)),
-        ("arxpkts", Value::UInt(total_announce_rx)),
-        ("atxpkts", Value::UInt(total_announce_tx)),
-        ("prxpkts", Value::UInt(total_path_request_rx)),
-        ("ptxpkts", Value::UInt(total_path_request_tx)),
-        ("rxs", Value::Float(total_rxs)),
-        ("txs", Value::Float(total_txs)),
-        ("frxb", Value::UInt(total_frxb)),
-        ("ftxb", Value::UInt(total_ftxb)),
-        ("frxs", Value::Float(total_frxs)),
-        ("ftxs", Value::Float(total_ftxs)),
-        ("arxb", Value::UInt(total_arxb)),
-        ("atxb", Value::UInt(total_atxb)),
-        ("arxc", Value::UInt(total_arxc)),
-        ("atxc", Value::UInt(total_atxc)),
-        ("arxs", Value::Float(total_arxs)),
-        ("atxs", Value::Float(total_atxs)),
-        ("prxb", Value::UInt(total_prxb)),
-        ("ptxb", Value::UInt(total_ptxb)),
-        ("prxc", Value::UInt(total_prxc)),
-        ("ptxc", Value::UInt(total_ptxc)),
-        ("prxs", Value::Float(total_prxs)),
-        ("ptxs", Value::Float(total_ptxs)),
-        ("arxf", Value::Float(total_arxf)),
-        ("atxf", Value::Float(total_atxf)),
-        ("prxf", Value::Float(total_prxf)),
-        ("ptxf", Value::Float(total_ptxf)),
-    ];
-
-    let (path_pool_total, path_pool_unused) = engine.path_pool_counts();
-    let total_links = engine.link_table_count();
-    let active_links = engine.active_link_count();
-    stats.push(("tlinks", Value::UInt(total_links as u64)));
-    stats.push(("alinks", Value::UInt(active_links as u64)));
-    stats.push((
-        "plinks",
-        Value::UInt(total_links.saturating_sub(active_links) as u64),
-    ));
-    stats.push(("tpcount", Value::UInt(path_pool_total as u64)));
-    stats.push(("unupcount", Value::UInt(path_pool_unused as u64)));
-    stats.push((
-        "actpcount",
-        Value::UInt(path_pool_total.saturating_sub(path_pool_unused) as u64),
-    ));
-
-    if let Some(identity_hash) = engine.config().identity_hash {
-        stats.push(("transport_id", Value::Bin(identity_hash.to_vec())));
-        stats.push(("transport_uptime", Value::Float(time::now() - started)));
-    }
-    stats.push((
-        "probe_responder",
-        match probe_responder_hash {
-            Some(hash) => Value::Bin(hash.to_vec()),
-            None => Value::Nil,
-        },
-    ));
-    stats.push(("rss", Value::Nil));
-
-    let stats_map = stats
-        .into_iter()
-        .map(|(k, v)| (Value::Str(k.into()), v))
-        .collect();
-
-    // Build response: [stats_dict] or [stats_dict, link_count]
-    let mut response = vec![Value::Map(stats_map)];
-    if include_lstats {
-        let link_count = engine.link_table_count();
+    let mut response = vec![interface_stats];
+    if flag(0) {
         response.push(Value::UInt(link_count as u64));
     }
-    if include_profiling {
+    if request.len() >= 2 && flag(1) {
         response.push(crate::profiling::results_msgpack());
     }
-
     Some(msgpack::pack(&Value::Array(response)))
 }
 

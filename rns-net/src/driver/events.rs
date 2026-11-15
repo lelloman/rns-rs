@@ -3093,20 +3093,13 @@ impl Driver {
         }
 
         let response_data = if path_hash == management::status_path_hash() {
-            {
-                let views: Vec<&dyn management::InterfaceStatusView> = self
-                    .interfaces
-                    .values()
-                    .map(|e| e as &dyn management::InterfaceStatusView)
-                    .collect();
-                management::handle_status_request(
-                    &data,
-                    &self.engine,
-                    &views,
-                    self.started,
-                    self.probe_responder_hash,
-                )
-            }
+            // Upstream answers with get_interface_stats(), the RPC's dict.
+            management::handle_status_request(
+                &data,
+                crate::rpc::interface_stats_msgpack(&self.interface_stats()),
+                // The RPC's get_link_count.
+                self.engine.link_table_count() + self.link_manager.link_count(),
+            )
         } else if path_hash == management::path_path_hash() {
             management::handle_path_request(&data, &self.engine)
         } else if path_hash == management::list_path_hash() {

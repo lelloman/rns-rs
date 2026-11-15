@@ -5,24 +5,11 @@ pub use crate::common::management::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interface::{InterfaceEntry, InterfaceStats, Writer};
     use crate::time;
     use rns_core::constants;
     use rns_core::msgpack::{self, Value};
-    use rns_core::transport::types::{
-        InterfaceId, InterfaceInfo, TransportConfig, DEFAULT_MAX_PATH_DESTINATIONS,
-    };
+    use rns_core::transport::types::{TransportConfig, DEFAULT_MAX_PATH_DESTINATIONS};
     use rns_core::transport::TransportEngine;
-    use std::collections::HashMap;
-    use std::io;
-    use std::time::Duration;
-
-    struct NullWriter;
-    impl Writer for NullWriter {
-        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
-            Ok(())
-        }
-    }
 
     fn make_engine() -> TransportEngine {
         TransportEngine::new(TransportConfig {
@@ -45,97 +32,6 @@ mod tests {
             announce_queue_max_entries: 256,
             announce_queue_max_interfaces: 1024,
         })
-    }
-
-    fn make_interface_views() -> (HashMap<InterfaceId, InterfaceEntry>, Vec<InterfaceId>) {
-        let mut map = HashMap::new();
-        let id = InterfaceId(1);
-        let info = InterfaceInfo {
-            stamp_costs: Default::default(),
-            id,
-            name: "TestInterface".into(),
-            mode: constants::MODE_FULL,
-            gravity: 0,
-            recursive_prs: false,
-            announces_from_internal: true,
-            announces_to_internal: None,
-            out_capable: true,
-            in_capable: true,
-            bitrate: Some(115200),
-            airtime_profile: None,
-            announce_rate_target: None,
-            announce_rate_grace: 0,
-            announce_rate_penalty: 0.0,
-            announce_cap: constants::ANNOUNCE_CAP,
-            is_local_client: false,
-            wants_tunnel: false,
-            tunnel_id: None,
-            mtu: rns_core::constants::MTU as u32,
-            mtu_upgradable: false,
-            ia_freq: 0.0,
-            ip_freq: 0.0,
-            op_freq: 0.0,
-            op_samples: 0,
-            started: 0.0,
-            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
-        };
-        map.insert(
-            id,
-            InterfaceEntry {
-                id,
-                info,
-                writer: Box::new(NullWriter),
-                async_writer_metrics: None,
-                enabled: true,
-                online: true,
-                dynamic: false,
-                ifac: None,
-                stats: InterfaceStats {
-                    rxb: 1234,
-                    txb: 5678,
-                    arxb: 0,
-                    atxb: 0,
-                    arxc: 0,
-                    atxc: 0,
-                    prxb: 0,
-                    ptxb: 0,
-                    prxc: 0,
-                    ptxc: 0,
-                    traffic_rates: Default::default(),
-                    protocol_violations: 0,
-                    ifac_violations: 0,
-                    packet_filter_hits: 0,
-                    hop_limiter_hits: 0,
-                    stamped_path_requests: 0,
-                    rx_packets: 10,
-                    tx_packets: 20,
-                    cpu_load: None,
-                    mem_load: None,
-                    switch_id: None,
-                    endpoint_id: None,
-                    via_switch_id: None,
-                    peers: None,
-                    started: 1000.0,
-                    ia_timestamps: vec![],
-                    oa_timestamps: vec![],
-                    ip_timestamps: vec![],
-                    op_timestamps: vec![],
-                    ..Default::default()
-                },
-                interface_type: "TestInterface".to_string(),
-                send_retry_at: None,
-                send_retry_backoff: Duration::ZERO,
-            },
-        );
-        let ids: Vec<InterfaceId> = map.keys().copied().collect();
-        (map, ids)
-    }
-
-    /// Helper: collect InterfaceEntry refs as trait object refs.
-    fn as_views(map: &HashMap<InterfaceId, InterfaceEntry>) -> Vec<&dyn InterfaceStatusView> {
-        map.values()
-            .map(|e| e as &dyn InterfaceStatusView)
-            .collect()
     }
 
     #[test]
@@ -181,171 +77,50 @@ mod tests {
         assert!(!is_management_path(&[0u8; 16]));
     }
 
-    #[test]
-    fn test_status_request_basic() {
-        let engine = make_engine();
-        let (interfaces, _) = make_interface_views();
-        let views = as_views(&interfaces);
-        let started = time::now() - 100.0;
-
-        let request = msgpack::pack(&Value::Array(vec![Value::Bool(false)]));
-        let response = handle_status_request(&request, &engine, &views, started, None).unwrap();
-
-        let val = msgpack::unpack_exact(&response).unwrap();
-        match val {
-            Value::Array(arr) => {
-                assert_eq!(arr.len(), 1);
-                match &arr[0] {
-                    Value::Map(map) => {
-                        let transport_id = map
-                            .iter()
-                            .find(|(k, _)| *k == Value::Str("transport_id".into()))
-                            .map(|(_, v)| v);
-                        assert!(transport_id.is_some());
-
-                        let rxb = map
-                            .iter()
-                            .find(|(k, _)| *k == Value::Str("rxb".into()))
-                            .map(|(_, v)| v.as_uint().unwrap());
-                        assert_eq!(rxb, Some(1234));
-
-                        let txb = map
-                            .iter()
-                            .find(|(k, _)| *k == Value::Str("txb".into()))
-                            .map(|(_, v)| v.as_uint().unwrap());
-                        assert_eq!(txb, Some(5678));
-
-                        for key in ["arxf", "atxf", "prxf", "ptxf", "rxpps", "txpps"] {
-                            let frequency = map
-                                .iter()
-                                .find(|(candidate, _)| *candidate == Value::Str(key.into()))
-                                .and_then(|(_, value)| value.as_float());
-                            assert_eq!(frequency, Some(0.0), "missing {key}");
-                        }
-
-                        let ifaces = map
-                            .iter()
-                            .find(|(k, _)| *k == Value::Str("interfaces".into()))
-                            .map(|(_, v)| v);
-                        match ifaces {
-                            Some(Value::Array(iface_arr)) => {
-                                assert_eq!(iface_arr.len(), 1);
-                                // Upstream 9b6b724b: no tunnel yet, so nil.
-                                let Value::Map(iface) = &iface_arr[0] else {
-                                    panic!("Expected interface map");
-                                };
-                                let tunnel_id = iface
-                                    .iter()
-                                    .find(|(k, _)| *k == Value::Str("tunnel_id".into()))
-                                    .map(|(_, v)| v);
-                                assert_eq!(tunnel_id, Some(&Value::Nil));
-                            }
-                            _ => panic!("Expected interfaces array"),
-                        }
-
-                        let uptime = map
-                            .iter()
-                            .find(|(k, _)| *k == Value::Str("transport_uptime".into()))
-                            .and_then(|(_, v)| v.as_float());
-                        assert!(uptime.unwrap() >= 100.0);
-                    }
-                    _ => panic!("Expected map in response"),
-                }
-            }
-            _ => panic!("Expected array response"),
-        }
-    }
-
-    /// The (single) interface map of a status response.
-    fn status_interface(response: &[u8]) -> Vec<(Value, Value)> {
-        let Value::Array(arr) = msgpack::unpack_exact(response).unwrap() else {
-            panic!("Expected array response");
-        };
-        let Value::Map(map) = &arr[0] else {
-            panic!("Expected map in response");
-        };
-        let Some((_, Value::Array(ifaces))) = map
-            .iter()
-            .find(|(k, _)| *k == Value::Str("interfaces".into()))
-        else {
-            panic!("Expected interfaces array");
-        };
-        let Value::Map(iface) = &ifaces[0] else {
-            panic!("Expected interface map");
-        };
-        iface.clone()
-    }
-
-    #[test]
-    fn test_status_request_reports_the_tunnel_this_node_synthesized() {
-        // Upstream 3281e283: `tunnel_id or local_tunnel_id`.
-        let mut engine = make_engine();
-        let (interfaces, _) = make_interface_views();
-        engine.register_interface(interfaces[&InterfaceId(1)].info.clone());
-        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
-        engine.synthesize_tunnel(&identity, InterfaceId(1), &mut rns_crypto::OsRng);
-        let local = engine.local_tunnel_id(&InterfaceId(1)).unwrap();
-        let views = as_views(&interfaces);
-
-        let request = msgpack::pack(&Value::Array(vec![Value::Bool(false)]));
-        let response = handle_status_request(&request, &engine, &views, time::now(), None).unwrap();
-        let tunnel_id = status_interface(&response)
-            .into_iter()
-            .find(|(k, _)| *k == Value::Str("tunnel_id".into()))
-            .map(|(_, v)| v);
-        assert_eq!(tunnel_id, Some(Value::Bin(local.to_vec())));
-    }
-
-    #[test]
-    fn test_status_request_with_lstats() {
-        let engine = make_engine();
-        let (interfaces, _) = make_interface_views();
-        let views = as_views(&interfaces);
-        let started = time::now();
-
-        let request = msgpack::pack(&Value::Array(vec![Value::Bool(true)]));
-        let response = handle_status_request(&request, &engine, &views, started, None).unwrap();
-
-        let val = msgpack::unpack_exact(&response).unwrap();
-        match val {
-            Value::Array(arr) => {
-                assert_eq!(arr.len(), 2);
-                assert_eq!(arr[1].as_uint(), Some(0));
-            }
-            _ => panic!("Expected array response"),
-        }
-    }
-
-    #[test]
-    fn test_status_request_with_profiling() {
-        {
-            let _sample = crate::profiling::profile("entry110.remote");
-        }
-        let engine = make_engine();
-        let (interfaces, _) = make_interface_views();
-        let views = as_views(&interfaces);
-        let request = msgpack::pack(&Value::Array(vec![Value::Bool(true), Value::Bool(true)]));
-        let response = handle_status_request(&request, &engine, &views, time::now(), None).unwrap();
+    fn status_reply(data: &[u8]) -> Option<Vec<Value>> {
+        let stats = Value::Map(vec![(Value::Str("rxb".into()), Value::UInt(7))]);
+        let response = handle_status_request(data, stats, 3)?;
         let Value::Array(items) = msgpack::unpack_exact(&response).unwrap() else {
             panic!("expected status response array");
         };
-        assert_eq!(items.len(), 3);
-        assert!(matches!(items[2], Value::Map(_)));
+        Some(items)
     }
 
     #[test]
-    fn test_status_request_empty_data() {
-        let engine = make_engine();
-        let (interfaces, _) = make_interface_views();
-        let views = as_views(&interfaces);
-        let started = time::now();
+    fn status_request_answers_the_stats_it_is_given() {
+        let items = status_reply(&msgpack::pack(&Value::Array(vec![Value::Bool(false)]))).unwrap();
+        assert_eq!(
+            items,
+            vec![Value::Map(vec![(Value::Str("rxb".into()), Value::UInt(7))])]
+        );
+    }
 
-        let response = handle_status_request(&[], &engine, &views, started, None).unwrap();
-        let val = msgpack::unpack_exact(&response).unwrap();
-        match val {
-            Value::Array(arr) => assert_eq!(arr.len(), 1),
-            _ => panic!("Expected array response"),
+    #[test]
+    fn status_request_adds_the_link_count_when_asked() {
+        let items = status_reply(&msgpack::pack(&Value::Array(vec![Value::Bool(true)]))).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1], Value::UInt(3));
+    }
+
+    #[test]
+    fn status_request_adds_profiling_results_when_asked() {
+        {
+            let _sample = crate::profiling::profile("entry110.remote");
         }
+        let request = msgpack::pack(&Value::Array(vec![Value::Bool(true), Value::Bool(true)]));
+        let items = status_reply(&request).unwrap();
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[2], Value::Map(_)));
+        let request = msgpack::pack(&Value::Array(vec![Value::Bool(false), Value::Bool(true)]));
+        assert_eq!(status_reply(&request).unwrap().len(), 2);
+    }
+
+    /// As upstream's handler: only a non-empty list is answered.
+    #[test]
+    fn status_request_without_a_flag_list_is_not_answered() {
+        assert!(status_reply(&[]).is_none());
+        assert!(status_reply(&msgpack::pack(&Value::Array(Vec::new()))).is_none());
+        assert!(status_reply(&msgpack::pack(&Value::Bool(true))).is_none());
     }
 
     #[test]
