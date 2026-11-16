@@ -1484,6 +1484,43 @@ fn keepalive_ack_does_not_create_ping_pong_reply() {
     assert!(keepalive_packets(&actions).is_empty());
 }
 
+/// Python drops a keepalive probe arriving at the initiator: it must not
+/// keep the initiator's side of the link alive nor count as traffic.
+#[test]
+fn initiator_ignores_a_keepalive_probe() {
+    let (mut initiator, _, link_id) = setup_active_link();
+    let engine = &mut initiator.links.get_mut(&link_id).unwrap().engine;
+    engine.tick(time::now() + 10_000.0);
+    assert_eq!(engine.state(), LinkState::Stale);
+    let rx_before = engine.rx_packets();
+    let (raw, packet) = packed_keepalive(&link_id, &[0xff]);
+
+    let actions = initiator.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+    assert!(actions.is_empty());
+    let engine = &initiator.links[&link_id].engine;
+    assert_eq!(engine.state(), LinkState::Stale);
+    assert_eq!(engine.rx_packets(), rx_before);
+
+    // The responder's answer does count.
+    let (raw, packet) = packed_keepalive(&link_id, &[0xfe]);
+    initiator.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+    let engine = &initiator.links[&link_id].engine;
+    assert_eq!(engine.state(), LinkState::Active);
+    assert_eq!(engine.rx_packets(), rx_before + 1);
+}
+
 // ====================================================================
 // Phase 8a: Resource wiring tests
 // ====================================================================
