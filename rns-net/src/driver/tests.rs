@@ -5289,13 +5289,23 @@ fn tunnel_synthesis_is_answered_and_both_ends_learn_the_other() {
     assert_eq!(entry.remote_transport_info.as_ref(), Some(&reported));
 
     // A reconnect starts over: no remote transport until the next answer.
+    // What the server reported stays until its next synthesis replaces it,
+    // as upstream keeps the interface's remote_impl, remote_vers and costs.
+    let before = client
+        .engine
+        .remote_transport_info(&InterfaceId(1))
+        .cloned();
+    assert!(before.is_some());
     client.handle_interface_down_event(InterfaceId(1));
     client.handle_interface_up_event(InterfaceId(1), None, None);
     assert_eq!(client.engine.remote_transport(&InterfaceId(1)), None);
-    assert!(client
-        .engine
-        .remote_transport_info(&InterfaceId(1))
-        .is_none());
+    assert_eq!(
+        client
+            .engine
+            .remote_transport_info(&InterfaceId(1))
+            .cloned(),
+        before
+    );
     assert_eq!(client_sent.lock().unwrap().len(), 2);
 }
 
