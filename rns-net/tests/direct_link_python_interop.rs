@@ -57,6 +57,10 @@ def emit(**event):
     print(json.dumps(event), flush=True)
 
 RNS.Reticulum(configdir=config_dir)
+# Since 1.6.1 emitted announces are stamped by default, and grinding the
+# destination stamp in Python outlasts the test's wait for the announce.
+if hasattr(RNS.Transport, "STAMP_DESTINATIONS"): RNS.Transport.STAMP_DESTINATIONS = False
+if hasattr(RNS.Transport, "STAMP_PRS"): RNS.Transport.STAMP_PRS = False
 
 class AppMessage(MessageBase):
     MSGTYPE = 0x0101
