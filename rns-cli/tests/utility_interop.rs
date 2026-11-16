@@ -1631,6 +1631,193 @@ fn python_instance_fetches_rust_blackhole_source() {
     blackhole_source_fetch(Daemon::Rust, Daemon::Python);
 }
 
+/// Python's `rnpath -R <hash> -t` and `-r`, with and without `-j`, against
+/// a transport instance run by `managed` with remote management, through a
+/// Python shared instance. Returns the JSON tables as printed.
+#[cfg(target_os = "linux")]
+fn remote_path_tables(managed: Daemon) -> (String, String) {
+    let root = tempfile::tempdir().unwrap();
+    let managed_dir = root.path().join("managed");
+    let client_dir = root.path().join("client");
+    fs::create_dir_all(managed_dir.join("storage/identities")).unwrap();
+    fs::create_dir_all(&client_dir).unwrap();
+    let management_identity = root.path().join("management");
+
+    // The managed instance's transport identity, where either
+    // implementation reads it, and the management identity.
+    let mut prepare = Command::new("python3");
+    prepare.env("PYTHONUNBUFFERED", "1");
+    prepare.args([
+        "-c",
+        "import RNS, os, sys; i = RNS.Identity(); \
+         i.to_file(os.path.join(sys.argv[1], 'storage', 'transport_identity')); \
+         i.to_file(os.path.join(sys.argv[1], 'storage', 'identities', 'identity')); \
+         m = RNS.Identity(); m.to_file(sys.argv[2]); print(i.hash.hex(), m.hash.hex())",
+        managed_dir.to_str().unwrap(),
+        management_identity.to_str().unwrap(),
+    ]);
+    let prepared = run(prepare);
+    assert_success(&prepared, "prepare managed instance");
+    let stdout = String::from_utf8_lossy(&prepared.stdout);
+    let (transport, management) = stdout
+        .lines()
+        .last()
+        .and_then(|line| line.split_once(' '))
+        .map(|(t, m)| (t.trim().to_string(), m.trim().to_string()))
+        .expect("identity hashes");
+
+    let ports: Vec<TcpPortReservation> = (0..5).map(|_| TcpPortReservation::new()).collect();
+    let port = |i: usize| ports[i].port();
+    let (transport_port, m_shared, m_control, c_shared, c_control) =
+        (port(0), port(1), port(2), port(3), port(4));
+    let pid = std::process::id();
+    let label = if managed == Daemon::Python {
+        "py"
+    } else {
+        "rs"
+    };
+    fs::write(
+        managed_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+             instance_name = rpath-managed-{label}-{pid}\n  shared_instance_port = {m_shared}\n  \
+             instance_control_port = {m_control}\n  enable_remote_management = Yes\n  \
+             remote_management_allowed = {management}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[managed server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        client_dir.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+             instance_name = rpath-client-{label}-{pid}\n  shared_instance_port = {c_shared}\n  \
+             instance_control_port = {c_control}\n  publish_blackhole = Yes\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[client]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    drop(ports);
+
+    let mut managed_daemon = spawn_daemon(managed, &managed_dir, &root.path().join("managed.log"));
+    wait_for_port(transport_port, &mut managed_daemon, "managed TCP server");
+    let mut client_daemon =
+        spawn_daemon(Daemon::Python, &client_dir, &root.path().join("client.log"));
+    wait_for_abstract_socket(
+        &format!("rns/rpath-client-{label}-{pid}"),
+        &mut client_daemon,
+        "client shared instance",
+    );
+    wait_for_abstract_socket(
+        &format!("rns/rpath-client-{label}-{pid}/rpc"),
+        &mut client_daemon,
+        "client RPC",
+    );
+
+    // The status and what rnpath printed after its last line reset.
+    let rnpath = |args: &[&str]| {
+        let mut command = Command::new("python3");
+        command.env("PYTHONUNBUFFERED", "1");
+        command.args(["-m", "RNS.Utilities.rnpath", "--config"]);
+        command.arg(&client_dir);
+        command.args(["-R", &transport, "-i"]);
+        command.arg(&management_identity);
+        command.args(["-W", "30"]).args(args);
+        let output = run(command);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let shown = stdout.rsplit('\r').next().unwrap_or_default().to_string();
+        (output.status.code(), shown)
+    };
+    // Once the managed instance has a path to the client's blackhole
+    // destination; until then its empty table counts as a failed request,
+    // as upstream's rnpath decides.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let table = loop {
+        managed_daemon.assert_running("managed");
+        client_daemon.assert_running("client");
+        let (status, table) = rnpath(&["-t"]);
+        if status == Some(0) && table.lines().any(|line| line.starts_with('<')) {
+            break table;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{label}: no remote path table: {status:?} {table}\nmanaged log:\n{}",
+            fs::read_to_string(root.path().join("managed.log")).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_secs(1));
+    };
+    assert!(
+        table
+            .lines()
+            .any(|line| line.contains(" via ") && line.contains("(dv:")),
+        "{label}: {table}"
+    );
+    let json = |args: &[&str]| {
+        let (status, printed) = rnpath(args);
+        assert_eq!(status, Some(0), "{label} {args:?}: {printed}");
+        printed
+    };
+    let rates = json(&["-r"]);
+    assert!(!rates.contains("Error"), "{label}: {rates}");
+    (json(&["-t", "-j"]), json(&["-r", "-j"]))
+}
+
+/// The first entry of a table `rnpath -j` printed: its keys in the order
+/// printed, each with the JSON type of its value.
+#[cfg(target_os = "linux")]
+fn first_entry_shape(printed: &str) -> Vec<(String, &'static str)> {
+    let table: serde_json::Value =
+        serde_json::from_str(printed.trim()).unwrap_or_else(|e| panic!("{e}: {printed}"));
+    let entry = table
+        .as_array()
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.as_object())
+        .unwrap_or_else(|| panic!("no entry: {printed}"));
+    // serde_json's map is sorted; the order comes from the text.
+    let text = &printed[..printed.find('}').expect("an object")];
+    let keys = text
+        .split("\": ")
+        .filter_map(|before| before.rsplit('"').next());
+    keys.take(entry.len())
+        .map(|key| {
+            let kind = match &entry[key] {
+                serde_json::Value::Null => "null",
+                serde_json::Value::Bool(_) => "bool",
+                serde_json::Value::Number(n) if n.is_f64() => "float",
+                serde_json::Value::Number(_) => "int",
+                serde_json::Value::String(_) => "str",
+                serde_json::Value::Array(_) => "list",
+                serde_json::Value::Object(_) => "dict",
+            };
+            (key.to_string(), kind)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnpath_reads_rust_remote_path_table() {
+    // Upstream's remote_path_handler answers with get_path_table() and
+    // get_rate_table() entries; Python's rnpath reads `value` and `lr_cost`
+    // of each. The entries of both implementations have the same keys, in
+    // the same order, with values of the same types.
+    let (python_table, python_rates) = remote_path_tables(Daemon::Python);
+    let (rust_table, rust_rates) = remote_path_tables(Daemon::Rust);
+    assert_eq!(
+        first_entry_shape(&rust_table),
+        first_entry_shape(&python_table)
+    );
+    assert_eq!(
+        first_entry_shape(&rust_rates),
+        first_entry_shape(&python_rates)
+    );
+}
+
 /// Start an rnsd of `implementation` on the config directory `dir`.
 #[cfg(target_os = "linux")]
 fn spawn_daemon(implementation: Daemon, dir: &Path, log: &Path) -> ProcessGuard {
