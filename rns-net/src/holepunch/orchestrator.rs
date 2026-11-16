@@ -946,6 +946,17 @@ impl HolePunchManager {
         self.direct.get(link_id).map(|path| path.interface_id)
     }
 
+    /// The link whose direct interface `interface_id` is, if any.
+    pub fn direct_link_of(
+        &self,
+        interface_id: rns_core::transport::types::InterfaceId,
+    ) -> Option<[u8; 16]> {
+        self.direct
+            .iter()
+            .find(|(_, path)| path.interface_id == interface_id)
+            .map(|(link_id, _)| *link_id)
+    }
+
     /// The session of the link's direct path, if any.
     pub fn direct_session(&self, link_id: &[u8; 16]) -> Option<[u8; 16]> {
         self.direct.get(link_id).map(|path| path.session_id)

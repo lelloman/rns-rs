@@ -2745,6 +2745,31 @@ impl Driver {
             .on_direct_connect_lost(rns_core::types::LinkId(link_id), interface_id);
     }
 
+    /// A direct interface found its path MTU: the link it carries uses it,
+    /// never above the MTU the link had before its direct path.
+    pub(crate) fn direct_path_mtu_discovered(
+        &mut self,
+        interface_id: rns_core::transport::types::InterfaceId,
+        mtu: u32,
+    ) {
+        let Some(link_id) = self.holepunch_manager.direct_link_of(interface_id) else {
+            return;
+        };
+        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+            entry.info.mtu = mtu;
+        }
+        if let Some(applied) = self
+            .link_manager
+            .set_direct_mtu(&link_id, interface_id, mtu)
+        {
+            log::debug!(
+                "Link {:02x?} uses MTU {} on its direct path",
+                &link_id[..4],
+                applied
+            );
+        }
+    }
+
     /// Dispatch hole-punch manager actions.
     pub(crate) fn dispatch_holepunch_actions(&mut self, actions: Vec<HolePunchManagerAction>) {
         for action in actions {

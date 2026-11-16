@@ -6680,3 +6680,36 @@ fn direct_link_signalling_still_goes_out_on_a_stale_link() {
         rns_core::holepunch::CONTEXT_DIRECT_LINK
     );
 }
+
+#[test]
+fn discovered_direct_mtu_applies_up_to_the_original_mtu() {
+    use rns_core::transport::types::InterfaceId;
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let direct = InterfaceId(50_000);
+    let mtu_before = init_mgr.links[&link_id].engine.mtu();
+    // Not on a direct path yet: nothing changes.
+    assert_eq!(init_mgr.set_direct_mtu(&link_id, direct, 300), None);
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
+
+    assert!(init_mgr.attach_direct_route(&link_id, direct, 200));
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), 200.min(mtu_before));
+    // Another interface's discovery is not this link's.
+    assert_eq!(
+        init_mgr.set_direct_mtu(&link_id, InterfaceId(50_001), 300),
+        None
+    );
+    let lower = mtu_before - 50;
+    assert_eq!(
+        init_mgr.set_direct_mtu(&link_id, direct, lower),
+        Some(lower)
+    );
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), lower);
+    // Never above what the link had before its direct path.
+    assert_eq!(
+        init_mgr.set_direct_mtu(&link_id, direct, mtu_before + 1000),
+        Some(mtu_before)
+    );
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
+    init_mgr.detach_direct_route(&link_id);
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
+}

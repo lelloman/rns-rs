@@ -75,7 +75,11 @@ Watch `/api/link_events` for `direct_established` or `direct_failed` (its
 `reason_code` is listed under
 [Failure reasons](direct-link-protocol.md#failure-reasons)). Once
 established, the link's traffic goes over the direct UDP interface, which
-carries nothing but that link and is removed with it. If the direct path dies
+carries nothing but that link and is removed with it. The direct path
+starts with an MTU of 1200 bytes and, within about three seconds, moves to
+the largest of 1472 (1452 over IPv6), 1400 and 1280 bytes that its probes
+show the path carries; it is probed once, when it comes up (see
+[Path MTU](direct-link-protocol.md#path-mtu) for the limits). If the direct path dies
 (no keepalive for 15 seconds, the link going stale, or the link's channel
 running out of retries), both sides move the link back to the transport path,
 report `direct_lost`, and the link carries on.

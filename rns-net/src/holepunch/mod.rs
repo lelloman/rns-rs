@@ -1,6 +1,7 @@
 pub mod admission;
 mod folded_probe;
 pub mod orchestrator;
+pub mod path_mtu;
 pub mod probe;
 pub mod puncher;
 pub mod udp_direct;
