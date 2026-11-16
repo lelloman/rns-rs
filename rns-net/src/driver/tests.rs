@@ -17030,3 +17030,27 @@ fn crossing_proposals_make_the_link_responder_answer() {
     assert!(!driver.holepunch_manager.proposing(&link_id));
     assert_eq!(driver.holepunch_manager.session_count(), 1);
 }
+
+#[test]
+fn probe_config_keeps_the_direct_connect_settings() {
+    let mut driver = new_test_driver();
+    driver
+        .holepunch_manager
+        .set_policy(HolePunchPolicy::IdentifiedOnly);
+    driver
+        .holepunch_manager
+        .set_allowed_identities(vec![[7; 16]]);
+    driver.holepunch_manager.set_allow_private_endpoints(true);
+    driver.set_probe_config(
+        vec!["192.0.2.1:4343".parse().unwrap()],
+        rns_core::holepunch::ProbeProtocol::Rnsp,
+        None,
+    );
+    assert!(driver.holepunch_manager.identity_allowed(&[7; 16]));
+    assert!(driver.holepunch_manager.allow_private_endpoints());
+    assert_eq!(
+        driver.holepunch_manager.policy(),
+        HolePunchPolicy::IdentifiedOnly
+    );
+    assert!(driver.holepunch_manager.enabled());
+}
