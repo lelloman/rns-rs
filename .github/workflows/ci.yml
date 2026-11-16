@@ -264,6 +264,10 @@ jobs:
       - name: Run workspace tests with rns-hooks
         run: cargo test --workspace --features rns-hooks
 
+      # rns-hooks builds no backend by default; test both, WASM included.
+      - name: Run rns-hooks tests with both backends
+        run: cargo test -p rns-hooks --features wasm,native
+
       # The workspace run above builds native hooks only, which leaves
       # e2e_hooks (WASM and built-in hooks) out; run it here under each I/O
       # model (docs/engines.md): compact folded, compact with its helper
