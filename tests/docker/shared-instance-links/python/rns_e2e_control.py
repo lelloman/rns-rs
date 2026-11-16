@@ -155,9 +155,14 @@ class Node:
                 f"{out.hash.hex()}, not {dest_hex}"
             )
         link = RNS.Link(out, established_callback=self._outbound_established)
-        self._track(link, True)
+        # The link ID exists only once the request is packed. When the
+        # destination announced a link request cost, RNS first grinds the
+        # request stamp, so track the link after it settles.
         while link.status not in (RNS.Link.ACTIVE, RNS.Link.CLOSED) and time.time() < deadline:
             time.sleep(0.1)
+        if link.link_id is None:
+            raise RuntimeError(f"link request to {dest_hex} not sent within {timeout}s")
+        self._track(link, True)
         return self._link_json(link.link_id.hex(), link, True)
 
     def _get_link(self, lid):
