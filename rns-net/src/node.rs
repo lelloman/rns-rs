@@ -2591,7 +2591,9 @@ impl RnsNode {
                             stamp_costs: iface_config.stamp_costs,
                             ifac_runtime: ifac_runtime.clone(),
                             ifac_enabled: ifac_state.is_some(),
-                            interface_type_name: iface_config.type_name.clone(),
+                            // Upstream starts a BackboneClientInterface for
+                            // a Backbone interface with a target host.
+                            interface_type_name: "BackboneClientInterface".to_string(),
                             source: crate::driver::BackbonePeerPoolCandidateSource::Configured,
                             priority,
                             discovery: None,

@@ -16389,6 +16389,8 @@ fn autoconnected_backbone_client_is_configured_as_upstream() {
         .unwrap();
     assert_eq!(stat.interface_type, "BackboneClientInterface");
     assert_eq!(stat.bitrate, Some(5_000_000));
+    // Upstream's configured `5E6` is a float, and reported as one.
+    assert!(stat.bitrate_is_float);
     assert_eq!(stat.mtu, Some(8192));
     assert_eq!(
         stat.display_name,

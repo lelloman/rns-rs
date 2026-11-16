@@ -2235,7 +2235,9 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     id,
                     info,
                     writer,
-                    interface_type_name: "BackboneInterface".to_string(),
+                    // Upstream starts a BackboneClientInterface for a
+                    // Backbone interface with a target host.
+                    interface_type_name: "BackboneClientInterface".to_string(),
                 })
             }
             BackboneMode::Server(mut cfg) => {
@@ -4190,6 +4192,44 @@ mod tests {
         assert!(info.wants_tunnel);
         if let Some(control) = control {
             control.request_stop();
+        }
+    }
+
+    #[test]
+    fn configured_backbone_clients_are_backbone_client_interfaces() {
+        // Upstream starts a BackboneClientInterface both for a
+        // BackboneClientInterface section and for a BackboneInterface one
+        // with a target host, and statistics report that class.
+        let port = find_free_port();
+        let _listener = std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let factories: [&dyn InterfaceFactory; 2] =
+            [&BackboneInterfaceFactory, &BackboneClientInterfaceFactory];
+        for (n, factory) in factories.into_iter().enumerate() {
+            let (tx, _rx) = crate::event::channel();
+            let mut params = HashMap::new();
+            params.insert("target_host".into(), "127.0.0.1".into());
+            params.insert("target_port".into(), port.to_string());
+            let config = factory
+                .parse_config("client", InterfaceId(80 + n as u64), &params)
+                .unwrap();
+            let result = factory
+                .start(config, crate::interface::test_start_context(tx))
+                .unwrap();
+            let StartResult::Simple {
+                interface_type_name,
+                info,
+                control,
+                ..
+            } = result
+            else {
+                panic!("expected a simple interface");
+            };
+            assert_eq!(interface_type_name, "BackboneClientInterface");
+            // Upstream's BITRATE_GUESS, an int.
+            assert_eq!(info.bitrate, Some(100_000_000));
+            if let Some(control) = control {
+                control.request_stop();
+            }
         }
     }
 }
