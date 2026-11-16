@@ -66,8 +66,7 @@ impl ProbeJob {
 fn ask(server: SocketAddr, job: &ProbeJob) -> io::Result<(UdpSocket, ProbeRequest)> {
     let socket = open_probe_socket(server, job.device.as_deref(), job.underlay_mark)?;
     socket.set_nonblocking(true)?;
-    let port = socket.local_addr().map(|a| a.port()).unwrap_or(0);
-    let request = ProbeRequest::new(job.protocol, port);
+    let request = ProbeRequest::new(job.protocol);
     socket.send_to(request.bytes(), server)?;
     Ok((socket, request))
 }
@@ -123,7 +122,7 @@ impl LoopSource for ProbeSource {
             return SourceStatus::Remove;
         };
         loop {
-            let (len, _) = match socket.recv_from(cx.buf) {
+            let (len, src) = match socket.recv_from(cx.buf) {
                 Ok(received) => received,
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return SourceStatus::Rearm,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -131,14 +130,18 @@ impl LoopSource for ProbeSource {
                 // failed: the next server, at once.
                 Err(e) => return self.fail_over(cx, &e.to_string()),
             };
-            // Anything but the reply is ignored until the deadline.
-            let Some(observed) = self.request.reply(&cx.buf[..len]) else {
+            let Some(server) = self.job.as_ref().map(|job| job.servers[self.index]) else {
+                return SourceStatus::Remove;
+            };
+            // Anything but the reply, from the server asked, is ignored
+            // until the deadline.
+            let Some(observed) = self.request.reply_from(&cx.buf[..len], src, server) else {
                 continue;
             };
             let (Some(job), Some(socket)) = (self.job.take(), self.socket.take()) else {
                 return SourceStatus::Remove;
             };
-            let probe_server = job.servers[self.index];
+            let probe_server = server;
             log::info!(
                 "Probe discovered endpoint: {} via server {} for session {:02x?}",
                 observed,
@@ -219,6 +222,23 @@ mod tests {
             other => panic!("expected a probe result, got {other:?}"),
         }
         server.stop();
+    }
+
+    #[test]
+    fn probe_ignores_replies_from_elsewhere_or_with_another_nonce() {
+        use super::super::probe::tests::{answer_with_decoys, rnsp_id, rnsp_reply};
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (tx, rx) = crate::event::channel();
+        let mut probe = job(vec![server.local_addr().unwrap()], tx);
+        probe.timeout = Duration::from_secs(3);
+        start(probe);
+        answer_with_decoys(&server, rnsp_id, rnsp_reply);
+        match rx.recv_timeout(Duration::from_secs(3)).unwrap() {
+            Event::HolePunchProbeResult { observed_addr, .. } => {
+                assert_eq!(observed_addr, "3.3.3.3:3".parse().unwrap())
+            }
+            other => panic!("expected a probe result, got {other:?}"),
+        }
     }
 
     #[test]

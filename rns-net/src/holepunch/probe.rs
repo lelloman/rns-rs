@@ -274,39 +274,43 @@ pub fn probe_endpoint_with_mark(
     crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
     socket.set_read_timeout(Some(timeout))?;
 
-    // Build request with a nonce for response matching
-    let mut nonce = [0u8; 16];
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let nanos = now.as_nanos();
-    nonce[..8].copy_from_slice(&nanos.to_le_bytes()[..8]);
-    // Fill remaining bytes: local port + thread ID bits + subsec nanos (reversed)
-    let local_port = socket.local_addr().map(|a| a.port()).unwrap_or(0);
-    nonce[8..10].copy_from_slice(&local_port.to_be_bytes());
-    let thread_id = std::thread::current().id();
-    let thread_hash = format!("{:?}", thread_id);
-    for (i, b) in thread_hash.bytes().enumerate() {
-        if 10 + i >= 16 {
-            break;
+    let observed = ask_and_wait(
+        &socket,
+        probe_server,
+        rns_core::holepunch::ProbeProtocol::Rnsp,
+        timeout,
+    )?;
+    Ok((observed, socket))
+}
+
+/// Send a fresh request to `server` and wait up to `timeout` for its
+/// reply: a datagram from `server` that echoes the request's random nonce
+/// (or STUN transaction id). Anything else is ignored.
+fn ask_and_wait(
+    socket: &UdpSocket,
+    server: SocketAddr,
+    protocol: rns_core::holepunch::ProbeProtocol,
+    timeout: Duration,
+) -> io::Result<SocketAddr> {
+    let request = ProbeRequest::new(protocol);
+    socket.send_to(request.bytes(), server)?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buf = [0u8; 256];
+    loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "no probe reply"))?;
+        socket.set_read_timeout(Some(remaining))?;
+        let (len, src) = socket.recv_from(&mut buf)?;
+        if let Some(observed) = request.reply_from(&buf[..len], src, server) {
+            return Ok(observed);
         }
-        nonce[10 + i] = b;
+        log::debug!(
+            "Ignoring a datagram from {} that is not the probe reply",
+            src
+        );
     }
-
-    let mut request = Vec::with_capacity(PROBE_REQUEST_LEN);
-    request.extend_from_slice(PROBE_MAGIC);
-    request.push(PROBE_VERSION);
-    request.extend_from_slice(&nonce);
-
-    socket.send_to(&request, probe_server)?;
-
-    // Wait for response
-    let mut buf = [0u8; 64];
-    let (len, _) = socket.recv_from(&mut buf)?;
-
-    parse_probe_response(&buf[..len], &nonce)
-        .map(|addr| (addr, socket))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid probe response"))
 }
 
 // --- STUN client (RFC 5389) ---
@@ -369,33 +373,13 @@ pub fn stun_probe_endpoint_with_mark(
     crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
     socket.set_read_timeout(Some(timeout))?;
 
-    // Build transaction ID (12 bytes) from timestamp + port + thread bits
-    let mut txn_id = [0u8; 12];
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let nanos = now.as_nanos();
-    txn_id[..8].copy_from_slice(&nanos.to_le_bytes()[..8]);
-    let local_port = socket.local_addr().map(|a| a.port()).unwrap_or(0);
-    txn_id[8..10].copy_from_slice(&local_port.to_be_bytes());
-    let thread_id = std::thread::current().id();
-    let thread_hash = format!("{:?}", thread_id);
-    for (i, b) in thread_hash.bytes().enumerate() {
-        if 10 + i >= 12 {
-            break;
-        }
-        txn_id[10 + i] = b;
-    }
-
-    let request = build_stun_binding_request(&txn_id);
-    socket.send_to(&request, stun_server)?;
-
-    let mut buf = [0u8; 256];
-    let (len, _) = socket.recv_from(&mut buf)?;
-
-    parse_stun_binding_response(&buf[..len], &txn_id)
-        .map(|addr| (addr, socket))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid STUN response"))
+    let observed = ask_and_wait(
+        &socket,
+        stun_server,
+        rns_core::holepunch::ProbeProtocol::Stun,
+        timeout,
+    )?;
+    Ok((observed, socket))
 }
 
 /// Build a minimal STUN Binding Request (header only, no attributes).
@@ -621,19 +605,13 @@ enum ProbeId {
 }
 
 impl ProbeRequest {
-    /// A request with a fresh nonce (or STUN transaction id), unique per
-    /// local port and per request.
-    pub(crate) fn new(protocol: rns_core::holepunch::ProbeProtocol, local_port: u16) -> Self {
-        use std::sync::atomic::AtomicU32;
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
+    /// A request with a fresh random nonce (or STUN transaction id), so
+    /// that a reply cannot be forged by anyone who has not seen the
+    /// request.
+    pub(crate) fn new(protocol: rns_core::holepunch::ProbeProtocol) -> Self {
+        use rns_crypto::Rng;
         let mut nonce = [0u8; 16];
-        nonce[..8].copy_from_slice(&nanos.to_le_bytes()[..8]);
-        nonce[8..10].copy_from_slice(&local_port.to_be_bytes());
-        nonce[10..14].copy_from_slice(&COUNTER.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+        rns_crypto::OsRng.fill_bytes(&mut nonce);
         match protocol {
             rns_core::holepunch::ProbeProtocol::Rnsp => {
                 let mut bytes = Vec::with_capacity(PROBE_REQUEST_LEN);
@@ -659,8 +637,22 @@ impl ProbeRequest {
         &self.bytes
     }
 
+    /// The observed address, if `data`, received from `src`, is the reply
+    /// to this request sent to `server`.
+    pub(crate) fn reply_from(
+        &self,
+        data: &[u8],
+        src: SocketAddr,
+        server: SocketAddr,
+    ) -> Option<SocketAddr> {
+        if super::canonical(src) != super::canonical(server) {
+            return None;
+        }
+        self.reply(data)
+    }
+
     /// The observed address, if `data` is the reply to this request.
-    pub(crate) fn reply(&self, data: &[u8]) -> Option<SocketAddr> {
+    fn reply(&self, data: &[u8]) -> Option<SocketAddr> {
         match &self.id {
             ProbeId::Rnsp(nonce) => parse_probe_response(data, nonce),
             ProbeId::Stun(txn_id) => parse_stun_binding_response(data, txn_id),
@@ -730,7 +722,7 @@ fn parse_probe_response(data: &[u8], expected_nonce: &[u8; 16]) -> Option<Socket
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -763,6 +755,102 @@ mod tests {
         running.store(false, Ordering::Relaxed);
         wake.wake();
         let _ = server_thread.join();
+    }
+
+    /// Answer the probe that arrives at `server` with a reply from another
+    /// socket, a reply with another id, and then the reply, which observed
+    /// 3.3.3.3:3. `id` picks the request's id out of it, and `respond`
+    /// builds a reply echoing an id.
+    pub(crate) fn answer_with_decoys(
+        server: &UdpSocket,
+        id: impl Fn(&[u8]) -> Vec<u8>,
+        respond: impl Fn(&[u8], &SocketAddr) -> Vec<u8>,
+    ) {
+        server
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let (len, client) = server.recv_from(&mut buf).unwrap();
+        let id = id(&buf[..len]);
+        let mut other_id = id.clone();
+        other_id[0] ^= 0xff;
+        let other = UdpSocket::bind("127.0.0.1:0").unwrap();
+        other
+            .send_to(&respond(&id, &"1.1.1.1:1".parse().unwrap()), client)
+            .unwrap();
+        server
+            .send_to(&respond(&other_id, &"2.2.2.2:2".parse().unwrap()), client)
+            .unwrap();
+        server
+            .send_to(&respond(&id, &"3.3.3.3:3".parse().unwrap()), client)
+            .unwrap();
+    }
+
+    pub(crate) fn rnsp_id(request: &[u8]) -> Vec<u8> {
+        assert_eq!(request.len(), PROBE_REQUEST_LEN);
+        request[5..21].to_vec()
+    }
+
+    pub(crate) fn rnsp_reply(id: &[u8], observed: &SocketAddr) -> Vec<u8> {
+        build_probe_response(id, observed)
+    }
+
+    #[test]
+    fn probe_reply_must_come_from_the_server_and_echo_the_nonce() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server.local_addr().unwrap();
+        let client =
+            thread::spawn(move || probe_endpoint(server_addr, None, Duration::from_secs(3), None));
+        answer_with_decoys(&server, rnsp_id, rnsp_reply);
+        let (observed, _) = client.join().unwrap().unwrap();
+        assert_eq!(observed, "3.3.3.3:3".parse().unwrap());
+    }
+
+    #[test]
+    fn stun_reply_must_come_from_the_server_and_echo_the_transaction_id() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            stun_probe_endpoint(server_addr, None, Duration::from_secs(3), None)
+        });
+        answer_with_decoys(
+            &server,
+            |request| request[8..20].to_vec(),
+            |id, observed| build_stun_response_xor_mapped(id.try_into().unwrap(), observed),
+        );
+        let (observed, _) = client.join().unwrap().unwrap();
+        assert_eq!(observed, "3.3.3.3:3".parse().unwrap());
+    }
+
+    #[test]
+    fn probe_without_its_reply_times_out() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            probe_endpoint(server_addr, None, Duration::from_millis(500), None)
+        });
+        let mut buf = [0u8; 64];
+        let (len, client_addr) = server.recv_from(&mut buf).unwrap();
+        let nonce = rnsp_id(&buf[..len]);
+        let mut wrong = nonce.clone();
+        wrong[15] ^= 1;
+        server
+            .send_to(
+                &rnsp_reply(&wrong, &"2.2.2.2:2".parse().unwrap()),
+                client_addr,
+            )
+            .unwrap();
+        assert!(client.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn probe_ids_are_random() {
+        use rns_core::holepunch::ProbeProtocol;
+        for protocol in [ProbeProtocol::Rnsp, ProbeProtocol::Stun] {
+            let a = ProbeRequest::new(protocol);
+            let b = ProbeRequest::new(protocol);
+            assert_ne!(a.bytes(), b.bytes());
+        }
     }
 
     #[test]

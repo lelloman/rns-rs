@@ -246,9 +246,8 @@ When a packet arrives at a NAT that has already seen an outgoing packet to the
 same remote address, the NAT allows it through (the "pinhole").
 
 The hole punch procedure:
-1. Both sides begin sending UDP packets immediately after Phase 3 completes.
-   The punch packets carry the session id and a punch token derived from the
-   link key, `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-v1")`.
+1. Both sides begin sending UDP packets immediately after Phase 3 completes
+   (see [Punch packets](#punch-packets)).
 2. Packets are sent at a regular interval (e.g. every 100ms) for a bounded
    duration (e.g. 10 seconds). rns-rs also caps a session at 128 punch packets
    and 128 acknowledgements, sends to at most 4 candidate endpoints (today
@@ -257,10 +256,33 @@ The hole punch procedure:
    from an endpoint's IP, that endpoint gets a burst of 16 packets and then
    one a second, at most 25 in the 10 seconds (see
    [Reflection](#reflection)).
-3. The first received packet from the peer confirms the hole punch succeeded.
-   rns-rs only accepts punch and acknowledgement packets whose source IP
-   matches the peer endpoint being punched (the port may differ).
+3. Each side answers every valid punch with an acknowledgement. The punch
+   has succeeded once a side has both received a valid punch and received an
+   acknowledgement of one of its own punches. rns-rs only accepts punch and
+   acknowledgement packets whose source IP matches the peer endpoint being
+   punched (the port may differ, for a NAT that does not preserve it), and
+   an acknowledgement only if it echoes the nonce of a punch it sent to that
+   IP.
 4. If no packet is received within the timeout, the hole punch has failed.
+
+### Punch packets
+
+Punch packets and their acknowledgements are raw UDP datagrams of 52 bytes:
+
+```
+[magic: 4] [session id: 16] [nonce: 16] [tag: 16]
+```
+
+| Magic | Packet | Nonce |
+|-------|--------|-------|
+| `"RNSH"` | Punch | 16 random bytes, fresh for every punch packet |
+| `"RNSA"` | Acknowledgement | The nonce of the punch it answers |
+
+The tag is the first 16 bytes of HMAC-SHA256 over the preceding 36 bytes,
+keyed with the session's punch token,
+`HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-v1")`. The
+token is known only to the two link peers and never appears on the wire. A
+packet with a wrong length, session id or tag is ignored.
 
 Before it punches, each side also refuses a peer endpoint that is a
 facilitator (the one its probe used, or any it has configured), its own
@@ -287,7 +309,7 @@ that was upgraded and carries nothing else:
 | **Link traffic only** | Its reader and writer pass only HEADER_1 link DATA and PROOF packets addressed to the link's id; any other datagram from the peer, and any other frame the node would send, is dropped. Datagrams from any address but the peer's are ignored |
 | **Not an outbound interface** | It is registered with `out_capable = false`, and broadcasts skip it, so the transport engine never sends announces, path requests or broadcasts on it. Since nothing but the link's packets is accepted from it, no path, announce or link request is learned through it and no other traffic is forwarded over it |
 | **Packet send/receive** | One Reticulum packet per UDP datagram, no framing |
-| **Keepalive** | Sends an authenticated keepalive every 5 seconds, which also keeps the NAT mapping open: `"RNSK"`, the session id, a 64-bit counter and the first 16 bytes of HMAC-SHA256 over those 28 bytes, keyed with `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-keepalive-v1")`. The key never appears on the wire (unlike the punch token) |
+| **Keepalive** | Sends an authenticated keepalive every 5 seconds, which also keeps the NAT mapping open: `"RNSK"`, the session id, a 64-bit counter and the first 16 bytes of HMAC-SHA256 over those 28 bytes, keyed with `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-keepalive-v1")`. The key never appears on the wire |
 | **Liveness detection** | Only a valid keepalive from the peer with a counter above the last one accepted counts as a sign of life; link packets and anything forged or replayed do not. Without one for 15 seconds (three missed) the interface declares itself down |
 | **Teardown** | It is removed when its link closes (about a second later, so the link's closing packets still leave on it), when it goes down, and when a newer upgrade of the same link replaces it |
 
@@ -359,6 +381,14 @@ Client                          Facilitator
   │                                │
 ```
 
+The client side of rns-rs accepts a reply only if it comes from the exact
+address and port the request was sent to and echoes the request's id: 16
+random bytes for the RNSP protocol (`"RNSP"`, version 1, nonce; the reply
+adds the observed address), 12 random bytes of transaction id for STUN
+(RFC 5389 Binding). Any other datagram is ignored until the probe times
+out after 3 seconds. A facilitator must therefore answer from the address
+it is asked at (bind it to that address on a multi-homed host).
+
 Properties of the facilitator:
 - **Stateless** — each request/response is independent. The facilitator does
   not track relationships between peers.
@@ -428,8 +458,8 @@ to a third party. What such a target can receive is bounded instead:
   sessions node-wide, one session per target address);
 - per session, one probe request (21 bytes, or 20 for STUN) to the named
   facilitator, and at most 25 punch packets of 56 bytes (about 1.4 KB) to a
-  target that never answers with a packet authenticated by the session's
-  punch token. Only a target that does answer, which is then the peer,
+  target that never answers with a packet tagged with the session's punch
+  token. Only a target that does answer, which is then the peer,
   gets the full rate of the punch.
 
 Loopback is always refused because it would make the node send to services

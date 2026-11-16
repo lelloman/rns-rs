@@ -84,7 +84,7 @@ impl Keepalives {
         }
         let signed = &data[..KEEPALIVE_LEN - KEEPALIVE_TAG_LEN];
         let tag = rns_crypto::hmac::hmac_sha256(&self.key, signed);
-        if !constant_time_eq(&tag[..KEEPALIVE_TAG_LEN], &data[signed.len()..]) {
+        if !super::constant_time_eq(&tag[..KEEPALIVE_TAG_LEN], &data[signed.len()..]) {
             return false;
         }
         let counter = u64::from_be_bytes(data[20..28].try_into().unwrap());
@@ -94,10 +94,6 @@ impl Keepalives {
         self.seen = counter;
         true
     }
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Datagrams that are not Reticulum packets: keepalives, and punch packets

@@ -1,8 +1,14 @@
 //! UDP hole punch execution.
 //!
 //! Sends punch packets to peer endpoints and listens for valid replies.
-//! Punch packet: [MAGIC:"RNSH" 4B] [SESSION_ID:16B] [PUNCH_TOKEN:32B] [SEQ:4B] = 56 bytes
-//! ACK packet:   [MAGIC:"RNSA" 4B] [SESSION_ID:16B] [PUNCH_TOKEN:32B] [SEQ:4B] = 56 bytes
+//! Punch packet: [MAGIC:"RNSH" 4B] [SESSION_ID:16B] [NONCE:16B] [TAG:16B] = 52 bytes
+//! ACK packet:   [MAGIC:"RNSA" 4B] [SESSION_ID:16B] [NONCE:16B] [TAG:16B] = 52 bytes
+//!
+//! The nonce of a punch is random; an ACK echoes the nonce of the punch it
+//! answers. The tag is the first 16 bytes of HMAC-SHA256 over the preceding
+//! 36 bytes, keyed with the session's punch token, which never appears on
+//! the wire. An ACK counts only if it echoes a nonce this side sent to the
+//! IP it comes from.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -13,7 +19,9 @@ use std::time::{Duration, Instant};
 
 const PUNCH_MAGIC: &[u8; 4] = b"RNSH";
 const ACK_MAGIC: &[u8; 4] = b"RNSA";
-const PUNCH_PACKET_LEN: usize = 56; // 4 + 16 + 32 + 4
+const NONCE_LEN: usize = 16;
+const TAG_LEN: usize = 16;
+const PUNCH_PACKET_LEN: usize = 4 + 16 + NONCE_LEN + TAG_LEN;
 const PUNCH_INTERVAL: Duration = Duration::from_millis(100);
 const PUNCH_DURATION: Duration = Duration::from_secs(10);
 /// Upper bound on punch packets sent per session (over all endpoints).
@@ -278,7 +286,8 @@ struct PunchState {
     punch_token: [u8; 32],
     limits: PunchLimits,
     start: Instant,
-    seq: u32,
+    /// The nonce of every punch sent, with the IP it went to.
+    sent_nonces: Vec<([u8; NONCE_LEN], std::net::IpAddr)>,
     punch_packets_sent: u32,
     ack_packets_sent: u32,
     we_got_ack: bool,
@@ -328,7 +337,7 @@ impl PunchState {
             punch_token,
             limits,
             start: Instant::now(),
-            seq: 0,
+            sent_nonces: Vec::new(),
             punch_packets_sent: 0,
             ack_packets_sent: 0,
             we_got_ack: false,
@@ -345,8 +354,8 @@ impl PunchState {
     /// Send a punch packet to every peer endpoint that is due one, within
     /// the budget.
     fn send_round(&mut self, socket: &UdpSocket) {
+        use rns_crypto::Rng;
         let now = Instant::now();
-        let punch_pkt = build_punch_packet(&self.session_id, &self.punch_token, self.seq);
         for ep in &mut self.endpoints {
             if self.punch_packets_sent >= self.limits.max_punch_packets {
                 break;
@@ -354,12 +363,15 @@ impl PunchState {
             if !ep.due(now, &self.limits) {
                 continue;
             }
+            let mut nonce = [0u8; NONCE_LEN];
+            rns_crypto::OsRng.fill_bytes(&mut nonce);
+            let punch_pkt = build_punch_packet(&self.session_id, &self.punch_token, &nonce);
+            self.sent_nonces.push((nonce, ep.addr.ip()));
             let _ = socket.send_to(&punch_pkt, ep.addr);
             ep.sent += 1;
             ep.last_sent = Some(now);
             self.punch_packets_sent += 1;
         }
-        self.seq = self.seq.wrapping_add(1);
     }
 
     /// A valid packet came from `src`: the endpoints at its IP are the peer.
@@ -384,29 +396,31 @@ impl PunchState {
         {
             return None;
         }
-        if &data[..4] == PUNCH_MAGIC {
-            // Received a punch from peer — verify token
-            if verify_punch_packet(data, &self.session_id, &self.punch_token) {
-                // Send ACK back
-                let peer_seq = u32::from_be_bytes([data[52], data[53], data[54], data[55]]);
-                if self.ack_packets_sent < self.limits.max_ack_packets {
-                    let ack = build_ack_packet(&self.session_id, &self.punch_token, peer_seq);
-                    let _ = socket.send_to(&ack, src);
-                    self.ack_packets_sent += 1;
-                }
-                self.they_got_ack = true;
-                self.verified_peer = Some(src);
-                self.verify_source(src);
+        if let Some(nonce) = open_control(data, PUNCH_MAGIC, &self.session_id, &self.punch_token) {
+            // A punch from the peer: acknowledge it, echoing its nonce.
+            if self.ack_packets_sent < self.limits.max_ack_packets {
+                let ack = build_ack_packet(&self.session_id, &self.punch_token, &nonce);
+                let _ = socket.send_to(&ack, src);
+                self.ack_packets_sent += 1;
             }
-        } else if &data[..4] == ACK_MAGIC {
-            // Received ACK for our punch
-            if verify_ack_packet(data, &self.session_id, &self.punch_token) {
+            self.they_got_ack = true;
+            self.verified_peer = Some(src);
+            self.verify_source(src);
+        } else if let Some(nonce) =
+            open_control(data, ACK_MAGIC, &self.session_id, &self.punch_token)
+        {
+            // An ACK counts only for a punch we sent to where it came from.
+            let ours = self
+                .sent_nonces
+                .iter()
+                .any(|(sent, ip)| *sent == nonce && *ip == src.ip());
+            if ours {
                 self.we_got_ack = true;
                 self.first_ack_time.get_or_insert_with(Instant::now);
-                self.verify_source(src);
                 if self.verified_peer.is_none() {
                     self.verified_peer = Some(src);
                 }
+                self.verify_source(src);
             }
         }
         // Both sides confirmed → success
@@ -581,42 +595,46 @@ fn run_udp_punch(
     None
 }
 
-fn build_punch_packet(session_id: &[u8; 16], punch_token: &[u8; 32], seq: u32) -> Vec<u8> {
+fn build_control(
+    magic: &[u8; 4],
+    session_id: &[u8; 16],
+    key: &[u8; 32],
+    nonce: &[u8; NONCE_LEN],
+) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(PUNCH_PACKET_LEN);
-    pkt.extend_from_slice(PUNCH_MAGIC);
+    pkt.extend_from_slice(magic);
     pkt.extend_from_slice(session_id);
-    pkt.extend_from_slice(punch_token);
-    pkt.extend_from_slice(&seq.to_be_bytes());
+    pkt.extend_from_slice(nonce);
+    let tag = rns_crypto::hmac::hmac_sha256(key, &pkt);
+    pkt.extend_from_slice(&tag[..TAG_LEN]);
     pkt
 }
 
-fn build_ack_packet(session_id: &[u8; 16], punch_token: &[u8; 32], seq: u32) -> Vec<u8> {
-    let mut pkt = Vec::with_capacity(PUNCH_PACKET_LEN);
-    pkt.extend_from_slice(ACK_MAGIC);
-    pkt.extend_from_slice(session_id);
-    pkt.extend_from_slice(punch_token);
-    pkt.extend_from_slice(&seq.to_be_bytes());
-    pkt
+/// The nonce of `data`, if it is a `magic` packet of the session with a
+/// valid tag.
+fn open_control(
+    data: &[u8],
+    magic: &[u8; 4],
+    session_id: &[u8; 16],
+    key: &[u8; 32],
+) -> Option<[u8; NONCE_LEN]> {
+    if data.len() != PUNCH_PACKET_LEN || &data[..4] != magic || data[4..20] != session_id[..] {
+        return None;
+    }
+    let signed = &data[..PUNCH_PACKET_LEN - TAG_LEN];
+    let tag = rns_crypto::hmac::hmac_sha256(key, signed);
+    if !super::constant_time_eq(&tag[..TAG_LEN], &data[signed.len()..]) {
+        return None;
+    }
+    data[20..20 + NONCE_LEN].try_into().ok()
 }
 
-fn verify_punch_packet(data: &[u8], session_id: &[u8; 16], punch_token: &[u8; 32]) -> bool {
-    if data.len() != PUNCH_PACKET_LEN {
-        return false;
-    }
-    if &data[..4] != PUNCH_MAGIC {
-        return false;
-    }
-    &data[4..20] == session_id && &data[20..52] == punch_token
+fn build_punch_packet(session_id: &[u8; 16], punch_token: &[u8; 32], nonce: &[u8; 16]) -> Vec<u8> {
+    build_control(PUNCH_MAGIC, session_id, punch_token, nonce)
 }
 
-fn verify_ack_packet(data: &[u8], session_id: &[u8; 16], punch_token: &[u8; 32]) -> bool {
-    if data.len() != PUNCH_PACKET_LEN {
-        return false;
-    }
-    if &data[..4] != ACK_MAGIC {
-        return false;
-    }
-    &data[4..20] == session_id && &data[20..52] == punch_token
+fn build_ack_packet(session_id: &[u8; 16], punch_token: &[u8; 32], nonce: &[u8; 16]) -> Vec<u8> {
+    build_control(ACK_MAGIC, session_id, punch_token, nonce)
 }
 
 #[cfg(test)]
@@ -627,27 +645,80 @@ mod tests {
     fn test_punch_packet_roundtrip() {
         let session_id = [0xAA; 16];
         let token = [0xBB; 32];
-        let pkt = build_punch_packet(&session_id, &token, 42);
+        let pkt = build_punch_packet(&session_id, &token, &[42; 16]);
         assert_eq!(pkt.len(), PUNCH_PACKET_LEN);
-        assert!(verify_punch_packet(&pkt, &session_id, &token));
+        assert_eq!(
+            open_control(&pkt, PUNCH_MAGIC, &session_id, &token),
+            Some([42; 16])
+        );
+        // The key never appears on the wire.
+        assert!(!pkt.windows(32).any(|w| w == token));
+        assert_eq!(open_control(&pkt, ACK_MAGIC, &session_id, &token), None);
     }
 
     #[test]
     fn test_ack_packet_roundtrip() {
         let session_id = [0xCC; 16];
         let token = [0xDD; 32];
-        let pkt = build_ack_packet(&session_id, &token, 7);
+        let pkt = build_ack_packet(&session_id, &token, &[7; 16]);
         assert_eq!(pkt.len(), PUNCH_PACKET_LEN);
-        assert!(verify_ack_packet(&pkt, &session_id, &token));
+        assert_eq!(
+            open_control(&pkt, ACK_MAGIC, &session_id, &token),
+            Some([7; 16])
+        );
     }
 
     #[test]
-    fn test_wrong_token_rejected() {
+    fn test_wrong_token_or_session_or_tampering_rejected() {
         let session_id = [0xAA; 16];
         let token = [0xBB; 32];
-        let wrong_token = [0xFF; 32];
-        let pkt = build_punch_packet(&session_id, &token, 0);
-        assert!(!verify_punch_packet(&pkt, &session_id, &wrong_token));
+        let pkt = build_punch_packet(&session_id, &token, &[1; 16]);
+        assert!(open_control(&pkt, PUNCH_MAGIC, &session_id, &[0xFF; 32]).is_none());
+        assert!(open_control(&pkt, PUNCH_MAGIC, &[0xAB; 16], &token).is_none());
+        let mut tampered = pkt.clone();
+        tampered[25] ^= 1;
+        assert!(open_control(&tampered, PUNCH_MAGIC, &session_id, &token).is_none());
+        assert!(open_control(&pkt[..51], PUNCH_MAGIC, &session_id, &token).is_none());
+    }
+
+    #[test]
+    fn punch_nonces_are_random() {
+        let target = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut punch = PunchState::new(
+            vec![target.local_addr().unwrap()],
+            [1; 16],
+            [2; 32],
+            DEFAULT_LIMITS,
+        );
+        punch.send_round(&sender);
+        punch.send_round(&sender);
+        assert_eq!(punch.sent_nonces.len(), 2);
+        assert_ne!(punch.sent_nonces[0].0, punch.sent_nonces[1].0);
+        assert_ne!(punch.sent_nonces[0].0, [0; 16]);
+    }
+
+    #[test]
+    fn ack_counts_only_with_a_nonce_sent_to_its_source() {
+        let session_id = [3; 16];
+        let token = [4; 32];
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let target: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let mut punch = PunchState::new(vec![target], session_id, token, DEFAULT_LIMITS);
+        punch.send_round(&sender);
+        let sent = punch.sent_nonces[0].0;
+
+        // A well-formed ACK echoing a nonce never sent.
+        let forged = build_ack_packet(&session_id, &token, &[9; 16]);
+        punch.receive(&sender, &forged, target);
+        assert!(!punch.we_got_ack);
+        // The right nonce from an IP it was not sent to.
+        let ack = build_ack_packet(&session_id, &token, &sent);
+        punch.receive(&sender, &ack, "127.0.0.2:40000".parse().unwrap());
+        assert!(!punch.we_got_ack);
+        // The right nonce from where it was sent (the port may differ).
+        punch.receive(&sender, &ack, "127.0.0.1:40001".parse().unwrap());
+        assert!(punch.we_got_ack);
     }
 
     #[test]
@@ -833,10 +904,10 @@ mod tests {
         .unwrap();
 
         other
-            .send_to(&build_punch_packet(&session_id, &token, 0), addr_a)
+            .send_to(&build_punch_packet(&session_id, &token, &[0; 16]), addr_a)
             .unwrap();
         other
-            .send_to(&build_ack_packet(&session_id, &token, 0), addr_a)
+            .send_to(&build_ack_packet(&session_id, &token, &[0; 16]), addr_a)
             .unwrap();
         let mut buf = [0u8; 128];
         assert!(other.recv_from(&mut buf).is_err(), "no ACK expected");

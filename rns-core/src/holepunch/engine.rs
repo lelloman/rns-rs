@@ -23,7 +23,9 @@ use super::types::*;
 
 /// Derives a 32-byte punch token from the link's derived key and session ID.
 ///
-/// `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-v1")[:32]`
+/// `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-v1")[:32]`.
+/// It keys the tags of the punch packets and their acknowledgements, and
+/// never appears on the wire.
 pub fn derive_punch_token(
     derived_key: &[u8],
     session_id: &[u8; 16],
@@ -38,7 +40,7 @@ pub fn derive_punch_token(
 /// Derives the 32-byte key that authenticates the direct path's keepalives.
 ///
 /// `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-keepalive-v1")`.
-/// Unlike the punch token, it never appears on the wire.
+/// Like the punch token, it never appears on the wire.
 pub fn derive_keepalive_key(
     derived_key: &[u8],
     session_id: &[u8; 16],
