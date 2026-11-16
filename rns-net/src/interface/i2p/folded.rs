@@ -25,8 +25,8 @@ use rns_core::transport::types::InterfaceId;
 use super::sam::{self, Destination, SamError};
 use super::tunnel::PeerTunnel;
 use super::{
-    frame_decoder, open_session_retrying, peer_info, peer_up, template_ifac_size, I2pConfig,
-    I2pEndpoint, I2pRuntime, I2pWriter, OutboundPeer,
+    control_reply, frame_decoder, open_session_retrying, peer_info, peer_up, reopen_session,
+    template_ifac_size, I2pConfig, I2pEndpoint, I2pRuntime, I2pWriter, OutboundPeer,
 };
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
@@ -53,6 +53,10 @@ struct Session {
     dynamic_template: Option<crate::interface::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
     endpoint: Arc<Mutex<I2pEndpoint>>,
+    /// The interface's configuration, to open the session again with.
+    config: I2pConfig,
+    /// How long to wait before opening the session again.
+    sam_retry_wait: Duration,
 }
 
 /// Set the SAM session up and serve it on the driver loop. Runs on a setup
@@ -81,21 +85,12 @@ pub(super) fn setup(
         dynamic_template,
         underlay_mark: config.underlay_mark,
         endpoint: Arc::clone(&config.endpoint),
+        sam_retry_wait: config.sam_retry_wait(),
+        config: config.clone(),
     });
 
     // The session lasts as long as its control socket stays open.
-    control.set_nonblocking(true).map_err(SamError::Io)?;
-    session
-        .tx
-        .register_source(
-            read_key(config.interface_id),
-            Box::new(ControlSource {
-                stream: control,
-                line: Vec::new(),
-                session: Arc::clone(&session),
-            }),
-        )
-        .map_err(SamError::Io)?;
+    session.serve_control(control).map_err(SamError::Io)?;
 
     for peer in peers {
         let session = Arc::clone(&session);
@@ -115,6 +110,39 @@ pub(super) fn setup(
 impl Session {
     fn reconnect_wait(&self) -> Duration {
         lock_or_recover(&self.runtime, "i2p runtime").reconnect_wait
+    }
+
+    /// Open the session again, on a thread of its own, after the bridge
+    /// closed it, and serve its new control socket on the driver loop.
+    /// Peers reconnect and accepts are asked for again meanwhile, under the
+    /// same session id.
+    fn reopen_later(self: &Arc<Self>) {
+        let session = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name(format!("i2p-session-{}", self.config.interface_id.0))
+            .spawn(move || {
+                let control =
+                    reopen_session(&session.config, &session.sam_addr, session.sam_retry_wait);
+                if let Err(e) = session.serve_control(control) {
+                    log::error!("[{}] cannot serve the I2P session: {}", session.name, e);
+                }
+            });
+        if let Err(e) = spawned {
+            log::error!("[{}] cannot reopen the I2P session: {}", self.name, e);
+        }
+    }
+
+    /// Serve the session's control socket on the driver loop.
+    fn serve_control(self: &Arc<Self>, control: TcpStream) -> io::Result<()> {
+        control.set_nonblocking(true)?;
+        self.tx.register_source(
+            read_key(self.config.interface_id),
+            Box::new(ControlSource {
+                stream: control,
+                line: Vec::new(),
+                session: Arc::clone(self),
+            }),
+        )
     }
 
     fn allocate_id(&self) -> InterfaceId {
@@ -286,6 +314,7 @@ impl LoopSource for ControlSource {
                         "[{}] the SAM bridge closed the I2P session",
                         self.session.name
                     );
+                    self.session.reopen_later();
                     return SourceStatus::Remove;
                 }
                 Ok(n) => {
@@ -299,8 +328,8 @@ impl LoopSource for ControlSource {
                         let line = String::from_utf8_lossy(&self.line).into_owned();
                         self.line.clear();
                         // Keep the session alive when the bridge checks on it.
-                        if let Some(rest) = line.strip_prefix("PING") {
-                            let _ = self.stream.write_all(format!("PONG{}\n", rest).as_bytes());
+                        if let Some(reply) = control_reply(&line) {
+                            let _ = self.stream.write_all(reply.as_bytes());
                         }
                     }
                 }
@@ -308,6 +337,7 @@ impl LoopSource for ControlSource {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => {
                     log::warn!("[{}] I2P session socket failed: {}", self.session.name, e);
+                    self.session.reopen_later();
                     return SourceStatus::Remove;
                 }
             }
@@ -552,6 +582,62 @@ mod tests {
     }
 
     #[test]
+    fn session_closed_by_the_bridge_is_opened_again_on_the_driver_loop() {
+        if !crate::engine::FOLD_IO {
+            return;
+        }
+        use super::super::tests::{answer_session, config_with_keys, free_port};
+        let port = free_port();
+        let mut config = config_with_keys("I2P folded", port);
+        config.interface_id = InterfaceId(42);
+        let sam_addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let bridge = TcpListener::bind(sam_addr).unwrap();
+        let (tx, rx) = crate::event::channel();
+        let session = Arc::new(Session {
+            sam_addr,
+            session_id: "I2P_folded".into(),
+            name: config.name.clone(),
+            tx,
+            next_id: Arc::new(AtomicU64::new(900)),
+            runtime: Arc::clone(&config.runtime),
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+            dynamic_template: None,
+            underlay_mark: None,
+            endpoint: Arc::clone(&config.endpoint),
+            config: config.clone(),
+            sam_retry_wait: Duration::from_millis(200),
+        });
+        // The session's first control socket, served on the driver loop.
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control = TcpStream::connect(control_listener.local_addr().unwrap()).unwrap();
+        let (first, _) = control_listener.accept().unwrap();
+        session.serve_control(control).unwrap();
+        I2pEndpoint::set_accepting(&config.endpoint);
+
+        // The bridge answers the session opened again, and checks on it.
+        let (done_tx, done) = mpsc::channel();
+        thread::spawn(move || {
+            let mut control = answer_session(&bridge, "I2P_folded");
+            control.write_all(b"PING 7\n").unwrap();
+            let _ = done_tx.send(read_command(&mut control));
+            thread::sleep(Duration::from_secs(1));
+        });
+        drop(first);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let pong = loop {
+            let _ = rx.recv_timeout(Duration::from_millis(50));
+            if let Ok(pong) = done.try_recv() {
+                break pong;
+            }
+            assert!(std::time::Instant::now() < deadline, "session not reopened");
+        };
+        // The new control socket is served on the driver loop.
+        assert_eq!(pong, "PONG 7");
+        assert!(lock_or_recover(&config.endpoint, "test").online);
+        let _ = std::fs::remove_dir_all(&config.storage_dir);
+    }
+
+    #[test]
     fn accepted_peer_is_served_on_the_driver_loop() {
         if !crate::engine::FOLD_IO {
             return;
@@ -572,6 +658,8 @@ mod tests {
             dynamic_template: None,
             underlay_mark: None,
             endpoint: Arc::clone(&endpoint),
+            config: I2pConfig::default(),
+            sam_retry_wait: Duration::from_secs(1),
         });
         let (accepts_tx, accepts) = mpsc::channel();
         thread::spawn(move || {
@@ -659,6 +747,8 @@ mod tests {
             dynamic_template: None,
             underlay_mark: None,
             endpoint: Arc::clone(&endpoint),
+            config: I2pConfig::default(),
+            sam_retry_wait: Duration::from_secs(1),
         });
         let (connections_tx, connections) = mpsc::channel();
         thread::spawn(move || {
