@@ -1071,3 +1071,39 @@ fn channel_messages_in_flight_across_the_upgrade_all_arrive() {
     ));
     pair.shutdown();
 }
+
+#[test]
+fn both_sides_proposing_at_once_still_upgrade() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    pair.alice.propose_direct_connect(pair.link_id).unwrap();
+    pair.bob.propose_direct_connect(pair.link_id).unwrap();
+    let link_id = pair.link_id;
+    for (who, rx) in [("alice", &pair.alice_rx), ("bob", &pair.bob_rx)] {
+        let outcome = wait_for(rx, Duration::from_secs(25), |event| match event {
+            TestEvent::DirectConnected(id, interface) if *id == link_id => Some(Ok(*interface)),
+            TestEvent::DirectFailed(id, reason) if *id == link_id => Some(Err(*reason)),
+            _ => None,
+        });
+        assert!(matches!(outcome, Some(Ok(_))), "{who}: {outcome:?}");
+    }
+    // One upgrade, the link initiator's: the same session on both sides.
+    let names = |node: &RnsNode| -> Vec<String> {
+        interfaces(node)
+            .into_iter()
+            .filter(|i| i.name.starts_with("DirectPeer"))
+            .map(|i| i.name)
+            .collect()
+    };
+    assert_eq!(names(&pair.alice).len(), 1);
+    assert_eq!(names(&pair.alice), names(&pair.bob));
+    assert!(deliver(
+        &pair.bob,
+        &pair.alice_rx,
+        link_id,
+        b"direct after glare",
+        Duration::from_secs(10)
+    ));
+    pair.shutdown();
+}

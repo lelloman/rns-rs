@@ -896,6 +896,53 @@ impl HolePunchManager {
         Some((link_id, path.session_id))
     }
 
+    /// Whether this node is itself proposing on `link_id`: asking the peer
+    /// about Direct Link for a proposal, or running an initiator session
+    /// that has not finished.
+    pub fn proposing(&self, link_id: &[u8; 16]) -> bool {
+        if matches!(
+            self.peer_support.get(link_id),
+            Some(PeerSupport::Querying { .. })
+        ) {
+            return true;
+        }
+        self.link_to_session
+            .get(link_id)
+            .and_then(|session_id| self.sessions.get(session_id))
+            .is_some_and(|session| {
+                session.engine.is_initiator()
+                    && matches!(
+                        session.engine.state(),
+                        HolePunchState::Discovering
+                            | HolePunchState::Proposing
+                            | HolePunchState::WaitingReady
+                            | HolePunchState::Punching
+                    )
+            })
+    }
+
+    /// Both sides proposed on the same link at once, and the peer's
+    /// proposal wins (the link initiator's does): drop ours without
+    /// reporting a failure, since the upgrade goes ahead with us as the
+    /// responder.
+    pub fn yield_proposal(&mut self, link_id: &[u8; 16]) {
+        if matches!(
+            self.peer_support.get(link_id),
+            Some(PeerSupport::Querying { .. })
+        ) {
+            // The peer sent a request, so it implements Direct Link.
+            self.peer_support.insert(*link_id, PeerSupport::Supported);
+        }
+        let ours = self
+            .link_to_session
+            .get(link_id)
+            .and_then(|session_id| self.sessions.get(session_id))
+            .is_some_and(|session| session.engine.is_initiator());
+        if ours {
+            self.remove_link_session(link_id);
+        }
+    }
+
     /// Responder: replies to resend when `payload` repeats the request of
     /// the session running on `link_id` (its earlier replies may have been
     /// lost). `None` for a new request.
@@ -1386,7 +1433,7 @@ impl HolePunchManager {
         self.link_to_session.contains_key(link_id)
     }
 
-    fn set_spawn_workers(&mut self, spawn: bool) {
+    pub(crate) fn set_spawn_workers(&mut self, spawn: bool) {
         self.spawn_workers = spawn;
     }
 
@@ -2261,5 +2308,44 @@ mod tests {
         mgr.link_closed(&link_id);
         assert_eq!(mgr.direct_interface_down(InterfaceId(50_003)), None);
         assert!(mgr.retiring.is_empty());
+    }
+
+    #[test]
+    fn own_proposal_is_reported_and_can_be_yielded() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x73; 16];
+        assert!(!mgr.proposing(&link_id));
+        // Asking HELLO counts as proposing.
+        mgr.propose(link_id, &test_derived_key(), &mut make_rng(1), &tx);
+        assert!(mgr.proposing(&link_id));
+        mgr.yield_proposal(&link_id);
+        assert!(!mgr.proposing(&link_id));
+        assert!(mgr.peer_supported(&link_id));
+
+        // So does a running initiator session; yielding drops it quietly.
+        mgr.propose(link_id, &test_derived_key(), &mut make_rng(2), &tx);
+        assert!(mgr.proposing(&link_id));
+        assert_eq!(mgr.session_count(), 1);
+        mgr.yield_proposal(&link_id);
+        assert!(!mgr.proposing(&link_id));
+        assert_eq!(mgr.session_count(), 0);
+        assert!(mgr
+            .tick(&tx)
+            .iter()
+            .all(|a| !matches!(a, HolePunchManagerAction::DirectConnectFailed { .. })));
+
+        // A responder session is not ours to yield.
+        let request = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x44);
+        mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            request,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert!(!mgr.proposing(&link_id));
+        mgr.yield_proposal(&link_id);
+        assert_eq!(mgr.session_count(), 1);
     }
 }

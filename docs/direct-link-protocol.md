@@ -109,6 +109,15 @@ answers with the replies it has already sent (`UPGRADE_ACCEPT`, and
 `UPGRADE_READY` once it knows its endpoint) instead of treating it as a new
 request; the policy and pacing checks are not applied again.
 
+### Simultaneous proposals
+
+If both peers propose on the same link at once, their requests cross. The
+proposal of the side that initiated the Reticulum link goes ahead: that side
+leaves the peer's request unanswered, and the other side, on receiving a
+request while it is proposing itself (asking `HELLO` or running its own
+session), drops its proposal without reporting a failure and answers the
+request as the responder. Both sides end up with the same direct path.
+
 ## Protocol Flow
 
 ```

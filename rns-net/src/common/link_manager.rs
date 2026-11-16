@@ -815,6 +815,13 @@ impl LinkManager {
         Some(direct.interface)
     }
 
+    /// Whether this side initiated the link (`None` for an unknown link).
+    pub fn is_link_initiator(&self, link_id: &LinkId) -> Option<bool> {
+        self.links
+            .get(link_id)
+            .map(|link| link.engine.is_initiator())
+    }
+
     /// The Direct Link interface the link runs over, if any.
     pub fn direct_route_interface(
         &self,
