@@ -90,8 +90,9 @@ fn parse_interface_gravity(value: Option<&str>, default_gravity: i64) -> i64 {
 
 /// Parse an interface's `hop_limiter` option (upstream bb63dd44): `as_int`,
 /// clamped to `0..=PATHFINDER_M`. Upstream checks it as a truth value, so 0
-/// leaves the interface without a limiter of its own, as does a value that
-/// is not an integer.
+/// leaves the interface without a limiter of its own. A config file with a
+/// value that is not an integer is refused when it is parsed, as upstream
+/// refuses to create the interface; here such a value is no limiter.
 pub(crate) fn parse_interface_hop_limiter(value: Option<&str>) -> Option<u8> {
     let limit = value?.trim().parse::<i64>().ok()?;
     let limit = limit.clamp(0, i64::from(rns_core::constants::PATHFINDER_M)) as u8;
