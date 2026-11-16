@@ -1228,14 +1228,16 @@ fn python_rnpath_lists_rust_path_table() {
     assert_success(&probe, "probe RNS.prettycost");
     if String::from_utf8_lossy(&probe.stdout).trim() == "True" {
         // The listener's destination is a known destination of the client
-        // daemon, so its stamp value is reported; it announces no link
-        // request cost. `prettycost` prints a missing value as `?`, and as
-        // `n` since rgit `d5891fde`.
+        // daemon, so its stamp value is reported. The listener, a client of
+        // the Rust instance, stamps its announce (upstream 51fa8413), and a
+        // stamped announce carries the destination's link request cost, the
+        // default 12.5 here. `prettycost` prints a missing value as `?`, and
+        // as `n` since rgit `d5891fde`.
         let missing = ["?", "n"];
         assert!(
             line.contains("(dv:")
                 && !missing.iter().any(|m| line.contains(&format!("(dv:{m}/")))
-                && missing.iter().any(|m| line.ends_with(&format!("/lc:{m})"))),
+                && line.ends_with("/lc:12.500)"),
             "unexpected rnpath line: {line}"
         );
     }
