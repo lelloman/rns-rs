@@ -572,7 +572,10 @@ impl InterfaceFactory for TcpClientFactory {
             announce_cap: rns_core::constants::ANNOUNCE_CAP,
             is_local_client: false,
             // A dialing client synthesizes a tunnel on each connect, so the
-            // server can keep its paths across reconnects.
+            // server can keep its paths across reconnects. Each connect
+            // sends `InterfaceUp`, whose handler sends the synthesis as the
+            // first frame (upstream ad6c709e writes it while connecting).
+            // rns-rs has no KISS-framed TCP client, which upstream exempts.
             wants_tunnel: true,
             tunnel_id: None,
             mtu: super::tcp_hardware_mtu(tcp_config.bitrate, tcp_config.fixed_mtu),

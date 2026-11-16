@@ -58,7 +58,7 @@ Dispositions are provisional until each mapping commit lands.
 | 3 | `a450be5d7ed40c78353f547f1373587bb2b85d9f` | Raised announce validation caches to 384 | Structurally covered | `ANNOUNCE_SIG_CACHE_MAXSIZE` (2,000 entries, 600 s TTL, configurable) documented against upstream's sizes |
 | 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Integrated | `announces_that_cannot_update_a_known_path_are_prefiltered`, `announce_with_insufficient_payload_counts_a_protocol_violation`; `announce_with_cached_signature_but_different_fields_is_verified_again` adjusted |
 | 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Integrated | `tunnel_synthesis_is_sent_before_the_interface_is_announced_up`, `dialing_interface_synthesizes_a_tunnel_on_each_connect` |
-| 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Needs port | |
+| 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Structurally covered | Same `InterfaceUp` ordering as commit 5; TCP client and outbound I2P peer bring each connect up through it (comments in `tcp.rs` and `i2p/mod.rs`) |
 | 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Needs decision | |
 | 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Needs port | |
 | 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Needs port | |
@@ -252,11 +252,16 @@ written to the socket in `connect` before the interface goes online, and the
 separate synthesis after (re)connect is removed.
 
 **Rust applicability:** As commit 5, for the TCP client and outbound I2P peer
-writers.
+writers. Both send `InterfaceUp` on every connect and reconnect (the I2P peer
+through `peer_up`), so both reach the handler that commit 5 made send the
+synthesis first. rns-rs has no KISS-framed TCP client, which upstream
+exempts from synthesis; its I2P peers frame with HDLC.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** No further code change: commit 5's ordering
+covers both. The mapping commit documents it where the two interfaces want
+a tunnel. Evidence as commit 5.
 
-**Final disposition:** Needs port.
+**Final disposition:** Structurally covered.
 
 ### 7. `29ce7ca5` — Fixed exit handler deadlock if signal arrives in the middle of an RPC call
 
