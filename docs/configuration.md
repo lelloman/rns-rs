@@ -130,9 +130,8 @@ types, values and costs; the keys and defaults below are the ones it lists:
 
 ```ini
 [stamps]
-  # Opt in early to generation, emission and enforcement.
-  # stamp_destinations = yes
-  # stamp_prs = yes
+  # Generation and emission are on by default since 1.6.1.
+  # Opt in early to enforcement.
   # always_stamp_lrs = yes
   # enforce_stamps = yes
 
@@ -149,8 +148,8 @@ types, values and costs; the keys and defaults below are the ones it lists:
 
 | Key | Default | Effect |
 |-----|---------|--------|
-| `stamp_destinations` | `no` | Stamp announces emitted by this instance |
-| `stamp_prs` | `no` | Stamp path requests emitted by this instance, and unstamped ones forwarded for local clients |
+| `stamp_destinations` | `yes` | Stamp announces emitted by this instance |
+| `stamp_prs` | `yes` | Stamp path requests emitted by this instance, and unstamped ones forwarded for local clients |
 | `always_stamp_lrs` | `no` | Also stamp outbound link requests to destinations that announced no link cost, at `lr_cost` |
 | `enforce_stamps` | `no` | Drop announces and path requests whose stamp is missing or below the required cost, and enforce link request stamps |
 | `destination_cost` | `23.5` | Required stamp value of received and transported announces |
@@ -164,9 +163,12 @@ types, values and costs; the keys and defaults below are the ones it lists:
 | `worker_niceness` | `16` | Scheduling niceness (0-20) of stamp search threads on Linux, so grinding yields the CPU to the node's own work |
 
 The four switches can only enable a feature: `no` keeps the built-in default
-rather than forcing it off, as upstream applies them. During the 1.6.x
-transition all four default to off; upstream plans to turn generation and
-emission on by default in 1.6.1 and enforcement in 1.6.2. Link requests are
+rather than forcing it off, as upstream applies them. Since upstream
+`51fa8413` (1.6.1) `stamp_destinations` and `stamp_prs` default to on, so a
+node stamps the announces and path requests it emits; `always_stamp_lrs` and
+`enforce_stamps` stay off, and upstream plans to turn enforcement on in
+1.6.2. As in upstream, the config file cannot turn the two emission switches
+off; the runtime keys below can. Link requests are
 already stamped whenever the destination announced a non-zero cost
 (`Transport.STAMP_LRS`, on again since upstream `a8cc6cb2`, which removed the
 `stamp_lrs` option; a leftover `stamp_lrs` line is ignored). Costs and values
@@ -182,9 +184,9 @@ An invalid boolean or number is a configuration error. The defaults are the
 constants in `rns-core/src/constants.rs`, which mirror the upstream
 `Transport` class attributes at the current parity target.
 
-With these defaults a node validates inbound announce and path request stamps
-and records announced link costs, but emits no stamps and refuses nothing for
-lack of a stamp. Stamped link request keys are ground on a worker thread so the
+With these defaults a node validates inbound announce and path request stamps,
+records announced link costs and stamps what it emits, but refuses nothing
+for lack of a stamp. Stamped link request keys are ground on a worker thread so the
 driver stays responsive. Discovery announces have their own per-interface
 `discovery_stamp_value`, described in
 [Interface Discovery](interface-discovery.md#advertised-locations).
@@ -209,10 +211,19 @@ is not sent. With `stamp_destinations` the built-in destinations (remote
 management, the blackhole list and the probe responder) are stamped too,
 and announce their link cost: their stamps are ground on the same worker
 and persisted, and an announce waits for its stamp. None of this runs while
-the switches are off, which is the upstream default.
+the switches are off.
+
+A destination's first announce therefore goes out only once its stamp is
+found, which at the default value of 25 takes from seconds to minutes
+depending on the CPU; later announces reuse the persisted stamp, and a
+program that announces and exits at once can exit before the first one is
+sent, as upstream's can. A node with no stamp store, such as a client of a
+shared instance or a node started in code without a storage directory,
+announces unstamped: it has nowhere to keep a stamp. Upstream clients stamp
+their own announces; rns-rs shared clients do not yet.
 
 The emission switches are also runtime config keys, so a running node can be
-switched to stamped emission without a restart. `global.stamp_link_requests`
+switched to unstamped emission and back without a restart. `global.stamp_link_requests`
 (`Transport.STAMP_LRS`, on by default) has no config option and can only be
 changed at runtime. `enforce_stamps` is split into two keys:
 `global.stamps_enforced` (`Transport.STAMPS_ENFORCED`) drops received announces
@@ -220,8 +231,8 @@ and path requests whose stamp is below the required cost, and
 `global.lr_stamps_enforced` does the same for link requests (see below):
 
 ```bash
-rns-ctl config get global.stamp_destinations         # false by default
-rns-ctl config set global.stamp_path_requests true
+rns-ctl config get global.stamp_destinations         # true by default
+rns-ctl config set global.stamp_path_requests false
 rns-ctl config set global.always_stamp_link_requests true
 rns-ctl config set global.stamp_link_requests false
 rns-ctl config set global.stamps_enforced true

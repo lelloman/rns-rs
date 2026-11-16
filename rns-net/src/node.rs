@@ -5307,11 +5307,15 @@ pub(crate) fn build_announce_packet(
     } else {
         None
     };
-    let wire_app_data: Option<Vec<u8>> = if stamp_destinations {
+    // A node without a stamp store (a shared instance client, or one started
+    // without storage) has nowhere to keep a stamp and announces unstamped,
+    // as `announce_needs_stamp` already treats it; failing every announce
+    // would make the 51fa8413 default unusable for it.
+    let stamp_store = stamp_store.filter(|_| stamp_destinations);
+    let wire_app_data: Option<Vec<u8>> = if let Some(store) = stamp_store {
         let public_key = identity.get_public_key().ok_or(SendError)?;
         let material =
             crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
-        let store = stamp_store.ok_or(SendError)?;
         let target = targets.destination_target(dest);
         let (stamp, _value) = match store.load(&dest.hash.0, &material, target) {
             Some(entry) => entry,
@@ -8694,6 +8698,14 @@ enable_transport = False
             &second[..]
         );
         assert_eq!(ext[rns_core::constants::EXT_PAYLOAD_LENGTH - 1], 7);
+
+        // Without a stamp store, as a shared instance client has, the
+        // announce goes out unstamped instead of failing.
+        let (packet, _) =
+            build_announce_packet(&tx, None, true, targets, &dest, &identity, Some(b"app"))
+                .unwrap();
+        let announce = rns_core::announce::AnnounceData::unpack(packet.data(), false).unwrap();
+        assert_eq!(announce.app_data.as_deref(), Some(&b"app"[..]));
     }
 
     #[test]

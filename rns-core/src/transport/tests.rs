@@ -3019,6 +3019,7 @@ fn path_request_longer_than_stamped_length_is_dropped() {
 #[test]
 fn test_recursive_path_request_rebuilds_transport_payload() {
     let mut engine = TransportEngine::new(make_config(true));
+    engine.set_stamp_prs(false);
     engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
     engine.register_interface(make_interface(2, constants::MODE_FULL));
 
@@ -3043,6 +3044,7 @@ fn test_recursive_path_request_rebuilds_transport_payload() {
 #[test]
 fn test_path_request_forwarded_on_internal() {
     let mut engine = TransportEngine::new(make_config(true));
+    engine.set_stamp_prs(false);
     engine.register_interface(make_interface(1, constants::MODE_INTERNAL));
     engine.register_interface(make_interface(2, constants::MODE_FULL));
 
@@ -3066,6 +3068,7 @@ fn test_path_request_forwarded_on_internal() {
 #[test]
 fn boundary_path_request_searches_only_boundary_and_gateway_interfaces() {
     let mut engine = TransportEngine::new(make_config(true));
+    engine.set_stamp_prs(false);
     engine.register_interface(make_interface(1, constants::MODE_BOUNDARY));
     engine.register_interface(make_interface(2, constants::MODE_BOUNDARY));
     engine.register_interface(make_interface(3, constants::MODE_GATEWAY));
@@ -3096,6 +3099,7 @@ fn boundary_path_request_searches_only_boundary_and_gateway_interfaces() {
 #[test]
 fn recursive_prs_on_boundary_keeps_unfiltered_egress_behavior() {
     let mut engine = TransportEngine::new(make_config(true));
+    engine.set_stamp_prs(false);
     let mut ingress = make_interface(1, constants::MODE_BOUNDARY);
     ingress.recursive_prs = true;
     engine.register_interface(ingress);
@@ -3261,6 +3265,7 @@ fn attached_announce_bypasses_interface_mode_filters() {
 #[test]
 fn test_path_request_forwarded_on_full_with_recursive_prs() {
     let mut engine = TransportEngine::new(make_config(true));
+    engine.set_stamp_prs(false);
     let mut ingress = make_interface(1, constants::MODE_FULL);
     ingress.recursive_prs = true;
     engine.register_interface(ingress);
@@ -4029,6 +4034,7 @@ fn learned_path_is_answered_while_request_gate_timestamp_remains() {
 #[test]
 fn test_path_request_discovers_when_known_path_has_no_announce_raw() {
     let mut engine = TransportEngine::new(make_config(true));
+    engine.set_stamp_prs(false);
     engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
     engine.register_interface(make_interface(2, constants::MODE_FULL));
 
@@ -5301,6 +5307,9 @@ fn make_issue183_daemon(transport_enabled: bool) -> (TransportEngine, [u8; 16]) 
     let mut config = make_config(transport_enabled);
     config.identity_hash = Some([0x42; 16]);
     let mut engine = TransportEngine::new(config);
+    // Unstamped; the stamping tests switch STAMP_PRS on (upstream 51fa8413
+    // made it the default).
+    engine.set_stamp_prs(false);
     engine.register_interface(make_local_client_interface(1));
     engine.register_interface(make_local_client_interface(2));
     engine.register_interface(make_interface(3, constants::MODE_FULL));
@@ -5957,7 +5966,7 @@ fn stamping_shared_instance_queues_stamps_for_unstamped_local_client_path_reques
         let tag = [0x32; 16];
         let request = make_path_request_data(&unknown_dest, &tag);
 
-        // Without STAMP_PRS the request is forwarded as-is (the default).
+        // Without STAMP_PRS the request is forwarded as-is.
         let (mut plain, _) = make_issue183_daemon(transport_enabled);
         assert!(!plain.stamp_prs());
         let forwarded_on: BTreeSet<u64> = plain

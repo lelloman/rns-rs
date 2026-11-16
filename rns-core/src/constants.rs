@@ -136,11 +136,13 @@ pub const LINK_REQUEST_STAMP_COST: StampCost = StampCost::from_fp(3200);
 /// since upstream 426673e9; `cost_to_fp(5.25)`).
 pub const BLACKHOLE_LINK_COST: StampCost = StampCost::from_fp(1344);
 
-/// Whether destination announces emitted by this instance are stamped.
-pub const STAMP_DESTINATIONS: bool = false;
+/// Whether destination announces emitted by this instance are stamped. On
+/// by default since upstream 51fa8413 (1.6.1).
+pub const STAMP_DESTINATIONS: bool = true;
 
-/// Whether path requests emitted by this instance are stamped.
-pub const STAMP_PRS: bool = false;
+/// Whether path requests emitted by this instance are stamped. On by
+/// default since upstream 51fa8413 (1.6.1).
+pub const STAMP_PRS: bool = true;
 
 /// Whether link requests emitted by this instance are stamped when the
 /// destination announces a cost. On again since upstream a8cc6cb2, which
@@ -855,16 +857,12 @@ mod tests {
         assert_eq!(LINK_STAMP_TIMEOUT, 15);
         assert_eq!(PATH_REQUEST_STAMP_TIMEOUT, 15);
         assert_eq!(HOP_LIMITER, PATHFINDER_M);
-        // Generation, emission and enforcement stay opt-in in 1.6.0, except
-        // that link requests are stamped when the destination announced a
-        // cost (a8cc6cb2 turned STAMP_LRS back on).
-        let opt_in = [
-            STAMPS_ENFORCED,
-            LR_STAMPS_ENFORCED,
-            STAMP_DESTINATIONS,
-            STAMP_PRS,
-            ALWAYS_STAMP_LRS,
-        ];
-        assert_eq!((opt_in, STAMP_LRS), ([false; 5], true));
+        // Since upstream 51fa8413 (1.6.1) announces and path requests this
+        // node emits are stamped, and link requests are when the destination
+        // announced a cost (a8cc6cb2 turned STAMP_LRS back on). Enforcement
+        // and stamping requests to destinations without a cost stay opt-in.
+        let opt_in = [STAMPS_ENFORCED, LR_STAMPS_ENFORCED, ALWAYS_STAMP_LRS];
+        let on = [STAMP_DESTINATIONS, STAMP_PRS, STAMP_LRS];
+        assert_eq!((opt_in, on), ([false; 3], [true; 3]));
     }
 }

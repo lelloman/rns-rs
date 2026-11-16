@@ -535,6 +535,11 @@ def emit(event, **fields):
     print(json.dumps(fields), flush=True)
 
 reticulum = RNS.Reticulum(configdir=config_dir)
+# Since 1.6.1 (51fa8413) emitted announces and path requests are stamped by
+# default, and grinding a 25-bit stamp in Python takes minutes. The harness
+# emits unstamped unless a command asks for a stamp.
+if hasattr(RNS.Transport, "STAMP_DESTINATIONS"): RNS.Transport.STAMP_DESTINATIONS = False
+if hasattr(RNS.Transport, "STAMP_PRS"): RNS.Transport.STAMP_PRS = False
 identity = RNS.Identity()
 destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "python")
 destination.set_default_app_data(b"python-appdata")
