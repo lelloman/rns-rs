@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 pub fn run(args: Args) {
     if args.has("help") || args.positional.is_empty() {
-        print_usage();
+        crate::cli::BACKBONE.print_help("rns-ctl backbone");
         return;
     }
 
@@ -22,11 +22,12 @@ pub fn run(args: Args) {
         Some("blacklist") => run_blacklist(&args, &mut client, json_output),
         Some("provider") => run_provider(&mut client, json_output),
         Some(other) => {
-            eprintln!("Unknown backbone subcommand: {}", other);
-            print_usage();
-            process::exit(1);
+            crate::cli::BACKBONE.error(
+                "rns-ctl backbone",
+                &format!("Unknown backbone subcommand: {}", other),
+            );
         }
-        None => print_usage(),
+        None => crate::cli::BACKBONE.print_help("rns-ctl backbone"),
     }
 }
 
@@ -90,9 +91,7 @@ fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
             }
         }
         _ => {
-            eprintln!("Unknown backbone blacklist action");
-            print_usage();
-            process::exit(1);
+            crate::cli::BACKBONE.error("rns-ctl backbone", "Unknown backbone blacklist action");
         }
     }
 }
@@ -380,11 +379,4 @@ fn rpc_call(client: &mut RpcClient, request: PickleValue) -> PickleValue {
             process::exit(1);
         }
     }
-}
-
-fn print_usage() {
-    println!("Usage:");
-    println!("    rns-ctl backbone blacklist list [INTERFACE] [--json]");
-    println!("    rns-ctl backbone blacklist clear <INTERFACE> <IP>");
-    println!("    rns-ctl backbone provider [--json]");
 }

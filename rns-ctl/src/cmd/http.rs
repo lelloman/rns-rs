@@ -45,7 +45,7 @@ impl HttpRunOptions {
 
 pub fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
     if args.has("help") {
-        print_help();
+        crate::cli::HTTP.print_help("rns-ctl http");
         return Ok(());
     }
 
@@ -438,31 +438,6 @@ fn libc_signal<F: FnMut() + Send + 'static>(mut callback: F) {
 
 #[cfg(not(unix))]
 fn libc_signal<F: FnMut() + Send + 'static>(_callback: F) {}
-
-fn print_help() {
-    println!(
-        "rns-ctl http - HTTP/WebSocket control interface for Reticulum
-
-USAGE:
-    rns-ctl http [OPTIONS]
-
-OPTIONS:
-    -c, --config PATH       Path to RNS config directory
-    -p, --port PORT         HTTP port (default: 8080, env: RNSCTL_HTTP_PORT)
-    -H, --host HOST         Bind host (default: 127.0.0.1, env: RNSCTL_HOST)
-    -t, --token TOKEN       Auth bearer token (env: RNSCTL_AUTH_TOKEN). When unset, a
-                            token is generated and written to <config dir>/http-token
-    -d, --daemon            Connect as client to running rnsd
-        --disable-auth      Disable authentication
-        --tls-cert PATH     TLS certificate file (env: RNSCTL_TLS_CERT, requires 'tls' feature)
-        --tls-key PATH      TLS private key file (env: RNSCTL_TLS_KEY, requires 'tls' feature)
-        --hooks-dir PATH    Directory native hooks may be loaded from through the API
-                            (default: <config dir>/hooks, env: RNSCTL_HOOKS_DIR)
-    -v                      Increase verbosity (repeat for more)
-    -h, --help              Show this help
-        --version           Show version"
-    );
-}
 
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ pub mod argparse;
 pub mod args;
 pub mod configobj;
 pub mod format;
+pub mod native_cli;
 pub mod placeholder;
 pub mod pyfmt;
 pub mod pylog;

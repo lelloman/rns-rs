@@ -18,7 +18,7 @@ pub fn run(args: Args) {
     }
 
     if args.has("help") || args.positional.is_empty() {
-        print_usage();
+        crate::cli::CONFIG.print_help("rns-ctl config");
         return;
     }
 
@@ -144,9 +144,10 @@ pub fn run(args: Args) {
             handle_mutation_response(&response, json_output, value_only);
         }
         _ => {
-            eprintln!("Unknown config subcommand: {}", action);
-            print_usage();
-            process::exit(1);
+            crate::cli::CONFIG.error(
+                "rns-ctl config",
+                &format!("Unknown config subcommand: {}", action),
+            );
         }
     }
 }
@@ -399,22 +400,6 @@ fn pickle_to_json(value: &PickleValue) -> Value {
             Value::Object(obj)
         }
     }
-}
-
-fn print_usage() {
-    println!("Usage: rns-ctl config <COMMAND> [OPTIONS]");
-    println!();
-    println!("Commands:");
-    println!("    list [--prefix PREFIX]      List supported runtime config entries");
-    println!("    get <key>                   Get one runtime config entry");
-    println!("    set <key> <value>           Set one runtime config value");
-    println!("    reset <key>                 Reset one runtime config value");
-    println!();
-    println!("Options:");
-    println!("    -c, --config PATH           Config directory");
-    println!("    -j, --json                  JSON output");
-    println!("        --keys-only             Print only keys for list");
-    println!("        --value-only            Print only the effective value");
 }
 
 #[cfg(test)]

@@ -18,7 +18,9 @@ use rns_net::storage;
 use rns_net::{HookInfo, RpcAddr, RpcClient};
 use rusqlite::{params, Connection};
 
+use crate::argparse::{Parser, Ty};
 use crate::args::Args;
+use crate::native_cli::{self, Cli};
 use crate::readiness::ReadyFile;
 
 const VERSION: &str = env!("FULL_VERSION");
@@ -88,8 +90,83 @@ fn parse_optional_limit(
     }
 }
 
+/// rns-statsd's command line.
+pub static CLI: Cli = Cli::new(
+    Parser {
+        name: "rns-statsd",
+        description: Some("Traffic statistics recorder for a running Reticulum instance"),
+        actions: &[
+            native_cli::help(),
+            native_cli::value(
+                &["-c", "--config"],
+                "config",
+                "PATH",
+                Ty::Str,
+                "path to config directory",
+            ),
+            native_cli::value(
+                &["--db"],
+                "db",
+                "PATH",
+                Ty::Str,
+                "SQLite database path (required)",
+            ),
+            native_cli::value(
+                &["-f", "--flush-interval"],
+                "flush_interval",
+                "SECONDS",
+                Ty::Int,
+                "flush interval (default: 5)",
+            ),
+            native_cli::value(
+                &["--max-age-days"],
+                "max_age_days",
+                "DAYS",
+                Ty::Str,
+                "raw history retention in days, or none (default: 30)",
+            ),
+            native_cli::value(
+                &["--max-size-mb"],
+                "max_size_mb",
+                "MIB",
+                Ty::Str,
+                "database size ceiling in MiB, or none (default: 4096)",
+            ),
+            native_cli::value(
+                &["--socket"],
+                "socket",
+                "PATH",
+                Ty::Str,
+                "override provider bridge socket path",
+            ),
+            native_cli::value(
+                &["--ready-file"],
+                "ready_file",
+                "PATH",
+                Ty::Str,
+                "write readiness contract file once operational",
+            ),
+            native_cli::value(
+                &["--priority"],
+                "priority",
+                "N",
+                Ty::Int,
+                "hook priority (default: 0)",
+            ),
+            native_cli::count(&["-v", "--verbose"], "verbose", "increase verbosity"),
+            native_cli::version(),
+        ],
+    },
+    None,
+);
+
+/// Parse rns-statsd's command line `argv` (without the program name).
+pub fn parse_args(argv: Vec<String>) -> Args {
+    CLI.parse("rns-statsd", argv)
+}
+
 pub fn main_entry() {
-    main_entry_from(Args::parse());
+    main_entry_from(parse_args(std::env::args().skip(1).collect()));
 }
 
 pub fn main_entry_from(args: Args) {
@@ -117,7 +194,7 @@ fn run(args: Args) -> Result<(), String> {
         return Ok(());
     }
     if args.has("help") || args.has("h") {
-        print_usage();
+        CLI.print_help("rns-statsd");
         return Ok(());
     }
 
@@ -1178,21 +1255,6 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     SHOULD_STOP.store(true, Ordering::Relaxed);
 }
 
-fn print_usage() {
-    println!("Usage: rns-statsd --db PATH [OPTIONS]");
-    println!();
-    println!("Options:");
-    println!("  --config PATH, -c PATH      Path to config directory");
-    println!("  --db PATH                   SQLite database path");
-    println!("  --flush-interval SECONDS    Flush interval (default: 5)");
-    println!("  --max-age-days DAYS|none    Raw history retention (default: 30 days)");
-    println!("  --max-size-mb MIB|none      Database size ceiling (default: 4096 MiB)");
-    println!("  --socket PATH               Override provider bridge socket path");
-    println!("  --ready-file PATH           Write readiness contract file once operational");
-    println!("  --priority N                Hook priority (default: 0)");
-    println!("  --version                   Show version");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1333,11 +1395,11 @@ mod tests {
 
     #[test]
     fn retention_arguments_accept_defaults_and_none() {
-        let defaults = StatsRetentionPolicy::from_args(&Args::parse_from(Vec::new())).unwrap();
+        let defaults = StatsRetentionPolicy::from_args(&parse_args(Vec::new())).unwrap();
         assert_eq!(defaults.max_age_days, Some(30));
         assert_eq!(defaults.max_size_mb, Some(4096));
 
-        let disabled = StatsRetentionPolicy::from_args(&Args::parse_from(vec![
+        let disabled = StatsRetentionPolicy::from_args(&parse_args(vec![
             "--max-age-days".into(),
             "none".into(),
             "--max-size-mb".into(),
@@ -1347,11 +1409,9 @@ mod tests {
         assert_eq!(disabled.max_age_days, None);
         assert_eq!(disabled.max_size_mb, None);
 
-        let invalid = StatsRetentionPolicy::from_args(&Args::parse_from(vec![
-            "--max-size-mb".into(),
-            "63".into(),
-        ]))
-        .unwrap_err();
+        let invalid =
+            StatsRetentionPolicy::from_args(&parse_args(vec!["--max-size-mb".into(), "63".into()]))
+                .unwrap_err();
         assert!(invalid.contains("between 64 and 1048576"));
     }
 

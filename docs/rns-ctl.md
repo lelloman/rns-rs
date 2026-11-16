@@ -24,6 +24,14 @@ cargo build --release -p rns-ctl
 
 Run any subcommand with `--help` for its options.
 
+Command lines are parsed as the upstream utilities parse theirs, with
+argparse's rules: `--help` prints the help and exits 0; an unknown option, a
+missing or mistyped value, or an unknown subcommand prints the usage and the
+error to stderr and exits 2. `status`, `probe`, `path`, `id` and `daemon`
+take the options, help and errors of `rnstatus`, `rnprobe`, `rnpath`, `rnid`
+and `rnsd`. `rns-sentineld` and `rns-statsd` parse their command lines the
+same way.
+
 The client subcommands (`status`, `probe`, `path`, `config`, `backbone`) talk
 to a running node over its shared-instance RPC socket. They authenticate with
 a key derived from that node's `storage/transport_identity`, so they must be

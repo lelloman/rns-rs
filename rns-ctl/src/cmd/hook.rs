@@ -19,7 +19,7 @@ const DEFAULT_HOOK_TYPE: &str = {
 
 pub fn run(args: Args) {
     if args.has("help") {
-        print_usage();
+        crate::cli::HOOK.print_help("rns-ctl hook");
         return;
     }
 
@@ -40,7 +40,7 @@ pub fn run(args: Args) {
         Some("enable") => do_set_enabled(&args, &base_url, token.as_deref(), true),
         Some("disable") => do_set_enabled(&args, &base_url, token.as_deref(), false),
         Some("set-priority") => do_set_priority(&args, &base_url, token.as_deref()),
-        _ => print_usage(),
+        _ => crate::cli::HOOK.print_help("rns-ctl hook"),
     }
 }
 
@@ -91,17 +91,13 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
     let path = match args.positional.get(1) {
         Some(p) => p,
         None => {
-            eprintln!("Missing hook file path");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing hook file path");
         }
     };
     let attach_point = match args.get("point") {
         Some(p) => p.to_string(),
         None => {
-            eprintln!("Missing --point <HookPoint>");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing --point <HookPoint>");
         }
     };
     let priority: i32 = args
@@ -140,17 +136,13 @@ fn do_unload(args: &Args, base_url: &str, token: Option<&str>) {
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
-            eprintln!("Missing hook name");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing hook name");
         }
     };
     let attach_point = match args.get("point") {
         Some(p) => p.to_string(),
         None => {
-            eprintln!("Missing --point <HookPoint>");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing --point <HookPoint>");
         }
     };
 
@@ -173,25 +165,19 @@ fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
-            eprintln!("Missing hook name");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing hook name");
         }
     };
     let attach_point = match args.get("point") {
         Some(p) => p.to_string(),
         None => {
-            eprintln!("Missing --point <HookPoint>");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing --point <HookPoint>");
         }
     };
     let path = match args.get("path") {
         Some(p) => p.to_string(),
         None => {
-            eprintln!("Missing --path <hook_file>");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing --path <hook_file>");
         }
     };
     let hook_type = args.get("type").unwrap_or(DEFAULT_HOOK_TYPE).to_string();
@@ -218,17 +204,13 @@ fn do_set_enabled(args: &Args, base_url: &str, token: Option<&str>, enabled: boo
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
-            eprintln!("Missing hook name");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing hook name");
         }
     };
     let attach_point = match args.get("point") {
         Some(p) => p.to_string(),
         None => {
-            eprintln!("Missing --point <HookPoint>");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing --point <HookPoint>");
         }
     };
 
@@ -254,25 +236,19 @@ fn do_set_priority(args: &Args, base_url: &str, token: Option<&str>) {
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
-            eprintln!("Missing hook name");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing hook name");
         }
     };
     let attach_point = match args.get("point") {
         Some(p) => p.to_string(),
         None => {
-            eprintln!("Missing --point <HookPoint>");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing --point <HookPoint>");
         }
     };
     let priority: i32 = match args.get("priority").and_then(|s| s.parse().ok()) {
         Some(priority) => priority,
         None => {
-            eprintln!("Missing --priority <N>");
-            print_usage();
-            std::process::exit(1);
+            crate::cli::HOOK.error("rns-ctl hook", "Missing --priority <N>");
         }
     };
 
@@ -370,40 +346,4 @@ fn extract_body(response: &str) -> Result<String, String> {
         Some(i) => Ok(response[i + 4..].to_string()),
         None => Ok(response.to_string()),
     }
-}
-
-fn print_usage() {
-    println!("Usage: rns-ctl hook <COMMAND> [OPTIONS]");
-    println!();
-    println!("COMMANDS:");
-    println!("    list                               List loaded hooks");
-    println!("    load <path> --point <HookPoint>     Load a hook");
-    println!("         [--type wasm|native|builtin] [--priority N] [--name name]");
-    println!("         [--builtin ID]              Built-in hook ID (defaults to <path>)");
-    println!("    unload <name> --point <HookPoint>   Unload a hook");
-    println!("    reload <name> --point <HookPoint>   Reload a hook");
-    println!("         --path <hook_file_or_builtin_id> [--type wasm|native|builtin]");
-    println!("    enable <name> --point <HookPoint>   Enable a loaded hook");
-    println!("    disable <name> --point <HookPoint>  Disable a loaded hook");
-    println!("    set-priority <name> --point <HookPoint> --priority N");
-    println!();
-    println!("OPTIONS:");
-    println!("    --url URL          HTTP server URL (default: http://127.0.0.1:8080)");
-    println!(
-        "    --token TOKEN, -t  Bearer auth token (generated tokens: <config dir>/http-token)"
-    );
-    println!();
-    println!(
-        "    --type defaults to {}. Native hooks must be requested with",
-        DEFAULT_HOOK_TYPE
-    );
-    println!("    --type native and an absolute path inside the server's configured");
-    println!("    hooks directory (default: <config dir>/hooks).");
-    println!();
-    println!("HOOK POINTS:");
-    println!("    PreIngress, PreDispatch, AnnounceReceived, PathUpdated,");
-    println!("    AnnounceRetransmit, LinkRequestReceived, LinkEstablished,");
-    println!("    LinkClosed, InterfaceUp, InterfaceDown, InterfaceConfigChanged,");
-    println!("    SendOnInterface, BroadcastOnAllInterfaces, DeliverLocal,");
-    println!("    TunnelSynthesize, Tick");
 }
