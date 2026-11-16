@@ -3197,7 +3197,7 @@ fn begin_drain_with_holepunch_session_reports_incomplete_status_and_deadline_abo
         None,
     );
 
-    let _ = driver.holepunch_manager.propose(
+    let _ = driver.holepunch_manager.propose_to_supported(
         [0x44; 16],
         &[0xAA; 32],
         &mut OsRng,

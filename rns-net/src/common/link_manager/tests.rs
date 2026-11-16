@@ -4595,6 +4595,45 @@ fn test_generic_link_data_delivery() {
 }
 
 #[test]
+fn direct_link_signalling_is_its_own_unproven_action() {
+    let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let framed = rns_core::holepunch::encode_signal(rns_core::holepunch::HELLO, b"body");
+    let actions = init_mgr.send_on_link(
+        &link_id,
+        &framed,
+        rns_core::holepunch::CONTEXT_DIRECT_LINK,
+        &mut rng,
+    );
+    let raw = extract_any_send_packet(&actions);
+    let pkt = RawPacket::unpack(&raw).unwrap();
+    assert!(pkt.is_unproven_link_data());
+    let resp_actions = resp_mgr.handle_local_delivery(
+        pkt.destination_hash,
+        &raw,
+        pkt.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    // Decrypted for the Direct Link handler; never shown to the
+    // application as link data, and never proven.
+    assert!(resp_actions.iter().any(|a| matches!(
+        a,
+        LinkManagerAction::DirectLinkSignal { link_id: id, data } if *id == link_id && *data == framed
+    )));
+    assert!(!resp_actions.iter().any(|a| matches!(
+        a,
+        LinkManagerAction::LinkDataReceived { .. } | LinkManagerAction::ProofRequired { .. }
+    )));
+    assert!(!resp_actions.iter().any(|a| match a {
+        LinkManagerAction::SendPacket { raw, .. } => {
+            RawPacket::unpack(raw).unwrap().flags.packet_type == constants::PACKET_TYPE_PROOF
+        }
+        _ => false,
+    }));
+}
+
+#[test]
 fn test_invalid_encrypted_contexts_are_ignored_without_blocking_later_receive() {
     let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;

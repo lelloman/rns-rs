@@ -2446,45 +2446,14 @@ impl Driver {
                     msgtype,
                     payload,
                 } => {
-                    // Intercept hole-punch signaling messages (0xFE00..=0xFE04)
-                    if HolePunchManager::is_holepunch_message(msgtype) {
-                        let configured_policy = self.holepunch_manager.policy();
-                        if msgtype == rns_core::holepunch::UPGRADE_REQUEST {
-                            let peer_identity = self.link_manager.remote_identity_hash(&link_id);
-                            let Some(accept) = self.authorize_direct_connect_proposal(
-                                configured_policy,
-                                link_id,
-                                peer_identity,
-                                &payload,
-                            ) else {
-                                continue;
-                            };
-                            self.holepunch_manager.set_policy(if accept {
-                                crate::event::HolePunchPolicy::AcceptAll
-                            } else {
-                                crate::event::HolePunchPolicy::Reject
-                            });
-                        }
-                        let derived_key = self.link_manager.get_derived_key(&link_id);
-                        let tx = self.get_event_sender();
-                        let (handled, hp_actions) = self.holepunch_manager.handle_signal(
-                            link_id,
-                            msgtype,
-                            payload,
-                            derived_key.as_deref(),
-                            &tx,
-                        );
-                        self.holepunch_manager.set_policy(configured_policy);
-                        if handled {
-                            self.dispatch_holepunch_actions(hp_actions);
-                        }
-                    } else {
-                        self.callbacks.on_channel_message(
-                            rns_core::types::LinkId(link_id),
-                            msgtype,
-                            payload,
-                        );
-                    }
+                    self.callbacks.on_channel_message(
+                        rns_core::types::LinkId(link_id),
+                        msgtype,
+                        payload,
+                    );
+                }
+                LinkManagerAction::DirectLinkSignal { link_id, data } => {
+                    self.handle_direct_link_signal(link_id, &data);
                 }
                 LinkManagerAction::LinkDataReceived {
                     link_id,
@@ -2591,23 +2560,92 @@ impl Driver {
         self.dispatch_hook_injected(hook_injected, 0);
     }
 
+    /// Handle Direct Link signalling from a link peer. A node that takes no
+    /// part in Direct Link drops it unanswered, as a node without support
+    /// for it does.
+    pub(crate) fn handle_direct_link_signal(&mut self, link_id: [u8; 16], data: &[u8]) {
+        if !self.holepunch_manager.enabled() {
+            return;
+        }
+        let Some((msgtype, body)) = rns_core::holepunch::decode_signal(data) else {
+            log::debug!(
+                "Dropping Direct Link signalling of an unknown version on link {:02x?}",
+                &link_id[..4]
+            );
+            return;
+        };
+        let derived_key = self.link_manager.get_derived_key(&link_id);
+        let tx = self.get_event_sender();
+        if msgtype == rns_core::holepunch::HELLO {
+            let actions = self.holepunch_manager.handle_hello(
+                link_id,
+                body,
+                derived_key.as_deref(),
+                &mut self.rng,
+                &tx,
+            );
+            self.dispatch_holepunch_actions(actions);
+            return;
+        }
+        if !HolePunchManager::is_holepunch_message(msgtype) {
+            return;
+        }
+        let configured_policy = self.holepunch_manager.policy();
+        if msgtype == rns_core::holepunch::UPGRADE_REQUEST {
+            // A repeated request is answered with the replies already sent,
+            // without asking the policy again.
+            if let Some(replay) = self
+                .holepunch_manager
+                .replay_for_repeated_request(link_id, body)
+            {
+                self.dispatch_holepunch_actions(replay);
+                return;
+            }
+            let peer_identity = self.link_manager.remote_identity_hash(&link_id);
+            let Some(accept) = self.authorize_direct_connect_proposal(
+                configured_policy,
+                link_id,
+                peer_identity,
+                body,
+            ) else {
+                return;
+            };
+            self.holepunch_manager.set_policy(if accept {
+                crate::event::HolePunchPolicy::AcceptAll
+            } else {
+                crate::event::HolePunchPolicy::Reject
+            });
+        }
+        let (handled, hp_actions) = self.holepunch_manager.handle_signal(
+            link_id,
+            msgtype,
+            body.to_vec(),
+            derived_key.as_deref(),
+            &tx,
+        );
+        self.holepunch_manager.set_policy(configured_policy);
+        if handled {
+            self.dispatch_holepunch_actions(hp_actions);
+        }
+    }
+
     /// Dispatch hole-punch manager actions.
     pub(crate) fn dispatch_holepunch_actions(&mut self, actions: Vec<HolePunchManagerAction>) {
         for action in actions {
             match action {
-                HolePunchManagerAction::SendChannelMessage {
+                HolePunchManagerAction::SendSignal {
                     link_id,
                     msgtype,
                     payload,
                 } => {
-                    if let Ok(link_actions) = self.link_manager.send_channel_message(
+                    let framed = rns_core::holepunch::encode_signal(msgtype, &payload);
+                    let link_actions = self.link_manager.send_on_link(
                         &link_id,
-                        msgtype,
-                        &payload,
+                        &framed,
+                        rns_core::holepunch::CONTEXT_DIRECT_LINK,
                         &mut self.rng,
-                    ) {
-                        self.dispatch_link_actions(link_actions);
-                    }
+                    );
+                    self.dispatch_link_actions(link_actions);
                 }
                 HolePunchManagerAction::DirectConnectEstablished {
                     link_id,

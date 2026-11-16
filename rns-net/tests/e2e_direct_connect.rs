@@ -1,5 +1,5 @@
-//! End-to-end hole punching: two nodes linked over TCP upgrade their link
-//! to a direct UDP connection, discovering their endpoints through a probe
+//! End-to-end Direct Link: two nodes linked over TCP upgrade their link to
+//! a direct UDP connection, discovering their endpoints through a probe
 //! server one of them runs.
 //!
 //! Run: cargo test --package rns-net --test e2e_direct_connect
@@ -10,18 +10,27 @@ use std::time::{Duration, Instant};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 
+use rns_net::event::HolePunchPolicy;
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
     InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, TcpClientConfig, TcpServerConfig,
     MODE_FULL,
 };
 
+/// `REJECT_UNSUPPORTED` from `rns_core::holepunch`.
+const REJECT_UNSUPPORTED: u8 = 0x03;
+
+/// The application message type the tests exchange.
+const APP_MSGTYPE: u16 = 0x0101;
+
 #[derive(Debug)]
 enum TestEvent {
     Announce(DestHash),
     LinkEstablished([u8; 16]),
+    LinkClosed([u8; 16]),
     DirectConnected([u8; 16], InterfaceId),
     DirectFailed([u8; 16], u8),
+    Channel([u8; 16], u16, Vec<u8>),
 }
 
 struct TestCallbacks(mpsc::Sender<TestEvent>);
@@ -45,6 +54,18 @@ impl Callbacks for TestCallbacks {
         let _ = self.0.send(TestEvent::LinkEstablished(link_id.0));
     }
 
+    fn on_link_closed(
+        &mut self,
+        link_id: rns_net::LinkId,
+        _reason: Option<rns_net::TeardownReason>,
+    ) {
+        let _ = self.0.send(TestEvent::LinkClosed(link_id.0));
+    }
+
+    fn on_channel_message(&mut self, link_id: rns_net::LinkId, msgtype: u16, payload: Vec<u8>) {
+        let _ = self.0.send(TestEvent::Channel(link_id.0, msgtype, payload));
+    }
+
     fn on_direct_connect_established(
         &mut self,
         link_id: rns_net::LinkId,
@@ -60,15 +81,16 @@ impl Callbacks for TestCallbacks {
     }
 }
 
+/// A port free for both TCP and UDP, kept outside 30000-45000.
 fn free_port() -> u16 {
-    // A port free for both TCP and UDP.
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let seed = (std::process::id() % 4000) as u16 * 3;
     loop {
-        let port = std::net::UdpSocket::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+        let port = 47000 + (seed + NEXT.fetch_add(1, Ordering::Relaxed)) % 13000;
+        if std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok()
+            && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+        {
             return port;
         }
     }
@@ -92,31 +114,65 @@ fn interface(type_name: &str, config: Box<dyn rns_net::InterfaceConfigData>) -> 
     }
 }
 
+/// Direct Link settings of one test node.
+#[derive(Clone)]
+struct DirectSettings {
+    /// Run the probe server (facilitator) on this port.
+    probe_port: Option<u16>,
+    /// Use the facilitator to discover our endpoint (needed to propose).
+    use_probe: bool,
+    /// `None` keeps the default policy.
+    policy: Option<HolePunchPolicy>,
+}
+
+impl DirectSettings {
+    /// Proposes and accepts every proposal.
+    fn willing() -> Self {
+        DirectSettings {
+            probe_port: None,
+            use_probe: true,
+            policy: Some(HolePunchPolicy::AcceptAll),
+        }
+    }
+
+    /// No Direct Link configuration at all.
+    fn unconfigured() -> Self {
+        DirectSettings {
+            probe_port: None,
+            use_probe: false,
+            policy: Some(HolePunchPolicy::Reject),
+        }
+    }
+}
+
 fn node(
     identity: &Identity,
     interface: InterfaceConfig,
-    probe_port: Option<u16>,
     probe_server: std::net::SocketAddr,
+    settings: DirectSettings,
     tx: mpsc::Sender<TestEvent>,
 ) -> RnsNode {
-    RnsNode::start(
-        NodeConfig {
-            identity: Some(Identity::from_private_key(
-                &identity.get_private_key().unwrap(),
-            )),
-            interfaces: vec![interface],
-            share_instance: false,
-            rpc_port: 0,
-            probe_port,
-            probe_addrs: vec![probe_server],
-            direct_connect_policy: rns_net::event::HolePunchPolicy::AcceptAll,
-            // Both ends are on localhost.
-            direct_connect_allow_private_endpoints: true,
-            ..Default::default()
+    let mut config = NodeConfig {
+        identity: Some(Identity::from_private_key(
+            &identity.get_private_key().unwrap(),
+        )),
+        interfaces: vec![interface],
+        share_instance: false,
+        rpc_port: 0,
+        probe_port: settings.probe_port,
+        probe_addrs: if settings.use_probe {
+            vec![probe_server]
+        } else {
+            vec![]
         },
-        Box::new(TestCallbacks(tx)),
-    )
-    .unwrap()
+        // Both ends are on this host.
+        direct_connect_allow_private_endpoints: true,
+        ..Default::default()
+    };
+    if let Some(policy) = settings.policy {
+        config.direct_connect_policy = policy;
+    }
+    RnsNode::start(config, Box::new(TestCallbacks(tx))).unwrap()
 }
 
 fn wait_for<T>(
@@ -148,111 +204,255 @@ fn local_address() -> Option<std::net::IpAddr> {
     (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
 }
 
+/// Bob serves TCP and runs the probe server; Alice connects to him and
+/// holds an established link to his destination.
+struct Pair {
+    alice: RnsNode,
+    alice_rx: mpsc::Receiver<TestEvent>,
+    bob: RnsNode,
+    bob_rx: mpsc::Receiver<TestEvent>,
+    link_id: [u8; 16],
+}
+
+impl Pair {
+    /// `None` when the host has no non-loopback address to punch through.
+    fn start(alice_settings: DirectSettings, bob_settings: DirectSettings) -> Option<Pair> {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let Some(local) = local_address() else {
+            eprintln!("skipped: no non-loopback address to punch through");
+            return None;
+        };
+        let tcp_port = free_port();
+        let probe_port = free_port();
+        // Probes sent to this address come from it, so each node observes
+        // its own non-loopback endpoint.
+        let probe_server = std::net::SocketAddr::new(local, probe_port);
+
+        let bob_id = Identity::new(&mut OsRng);
+        let bob_dest =
+            Destination::single_in("e2e_direct", &["link"], IdentityHash(*bob_id.hash()))
+                .set_proof_strategy(ProofStrategy::ProveAll);
+
+        let (bob_tx, bob_rx) = mpsc::channel();
+        let bob = node(
+            &bob_id,
+            interface(
+                "TCPServerInterface",
+                Box::new(TcpServerConfig {
+                    name: "Bob".into(),
+                    listen_ip: "127.0.0.1".into(),
+                    listen_port: tcp_port,
+                    interface_id: InterfaceId(1),
+                    ..TcpServerConfig::default()
+                }),
+            ),
+            probe_server,
+            DirectSettings {
+                probe_port: Some(probe_port),
+                ..bob_settings
+            },
+            bob_tx,
+        );
+        bob.register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
+            .unwrap();
+        let bob_prv = bob_id.get_private_key().unwrap();
+        let bob_pub = bob_id.get_public_key().unwrap();
+        let (sig_prv, sig_pub): ([u8; 32], [u8; 32]) = (
+            bob_prv[32..64].try_into().unwrap(),
+            bob_pub[32..64].try_into().unwrap(),
+        );
+        bob.register_link_destination(bob_dest.hash.0, sig_prv, sig_pub, 0)
+            .unwrap();
+
+        let alice_id = Identity::new(&mut OsRng);
+        let (alice_tx, alice_rx) = mpsc::channel();
+        let alice = node(
+            &alice_id,
+            interface(
+                "TCPClientInterface",
+                Box::new(TcpClientConfig {
+                    name: "Alice".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: tcp_port,
+                    interface_id: InterfaceId(1),
+                    ..Default::default()
+                }),
+            ),
+            probe_server,
+            alice_settings,
+            alice_tx,
+        );
+
+        // Alice learns Bob's destination, and links to it.
+        let mut found = false;
+        for _ in 0..10 {
+            let _ = futures::executor::block_on(bob.announce(&bob_dest, &bob_id, None));
+            if wait_for(&alice_rx, Duration::from_secs(2), |event| {
+                matches!(event, TestEvent::Announce(hash) if *hash == bob_dest.hash).then_some(())
+            })
+            .is_some()
+            {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "Alice did not learn Bob's destination");
+        let link_id = alice.create_link(bob_dest.hash.0, sig_pub).unwrap();
+        wait_for(&alice_rx, Duration::from_secs(10), |event| {
+            matches!(event, TestEvent::LinkEstablished(id) if *id == link_id).then_some(())
+        })
+        .expect("link not established");
+        wait_for(&bob_rx, Duration::from_secs(10), |event| {
+            matches!(event, TestEvent::LinkEstablished(id) if *id == link_id).then_some(())
+        })
+        .expect("Bob did not see the link");
+
+        Some(Pair {
+            alice,
+            alice_rx,
+            bob,
+            bob_rx,
+            link_id,
+        })
+    }
+
+    /// Alice proposes; the outcome she reports.
+    fn propose(&self) -> Result<InterfaceId, u8> {
+        self.alice.propose_direct_connect(self.link_id).unwrap();
+        let link_id = self.link_id;
+        wait_for(
+            &self.alice_rx,
+            Duration::from_secs(25),
+            |event| match event {
+                TestEvent::DirectConnected(id, interface) if *id == link_id => Some(Ok(*interface)),
+                TestEvent::DirectFailed(id, reason) if *id == link_id => Some(Err(*reason)),
+                _ => None,
+            },
+        )
+        .expect("no direct connect outcome")
+    }
+
+    /// Alice proposes, and both sides establish the direct path.
+    fn upgrade(&self) -> (InterfaceId, InterfaceId) {
+        let alice_iface = match self.propose() {
+            Ok(interface) => interface,
+            Err(reason) => panic!("direct connect failed: reason {reason}"),
+        };
+        let bob_iface = wait_for(&self.bob_rx, Duration::from_secs(10), |event| match event {
+            TestEvent::DirectConnected(_, interface) => Some(Ok(*interface)),
+            TestEvent::DirectFailed(_, reason) => Some(Err(*reason)),
+            _ => None,
+        })
+        .expect("no outcome on Bob's side")
+        .expect("Bob's side did not connect");
+        (alice_iface, bob_iface)
+    }
+
+    fn shutdown(self) {
+        self.alice.shutdown();
+        self.bob.shutdown();
+    }
+}
+
+/// Send an application channel message and wait until the receiver's
+/// application gets it. Returns whether it arrived within `timeout`.
+fn deliver(
+    from: &RnsNode,
+    to_rx: &mpsc::Receiver<TestEvent>,
+    link_id: [u8; 16],
+    payload: &[u8],
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    while from
+        .try_send_channel_message(link_id, APP_MSGTYPE, payload.to_vec())
+        .is_err()
+    {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    wait_for(to_rx, remaining, |event| match event {
+        TestEvent::Channel(id, APP_MSGTYPE, data) if *id == link_id && data == payload => Some(()),
+        _ => None,
+    })
+    .is_some()
+}
+
+fn interfaces(node: &RnsNode) -> Vec<rns_net::event::SingleInterfaceStat> {
+    match node.query(rns_net::event::QueryRequest::InterfaceStats) {
+        Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) => stats.interfaces,
+        other => panic!("no interface stats: {other:?}"),
+    }
+}
+
+/// Bytes received and sent on an interface, as `(rx, tx)`.
+fn traffic(node: &RnsNode, interface: InterfaceId) -> Option<(u64, u64)> {
+    interfaces(node)
+        .into_iter()
+        .find(|i| i.id == interface.0)
+        .map(|i| (i.rxb, i.txb))
+}
+
+fn direct_interfaces(node: &RnsNode) -> Vec<u64> {
+    interfaces(node)
+        .into_iter()
+        .filter(|i| i.name.starts_with("DirectPeer"))
+        .map(|i| i.id)
+        .collect()
+}
+
+/// Poll `check` until it holds or `timeout` passes.
+fn eventually(timeout: Duration, mut check: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if check() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 #[test]
-fn link_upgrades_to_a_direct_udp_connection() {
-    let _ = env_logger::builder().is_test(true).try_init();
-    let Some(local) = local_address() else {
-        eprintln!("skipped: no non-loopback address to punch through");
+fn upgrade_carries_link_traffic_over_the_direct_path() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
         return;
     };
-    let tcp_port = free_port();
-    let probe_port = free_port();
-    // Probes sent to this address come from it, so each node observes its
-    // own non-loopback endpoint.
-    let probe_server = std::net::SocketAddr::new(local, probe_port);
+    let (alice_iface, bob_iface) = pair.upgrade();
 
-    let bob_id = Identity::new(&mut OsRng);
-    let bob_dest = Destination::single_in("e2e_direct", &["link"], IdentityHash(*bob_id.hash()))
-        .set_proof_strategy(ProofStrategy::ProveAll);
-
-    // Bob serves TCP and runs the probe server.
-    let (bob_tx, bob_rx) = mpsc::channel();
-    let bob = node(
-        &bob_id,
-        interface(
-            "TCPServerInterface",
-            Box::new(TcpServerConfig {
-                name: "Bob".into(),
-                listen_ip: "127.0.0.1".into(),
-                listen_port: tcp_port,
-                interface_id: InterfaceId(1),
-                ..TcpServerConfig::default()
-            }),
-        ),
-        Some(probe_port),
-        probe_server,
-        bob_tx,
+    // Application data flows both ways, over the direct interfaces.
+    let before_alice = traffic(&pair.alice, alice_iface).unwrap();
+    let before_bob = traffic(&pair.bob, bob_iface).unwrap();
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        pair.link_id,
+        b"alice to bob, direct",
+        Duration::from_secs(10)
+    ));
+    assert!(deliver(
+        &pair.bob,
+        &pair.alice_rx,
+        pair.link_id,
+        b"bob to alice, direct",
+        Duration::from_secs(10)
+    ));
+    assert!(
+        eventually(Duration::from_secs(5), || {
+            let (alice_rx, alice_tx) = traffic(&pair.alice, alice_iface).unwrap();
+            let (bob_rx, bob_tx) = traffic(&pair.bob, bob_iface).unwrap();
+            alice_tx > before_alice.1
+                && alice_rx > before_alice.0
+                && bob_tx > before_bob.1
+                && bob_rx > before_bob.0
+        }),
+        "link traffic did not use the direct interfaces"
     );
-    bob.register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
-        .unwrap();
-    let bob_prv = bob_id.get_private_key().unwrap();
-    let bob_pub = bob_id.get_public_key().unwrap();
-    let (sig_prv, sig_pub): ([u8; 32], [u8; 32]) = (
-        bob_prv[32..64].try_into().unwrap(),
-        bob_pub[32..64].try_into().unwrap(),
-    );
-    bob.register_link_destination(bob_dest.hash.0, sig_prv, sig_pub, 0)
-        .unwrap();
-
-    // Alice connects to Bob over TCP.
-    let alice_id = Identity::new(&mut OsRng);
-    let (alice_tx, alice_rx) = mpsc::channel();
-    let alice = node(
-        &alice_id,
-        interface(
-            "TCPClientInterface",
-            Box::new(TcpClientConfig {
-                name: "Alice".into(),
-                target_host: "127.0.0.1".into(),
-                target_port: tcp_port,
-                interface_id: InterfaceId(1),
-                ..Default::default()
-            }),
-        ),
-        None,
-        probe_server,
-        alice_tx,
-    );
-
-    // Alice learns Bob's destination, and links to it.
-    let mut found = false;
-    for _ in 0..10 {
-        let _ = futures::executor::block_on(bob.announce(&bob_dest, &bob_id, None));
-        if wait_for(&alice_rx, Duration::from_secs(2), |event| {
-            matches!(event, TestEvent::Announce(hash) if *hash == bob_dest.hash).then_some(())
-        })
-        .is_some()
-        {
-            found = true;
-            break;
-        }
-    }
-    assert!(found, "Alice did not learn Bob's destination");
-    let link_id = alice.create_link(bob_dest.hash.0, sig_pub).unwrap();
-    wait_for(&alice_rx, Duration::from_secs(10), |event| {
-        matches!(event, TestEvent::LinkEstablished(id) if *id == link_id).then_some(())
-    })
-    .expect("link not established");
-
-    // Alice proposes the upgrade: both probe, punch, and get a direct
-    // interface.
-    alice.propose_direct_connect(link_id).unwrap();
-    let outcome = wait_for(&alice_rx, Duration::from_secs(20), |event| match event {
-        TestEvent::DirectConnected(id, interface) if *id == link_id => Some(Ok(*interface)),
-        TestEvent::DirectFailed(id, reason) if *id == link_id => Some(Err(*reason)),
-        _ => None,
-    });
-    match outcome {
-        Some(Ok(_interface)) => {}
-        Some(Err(reason)) => panic!("direct connect failed: reason {reason}"),
-        None => panic!("no direct connect outcome"),
-    }
-    let bob_outcome = wait_for(&bob_rx, Duration::from_secs(10), |event| match event {
-        TestEvent::DirectConnected(..) => Some(true),
-        TestEvent::DirectFailed(..) => Some(false),
-        _ => None,
-    });
-    assert_eq!(bob_outcome, Some(true), "Bob's side did not connect");
 
     // With services and interface I/O folded, no probe, punch or direct
     // link thread was needed.
@@ -274,6 +474,80 @@ fn link_upgrades_to_a_direct_udp_connection() {
         }
     }
 
-    alice.shutdown();
-    bob.shutdown();
+    pair.shutdown();
+}
+
+#[test]
+fn peer_without_direct_link_is_never_signalled() {
+    // Bob takes no part in Direct Link: he does not answer the capability
+    // query, so Alice sends him nothing else and gives up.
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::unconfigured()) else {
+        return;
+    };
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        pair.link_id,
+        b"before the proposal",
+        Duration::from_secs(10)
+    ));
+    let started = Instant::now();
+    assert_eq!(pair.propose(), Err(REJECT_UNSUPPORTED));
+    assert!(started.elapsed() < Duration::from_secs(15));
+
+    // The link and its channel keep working both ways, and Bob's
+    // application saw only the application's own messages.
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        pair.link_id,
+        b"after the proposal",
+        Duration::from_secs(10)
+    ));
+    assert!(deliver(
+        &pair.bob,
+        &pair.alice_rx,
+        pair.link_id,
+        b"bob answers",
+        Duration::from_secs(10)
+    ));
+    while let Ok(event) = pair.bob_rx.try_recv() {
+        match event {
+            TestEvent::Channel(_, msgtype, _) => assert_eq!(msgtype, APP_MSGTYPE),
+            TestEvent::LinkClosed(id) => panic!("Bob's link {id:02x?} closed"),
+            TestEvent::DirectConnected(..) | TestEvent::DirectFailed(..) => {
+                panic!("Bob took part in Direct Link: {event:?}")
+            }
+            _ => {}
+        }
+    }
+    assert!(direct_interfaces(&pair.alice).is_empty());
+    assert!(direct_interfaces(&pair.bob).is_empty());
+    pair.shutdown();
+}
+
+#[test]
+fn application_channel_messages_in_the_old_signalling_range_reach_the_application() {
+    // Direct Link does not use the channel: message types 0xFE00-0xFE04
+    // belong to the application like any other.
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    for msgtype in [0xFE00u16, 0xFE03] {
+        let payload = vec![0x5A; 8];
+        pair.alice
+            .send_channel_message(pair.link_id, msgtype, payload.clone())
+            .unwrap();
+        let link_id = pair.link_id;
+        wait_for(&pair.bob_rx, Duration::from_secs(10), |event| match event {
+            TestEvent::Channel(id, t, data)
+                if *id == link_id && *t == msgtype && *data == payload =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("message type {msgtype:#06x} did not reach the application"));
+    }
+    pair.shutdown();
 }

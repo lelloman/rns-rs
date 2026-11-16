@@ -17,13 +17,15 @@ channel, bypassing transport nodes entirely.
 
 ## Overview
 
-The protocol has three stages:
+The protocol has four stages:
 
-1. **STUN Discovery** — the initiator learns its own public address via a
+1. **Capability check** — the initiator asks its link peer whether it
+   implements Direct Link, in a way upstream Reticulum ignores.
+2. **STUN Discovery** — the initiator learns its own public address via a
    facilitator node.
-2. **Negotiation** — the peers agree to upgrade, exchanging addressing
+3. **Negotiation** — the peers agree to upgrade, exchanging addressing
    information over their existing Reticulum link.
-3. **Hole Punch** — both peers send UDP packets to each other's public
+4. **Hole Punch** — both peers send UDP packets to each other's public
    addresses simultaneously, punching through NATs to establish a direct
    channel.
 
@@ -45,9 +47,66 @@ as a fallback.
 ## Prerequisites
 
 - A and B have an **established Reticulum link** (they can exchange messages).
+- B has answered A's capability query (see [Signalling](#signalling)).
 - A has a connection (e.g. TCP) to a facilitator node T.
 - T is **publicly reachable** on a UDP port and supports the STUN facilitation
   protocol.
+
+## Signalling
+
+All Direct Link messages travel over the existing link as Reticulum link DATA
+packets with packet context `0x80` (`CONTEXT_DIRECT_LINK`), encrypted with the
+link key like any other link packet. They do not use the link's channel, so
+the application's channel sequence and window are never touched. They are
+never proven.
+
+The decrypted payload is
+
+```
+[version: u8] [kind: u8] [body: msgpack map]
+```
+
+| Kind | Name | Body |
+|------|------|------|
+| `0x00` | `HELLO` | `{"v": highest version spoken, "r": reply wanted}` |
+| `0x01` | `UPGRADE_REQUEST` | `{"s": session id, "f": facilitator, "a": initiator public, "p": probe protocol (omitted for RNSP)}` |
+| `0x02` | `UPGRADE_ACCEPT` | `{"s": session id}` |
+| `0x03` | `UPGRADE_REJECT` | `{"s": session id, "r": reason}` |
+| `0x04` | `UPGRADE_READY` | `{"s": session id, "a": responder public}` |
+
+Endpoints are `[address bytes (4 or 16), port]`. The version is `1`. A
+message framed in any other version is dropped; a later version must keep
+sending `HELLO` in version 1 framing and advertise its highest version in
+`v`, and fields a receiver does not know are ignored.
+
+### Capability check
+
+Upstream Reticulum drops a link packet whose context it does not know: it
+neither replies nor proves it, and nothing reaches the application. A node
+therefore asks before it signals anything:
+
+1. A wants to propose. Unless B is already known to implement Direct Link, A
+   sends `HELLO` with `r = true`, repeats it every 2.5 seconds, and waits up
+   to 8 seconds.
+2. A node that takes part in Direct Link (it has a facilitator configured,
+   or its policy may accept requests) answers a `HELLO` with `r = true` with
+   its own `HELLO` (`r = false`). A node that takes part in neither ignores
+   all Direct Link packets, exactly as upstream does.
+3. When B's `HELLO` arrives, A proceeds with Phase 1. If none arrives, A treats
+   B as not supporting Direct Link and reports the attempt failed with reason
+   `0x03` (unsupported); B has received nothing but the ignored queries.
+
+A node that receives any upgrade message from a peer also notes that the peer
+implements Direct Link. The knowledge lasts for the life of the link.
+
+### Retransmission
+
+Signalling is not acknowledged. While it waits for `UPGRADE_ACCEPT` and
+`UPGRADE_READY`, the initiator repeats its `UPGRADE_REQUEST` every 2 seconds.
+A responder that receives a request for the session it is already running
+answers with the replies it has already sent (`UPGRADE_ACCEPT`, and
+`UPGRADE_READY` once it knows its endpoint) instead of treating it as a new
+request; the policy and pacing checks are not applied again.
 
 ## Protocol Flow
 
@@ -87,13 +146,10 @@ as a fallback.
     │                  │ Direct UDP link │                   │
     │←────────────────→│   established   │←─────────────────→│
     │                  └─────────────────┘                   │
-    │                                                        │
-    ├── Phase 5 ─────────────────────────────────────────────┤
-    │   UPGRADE_COMPLETE ───────────────────────────────────→│
-    │←──────────────────────────────── UPGRADE_COMPLETE ─────┤
-    │                  (via direct UDP)                       │
-    │                                                        │
 ```
+
+Before Phase 1, A has checked that B implements Direct Link (`HELLO`, see
+[Capability check](#capability-check)).
 
 ### Phase 1: STUN Discovery (A ↔ T)
 
@@ -117,11 +173,10 @@ B evaluates the request and responds with either:
 - **`UPGRADE_REJECT`** — B declines. Protocol ends. The existing Reticulum link
   continues unchanged.
 
-Reasons B might reject:
-- B does not support the DirectLink protocol.
-- B is behind a network that blocks outbound UDP.
-- B does not wish to reveal its public IP address.
-- Policy or configuration.
+B rejects because of its policy or because the request is out of range
+(reason `0x01`), or because it is busy (reason `0x02`). A peer that does not
+implement Direct Link never sees a request: the capability check failed
+first, with reason `0x03`.
 
 The responder applies `direct_connect_policy` only after fully decoding the
 request. `identified_only` (the default) accepts only when the existing link has
@@ -171,6 +226,8 @@ same remote address, the NAT allows it through (the "pinhole").
 
 The hole punch procedure:
 1. Both sides begin sending UDP packets immediately after Phase 3 completes.
+   The punch packets carry the session id and a punch token derived from the
+   link key, `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-v1")`.
 2. Packets are sent at a regular interval (e.g. every 100ms) for a bounded
    duration (e.g. 10 seconds). rns-rs also caps a session at 128 punch packets
    and 128 acknowledgements.
@@ -182,15 +239,8 @@ The hole punch procedure:
 On failure, the protocol ends gracefully. The existing Reticulum link continues
 unchanged.
 
-### Phase 5: Confirmation (A ↔ B, via direct UDP)
-
-Both peers exchange `UPGRADE_COMPLETE` messages over the newly established
-direct UDP channel. This confirms:
-- Both directions of the direct link are functional.
-- Both peers agree to activate the `DirectUdpInterface`.
-
-After confirmation, a `DirectUdpInterface` is created on both sides, and
-Reticulum begins routing traffic over the direct path.
+Each side creates its `DirectUdpInterface` as soon as its punch succeeds and
+routes the link over it. There is no separate confirmation message.
 
 ## DirectUdpInterface
 
@@ -255,6 +305,7 @@ Properties of the facilitator:
 | Failure | Phase | Recovery |
 |---------|-------|----------|
 | T unreachable or does not support STUN | 1 | A tries another facilitator or aborts |
+| B does not implement Direct Link | 0 | B never answers `HELLO`; A fails with reason `0x03` and sends nothing else |
 | B rejects the upgrade | 2 | Keep existing Reticulum link |
 | B cannot reach T | 3 | B sends `UPGRADE_REJECT`, keep existing link |
 | Symmetric NAT on either side | 4 | Hole punch fails (timeout), keep existing link |
