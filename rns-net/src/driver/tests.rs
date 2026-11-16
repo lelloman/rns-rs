@@ -4659,6 +4659,46 @@ fn oversized_announce_of_a_blocked_type_counts_a_protocol_violation() {
     );
 }
 
+/// Upstream 096e6726: an announce payload shorter than a public key, a name
+/// hash and a random hash is a protocol violation, before the destination
+/// type filter, so it is one even for a blocked type. One byte more is not.
+#[test]
+fn announce_with_insufficient_payload_counts_a_protocol_violation() {
+    let min = constants::KEYSIZE / 8 + constants::NAME_HASH_LENGTH / 8 + 10;
+    for (len, violations) in [(min - 1, 1), (min, 0)] {
+        let mut driver = new_test_driver();
+        register_test_generic_interface(&mut driver, 1, "short-announce");
+        driver
+            .engine
+            .destination_filter_mut()
+            .block([0x55; constants::NAME_HASH_LENGTH / 8]);
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &[0xA7; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &vec![0x55; len],
+        )
+        .unwrap();
+        let size = packet.raw.len() as u64;
+
+        driver.handle_frame_event(InterfaceId(1), packet.raw, None, None);
+
+        let stats = &driver.interfaces[&InterfaceId(1)].stats;
+        assert_eq!(stats.protocol_violations, violations, "length {len}");
+        // Either way the frame is filtered: by the violation, or by the
+        // blocked type.
+        assert_eq!(stats.frxb, size, "length {len}");
+    }
+}
+
 /// An interface with ingress control that holds one announce and may hold
 /// `max_held`; returns the driver.
 fn driver_holding_one_announce(max_held: usize) -> Driver {

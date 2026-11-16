@@ -97,12 +97,28 @@ impl Driver {
         decoded: &DecodedPacket,
     ) -> bool {
         let parsed_packet = decoded.packet();
-        if parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
-            && packet_len > rns_core::constants::MTU
-        {
+        let is_announce =
+            parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE;
+        if is_announce && packet_len > rns_core::constants::MTU {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
             }
+            return false;
+        }
+        // Upstream 096e6726: an announce payload shorter than a public key,
+        // a name hash and a random hash is a protocol violation, checked
+        // before the destination type filter reads the name hash.
+        let announce_min =
+            rns_core::constants::KEYSIZE / 8 + rns_core::constants::NAME_HASH_LENGTH / 8 + 10;
+        if is_announce && parsed_packet.data().len() < announce_min {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.protocol_violations += 1;
+            }
+            log::debug!(
+                "Protocol violation on interface {}: Insufficient announce payload of {} bytes",
+                interface_id.0,
+                parsed_packet.data().len()
+            );
             return false;
         }
         let is_path_request = parsed_packet.destination_hash == self.path_request_dest;

@@ -237,14 +237,20 @@ fn trusted(emitted: u64, now: f64) -> u64 {
 
 /// The path replacement rules (upstream Transport.py inbound announce
 /// handling, plus the distrust of implausible emission times) for a single
-/// next hop, a responsive path and `prefer_shorter_path` off:
+/// next hop, a responsive path, interfaces of equal gravity, no transport
+/// (so no announce table) and `prefer_shorter_path` off:
 ///
 /// - an unknown destination takes the first path;
+/// - an announce for a destination still in the path table, expired or
+///   not, is prefiltered unless its emission time is later than every
+///   emission time the path has seen (upstream 096e6726);
 /// - an announce with no more hops replaces the path when its random blob
 ///   is new and its emission time is later than every emission time the
 ///   path has seen;
 /// - an announce with more hops replaces the path when its random blob is
 ///   new and either the path has expired or its emission time is later.
+///   After the prefilter only the later emission time can apply, until the
+///   expired path is culled.
 fn model_accepts(path: Option<&ModelPath>, hops: u8, blob: &[u8; 10], now: f64) -> bool {
     if hops > constants::PATHFINDER_M {
         return false;
@@ -260,6 +266,9 @@ fn model_accepts(path: Option<&ModelPath>, hops: u8, blob: &[u8; 10], now: f64) 
         .map(|blob| trusted(emitted(blob), now))
         .max()
         .unwrap_or(0);
+    if announce_emitted <= path_timebase {
+        return false;
+    }
     if hops <= path.hops {
         blob_is_new && announce_emitted > path_timebase
     } else {
