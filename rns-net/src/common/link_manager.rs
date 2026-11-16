@@ -2789,10 +2789,16 @@ impl LinkManager {
     /// Account a packed outbound action at the single driver dispatch point.
     /// LINKREQUEST is accounted when its engine is created since its wire
     /// destination is not the resulting link ID.
+    ///
+    /// Every packet sent on the link also refreshes its outbound timer, as
+    /// Python's `Packet.send` sets `link.last_outbound`: the keepalive
+    /// watchdog and the responder's choice to answer a probe both read it.
     pub fn record_outbound_packet<B: AsRef<[u8]>>(&mut self, packet: &RawPacket<B>) {
         if packet.flags.destination_type == constants::DESTINATION_LINK {
             if let Some(link) = self.links.get_mut(&packet.destination_hash) {
                 link.engine.record_outbound_traffic(packet.data().len());
+                let is_keepalive = packet.context == constants::CONTEXT_KEEPALIVE;
+                link.engine.record_outbound(time::now(), is_keepalive);
             }
         }
     }
