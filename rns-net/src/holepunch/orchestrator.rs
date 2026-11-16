@@ -94,10 +94,12 @@ enum PeerSupport {
 }
 
 /// The direct interface a link was upgraded to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct DirectPath {
     interface_id: rns_core::transport::types::InterfaceId,
     session_id: [u8; 16],
+    /// Drops the path's traffic both ways when set (for tests).
+    blackhole: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Manages all hole-punch sessions.
@@ -145,11 +147,14 @@ pub enum HolePunchManagerAction {
         msgtype: u8,
         payload: Vec<u8>,
     },
-    /// Direct connection established — register the new interface.
+    /// Direct connection established: register the new interface and
+    /// route the link over it.
     DirectConnectEstablished {
         link_id: [u8; 16],
         session_id: [u8; 16],
         interface_id: rns_core::transport::types::InterfaceId,
+        writer: Box<dyn crate::interface::Writer>,
+        info: Box<rns_core::transport::types::InterfaceInfo>,
         /// RTT measured during punch (time from first send to first ACK).
         rtt: f64,
         /// MTU of the direct interface.
@@ -688,27 +693,25 @@ impl HolePunchManager {
                         rns_core::transport::types::InterfaceId(self.next_interface_id);
                     self.next_interface_id += 1;
 
-                    let mut iface_ok = false;
+                    let mut started = None;
+                    let blackhole = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                     if let Some(session) = self.sessions.get(&completion.session_id) {
-                        let session_id = *session.engine.session_id();
-                        let punch_token = *session.engine.punch_token();
+                        let params = udp_direct::DirectPathParams {
+                            link_id: completion.link_id,
+                            session_id: *session.engine.session_id(),
+                            keepalive_key: *session.engine.keepalive_key(),
+                            blackhole: blackhole.clone(),
+                        };
                         match udp_direct::start_direct_interface(
                             socket,
                             peer_addr,
                             interface_id,
-                            completion.link_id,
-                            session_id,
-                            punch_token,
+                            params,
                             tx.clone(),
                         ) {
                             Ok((writer, info)) => {
-                                log::info!("Direct UDP interface registered: {}", info.name);
-                                let _ = tx.send(Event::InterfaceUp(
-                                    interface_id,
-                                    Some(writer),
-                                    Some(Box::new(info)),
-                                ));
-                                iface_ok = true;
+                                log::info!("Direct UDP interface started: {}", info.name);
+                                started = Some((writer, info));
                             }
                             Err(e) => {
                                 log::warn!("Failed to start direct interface: {}", e);
@@ -722,7 +725,8 @@ impl HolePunchManager {
                             session.engine.punch_succeeded(now).unwrap_or_default();
                         for action in engine_actions {
                             match action {
-                                HolePunchAction::Succeeded { session_id } if iface_ok => {
+                                HolePunchAction::Succeeded { session_id } if started.is_some() => {
+                                    let (writer, info) = started.take().unwrap();
                                     // One direct interface per link: a
                                     // repeated upgrade replaces the old one.
                                     if let Some(old) = self.direct.insert(
@@ -730,6 +734,7 @@ impl HolePunchManager {
                                         DirectPath {
                                             interface_id,
                                             session_id,
+                                            blackhole: blackhole.clone(),
                                         },
                                     ) {
                                         all_actions.push(
@@ -744,8 +749,10 @@ impl HolePunchManager {
                                             link_id: completion.link_id,
                                             session_id,
                                             interface_id,
+                                            writer,
+                                            info: Box::new(info),
                                             rtt: completion.rtt.unwrap_or(0.0),
-                                            mtu: 1400,
+                                            mtu: udp_direct::DIRECT_MTU,
                                         },
                                     );
                                 }
@@ -843,12 +850,41 @@ impl HolePunchManager {
         self.direct.get(link_id).map(|path| path.interface_id)
     }
 
+    /// The session of the link's direct path, if any.
+    pub fn direct_session(&self, link_id: &[u8; 16]) -> Option<[u8; 16]> {
+        self.direct.get(link_id).map(|path| path.session_id)
+    }
+
+    /// Stop using the link's direct path: forget it and return its
+    /// interface and session. The caller removes the interface.
+    pub fn take_direct(
+        &mut self,
+        link_id: &[u8; 16],
+    ) -> Option<(rns_core::transport::types::InterfaceId, [u8; 16])> {
+        self.direct
+            .remove(link_id)
+            .map(|path| (path.interface_id, path.session_id))
+    }
+
+    /// Make the link's direct path silently drop all traffic both ways, as
+    /// a network that stopped carrying it would. For tests.
+    pub fn blackhole_direct(&self, link_id: &[u8; 16]) -> bool {
+        match self.direct.get(link_id) {
+            Some(path) => {
+                path.blackhole
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Called when an interface went down: if it was a link's direct
-    /// interface, forget it and return the link.
+    /// interface, forget it and return the link and the path's session.
     pub fn direct_interface_down(
         &mut self,
         interface_id: rns_core::transport::types::InterfaceId,
-    ) -> Option<[u8; 16]> {
+    ) -> Option<([u8; 16], [u8; 16])> {
         self.retiring
             .retain(|(_, retiring, _)| *retiring != interface_id);
         let link_id = self
@@ -856,8 +892,8 @@ impl HolePunchManager {
             .iter()
             .find(|(_, path)| path.interface_id == interface_id)
             .map(|(link_id, _)| *link_id)?;
-        self.direct.remove(&link_id);
-        Some(link_id)
+        let path = self.direct.remove(&link_id)?;
+        Some((link_id, path.session_id))
     }
 
     /// Responder: replies to resend when `payload` repeats the request of
@@ -2173,6 +2209,7 @@ mod tests {
             DirectPath {
                 interface_id: rns_core::transport::types::InterfaceId(interface),
                 session_id: [interface as u8; 16],
+                blackhole: Default::default(),
             },
         );
     }
@@ -2215,7 +2252,7 @@ mod tests {
         assert_eq!(mgr.direct_interface_down(InterfaceId(7)), None);
         assert_eq!(
             mgr.direct_interface_down(InterfaceId(50_002)),
-            Some(link_id)
+            Some((link_id, [(50_002u64 as u8); 16]))
         );
         assert!(!mgr.is_direct_interface(InterfaceId(50_002)));
         assert_eq!(mgr.direct_interface_down(InterfaceId(50_002)), None);

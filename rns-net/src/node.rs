@@ -3932,6 +3932,16 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Make the link's direct path silently drop all traffic in both
+    /// directions on this side, as a network that stopped carrying it
+    /// would. For tests of the fallback to the original route.
+    #[doc(hidden)]
+    pub fn blackhole_direct_path_for_testing(&self, link_id: [u8; 16]) -> Result<(), SendError> {
+        self.tx
+            .send(Event::BlackholeDirectPath { link_id })
+            .map_err(|_| SendError)
+    }
+
     /// Set the policy for handling incoming direct-connect proposals.
     pub fn set_direct_connect_policy(
         &self,

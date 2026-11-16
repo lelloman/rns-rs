@@ -262,4 +262,10 @@ pub trait Callbacks: Send {
 
     /// Called when a direct connection attempt fails.
     fn on_direct_connect_failed(&mut self, _link_id: LinkId, _reason: u8) {}
+
+    /// Called when an established direct path stops being used (it died,
+    /// the peer fell back, or the link showed it failed). The link carries
+    /// on over its original route; `interface_id` is the removed direct
+    /// interface.
+    fn on_direct_connect_lost(&mut self, _link_id: LinkId, _interface_id: InterfaceId) {}
 }

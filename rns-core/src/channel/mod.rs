@@ -44,6 +44,9 @@ pub struct Channel {
     medium_rate_rounds: u16,
     max_tries: u8,
     rtt: f64,
+    /// Report exhausted retries as `PathFailed` once instead of tearing
+    /// the link down.
+    hold_on_exhaustion: bool,
 }
 
 impl Channel {
@@ -74,7 +77,17 @@ impl Channel {
             medium_rate_rounds: 0,
             max_tries: CHANNEL_MAX_TRIES,
             rtt: initial_rtt,
+            hold_on_exhaustion: false,
         }
+    }
+
+    /// While the link runs over a path it can fall back from (an rns-rs
+    /// Direct Link), exhausted retries mean that path failed, not the link:
+    /// the next exhaustion returns `PathFailed` and resends every
+    /// outstanding envelope instead of tearing the link down. The hold is
+    /// used up by that, and cleared by `set_hold_on_exhaustion(false)`.
+    pub fn set_hold_on_exhaustion(&mut self, hold: bool) {
+        self.hold_on_exhaustion = hold;
     }
 
     /// Update the RTT value.
@@ -202,6 +215,19 @@ impl Channel {
         };
 
         let envelope = &self.tx_ring[pos];
+        if envelope.tries >= self.max_tries && self.hold_on_exhaustion {
+            self.hold_on_exhaustion = false;
+            let mut actions = alloc::vec![ChannelAction::PathFailed];
+            for envelope in self.tx_ring.iter_mut().filter(|e| !e.delivered) {
+                envelope.tries = 1;
+                envelope.sent_at = now;
+                actions.push(ChannelAction::SendOnLink {
+                    raw: envelope.raw.clone(),
+                    sequence: envelope.sequence,
+                });
+            }
+            return actions;
+        }
         if envelope.tries >= self.max_tries {
             self.tx_ring.clear();
             self.rx_ring.clear();
@@ -528,6 +554,41 @@ mod tests {
             ChannelAction::TeardownLink => {}
             _ => panic!("Expected TeardownLink"),
         }
+    }
+
+    #[test]
+    fn held_exhaustion_reports_path_failure_once_and_resends_everything() {
+        let mut ch = Channel::new(0.1);
+        ch.send(0x01, b"a", 1.0, 500).unwrap();
+        ch.send(0x01, b"b", 1.0, 500).unwrap();
+        ch.set_hold_on_exhaustion(true);
+        for i in 0..4 {
+            assert!(matches!(
+                ch.packet_timeout(0, 2.0 + i as f64)[..],
+                [ChannelAction::SendOnLink { .. }]
+            ));
+        }
+        // Exhausted: the path failed, and both envelopes go out again.
+        let actions = ch.packet_timeout(0, 10.0);
+        assert_eq!(actions[0], ChannelAction::PathFailed);
+        let resent: Vec<Sequence> = actions[1..]
+            .iter()
+            .map(|a| match a {
+                ChannelAction::SendOnLink { sequence, .. } => *sequence,
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(resent, vec![0, 1]);
+        assert_eq!(ch.get_tries(0), Some(1));
+        assert_eq!(ch.get_tries(1), Some(1));
+        // The hold is used up: exhausting again tears the link down.
+        for i in 0..4 {
+            ch.packet_timeout(0, 11.0 + i as f64);
+        }
+        assert_eq!(
+            ch.packet_timeout(0, 20.0),
+            vec![ChannelAction::TeardownLink]
+        );
     }
 
     #[test]

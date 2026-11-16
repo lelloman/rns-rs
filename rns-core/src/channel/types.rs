@@ -17,6 +17,14 @@ pub enum ChannelAction {
     },
     /// Max retries exceeded — tear down the link.
     TeardownLink,
+    /// Max retries exceeded while the link runs over a path it can fall
+    /// back from (see [`Channel::set_hold_on_exhaustion`]): the caller
+    /// should switch the link to its other path. Every outstanding envelope
+    /// is resent, with its tries reset, by the `SendOnLink` actions that
+    /// follow.
+    ///
+    /// [`Channel::set_hold_on_exhaustion`]: super::Channel::set_hold_on_exhaustion
+    PathFailed,
 }
 
 /// Errors in channel operations.

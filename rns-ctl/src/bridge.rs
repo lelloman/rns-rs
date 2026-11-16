@@ -227,6 +227,20 @@ impl Callbacks for CtlCallbacks {
         broadcast(&self.ws_broadcast, event);
     }
 
+    fn on_direct_connect_lost(&mut self, link_id: LinkId, interface_id: InterfaceId) {
+        let record = LinkEventRecord {
+            link_id: to_hex(&link_id.0),
+            event_type: "direct_lost".into(),
+            is_initiator: None,
+            rtt: None,
+            identity_hash: None,
+            reason: Some(format!("interface_id={}", interface_id.0)),
+        };
+        let event = WsEvent::link(&record);
+        push_link_event(&self.state, record);
+        broadcast(&self.ws_broadcast, event);
+    }
+
     fn on_direct_connect_failed(&mut self, link_id: LinkId, reason: u8) {
         let record = LinkEventRecord {
             link_id: to_hex(&link_id.0),

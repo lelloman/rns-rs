@@ -54,7 +54,19 @@ pub(super) struct ManagedLink {
     /// When present, outbound link packets can be rewritten to HEADER_2 using
     /// this transport ID to preserve multi-hop routing.
     pub(super) route_transport_id: Option<[u8; 16]>,
+    /// While the link runs over a Direct Link interface: that interface and
+    /// the original route and MTU to return to.
+    pub(super) direct_route: Option<DirectRoute>,
 }
+
+/// A link's direct path, and the original route it falls back to.
+pub(super) struct DirectRoute {
+    pub(super) interface: rns_core::transport::types::InterfaceId,
+    pub(super) fallback_interface: Option<rns_core::transport::types::InterfaceId>,
+    pub(super) fallback_transport_id: Option<[u8; 16]>,
+    pub(super) fallback_mtu: u32,
+}
+
 pub(super) struct PendingRequest {
     pub(super) deadline: Option<f64>,
     pub(super) max_response_size: Option<usize>,

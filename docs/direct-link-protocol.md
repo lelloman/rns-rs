@@ -73,6 +73,7 @@ The decrypted payload is
 | `0x02` | `UPGRADE_ACCEPT` | `{"s": session id}` |
 | `0x03` | `UPGRADE_REJECT` | `{"s": session id, "r": reason}` |
 | `0x04` | `UPGRADE_READY` | `{"s": session id, "a": responder public}` |
+| `0x05` | `FALLBACK` | `{"s": session id of the direct path, "r": reply wanted}` (see [Fallback](#fallback)) |
 
 Endpoints are `[address bytes (4 or 16), port]`. The version is `1`. A
 message framed in any other version is dropped; a later version must keep
@@ -256,22 +257,59 @@ that was upgraded and carries nothing else:
 | **Link traffic only** | Its reader and writer pass only HEADER_1 link DATA and PROOF packets addressed to the link's id; any other datagram from the peer, and any other frame the node would send, is dropped. Datagrams from any address but the peer's are ignored |
 | **Not an outbound interface** | It is registered with `out_capable = false`, and broadcasts skip it, so the transport engine never sends announces, path requests or broadcasts on it. Since nothing but the link's packets is accepted from it, no path, announce or link request is learned through it and no other traffic is forwarded over it |
 | **Packet send/receive** | One Reticulum packet per UDP datagram, no framing |
-| **NAT keepalive** | Sends a keepalive datagram to the peer periodically to keep the NAT mapping open |
-| **Liveness detection** | Declares itself down when nothing arrives from the peer within its inactivity timeout |
+| **Keepalive** | Sends an authenticated keepalive every 5 seconds, which also keeps the NAT mapping open: `"RNSK"`, the session id, a 64-bit counter and the first 16 bytes of HMAC-SHA256 over those 28 bytes, keyed with `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-keepalive-v1")`. The key never appears on the wire (unlike the punch token) |
+| **Liveness detection** | Only a valid keepalive from the peer with a counter above the last one accepted counts as a sign of life; link packets and anything forged or replayed do not. Without one for 15 seconds (three missed) the interface declares itself down |
 | **Teardown** | It is removed when its link closes (about a second later, so the link's closing packets still leave on it), when it goes down, and when a newer upgrade of the same link replaces it |
 
-### Path Preference
+### Routing the link
 
-When the `DirectUdpInterface` comes up, Reticulum learns a new 1-hop path to
-the peer through it. Since the existing path through transport nodes is 2+ hops,
-Reticulum naturally prefers the direct path. No special routing logic is needed.
+When its punch succeeds, each side registers the interface and routes the
+link over it: the link's outbound packets go out on the direct interface,
+with no transport header. Nothing is added to the path table; other
+destinations, including the peer's own, keep their paths.
+
+The link remembers the route it had (interface and next-hop transport id) and
+its MTU. Its MTU is lowered to the direct interface's 1400 bytes if it was
+larger, never raised, so nothing sized for the direct path is too large for
+the original one. Its RTT, and with it the keepalive interval and stale time,
+stay as measured on the original path.
+
+While the link runs over the direct path, its packets are accepted on the
+direct interface and on the original route (where the peer may already have
+fallen back); packets on the original route keep that route current for the
+fallback but do not move the link off the direct path.
+
+On the direct path the link's responder answers every keepalive probe of the
+initiator. (Elsewhere it skips the answer when it has sent something within
+the keepalive interval, as upstream does; with the shortest interval that
+can let an idle link go stale for a moment, which on the direct path would
+read as a dead path.) A link that goes stale there is therefore one whose
+direct path has stopped carrying it.
 
 ### Fallback
 
-If the `DirectUdpInterface` goes down (NAT remapping, network change, etc.),
-the path through it becomes unresponsive. Reticulum automatically falls back to
-the next known path — the original route through transport nodes. The
-application layer (LXMF, LXST) is unaware of the change.
+The link returns to its original route, and its MTU to what it was, when any
+of these shows the direct path failed:
+
+- the direct interface goes down (15 seconds without a valid keepalive, or a
+  socket error);
+- the link goes stale (no inbound traffic for its stale time) while on the
+  direct path, which on a fast link happens before the keepalive timeout;
+- the link's channel runs out of retries on the direct path: instead of
+  tearing the link down, as it would on any other path, the channel resends
+  every outstanding message, with its tries reset, over the original route
+  (once per upgrade);
+- the peer says it fell back (`FALLBACK` for the path's session).
+
+The side that falls back removes its direct interface, reports the loss to
+the application (`on_direct_connect_lost`; `direct_lost` in rns-ctl's link
+events) and, unless the peer told it, sends `FALLBACK` with `r = true` over
+the original route. Direct Link signalling is sent on a stale link too,
+which other link packets are not. The peer falls back too and answers with `FALLBACK`
+(`r = false`); that answer is also inbound traffic that revives a link that
+went stale. The link itself is never closed by a direct-path failure, and
+the application keeps using it unchanged. A new upgrade can be proposed
+afterwards (subject to the usual pacing).
 
 ## Facilitator (STUN) Protocol
 
@@ -312,8 +350,8 @@ Properties of the facilitator:
 | B cannot reach T | 3 | B sends `UPGRADE_REJECT`, keep existing link |
 | Symmetric NAT on either side | 4 | Hole punch fails (timeout), keep existing link |
 | Hole punch timeout | 4 | Keep existing link. Optionally retry with a different facilitator |
-| Direct link drops after establishment | 5+ | `DirectUdpInterface` goes down, Reticulum falls back to original path |
-| NAT remapping (IP change, roaming) | 5+ | Keepalive fails, interface goes down, fallback to original path. Peers may re-initiate the protocol |
+| Direct path drops after establishment | after 4 | Detected by the keepalives, the link going stale, or exhausted channel retries; both sides fall back to the original route and the link stays open |
+| NAT remapping (IP change, roaming) | after 4 | As above. Peers may propose again |
 
 ## Security Considerations
 

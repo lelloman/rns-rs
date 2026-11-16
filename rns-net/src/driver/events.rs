@@ -1311,13 +1311,7 @@ impl Driver {
 
     pub(crate) fn handle_interface_down_event(&mut self, id: InterfaceId) {
         self.state_snapshot_schedule.mark_dirty();
-        if let Some(link_id) = self.holepunch_manager.direct_interface_down(id) {
-            log::info!(
-                "[{}] direct interface of link {:02x?} went down",
-                id.0,
-                &link_id[..4]
-            );
-        }
+        let lost_direct = self.holepunch_manager.direct_interface_down(id);
         self.event_tx.remove_interface(id);
         if let Some(entry) = self.interfaces.get(&id) {
             if let Some(tunnel_id) = entry.info.tunnel_id {
@@ -1386,6 +1380,14 @@ impl Driver {
         }
         #[cfg(feature = "iface-backbone")]
         self.handle_backbone_peer_pool_down(id);
+        if let Some((link_id, session_id)) = lost_direct {
+            log::info!(
+                "[{}] direct interface of link {:02x?} went down; falling back",
+                id.0,
+                &link_id[..4]
+            );
+            self.direct_path_lost(link_id, id, Some(session_id), true);
+        }
     }
 
     pub(crate) fn known_destination_route_hint(
@@ -2116,6 +2118,11 @@ impl Driver {
                             "Cannot propose direct connect: no derived key for link {:02x?}",
                             &link_id[..4]
                         );
+                    }
+                }
+                Event::BlackholeDirectPath { link_id } => {
+                    if !self.holepunch_manager.blackhole_direct(&link_id) {
+                        log::warn!("No direct path to blackhole on link {:02x?}", &link_id[..4]);
                     }
                 }
                 Event::SetDirectConnectPolicy { policy } => {

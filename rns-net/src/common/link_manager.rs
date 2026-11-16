@@ -314,6 +314,10 @@ pub enum LinkManagerAction {
     /// see `rns_core::holepunch::decode_signal`). Never proven and never
     /// shown to the application.
     DirectLinkSignal { link_id: LinkId, data: Vec<u8> },
+    /// A link running over a direct path shows that the path failed (it
+    /// went stale, or its channel ran out of retries): fall back to the
+    /// original route.
+    DirectPathFailed { link_id: LinkId },
     /// Generic link data received (CONTEXT_NONE).
     LinkDataReceived {
         link_id: LinkId,
@@ -735,7 +739,8 @@ impl LinkManager {
         })
     }
 
-    /// Set the best-known outbound route for a link.
+    /// Set the best-known outbound route for a link. While the link runs
+    /// over a direct path, this updates the route it falls back to.
     pub fn set_link_route_hint(
         &mut self,
         link_id: &LinkId,
@@ -745,9 +750,102 @@ impl LinkManager {
         let Some(link) = self.links.get_mut(link_id) else {
             return false;
         };
+        if let Some(direct) = link.direct_route.as_mut() {
+            direct.fallback_interface = Some(interface);
+            direct.fallback_transport_id = transport_id;
+            return true;
+        }
         link.route_interface = Some(interface);
         link.route_transport_id = transport_id;
         true
+    }
+
+    /// Route the link over a Direct Link interface, remembering its current
+    /// route and MTU to fall back to. The link MTU is lowered to `mtu` if it
+    /// is larger, never raised. Its RTT and keepalive timing are left as
+    /// measured on the original path, so they stay valid after a fallback.
+    pub fn attach_direct_route(
+        &mut self,
+        link_id: &LinkId,
+        interface: rns_core::transport::types::InterfaceId,
+        mtu: u32,
+    ) -> bool {
+        let Some(link) = self.links.get_mut(link_id) else {
+            return false;
+        };
+        let direct = match link.direct_route.take() {
+            // A newer upgrade: the original route is still the fallback.
+            Some(previous) => DirectRoute {
+                interface,
+                ..previous
+            },
+            None => DirectRoute {
+                interface,
+                fallback_interface: link.route_interface,
+                fallback_transport_id: link.route_transport_id,
+                fallback_mtu: link.engine.mtu(),
+            },
+        };
+        if mtu < direct.fallback_mtu {
+            link.engine.set_mtu(mtu);
+        }
+        link.direct_route = Some(direct);
+        link.route_interface = Some(interface);
+        link.route_transport_id = None;
+        if let Some(channel) = link.channel.as_mut() {
+            channel.set_hold_on_exhaustion(true);
+        }
+        true
+    }
+
+    /// Return the link to the route and MTU it had before its direct path.
+    /// Returns the direct interface it stops using.
+    pub fn detach_direct_route(
+        &mut self,
+        link_id: &LinkId,
+    ) -> Option<rns_core::transport::types::InterfaceId> {
+        let link = self.links.get_mut(link_id)?;
+        let direct = link.direct_route.take()?;
+        link.route_interface = direct.fallback_interface;
+        link.route_transport_id = direct.fallback_transport_id;
+        link.engine.set_mtu(direct.fallback_mtu);
+        if let Some(channel) = link.channel.as_mut() {
+            channel.set_hold_on_exhaustion(false);
+        }
+        Some(direct.interface)
+    }
+
+    /// The Direct Link interface the link runs over, if any.
+    pub fn direct_route_interface(
+        &self,
+        link_id: &LinkId,
+    ) -> Option<rns_core::transport::types::InterfaceId> {
+        self.links
+            .get(link_id)
+            .and_then(|link| link.direct_route.as_ref())
+            .map(|direct| direct.interface)
+    }
+
+    /// Whether a link packet arriving on `interface` is on one of the
+    /// link's routes: its current one, or, while it runs over a direct
+    /// path, the original route it falls back to (the peer may already have
+    /// fallen back). A link without a known route accepts any interface.
+    pub fn link_route_accepts(
+        &self,
+        link_id: &LinkId,
+        interface: rns_core::transport::types::InterfaceId,
+    ) -> bool {
+        let Some(link) = self.links.get(link_id) else {
+            return true;
+        };
+        match link.route_interface {
+            None => true,
+            Some(route) if route == interface => true,
+            Some(_) => link
+                .direct_route
+                .as_ref()
+                .is_some_and(|direct| direct.fallback_interface == Some(interface)),
+        }
     }
 
     /// Register a destination that can accept incoming links.
@@ -962,6 +1060,7 @@ impl LinkManager {
             max_request_size: None,
             route_interface: None,
             route_transport_id: None,
+            direct_route: None,
         };
         self.links.insert(link_id, managed);
 
@@ -1170,6 +1269,7 @@ impl LinkManager {
             } else {
                 None
             },
+            direct_route: None,
         };
         self.links.insert(link_id, managed);
 
@@ -1609,13 +1709,36 @@ impl LinkManager {
                 }
             };
 
-            link.route_interface = Some(receiving_interface);
-            if packet.flags.header_type == constants::HEADER_2 {
-                if let Some(transport_id) = packet.transport_id {
-                    link.route_transport_id = Some(transport_id);
-                }
+            let transport_id = if packet.flags.header_type == constants::HEADER_2 {
+                packet.transport_id
             } else {
-                link.route_transport_id = None;
+                None
+            };
+            match link.direct_route.as_mut() {
+                None => {
+                    link.route_interface = Some(receiving_interface);
+                    if packet.flags.header_type == constants::HEADER_2 {
+                        if transport_id.is_some() {
+                            link.route_transport_id = transport_id;
+                        }
+                    } else {
+                        link.route_transport_id = None;
+                    }
+                }
+                // The direct path stays the route; packets the peer sends
+                // on the original path keep that path current for the
+                // fallback.
+                Some(direct) if direct.interface != receiving_interface => {
+                    direct.fallback_interface = Some(receiving_interface);
+                    if packet.flags.header_type == constants::HEADER_2 {
+                        if transport_id.is_some() {
+                            direct.fallback_transport_id = transport_id;
+                        }
+                    } else {
+                        direct.fallback_transport_id = None;
+                    }
+                }
+                Some(_) => {}
             }
 
             match packet.context {
@@ -1656,9 +1779,16 @@ impl LinkManager {
                 }
                 constants::CONTEXT_KEEPALIVE => {
                     let received_at = time::now();
+                    // On a direct path (an rns-rs peer) every probe is
+                    // answered: the initiator's inbound timer then never
+                    // depends on the reply-suppression rule, and a stale
+                    // link there means the path is silent.
                     let reply = link
                         .engine
-                        .should_reply_keepalive(packet.data(), received_at);
+                        .should_reply_keepalive(packet.data(), received_at)
+                        || (link.direct_route.is_some()
+                            && !link.engine.is_initiator()
+                            && packet.data() == [0xff]);
                     let inbound_actions = link.engine.record_inbound(received_at);
                     let link_id = *link.engine.link_id();
                     LinkDataResult::Keepalive {
@@ -2090,13 +2220,48 @@ impl LinkManager {
         context: u8,
         rng: &mut dyn Rng,
     ) -> Result<Vec<LinkManagerAction>, crate::event::LinkDatagramError> {
+        self.pack_on_link(link_id, plaintext, context, false, rng)
+    }
+
+    /// Send Direct Link signalling on a link. Unlike other link packets it
+    /// also goes out while the link is stale: falling back from a silent
+    /// direct path is what can revive the link.
+    pub fn send_direct_link_signal(
+        &self,
+        link_id: &LinkId,
+        framed: &[u8],
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        self.pack_on_link(
+            link_id,
+            framed,
+            rns_core::holepunch::CONTEXT_DIRECT_LINK,
+            true,
+            rng,
+        )
+        .unwrap_or_default()
+    }
+
+    fn pack_on_link(
+        &self,
+        link_id: &LinkId,
+        plaintext: &[u8],
+        context: u8,
+        allow_stale: bool,
+        rng: &mut dyn Rng,
+    ) -> Result<Vec<LinkManagerAction>, crate::event::LinkDatagramError> {
         use crate::event::LinkDatagramError;
         let link = match self.links.get(link_id) {
             Some(l) => l,
             None => return Err(LinkDatagramError::LinkNotFound),
         };
 
-        if link.engine.state() != LinkState::Active {
+        let sendable = match link.engine.state() {
+            LinkState::Active => true,
+            LinkState::Stale => allow_stale,
+            _ => false,
+        };
+        if !sendable {
             return Err(LinkDatagramError::LinkNotActive);
         }
         let maximum = link.engine.mdu();
@@ -2702,6 +2867,14 @@ impl LinkManager {
                             link_id: *link_id,
                             reason: *reason,
                         });
+                    }
+                    if new_state == &LinkState::Stale
+                        && self
+                            .links
+                            .get(link_id)
+                            .is_some_and(|link| link.direct_route.is_some())
+                    {
+                        result.push(LinkManagerAction::DirectPathFailed { link_id: *link_id });
                     }
                 }
                 LinkAction::LinkEstablished {

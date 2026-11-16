@@ -6330,3 +6330,164 @@ fn plain_link_data_asks_the_driver_before_it_is_proved() {
     assert_eq!(proof_pkt.destination_hash, link_id);
     assert_eq!(&proof_pkt.data()[..32], &pkt.packet_hash);
 }
+
+#[test]
+fn direct_route_is_attached_and_restored() {
+    use rns_core::transport::types::InterfaceId;
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let transport = InterfaceId(1);
+    let direct = InterfaceId(50_000);
+    init_mgr.set_link_route_hint(&link_id, transport, Some([0x77; 16]));
+    let mtu_before = init_mgr.links[&link_id].engine.mtu();
+
+    assert!(init_mgr.attach_direct_route(&link_id, direct, 400));
+    let route = init_mgr.get_link_route_hint(&link_id).unwrap();
+    assert_eq!(route.interface, direct);
+    assert_eq!(route.transport_id, None);
+    assert_eq!(init_mgr.direct_route_interface(&link_id), Some(direct));
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), 400.min(mtu_before));
+    // Packets on either route are accepted, on any other they are not.
+    assert!(init_mgr.link_route_accepts(&link_id, direct));
+    assert!(init_mgr.link_route_accepts(&link_id, transport));
+    assert!(!init_mgr.link_route_accepts(&link_id, InterfaceId(2)));
+    // A route update while direct changes the fallback, not the route.
+    init_mgr.set_link_route_hint(&link_id, InterfaceId(3), None);
+    assert_eq!(
+        init_mgr.get_link_route_hint(&link_id).unwrap().interface,
+        direct
+    );
+    assert!(init_mgr.link_route_accepts(&link_id, InterfaceId(3)));
+    init_mgr.set_link_route_hint(&link_id, transport, Some([0x77; 16]));
+
+    assert_eq!(init_mgr.detach_direct_route(&link_id), Some(direct));
+    let route = init_mgr.get_link_route_hint(&link_id).unwrap();
+    assert_eq!(route.interface, transport);
+    assert_eq!(route.transport_id, Some([0x77; 16]));
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
+    assert!(!init_mgr.link_route_accepts(&link_id, direct));
+    assert_eq!(init_mgr.detach_direct_route(&link_id), None);
+    assert_eq!(init_mgr.direct_route_interface(&link_id), None);
+}
+
+#[test]
+fn direct_route_never_raises_the_mtu() {
+    use rns_core::transport::types::InterfaceId;
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let mtu_before = init_mgr.links[&link_id].engine.mtu();
+    assert!(init_mgr.attach_direct_route(&link_id, InterfaceId(50_000), mtu_before + 1000));
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
+    // A second upgrade keeps the original route and MTU as the fallback.
+    init_mgr.set_link_route_hint(&link_id, InterfaceId(1), None);
+    assert!(init_mgr.attach_direct_route(&link_id, InterfaceId(50_001), 300));
+    assert_eq!(
+        init_mgr.detach_direct_route(&link_id),
+        Some(InterfaceId(50_001))
+    );
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
+    assert_eq!(
+        init_mgr.get_link_route_hint(&link_id).unwrap().interface,
+        InterfaceId(1)
+    );
+}
+
+#[test]
+fn stale_link_on_a_direct_route_reports_the_path_failed() {
+    use rns_core::transport::types::InterfaceId;
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let stale = vec![rns_core::link::LinkAction::StateChanged {
+        link_id,
+        new_state: LinkState::Stale,
+        reason: None,
+    }];
+    let failed = |actions: &[LinkManagerAction]| {
+        actions.iter().any(
+            |a| matches!(a, LinkManagerAction::DirectPathFailed { link_id: id } if *id == link_id),
+        )
+    };
+    assert!(!failed(&init_mgr.process_link_actions(&link_id, &stale)));
+    init_mgr.attach_direct_route(&link_id, InterfaceId(50_000), 1400);
+    assert!(failed(&init_mgr.process_link_actions(&link_id, &stale)));
+}
+
+fn keepalive_probe(link_id: &LinkId) -> Vec<u8> {
+    RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        link_id,
+        None,
+        constants::CONTEXT_KEEPALIVE,
+        &[0xff],
+    )
+    .unwrap()
+    .raw
+    .to_vec()
+}
+
+fn replies_to_keepalive(mgr: &mut LinkManager, link_id: &LinkId) -> bool {
+    let raw = keepalive_probe(link_id);
+    let packet = RawPacket::unpack(&raw).unwrap();
+    let actions = mgr.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+    actions.iter().any(|a| match a {
+        LinkManagerAction::SendPacket { raw, .. } => {
+            RawPacket::unpack(raw).unwrap().context == constants::CONTEXT_KEEPALIVE
+        }
+        _ => false,
+    })
+}
+
+#[test]
+fn responder_on_a_direct_route_answers_every_keepalive() {
+    use rns_core::transport::types::InterfaceId;
+    let (_init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    // Having just sent something, the responder skips the reply, as
+    // upstream does.
+    let now = time::now();
+    resp_mgr
+        .links
+        .get_mut(&link_id)
+        .unwrap()
+        .engine
+        .record_outbound(now, false);
+    assert!(!replies_to_keepalive(&mut resp_mgr, &link_id));
+
+    // On a direct route it answers anyway.
+    resp_mgr.set_link_route_hint(&link_id, InterfaceId(0), None);
+    resp_mgr.attach_direct_route(&link_id, InterfaceId(50_000), 1400);
+    resp_mgr
+        .links
+        .get_mut(&link_id)
+        .unwrap()
+        .engine
+        .record_outbound(time::now(), false);
+    assert!(replies_to_keepalive(&mut resp_mgr, &link_id));
+}
+
+#[test]
+fn direct_link_signalling_still_goes_out_on_a_stale_link() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let engine = &mut init_mgr.links.get_mut(&link_id).unwrap().engine;
+    engine.tick(time::now() + 10_000.0);
+    assert_eq!(engine.state(), LinkState::Stale);
+    let mut rng = OsRng;
+    assert!(init_mgr
+        .try_send_on_link(&link_id, b"data", constants::CONTEXT_NONE, &mut rng)
+        .is_err());
+    let actions = init_mgr.send_direct_link_signal(&link_id, b"\x01\x05signal", &mut rng);
+    let raw = extract_any_send_packet(&actions);
+    assert_eq!(
+        RawPacket::unpack(&raw).unwrap().context,
+        rns_core::holepunch::CONTEXT_DIRECT_LINK
+    );
+}

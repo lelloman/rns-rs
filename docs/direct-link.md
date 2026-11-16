@@ -72,8 +72,11 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/link_events
 ```
 
 Watch `/api/link_events` for `direct_established` or `direct_failed`. Once
-established, traffic for that link prefers the direct UDP interface and falls
-back to the transport path if the direct path dies.
+established, the link's traffic goes over the direct UDP interface, which
+carries nothing but that link and is removed with it. If the direct path dies
+(no keepalive for 15 seconds, the link going stale, or the link's channel
+running out of retries), both sides move the link back to the transport path,
+report `direct_lost`, and the link carries on.
 
 ## Testing
 
