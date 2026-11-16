@@ -240,7 +240,9 @@ impl TransportEngine {
             .data()
             .get(start..start + constants::NAME_HASH_LENGTH / 8)
         else {
-            // Malformed; announce unpacking reports the violation.
+            // Malformed. The driver rejects a payload this short as a
+            // protocol violation (upstream 096e6726); otherwise announce
+            // unpacking reports it.
             return DestinationFilterVerdict::Admit;
         };
         let mut destination_type = [0u8; constants::NAME_HASH_LENGTH / 8];
@@ -696,6 +698,9 @@ impl TransportEngine {
             }
         };
 
+        if self.prefilter_announce(packet, iface, now) {
+            return;
+        }
         match self.hold_decision(packet, original_raw, iface, now) {
             HoldDecision::Pass => {}
             HoldDecision::Held => return,
@@ -823,6 +828,45 @@ impl TransportEngine {
         }
     }
 
+    /// Upstream 096e6726 prefilters an announce for a destination that
+    /// already has a path, before validating its signature: unless it is a
+    /// path response, a local or discovery path request waits for the
+    /// destination, or the destination is in the announce table, an announce
+    /// that could not update the path (`Transport.announce_prefilter`) counts
+    /// as a received announce without bytes and as a filtered announce, and
+    /// is dropped. Returns whether it was dropped.
+    fn prefilter_announce<B: AsRef<[u8]>>(
+        &mut self,
+        packet: &RawPacket<B>,
+        iface: InterfaceId,
+        now: f64,
+    ) -> bool {
+        let destination_hash = &packet.destination_hash;
+        if packet.context == constants::CONTEXT_PATH_RESPONSE
+            || !self.path_table.contains_key(destination_hash)
+            || self.path_requests.contains_key(destination_hash)
+            || self.discovery_path_requests.contains_key(destination_hash)
+            || self.announce_table.contains_key(destination_hash)
+        {
+            return false;
+        }
+        if super::maintenance::announce_passes_prefilter(
+            &self.config,
+            &self.path_table,
+            &self.path_states,
+            &self.interfaces,
+            destination_hash,
+            packet.data(),
+            iface,
+            now,
+        ) {
+            return false;
+        }
+        self.announce_receipts.push((iface, 0));
+        self.filter_announce();
+        true
+    }
+
     /// Ingress limiting of an announce for an unknown destination. An
     /// announce ingress control takes up counts as received without bytes
     /// (upstream c850cdac). Since upstream 29dc449a `preprocess_inbound`
@@ -915,6 +959,9 @@ impl TransportEngine {
             }
         };
 
+        if self.prefilter_announce(&ctx.packet, ctx.iface, ctx.now) {
+            return;
+        }
         let received_from = self.announce_received_from(&ctx.packet, ctx.now);
 
         // Announce verification and this registry read share the engine's

@@ -56,7 +56,7 @@ Dispositions are provisional until each mapping commit lands.
 | 1 | `29dc449af89adb41b142141bee63093f6edb76b4` | Traffic counting | Integrated | `held_frames_are_filtered_and_releases_are_charged_again`, `released_announces_are_charged_as_received_traffic`; `held_announces_limit_applies_only_while_ingress_limiting` and `announce_is_held_while_held_announces_have_room` updated |
 | 2 | `85d3697938393fbe68661ae9b06d2047269252d3` | Pre-emptively cull held announce queue for useless announces | Integrated | `held_announces_that_cannot_update_a_path_are_culled`, `announce_prefilter_keeps_only_announces_that_could_update_the_path` |
 | 3 | `a450be5d7ed40c78353f547f1373587bb2b85d9f` | Raised announce validation caches to 384 | Structurally covered | `ANNOUNCE_SIG_CACHE_MAXSIZE` (2,000 entries, 600 s TTL, configurable) documented against upstream's sizes |
-| 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Needs coordinated port (with 2) | |
+| 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Integrated | `announces_that_cannot_update_a_known_path_are_prefiltered`, `announce_with_insufficient_payload_counts_a_protocol_violation`; `announce_with_cached_signature_but_different_fields_is_verified_again` adjusted |
 | 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Needs port | |
 | 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Needs port | |
 | 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Needs decision | |
@@ -185,13 +185,33 @@ commit 2, now shared with the held-queue cull.
 
 **Rust applicability:** The engine decides path updates after validation in
 `inbound_engine.rs` using the same random-blob timebase comparison. The
-prefilter moves that decision ahead of signature validation for known
-destinations, so useless announces skip the Ed25519 check and the hold queue.
-Needs the same predicate, the payload-length violation, and the accounting.
+prefilter moves the decision ahead of signature validation for known
+destinations, so useless announces skip the Ed25519 check. The keep test
+itself was ported with commit 2. The payload-length violation belongs with
+the driver's other admission checks, where the oversized-announce check
+already runs before the engine's destination type filter.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** The driver's `admit_decoded_inbound` counts
+an announce payload shorter than 84 bytes (public key, name hash, random
+hash) as a protocol violation and filters the frame, before the engine's
+destination type filter, so a short announce of a blocked type is a violation
+as upstream. `TransportEngine::prefilter_announce` runs in both announce
+paths (synchronous and the verification queue) after unpacking and before
+ingress holding and signature validation. For a destination in the path
+table, unless the announce is a path response, a local or discovery path
+request waits for it, or it is in the announce table, it applies
+`announce_passes_prefilter`; a failing announce counts as a received
+announce without bytes and as a filtered announce, and its frame is
+filtered. Tests: `announces_that_cannot_update_a_known_path_are_prefiltered`
+(an older announce with a corrupted signature is filtered without a
+violation; a path response and a waiting path request are exempt) and
+`announce_with_insufficient_payload_counts_a_protocol_violation` (83 and 84
+byte payloads of a blocked type). The signature cache test that replayed an
+accepted announce's random blob under a known path now removes the path
+first, since the prefilter would drop those variants before the cache is
+consulted. `docs/rnstatus.md` lists the new filtered announces.
 
-**Final disposition:** Needs coordinated port (with 2).
+**Final disposition:** Integrated.
 
 ### 5. `f361a354` — Ensure early tunnel synthesis on BackboneInterface
 

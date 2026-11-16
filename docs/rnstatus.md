@@ -116,7 +116,12 @@ and path-request counts. The announce total line ends with the number of
 filtered announces when there are any, and the `afrxc` sort key orders by it.
 An announce is filtered when ingress control drops it or uses it to replace an
 announce it already holds, when `required_destinations_only` rejects its type,
-or when its identity is blackholed or its stamp fails. `pvs`, `ivs`, and `flt` sort by protocol, IFAC, and
+when its identity is blackholed or its stamp fails, or when its destination
+already has a path the announce could not update (upstream `096e6726`): it
+was emitted before the path's newest announce, or at the same time over an
+interface of no higher gravity while the path is responsive. Path responses,
+destinations with a waiting path request and destinations this node is
+rebroadcasting are exempt. `pvs`, `ivs`, and `flt` sort by protocol, IFAC, and
 duplicate-filter violations respectively. Frames dropped because their hop
 count reached the transport hop limiter (`[filter] hop_limiter`) are counted
 separately from protocol violations, as `hop_limiter_hits` in `-j` output;
@@ -130,7 +135,8 @@ dropped before transport processed them. Those are frames failing IFAC, too
 large, malformed, over the hop limiter or caught by the packet filter;
 announces dropped while the interface's held announces are full, of a
 blocked or not allowed destination type, failing to unpack or verify, from
-a blackholed identity, without a required stamp, or held by ingress control;
+a blackholed identity, without a required stamp, held by ingress control, or
+unable to update a known path;
 and path requests that are duplicates, fail a required stamp or join one
 already in flight. A filtered frame is moved out of the received bytes and
 packets. A held announce's frame is counted again when ingress control

@@ -1720,6 +1720,10 @@ fn announce_with_cached_signature_but_different_fields_is_verified_again() {
     let actions = feed_announce(&mut engine, &packet, 1000.0);
     assert!(announce_received(&actions).is_some());
     assert_eq!(engine.announce_sig_cache_len(), 1);
+    // The variants reuse the announce's random blob, so with its path known
+    // the prefilter (upstream 096e6726) would drop them before validation.
+    // Without the path they reach the signature cache.
+    engine.path_table.remove(&dest);
 
     // Same destination hash and signature, different public key.
     let other_identity = rns_crypto::identity::Identity::from_private_key(&[0x65; 64]);
@@ -7101,6 +7105,64 @@ fn held_announces_that_cannot_update_a_path_are_culled() {
             .receiving_interface,
         InterfaceId(2)
     );
+}
+
+#[test]
+fn announces_that_cannot_update_a_known_path_are_prefiltered() {
+    // Upstream 096e6726: for a destination with a path, an announce that
+    // could not update it is a received announce without bytes and a
+    // filtered announce, dropped before its signature is validated.
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let now = 10_000.0;
+    let (dest, newer) = signed_announce_with(
+        0x31,
+        "known",
+        blob_emitted_at(9_500),
+        constants::CONTEXT_NONE,
+    );
+    let (_, mut older) = signed_announce_with(
+        0x31,
+        "known",
+        blob_emitted_at(9_000),
+        constants::CONTEXT_NONE,
+    );
+    engine.handle_inbound(InboundFrame::new(&newer, InterfaceId(1), now), &mut rng);
+    assert!(engine.has_path(&dest));
+    engine.take_announce_receipts();
+    // Remove the newer announce's retransmission, which would exempt it.
+    engine.announce_table.remove(&dest);
+
+    // A corrupted signature is not even looked at.
+    let last = older.len() - 1;
+    older[last] ^= 0xff;
+    let actions = engine.handle_inbound(InboundFrame::new(&older, InterfaceId(1), now), &mut rng);
+    assert_eq!(filtered_flags(&mut engine), (true, true));
+    assert_eq!(engine.take_announce_receipts(), vec![(InterfaceId(1), 0)]);
+    assert!(!actions
+        .iter()
+        .any(|action| matches!(action, TransportAction::ProtocolViolation { .. })));
+
+    // A path response is exempt, and so is a destination with a waiting
+    // path request: both go on to normal processing.
+    let (_, response) = signed_announce_with(
+        0x31,
+        "known",
+        blob_emitted_at(9_000),
+        constants::CONTEXT_PATH_RESPONSE,
+    );
+    engine.handle_inbound(InboundFrame::new(&response, InterfaceId(1), now), &mut rng);
+    assert!(!filtered_flags(&mut engine).1);
+    engine.record_outbound_path_request(dest, now);
+    let (_, requested) = signed_announce_with(
+        0x31,
+        "known",
+        blob_emitted_at(8_000),
+        constants::CONTEXT_NONE,
+    );
+    engine.handle_inbound(InboundFrame::new(&requested, InterfaceId(1), now), &mut rng);
+    assert!(!filtered_flags(&mut engine).1);
 }
 
 #[test]
