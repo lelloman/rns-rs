@@ -1097,32 +1097,11 @@ impl Driver {
     ) {
         self.state_snapshot_schedule.mark_dirty();
         let wants_tunnel;
+        let mut came_up = false;
         let mut replay_shared_announces = false;
         if let Some(info) = info {
             wants_tunnel = self.register_dynamic_interface(id, new_writer, info, true);
-            self.callbacks.on_interface_up(id);
-            #[cfg(feature = "hooks")]
-            {
-                let ctx = HookContext::Interface { interface_id: id.0 };
-                let now = time::now();
-                let engine_ref = EngineRef {
-                    engine: &self.engine,
-                    interfaces: &self.interfaces,
-                    link_manager: &self.link_manager,
-                    now,
-                };
-                let provider_events_enabled = self.provider_events_enabled();
-                if let Some(ref e) = run_hook_inner(
-                    &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
-                    &self.hook_manager,
-                    &engine_ref,
-                    &ctx,
-                    now,
-                    provider_events_enabled,
-                ) {
-                    self.forward_hook_side_effects("InterfaceUp", e);
-                }
-            }
+            came_up = true;
         } else {
             let is_local_client = self
                 .interfaces
@@ -1152,39 +1131,53 @@ impl Driver {
                     entry.writer = writer;
                     entry.async_writer_metrics = Some(async_writer_metrics);
                 }
-                self.callbacks.on_interface_up(id);
-                #[cfg(feature = "hooks")]
-                {
-                    let ctx = HookContext::Interface { interface_id: id.0 };
-                    let now = time::now();
-                    let engine_ref = EngineRef {
-                        engine: &self.engine,
-                        interfaces: &self.interfaces,
-                        link_manager: &self.link_manager,
-                        now,
-                    };
-                    let provider_events_enabled = self.provider_events_enabled();
-                    if let Some(ref e) = run_hook_inner(
-                        &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
-                        &self.hook_manager,
-                        &engine_ref,
-                        &ctx,
-                        now,
-                        provider_events_enabled,
-                    ) {
-                        self.forward_hook_side_effects("InterfaceUp", e);
-                    }
-                }
+                came_up = true;
             } else {
                 wants_tunnel = false;
             }
         }
 
+        // Upstream f361a354 and ad6c709e synthesize on connect, before the
+        // interface is online, so the synthesis is the first frame on the
+        // connection. Here it is sent before anything else can use the
+        // interface: before the callback and the `InterfaceUp` hook, whose
+        // injected actions are dispatched at once.
         if wants_tunnel {
             self.synthesize_tunnel_for_interface(id);
         }
+        if came_up {
+            self.notify_interface_up(id);
+        }
         if replay_shared_announces {
             self.replay_shared_announces();
+        }
+    }
+
+    /// Tell the application callback and the `InterfaceUp` hook that an
+    /// interface came up.
+    fn notify_interface_up(&mut self, id: InterfaceId) {
+        self.callbacks.on_interface_up(id);
+        #[cfg(feature = "hooks")]
+        {
+            let ctx = HookContext::Interface { interface_id: id.0 };
+            let now = time::now();
+            let engine_ref = EngineRef {
+                engine: &self.engine,
+                interfaces: &self.interfaces,
+                link_manager: &self.link_manager,
+                now,
+            };
+            let provider_events_enabled = self.provider_events_enabled();
+            if let Some(ref e) = run_hook_inner(
+                &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
+                &self.hook_manager,
+                &engine_ref,
+                &ctx,
+                now,
+                provider_events_enabled,
+            ) {
+                self.forward_hook_side_effects("InterfaceUp", e);
+            }
         }
     }
 

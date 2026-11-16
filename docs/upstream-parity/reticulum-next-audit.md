@@ -57,7 +57,7 @@ Dispositions are provisional until each mapping commit lands.
 | 2 | `85d3697938393fbe68661ae9b06d2047269252d3` | Pre-emptively cull held announce queue for useless announces | Integrated | `held_announces_that_cannot_update_a_path_are_culled`, `announce_prefilter_keeps_only_announces_that_could_update_the_path` |
 | 3 | `a450be5d7ed40c78353f547f1373587bb2b85d9f` | Raised announce validation caches to 384 | Structurally covered | `ANNOUNCE_SIG_CACHE_MAXSIZE` (2,000 entries, 600 s TTL, configurable) documented against upstream's sizes |
 | 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Integrated | `announces_that_cannot_update_a_known_path_are_prefiltered`, `announce_with_insufficient_payload_counts_a_protocol_violation`; `announce_with_cached_signature_but_different_fields_is_verified_again` adjusted |
-| 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Needs port | |
+| 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Integrated | `tunnel_synthesis_is_sent_before_the_interface_is_announced_up`, `dialing_interface_synthesizes_a_tunnel_on_each_connect` |
 | 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Needs port | |
 | 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Needs decision | |
 | 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Needs port | |
@@ -224,14 +224,25 @@ through `early_synthesis` when the interface is not online yet. Every
 interface job pass synthesizes for an online interface that still wants a
 tunnel. `Interface.wants_tunnel` gets a default of `False`.
 
-**Rust applicability:** rns-rs synthesizes when the driver sees the dialing
-interface come up (`1df27919`). Check whether anything can be sent on the
-connection before the synthesis frame, and whether a failed synthesis is
-retried while the interface stays up.
+**Rust applicability:** rns-rs synthesizes when the driver sees a dialing
+interface come up (`1df27919`), on every connect, in the `InterfaceUp`
+handler that marks it online. Nothing the driver dispatches for the interface
+can precede that, except what the application callback and the
+`InterfaceUp` hook do: hook-injected actions are dispatched at once, and they
+ran before the synthesis. The retry in the interface jobs covers a synthesis
+that returned early, in practice for want of a transport identity; the driver
+always has one before its event loop starts, so there is nothing to retry. A
+Backbone client in rns-rs already wanted a tunnel on its first connect.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** `handle_interface_up_event` now synthesizes
+before `notify_interface_up` runs the callback and the hook, so the synthesis
+is the first frame on the connection, as upstream's `early_synthesis` makes
+it. Tests: `tunnel_synthesis_is_sent_before_the_interface_is_announced_up`
+(the callback sees the synthesis already sent, on the first connect and a
+reconnect) and the existing
+`dialing_interface_synthesizes_a_tunnel_on_each_connect`.
 
-**Final disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 6. `ad6c709e` — Ensure early tunnel synthesis on TCP and I2P interfaces
 
