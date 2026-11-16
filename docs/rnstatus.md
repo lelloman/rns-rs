@@ -91,7 +91,9 @@ or `Unknown`. TCP clients, Backbone clients and outbound I2P peers synthesize a
 tunnel each time they connect, so the remote side keeps their paths across
 reconnects. Tunnels are only accepted over TCP, Backbone and I2P connections,
 one per connection, and a connection whose tunnel synthesis carries a bad
-signature is torn down.
+signature is torn down. A second synthesis on a connection, or one too short
+or longer than the MDU, counts as a protocol violation (upstream
+`13b98a6b`).
 
 Discovered-interface views (`-d` and `-D`) show the announcing stack's
 implementation and version as `Running` in the table or `Stack` in the detail

@@ -29,6 +29,7 @@ impl TransportEngine {
             interface_hashes: BTreeMap::new(),
             local_tunnel_ids: BTreeMap::new(),
             remote_transports: BTreeMap::new(),
+            synthesis_received: BTreeSet::new(),
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
             announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
@@ -79,6 +80,7 @@ impl TransportEngine {
         self.interface_hashes.remove(&id);
         self.local_tunnel_ids.remove(&id);
         self.remote_transports.remove(&id);
+        self.synthesis_received.remove(&id);
         self.drop_paths_for_interface(id);
         self.drop_reverse_for_interface(id);
         self.drop_links_for_interface(id);
@@ -483,6 +485,13 @@ impl TransportEngine {
         });
 
         actions
+    }
+
+    /// Record that an interface received a tunnel synthesis. Returns false
+    /// when it had already received one, which upstream 13b98a6b counts as
+    /// a protocol violation.
+    pub fn mark_synthesis_received(&mut self, interface: InterfaceId) -> bool {
+        self.synthesis_received.insert(interface)
     }
 
     /// Record the transport node that synthesized a tunnel over an interface.

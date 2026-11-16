@@ -271,6 +271,10 @@ pub struct TransportEngine {
     /// The transport identity hash of the node that synthesized a tunnel
     /// over an interface (upstream 464e7598 `Interface.remote_transport`).
     remote_transports: BTreeMap<InterfaceId, [u8; 16]>,
+    /// Interfaces that have received their tunnel synthesis (upstream
+    /// 13b98a6b `Interface.synthesis_received`): another one is a protocol
+    /// violation.
+    synthesis_received: BTreeSet<InterfaceId>,
     local_destinations: BTreeMap<[u8; 16], u8>,
     blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
     announce_queues: AnnounceQueues,

@@ -2431,7 +2431,8 @@ impl Driver {
         };
 
         // Upstream 464e7598: only TCP, Backbone and I2P connections carry
-        // tunnels, and each takes one synthesis.
+        // tunnels. Since 13b98a6b each takes one synthesis: another one, or
+        // one on an established tunnel, is a protocol violation.
         let Some(entry) = self.interfaces.get(&receiving_interface) else {
             return;
         };
@@ -2439,17 +2440,38 @@ impl Driver {
             return;
         }
         if self.engine.remote_transport(&receiving_interface).is_some() {
-            log::debug!(
-                "Tunnel already synthesized on {}, ignoring synthesis packet",
-                entry.info.name
+            self.tunnel_synthesis_violation(
+                receiving_interface,
+                "Tunnel synthesis packet on already established tunnel",
+            );
+            return;
+        }
+        if !self.engine.mark_synthesis_received(receiving_interface) {
+            self.tunnel_synthesis_violation(
+                receiving_interface,
+                "Additional synthesis packet received",
+            );
+            return;
+        }
+        let data_len = packet.data().len();
+        if data_len > rns_core::constants::MDU {
+            self.tunnel_synthesis_violation(
+                receiving_interface,
+                "Excessive tunnel synthesis packet size",
+            );
+            return;
+        }
+        if data_len < rns_core::transport::tunnel::TUNNEL_SYNTH_LENGTH {
+            self.tunnel_synthesis_violation(
+                receiving_interface,
+                "Insufficient tunnel synthesis packet size",
             );
             return;
         }
 
         // As `Transport.tunnel_synthesize_handler`: the tunnel belongs to
-        // the interface the synthesis arrived on. A synthesis of the wrong
-        // length or with a bad signature is ignored; only one whose key
-        // cannot be loaded, where Python raises, is a protocol violation.
+        // the interface the synthesis arrived on. One whose key cannot be
+        // loaded, where Python raises, is a protocol violation.
         match rns_core::transport::tunnel::validate_tunnel_synthesize_data(packet.data()) {
             Ok(validated) => {
                 let now = time::now();
@@ -2476,13 +2498,10 @@ impl Driver {
                 self.dispatch_all(tunnel_actions);
             }
             Err(rns_core::transport::tunnel::TunnelError::InvalidPublicKey) => {
-                log::debug!(
-                    "Invalid tunnel synthesis packet on {:?}",
-                    receiving_interface
+                self.tunnel_synthesis_violation(
+                    receiving_interface,
+                    "Invalid tunnel synthesis packet",
                 );
-                if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
-                    entry.stats.protocol_violations += 1;
-                }
             }
             // Upstream 3281e283, effective since 56b23c48: a bad signature
             // tears the interface down.
@@ -2493,7 +2512,17 @@ impl Driver {
                 );
                 self.teardown_interface(receiving_interface);
             }
-            Err(e) => log::debug!("Ignoring tunnel synthesis: {}", e),
+            // The length was checked above.
+            Err(rns_core::transport::tunnel::TunnelError::InvalidLength) => {}
+        }
+    }
+
+    /// Count a protocol violation by a tunnel synthesis on `interface`, as
+    /// upstream's handler does with `Interface.protocol_violation`.
+    fn tunnel_synthesis_violation(&mut self, interface: InterfaceId, description: &str) {
+        if let Some(entry) = self.interfaces.get_mut(&interface) {
+            entry.stats.protocol_violations += 1;
+            log::debug!("Protocol violation on {}: {}", entry.info.name, description);
         }
     }
 
