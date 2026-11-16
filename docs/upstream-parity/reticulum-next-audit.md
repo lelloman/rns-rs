@@ -66,7 +66,7 @@ Dispositions are provisional until each mapping commit lands.
 | 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Integrated | `header_1_announce_without_transport_room_counts_a_protocol_violation` |
 | 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Structurally covered | No forked instances (supervisor children are executed, not forked); withdrawal only after a shared-instance registration (documented on `withdraw_from_shared_instance`) |
 | 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Integrated | `tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation`, `a_longer_tunnel_synthesis_within_the_mdu_is_accepted`, `an_interface_takes_only_one_tunnel_synthesis`, `longer_synthesis_validates_up_to_the_mdu` |
-| 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Needs coordinated port (with 13) | |
+| 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Integrated | `tunnel_synthesis_is_answered_and_both_ends_learn_the_other`, `a_synthesis_without_an_extension_is_not_answered`, `an_invalid_synthesis_extension_is_a_protocol_violation`, `tunnel_extension` unit tests, `the_signature_covers_the_extension`, RPC pickle assertions, regenerated `tunnels` rnstatus fixture; interop `python_rns_receives_tunnel_synthesis_from_rust_client` against `884f109b` and `c850cdac` |
 | 15 | `51fa8413277ef7308925aef610e409f9af0d9c3b` | Enabled stamp generation | Needs port | |
 | 16 | `fd36a97220a40383ce7f0a1d0f40bc7043f4494f` | Updated version | Needs decision | |
 | 17 | `884f109b2b821638c7addd456a52a2cd5bb8c5b1` | Fixed missing wanted destination type for interface discovery | Needs port | |
@@ -480,16 +480,71 @@ report `rem_impl`, `rem_vers`, `rem_is_tn`, `rem_dst_cost` and `rem_pr_cost`
 as plain hex plus `Rem.Vers.` and `Rem.Csts.` lines.
 
 **Rust applicability:** A wire format change. A Python 1.6.1 client's
-synthesis is longer than the 1.6.0 layout, which rns-rs currently ignores, so
-1.6.1 clients get no tunnel on rns-rs servers until this is ported. rns-rs
-synthesis without an extension is still accepted by 1.6.1, but gets no reverse
-synthesis. Needs the extension encoder and validator (sharing the discovery
-constants and name sanitizing in `common/discovery.rs`), reverse synthesis,
-the new interface state, stats and RPC keys, and `rnstatus` output.
+synthesis is longer than the 1.6.0 layout; since commit 13 rns-rs accepts the
+length, and now it reads the extension. Python before 1.6.1 requires the
+exact 1.6.0 length, so it ignores a synthesis with an extension, from a 1.6.1
+Python client or an rns-rs client alike. That follows upstream, but it means
+older Python servers record no tunnel from rns-rs clients any more, as they
+did from `1df27919` until here.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:**
 
-**Final disposition:** Needs coordinated port (with 13).
+- rns-core: `build_tunnel_synthesize_data` takes the extension, signs it with
+  the fixed fields and appends it after the signature;
+  `validate_tunnel_synthesize_data` returns it and verifies the signature over
+  it. The engine records `synthesis_emitted` and each interface's
+  `RemoteTransportInfo` (implementation, version components, transport
+  status, quantized destination and path request costs);
+  `synthesize_tunnel(.., extension, reverse, ..)` records a local tunnel only
+  for a forward synthesis; `reset_tunnel_synthesis` clears an interface's
+  remote transport, report and received and emitted flags.
+- rns-net `common::tunnel_extension`: `encode` writes upstream's `ext_info`
+  map in its key order with rns-rs's implementation name and version as
+  interface discovery announces them, transport status, and the interface's
+  effective destination and path request costs. `decode` checks it as
+  upstream: undecodable, not a map, each missing field, the version
+  (`version_tuple`, now in `common::discovery`), the implementation name
+  (already sanitized), float costs and a boolean status, each with upstream's
+  violation text. Costs are quantized; a non-finite cost, where upstream's
+  quantization raises, is its parsing exception.
+- Driver: a synthesis with an extension records the report, or counts the
+  violation and stops before any tunnel; a node that has not emitted a
+  synthesis on the interface answers with a reverse one. The tunnel is
+  attached only where no local tunnel exists, so a client that receives the
+  answer learns the remote transport without attaching the server's tunnel,
+  as upstream's `if not interface.local_tunnel_id` does. A dialing interface
+  resets its synthesis state on each connect before synthesizing; upstream
+  resets the remote transport and received flag and leaves the report until
+  the next one overwrites it, which this does not wait for.
+- Stats: `SingleInterfaceStat::remote_transport_info`, `None` on a shared
+  medium; RPC carries `rem_impl`, `rem_vers` (a list, which Python reads as
+  upstream's tuple), `rem_is_tn`, `rem_dst_cost` and `rem_pr_cost`.
+- `rnstatus -T`: the tunnel id in plain hex, and for an interface with a
+  tunnel `Rem.Tr.ID`, `Rem.Vers.` and `Rem.Csts.`, as upstream prints them.
+  Upstream indexes the new keys directly and would fail on an instance that
+  predates them; a missing key reads as `None` here. The `tunnels` fixture
+  was regenerated with upstream's own `rnstatus` at `884f109b` (generator
+  updated with remote reports and a tunnel without one); only that case's
+  output changed, so the range has no other `rnstatus` difference.
+
+Tests: `tunnel_synthesis_is_answered_and_both_ends_learn_the_other` (the
+server records the client and answers, the client records the server without
+answering or attaching a tunnel, stats report it, a reconnect resets it),
+`a_synthesis_without_an_extension_is_not_answered`,
+`an_invalid_synthesis_extension_is_a_protocol_violation`, the
+`tunnel_extension` unit tests (round trip, upstream's map, every violation),
+`the_signature_covers_the_extension`, the RPC pickle assertions and the
+`rnstatus` fixture. Commit 13's tests now build a short synthesis below the
+fixed fields; its `a_longer_tunnel_synthesis_within_the_mdu_is_accepted`,
+which appended unsigned bytes, is replaced by the signed round trip. Live
+interop: `python_rns_receives_tunnel_synthesis_from_rust_client` now checks
+that Python 1.6.1 records the Rust client's tunnel and answers, and that the
+Rust client records Python's transport identity and `RNS` implementation; on
+Python without the extension it checks the synthesis is ignored. Passed
+against exports of `884f109b` and `c850cdac`. `docs/rnstatus.md` describes
+the exchange, the new lines and the older-Python behavior.
+
+**Final disposition:** Integrated.
 
 ### 15. `51fa8413` — Enabled stamp generation
 

@@ -1168,6 +1168,9 @@ impl Driver {
         // interface: before the callback and the `InterfaceUp` hook, whose
         // injected actions are dispatched at once.
         if wants_tunnel {
+            // Upstream b7a93b9b: a dialing interface starts each connection
+            // with no remote transport and no synthesis received.
+            self.engine.reset_tunnel_synthesis(id);
             self.synthesize_tunnel_for_interface(id);
         }
         if came_up {
@@ -2490,12 +2493,37 @@ impl Driver {
                     self.teardown_interface(receiving_interface);
                     return;
                 }
+                // Upstream b7a93b9b: the extension tells what the remote
+                // node is. An invalid one is a protocol violation and no
+                // tunnel. A node that has not synthesized on the interface
+                // answers with a synthesis of its own.
+                if !validated.extension.is_empty() {
+                    match crate::common::tunnel_extension::decode(&validated.extension) {
+                        Ok(info) => {
+                            self.engine
+                                .set_remote_transport_info(receiving_interface, info);
+                        }
+                        Err(description) => {
+                            self.tunnel_synthesis_violation(receiving_interface, description);
+                            return;
+                        }
+                    }
+                    if !self.engine.synthesis_emitted(&receiving_interface) {
+                        self.send_tunnel_synthesis(receiving_interface, true);
+                    }
+                }
+                // The side that synthesized the interface's tunnel itself
+                // only learns the remote transport; the other side attaches
+                // the remote tunnel to the interface.
+                let attach = self.engine.local_tunnel_id(&receiving_interface).is_none();
                 self.engine
                     .set_remote_transport(receiving_interface, remote);
-                let tunnel_actions =
-                    self.engine
-                        .handle_tunnel(validated.tunnel_id, receiving_interface, now);
-                self.dispatch_all(tunnel_actions);
+                if attach {
+                    let tunnel_actions =
+                        self.engine
+                            .handle_tunnel(validated.tunnel_id, receiving_interface, now);
+                    self.dispatch_all(tunnel_actions);
+                }
             }
             Err(rns_core::transport::tunnel::TunnelError::InvalidPublicKey) => {
                 self.tunnel_synthesis_violation(
@@ -2530,12 +2558,30 @@ impl Driver {
     ///
     /// Called when an interface with `wants_tunnel` comes up.
     pub(crate) fn synthesize_tunnel_for_interface(&mut self, interface: InterfaceId) {
-        if let Some(ref identity) = self.transport_identity {
-            let actions = self
-                .engine
-                .synthesize_tunnel(identity, interface, &mut self.rng);
-            self.dispatch_all(actions);
-        }
+        self.send_tunnel_synthesis(interface, false);
+    }
+
+    /// Send a synthesis on `interface`, with this node's extension (upstream
+    /// b7a93b9b): its implementation, version and transport status, and the
+    /// interface's destination and path request stamp costs. A `reverse`
+    /// synthesis answers one received on the interface.
+    fn send_tunnel_synthesis(&mut self, interface: InterfaceId, reverse: bool) {
+        let Some(ref identity) = self.transport_identity else {
+            return;
+        };
+        let Some(info) = self.engine.interface_info(&interface) else {
+            return;
+        };
+        let requirements = self.engine.stamp_requirements();
+        let extension = crate::common::tunnel_extension::encode(
+            self.engine.transport_enabled(),
+            info.stamp_costs.destination_cost(&requirements),
+            info.stamp_costs.pr_cost(&requirements),
+        );
+        let actions =
+            self.engine
+                .synthesize_tunnel(identity, interface, &extension, reverse, &mut self.rng);
+        self.dispatch_all(actions);
     }
 
     /// Emit a path request for a destination, as `Transport.request_path`

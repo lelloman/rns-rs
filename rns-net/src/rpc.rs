@@ -2336,6 +2336,7 @@ fn radio_stats_to_pickle(s: &SingleInterfaceStat, dict: &mut Vec<(PickleValue, P
 }
 
 fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
+    let remote_info = s.remote_transport_info.as_ref();
     let mut dict = vec![
         (
             PickleValue::String("id".into()),
@@ -2362,6 +2363,45 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String("remote_transport_id".into()),
             s.remote_transport_id
                 .map(|identity_hash| PickleValue::Bytes(identity_hash.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ),
+        // Upstream b7a93b9b: what the remote transport node reported in its
+        // synthesis extension, `None` when unknown or on a shared medium.
+        (
+            PickleValue::String("rem_impl".into()),
+            remote_info
+                .map(|info| PickleValue::String(info.implementation.clone()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("rem_vers".into()),
+            remote_info
+                .map(|info| {
+                    PickleValue::List(
+                        info.version
+                            .iter()
+                            .map(|component| PickleValue::Int(i64::from(*component)))
+                            .collect(),
+                    )
+                })
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("rem_is_tn".into()),
+            remote_info
+                .map(|info| PickleValue::Bool(info.is_transport))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("rem_dst_cost".into()),
+            remote_info
+                .map(|info| PickleValue::Float(info.destination_cost.as_f64()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("rem_pr_cost".into()),
+            remote_info
+                .map(|info| PickleValue::Float(info.pr_cost.as_f64()))
                 .unwrap_or(PickleValue::None),
         ),
         (
@@ -4676,6 +4716,7 @@ mod tests {
                             parent_display_name: None,
                             tunnel_id: None,
                             remote_transport_id: None,
+                            remote_transport_info: None,
                             status: true,
                             mode: 1,
                             gravity: -2,
@@ -5376,6 +5417,13 @@ mod tests {
                 parent_display_name: None,
                 tunnel_id: Some([0x5A; 32]),
                 remote_transport_id: Some([0x6B; 16]),
+                remote_transport_info: Some(rns_core::transport::tunnel::RemoteTransportInfo {
+                    implementation: "RNS".into(),
+                    version: vec![1, 6, 1],
+                    is_transport: true,
+                    destination_cost: rns_core::stamp::StampCost::from_f64(23.5),
+                    pr_cost: rns_core::stamp::StampCost::from_f64(15.8),
+                }),
                 status: true,
                 mode: 1,
                 gravity: -2,
@@ -5625,6 +5673,25 @@ mod tests {
         assert_eq!(
             ifaces[0].get("remote_transport_id").unwrap().as_bytes(),
             Some(&[0x6B; 16][..])
+        );
+        // Upstream b7a93b9b: what the remote transport reported.
+        assert_eq!(ifaces[0].get("rem_impl").unwrap().as_str(), Some("RNS"));
+        assert_eq!(
+            ifaces[0].get("rem_vers"),
+            Some(&PickleValue::List(vec![
+                PickleValue::Int(1),
+                PickleValue::Int(6),
+                PickleValue::Int(1)
+            ]))
+        );
+        assert_eq!(ifaces[0].get("rem_is_tn"), Some(&PickleValue::Bool(true)));
+        assert_eq!(
+            ifaces[0].get("rem_dst_cost"),
+            Some(&PickleValue::Float(23.5))
+        );
+        assert_eq!(
+            ifaces[0].get("rem_pr_cost"),
+            Some(&PickleValue::Float(4045.0 / 256.0))
         );
         // Upstream 9b6b724b: the tunnel id, bytes or None.
         assert_eq!(

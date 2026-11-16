@@ -8,6 +8,7 @@ pub mod interface_stats;
 pub mod link_manager;
 pub mod management;
 pub mod time;
+pub mod tunnel_extension;
 
 /// Hash map for hot per-packet lookups keyed by link ids and hashes. std's
 /// SipHash dominated these lookups; foldhash is several times cheaper and
