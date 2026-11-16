@@ -215,6 +215,9 @@ anything:
   The initiator applies the same check to `responder_public` in
   `UPGRADE_READY` before punching. Out-of-range requests receive
   `UPGRADE_REJECT` with reason `0x01`.
+- **Not a facilitator.** `initiator_public` must not be the facilitator
+  named in the request or one of the responder's own probe servers
+  (reason `0x01`).
 - **Pacing.** At most one upgrade request per link is taken up per 60 seconds,
   at most 4 responder sessions run node-wide at once, and only one session at a
   time punches toward a given address. Requests over these limits receive
@@ -248,11 +251,24 @@ The hole punch procedure:
    link key, `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-v1")`.
 2. Packets are sent at a regular interval (e.g. every 100ms) for a bounded
    duration (e.g. 10 seconds). rns-rs also caps a session at 128 punch packets
-   and 128 acknowledgements.
+   and 128 acknowledgements, sends to at most 4 candidate endpoints (today
+   only the one the peer signalled), and never to an unspecified, multicast
+   or broadcast address. Until a valid punch or acknowledgement has arrived
+   from an endpoint's IP, that endpoint gets a burst of 16 packets and then
+   one a second, at most 25 in the 10 seconds (see
+   [Reflection](#reflection)).
 3. The first received packet from the peer confirms the hole punch succeeded.
    rns-rs only accepts punch and acknowledgement packets whose source IP
    matches the peer endpoint being punched (the port may differ).
 4. If no packet is received within the timeout, the hole punch has failed.
+
+Before it punches, each side also refuses a peer endpoint that is a
+facilitator (the one its probe used, or any it has configured), its own
+mapping as its probe saw it, one of its own listening ports (its probe
+server) at its own public address, or of another address family than that
+mapping. The punch then fails as if it had timed out (`0x10`). Another port
+at the node's own public address is accepted: it is a peer behind the same
+NAT.
 
 On failure, the protocol ends gracefully. The existing Reticulum link continues
 unchanged.
@@ -396,6 +412,29 @@ probes it but does not know which peers are trying to connect to each other
 facilitator could return a wrong address, but this would simply cause the hole
 punch to fail — it cannot redirect traffic since the Reticulum link's
 end-to-end encryption and identity verification would detect any man-in-the-middle.
+
+<a id="reflection"></a>
+**Reflection**: The facilitator and the two public endpoints are named by
+the peers themselves, and nothing can authenticate them: the facilitator
+is stateless and unauthenticated, and it cannot vouch for the address it
+saw for the other side. A peer could therefore try to make a node send UDP
+to a third party. What such a target can receive is bounded instead:
+
+- the endpoint checks of Phase 2 (globally routable unicast only, never
+  loopback; private, shared, link-local and unique-local ranges only with
+  `direct_connect_allow_private_endpoints`, meant for LAN deployments where
+  every host is reachable anyway; never a facilitator or the node itself);
+- the pacing of Phase 2 (one request per link per 60 seconds, 4 responder
+  sessions node-wide, one session per target address);
+- per session, one probe request (21 bytes, or 20 for STUN) to the named
+  facilitator, and at most 25 punch packets of 56 bytes (about 1.4 KB) to a
+  target that never answers with a packet authenticated by the session's
+  punch token. Only a target that does answer, which is then the peer,
+  gets the full rate of the punch.
+
+Loopback is always refused because it would make the node send to services
+on its own host; link-local addresses are only meaningful on the local
+segment and are treated as private.
 
 **Encryption**: The direct UDP channel carries standard Reticulum packets, which
 are already encrypted. The `DirectUdpInterface` does not add or remove any
