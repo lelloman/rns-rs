@@ -30,6 +30,17 @@ includes an example of every interface type.
 As upstream, an interface section runs only with `enabled = yes` (or
 `interface_enabled = yes`); without either it is skipped.
 
+The options every interface takes are converted as upstream converts them:
+integers (`gravity`, `hop_limiter`, `ifac_size`, `bitrate`,
+`announce_rate_*`, `ic_max_held_announces`), numbers (`destination_cost`,
+`pr_cost`, `announce_cap`, the `ic_*` and `ec_*` timings) and booleans
+(`enabled`, `ingress_control`, `recursive_prs`, `discoverable` and the
+like), and on a discoverable interface its discovery options. A value that
+does not convert, in any interface section, disabled ones included, stops
+the node from starting with upstream's message, `The interface "NAME" could
+not be created. Check your configuration file for errors!`, followed by the
+reason. `announce_interval` is in minutes.
+
 Interface types: `AutoInterface`, `TCPClientInterface`, `TCPServerInterface`,
 `UDPInterface`, `SerialInterface`, `KISSInterface`, `AX25KISSInterface`,
 `PipeInterface`, `RNodeInterface`, `BackboneInterface`, `I2PInterface`, and

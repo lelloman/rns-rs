@@ -584,7 +584,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
                     iface_name,
                     kvs,
                     std::mem::take(&mut current_iface_subinterfaces),
-                ));
+                )?);
             }
             // Finalize previous hook subsection if any
             if let (Some(hook_name), Some(kvs)) =
@@ -619,7 +619,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
                     iface_name,
                     kvs,
                     std::mem::take(&mut current_iface_subinterfaces),
-                ));
+                )?);
             }
             // Finalize previous hook subsection if any
             if let (Some(hook_name), Some(kvs)) =
@@ -682,7 +682,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
             iface_name,
             kvs,
             current_iface_subinterfaces,
-        ));
+        )?);
     }
     if let (Some(hook_name), Some(kvs)) = (current_hook_name.take(), current_hook_kvs.take()) {
         hooks.push(build_parsed_hook(hook_name, kvs));
@@ -804,11 +804,135 @@ fn parse_usize_option(
     Ok(Some(parsed))
 }
 
+/// Interface options upstream's `Reticulum._synthesize_interface` reads with
+/// ConfigObj's `as_int`.
+const INTERFACE_INT_OPTIONS: &[&str] = &[
+    "gravity",
+    "hop_limiter",
+    "ifac_size",
+    "ic_max_held_announces",
+    "bitrate",
+    "announce_rate_target",
+    "announce_rate_grace",
+    "announce_rate_penalty",
+];
+
+/// Interface options it reads with `as_float`.
+const INTERFACE_FLOAT_OPTIONS: &[&str] = &[
+    "destination_cost",
+    "pr_cost",
+    "ic_burst_hold",
+    "ic_burst_freq_new",
+    "ic_burst_freq",
+    "ic_pr_burst_freq_new",
+    "ic_pr_burst_freq",
+    "ec_pr_freq",
+    "ic_new_time",
+    "ic_burst_penalty",
+    "ic_held_release_interval",
+    "announce_cap",
+];
+
+/// Interface options it reads with `as_bool`.
+const INTERFACE_BOOL_OPTIONS: &[&str] = &[
+    "ingress_control",
+    "egress_control",
+    "bootstrap_only",
+    "recursive_prs",
+    "announces_from_internal",
+    "announces_to_internal",
+    "ignore_config_warnings",
+    "discoverable",
+];
+
+/// Discovery options it reads, with these conversions, once `discoverable`
+/// is true.
+const DISCOVERY_INT_OPTIONS: &[&str] = &[
+    "announce_interval",
+    "discovery_frequency",
+    "discovery_bandwidth",
+    "discovery_modulation",
+];
+const DISCOVERY_FLOAT_OPTIONS: &[&str] =
+    &["discovery_stamp_value", "latitude", "longitude", "height"];
+const DISCOVERY_BOOL_OPTIONS: &[&str] = &["discovery_encrypt", "publish_ifac"];
+
+/// Check an interface section's generic options as upstream converts them.
+/// Upstream raises on a value `as_int`, `as_float` or `as_bool` cannot
+/// convert, and `_synthesize_interface` then logs that the interface could
+/// not be created and stops the instance (`RNS.panic`). It converts every
+/// generic option before it checks whether the interface is enabled, so a
+/// disabled section is checked too; `outgoing` only once the interface
+/// exists.
+fn check_interface_options(name: &str, kvs: &HashMap<String, String>) -> Result<(), ConfigError> {
+    let fail = |exception: String| {
+        Err(ConfigError::Parse(format!(
+            "The interface \"{name}\" could not be created. Check your configuration file \
+             for errors! The contained exception was: {exception}"
+        )))
+    };
+    let as_int = |key: &str| -> Result<(), ConfigError> {
+        match kvs.get(key) {
+            Some(value) if parse_config_int(value).is_none() => {
+                fail(format!("invalid literal for int() with base 10: '{value}'"))
+            }
+            _ => Ok(()),
+        }
+    };
+    let as_float = |key: &str| -> Result<(), ConfigError> {
+        match kvs.get(key) {
+            Some(value) if parse_config_float(value).is_none() => {
+                fail(format!("could not convert string to float: '{value}'"))
+            }
+            _ => Ok(()),
+        }
+    };
+    let as_bool = |key: &str| -> Result<Option<bool>, ConfigError> {
+        match kvs.get(key) {
+            None => Ok(None),
+            Some(value) => match parse_bool(value.trim()) {
+                Some(parsed) => Ok(Some(parsed)),
+                None => fail(format!("Value \"{value}\" is neither True nor False")).map(|()| None),
+            },
+        }
+    };
+
+    for key in INTERFACE_INT_OPTIONS {
+        as_int(key)?;
+    }
+    for key in INTERFACE_FLOAT_OPTIONS {
+        as_float(key)?;
+    }
+    for key in INTERFACE_BOOL_OPTIONS {
+        as_bool(key)?;
+    }
+    if as_bool("discoverable")? == Some(true) {
+        for key in DISCOVERY_INT_OPTIONS {
+            as_int(key)?;
+        }
+        for key in DISCOVERY_FLOAT_OPTIONS {
+            as_float(key)?;
+        }
+        for key in DISCOVERY_BOOL_OPTIONS {
+            as_bool(key)?;
+        }
+    }
+    // `("interface_enabled" in c and c.as_bool(..) == True) or ("enabled"
+    // in c and c.as_bool(..) == True)`: `enabled` is only converted when
+    // `interface_enabled` did not enable the interface.
+    let enabled = as_bool("interface_enabled")? == Some(true) || as_bool("enabled")? == Some(true);
+    if enabled {
+        as_bool("outgoing")?;
+    }
+    Ok(())
+}
+
 fn build_parsed_interface(
     name: String,
     mut kvs: HashMap<String, String>,
     subinterfaces: Vec<ParsedSubinterface>,
-) -> ParsedInterface {
+) -> Result<ParsedInterface, ConfigError> {
+    check_interface_options(&name, &kvs)?;
     let interface_type = kvs.remove("type").unwrap_or_default();
     // As upstream: an interface runs only when `interface_enabled` or
     // `enabled` says so; without either it is skipped.
@@ -824,14 +948,14 @@ fn build_parsed_interface(
         .or_else(|| kvs.remove("mode"))
         .unwrap_or_else(|| "full".into());
 
-    ParsedInterface {
+    Ok(ParsedInterface {
         name,
         interface_type,
         enabled,
         mode,
         params: kvs,
         subinterfaces,
-    }
+    })
 }
 
 fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHook {
@@ -3241,6 +3365,46 @@ direct_connect_policy = identified_only
         assert!(!filter.allows(&destination_type("nomadnetwork.node"), true));
         assert!(filter.allows(&destination_type("lxmf.delivery"), false));
         assert!(!filter.allows(&destination_type("rncp.receive"), false));
+    }
+
+    #[test]
+    fn interface_options_are_converted_as_upstream_converts_them() {
+        // Upstream's as_int, as_float and as_bool raise on a value they
+        // cannot convert, and the interface is not created; the instance
+        // stops. Disabled sections are converted too.
+        let section = |options: &str| {
+            parse(&format!(
+                "[interfaces]\n  [[Iface]]\n    type = TCPClientInterface\n{options}"
+            ))
+        };
+        let refused = |options: &str| match section(options) {
+            Err(ConfigError::Parse(message)) => message,
+            other => panic!("{options:?} should be refused, got {other:?}"),
+        };
+        assert!(section("    enabled = yes\n    gravity = -3\n    announce_cap = 2.5\n").is_ok());
+        assert_eq!(
+            refused("    enabled = yes\n    gravity = high\n"),
+            "The interface \"Iface\" could not be created. Check your configuration file for \
+             errors! The contained exception was: invalid literal for int() with base 10: 'high'"
+        );
+        assert!(refused("    enabled = no\n    hop_limiter = 2.5\n").contains("int()"));
+        assert!(refused("    enabled = yes\n    pr_cost = cheap\n").contains("float: 'cheap'"));
+        assert!(refused("    enabled = yes\n    recursive_prs = maybe\n")
+            .contains("Value \"maybe\" is neither True nor False"));
+
+        // Discovery options are only converted on a discoverable interface.
+        assert!(section("    enabled = yes\n    announce_interval = soon\n").is_ok());
+        assert!(refused(
+            "    enabled = yes\n    discoverable = yes\n    announce_interval = soon\n"
+        )
+        .contains("'soon'"));
+
+        // `enabled` is only converted when `interface_enabled` did not
+        // enable the interface, and `outgoing` only on an enabled one.
+        assert!(section("    interface_enabled = yes\n    enabled = perhaps\n").is_ok());
+        assert!(refused("    interface_enabled = no\n    enabled = perhaps\n").contains("perhaps"));
+        assert!(section("    enabled = no\n    outgoing = sometimes\n").is_ok());
+        assert!(refused("    enabled = yes\n    outgoing = sometimes\n").contains("sometimes"));
     }
 
     #[test]
