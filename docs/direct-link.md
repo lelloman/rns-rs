@@ -71,7 +71,9 @@ curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/api/direct_
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/link_events
 ```
 
-Watch `/api/link_events` for `direct_established` or `direct_failed`. Once
+Watch `/api/link_events` for `direct_established` or `direct_failed` (its
+`reason_code` is listed under
+[Failure reasons](direct-link-protocol.md#failure-reasons)). Once
 established, the link's traffic goes over the direct UDP interface, which
 carries nothing but that link and is removed with it. If the direct path dies
 (no keepalive for 15 seconds, the link going stale, or the link's channel

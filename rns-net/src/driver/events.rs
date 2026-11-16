@@ -2118,6 +2118,10 @@ impl Driver {
                             "Cannot propose direct connect: no derived key for link {:02x?}",
                             &link_id[..4]
                         );
+                        self.callbacks.on_direct_connect_failed(
+                            rns_core::types::LinkId(link_id),
+                            rns_core::holepunch::types::FAIL_NOT_STARTED,
+                        );
                     }
                 }
                 Event::BlackholeDirectPath { link_id } => {
