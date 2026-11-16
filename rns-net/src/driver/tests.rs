@@ -16522,3 +16522,72 @@ fn direct_upgrade_keeps_unacknowledged_channel_messages() {
     );
     assert_eq!(outstanding(&driver), Some(1));
 }
+
+/// A driver holding one end of an active link, proposing a direct
+/// connection on it itself, and the peer's crossing UPGRADE_REQUEST.
+fn glare_driver(link_initiator: bool) -> (Driver, [u8; 16], Vec<u8>) {
+    let mut driver = new_test_driver();
+    let mut initiator = crate::link_manager::LinkManager::new();
+    let (responder, link_id) = establish_link(&mut initiator, [0xDD; 16], InterfaceId(1));
+    driver.link_manager = if link_initiator { initiator } else { responder };
+    let mut manager = crate::holepunch::orchestrator::HolePunchManager::new(
+        vec!["127.0.0.1:4343".parse().unwrap()],
+        rns_core::holepunch::ProbeProtocol::Rnsp,
+        None,
+    );
+    manager.set_spawn_workers(false);
+    manager.set_policy(HolePunchPolicy::AcceptAll);
+    manager.set_allow_private_endpoints(true);
+    driver.holepunch_manager = manager;
+    let derived_key = driver.link_manager.get_derived_key(&link_id).unwrap();
+    let tx = driver.get_event_sender();
+    let _ = driver
+        .holepunch_manager
+        .propose_to_supported(link_id, &derived_key, &mut OsRng, &tx);
+    assert!(driver.holepunch_manager.proposing(&link_id));
+
+    // The peer's request, made with the same link key.
+    let mut peer = rns_core::holepunch::HolePunchEngine::new(
+        link_id,
+        Some(rns_core::holepunch::Endpoint {
+            addr: vec![10, 0, 0, 1],
+            port: 4343,
+        }),
+        rns_core::holepunch::ProbeProtocol::Rnsp,
+    );
+    peer.propose(&derived_key, 1.0, &mut OsRng).unwrap();
+    let request = match &peer
+        .endpoints_discovered(
+            rns_core::holepunch::Endpoint {
+                addr: vec![10, 0, 0, 2],
+                port: 41000,
+            },
+            2.0,
+        )
+        .unwrap()[0]
+    {
+        rns_core::holepunch::HolePunchAction::SendSignal { payload, .. } => {
+            rns_core::holepunch::encode_signal(rns_core::holepunch::UPGRADE_REQUEST, payload)
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+    (driver, link_id, request)
+}
+
+#[test]
+fn crossing_proposals_keep_the_link_initiators() {
+    let (mut driver, link_id, request) = glare_driver(true);
+    driver.handle_direct_link_signal(link_id, &request);
+    // The link initiator keeps its own proposal and takes up nothing.
+    assert!(driver.holepunch_manager.proposing(&link_id));
+    assert_eq!(driver.holepunch_manager.session_count(), 1);
+}
+
+#[test]
+fn crossing_proposals_make_the_link_responder_answer() {
+    let (mut driver, link_id, request) = glare_driver(false);
+    driver.handle_direct_link_signal(link_id, &request);
+    // The link responder drops its proposal and answers the peer's.
+    assert!(!driver.holepunch_manager.proposing(&link_id));
+    assert_eq!(driver.holepunch_manager.session_count(), 1);
+}

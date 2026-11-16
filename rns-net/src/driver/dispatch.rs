@@ -2634,6 +2634,24 @@ impl Driver {
                 self.dispatch_holepunch_actions(replay);
                 return;
             }
+            // Both sides proposed at once: the link initiator's proposal
+            // goes ahead, and the other side answers it as the responder.
+            // The initiator leaves the peer's request unanswered: the peer
+            // drops its own proposal when ours reaches it.
+            if self.holepunch_manager.proposing(&link_id) {
+                if self.link_manager.is_link_initiator(&link_id) == Some(true) {
+                    log::debug!(
+                        "Both sides proposed on link {:02x?}; keeping ours",
+                        &link_id[..4]
+                    );
+                    return;
+                }
+                log::debug!(
+                    "Both sides proposed on link {:02x?}; answering theirs",
+                    &link_id[..4]
+                );
+                self.holepunch_manager.yield_proposal(&link_id);
+            }
             let peer_identity = self.link_manager.remote_identity_hash(&link_id);
             let Some(accept) = self.authorize_direct_connect_proposal(
                 configured_policy,
