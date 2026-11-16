@@ -109,26 +109,18 @@ impl DestinationTypeRequester {
         let Some((addr, auth_key)) = &self.shared_rpc else {
             return false;
         };
-        let request = PickleValue::Dict(vec![
+        call_destination_type_rpc(addr, auth_key, &self.destination_type_request(key, value))
+    }
+
+    fn destination_type_request(&self, key: &str, value: PickleValue) -> PickleValue {
+        PickleValue::Dict(vec![
             (PickleValue::String(key.into()), value),
             (
                 PickleValue::String("requester".into()),
                 PickleValue::Bytes(self.requester.to_vec()),
             ),
             (PickleValue::String("signature".into()), PickleValue::None),
-        ]);
-        match RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(&request)) {
-            Ok(response) => response.as_bool() == Some(true),
-            // Debug level: a Python shared instance on Linux serves RPC on
-            // an abstract Unix socket, which this TCP client cannot reach,
-            // and registration only matters when it filters announces.
-            Err(e) => {
-                log::debug!(
-                    "Shared instance RPC failed while setting destination type filters: {e}"
-                );
-                false
-            }
-        }
+        ])
     }
 
     /// Whether this is a shared instance client that knows the instance's
@@ -150,10 +142,52 @@ impl DestinationTypeRequester {
     }
 
     /// Withdraw this application's registrations from the shared instance,
-    /// as the Python exit handler does.
+    /// as the Python exit handler does. Since upstream 29ce7ca5 the exit
+    /// handler waits at most [`SHARED_RPC_EXIT_TIMEOUT`] for the call, so a
+    /// shared instance that does not answer cannot hold up shutdown; the
+    /// call is left to finish on its own thread.
     pub(crate) fn withdraw_from_shared_instance(&self) {
-        if self.registered.swap(false, Ordering::Relaxed) {
-            self.call_shared_instance("unwants_all_destination_types", PickleValue::Bool(true));
+        if !self.registered.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        let Some((addr, auth_key)) = self.shared_rpc.clone() else {
+            return;
+        };
+        let request =
+            self.destination_type_request("unwants_all_destination_types", PickleValue::Bool(true));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let spawned = thread::Builder::new()
+            .name("rns-withdraw-types".into())
+            .spawn(move || {
+                let _ = done_tx.send(call_destination_type_rpc(&addr, &auth_key, &request));
+            });
+        match spawned {
+            Ok(_) => {
+                if done_rx.recv_timeout(SHARED_RPC_EXIT_TIMEOUT).is_err() {
+                    log::debug!("Shared instance RPC timed out during exit");
+                }
+            }
+            Err(e) => log::debug!("Could not deregister destination types at exit: {e}"),
+        }
+    }
+}
+
+/// How long shutdown waits for the shared instance to withdraw this
+/// application's destination types (upstream `Reticulum.RPC_EXIT_TIMEOUT`,
+/// 29ce7ca5).
+pub(crate) const SHARED_RPC_EXIT_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// One destination type call to a shared instance's RPC server. A failed
+/// call or one the instance does not understand reports `false`.
+fn call_destination_type_rpc(addr: &RpcAddr, auth_key: &[u8; 32], request: &PickleValue) -> bool {
+    match RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(request)) {
+        Ok(response) => response.as_bool() == Some(true),
+        // Debug level: a Python shared instance on Linux serves RPC on an
+        // abstract Unix socket, which this TCP client cannot reach, and
+        // registration only matters when it filters announces.
+        Err(e) => {
+            log::debug!("Shared instance RPC failed while setting destination type filters: {e}");
+            false
         }
     }
 }
@@ -1113,5 +1147,35 @@ mod tests {
         assert_eq!(config.instance_name, "default");
         assert_eq!(config.port, 37428);
         assert_eq!(config.rpc_port, 37429);
+    }
+
+    #[test]
+    fn withdrawing_from_an_unresponsive_shared_instance_is_bounded() {
+        // Upstream 29ce7ca5: the exit handler waits at most
+        // `RPC_EXIT_TIMEOUT` to deregister destination types.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accepts the connection, then never answers the authentication.
+        let held = thread::spawn(move || listener.accept().map(|(stream, _)| stream));
+        let requester = DestinationTypeRequester {
+            shared_client: true,
+            shared_rpc: Some((RpcAddr::Tcp("127.0.0.1".into(), port), [0x11; 32])),
+            registered: AtomicBool::new(true),
+            ..Default::default()
+        };
+
+        let started = std::time::Instant::now();
+        requester.withdraw_from_shared_instance();
+        let waited = started.elapsed();
+        assert!(
+            waited >= SHARED_RPC_EXIT_TIMEOUT,
+            "returned after {waited:?}"
+        );
+        assert!(
+            waited < SHARED_RPC_EXIT_TIMEOUT + Duration::from_secs(2),
+            "waited {waited:?}"
+        );
+        assert!(!requester.registered.load(Ordering::Relaxed));
+        drop(held);
     }
 }
