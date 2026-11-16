@@ -507,6 +507,12 @@ pub const LINK_STALE_GRACE: f64 = 5.0;
 /// Factor to compute stale_time from keepalive
 pub const LINK_STALE_FACTOR: f64 = 2.0;
 
+/// Longest the link watchdog sleeps between two runs (Python
+/// `Link.WATCHDOG_MAX_SLEEP`). It also caps the wait between a link going
+/// stale and its timeout, whatever `rtt * KEEPALIVE_TIMEOUT_FACTOR +
+/// STALE_GRACE` comes to.
+pub const LINK_WATCHDOG_MAX_SLEEP: f64 = 5.0;
+
 /// Traffic timeout factor
 pub const LINK_TRAFFIC_TIMEOUT_FACTOR: f64 = 6.0;
 

@@ -2018,29 +2018,9 @@ impl LinkManager {
                 );
                 out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 if reply {
-                    let flags = PacketFlags {
-                        header_type: constants::HEADER_1,
-                        context_flag: constants::FLAG_UNSET,
-                        transport_type: constants::TRANSPORT_BROADCAST,
-                        destination_type: constants::DESTINATION_LINK,
-                        packet_type: constants::PACKET_TYPE_DATA,
-                    };
-                    if let Ok((raw, _)) = RawPacket::pack_raw_with_hash(
-                        flags,
-                        0,
-                        &link_id,
-                        None,
-                        constants::CONTEXT_KEEPALIVE,
-                        &[0xfe],
-                    ) {
-                        out.push(LinkManagerAction::SendPacket {
-                            raw: raw.into(),
-                            dest_type: constants::DESTINATION_LINK,
-                            attached_interface: None,
-                        });
-                        if let Some(link) = self.links.get_mut(&link_id) {
-                            link.engine.record_outbound(received_at, true);
-                        }
+                    out.extend(Self::keepalive_packet(&link_id, 0xfe));
+                    if let Some(link) = self.links.get_mut(&link_id) {
+                        link.engine.record_outbound(received_at, true);
                     }
                 }
             }
@@ -2419,6 +2399,32 @@ impl LinkManager {
         })
     }
 
+    /// A KEEPALIVE packet: `0xff` is the initiator's probe, `0xfe` the
+    /// responder's answer, as upstream.
+    fn keepalive_packet(link_id: &LinkId, payload: u8) -> Option<LinkManagerAction> {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let (raw, _packet_hash) = RawPacket::pack_raw_with_hash(
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_KEEPALIVE,
+            &[payload],
+        )
+        .ok()?;
+        Some(LinkManagerAction::SendPacket {
+            raw: raw.into(),
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: None,
+        })
+    }
+
     /// Tear down all managed links.
     pub fn teardown_all_links(&mut self) -> Vec<LinkManagerAction> {
         let link_ids: Vec<LinkId> = self.links.keys().copied().collect();
@@ -2449,9 +2455,19 @@ impl LinkManager {
                 None => continue,
             };
 
-            // Tick the engine
+            // Run the engine's watchdog. Like Python's, it asks for the
+            // keepalive probe before it marks the link stale in the same
+            // run, so the probe goes out first and its answer can recover
+            // the link.
             let previous_state = link.engine.state();
             let tick_actions = link.engine.tick(now);
+            if tick_actions
+                .iter()
+                .any(|action| matches!(action, LinkAction::SendKeepalive { .. }))
+            {
+                log::debug!("Link keepalive probe queued: link={:02x?}", &link_id[..4]);
+                all_actions.extend(Self::keepalive_packet(link_id, 0xff));
+            }
             // Python's watchdog sends LINKCLOSE (from either role) right
             // before closing a stale link with reason TIMEOUT, so the peer
             // tears the link down too. Establishment timeouts (PENDING /
@@ -2464,39 +2480,10 @@ impl LinkManager {
             }
             all_actions.extend(self.process_link_actions(link_id, &tick_actions));
 
-            // Check if keepalive is needed
             let link = match self.links.get_mut(link_id) {
                 Some(l) => l,
                 None => continue,
             };
-            if link.engine.needs_keepalive(now) {
-                log::debug!("Link keepalive probe queued: link={:02x?}", &link_id[..4]);
-                // Only initiators reach this branch. Send the upstream 0xff
-                // probe; responders conditionally return 0xfe on receipt.
-                let flags = PacketFlags {
-                    header_type: constants::HEADER_1,
-                    context_flag: constants::FLAG_UNSET,
-                    transport_type: constants::TRANSPORT_BROADCAST,
-                    destination_type: constants::DESTINATION_LINK,
-                    packet_type: constants::PACKET_TYPE_DATA,
-                };
-                if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
-                    flags,
-                    0,
-                    link_id,
-                    None,
-                    constants::CONTEXT_KEEPALIVE,
-                    &[0xff],
-                ) {
-                    all_actions.push(LinkManagerAction::SendPacket {
-                        raw: raw.into(),
-                        dest_type: constants::DESTINATION_LINK,
-                        attached_interface: None,
-                    });
-                    link.engine.record_outbound(now, true);
-                }
-            }
-
             if let Some(channel) = link.channel.as_mut() {
                 let chan_actions = channel.tick(now);
                 let _ = channel;
@@ -2933,6 +2920,10 @@ impl LinkManager {
                 }
                 LinkAction::DataReceived { .. } => {
                     // Data delivery is handled at a higher level
+                }
+                LinkAction::SendKeepalive { .. } => {
+                    // Sent by `tick_at`, which sees the watchdog's actions
+                    // first.
                 }
             }
         }

@@ -1325,6 +1325,35 @@ fn link_send_receipt_names_the_packet_its_proof_carries() {
     transport.shutdown();
 }
 
+/// An idle link over TCP loopback (minimum keepalive 5 s, stale time 10 s)
+/// stays open: the initiator's probes and the responder's conditional
+/// answers must keep both sides from timing it out.
+#[test]
+#[ignore = "keeps a link idle for over a minute"]
+fn idle_fast_link_stays_open() {
+    let (transport, alice_node, alice_rx, bob_node, bob_rx, _, _, _, _, link_id) = setup_link();
+
+    let idle = Duration::from_secs(75);
+    assert_eq!(wait_for_link_closed(&alice_rx, idle), None);
+    assert_eq!(
+        wait_for_link_closed(&bob_rx, Duration::from_millis(100)),
+        None
+    );
+
+    futures::executor::block_on(alice_node.send_on_link(link_id, b"from alice".to_vec(), 0))
+        .expect("Alice's idle link should still be up");
+    let (_, _, data) = wait_for_link_data(&bob_rx, TIMEOUT).expect("Bob should receive data");
+    assert_eq!(data, b"from alice");
+    futures::executor::block_on(bob_node.send_on_link(link_id, b"from bob".to_vec(), 0))
+        .expect("Bob's idle link should still be up");
+    let (_, _, data) = wait_for_link_data(&alice_rx, TIMEOUT).expect("Alice should receive data");
+    assert_eq!(data, b"from bob");
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Direct link establishment (no transport relay node)
 // ═══════════════════════════════════════════════════════════════════════════════

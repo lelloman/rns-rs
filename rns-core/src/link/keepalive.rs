@@ -56,7 +56,9 @@ pub fn should_send_keepalive(last_keepalive: f64, keepalive: f64, now: f64) -> b
 ///
 /// Python's watchdog sleeps `rtt * KEEPALIVE_TIMEOUT_FACTOR + STALE_GRACE`
 /// after marking a link stale; a packet received meanwhile reactivates it,
-/// otherwise the next iteration tears it down with `TIMEOUT`.
+/// otherwise the next iteration tears it down with `TIMEOUT`. Like every
+/// watchdog sleep, the wait is capped at `WATCHDOG_MAX_SLEEP`, which this
+/// value never undercuts.
 pub fn stale_close_timeout(rtt: f64) -> f64 {
     rtt * LINK_KEEPALIVE_TIMEOUT_FACTOR + LINK_STALE_GRACE
 }

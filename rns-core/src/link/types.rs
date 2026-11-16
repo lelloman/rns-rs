@@ -81,6 +81,10 @@ pub enum LinkAction {
         rtt: f64,
         is_initiator: bool,
     },
+    /// The watchdog wants a keepalive probe (`0xff`, context KEEPALIVE)
+    /// sent on the link. Only initiators send them; the engine has already
+    /// recorded it as sent.
+    SendKeepalive { link_id: LinkId },
 }
 
 /// Errors in link operations.
