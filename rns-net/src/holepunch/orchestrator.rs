@@ -48,6 +48,10 @@ struct HolePunchSession {
     last_proposal: f64,
     /// Address the punch thread sends to, once punching has started.
     punch_target: Option<SocketAddr>,
+    /// The facilitator that answered this session's probe, and the
+    /// endpoint it saw for us.
+    facilitator: Option<SocketAddr>,
+    observed: Option<SocketAddr>,
 }
 
 impl HolePunchSession {
@@ -58,6 +62,8 @@ impl HolePunchSession {
             punch_handle: None,
             last_proposal: now,
             punch_target: None,
+            facilitator: None,
+            observed: None,
         }
     }
 
@@ -127,6 +133,9 @@ pub struct HolePunchManager {
     next_interface_id: u64,
     /// Accept private, shared, link-local and unique-local endpoints from peers.
     allow_private_endpoints: bool,
+    /// UDP ports this node listens on (its probe server), never punched
+    /// toward at its own public address.
+    own_ports: Vec<u16>,
     /// Identities whose proposals are accepted whatever the policy.
     allowed_identities: Vec<[u8; 16]>,
     /// Paces inbound upgrade requests per link.
@@ -193,6 +202,7 @@ impl HolePunchManager {
             underlay_mark: None,
             next_interface_id: 50000, // start high to avoid collision with regular interfaces
             allow_private_endpoints: false,
+            own_ports: Vec::new(),
             allowed_identities: Vec::new(),
             inbound_limiter: InboundRequestLimiter::new(INBOUND_REQUEST_WINDOW),
             spawn_workers: true,
@@ -250,6 +260,46 @@ impl HolePunchManager {
 
     pub fn allow_private_endpoints(&self) -> bool {
         self.allow_private_endpoints
+    }
+
+    /// UDP ports this node listens on, which it never punches toward at
+    /// its own public address.
+    pub fn set_own_listen_ports(&mut self, ports: Vec<u16>) {
+        self.own_ports = ports;
+    }
+
+    pub fn own_listen_ports(&self) -> &[u16] {
+        &self.own_ports
+    }
+
+    /// Why `target`, named by the peer, may not be punched toward, or
+    /// `None` if it may: it is a facilitator, this node itself (as its
+    /// probe saw it, or one of its listening ports there), or of another
+    /// address family than the punch socket's mapping.
+    fn punch_target_refusal(
+        &self,
+        target: SocketAddr,
+        facilitator: Option<SocketAddr>,
+        observed: Option<SocketAddr>,
+    ) -> Option<&'static str> {
+        let target = canonical(target);
+        if facilitator
+            .into_iter()
+            .chain(self.probe_addrs.iter().copied())
+            .any(|f| canonical(f) == target)
+        {
+            return Some("a facilitator");
+        }
+        let observed = observed.map(canonical)?;
+        if observed == target
+            || (observed.ip() == target.ip() && self.own_ports.contains(&target.port()))
+        {
+            return Some("this node");
+        }
+        if observed.is_ipv4() != target.is_ipv4() {
+            return Some("of another address family than the probed mapping");
+        }
+        None
     }
 
     /// Whether a peer-supplied endpoint may be probed or punched.
@@ -542,6 +592,20 @@ impl HolePunchManager {
                 );
                 return (true, refuse_request(link_id, &payload, REJECT_POLICY));
             };
+            let facilitator = actions.iter().find_map(|a| match a {
+                HolePunchAction::DiscoverEndpoints { probe_addr, .. } => {
+                    endpoint_to_socket_addr(probe_addr)
+                }
+                _ => None,
+            });
+            if let Some(why) = self.punch_target_refusal(initiator_addr, facilitator, None) {
+                log::debug!(
+                    "Refusing hole punch proposal on link {:02x?}: initiator endpoint is {}",
+                    &link_id[..4],
+                    why
+                );
+                return (true, refuse_request(link_id, &payload, REJECT_POLICY));
+            }
             if self.target_in_use(initiator_addr, None) {
                 log::debug!(
                     "Refusing hole punch proposal on link {:02x?}: {} already has a session",
@@ -1157,7 +1221,21 @@ impl HolePunchManager {
         peer_public: &Endpoint,
         punch_token: &[u8; 32],
     ) -> Vec<HolePunchManagerAction> {
-        let peer_addr = self.endpoint_allowed(peer_public);
+        let refusal = self.sessions.get(session_id).and_then(|session| {
+            let target = self.endpoint_allowed(peer_public)?;
+            self.punch_target_refusal(target, session.facilitator, session.observed)
+        });
+        if let Some(why) = refusal {
+            log::warn!(
+                "Not punching session {:02x?}: peer endpoint {:?} is {}",
+                &session_id[..4],
+                peer_public,
+                why
+            );
+        }
+        let peer_addr = self
+            .endpoint_allowed(peer_public)
+            .filter(|_| refusal.is_none());
         let running = self.sessions.values().filter(|s| s.is_punching()).count();
         let target_busy = peer_addr
             .map(|addr| self.target_in_use(addr, Some(session_id)))
@@ -1176,6 +1254,7 @@ impl HolePunchManager {
             Some(a) if !target_busy && running < MAX_CONCURRENT_SESSIONS => a,
             other => {
                 match other {
+                    None if refusal.is_some() => {}
                     None => log::warn!(
                         "Not punching session {:02x?}: peer endpoint {:?} outside the accepted ranges",
                         &session_id[..4],
@@ -1260,6 +1339,8 @@ impl HolePunchManager {
 
         // Store the socket for reuse during punching (same NAT mapping)
         session.socket = Some(socket);
+        session.facilitator = Some(probe_server);
+        session.observed = Some(observed_addr);
 
         // If a different server succeeded than the first configured one,
         // update the engine's facilitator so UPGRADE_REQUEST carries the correct address.
@@ -1440,6 +1521,17 @@ fn convert_engine_actions(
         }
     }
     mgr_actions
+}
+
+/// `addr` with an IPv4-mapped IPv6 address as its IPv4 form.
+fn canonical(addr: SocketAddr) -> SocketAddr {
+    match addr {
+        SocketAddr::V6(v6) => match v6.ip().to_ipv4_mapped() {
+            Some(v4) => SocketAddr::new(v4.into(), v6.port()),
+            None => addr,
+        },
+        v4 => v4,
+    }
 }
 
 /// Convert an Endpoint (from rns-core) to a SocketAddr.
@@ -1675,6 +1767,127 @@ mod tests {
         assert!(session.punch_target.is_none());
         assert!(session.punch_handle.is_none());
         assert_eq!(session.engine.state(), HolePunchState::Failed);
+    }
+
+    #[test]
+    fn request_naming_a_facilitator_as_the_initiator_is_refused() {
+        // The facilitator in the request, and one of ours.
+        for (facilitator, initiator) in [
+            ("1.2.3.4:4343", "1.2.3.4:4343"),
+            ("1.2.3.4:4343", "[::ffff:1.2.3.4]:4343"),
+            ("1.2.3.4:4343", "9.9.9.9:4343"),
+        ] {
+            let mut mgr = HolePunchManager::new(
+                vec!["9.9.9.9:4343".parse().unwrap()],
+                ProbeProtocol::Rnsp,
+                None,
+            );
+            mgr.set_policy(HolePunchPolicy::AcceptAll);
+            mgr.set_spawn_workers(false);
+            let (tx, _rx) = make_tx();
+            let link_id = [0x58; 16];
+            let payload = make_request(link_id, facilitator, initiator, 0x42);
+            let (_, actions) = mgr.handle_signal(
+                link_id,
+                UPGRADE_REQUEST,
+                payload,
+                Some(&test_derived_key()),
+                &tx,
+            );
+            assert_eq!(reject_reason(&actions), Some(REJECT_POLICY), "{initiator}");
+            assert_eq!(mgr.session_count(), 0, "{initiator}");
+        }
+    }
+
+    /// Run an initiator session that probed `observed` through the
+    /// manager's probe server, up to the peer's READY naming `responder`.
+    /// Whether the manager went on to punch.
+    fn punches_toward(mgr: &mut HolePunchManager, observed: &str, responder: &str) -> bool {
+        let (tx, _rx) = make_tx();
+        let link_id = [0x59; 16];
+        let mut rng = make_rng(0x42);
+        mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
+        let session_id = *mgr.link_to_session.get(&link_id).unwrap();
+        let facilitator = mgr.probe_addrs[0];
+        let request = mgr.handle_probe_result(
+            link_id,
+            session_id,
+            observed.parse().unwrap(),
+            UdpSocket::bind("127.0.0.1:0").unwrap(),
+            facilitator,
+        );
+        let request_payload = match &request[0] {
+            HolePunchManagerAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        let mut responder_engine = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
+        let r_actions = responder_engine
+            .handle_signal(
+                UPGRADE_REQUEST,
+                &request_payload,
+                Some(&test_derived_key()),
+                1.0,
+            )
+            .unwrap();
+        let accept = match &r_actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        let ready_actions = responder_engine
+            .endpoints_discovered(ep(responder), 2.0)
+            .unwrap();
+        let ready = match &ready_actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        mgr.handle_signal(link_id, UPGRADE_ACCEPT, accept, None, &tx);
+        let (_, actions) = mgr.handle_signal(link_id, UPGRADE_READY, ready, None, &tx);
+        let session = mgr.sessions.get(&session_id).unwrap();
+        let punching = session.punch_target.is_some();
+        assert_eq!(
+            punching,
+            !actions
+                .iter()
+                .any(|a| matches!(a, HolePunchManagerAction::DirectConnectFailed { .. }))
+        );
+        punching
+    }
+
+    #[test]
+    fn punch_toward_this_node_or_a_facilitator_is_refused() {
+        let manager = || {
+            let mut mgr = HolePunchManager::new(
+                vec!["9.9.9.9:4343".parse().unwrap()],
+                ProbeProtocol::Rnsp,
+                None,
+            );
+            mgr.set_own_listen_ports(vec![4242]);
+            mgr.set_spawn_workers(false);
+            mgr
+        };
+        let observed = "1.2.3.4:41000";
+        // Our own mapping, our probe server at our address, the
+        // facilitator, and an IPv6 peer for an IPv4 mapping.
+        for responder in [
+            "1.2.3.4:41000",
+            "[::ffff:1.2.3.4]:41000",
+            "1.2.3.4:4242",
+            "9.9.9.9:4343",
+            "[2001:4860::1]:52000",
+        ] {
+            assert!(
+                !punches_toward(&mut manager(), observed, responder),
+                "{responder}"
+            );
+        }
+        // Another port at our own address is a peer behind the same NAT,
+        // and any port elsewhere is fine.
+        for responder in ["1.2.3.4:41001", "5.6.7.8:4242", "9.9.9.9:4344"] {
+            assert!(
+                punches_toward(&mut manager(), observed, responder),
+                "{responder}"
+            );
+        }
     }
 
     #[test]

@@ -20,6 +20,15 @@ const PUNCH_DURATION: Duration = Duration::from_secs(10);
 pub const MAX_PUNCH_PACKETS: u32 = 128;
 /// Upper bound on ACK packets sent per session.
 pub const MAX_ACK_PACKETS: u32 = 128;
+/// Most candidate endpoints one punch session sends to; any beyond are
+/// dropped.
+pub const MAX_PUNCH_CANDIDATES: usize = 4;
+/// Punch packets sent at the full rate to an endpoint that has not shown
+/// it is the peer (by sending a valid punch or acknowledgement).
+pub const UNVERIFIED_BURST: u32 = 16;
+/// After its burst, an endpoint that has not answered gets one punch
+/// packet per this interval, enough to keep a NAT mapping toward it open.
+const UNVERIFIED_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Timing and packet budget for one punch session.
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +37,8 @@ struct PunchLimits {
     interval: Duration,
     max_punch_packets: u32,
     max_ack_packets: u32,
+    unverified_burst: u32,
+    unverified_interval: Duration,
 }
 
 const DEFAULT_LIMITS: PunchLimits = PunchLimits {
@@ -35,7 +46,46 @@ const DEFAULT_LIMITS: PunchLimits = PunchLimits {
     interval: PUNCH_INTERVAL,
     max_punch_packets: MAX_PUNCH_PACKETS,
     max_ack_packets: MAX_ACK_PACKETS,
+    unverified_burst: UNVERIFIED_BURST,
+    unverified_interval: UNVERIFIED_INTERVAL,
 };
+
+/// Whether `addr` can be a punch target at all: a unicast address with a
+/// port. Which unicast ranges a peer may name is decided before the punch
+/// starts (see [`super::admission`]).
+fn plausible_target(addr: &SocketAddr) -> bool {
+    let ip = match addr.ip() {
+        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => std::net::IpAddr::V4(v4),
+            None => std::net::IpAddr::V6(v6),
+        },
+        ip => ip,
+    };
+    let unicast = match ip {
+        std::net::IpAddr::V4(v4) => !v4.is_broadcast() && !v4.is_multicast(),
+        std::net::IpAddr::V6(v6) => !v6.is_multicast(),
+    };
+    addr.port() != 0 && !ip.is_unspecified() && unicast
+}
+
+/// The endpoints a punch sends to: plausible targets, without repeats, at
+/// most [`MAX_PUNCH_CANDIDATES`].
+fn punch_candidates(endpoints: Vec<SocketAddr>) -> io::Result<Vec<SocketAddr>> {
+    let mut candidates: Vec<SocketAddr> = Vec::new();
+    for ep in endpoints {
+        if plausible_target(&ep) && !candidates.contains(&ep) {
+            candidates.push(ep);
+        }
+    }
+    candidates.truncate(MAX_PUNCH_CANDIDATES);
+    if candidates.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no endpoint to punch toward",
+        ));
+    }
+    Ok(candidates)
+}
 
 /// Result of a completed hole punch.
 pub struct PunchResult {
@@ -106,6 +156,10 @@ impl PunchHandle {
 /// Punch and ACK packets are only exchanged with sources whose IP matches one
 /// of the given endpoints (the port may differ), and the number of packets
 /// sent per session is capped by [`MAX_PUNCH_PACKETS`] and [`MAX_ACK_PACKETS`].
+/// At most [`MAX_PUNCH_CANDIDATES`] endpoints are used, and an endpoint gets
+/// only [`UNVERIFIED_BURST`] packets, then one a second, until a valid punch
+/// or acknowledgement from its IP shows the peer is there. Unspecified,
+/// multicast and broadcast endpoints are never sent to.
 pub fn start_udp_punch(
     socket: UdpSocket,
     peer_endpoints: Vec<SocketAddr>,
@@ -131,6 +185,8 @@ fn start_udp_punch_with_limits(
     punch_token: [u8; 32],
     limits: PunchLimits,
 ) -> io::Result<PunchHandle> {
+    let all_endpoints =
+        punch_candidates(peer_endpoints.into_iter().chain(local_endpoints).collect())?;
     socket.set_read_timeout(Some(Duration::from_millis(100)))?;
     socket.set_nonblocking(false)?;
 
@@ -138,8 +194,6 @@ fn start_udp_punch_with_limits(
     let cancel = Arc::new(AtomicBool::new(false));
     let status_clone = status.clone();
     let cancel_clone = cancel.clone();
-    let all_endpoints: Vec<SocketAddr> =
-        peer_endpoints.into_iter().chain(local_endpoints).collect();
 
     let handle = thread::Builder::new()
         .name("udp-punch".into())
@@ -191,6 +245,7 @@ fn start_udp_punch_on_loop_with_limits(
     limits: PunchLimits,
 ) -> io::Result<PunchHandle> {
     use std::os::fd::AsRawFd;
+    let endpoints = punch_candidates(endpoints)?;
     socket.set_nonblocking(true)?;
     let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -218,7 +273,7 @@ fn start_udp_punch_on_loop_with_limits(
 /// One punch session's progress: what was sent, and what the peer
 /// confirmed.
 struct PunchState {
-    endpoints: Vec<SocketAddr>,
+    endpoints: Vec<Candidate>,
     session_id: [u8; 16],
     punch_token: [u8; 32],
     limits: PunchLimits,
@@ -232,6 +287,26 @@ struct PunchState {
     first_ack_time: Option<Instant>,
 }
 
+/// One endpoint a punch sends to.
+struct Candidate {
+    addr: SocketAddr,
+    /// A valid punch or acknowledgement came from its IP.
+    verified: bool,
+    sent: u32,
+    last_sent: Option<Instant>,
+}
+
+impl Candidate {
+    /// Whether a punch packet to it is due in the round at `now`.
+    fn due(&self, now: Instant, limits: &PunchLimits) -> bool {
+        self.verified
+            || self.sent < limits.unverified_burst
+            || self.last_sent.is_none_or(|last| {
+                now.saturating_duration_since(last) >= limits.unverified_interval
+            })
+    }
+}
+
 impl PunchState {
     fn new(
         endpoints: Vec<SocketAddr>,
@@ -240,7 +315,15 @@ impl PunchState {
         limits: PunchLimits,
     ) -> Self {
         Self {
-            endpoints,
+            endpoints: endpoints
+                .into_iter()
+                .map(|addr| Candidate {
+                    addr,
+                    verified: false,
+                    sent: 0,
+                    last_sent: None,
+                })
+                .collect(),
             session_id,
             punch_token,
             limits,
@@ -259,17 +342,33 @@ impl PunchState {
         self.start + self.limits.duration
     }
 
-    /// Send a punch packet to every peer endpoint, within the budget.
+    /// Send a punch packet to every peer endpoint that is due one, within
+    /// the budget.
     fn send_round(&mut self, socket: &UdpSocket) {
+        let now = Instant::now();
         let punch_pkt = build_punch_packet(&self.session_id, &self.punch_token, self.seq);
-        for ep in &self.endpoints {
+        for ep in &mut self.endpoints {
             if self.punch_packets_sent >= self.limits.max_punch_packets {
                 break;
             }
-            let _ = socket.send_to(&punch_pkt, ep);
+            if !ep.due(now, &self.limits) {
+                continue;
+            }
+            let _ = socket.send_to(&punch_pkt, ep.addr);
+            ep.sent += 1;
+            ep.last_sent = Some(now);
             self.punch_packets_sent += 1;
         }
         self.seq = self.seq.wrapping_add(1);
+    }
+
+    /// A valid packet came from `src`: the endpoints at its IP are the peer.
+    fn verify_source(&mut self, src: SocketAddr) {
+        for ep in &mut self.endpoints {
+            if ep.addr.ip() == src.ip() {
+                ep.verified = true;
+            }
+        }
     }
 
     /// Handle one received datagram, answering a valid punch. Returns the
@@ -280,7 +379,9 @@ impl PunchState {
         data: &[u8],
         src: SocketAddr,
     ) -> Option<(SocketAddr, Duration)> {
-        if data.len() != PUNCH_PACKET_LEN || !self.endpoints.iter().any(|ep| ep.ip() == src.ip()) {
+        if data.len() != PUNCH_PACKET_LEN
+            || !self.endpoints.iter().any(|ep| ep.addr.ip() == src.ip())
+        {
             return None;
         }
         if &data[..4] == PUNCH_MAGIC {
@@ -295,12 +396,14 @@ impl PunchState {
                 }
                 self.they_got_ack = true;
                 self.verified_peer = Some(src);
+                self.verify_source(src);
             }
         } else if &data[..4] == ACK_MAGIC {
             // Received ACK for our punch
             if verify_ack_packet(data, &self.session_id, &self.punch_token) {
                 self.we_got_ack = true;
                 self.first_ack_time.get_or_insert_with(Instant::now);
+                self.verify_source(src);
                 if self.verified_peer.is_none() {
                     self.verified_peer = Some(src);
                 }
@@ -580,6 +683,105 @@ mod tests {
             interval: Duration::from_millis(5),
             max_punch_packets,
             max_ack_packets: MAX_ACK_PACKETS,
+            unverified_burst: MAX_PUNCH_PACKETS,
+            unverified_interval: Duration::from_millis(5),
+        }
+    }
+
+    /// Datagrams waiting on `socket`.
+    fn drain(socket: &UdpSocket) -> usize {
+        socket
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut buf = [0u8; 128];
+        let mut received = 0;
+        while socket.recv_from(&mut buf).is_ok() {
+            received += 1;
+        }
+        received
+    }
+
+    #[test]
+    fn silent_endpoint_gets_a_burst_then_one_packet_per_interval() {
+        let target = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let limits = PunchLimits {
+            duration: Duration::from_millis(700),
+            unverified_burst: 4,
+            unverified_interval: Duration::from_millis(200),
+            ..short_limits(MAX_PUNCH_PACKETS)
+        };
+        let handle = start_udp_punch_with_limits(
+            UdpSocket::bind("127.0.0.1:0").unwrap(),
+            vec![target.local_addr().unwrap()],
+            vec![],
+            [0x11; 16],
+            [0x22; 32],
+            limits,
+        )
+        .unwrap();
+        assert!(handle.join().is_none());
+        // The burst of 4 at the full rate (5 ms apart), then one about
+        // every 200 ms: well under the ~140 rounds the punch ran.
+        let received = drain(&target);
+        assert!((5..=8).contains(&received), "{received} packets");
+    }
+
+    #[test]
+    fn candidates_are_capped_and_implausible_targets_dropped() {
+        let targets: Vec<UdpSocket> = (0..MAX_PUNCH_CANDIDATES + 2)
+            .map(|_| UdpSocket::bind("127.0.0.1:0").unwrap())
+            .collect();
+        let mut endpoints: Vec<SocketAddr> = vec![
+            "0.0.0.0:4000".parse().unwrap(),
+            "224.0.0.1:4000".parse().unwrap(),
+            "255.255.255.255:4000".parse().unwrap(),
+            "127.0.0.1:0".parse().unwrap(),
+        ];
+        endpoints.extend(targets.iter().map(|t| t.local_addr().unwrap()));
+        // A repeat is sent to once.
+        endpoints.insert(5, targets[0].local_addr().unwrap());
+        let limits = PunchLimits {
+            duration: Duration::from_millis(100),
+            interval: Duration::from_millis(50),
+            ..short_limits(MAX_PUNCH_PACKETS)
+        };
+        let handle = start_udp_punch_with_limits(
+            UdpSocket::bind("127.0.0.1:0").unwrap(),
+            endpoints,
+            vec![],
+            [0x11; 16],
+            [0x22; 32],
+            limits,
+        )
+        .unwrap();
+        assert!(handle.join().is_none());
+        let counts: Vec<usize> = targets.iter().map(drain).collect();
+        assert!(
+            counts[..MAX_PUNCH_CANDIDATES].iter().all(|&c| c > 0),
+            "{counts:?}"
+        );
+        assert!(
+            counts[MAX_PUNCH_CANDIDATES..].iter().all(|&c| c == 0),
+            "{counts:?}"
+        );
+    }
+
+    #[test]
+    fn punch_with_no_plausible_target_does_not_start() {
+        for endpoints in [
+            vec!["0.0.0.0:4000".parse().unwrap()],
+            vec!["[ff02::1]:4000".parse().unwrap()],
+            vec!["[::ffff:255.255.255.255]:4000".parse().unwrap()],
+            vec![],
+        ] {
+            let started = start_udp_punch(
+                UdpSocket::bind("127.0.0.1:0").unwrap(),
+                endpoints.clone(),
+                vec![],
+                [0x11; 16],
+                [0x22; 32],
+            );
+            assert!(started.is_err(), "{endpoints:?}");
         }
     }
 
@@ -599,16 +801,7 @@ mod tests {
         )
         .unwrap();
         assert!(handle.join().is_none());
-
-        target
-            .set_read_timeout(Some(Duration::from_millis(50)))
-            .unwrap();
-        let mut buf = [0u8; 128];
-        let mut received = 0;
-        while target.recv_from(&mut buf).is_ok() {
-            received += 1;
-        }
-        assert_eq!(received, 5);
+        assert_eq!(drain(&target), 5);
     }
 
     #[test]

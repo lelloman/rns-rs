@@ -2313,7 +2313,11 @@ impl RnsNode {
             );
         }
 
-        // Start probe server if configured
+        // Start probe server if configured. A peer never gets this node
+        // to punch toward it.
+        if let Some(port) = config.probe_port {
+            driver.holepunch_manager.set_own_listen_ports(vec![port]);
+        }
         let probe_server = if let Some(port) = config.probe_port {
             let listen_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
             if crate::engine::FOLD_SERVICES {
