@@ -26,7 +26,7 @@ use super::sam::{self, Destination, SamError};
 use super::tunnel::PeerTunnel;
 use super::{
     frame_decoder, load_or_generate_keypair, peer_info, peer_up, sanitize_name, template_ifac_size,
-    I2pConfig, I2pEndpoint, I2pRuntime, I2pWriter,
+    I2pConfig, I2pEndpoint, I2pRuntime, I2pWriter, OutboundPeer,
 };
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
@@ -59,6 +59,7 @@ struct Session {
 /// thread, which ends once the first accept is armed.
 pub(super) fn setup(
     config: I2pConfig,
+    peers: Vec<OutboundPeer>,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     dynamic_template: Option<crate::interface::DynamicInterfaceTemplate>,
@@ -116,14 +117,10 @@ pub(super) fn setup(
         )
         .map_err(SamError::Io)?;
 
-    for peer in &config.peers {
-        let peer = peer.trim().to_string();
-        if peer.is_empty() {
-            continue;
-        }
+    for peer in peers {
         let session = Arc::clone(&session);
         thread::Builder::new()
-            .name(format!("i2p-out-{}", peer))
+            .name(format!("i2p-out-{}", peer.address))
             .spawn(move || session.connect(peer, false))
             .map_err(SamError::Io)?;
     }
@@ -146,7 +143,8 @@ impl Session {
 
     /// Connect to an outbound peer until it is served on the driver,
     /// waiting between attempts (and first, when `wait_first`).
-    fn connect(self: Arc<Self>, peer: String, wait_first: bool) {
+    fn connect(self: Arc<Self>, outbound: OutboundPeer, wait_first: bool) {
+        let OutboundPeer { address: peer, id } = outbound;
         let mut wait = wait_first;
         loop {
             if wait {
@@ -183,7 +181,6 @@ impl Session {
                     continue;
                 }
             };
-            let id = self.allocate_id();
             log::info!(
                 "[{}] connected to I2P peer {} → id {}",
                 self.name,
@@ -209,7 +206,6 @@ impl Session {
                 Ok(()) => return,
                 Err(e) => {
                     log::warn!("[{}] cannot read I2P peer {}: {}", self.name, peer, e);
-                    I2pEndpoint::remove_tunnel(&self.endpoint, id);
                     let _ = self.tx.send(Event::InterfaceDown(id));
                 }
             }
@@ -228,7 +224,7 @@ impl Session {
         let writer = Box::new(I2pWriter {
             stream: stream.try_clone()?,
         });
-        let tunnel = I2pEndpoint::add_tunnel(&self.endpoint, id, stream);
+        let tunnel = I2pEndpoint::add_tunnel(&self.endpoint, id, Some(stream));
         let up = peer_up(
             id,
             writer,
@@ -463,10 +459,10 @@ impl StreamSource {
 
     fn peer_lost(&self, peer: &Peer) {
         let session = &self.session;
-        I2pEndpoint::remove_tunnel(&session.endpoint, peer.id);
         let _ = session.tx.push_from_loop([Event::InterfaceDown(peer.id)]);
         let Some(address) = peer.outbound.clone() else {
             // Accepted peers are not reconnected.
+            I2pEndpoint::remove_tunnel(&session.endpoint, peer.id);
             return;
         };
         log::warn!(
@@ -476,9 +472,18 @@ impl StreamSource {
             session.reconnect_wait().as_secs()
         );
         let session = Arc::clone(session);
+        let peer_id = peer.id;
         let spawned = thread::Builder::new()
             .name(format!("i2p-out-{}", address))
-            .spawn(move || session.connect(address, true));
+            .spawn(move || {
+                session.connect(
+                    OutboundPeer {
+                        address,
+                        id: peer_id,
+                    },
+                    true,
+                )
+            });
         if let Err(e) = spawned {
             log::error!(
                 "[{}] cannot reconnect to I2P peer, giving up: {}",
@@ -690,7 +695,10 @@ mod tests {
                 }
             }
         });
-        let peer = "AAAA".to_string();
+        let peer = OutboundPeer {
+            address: "AAAA".to_string(),
+            id: InterfaceId(800),
+        };
         {
             let session = Arc::clone(&session);
             thread::spawn(move || session.connect(peer, false));
@@ -715,19 +723,26 @@ mod tests {
             .tunnels
             .contains_key(&InterfaceId(800)));
 
-        // The peer dropping brings it down, and it is connected again.
+        // The peer dropping brings it down, and it is connected again as
+        // the same interface, its tunnel keeping its state meanwhile.
+        let tunnel = Arc::clone(&lock_or_recover(&endpoint, "test").tunnels[&InterfaceId(800)]);
+        tunnel.resume(super::super::tunnel::TunnelState::Stale);
         drop(stream);
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             Event::InterfaceDown(InterfaceId(800))
         ));
-        assert!(!lock_or_recover(&endpoint, "test")
-            .tunnels
-            .contains_key(&InterfaceId(800)));
+        assert!(Arc::ptr_eq(
+            &tunnel,
+            &lock_or_recover(&endpoint, "test").tunnels[&InterfaceId(800)]
+        ));
         let _again = connections.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            Event::InterfaceUp(InterfaceId(801), Some(_), Some(_))
+            Event::InterfaceUp(InterfaceId(800), Some(_), Some(_))
         ));
+        let resumed = Arc::clone(&lock_or_recover(&endpoint, "test").tunnels[&InterfaceId(800)]);
+        assert!(!Arc::ptr_eq(&tunnel, &resumed));
+        assert_eq!(resumed.state(), super::super::tunnel::TunnelState::Stale);
     }
 }

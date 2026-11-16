@@ -1,7 +1,8 @@
-//! The tunnel state of a connected I2P peer, kept as upstream's
-//! `I2PInterfacePeer` keeps it.
+//! The tunnel state of an I2P peer, kept as upstream's `I2PInterfacePeer`
+//! keeps it.
 //!
-//! Upstream's peer starts in `TUNNEL_STATE_INIT`. Once it is connected, a
+//! Upstream's peer starts in `TUNNEL_STATE_INIT`, which an outbound peer
+//! reports from when its interface starts, until it first connects. Once it is connected, a
 //! watchdog checks it every second: the tunnel is `STALE` when nothing was
 //! read for twice `I2P_PROBE_AFTER`, else `ACTIVE`; a keepalive (an empty
 //! HDLC frame) goes out on every check while nothing was written for
@@ -131,6 +132,13 @@ impl PeerTunnel {
 
     pub fn state(&self) -> TunnelState {
         TunnelState::from_u8(self.state.load(Ordering::Relaxed))
+    }
+
+    /// Continue in `state`: an outbound peer that reconnects keeps the
+    /// state its tunnel was in, as upstream's peer does until its watchdog
+    /// checks the new connection.
+    pub fn resume(&self, state: TunnelState) {
+        self.state.store(state as u8, Ordering::Relaxed);
     }
 
     /// Record that the peer's stream delivered bytes.

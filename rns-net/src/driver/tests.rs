@@ -3730,6 +3730,7 @@ fn dynamic_interface_inherits_parent_announce_cap() {
             ifac: None,
             display_name: None,
             short_name: None,
+            reconnecting: false,
         },
     );
 
@@ -3779,6 +3780,7 @@ fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
                 ifac: None,
                 display_name: None,
                 short_name: None,
+                reconnecting: false,
             },
         );
         let registered = driver
@@ -15873,6 +15875,7 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
             ifac: None,
             display_name: Some("TCPInterface[Client on Server/10.0.0.2:50000]".into()),
             short_name: Some("Client on Server".into()),
+            reconnecting: false,
         },
     );
     driver
@@ -16013,6 +16016,7 @@ fn interface_stats_report_peer_spawning_parents() {
                 ifac: None,
                 display_name: None,
                 short_name: Some(short_name.into()),
+                reconnecting: false,
             },
         );
         let stats = &mut driver.interfaces.get_mut(&InterfaceId(id)).unwrap().stats;
@@ -16185,6 +16189,7 @@ fn driver_watches_i2p_peer_tunnels() {
                 ifac: None,
                 display_name: None,
                 short_name: Some("Connected peer on I2P".into()),
+                reconnecting: false,
             },
         );
     }
@@ -16236,6 +16241,111 @@ fn driver_watches_i2p_peer_tunnels() {
     };
     assert_eq!(state(21), Some(Some("Tunnel Active".into())));
     assert_eq!(state(22), Some(Some("Tunnel Unresponsive".into())));
+}
+
+/// Upstream adds an I2PInterfacePeer for each configured peer when its
+/// I2P interface starts: listed, down and creating its tunnel, before it
+/// connects, and kept, as the same interface and in the state its tunnel
+/// was in, while it reconnects.
+#[cfg(feature = "iface-i2p")]
+#[test]
+fn outbound_i2p_peer_is_listed_before_connecting_and_kept_across_reconnects() {
+    use crate::interface::i2p::tunnel::{PeerTunnel, TunnelState};
+
+    let (callbacks, ..) = MockCallbacks::new();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+    let endpoint = Arc::new(Mutex::new(crate::interface::i2p::I2pEndpoint::default()));
+    driver.listener_stats.push(ListenerStat {
+        id: InterfaceId(20),
+        name: "I2P".into(),
+        display_name: "I2PInterface[I2P]".into(),
+        interface_type: "I2PInterface".into(),
+        mode: constants::MODE_FULL,
+        gravity: 0,
+        announces_to_internal: None,
+        bitrate: Some(256_000),
+        mtu: 1064,
+        ifac: None,
+        clients: ListenerClients::I2pPeers(I2pListener {
+            connectable: false,
+            configured_peers: Some(1),
+            endpoint: Arc::clone(&endpoint),
+        }),
+    });
+    let tunnel = Arc::new(PeerTunnel::new(None));
+    endpoint
+        .lock()
+        .unwrap()
+        .tunnels
+        .insert(InterfaceId(21), Arc::clone(&tunnel));
+    let mut info = make_interface_info(21);
+    info.wants_tunnel = true;
+    driver.handle_dynamic_interface_up_event(
+        InterfaceId(21),
+        Box::new(crate::interface::UnavailableWriter),
+        event::DynamicInterfaceRegistration {
+            info,
+            interface_type: "I2PInterfacePeer".into(),
+            parent_id: InterfaceId(20),
+            telemetry: event::InterfaceTelemetry::default(),
+            ifac: None,
+            display_name: Some("I2PInterfacePeer[I2P to peer.b32.i2p]".into()),
+            short_name: Some("I2P to peer.b32.i2p".into()),
+            reconnecting: true,
+        },
+    );
+    let peer = |driver: &Driver| {
+        driver
+            .interface_stats()
+            .interfaces
+            .into_iter()
+            .find(|stat| stat.id == 21)
+    };
+    let listed = peer(&driver).expect("listed before it connects");
+    assert!(!listed.status);
+    assert_eq!(listed.name, "I2P to peer.b32.i2p");
+    assert_eq!(listed.interface_type, "I2PInterfacePeer");
+    assert_eq!(
+        listed.parent_display_name.as_deref(),
+        Some("I2PInterface[I2P]")
+    );
+    assert_eq!(
+        listed.i2p_tunnel_state,
+        Some(Some("Creating Tunnel".into()))
+    );
+    // Not connected: no tunnel synthesized, and the watchdog leaves it be.
+    assert!(driver.engine.local_tunnel_id(&InterfaceId(21)).is_none());
+    driver.handle_tick_event();
+    assert_eq!(tunnel.state(), TunnelState::Init);
+    // An outbound peer is no client of its interface.
+    let listener = |driver: &Driver| {
+        driver
+            .interface_stats()
+            .interfaces
+            .into_iter()
+            .find(|stat| stat.id == 20)
+            .unwrap()
+    };
+    assert_eq!(listener(&driver).clients, Some(0));
+
+    // It connects, goes down, and connects again: the same interface.
+    for _ in 0..2 {
+        let (writer, _) = MockWriter::new();
+        driver.handle_interface_up_event(InterfaceId(21), Some(Box::new(writer)), None);
+        assert!(peer(&driver).unwrap().status);
+        assert!(driver.interfaces[&InterfaceId(21)].online);
+        driver.handle_interface_down_event(InterfaceId(21));
+        let down = peer(&driver).expect("kept while it reconnects");
+        assert!(!down.status);
+        assert_eq!(
+            down.parent_display_name.as_deref(),
+            Some("I2PInterface[I2P]")
+        );
+        assert_eq!(down.i2p_tunnel_state, Some(Some("Creating Tunnel".into())));
+        assert!(driver.engine.interface_info(&InterfaceId(21)).is_some());
+    }
+    assert_eq!(listener(&driver).clients, Some(0));
 }
 
 /// Upstream auto-connects a discovered Backbone interface as a

@@ -687,6 +687,7 @@ impl WeaveSession {
                 display_name: Some(crate::interface::display::weave_peer(&endpoint)),
                 // Upstream's `WeaveInterfacePeer` never sets a name.
                 short_name: Some(crate::interface::display::UNNAMED.into()),
+                reconnecting: false,
             }),
         });
         self.publish_parent_telemetry();

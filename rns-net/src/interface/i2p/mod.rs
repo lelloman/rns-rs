@@ -69,7 +69,8 @@ pub struct I2pEndpoint {
     pub online: bool,
     /// `{base32}.b32.i2p`.
     pub b32: Option<String>,
-    /// The tunnels of the connected peers, by their interface.
+    /// The tunnels of the peers, by their interface: of each connected
+    /// peer, and of each outbound peer from when the interface starts.
     pub tunnels: std::collections::HashMap<InterfaceId, Arc<tunnel::PeerTunnel>>,
 }
 
@@ -87,20 +88,27 @@ impl I2pEndpoint {
         lock_or_recover(endpoint, "i2p endpoint").online = true;
     }
 
-    /// Start watching the tunnel of peer `id`, connected over `stream`.
+    /// Start watching the tunnel of peer `id`, connected over `stream`. An
+    /// outbound peer reconnecting keeps the state its tunnel was in.
     fn add_tunnel(
         endpoint: &Mutex<I2pEndpoint>,
         id: InterfaceId,
-        stream: &std::net::TcpStream,
+        stream: Option<&std::net::TcpStream>,
     ) -> Arc<tunnel::PeerTunnel> {
-        let tunnel = Arc::new(tunnel::PeerTunnel::new(stream.try_clone().ok()));
-        lock_or_recover(endpoint, "i2p endpoint")
-            .tunnels
-            .insert(id, Arc::clone(&tunnel));
+        let tunnel = Arc::new(tunnel::PeerTunnel::new(
+            stream.and_then(|stream| stream.try_clone().ok()),
+        ));
+        let mut endpoint = lock_or_recover(endpoint, "i2p endpoint");
+        if let Some(previous) = endpoint.tunnels.get(&id) {
+            tunnel.resume(previous.state());
+        }
+        endpoint.tunnels.insert(id, Arc::clone(&tunnel));
         tunnel
     }
 
-    /// Stop watching the tunnel of peer `id`, which disconnected.
+    /// Stop watching the tunnel of accepted peer `id`, which disconnected.
+    /// An outbound peer's tunnel stays, as the peer does while it
+    /// reconnects.
     fn remove_tunnel(endpoint: &Mutex<I2pEndpoint>, id: InterfaceId) {
         lock_or_recover(endpoint, "i2p endpoint")
             .tunnels
@@ -215,8 +223,23 @@ fn peer_info(
     }
 }
 
+/// A peer's interface, under upstream's peer name `name` (see
+/// [`super::display::i2p_peer_name`]).
+fn peer_registration(
+    template: &super::DynamicInterfaceTemplate,
+    info: InterfaceInfo,
+    name: String,
+) -> crate::event::DynamicInterfaceRegistration {
+    let mut registration = template.registration(info);
+    registration.display_name = Some(format!("I2PInterfacePeer[{name}]"));
+    registration.short_name = Some(name);
+    registration
+}
+
 /// The event that brings up a connected peer's interface, reported under
-/// upstream's peer name `name` (see [`super::display::i2p_peer_name`]).
+/// upstream's peer name `name`. An outbound peer's interface was registered
+/// when the interface started (see [`register_outbound_peers`]), and only
+/// comes online.
 fn peer_up(
     client_id: InterfaceId,
     writer: Box<dyn Writer>,
@@ -225,18 +248,63 @@ fn peer_up(
     name: String,
 ) -> Event {
     match template {
-        Some(template) => {
-            let mut registration = template.registration(info);
-            registration.display_name = Some(format!("I2PInterfacePeer[{name}]"));
-            registration.short_name = Some(name);
-            Event::DynamicInterfaceUp {
-                id: client_id,
-                writer,
-                registration: Box::new(registration),
-            }
-        }
+        // Only outbound peers want a tunnel (see `peer_info`).
+        Some(_) if info.wants_tunnel => Event::InterfaceUp(client_id, Some(writer), None),
+        Some(template) => Event::DynamicInterfaceUp {
+            id: client_id,
+            writer,
+            registration: Box::new(peer_registration(template, info, name)),
+        },
         None => Event::InterfaceUp(client_id, Some(writer), Some(Box::new(info))),
     }
+}
+
+/// A configured outbound peer: the address it connects to and its
+/// interface, which it keeps across reconnects.
+#[derive(Debug, Clone)]
+struct OutboundPeer {
+    address: String,
+    id: InterfaceId,
+}
+
+/// Give each configured peer its interface, as upstream adds an
+/// `I2PInterfacePeer` for each when the interface starts: listed, offline
+/// and creating its tunnel, before it connects, and kept, under the same
+/// interface, while it reconnects. Without a template the peers' interfaces
+/// are registered as they connect.
+fn register_outbound_peers(
+    config: &I2pConfig,
+    tx: &EventSender,
+    next_id: &AtomicU64,
+    template: Option<&super::DynamicInterfaceTemplate>,
+) -> Vec<OutboundPeer> {
+    config
+        .peers
+        .iter()
+        .map(|address| address.trim())
+        .filter(|address| !address.is_empty())
+        .map(|address| {
+            let id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
+            I2pEndpoint::add_tunnel(&config.endpoint, id, None);
+            if let Some(template) = template {
+                let mut registration = peer_registration(
+                    template,
+                    peer_info(id, address, config.ingress_control, true),
+                    crate::interface::display::i2p_peer_name(&config.name, address, true),
+                );
+                registration.reconnecting = true;
+                let _ = tx.send(Event::DynamicInterfaceUp {
+                    id,
+                    writer: Box::new(crate::interface::UnavailableWriter),
+                    registration: Box::new(registration),
+                });
+            }
+            OutboundPeer {
+                address: address.to_string(),
+                id,
+            }
+        })
+        .collect()
 }
 
 /// Sanitize a name for use in filenames and SAM session IDs.
@@ -322,12 +390,13 @@ fn start_with_template(
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) -> io::Result<()> {
     let name = config.name.clone();
+    let peers = register_outbound_peers(&config, &tx, &next_id, dynamic_template.as_ref());
 
     if crate::engine::FOLD_IO {
         thread::Builder::new()
             .name(format!("i2p-setup-{}", config.interface_id.0))
             .spawn(move || {
-                if let Err(e) = folded::setup(config, tx, next_id, dynamic_template) {
+                if let Err(e) = folded::setup(config, peers, tx, next_id, dynamic_template) {
                     log::error!("[{}] I2P setup failed: {}", name, e);
                 }
             })?;
@@ -337,7 +406,7 @@ fn start_with_template(
     thread::Builder::new()
         .name(format!("i2p-coord-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = coordinator(config, tx, next_id, dynamic_template) {
+            if let Err(e) = coordinator(config, peers, tx, next_id, dynamic_template) {
                 log::error!("[{}] I2P coordinator failed: {}", name, e);
             }
         })?;
@@ -348,6 +417,7 @@ fn start_with_template(
 /// Coordinator thread: sets up SAM sessions and spawns peer threads.
 fn coordinator(
     config: I2pConfig,
+    peers: Vec<OutboundPeer>,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
@@ -388,14 +458,8 @@ fn coordinator(
     }
 
     // Spawn outbound peer threads
-    for peer_addr in &config.peers {
-        let peer_addr = peer_addr.trim().to_string();
-        if peer_addr.is_empty() {
-            continue;
-        }
-
+    for peer in peers {
         let tx2 = tx.clone();
-        let next_id2 = next_id.clone();
         let sam_addr2 = sam_addr;
         let session_id2 = session_id.clone();
         let iface_name = config.name.clone();
@@ -404,15 +468,14 @@ fn coordinator(
         let endpoint = Arc::clone(&config.endpoint);
 
         thread::Builder::new()
-            .name(format!("i2p-out-{}", peer_addr))
+            .name(format!("i2p-out-{}", peer.address))
             .spawn(move || {
                 outbound_peer_loop(OutboundPeerContext {
                     sam_addr: sam_addr2,
                     session_id: session_id2,
-                    peer_addr,
+                    peer,
                     iface_name,
                     tx2,
-                    next_id2,
                     runtime,
                     ingress_control,
                     dynamic_template,
@@ -465,10 +528,9 @@ fn coordinator(
 struct OutboundPeerContext {
     sam_addr: SocketAddr,
     session_id: String,
-    peer_addr: String,
+    peer: OutboundPeer,
     iface_name: String,
     tx2: EventSender,
-    next_id2: Arc<AtomicU64>,
     runtime: Arc<Mutex<I2pRuntime>>,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
@@ -480,10 +542,12 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
     let OutboundPeerContext {
         sam_addr,
         session_id,
-        peer_addr,
+        peer: OutboundPeer {
+            address: peer_addr,
+            id: client_id,
+        },
         iface_name,
         tx2: tx,
-        next_id2: next_id,
         runtime,
         ingress_control,
         dynamic_template,
@@ -511,8 +575,6 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
         // Connect via SAM
         match sam::stream_connect_with_mark(&sam_addr, &session_id, &destination, underlay_mark) {
             Ok(stream) => {
-                let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
-
                 log::info!(
                     "[{}] connected to I2P peer {} → id {}",
                     iface_name,
@@ -534,7 +596,7 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                     stream: writer_stream,
                 });
 
-                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, &stream);
+                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, Some(&stream));
                 let event = peer_up(
                     client_id,
                     writer,
@@ -557,7 +619,6 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                 );
 
                 // Disconnected
-                I2pEndpoint::remove_tunnel(&endpoint, client_id);
                 let _ = tx.send(Event::InterfaceDown(client_id));
                 log::warn!(
                     "[{}] I2P peer {} disconnected, reconnecting in {}s",
@@ -634,7 +695,7 @@ fn acceptor_loop(context: AcceptorContext) {
                     stream: writer_stream,
                 });
 
-                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, &stream);
+                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, Some(&stream));
                 let event = peer_up(
                     client_id,
                     writer,
@@ -870,5 +931,88 @@ mod tests {
             "upstream I2PInterfacePeer.HW_MTU, and what the decoder accepts"
         );
         assert!(!peer_info(InterfaceId(2), "peer.b32.i2p", ic, false).wants_tunnel);
+    }
+
+    fn template() -> crate::interface::DynamicInterfaceTemplate {
+        crate::interface::DynamicInterfaceTemplate {
+            parent_id: InterfaceId(5),
+            interface_type: "I2PInterfacePeer".into(),
+            ifac: None,
+            mode: constants::MODE_FULL,
+            gravity: 0,
+            recursive_prs: false,
+            announces_from_internal: true,
+            announces_to_internal: None,
+            stamp_costs: Default::default(),
+            announce_limits: Default::default(),
+        }
+    }
+
+    #[test]
+    fn configured_peers_are_registered_offline_when_the_interface_starts() {
+        // Upstream adds each configured peer's I2PInterfacePeer at start,
+        // creating its tunnel, and keeps it across reconnects.
+        let config = I2pConfig {
+            name: "I2P".into(),
+            peers: vec!["a.b32.i2p".into(), " ".into(), " b.b32.i2p ".into()],
+            ..I2pConfig::default()
+        };
+        let (tx, rx) = crate::event::channel();
+        let next_id = AtomicU64::new(40);
+        let peers = register_outbound_peers(&config, &tx, &next_id, Some(&template()));
+        let registered: Vec<_> = peers
+            .iter()
+            .map(|peer| (peer.address.as_str(), peer.id))
+            .collect();
+        assert_eq!(
+            registered,
+            vec![
+                ("a.b32.i2p", InterfaceId(40)),
+                ("b.b32.i2p", InterfaceId(41))
+            ]
+        );
+        for (address, id) in registered {
+            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Event::DynamicInterfaceUp {
+                    id: up,
+                    mut writer,
+                    registration,
+                } => {
+                    assert_eq!(up, id);
+                    assert!(registration.reconnecting);
+                    assert!(registration.info.wants_tunnel);
+                    assert_eq!(registration.parent_id, InterfaceId(5));
+                    assert_eq!(registration.interface_type, "I2PInterfacePeer");
+                    assert_eq!(
+                        registration.short_name.as_deref(),
+                        Some(format!("I2P to {address}").as_str())
+                    );
+                    assert_eq!(
+                        writer.send_frame(b"x").unwrap_err().kind(),
+                        io::ErrorKind::NotConnected
+                    );
+                }
+                other => panic!("expected the peer's registration, got {other:?}"),
+            }
+            assert_eq!(
+                lock_or_recover(&config.endpoint, "test").tunnels[&id].state(),
+                tunnel::TunnelState::Init
+            );
+        }
+
+        // Once connected, the registered peer only comes online.
+        let stream_pair = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(stream_pair.local_addr().unwrap()).unwrap();
+        let up = peer_up(
+            InterfaceId(40),
+            Box::new(I2pWriter { stream }),
+            peer_info(InterfaceId(40), "a.b32.i2p", config.ingress_control, true),
+            Some(&template()),
+            "I2P to a.b32.i2p".into(),
+        );
+        assert!(matches!(
+            up,
+            Event::InterfaceUp(InterfaceId(40), Some(_), None)
+        ));
     }
 }

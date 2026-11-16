@@ -1533,6 +1533,7 @@ impl DynamicInterfaceTemplate {
             ifac: self.ifac.clone(),
             display_name: None,
             short_name: None,
+            reconnecting: false,
         }
     }
 }
