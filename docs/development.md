@@ -115,7 +115,7 @@ The operator scripts have their own tests, run by CI with
 
 | Job | Command or scope |
 |-----|------------------|
-| Cargo Test | WASM example build, interface-selection `cargo check`, `cargo test --workspace` |
+| Cargo Test | WASM example build, interface-selection `cargo check`, `cargo test --workspace` (on a pull request, the crates the change reaches) |
 | Cargo Test (rns-hooks) | Workspace tests with `--features rns-hooks`, built-in hook integration tests |
 | Cargo Test (rns-ctl tls) | `cargo test -p rns-ctl --features tls` |
 | Reticulum Interop | Live interop against three pinned Python versions |
@@ -130,6 +130,54 @@ The operator scripts have their own tests, run by CI with
 | RustSec audit | `cargo audit` on both lock files, weekly and on manifest changes; `deny.toml` configures `cargo-deny` |
 
 Workflows live in `.github/workflows/`.
+
+### Which jobs a pull request runs
+
+Every job runs on a push to `master`, on the nightly schedule and on a
+manual run (`workflow_dispatch`). On a pull request, the first job
+(`Select Jobs`, `scripts/ci_changes.py`) reads the files the pull request
+changes and runs a heavy job only when the change can affect it. Rustfmt,
+Clippy, Python Tools and Upstream Badge always run. If `Select Jobs` fails,
+the run fails and every gated job runs.
+
+A changed file inside a crate's directory changes that crate, and so every
+crate that depends on it through a path dependency (normal, dev, build or
+optional; the WASM hook examples count as dependencies of `rns-hooks`).
+Cargo Test tests that set with `-p`, or the whole workspace when it is every
+crate; its no-std, selected-interface and compact-engine steps run when the
+set has `rns-core` or `rns-crypto`, `rns-cli` or `rns-ctl`, and `rns-net`.
+
+| Job | Runs when the change reaches |
+|-----|------------------------------|
+| Cargo Test (rns-hooks) | A dependency of the hook crates, `rns-net`, `rns-cli`, `rns-ctl` or `rns-server` |
+| Reticulum Interop | A dependency of `rns-net`, `rns-cli` or `rns-rnodeconf` |
+| Docker E2E | A dependency of `rns-ctl`, `rns-cli`, `rns-tun` or `rns-server`, or `tests/docker/` |
+| ARMv7 Build Smoke | A dependency of `rns-cli`, `rns-ctl` or `rns-server` |
+| Cargo Test (rns-ctl tls) | A dependency of `rns-ctl` |
+| Android Client | Anything `rns-tun-android` depends on, including itself (Gradle files included) |
+| ESP32 Lockfile | `rns-esp32/`, `vendor/`, or the manifest of a crate the firmware depends on |
+| rns-ctl-web-smoke | `rns-ctl/assets/` |
+
+"A dependency of X" includes X itself. Paths outside the crates:
+
+- `.github/workflows/ci.yml`, `scripts/ci_changes.py`, `Cargo.toml`,
+  `Cargo.lock`, `rust-toolchain.toml` and `.cargo/` run everything.
+- `tests/fixtures/` counts as a change to the crates that read the fixtures,
+  `bench/` (except its `.md` files) as one to `rns-bench`, and
+  `docs/interface-discovery.md` as one to `rns-net`, which embeds it. When
+  crate code starts reading another file outside its directory, add it to
+  `EXTERNAL_INPUTS` in the script; `tests/test_ci_changes.py` fails until it
+  is there.
+- Other `.md` files, `docs/`, `scripts/`, `tests/*.py`, `fuzz/`, the other
+  workflows, `deny.toml`, `LICENSE` and `.gitignore` run only the always-on
+  jobs.
+- Any other path runs everything.
+
+`python3 scripts/ci_changes.py --range BASE HEAD` shows what a range
+selects. To force the full suite on a pull request, add the `full-ci` label
+and push (the label is read when a run starts), or start the CI workflow
+manually on the branch. The Reticulum Interop matrix skips its steps rather
+than the job, so each version still reports a check.
 
 ## Benchmarks
 

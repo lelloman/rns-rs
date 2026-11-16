@@ -1,10 +1,12 @@
 name: CI
 
-# The full suite runs on every pull request, on every push to master and
-# nightly (against master, so a dependency, toolchain or upstream change
-# that breaks it shows up without a commit). The slow analyses that do not
-# gate changes, fuzzing, Miri, coverage and mutation testing, are in
-# nightly.yml and fuzz.yml.
+# The full suite runs on every push to master, nightly (against master, so a
+# dependency, toolchain or upstream change that breaks it shows up without a
+# commit) and on a manual run. On a pull request the `changes` job decides,
+# from the files the pull request changes, which of the heavy jobs can be
+# affected (scripts/ci_changes.py; rules in docs/development.md); the cheap
+# checks always run. The slow analyses that do not gate changes, fuzzing,
+# Miri, coverage and mutation testing, are in nightly.yml and fuzz.yml.
 on:
   push:
     branches:
@@ -18,9 +20,64 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# A gated job tests `!= 'false'` rather than `== 'true'` and runs unless
+# cancelled, so that if `changes` fails (empty outputs) every job still runs
+# instead of being skipped, which would read as passing.
 jobs:
+  changes:
+    name: Select Jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      crates: ${{ steps.select.outputs.crates }}
+      cargo_test: ${{ steps.select.outputs.cargo_test }}
+      cargo_test_args: ${{ steps.select.outputs.cargo_test_args }}
+      hook_examples: ${{ steps.select.outputs.hook_examples }}
+      cli_features: ${{ steps.select.outputs.cli_features }}
+      no_std: ${{ steps.select.outputs.no_std }}
+      compact_engine: ${{ steps.select.outputs.compact_engine }}
+      android: ${{ steps.select.outputs.android }}
+      hooks: ${{ steps.select.outputs.hooks }}
+      interop: ${{ steps.select.outputs.interop }}
+      docker: ${{ steps.select.outputs.docker }}
+      armv7: ${{ steps.select.outputs.armv7 }}
+      ctl_tls: ${{ steps.select.outputs.ctl_tls }}
+      esp32: ${{ steps.select.outputs.esp32 }}
+      web_smoke: ${{ steps.select.outputs.web_smoke }}
+
+    steps:
+      # A pull_request run checks out the merge commit; its first parent is
+      # the base branch, so the diff against it is what the pull request
+      # changes.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Select jobs for the changed files
+        id: select
+        env:
+          FULL_RUN: >-
+            ${{ github.event_name != 'pull_request'
+            || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          if [ "$FULL_RUN" = "true" ]; then
+            set -- --all
+          else
+            set -- --merge HEAD
+          fi
+          python scripts/ci_changes.py "$@" \
+            --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+
   android-client:
     name: Android Client
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.android != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -119,6 +176,8 @@ jobs:
 
   cargo-test:
     name: Cargo Test
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.cargo_test != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -135,29 +194,43 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build hook WASM examples
+        if: needs.changes.outputs.hook_examples != 'false'
         run: ./rns-hooks/build-examples.sh
 
       - name: Check CLI with selected interfaces
+        if: needs.changes.outputs.cli_features != 'false'
         run: |
           cargo check -p rns-cli -p rns-ctl --bins --no-default-features
           cargo check -p rns-cli -p rns-ctl --bins --no-default-features --features iface-tcp,rns-hooks-native
 
       - name: Check core crates without std
+        if: needs.changes.outputs.no_std != 'false'
         run: cargo check -p rns-crypto -p rns-core --no-default-features
 
+      # Every workspace crate on a full run; on a pull request, the crates
+      # the change reaches (those changed and every crate depending on them).
       - name: Run workspace tests
-        run: cargo test --workspace
+        env:
+          CARGO_TEST_ARGS: ${{ needs.changes.outputs.cargo_test_args || '--workspace' }}
+        run: |
+          echo "cargo test $CARGO_TEST_ARGS"
+          # shellcheck disable=SC2086 # one word per package argument
+          cargo test $CARGO_TEST_ARGS
       - name: Test the compact engine
+        if: needs.changes.outputs.compact_engine != 'false'
         # The workspace build above runs the parallel engine (rns-cli asks for
-        # it); rns-net built alone runs the compact one. Between them, every
-        # rns-net test, the e2e suites included, runs under each I/O model:
-        # parallel, compact folded and compact with its helper threads kept.
+        # it, and any test set with rns-net in it has rns-cli too); rns-net
+        # built alone runs the compact one. Between them, every rns-net test,
+        # the e2e suites included, runs under each I/O model: parallel,
+        # compact folded and compact with its helper threads kept.
         run: |
           cargo test -p rns-net
           cargo test -p rns-net --features compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io
 
   esp32-lockfile:
     name: ESP32 Lockfile
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.esp32 != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -175,6 +248,10 @@ jobs:
 
   reticulum-interop:
     name: Reticulum ${{ matrix.reticulum.version }} Interop
+    # Gated per step, not per job: a matrix job skipped as a whole reports
+    # one unexpanded check instead of one per version.
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -195,10 +272,16 @@ jobs:
             rns_tree: 3448fb48deaf018bbe6e8a04795fa085bef2f2b9
 
     steps:
+      - name: Report a skipped run
+        if: needs.changes.outputs.interop == 'false'
+        run: echo "No change reaches the interop tests; skipping them."
+
       - name: Checkout rns-rs
+        if: needs.changes.outputs.interop != 'false'
         uses: actions/checkout@v7
 
       - name: Checkout mirrored Reticulum interop target
+        if: needs.changes.outputs.interop != 'false'
         run: |
           git clone https://github.com/markqvist/Reticulum.git reticulum-upstream
           git -C reticulum-upstream checkout "${{ matrix.reticulum.commit }}"
@@ -209,6 +292,7 @@ jobs:
       # the bare toolchain afterwards has failed on some runners with
       # "detected conflict: 'bin/cargo-clippy'".
       - name: Install Rust
+        if: needs.changes.outputs.interop != 'false'
         uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy, rustfmt
@@ -218,13 +302,16 @@ jobs:
       # The pinned RNS comes from PYTHONPATH, so LXMF is installed without
       # its RNS dependency.
       - name: Install LXMF
+        if: needs.changes.outputs.interop != 'false'
         run: python3 -m pip install --user --no-deps lxmf==1.0.1
 
       # Upstream rnodeconf, which the rnodeconf comparison tests run.
       - name: Install rnodeconf dependencies
+        if: needs.changes.outputs.interop != 'false'
         run: python3 -m pip install --user pyserial cryptography
 
       - name: Verify upstream version and run live interop
+        if: needs.changes.outputs.interop != 'false'
         env:
           PYTHONPATH: ${{ github.workspace }}/reticulum-upstream
           RETICULUM_UPSTREAM_DIR: ${{ github.workspace }}/reticulum-upstream
@@ -243,6 +330,8 @@ jobs:
 
   cargo-test-hooks:
     name: Cargo Test (rns-hooks)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.hooks != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -284,6 +373,8 @@ jobs:
 
   cargo-test-rns-ctl-tls:
     name: Cargo Test (rns-ctl tls)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ctl_tls != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -302,6 +393,8 @@ jobs:
 
   armv7-build-smoke:
     name: ARMv7 Build Smoke
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.armv7 != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -349,6 +442,8 @@ jobs:
 
   rns-ctl-web-smoke:
     name: rns-ctl-web-smoke
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.web_smoke != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -366,6 +461,8 @@ jobs:
 
   docker-e2e:
     name: Docker E2E
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docker != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
