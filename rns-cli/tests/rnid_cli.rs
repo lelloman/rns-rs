@@ -78,6 +78,12 @@ share_instance = Yes
 instance_name = rnid-test-{rpc_port}
 instance_control_port = {rpc_port}
 
+# rnid stamps its announce (upstream 51fa8413) and exits 0.25 s after
+# queueing it, as upstream's does; a cheap stamp is found in time.
+[stamps]
+destination_value = 2
+destination_cost = 2
+
 [interfaces]
 "#
         ),

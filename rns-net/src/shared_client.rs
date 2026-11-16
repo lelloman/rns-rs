@@ -281,16 +281,29 @@ impl RnsNode {
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,
     ) -> io::Result<Self> {
-        Self::connect_shared_with_reconnect_wait(config, callbacks, Duration::from_secs(8), None)
+        Self::connect_shared_with_reconnect_wait(
+            config,
+            callbacks,
+            Duration::from_secs(8),
+            None,
+            &crate::config::StampsSection::default(),
+            rns_core::constants::HOP_LIMITER,
+        )
     }
 
     /// `instance_storage` is the shared instance's storage directory: ratchets
-    /// this client has not seen announced are looked up there, read-only.
+    /// this client has not seen announced are looked up there, read-only, and
+    /// the client keeps its destination stamps under it, as an upstream client
+    /// shares the instance's storage path. Without it the client announces
+    /// unstamped. `stamps` and `hop_limiter` are the client's own `[stamps]`
+    /// and `[filter] hop_limiter`, which upstream applies in every instance.
     fn connect_shared_with_reconnect_wait(
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,
         reconnect_wait: Duration,
         instance_storage: Option<std::path::PathBuf>,
+        stamps: &crate::config::StampsSection,
+        hop_limiter: u8,
     ) -> io::Result<Self> {
         let transport_config = TransportConfig {
             transport_enabled: false,
@@ -317,6 +330,19 @@ impl RnsNode {
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         driver.connected_to_shared_instance = true;
+        // A client stamps the announces and path requests it emits itself
+        // (upstream 51fa8413), with the node handle and the driver sharing
+        // one stamper and one STAMP_DESTINATIONS flag, as `RnsNode::start`.
+        let stamper = Arc::new(crate::stamper::Stamper::new(tx.clone(), None));
+        driver.set_stamper(Arc::clone(&stamper));
+        let stamp_destinations = Arc::new(std::sync::atomic::AtomicBool::new(
+            rns_core::constants::STAMP_DESTINATIONS,
+        ));
+        driver.set_stamp_destinations_flag(Arc::clone(&stamp_destinations));
+        driver.apply_stamp_config(stamps, hop_limiter);
+        let stamp_store = instance_storage
+            .as_deref()
+            .map(crate::stamps::DestinationStampStore::new);
         // Received ratchets: without a store, packets to destinations that
         // enforce ratchets would go out encrypted to the identity key alone.
         let known_destinations = instance_storage
@@ -442,6 +468,14 @@ impl RnsNode {
             RnsNode::from_parts(tx, driver_handle, None, tick_interval_ms, accepting_work);
         node.destination_types.shared_client = true;
         node.ratchet_store = Some(ratchet_store);
+        node.attach_stamper(
+            stamper,
+            stamp_destinations,
+            crate::stamper::StampTargets::from(stamps),
+        );
+        if let Some(store) = stamp_store {
+            node.set_stamp_store(store);
+        }
         node.restore_known_destinations(known_destinations);
         Ok(node)
     }
@@ -481,6 +515,8 @@ impl RnsNode {
             callbacks,
             Duration::from_secs(8),
             Some(config_dir.join("storage")),
+            &rns_config.stamps,
+            rns_config.reticulum.hop_limiter,
         )?;
         node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
         Ok(node)
@@ -1125,6 +1161,94 @@ mod tests {
         let packet2 = RawPacket::unpack(&frames[0]).unwrap();
         assert_eq!(packet2.destination_hash, dest.hash.0);
         assert_eq!(packet2.context, rns_core::constants::CONTEXT_PATH_RESPONSE);
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn a_shared_client_with_storage_stamps_its_own_announces() {
+        // Upstream 51fa8413: a client of a shared instance stamps the
+        // announces it emits, keeping the stamp in the shared storage path.
+        let port = find_free_port();
+        let addr = format!("127.0.0.1:{}", port);
+        let listener = std::net::TcpListener::bind(&addr).unwrap();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            accepted_tx.send(stream).unwrap();
+        });
+
+        let storage = tempfile::tempdir().unwrap();
+        let cheap = rns_core::stamp::StampCost::from_whole(4);
+        let stamps = crate::config::StampsSection {
+            destination_value: cheap,
+            destination_cost: cheap,
+            ..Default::default()
+        };
+        let node = RnsNode::connect_shared_with_reconnect_wait(
+            SharedClientConfig {
+                instance_name: format!("test-shared-stamps-{port}"),
+                port,
+                rpc_port: 0,
+                use_af_unix: true,
+                force_bitrate: None,
+            },
+            Box::new(NoopCallbacks),
+            Duration::from_secs(8),
+            Some(storage.path().to_path_buf()),
+            &stamps,
+            rns_core::constants::HOP_LIMITER,
+        )
+        .unwrap();
+
+        let identity = Identity::new(&mut OsRng);
+        let dest = crate::destination::Destination::single_in(
+            "shared-stamps",
+            &["echo"],
+            IdentityHash(*identity.hash()),
+        );
+        node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())
+            .unwrap();
+        node.announce_queued(&dest, &identity, Some(b"hello"))
+            .unwrap();
+
+        let mut stream = accepted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut decoder = crate::interface::local::frame_decoder(0);
+        let mut buf = [0u8; 4096];
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let announce = 'found: loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no stamped announce from the client"
+            );
+            let Ok(n) = stream.read(&mut buf) else {
+                continue;
+            };
+            for frame in decoder.feed(&buf[..n]) {
+                let packet = RawPacket::unpack(&frame).unwrap();
+                if packet.destination_hash == dest.hash.0
+                    && packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
+                {
+                    break 'found packet;
+                }
+            }
+        };
+        let mut validated = rns_core::announce::AnnounceData::unpack(
+            announce.data(),
+            announce.flags.context_flag == rns_core::constants::FLAG_SET,
+        )
+        .unwrap()
+        .validate(&dest.hash.0)
+        .unwrap();
+        assert_eq!(
+            validated.apply_stamp(&dest.hash.0, cheap),
+            rns_core::announce::AnnounceStampStatus::Valid
+        );
+        assert_eq!(validated.app_data.as_deref(), Some(&b"hello"[..]));
+        assert!(storage.path().join("stamps").is_dir());
 
         node.shutdown();
     }

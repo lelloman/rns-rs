@@ -4359,6 +4359,19 @@ impl RnsNode {
         result
     }
 
+    /// Share the driver's stamper and `STAMP_DESTINATIONS` flag, so this
+    /// handle stamps announces as the driver is configured to.
+    pub(crate) fn attach_stamper(
+        &mut self,
+        stamper: Arc<crate::stamper::Stamper>,
+        stamp_destinations: Arc<AtomicBool>,
+        targets: crate::stamper::StampTargets,
+    ) {
+        self.stamper = Some(stamper);
+        self.stamp_destinations = stamp_destinations;
+        self.stamp_targets = targets;
+    }
+
     /// Use `store` for destination stamps, here and in the stamper.
     pub(crate) fn set_stamp_store(&mut self, store: crate::stamps::DestinationStampStore) {
         if let Some(stamper) = self.stamper.as_ref() {
