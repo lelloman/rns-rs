@@ -384,6 +384,9 @@ works with a Python shared instance on its Linux default, which serves RPC
 only on that socket, as well as with one set to `shared_instance_type = tcp`.
 `rncp` and `rnx` clients, the `rnsh` initiator and remote management in
 `rnstatus` and `rnpath` register their types, as the Python utilities do.
+A node with `discover_interfaces` registers
+`rnstransport.discovery.interface`, so `required_only` keeps discovery
+announces (upstream `884f109b`).
 Python clients from `825c2e19` on register theirs with an rns-rs shared
 instance the same way. `RnsNode::required_announces_only` applies
 `required_only` to a single client's own transport; it does nothing on a node

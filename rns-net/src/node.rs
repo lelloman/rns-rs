@@ -2424,6 +2424,7 @@ impl RnsNode {
 
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
+        let discover_interfaces = config.discover_interfaces;
         driver.interface_discovery_sources = config.discovery.interface_discovery_sources.clone();
         driver.forced_local_bitrate = config.shared_instance.force_bitrate;
         if config.discovery.network_identity {
@@ -3290,6 +3291,17 @@ impl RnsNode {
         if let Some(storage_dir) = storage_dir {
             node.set_stamp_store(crate::stamps::DestinationStampStore::new(&storage_dir));
         }
+        // InterfaceDiscovery (upstream 884f109b): an instance discovering
+        // interfaces wants their announces, so `required_only` keeps them.
+        #[cfg(feature = "iface-local")]
+        if discover_interfaces {
+            node.wants_destination_type(&format!(
+                "{}.discovery.interface",
+                crate::discovery::APP_NAME
+            ));
+        }
+        #[cfg(not(feature = "iface-local"))]
+        let _ = discover_interfaces;
         Ok(node)
     }
 
@@ -8706,6 +8718,28 @@ enable_transport = False
                 .unwrap();
         let announce = rns_core::announce::AnnounceData::unpack(packet.data(), false).unwrap();
         assert_eq!(announce.app_data.as_deref(), Some(&b"app"[..]));
+    }
+
+    #[cfg(feature = "iface-local")]
+    #[test]
+    fn a_node_discovering_interfaces_wants_their_announces() {
+        // Upstream 884f109b: InterfaceDiscovery registers the type, so a
+        // node with `required_only` still receives discovery announces.
+        let discovery_type = "rnstransport.discovery.interface";
+        let node = RnsNode::start(
+            NodeConfig {
+                discover_interfaces: true,
+                ..NodeConfig::default()
+            },
+            Box::new(NoopCallbacks),
+        )
+        .unwrap();
+        assert!(node.unwants_destination_type(discovery_type));
+        node.shutdown();
+
+        let node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
+        assert!(!node.unwants_destination_type(discovery_type));
+        node.shutdown();
     }
 
     #[test]
