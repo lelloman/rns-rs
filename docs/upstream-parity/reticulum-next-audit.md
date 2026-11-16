@@ -54,7 +54,7 @@ Dispositions are provisional until each mapping commit lands.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `29dc449af89adb41b142141bee63093f6edb76b4` | Traffic counting | Integrated | `held_frames_are_filtered_and_releases_are_charged_again`, `released_announces_are_charged_as_received_traffic`; `held_announces_limit_applies_only_while_ingress_limiting` and `announce_is_held_while_held_announces_have_room` updated |
-| 2 | `85d3697938393fbe68661ae9b06d2047269252d3` | Pre-emptively cull held announce queue for useless announces | Needs coordinated port (with 4) | |
+| 2 | `85d3697938393fbe68661ae9b06d2047269252d3` | Pre-emptively cull held announce queue for useless announces | Integrated | `held_announces_that_cannot_update_a_path_are_culled`, `announce_prefilter_keeps_only_announces_that_could_update_the_path` |
 | 3 | `a450be5d7ed40c78353f547f1373587bb2b85d9f` | Raised announce validation caches to 384 | Needs decision | |
 | 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Needs coordinated port (with 2) | |
 | 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Needs port | |
@@ -123,13 +123,32 @@ interface while the path is not unresponsive. Culled announces free queue
 slots without being released.
 
 **Rust applicability:** The engine's held-announce release
-(`maintenance.rs`) only selects the lowest-hop announce. The keep test is
-moved into `Transport.announce_prefilter` by commit 4, so both are ported
-together on the shared predicate.
+(`maintenance.rs`, `IngressControl::process_held_announces`) only selected
+the lowest-hop announce. Commit 4 moves the keep test into
+`Transport.announce_prefilter` and also uses it in inbound preprocessing, so
+it is ported here in the form commit 4 shares.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** `pathfinder::announce_prefilter` is the keep
+test, comparing emission times as `should_update_path` does (an
+implausibly-future emission time counts as unknown, the existing rns-rs
+deviation). `maintenance::announce_passes_prefilter` applies it to a
+destination's primary path, with the gravity of both receiving interfaces and
+the path state; a path whose receiving interface is gone keeps the announce,
+as upstream does for a path without one. It keeps every announce when
+`max_paths_per_destination` is above 1 or `prefer_shorter_path` is set: both
+are rns-rs extensions under which an older or same-time announce can still add
+an alternative or shorter path, and upstream has neither.
+`IngressControl::process_held_announces` takes the test as a closure and,
+once the release conditions hold, drops every held announce that fails it
+before selecting the lowest-hop one; with none left the release interval does
+not restart, as upstream. Tests:
+`announce_prefilter_keeps_only_announces_that_could_update_the_path`
+(predicate cases) and `held_announces_that_cannot_update_a_path_are_culled`
+(a held announce outdated by a newer one on another interface is culled
+without a release, while another is released; nothing is culled during the
+burst).
 
-**Final disposition:** Needs coordinated port (with 4).
+**Final disposition:** Integrated.
 
 ### 3. `a450be5d` — Raised announce validation caches to 384
 
