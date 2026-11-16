@@ -128,6 +128,11 @@ impl LinkManager {
                         payload,
                     });
                 }
+                rns_core::channel::ChannelAction::PathFailed => {
+                    // Retries ran out over a direct path: fall back first,
+                    // then the resends that follow take the original route.
+                    result.push(LinkManagerAction::DirectPathFailed { link_id: *link_id });
+                }
                 rns_core::channel::ChannelAction::TeardownLink => {
                     // Python `LinkChannelOutlet.timed_out` calls
                     // `Link.teardown()`: the link is closed, LINKCLOSE is sent

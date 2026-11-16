@@ -28,6 +28,9 @@ pub const UPGRADE_REQUEST: u8 = 0x01;
 pub const UPGRADE_ACCEPT: u8 = 0x02;
 pub const UPGRADE_REJECT: u8 = 0x03;
 pub const UPGRADE_READY: u8 = 0x04;
+/// "I stopped using the direct path of this session; use the link's
+/// original path." Sent over the original path.
+pub const FALLBACK: u8 = 0x05;
 
 /// Check if a signalling kind is one of the upgrade negotiation messages.
 pub fn is_holepunch_msgtype(kind: u8) -> bool {
@@ -190,7 +193,7 @@ mod tests {
         assert!(is_holepunch_msgtype(UPGRADE_REJECT));
         assert!(is_holepunch_msgtype(UPGRADE_READY));
         assert!(!is_holepunch_msgtype(HELLO));
-        assert!(!is_holepunch_msgtype(0x05));
+        assert!(!is_holepunch_msgtype(FALLBACK));
         assert!(!is_holepunch_msgtype(0xFF));
     }
 

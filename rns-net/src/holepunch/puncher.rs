@@ -516,12 +516,6 @@ fn verify_ack_packet(data: &[u8], session_id: &[u8; 16], punch_token: &[u8; 32])
     &data[4..20] == session_id && &data[20..52] == punch_token
 }
 
-/// Build a keepalive punch packet (empty payload, just the punch header).
-/// Used to maintain NAT mappings on the direct UDP interface.
-pub fn build_keepalive_packet(session_id: &[u8; 16], punch_token: &[u8; 32]) -> Vec<u8> {
-    build_punch_packet(session_id, punch_token, u32::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

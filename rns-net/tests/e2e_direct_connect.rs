@@ -34,7 +34,25 @@ enum TestEvent {
     Channel([u8; 16], u16, Vec<u8>),
 }
 
-struct TestCallbacks(mpsc::Sender<TestEvent>);
+/// What happened to a node's links, kept apart from the event queue that
+/// `wait_for` drains.
+#[derive(Default)]
+struct Record {
+    direct_lost: std::sync::atomic::AtomicUsize,
+    links_closed: std::sync::atomic::AtomicUsize,
+}
+
+impl Record {
+    fn direct_lost(&self) -> usize {
+        self.direct_lost.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn links_closed(&self) -> usize {
+        self.links_closed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+struct TestCallbacks(mpsc::Sender<TestEvent>, std::sync::Arc<Record>);
 
 impl Callbacks for TestCallbacks {
     fn on_announce(&mut self, announced: AnnouncedIdentity) {
@@ -60,6 +78,9 @@ impl Callbacks for TestCallbacks {
         link_id: rns_net::LinkId,
         _reason: Option<rns_net::TeardownReason>,
     ) {
+        self.1
+            .links_closed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let _ = self.0.send(TestEvent::LinkClosed(link_id.0));
     }
 
@@ -79,6 +100,12 @@ impl Callbacks for TestCallbacks {
 
     fn on_direct_connect_failed(&mut self, link_id: rns_net::LinkId, reason: u8) {
         let _ = self.0.send(TestEvent::DirectFailed(link_id.0, reason));
+    }
+
+    fn on_direct_connect_lost(&mut self, _link_id: rns_net::LinkId, _interface_id: InterfaceId) {
+        self.1
+            .direct_lost
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -177,6 +204,7 @@ fn node(
     settings: DirectSettings,
     alice: &Identity,
     tx: mpsc::Sender<TestEvent>,
+    record: std::sync::Arc<Record>,
 ) -> RnsNode {
     let mut config = NodeConfig {
         identity: Some(Identity::from_private_key(
@@ -202,7 +230,7 @@ fn node(
     if settings.allow_alice {
         config.direct_connect_allowed_identities = vec![*alice.hash()];
     }
-    RnsNode::start(config, Box::new(TestCallbacks(tx))).unwrap()
+    RnsNode::start(config, Box::new(TestCallbacks(tx, record))).unwrap()
 }
 
 fn wait_for<T>(
@@ -240,8 +268,10 @@ struct Pair {
     alice: RnsNode,
     alice_id: Identity,
     alice_rx: mpsc::Receiver<TestEvent>,
+    alice_record: std::sync::Arc<Record>,
     bob: RnsNode,
     bob_rx: mpsc::Receiver<TestEvent>,
+    bob_record: std::sync::Arc<Record>,
     link_id: [u8; 16],
 }
 
@@ -266,6 +296,8 @@ impl Pair {
                 .set_proof_strategy(ProofStrategy::ProveAll);
 
         let (bob_tx, bob_rx) = mpsc::channel();
+        let bob_record = std::sync::Arc::new(Record::default());
+        let alice_record = std::sync::Arc::new(Record::default());
         let bob = node(
             &bob_id,
             interface(
@@ -285,6 +317,7 @@ impl Pair {
             },
             &alice_id,
             bob_tx,
+            bob_record.clone(),
         );
         bob.register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
             .unwrap();
@@ -314,6 +347,7 @@ impl Pair {
             alice_settings,
             &alice_id,
             alice_tx,
+            alice_record.clone(),
         );
 
         // Alice learns Bob's destination, and links to it.
@@ -344,8 +378,10 @@ impl Pair {
             alice,
             alice_id,
             alice_rx,
+            alice_record,
             bob,
             bob_rx,
+            bob_record,
             link_id,
         })
     }
@@ -768,6 +804,10 @@ fn repeated_upgrade_replaces_the_direct_interface() {
     let (first_alice, first_bob) = pair.upgrade();
     // Proposals on a link are paced to one a minute on both sides.
     std::thread::sleep(Duration::from_secs(61));
+    // An idle link keeps its working direct path meanwhile.
+    assert_eq!(pair.alice_record.direct_lost(), 0);
+    assert_eq!(pair.bob_record.direct_lost(), 0);
+    assert_eq!(pair.alice_record.links_closed(), 0);
     let (second_alice, second_bob) = pair.upgrade();
     assert_ne!(first_alice, second_alice);
     assert_ne!(first_bob, second_bob);
@@ -787,5 +827,166 @@ fn repeated_upgrade_replaces_the_direct_interface() {
         b"over the new path",
         Duration::from_secs(10)
     ));
+    pair.shutdown();
+}
+
+fn link_mdu(node: &RnsNode, link_id: [u8; 16]) -> usize {
+    node.links()
+        .unwrap()
+        .into_iter()
+        .find(|link| link.link_id == link_id)
+        .expect("link gone")
+        .mdu
+}
+
+/// After the direct path is lost: the link is open on both sides, both
+/// were told, no direct interface remains, the link's MDU is what it was
+/// before the upgrade, and messages flow both ways for a while, over TCP.
+fn assert_fell_back(pair: &Pair, mdu_before: (usize, usize)) {
+    let link_id = pair.link_id;
+    let lost = || pair.alice_record.direct_lost() > 0 && pair.bob_record.direct_lost() > 0;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    // Alice keeps sending while the path fails; every message arrives.
+    let mut n = 0;
+    while Instant::now() < deadline && !lost() {
+        let text = format!("during {n}");
+        assert!(
+            deliver(
+                &pair.alice,
+                &pair.bob_rx,
+                link_id,
+                text.as_bytes(),
+                Duration::from_secs(25)
+            ),
+            "{text} not delivered"
+        );
+        n += 1;
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert!(lost(), "fallback not reported on both sides");
+    assert!(
+        eventually(Duration::from_secs(5), || direct_interfaces(&pair.alice)
+            .is_empty()
+            && direct_interfaces(&pair.bob).is_empty()),
+        "direct interfaces left: alice {:?} bob {:?}",
+        direct_interfaces(&pair.alice),
+        direct_interfaces(&pair.bob)
+    );
+    assert_eq!(
+        (link_mdu(&pair.alice, link_id), link_mdu(&pair.bob, link_id)),
+        mdu_before
+    );
+
+    // The link goes on over the original path, both ways, well past the
+    // link's stale time.
+    let tcp_before = traffic(&pair.alice, InterfaceId(1)).unwrap();
+    let until = Instant::now() + Duration::from_secs(25);
+    let mut n = 0;
+    while Instant::now() < until {
+        assert!(deliver(
+            &pair.alice,
+            &pair.bob_rx,
+            link_id,
+            format!("after {n}").as_bytes(),
+            Duration::from_secs(10)
+        ));
+        assert!(deliver(
+            &pair.bob,
+            &pair.alice_rx,
+            link_id,
+            format!("reply {n}").as_bytes(),
+            Duration::from_secs(10)
+        ));
+        n += 1;
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    let tcp_after = traffic(&pair.alice, InterfaceId(1)).unwrap();
+    assert!(tcp_after.0 > tcp_before.0 && tcp_after.1 > tcp_before.1);
+    assert_eq!(pair.alice_record.links_closed(), 0);
+    assert_eq!(pair.bob_record.links_closed(), 0);
+    // Each side lost its direct path once.
+    assert_eq!(pair.alice_record.direct_lost(), 1);
+    assert_eq!(pair.bob_record.direct_lost(), 1);
+}
+
+#[test]
+fn link_falls_back_when_the_direct_interface_goes_down() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    let mdu_before = (
+        link_mdu(&pair.alice, pair.link_id),
+        link_mdu(&pair.bob, pair.link_id),
+    );
+    let (_, bob_iface) = pair.upgrade();
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        pair.link_id,
+        b"direct",
+        Duration::from_secs(10)
+    ));
+
+    // Bob's direct interface goes down, as on a receive error.
+    pair.bob
+        .event_sender()
+        .send(rns_net::event::Event::InterfaceDown(bob_iface))
+        .unwrap();
+    assert_fell_back(&pair, mdu_before);
+    pair.shutdown();
+}
+
+#[test]
+fn link_falls_back_when_the_direct_path_dies_silently() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    let mdu_before = (
+        link_mdu(&pair.alice, pair.link_id),
+        link_mdu(&pair.bob, pair.link_id),
+    );
+    pair.upgrade();
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        pair.link_id,
+        b"direct",
+        Duration::from_secs(10)
+    ));
+
+    // The network stops carrying the direct path, both ways, without any
+    // error: only the missing keepalives and replies tell.
+    pair.bob
+        .blackhole_direct_path_for_testing(pair.link_id)
+        .unwrap();
+    assert_fell_back(&pair, mdu_before);
+    pair.shutdown();
+}
+
+#[test]
+fn idle_link_falls_back_when_the_direct_path_dies_silently() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    let mdu_before = (
+        link_mdu(&pair.alice, pair.link_id),
+        link_mdu(&pair.bob, pair.link_id),
+    );
+    pair.upgrade();
+    pair.bob
+        .blackhole_direct_path_for_testing(pair.link_id)
+        .unwrap();
+    // Nothing is sent: the keepalives (or the link going stale) detect it.
+    let started = Instant::now();
+    assert!(
+        eventually(Duration::from_secs(25), || pair.alice_record.direct_lost()
+            > 0
+            && pair.bob_record.direct_lost() > 0),
+        "no fallback"
+    );
+    eprintln!("idle fallback after {:?}", started.elapsed());
+    assert_eq!(pair.alice_record.links_closed(), 0);
+    assert_eq!(pair.bob_record.links_closed(), 0);
+    assert_fell_back(&pair, mdu_before);
     pair.shutdown();
 }

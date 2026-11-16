@@ -35,6 +35,26 @@ pub fn derive_punch_token(
     Ok(token)
 }
 
+/// Derives the 32-byte key that authenticates the direct path's keepalives.
+///
+/// `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-keepalive-v1")`.
+/// Unlike the punch token, it never appears on the wire.
+pub fn derive_keepalive_key(
+    derived_key: &[u8],
+    session_id: &[u8; 16],
+) -> Result<[u8; 32], HolePunchError> {
+    let result = hkdf(
+        32,
+        derived_key,
+        Some(session_id),
+        Some(b"rns-holepunch-keepalive-v1"),
+    )
+    .map_err(|_| HolePunchError::NoDerivedKey)?;
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result);
+    Ok(key)
+}
+
 /// The hole-punch state machine for a single link.
 pub struct HolePunchEngine {
     link_id: [u8; 16],
@@ -57,6 +77,9 @@ pub struct HolePunchEngine {
 
     /// Punch token derived from link key + session_id.
     punch_token: [u8; 32],
+
+    /// Key authenticating the direct path's keepalives.
+    keepalive_key: [u8; 32],
 
     /// Probe service address for endpoint discovery (configured on this node).
     probe_addr: Option<Endpoint>,
@@ -96,6 +119,7 @@ impl HolePunchEngine {
             peer_public_endpoint: None,
             facilitator_addr: None,
             punch_token: [0u8; 32],
+            keepalive_key: [0u8; 32],
             probe_addr,
             probe_protocol,
             state_entered_at: 0.0,
@@ -152,6 +176,10 @@ impl HolePunchEngine {
         &self.punch_token
     }
 
+    pub fn keepalive_key(&self) -> &[u8; 32] {
+        &self.keepalive_key
+    }
+
     /// Override the facilitator address.
     ///
     /// Used when the orchestrator discovers that a different probe server
@@ -188,8 +216,9 @@ impl HolePunchEngine {
         self.session_id = session_id;
         self.is_initiator = true;
 
-        // Derive punch token
+        // Derive punch token and keepalive key
         self.punch_token = derive_punch_token(derived_key, &session_id)?;
+        self.keepalive_key = derive_keepalive_key(derived_key, &session_id)?;
 
         let probe_addr = self.probe_addr.clone().ok_or(HolePunchError::NoProbeAddr)?;
         self.facilitator_addr = Some(probe_addr.clone());
@@ -402,6 +431,7 @@ impl HolePunchEngine {
         self.peer_public_endpoint = None;
         self.facilitator_addr = None;
         self.punch_token = [0u8; 32];
+        self.keepalive_key = [0u8; 32];
         self.probe_protocol = ProbeProtocol::Rnsp;
         self.state_entered_at = 0.0;
         self.request_payload = None;
@@ -439,6 +469,7 @@ impl HolePunchEngine {
         self.is_initiator = false;
         self.probe_protocol = protocol;
         self.punch_token = derive_punch_token(derived_key, &session_id)?;
+        self.keepalive_key = derive_keepalive_key(derived_key, &session_id)?;
 
         // Store A's public address (we'll punch this later)
         self.peer_public_endpoint = Some(initiator_public);
@@ -586,6 +617,28 @@ pub fn encode_hello(reply_wanted: bool) -> Vec<u8> {
             Value::Bool(reply_wanted)
         ),
     ]))
+}
+
+/// Encode a `FALLBACK` body: `{"s": session_id, "r": reply_wanted}`.
+pub fn encode_fallback(session_id: &[u8; 16], reply_wanted: bool) -> Vec<u8> {
+    msgpack::pack(&Value::Map(alloc::vec![
+        (
+            Value::Str(alloc::string::String::from("s")),
+            Value::Bin(session_id.to_vec())
+        ),
+        (
+            Value::Str(alloc::string::String::from("r")),
+            Value::Bool(reply_wanted)
+        ),
+    ]))
+}
+
+/// Decode a `FALLBACK` body into its session and whether a reply is wanted.
+pub fn decode_fallback(data: &[u8]) -> Result<([u8; 16], bool), HolePunchError> {
+    let (val, _) = msgpack::unpack(data).map_err(|_| HolePunchError::InvalidPayload)?;
+    let session_id = extract_session_id(&val)?;
+    let reply_wanted = val.map_get("r").and_then(|v| v.as_bool()).unwrap_or(false);
+    Ok((session_id, reply_wanted))
 }
 
 /// Decode a `HELLO` body. Unknown fields are ignored, so later versions can
@@ -1499,5 +1552,40 @@ mod tests {
         assert_eq!(ready_endpoint, test_public_addr_b());
         // An initiator has nothing to replay.
         assert!(initiator.replay_replies().is_empty());
+    }
+
+    #[test]
+    fn fallback_round_trips() {
+        let body = encode_fallback(&[9; 16], true);
+        assert_eq!(decode_fallback(&body).unwrap(), ([9; 16], true));
+        assert_eq!(
+            decode_fallback(&encode_fallback(&[3; 16], false)).unwrap(),
+            ([3; 16], false)
+        );
+        assert!(decode_fallback(&encode_hello(true)).is_err());
+    }
+
+    #[test]
+    fn keepalive_key_is_shared_by_both_sides_and_not_the_punch_token() {
+        let derived_key = test_derived_key();
+        let mut initiator =
+            HolePunchEngine::new([0x33; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator
+            .propose(&derived_key, 100.0, &mut make_rng(4))
+            .unwrap();
+        let request = signal(
+            &initiator
+                .endpoints_discovered(test_public_addr_a(), 100.0)
+                .unwrap()[0],
+        )
+        .unwrap()
+        .1;
+        let mut responder = HolePunchEngine::new([0x33; 16], None, ProbeProtocol::Rnsp);
+        responder
+            .handle_signal(UPGRADE_REQUEST, &request, Some(&derived_key), 101.0)
+            .unwrap();
+        assert_eq!(initiator.keepalive_key(), responder.keepalive_key());
+        assert_ne!(initiator.keepalive_key(), initiator.punch_token());
+        assert_ne!(*initiator.keepalive_key(), [0u8; 32]);
     }
 }

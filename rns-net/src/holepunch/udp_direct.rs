@@ -9,6 +9,11 @@
 //! path requests or broadcasts are routed to it), and its reader and writer
 //! drop any frame that is not a link DATA or PROOF packet addressed to the
 //! link. Nothing else can reach the peer through it, or the node through it.
+//!
+//! Liveness: each side sends an authenticated keepalive every
+//! [`KEEPALIVE_INTERVAL`]; the interface goes down when no valid, fresh
+//! keepalive has arrived for [`INACTIVITY_TIMEOUT`] (three missed), and the
+//! driver then moves the link back to its original path.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -22,13 +27,84 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::Writer;
 
-use super::puncher;
+/// Interval between keepalives, which also keep the NAT mapping open.
+pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Keepalive interval for maintaining NAT mappings.
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Without a valid keepalive for this long the direct path is dead.
+pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Timeout for considering the direct connection dead.
-const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
+/// MTU of the direct interface: one UDP datagram that crosses the internet
+/// without IP fragmentation.
+pub const DIRECT_MTU: u32 = 1400;
+
+const KEEPALIVE_MAGIC: &[u8; 4] = b"RNSK";
+const KEEPALIVE_TAG_LEN: usize = 16;
+const KEEPALIVE_LEN: usize = 4 + 16 + 8 + KEEPALIVE_TAG_LEN;
+
+/// Authenticated keepalives of one direct path:
+/// `"RNSK" | session id (16) | counter (u64 BE) | HMAC-SHA256(key, preceding 28 bytes)[..16]`.
+/// The key is derived from the link key and the session (see
+/// `rns_core::holepunch::derive_keepalive_key`) and never sent; a counter
+/// not above the last one accepted is a replay and does not count.
+struct Keepalives {
+    key: [u8; 32],
+    session_id: [u8; 16],
+    sent: u64,
+    seen: u64,
+}
+
+impl Keepalives {
+    fn new(key: [u8; 32], session_id: [u8; 16]) -> Self {
+        Keepalives {
+            key,
+            session_id,
+            sent: 0,
+            seen: 0,
+        }
+    }
+
+    fn next_packet(&mut self) -> Vec<u8> {
+        self.sent += 1;
+        let mut packet = Vec::with_capacity(KEEPALIVE_LEN);
+        packet.extend_from_slice(KEEPALIVE_MAGIC);
+        packet.extend_from_slice(&self.session_id);
+        packet.extend_from_slice(&self.sent.to_be_bytes());
+        let tag = rns_crypto::hmac::hmac_sha256(&self.key, &packet);
+        packet.extend_from_slice(&tag[..KEEPALIVE_TAG_LEN]);
+        packet
+    }
+
+    /// Whether `data` is a valid keepalive newer than any seen before.
+    fn accept(&mut self, data: &[u8]) -> bool {
+        if data.len() != KEEPALIVE_LEN
+            || &data[..4] != KEEPALIVE_MAGIC
+            || data[4..20] != self.session_id
+        {
+            return false;
+        }
+        let signed = &data[..KEEPALIVE_LEN - KEEPALIVE_TAG_LEN];
+        let tag = rns_crypto::hmac::hmac_sha256(&self.key, signed);
+        if !constant_time_eq(&tag[..KEEPALIVE_TAG_LEN], &data[signed.len()..]) {
+            return false;
+        }
+        let counter = u64::from_be_bytes(data[20..28].try_into().unwrap());
+        if counter <= self.seen {
+            return false;
+        }
+        self.seen = counter;
+        true
+    }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Datagrams that are not Reticulum packets: keepalives, and punch packets
+/// and acknowledgements still arriving after the punch.
+fn is_control_datagram(data: &[u8]) -> bool {
+    data.len() >= 4 && matches!(&data[..4], b"RNSK" | b"RNSH" | b"RNSA")
+}
 
 /// Whether `frame` is a packet of the link the direct interface belongs to:
 /// a HEADER_1 link DATA or PROOF packet whose destination is `link_id`.
@@ -46,6 +122,16 @@ pub(crate) fn carries_link(frame: &[u8], link_id: &[u8; 16]) -> bool {
         && frame.get(2..18) == Some(&link_id[..])
 }
 
+/// What a direct interface needs to know about its upgrade.
+pub struct DirectPathParams {
+    pub link_id: [u8; 16],
+    pub session_id: [u8; 16],
+    pub keepalive_key: [u8; 32],
+    /// Set to make the path silently drop everything in both directions,
+    /// as a network that stopped carrying it would (for tests).
+    pub blackhole: Arc<AtomicBool>,
+}
+
 /// Writer for a direct UDP peer-to-peer connection.
 ///
 /// When dropped, signals the reader thread to stop.
@@ -55,6 +141,7 @@ pub struct UdpDirectWriter {
     /// The link this interface belongs to; other frames are not sent.
     link_id: [u8; 16],
     running: Arc<AtomicBool>,
+    blackhole: Arc<AtomicBool>,
     /// Called by the driver directly on a non-blocking socket, with
     /// interface I/O folded (see [`crate::engine::FOLD_IO`]).
     inline: bool,
@@ -64,6 +151,9 @@ impl UdpDirectWriter {
     /// Frames of other traffic are dropped, as a link that cannot carry
     /// them would.
     fn admits(&self, data: &[u8]) -> bool {
+        if self.blackhole.load(Ordering::Relaxed) {
+            return false;
+        }
         let ok = carries_link(data, &self.link_id);
         if !ok {
             log::trace!("Direct UDP interface dropped a frame not of its link");
@@ -121,16 +211,15 @@ impl Drop for UdpDirectWriter {
 
 /// Start a direct UDP interface from a punched socket.
 ///
-/// Returns `(interface_id, writer, InterfaceInfo)` and spawns a reader thread.
-/// The reader thread sends `Event::Frame` for incoming packets and
-/// `Event::InterfaceDown` if the connection times out.
+/// Returns `(writer, InterfaceInfo)` and spawns a reader thread (or, with
+/// interface I/O folded, registers a source on the driver loop). The reader
+/// sends `Event::Frame` for the link's packets and `Event::InterfaceDown`
+/// when the keepalives stop.
 pub fn start_direct_interface(
     socket: UdpSocket,
     peer_addr: SocketAddr,
     interface_id: InterfaceId,
-    link_id: [u8; 16],
-    session_id: [u8; 16],
-    punch_token: [u8; 32],
+    params: DirectPathParams,
     tx: EventSender,
 ) -> io::Result<(Box<dyn Writer>, InterfaceInfo)> {
     let socket = Arc::new(socket);
@@ -138,7 +227,7 @@ pub fn start_direct_interface(
     if inline {
         socket.set_nonblocking(true)?;
     } else {
-        socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+        socket.set_read_timeout(Some(Duration::from_millis(500)))?;
     }
 
     let running = Arc::new(AtomicBool::new(true));
@@ -146,11 +235,13 @@ pub fn start_direct_interface(
     let writer = UdpDirectWriter {
         socket: socket.clone(),
         peer_addr,
-        link_id,
+        link_id: params.link_id,
         running: running.clone(),
+        blackhole: params.blackhole.clone(),
         inline,
     };
 
+    let session_id = params.session_id;
     let name = format!(
         "DirectPeer/{:02x}{:02x}{:02x}{:02x}",
         session_id[0], session_id[1], session_id[2], session_id[3]
@@ -179,7 +270,7 @@ pub fn start_direct_interface(
         is_local_client: false,
         wants_tunnel: false,
         tunnel_id: None,
-        mtu: 1400,
+        mtu: DIRECT_MTU,
         mtu_upgradable: false,
         ia_freq: 0.0,
         ip_freq: 0.0,
@@ -189,97 +280,120 @@ pub fn start_direct_interface(
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
     };
 
+    let reader = DirectReader {
+        socket,
+        peer_addr,
+        interface_id,
+        link_id: params.link_id,
+        keepalives: Keepalives::new(params.keepalive_key, session_id),
+        last_inbound: std::time::Instant::now(),
+        last_keepalive: None,
+        tx: tx.clone(),
+        running,
+        blackhole: params.blackhole,
+    };
+
     if inline {
-        let now = std::time::Instant::now();
         tx.register_source(
             crate::interface::loop_writer::read_key(interface_id),
-            Box::new(DirectSource {
-                socket,
-                peer_addr,
-                interface_id,
-                link_id,
-                keepalive: puncher::build_keepalive_packet(&session_id, &punch_token),
-                last_inbound: now,
-                last_keepalive: now,
-                tx: tx.clone(),
-                running,
-            }),
+            Box::new(DirectSource(reader)),
         )?;
         return Ok((Box::new(writer), info));
     }
 
-    let running_clone = running.clone();
-
     // Spawn reader + keepalive thread
     thread::Builder::new()
         .name(format!("direct-udp-{}", &name))
-        .spawn(move || {
-            run_reader(
-                socket,
-                peer_addr,
-                interface_id,
-                link_id,
-                session_id,
-                punch_token,
-                tx,
-                running_clone,
-            );
-        })?;
+        .spawn(move || run_reader(reader))?;
 
     Ok((Box::new(writer), info))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_reader(
+/// The receiving side of a direct path, with its keepalives and liveness.
+struct DirectReader {
     socket: Arc<UdpSocket>,
     peer_addr: SocketAddr,
     interface_id: InterfaceId,
     link_id: [u8; 16],
-    session_id: [u8; 16],
-    punch_token: [u8; 32],
+    keepalives: Keepalives,
+    /// When the last valid keepalive arrived (or the path came up).
+    last_inbound: std::time::Instant,
+    last_keepalive: Option<std::time::Instant>,
     tx: EventSender,
+    /// Cleared when the writer is dropped with the interface.
     running: Arc<AtomicBool>,
-) {
-    let mut buf = [0u8; 2048];
-    let mut last_inbound = std::time::Instant::now();
-    let mut last_keepalive = std::time::Instant::now();
-    let keepalive_pkt = puncher::build_keepalive_packet(&session_id, &punch_token);
+    blackhole: Arc<AtomicBool>,
+}
 
-    while running.load(Ordering::Relaxed) {
-        // Send keepalive if due
-        if last_keepalive.elapsed() >= KEEPALIVE_INTERVAL {
-            let _ = socket.send_to(&keepalive_pkt, peer_addr);
-            last_keepalive = std::time::Instant::now();
+impl DirectReader {
+    fn stopped(&self) -> bool {
+        !self.running.load(Ordering::Relaxed)
+    }
+
+    /// A datagram read from the socket: the frame to deliver, if any.
+    fn receive(&mut self, data: &[u8], src: SocketAddr) -> Option<Event> {
+        // Only our verified peer, and nothing at all while blackholed.
+        if src != self.peer_addr || self.blackhole.load(Ordering::Relaxed) {
+            return None;
         }
+        if is_control_datagram(data) {
+            if self.keepalives.accept(data) {
+                self.last_inbound = std::time::Instant::now();
+            }
+            return None;
+        }
+        carries_link(data, &self.link_id).then(|| Event::Frame {
+            interface_id: self.interface_id,
+            data: data.into(),
+            rssi: None,
+            snr: None,
+        })
+    }
 
-        // Check inactivity timeout
-        if last_inbound.elapsed() >= INACTIVITY_TIMEOUT {
-            log::info!("[{}] Direct UDP interface timed out", interface_id.0);
-            let _ = tx.send(Event::InterfaceDown(interface_id));
+    /// Send a keepalive if one is due; whether the path timed out.
+    fn on_timer(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if now >= self.last_inbound + INACTIVITY_TIMEOUT {
+            log::info!(
+                "[{}] Direct UDP interface timed out: no keepalive for {:?}",
+                self.interface_id.0,
+                INACTIVITY_TIMEOUT
+            );
+            return true;
+        }
+        let due = self
+            .last_keepalive
+            .is_none_or(|last| now >= last + KEEPALIVE_INTERVAL);
+        if due {
+            self.last_keepalive = Some(now);
+            if !self.blackhole.load(Ordering::Relaxed) {
+                let packet = self.keepalives.next_packet();
+                let _ = self.socket.send_to(&packet, self.peer_addr);
+            }
+        }
+        false
+    }
+
+    fn next_deadline(&self) -> std::time::Instant {
+        let keepalive = self
+            .last_keepalive
+            .map_or_else(std::time::Instant::now, |last| last + KEEPALIVE_INTERVAL);
+        keepalive.min(self.last_inbound + INACTIVITY_TIMEOUT)
+    }
+}
+
+fn run_reader(mut reader: DirectReader) {
+    let mut buf = [0u8; 2048];
+    while !reader.stopped() {
+        if reader.on_timer() {
+            let _ = reader.tx.send(Event::InterfaceDown(reader.interface_id));
             break;
         }
 
-        match socket.recv_from(&mut buf) {
+        match reader.socket.recv_from(&mut buf) {
             Ok((len, src)) => {
-                // Only accept packets from our verified peer
-                if src != peer_addr {
-                    continue;
-                }
-                last_inbound = std::time::Instant::now();
-
-                // Skip keepalive/punch packets (they have RNSH/RNSA magic)
-                if len >= 4 && (buf[..4] == *b"RNSH" || buf[..4] == *b"RNSA") {
-                    continue;
-                }
-
-                // Deliver as Reticulum frame, if it belongs to the link
-                if carries_link(&buf[..len], &link_id) {
-                    let _ = tx.send(Event::Frame {
-                        interface_id,
-                        data: buf[..len].into(),
-                        rssi: None,
-                        snr: None,
-                    });
+                if let Some(frame) = reader.receive(&buf[..len], src) {
+                    let _ = reader.tx.send(frame);
                 }
             }
             Err(ref e)
@@ -288,8 +402,8 @@ fn run_reader(
                 continue;
             }
             Err(e) => {
-                log::warn!("[{}] Direct UDP recv error: {}", interface_id.0, e);
-                let _ = tx.send(Event::InterfaceDown(interface_id));
+                log::warn!("[{}] Direct UDP recv error: {}", reader.interface_id.0, e);
+                let _ = reader.tx.send(Event::InterfaceDown(reader.interface_id));
                 break;
             }
         }
@@ -301,70 +415,46 @@ const READ_BUDGET: usize = 64;
 
 /// A direct UDP link, read on the driver thread, with its keepalive and
 /// inactivity timeout on timers.
-struct DirectSource {
-    socket: Arc<UdpSocket>,
-    peer_addr: SocketAddr,
-    interface_id: InterfaceId,
-    link_id: [u8; 16],
-    keepalive: Vec<u8>,
-    last_inbound: std::time::Instant,
-    last_keepalive: std::time::Instant,
-    tx: EventSender,
-    /// Cleared when the writer is dropped with the interface.
-    running: Arc<AtomicBool>,
-}
+struct DirectSource(DirectReader);
 
 impl LoopSource for DirectSource {
     fn fd(&self) -> std::os::fd::RawFd {
         use std::os::fd::AsRawFd;
-        self.socket.as_raw_fd()
+        self.0.socket.as_raw_fd()
     }
 
     fn stopped(&self) -> bool {
-        !self.running.load(Ordering::Relaxed)
+        self.0.stopped()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
-        if self.stopped() {
+        let reader = &mut self.0;
+        if reader.stopped() {
             return SourceStatus::Remove;
         }
-        if !self.tx.inbound_data_has_room() {
+        if !reader.tx.inbound_data_has_room() {
             return SourceStatus::Suspend;
         }
         let mut frames = Vec::new();
         for _ in 0..READ_BUDGET {
-            let (len, src) = match self.socket.recv_from(cx.buf) {
+            let (len, src) = match reader.socket.recv_from(cx.buf) {
                 Ok(received) => received,
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => {
-                    log::warn!("[{}] Direct UDP recv error: {}", self.interface_id.0, e);
-                    let _ = self.tx.push_from_loop(frames);
-                    let _ = self
+                    log::warn!("[{}] Direct UDP recv error: {}", reader.interface_id.0, e);
+                    let _ = reader.tx.push_from_loop(frames);
+                    let _ = reader
                         .tx
-                        .push_from_loop([Event::InterfaceDown(self.interface_id)]);
+                        .push_from_loop([Event::InterfaceDown(reader.interface_id)]);
                     return SourceStatus::Remove;
                 }
             };
-            // Only accept packets from our verified peer
-            if src != self.peer_addr {
-                continue;
-            }
-            self.last_inbound = std::time::Instant::now();
-            // Skip keepalive/punch packets (they have RNSH/RNSA magic)
-            if len >= 4 && (cx.buf[..4] == *b"RNSH" || cx.buf[..4] == *b"RNSA") {
-                continue;
-            }
-            if carries_link(&cx.buf[..len], &self.link_id) {
-                frames.push(Event::Frame {
-                    interface_id: self.interface_id,
-                    data: cx.buf[..len].into(),
-                    rssi: None,
-                    snr: None,
-                });
+            if let Some(frame) = reader.receive(&cx.buf[..len], src) {
+                frames.push(frame);
             }
         }
-        match self.tx.push_from_loop(frames) {
+        match reader.tx.push_from_loop(frames) {
             Ok(true) => SourceStatus::Rearm,
             Ok(false) => SourceStatus::Suspend,
             Err(_) => SourceStatus::Remove,
@@ -372,24 +462,19 @@ impl LoopSource for DirectSource {
     }
 
     fn deadline(&self) -> Option<std::time::Instant> {
-        Some((self.last_keepalive + KEEPALIVE_INTERVAL).min(self.last_inbound + INACTIVITY_TIMEOUT))
+        Some(self.0.next_deadline())
     }
 
     fn on_timer(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
-        if self.stopped() {
+        let reader = &mut self.0;
+        if reader.stopped() {
             return SourceStatus::Remove;
         }
-        let now = std::time::Instant::now();
-        if now >= self.last_inbound + INACTIVITY_TIMEOUT {
-            log::info!("[{}] Direct UDP interface timed out", self.interface_id.0);
-            let _ = self
+        if reader.on_timer() {
+            let _ = reader
                 .tx
-                .push_from_loop([Event::InterfaceDown(self.interface_id)]);
+                .push_from_loop([Event::InterfaceDown(reader.interface_id)]);
             return SourceStatus::Remove;
-        }
-        if now >= self.last_keepalive + KEEPALIVE_INTERVAL {
-            let _ = self.socket.send_to(&self.keepalive, self.peer_addr);
-            self.last_keepalive = now;
         }
         SourceStatus::Rearm
     }
@@ -481,11 +566,13 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(300)))
             .unwrap();
 
+        let blackhole = Arc::new(AtomicBool::new(false));
         let mut writer = UdpDirectWriter {
             socket: Arc::new(sock_a),
             peer_addr: addr_b,
             link_id: LINK,
             running: Arc::new(AtomicBool::new(true)),
+            blackhole: blackhole.clone(),
             inline: false,
         };
 
@@ -507,6 +594,96 @@ mod tests {
         let (len, _src) = sock_b.recv_from(&mut buf).unwrap();
         assert_eq!(&buf[..len], &data[..]);
         assert!(sock_b.recv_from(&mut buf).is_err());
+
+        // A blackholed path sends nothing.
+        blackhole.store(true, Ordering::Relaxed);
+        writer.send_frame(&data).unwrap();
+        assert!(sock_b.recv_from(&mut buf).is_err());
+    }
+
+    fn params() -> DirectPathParams {
+        DirectPathParams {
+            link_id: LINK,
+            session_id: [1; 16],
+            keepalive_key: [2; 32],
+            blackhole: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn keepalives_are_authenticated_and_fresh() {
+        let mut ours = Keepalives::new([7; 32], [1; 16]);
+        let mut theirs = Keepalives::new([7; 32], [1; 16]);
+        let first = ours.next_packet();
+        let second = ours.next_packet();
+        assert_eq!(first.len(), KEEPALIVE_LEN);
+        assert!(is_control_datagram(&first));
+        assert!(theirs.accept(&first));
+        // A replay, or an older one, does not count.
+        assert!(!theirs.accept(&first));
+        assert!(theirs.accept(&second));
+        assert!(!theirs.accept(&first));
+        // Another key or session, or a tampered packet: rejected.
+        let mut stranger = Keepalives::new([8; 32], [1; 16]);
+        stranger.sent = 10;
+        assert!(!theirs.accept(&stranger.next_packet()));
+        let mut other_session = Keepalives::new([7; 32], [2; 16]);
+        other_session.sent = 10;
+        assert!(!theirs.accept(&other_session.next_packet()));
+        let mut forged = ours.next_packet();
+        forged[27] ^= 1;
+        assert!(!theirs.accept(&forged));
+        assert!(!theirs.accept(&forged[..KEEPALIVE_LEN - 1]));
+        // The punch's own packets are control traffic, not frames.
+        assert!(is_control_datagram(b"RNSH...."));
+        assert!(is_control_datagram(b"RNSA...."));
+    }
+
+    #[test]
+    fn only_valid_keepalives_keep_the_path_alive() {
+        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").unwrap());
+        let peer: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let (tx, _rx) = crate::event::channel();
+        let params = params();
+        let mut reader = DirectReader {
+            socket,
+            peer_addr: peer,
+            interface_id: InterfaceId(911),
+            link_id: LINK,
+            keepalives: Keepalives::new(params.keepalive_key, params.session_id),
+            last_inbound: std::time::Instant::now() - INACTIVITY_TIMEOUT / 2,
+            last_keepalive: None,
+            tx,
+            running: Arc::new(AtomicBool::new(true)),
+            blackhole: params.blackhole.clone(),
+        };
+        let stale = reader.last_inbound;
+        // The link's own frames and forged keepalives do not refresh it.
+        assert!(reader.receive(&link_data(&LINK, b"data"), peer).is_some());
+        let mut forged = Keepalives::new([9; 32], params.session_id);
+        assert!(reader.receive(&forged.next_packet(), peer).is_none());
+        assert_eq!(reader.last_inbound, stale);
+        // A valid keepalive from the peer does; from anyone else it does not.
+        let mut peer_keepalives = Keepalives::new(params.keepalive_key, params.session_id);
+        let valid = peer_keepalives.next_packet();
+        assert!(reader
+            .receive(&valid, "127.0.0.1:10".parse().unwrap())
+            .is_none());
+        assert_eq!(reader.last_inbound, stale);
+        assert!(reader.receive(&valid, peer).is_none());
+        assert!(reader.last_inbound > stale);
+        assert!(!reader.on_timer());
+        // Silence for the timeout takes the path down.
+        reader.last_inbound = std::time::Instant::now() - INACTIVITY_TIMEOUT;
+        assert!(reader.on_timer());
+        // A blackholed path ignores even valid keepalives and frames.
+        reader.last_inbound = stale;
+        params.blackhole.store(true, Ordering::Relaxed);
+        assert!(reader
+            .receive(&peer_keepalives.next_packet(), peer)
+            .is_none());
+        assert!(reader.receive(&link_data(&LINK, b"data"), peer).is_none());
+        assert_eq!(reader.last_inbound, stale);
     }
 
     #[test]
@@ -519,16 +696,9 @@ mod tests {
         let peer_addr = peer.local_addr().unwrap();
         let local_addr = local.local_addr().unwrap();
         let (tx, rx) = crate::event::channel();
-        let (writer, info) = start_direct_interface(
-            local,
-            peer_addr,
-            InterfaceId(910),
-            LINK,
-            [1; 16],
-            [2; 32],
-            tx.clone(),
-        )
-        .unwrap();
+        let (writer, info) =
+            start_direct_interface(local, peer_addr, InterfaceId(910), params(), tx.clone())
+                .unwrap();
         assert!(!info.out_capable);
         assert!(writer.sends_inline());
         // Served on the driver loop: no reader thread.
@@ -573,7 +743,16 @@ mod tests {
         writer.send_frame(&to_peer).unwrap();
         let mut buf = [0u8; 64];
         peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-        let (n, _) = peer.recv_from(&mut buf).unwrap();
+        // Keepalives go out too, the first one right away.
+        let mut keepalives = 0;
+        let n = loop {
+            let (n, _) = peer.recv_from(&mut buf).unwrap();
+            if !buf.starts_with(KEEPALIVE_MAGIC) {
+                break n;
+            }
+            keepalives += 1;
+        };
         assert_eq!(&buf[..n], &to_peer[..]);
+        assert!(keepalives >= 1);
     }
 }

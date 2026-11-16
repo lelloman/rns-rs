@@ -480,6 +480,10 @@ pub enum Event<W: Send> {
     },
     /// Propose a direct connection to a peer via hole punching.
     ProposeDirectConnect { link_id: [u8; 16] },
+    /// Make the link's direct path silently drop all traffic both ways, as
+    /// a network that stopped carrying it would. For tests.
+    #[doc(hidden)]
+    BlackholeDirectPath { link_id: [u8; 16] },
     /// Set the direct-connect policy.
     SetDirectConnectPolicy { policy: HolePunchPolicy },
     /// (Internal) Probe result arrived from a worker thread.
@@ -1597,6 +1601,10 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("RegisterProofStrategy")
                 .field("dest_hash", dest_hash)
                 .field("strategy", strategy)
+                .finish(),
+            Event::BlackholeDirectPath { link_id } => f
+                .debug_struct("BlackholeDirectPath")
+                .field("link_id", link_id)
                 .finish(),
             Event::ProposeDirectConnect { link_id } => f
                 .debug_struct("ProposeDirectConnect")

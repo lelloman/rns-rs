@@ -1332,13 +1332,14 @@ impl Driver {
             // Only the flags are needed here; a full unpack would copy and
             // rehash the whole packet.
             if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
+                // A link running over a direct path also takes packets on
+                // its original route, where the peer may have fallen back.
                 let arrived_on_stale_link_route = packet.flags.packet_type
                     == rns_core::constants::PACKET_TYPE_DATA
                     && packet.flags.destination_type == rns_core::constants::DESTINATION_LINK
-                    && self
+                    && !self
                         .link_manager
-                        .get_link_route_hint(&destination_hash)
-                        .is_some_and(|route| route.interface != receiving_interface);
+                        .link_route_accepts(&destination_hash, receiving_interface);
                 if arrived_on_stale_link_route {
                     // The active link has failed over, but an in-flight packet
                     // arrived on its former interface. Do not let this arrival
@@ -2470,6 +2471,13 @@ impl Driver {
                 LinkManagerAction::DirectLinkSignal { link_id, data } => {
                     self.handle_direct_link_signal(link_id, &data);
                 }
+                LinkManagerAction::DirectPathFailed { link_id } => {
+                    log::info!(
+                        "Direct path of link {:02x?} failed; falling back",
+                        &link_id[..4]
+                    );
+                    self.fall_back_from_direct(link_id, true);
+                }
                 LinkManagerAction::LinkDataReceived {
                     link_id,
                     context,
@@ -2579,7 +2587,10 @@ impl Driver {
     /// part in Direct Link drops it unanswered, as a node without support
     /// for it does.
     pub(crate) fn handle_direct_link_signal(&mut self, link_id: [u8; 16], data: &[u8]) {
-        if !self.holepunch_manager.enabled() {
+        // A link already on a direct path still hears about it after the
+        // configuration changed.
+        let upgraded = self.holepunch_manager.direct_session(&link_id).is_some();
+        if !self.holepunch_manager.enabled() && !upgraded {
             return;
         }
         let Some((msgtype, body)) = rns_core::holepunch::decode_signal(data) else {
@@ -2589,6 +2600,13 @@ impl Driver {
             );
             return;
         };
+        if msgtype == rns_core::holepunch::FALLBACK {
+            self.handle_fallback_signal(link_id, body);
+            return;
+        }
+        if !self.holepunch_manager.enabled() {
+            return;
+        }
         let derived_key = self.link_manager.get_derived_key(&link_id);
         let tx = self.get_event_sender();
         if msgtype == rns_core::holepunch::HELLO {
@@ -2644,6 +2662,71 @@ impl Driver {
         }
     }
 
+    /// The peer stopped using the direct path of `session`: stop using it
+    /// too, and answer if it asks, so its link hears from us on the
+    /// original route.
+    fn handle_fallback_signal(&mut self, link_id: [u8; 16], body: &[u8]) {
+        let Ok((session_id, reply_wanted)) = rns_core::holepunch::decode_fallback(body) else {
+            log::debug!("Dropping malformed Direct Link FALLBACK");
+            return;
+        };
+        if self.holepunch_manager.direct_session(&link_id) == Some(session_id) {
+            log::info!(
+                "Link peer fell back from the direct path of link {:02x?}",
+                &link_id[..4]
+            );
+            self.fall_back_from_direct(link_id, false);
+        }
+        if reply_wanted {
+            self.send_fallback(link_id, session_id, false);
+        }
+    }
+
+    /// Send FALLBACK for `session` to the link peer, on the link's current
+    /// route.
+    fn send_fallback(&mut self, link_id: [u8; 16], session_id: [u8; 16], reply_wanted: bool) {
+        let framed = rns_core::holepunch::encode_signal(
+            rns_core::holepunch::FALLBACK,
+            &rns_core::holepunch::encode_fallback(&session_id, reply_wanted),
+        );
+        let actions = self
+            .link_manager
+            .send_direct_link_signal(&link_id, &framed, &mut self.rng);
+        self.dispatch_link_actions(actions);
+    }
+
+    /// Stop using the link's direct path: return the link to its original
+    /// route and MTU, remove the direct interface, tell the application,
+    /// and with `notify_peer` tell the peer over the original route (asking
+    /// for an answer, which also shows the link that path is alive).
+    pub(crate) fn fall_back_from_direct(&mut self, link_id: [u8; 16], notify_peer: bool) {
+        let direct = self.holepunch_manager.take_direct(&link_id);
+        let detached = self.link_manager.detach_direct_route(&link_id);
+        let Some(interface_id) = direct.map(|(interface, _)| interface).or(detached) else {
+            return;
+        };
+        // Its mapping is gone, so removing it does not come back here.
+        self.handle_interface_down_event(interface_id);
+        self.direct_path_lost(link_id, interface_id, direct.map(|(_, s)| s), notify_peer);
+    }
+
+    /// After a link's direct interface is gone: the link back on its
+    /// original route, the peer told, the application told.
+    pub(crate) fn direct_path_lost(
+        &mut self,
+        link_id: [u8; 16],
+        interface_id: rns_core::transport::types::InterfaceId,
+        session_id: Option<[u8; 16]>,
+        notify_peer: bool,
+    ) {
+        self.link_manager.detach_direct_route(&link_id);
+        if let (true, Some(session_id)) = (notify_peer, session_id) {
+            self.send_fallback(link_id, session_id, true);
+        }
+        self.callbacks
+            .on_direct_connect_lost(rns_core::types::LinkId(link_id), interface_id);
+    }
+
     /// Dispatch hole-punch manager actions.
     pub(crate) fn dispatch_holepunch_actions(&mut self, actions: Vec<HolePunchManagerAction>) {
         for action in actions {
@@ -2654,18 +2737,17 @@ impl Driver {
                     payload,
                 } => {
                     let framed = rns_core::holepunch::encode_signal(msgtype, &payload);
-                    let link_actions = self.link_manager.send_on_link(
-                        &link_id,
-                        &framed,
-                        rns_core::holepunch::CONTEXT_DIRECT_LINK,
-                        &mut self.rng,
-                    );
+                    let link_actions =
+                        self.link_manager
+                            .send_direct_link_signal(&link_id, &framed, &mut self.rng);
                     self.dispatch_link_actions(link_actions);
                 }
                 HolePunchManagerAction::DirectConnectEstablished {
                     link_id,
                     session_id,
                     interface_id,
+                    writer,
+                    info,
                     rtt,
                     mtu,
                 } => {
@@ -2673,17 +2755,16 @@ impl Driver {
                         "Direct connection established for link {:02x?} session {:02x?} iface {} rtt={:.1}ms mtu={}",
                         &link_id[..4], &session_id[..4], interface_id.0, rtt * 1000.0, mtu
                     );
-                    // Redirect the link's path to use the direct interface
-                    self.engine
-                        .redirect_path(&link_id, interface_id, time::now());
-                    self.link_manager
-                        .set_link_route_hint(&link_id, interface_id, None);
-                    // Update the link's RTT and MTU to reflect the direct path
-                    self.link_manager.set_link_rtt(&link_id, rtt);
-                    self.link_manager.set_link_mtu(&link_id, mtu);
-                    // Reset inbound timer — set_rtt shortens the keepalive/stale
-                    // intervals, so without this the link goes stale immediately
-                    self.link_manager.record_link_inbound(&link_id);
+                    // The interface is registered before the link uses it.
+                    self.handle_interface_up_event(interface_id, Some(writer), Some(*info));
+                    if !self
+                        .link_manager
+                        .attach_direct_route(&link_id, interface_id, mtu)
+                    {
+                        // The link closed meanwhile.
+                        self.holepunch_manager.link_closed(&link_id);
+                        continue;
+                    }
                     // Flush holepunch signaling messages from the channel window
                     self.link_manager.flush_channel_tx(&link_id);
                     self.callbacks.on_direct_connect_established(
