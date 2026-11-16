@@ -309,6 +309,7 @@ that was upgraded and carries nothing else:
 | **Link traffic only** | Its reader and writer pass only HEADER_1 link DATA and PROOF packets addressed to the link's id; any other datagram from the peer, and any other frame the node would send, is dropped. Datagrams from any address but the peer's are ignored |
 | **Not an outbound interface** | It is registered with `out_capable = false`, and broadcasts skip it, so the transport engine never sends announces, path requests or broadcasts on it. Since nothing but the link's packets is accepted from it, no path, announce or link request is learned through it and no other traffic is forwarded over it |
 | **Packet send/receive** | One Reticulum packet per UDP datagram, no framing |
+| **MTU** | 1200 bytes, raised to the largest of a short ladder of sizes the path is shown to carry (see [Path MTU](#path-mtu)) |
 | **Keepalive** | Sends an authenticated keepalive every 5 seconds, which also keeps the NAT mapping open: `"RNSK"`, the session id, a 64-bit counter and the first 16 bytes of HMAC-SHA256 over those 28 bytes, keyed with `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-keepalive-v1")`. The key never appears on the wire |
 | **Liveness detection** | Only a valid keepalive from the peer with a counter above the last one accepted counts as a sign of life; link packets and anything forged or replayed do not. Without one for 15 seconds (three missed) the interface declares itself down |
 | **Teardown** | It is removed when its link closes (about a second later, so the link's closing packets still leave on it), when it goes down, and when a newer upgrade of the same link replaces it |
@@ -321,10 +322,58 @@ with no transport header. Nothing is added to the path table; other
 destinations, including the peer's own, keep their paths.
 
 The link remembers the route it had (interface and next-hop transport id) and
-its MTU. Its MTU is lowered to the direct interface's 1400 bytes if it was
-larger, never raised, so nothing sized for the direct path is too large for
-the original one. Its RTT, and with it the keepalive interval and stale time,
-stay as measured on the original path.
+its MTU. Its MTU is lowered to the direct interface's MTU if it was larger,
+never raised above what it was, so nothing sized for the direct path is too
+large for the original one. The direct interface starts at 1200 bytes and
+may move up once its path MTU is known (see [Path MTU](#path-mtu)). Its
+RTT, and with it the keepalive interval and stale time, stay as measured on
+the original path.
+
+### Path MTU
+
+A direct interface starts with an MTU of 1200 bytes of UDP payload: it fits
+the IPv6 minimum link MTU of 1280 bytes less 48 bytes of IPv6 and UDP
+headers, leaves room for a tunnel or PPPoE header along the way, and any
+IPv4 path that carries ordinary internet traffic carries it. 1400 bytes, a
+common fixed choice, does not fit an IPv6 path through a WireGuard tunnel
+(1420 - 48 = 1372) or an IPv6 minimum-MTU link.
+
+As soon as the interface is up, each side probes its own sending direction
+with three sizes: 1472, 1400 and 1280 bytes toward an IPv4 peer (1472 is
+the UDP payload of a 1500-byte Ethernet path), 1452, 1400 and 1280 toward
+an IPv6 one. It sends one probe of each size not above the best size
+acknowledged so far, three rounds one second apart, and takes the largest
+size the peer acknowledged: at once when that is the largest of the
+ladder, otherwise one second after the last round. That is at most 9
+probes and about 3 seconds. A size never acknowledged is not used; if none
+is, the interface stays at 1200. The link then uses the discovered MTU,
+again never above the MTU it had before its direct path. While probing,
+the sockets send without fragmentation (on Linux, `IP_PMTUDISC_PROBE`), so
+a probe larger than the local interface or the path is lost rather than
+fragmented; afterwards the kernel's usual path MTU discovery applies.
+
+Probes and acknowledgements are raw UDP datagrams, keyed like the
+keepalives (`HKDF(ikm=derived_key, salt=session_id,
+info="rns-holepunch-keepalive-v1")`):
+
+```
+probe:           "RNSM" [session id: 16] [nonce: 8] [size: u16 BE] [zeros] [tag: 16]
+acknowledgement: "RNSN" [session id: 16] [nonce: 8] [size: u16 BE] [tag: 16]
+```
+
+The tag is the first 16 bytes of HMAC-SHA256 over everything before it. A
+probe is exactly `size` bytes long, and is acknowledged only if it arrived
+whole; the acknowledgement (46 bytes) echoes its nonce and size, and counts
+only for a probe still outstanding with that nonce and size. A side sends
+at most 32 acknowledgements over the life of the interface.
+
+Limits: probing happens once, when the path comes up. A path whose MTU
+shrinks later (a route change onto a tunnel) is not probed again; its large
+packets are lost until the direct path is given up (see
+[Fallback](#fallback)) and upgraded again. Each direction is probed on its
+own, so the two sides of a link may end up with different MTUs; each sends
+packets no larger than its own. Off Linux, probes are sent with the
+platform's default fragmentation behavior.
 
 While the link runs over the direct path, its packets are accepted on the
 direct interface and on the original route (where the peer may already have

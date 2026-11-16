@@ -500,6 +500,9 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         session_id: [u8; 16],
     },
+    /// (Internal) A direct interface's path MTU discovery ended with
+    /// this MTU.
+    DirectPathMtu { interface_id: InterfaceId, mtu: u32 },
     /// An interface's configuration changed (placeholder for future use).
     InterfaceConfigChanged(InterfaceId),
     /// A backbone server accepted a new inbound peer connection.
@@ -1637,6 +1640,11 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("HolePunchProbeFailed")
                 .field("link_id", link_id)
                 .field("session_id", session_id)
+                .finish(),
+            Event::DirectPathMtu { interface_id, mtu } => f
+                .debug_struct("DirectPathMtu")
+                .field("interface_id", interface_id)
+                .field("mtu", mtu)
                 .finish(),
             Event::InterfaceConfigChanged(id) => {
                 f.debug_tuple("InterfaceConfigChanged").field(id).finish()

@@ -845,6 +845,42 @@ fn link_mdu(node: &RnsNode, link_id: [u8; 16]) -> usize {
         .mdu
 }
 
+/// The link MDU for a link MTU.
+fn mdu_for(mtu: usize) -> usize {
+    use rns_core::constants::{AES128_BLOCKSIZE, HEADER_MINSIZE, IFAC_MIN_SIZE, TOKEN_OVERHEAD};
+    let numerator = mtu - (IFAC_MIN_SIZE + HEADER_MINSIZE + TOKEN_OVERHEAD);
+    (numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
+}
+
+#[test]
+fn direct_path_discovers_its_mtu() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    let tcp = (
+        link_mdu(&pair.alice, pair.link_id),
+        link_mdu(&pair.bob, pair.link_id),
+    );
+    // The link's MTU over TCP is well above any UDP path's.
+    assert!(tcp.0 > mdu_for(1472) && tcp.1 > mdu_for(1472), "{tcp:?}");
+    pair.upgrade();
+    // It starts at the floor, then each side's probes find that the host
+    // carries the largest size probed.
+    let expected = (mdu_for(1472), mdu_for(1472));
+    assert!(
+        eventually(Duration::from_secs(10), || (
+            link_mdu(&pair.alice, pair.link_id),
+            link_mdu(&pair.bob, pair.link_id)
+        ) == expected),
+        "MDU {:?} on the direct path",
+        (
+            link_mdu(&pair.alice, pair.link_id),
+            link_mdu(&pair.bob, pair.link_id)
+        )
+    );
+    pair.shutdown();
+}
+
 /// After the direct path is lost: the link is open on both sides, both
 /// were told, no direct interface remains, the link's MDU is what it was
 /// before the upgrade, and messages flow both ways for a while, over TCP.

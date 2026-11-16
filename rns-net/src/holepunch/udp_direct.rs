@@ -14,6 +14,10 @@
 //! [`KEEPALIVE_INTERVAL`]; the interface goes down when no valid, fresh
 //! keepalive has arrived for [`INACTIVITY_TIMEOUT`] (three missed), and the
 //! driver then moves the link back to its original path.
+//!
+//! MTU: the interface starts at [`DIRECT_MTU`] and probes its path for a
+//! larger one (see [`super::path_mtu`]), reporting the result with
+//! `Event::DirectPathMtu`.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -33,9 +37,9 @@ pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 /// Without a valid keepalive for this long the direct path is dead.
 pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// MTU of the direct interface: one UDP datagram that crosses the internet
-/// without IP fragmentation.
-pub const DIRECT_MTU: u32 = 1400;
+/// MTU a direct interface starts with, until its path MTU discovery (see
+/// [`super::path_mtu`]) finds a larger one.
+pub const DIRECT_MTU: u32 = super::path_mtu::MTU_FLOOR;
 
 const KEEPALIVE_MAGIC: &[u8; 4] = b"RNSK";
 const KEEPALIVE_TAG_LEN: usize = 16;
@@ -99,7 +103,7 @@ impl Keepalives {
 /// Datagrams that are not Reticulum packets: keepalives, and punch packets
 /// and acknowledgements still arriving after the punch.
 fn is_control_datagram(data: &[u8]) -> bool {
-    data.len() >= 4 && matches!(&data[..4], b"RNSK" | b"RNSH" | b"RNSA")
+    data.len() >= 4 && matches!(&data[..4], b"RNSK" | b"RNSH" | b"RNSA" | b"RNSM" | b"RNSN")
 }
 
 /// Whether `frame` is a packet of the link the direct interface belongs to:
@@ -223,7 +227,7 @@ pub fn start_direct_interface(
     if inline {
         socket.set_nonblocking(true)?;
     } else {
-        socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+        socket.set_read_timeout(Some(READ_TIMEOUT))?;
     }
 
     let running = Arc::new(AtomicBool::new(true));
@@ -277,7 +281,16 @@ pub fn start_direct_interface(
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
     };
 
+    // Probes go out unfragmented until discovery ends.
+    super::path_mtu::set_probing(&socket, true);
     let reader = DirectReader {
+        pmtu: super::path_mtu::PathMtu::new(
+            params.keepalive_key,
+            session_id,
+            peer_addr,
+            std::time::Instant::now(),
+        ),
+        pending: Vec::new(),
         socket,
         peer_addr,
         interface_id,
@@ -313,6 +326,9 @@ struct DirectReader {
     interface_id: InterfaceId,
     link_id: [u8; 16],
     keepalives: Keepalives,
+    pmtu: super::path_mtu::PathMtu,
+    /// Events for the driver other than received frames.
+    pending: Vec<Event>,
     /// When the last valid keepalive arrived (or the path came up).
     last_inbound: std::time::Instant,
     last_keepalive: Option<std::time::Instant>,
@@ -333,6 +349,11 @@ impl DirectReader {
         if src != self.peer_addr || self.blackhole.load(Ordering::Relaxed) {
             return None;
         }
+        if super::path_mtu::is_pmtu_datagram(data) {
+            let out = self.pmtu.receive(data);
+            self.apply_pmtu(out);
+            return None;
+        }
         if is_control_datagram(data) {
             if self.keepalives.accept(data) {
                 self.last_inbound = std::time::Instant::now();
@@ -347,9 +368,32 @@ impl DirectReader {
         })
     }
 
+    /// Carry out what path MTU discovery asks for.
+    fn apply_pmtu(&mut self, out: Vec<super::path_mtu::PmtuOutput>) {
+        for output in out {
+            match output {
+                super::path_mtu::PmtuOutput::Send(packet) => {
+                    if !self.blackhole.load(Ordering::Relaxed) {
+                        let _ = self.socket.send_to(&packet, self.peer_addr);
+                    }
+                }
+                super::path_mtu::PmtuOutput::Discovered(mtu) => {
+                    super::path_mtu::set_probing(&self.socket, false);
+                    log::info!("[{}] Direct UDP path MTU is {}", self.interface_id.0, mtu);
+                    self.pending.push(Event::DirectPathMtu {
+                        interface_id: self.interface_id,
+                        mtu,
+                    });
+                }
+            }
+        }
+    }
+
     /// Send a keepalive if one is due; whether the path timed out.
     fn on_timer(&mut self) -> bool {
         let now = std::time::Instant::now();
+        let out = self.pmtu.on_timer(now);
+        self.apply_pmtu(out);
         if now >= self.last_inbound + INACTIVITY_TIMEOUT {
             log::info!(
                 "[{}] Direct UDP interface timed out: no keepalive for {:?}",
@@ -375,22 +419,49 @@ impl DirectReader {
         let keepalive = self
             .last_keepalive
             .map_or_else(std::time::Instant::now, |last| last + KEEPALIVE_INTERVAL);
-        keepalive.min(self.last_inbound + INACTIVITY_TIMEOUT)
+        let deadline = keepalive.min(self.last_inbound + INACTIVITY_TIMEOUT);
+        self.pmtu
+            .deadline()
+            .map_or(deadline, |pmtu| pmtu.min(deadline))
     }
 }
 
+/// How long the reader thread waits for a datagram before it checks its
+/// timers.
+const READ_TIMEOUT: Duration = Duration::from_millis(500);
+
 fn run_reader(mut reader: DirectReader) {
     let mut buf = [0u8; 2048];
+    let mut read_timeout = READ_TIMEOUT;
     while !reader.stopped() {
         if reader.on_timer() {
             let _ = reader.tx.send(Event::InterfaceDown(reader.interface_id));
             break;
+        }
+        for event in reader.pending.drain(..) {
+            let _ = reader.tx.send(event);
+        }
+        // Wake for each path MTU round while probing.
+        let wait = if reader.pmtu.probing() {
+            reader
+                .next_deadline()
+                .saturating_duration_since(std::time::Instant::now())
+                .clamp(Duration::from_millis(10), READ_TIMEOUT)
+        } else {
+            READ_TIMEOUT
+        };
+        if wait != read_timeout {
+            read_timeout = wait;
+            let _ = reader.socket.set_read_timeout(Some(wait));
         }
 
         match reader.socket.recv_from(&mut buf) {
             Ok((len, src)) => {
                 if let Some(frame) = reader.receive(&buf[..len], src) {
                     let _ = reader.tx.send(frame);
+                }
+                for event in reader.pending.drain(..) {
+                    let _ = reader.tx.send(event);
                 }
             }
             Err(ref e)
@@ -450,6 +521,7 @@ impl LoopSource for DirectSource {
             if let Some(frame) = reader.receive(&cx.buf[..len], src) {
                 frames.push(frame);
             }
+            frames.append(&mut reader.pending);
         }
         match reader.tx.push_from_loop(frames) {
             Ok(true) => SourceStatus::Rearm,
@@ -472,6 +544,10 @@ impl LoopSource for DirectSource {
                 .tx
                 .push_from_loop([Event::InterfaceDown(reader.interface_id)]);
             return SourceStatus::Remove;
+        }
+        if !reader.pending.is_empty() {
+            let pending = std::mem::take(&mut reader.pending);
+            let _ = reader.tx.push_from_loop(pending);
         }
         SourceStatus::Rearm
     }
@@ -643,6 +719,13 @@ mod tests {
         let (tx, _rx) = crate::event::channel();
         let params = params();
         let mut reader = DirectReader {
+            pmtu: super::super::path_mtu::PathMtu::new(
+                params.keepalive_key,
+                params.session_id,
+                peer,
+                std::time::Instant::now(),
+            ),
+            pending: Vec::new(),
             socket,
             peer_addr: peer,
             interface_id: InterfaceId(911),
@@ -740,10 +823,14 @@ mod tests {
         writer.send_frame(&to_peer).unwrap();
         let mut buf = [0u8; 64];
         peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-        // Keepalives go out too, the first one right away.
+        // Keepalives go out too, the first one right away, and so do path
+        // MTU probes.
         let mut keepalives = 0;
         let n = loop {
             let (n, _) = peer.recv_from(&mut buf).unwrap();
+            if buf.starts_with(b"RNSM") {
+                continue;
+            }
             if !buf.starts_with(KEEPALIVE_MAGIC) {
                 break n;
             }
@@ -751,5 +838,30 @@ mod tests {
         };
         assert_eq!(&buf[..n], &to_peer[..]);
         assert!(keepalives >= 1);
+    }
+
+    #[test]
+    fn direct_interfaces_discover_their_path_mtu() {
+        let a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (a_addr, b_addr) = (a.local_addr().unwrap(), b.local_addr().unwrap());
+        let (tx, rx) = crate::event::channel();
+        let (_a_writer, a_info) =
+            start_direct_interface(a, b_addr, InterfaceId(920), params(), tx.clone()).unwrap();
+        let (_b_writer, _) =
+            start_direct_interface(b, a_addr, InterfaceId(921), params(), tx.clone()).unwrap();
+        assert_eq!(a_info.mtu, super::super::path_mtu::MTU_FLOOR);
+        let mut discovered = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while discovered.len() < 2 && std::time::Instant::now() < deadline {
+            if let Ok(Event::DirectPathMtu { interface_id, mtu }) =
+                rx.recv_timeout(Duration::from_millis(50))
+            {
+                discovered.push((interface_id.0, mtu));
+            }
+        }
+        discovered.sort();
+        // Loopback carries the largest size probed.
+        assert_eq!(discovered, vec![(920, 1472), (921, 1472)]);
     }
 }

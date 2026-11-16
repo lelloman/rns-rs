@@ -2210,6 +2210,9 @@ impl Driver {
                     );
                     self.dispatch_holepunch_actions(hp_actions);
                 }
+                Event::DirectPathMtu { interface_id, mtu } => {
+                    self.direct_path_mtu_discovered(interface_id, mtu);
+                }
                 Event::HolePunchProbeFailed {
                     link_id,
                     session_id,

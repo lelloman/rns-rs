@@ -798,6 +798,25 @@ impl LinkManager {
         true
     }
 
+    /// The path MTU of the link's direct interface is known: use it, but
+    /// never above the MTU the link had before its direct path. Returns the
+    /// MTU now in use, or `None` if the link does not run over `interface`.
+    pub fn set_direct_mtu(
+        &mut self,
+        link_id: &LinkId,
+        interface: rns_core::transport::types::InterfaceId,
+        mtu: u32,
+    ) -> Option<u32> {
+        let link = self.links.get_mut(link_id)?;
+        let direct = link.direct_route.as_ref()?;
+        if direct.interface != interface {
+            return None;
+        }
+        let mtu = mtu.min(direct.fallback_mtu);
+        link.engine.set_mtu(mtu);
+        Some(mtu)
+    }
+
     /// Return the link to the route and MTU it had before its direct path.
     /// Returns the direct interface it stops using.
     pub fn detach_direct_route(
