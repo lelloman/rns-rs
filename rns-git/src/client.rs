@@ -1033,6 +1033,10 @@ require_reidentify = os.environ.get("RNGIT_TEST_REQUIRE_REIDENTIFY") == "1"
 identifications = 0
 requests = 0
 reticulum = RNS.Reticulum(configdir=config_dir)
+# Since 1.6.1 emitted announces and path requests are stamped by default, and
+# grinding a destination stamp in Python outlasts the client's timeouts.
+if hasattr(RNS.Transport, "STAMP_DESTINATIONS"): RNS.Transport.STAMP_DESTINATIONS = False
+if hasattr(RNS.Transport, "STAMP_PRS"): RNS.Transport.STAMP_PRS = False
 identity = RNS.Identity()
 destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "git", "repositories")
 
