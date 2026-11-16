@@ -619,7 +619,10 @@ impl LinkEngine {
     /// next run unless an inbound packet reactivated it meanwhile.
     pub fn tick(&mut self, now: f64) -> Vec<LinkAction> {
         let mut actions = Vec::new();
-        if now < self.watchdog_at {
+        // Python's watchdog sleeps for a duration, so stepping the wall
+        // clock back does not hold it up; a wake time further away than the
+        // longest sleep can only mean that, and the watchdog runs now.
+        if now < self.watchdog_at && self.watchdog_at - now <= LINK_WATCHDOG_MAX_SLEEP {
             return actions;
         }
 
@@ -1380,6 +1383,19 @@ mod tests {
         let actions = initiator.tick(1_010.5);
         assert!(sends_keepalive(&actions));
         assert!(changes_state(&actions, LinkState::Stale));
+    }
+
+    #[test]
+    fn the_watchdog_keeps_running_when_the_clock_steps_back() {
+        let (mut initiator, _) = fast_link_pair();
+        initiator.record_inbound(1_000.0);
+        initiator.record_outbound(1_000.0, false);
+        assert!(sends_keepalive(&initiator.tick(1_005.0)));
+        assert_eq!(initiator.watchdog_at, 1_010.0);
+        // The clock steps back ten minutes: the watchdog runs at once and
+        // sleeps no longer than it would have.
+        initiator.tick(405.0);
+        assert!(initiator.watchdog_at <= 405.0 + LINK_WATCHDOG_MAX_SLEEP);
     }
 
     #[test]
