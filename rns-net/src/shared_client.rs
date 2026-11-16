@@ -145,7 +145,10 @@ impl DestinationTypeRequester {
     /// as the Python exit handler does. Since upstream 29ce7ca5 the exit
     /// handler waits at most [`SHARED_RPC_EXIT_TIMEOUT`] for the call, so a
     /// shared instance that does not answer cannot hold up shutdown; the
-    /// call is left to finish on its own thread.
+    /// call is left to finish on its own thread. Only an application that
+    /// registered a type with a shared instance withdraws, which is what
+    /// upstream's `is_connected_to_shared_instance` condition gives
+    /// (e35bd08f).
     pub(crate) fn withdraw_from_shared_instance(&self) {
         if !self.registered.swap(false, Ordering::Relaxed) {
             return;
