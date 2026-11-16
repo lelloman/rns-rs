@@ -375,6 +375,15 @@ enum Side {
 
 /// Wait for a daemon's RPC server, reached as its clients reach it: the
 /// abstract socket of `instance` on Linux, else TCP `port`.
+///
+/// A Python shared instance opens its shared instance socket before it
+/// loads or creates `storage/transport_identity`, and its RPC key is derived
+/// from that identity. A Python utility started in between runs the same
+/// load-or-create on the same file, so both processes can each create an
+/// identity, with the daemon keeping its own in memory while the file holds
+/// the other's: every later client then derives a key the daemon rejects
+/// ("digest received was wrong"). The RPC server only listens once the
+/// daemon's identity is on disk, so wait for it before starting clients.
 fn wait_for_rpc(instance: &str, port: u16, process: &mut ProcessGuard, description: &str) {
     let address = RpcAddr::local(instance, port);
     let deadline = Instant::now() + START_TIMEOUT;
@@ -1513,6 +1522,14 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
         &mut fetcher_daemon,
         "fetcher shared instance",
     );
+    // Nor before the daemon has stored its transport identity, from which
+    // the RPC key is derived; see `wait_for_rpc`.
+    wait_for_rpc(
+        &format!("bh-fetcher-{label}-{pid}"),
+        fetch_control,
+        &mut fetcher_daemon,
+        "fetcher RPC",
+    );
 
     // Each implementation's rnpath lists the fetcher's blackhole entries.
     let fetcher_config = fetcher_dir.to_str().unwrap().to_string();
@@ -1668,6 +1685,14 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
         &format!("rns/disc-receiver-{label}-{pid}"),
         &mut receiver_daemon,
         "receiver shared instance",
+    );
+    // A Python rnstatus started before the daemon has stored its transport
+    // identity could derive another RPC key; see `wait_for_rpc`.
+    wait_for_rpc(
+        &format!("disc-receiver-{label}-{pid}"),
+        recv_control,
+        &mut receiver_daemon,
+        "receiver RPC",
     );
     let mut publisher_daemon = spawn_daemon(
         publisher,
