@@ -14,7 +14,7 @@ pub mod tunnel;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -162,6 +162,22 @@ impl Default for I2pConfig {
 /// Writer that sends HDLC-framed data over an I2P SAM stream.
 struct I2pWriter {
     stream: std::net::TcpStream,
+    /// Set when the driver detaches the peer, so an outbound peer is not
+    /// reconnected, as upstream's detached `I2PInterfacePeer` stays down.
+    detached: Arc<AtomicBool>,
+}
+
+impl I2pWriter {
+    fn new(stream: std::net::TcpStream) -> (Self, Arc<AtomicBool>) {
+        let detached = Arc::new(AtomicBool::new(false));
+        (
+            I2pWriter {
+                stream,
+                detached: Arc::clone(&detached),
+            },
+            detached,
+        )
+    }
 }
 
 impl Writer for I2pWriter {
@@ -176,6 +192,8 @@ impl Writer for I2pWriter {
     }
 
     fn shutdown(&mut self) {
+        // Only a detach shuts a writer down; the peer stays down after it.
+        self.detached.store(true, Ordering::Relaxed);
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
     }
 }
@@ -723,9 +741,8 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
                     }
                 };
 
-                let writer: Box<dyn Writer> = Box::new(I2pWriter {
-                    stream: writer_stream,
-                });
+                let (writer, detached) = I2pWriter::new(writer_stream);
+                let writer: Box<dyn Writer> = Box::new(writer);
 
                 let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, Some(&stream));
                 let event = peer_up(
@@ -751,6 +768,15 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
 
                 // Disconnected
                 let _ = tx.send(Event::InterfaceDown(client_id));
+                if detached.load(Ordering::Relaxed) {
+                    log::info!(
+                        "[{}] I2P peer {} was detached, not reconnecting",
+                        iface_name,
+                        peer_addr
+                    );
+                    I2pEndpoint::remove_tunnel(&endpoint, client_id);
+                    return;
+                }
                 log::warn!(
                     "[{}] I2P peer {} disconnected, reconnecting in {}s",
                     iface_name,
@@ -822,9 +848,7 @@ fn acceptor_loop(context: AcceptorContext) {
                     }
                 };
 
-                let writer: Box<dyn Writer> = Box::new(I2pWriter {
-                    stream: writer_stream,
-                });
+                let writer: Box<dyn Writer> = Box::new(I2pWriter::new(writer_stream).0);
 
                 let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, Some(&stream));
                 let event = peer_up(
@@ -1186,6 +1210,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(&config.storage_dir);
     }
 
+    /// Answer an outbound peer's STREAM CONNECT on the fake bridge and
+    /// return its data stream.
+    fn answer_stream_connect(bridge: &std::net::TcpListener) -> std::net::TcpStream {
+        let (mut stream, _) = bridge.accept().unwrap();
+        assert!(read_command(&mut stream).starts_with("HELLO VERSION"));
+        stream
+            .write_all(b"HELLO REPLY RESULT=OK VERSION=3.1\n")
+            .unwrap();
+        assert!(read_command(&mut stream).starts_with("STREAM CONNECT ID=I2P_peer "));
+        stream.write_all(b"STREAM STATUS RESULT=OK\n").unwrap();
+        stream
+    }
+
+    #[test]
+    fn a_detached_outbound_peer_is_not_reconnected() {
+        // Upstream's detached I2PInterfacePeer stays down; a peer whose
+        // connection drops reconnects.
+        let bridge = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sam_addr = bridge.local_addr().unwrap();
+        let config = I2pConfig::default();
+        lock_or_recover(&config.runtime, "test").reconnect_wait = Duration::from_millis(50);
+        let (tx, rx) = crate::event::channel();
+        let (done_tx, done) = std::sync::mpsc::channel();
+        {
+            let context = OutboundPeerContext {
+                sam_addr,
+                session_id: "I2P_peer".into(),
+                peer: OutboundPeer {
+                    address: "peer-destination".into(),
+                    id: InterfaceId(7),
+                },
+                iface_name: "I2P".into(),
+                tx2: tx,
+                runtime: Arc::clone(&config.runtime),
+                ingress_control: config.ingress_control,
+                dynamic_template: None,
+                underlay_mark: None,
+                endpoint: Arc::clone(&config.endpoint),
+            };
+            thread::spawn(move || {
+                outbound_peer_loop(context);
+                let _ = done_tx.send(());
+            });
+        }
+        let writer_of = |rx: &crate::event::EventReceiver| loop {
+            match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+                Event::InterfaceUp(InterfaceId(7), Some(writer), _) => return writer,
+                Event::DynamicInterfaceUp { writer, .. } => return writer,
+                _ => {}
+            }
+        };
+
+        // The bridge drops the connection: the peer reconnects.
+        let first = answer_stream_connect(&bridge);
+        let _writer = writer_of(&rx);
+        drop(first);
+        let _second = answer_stream_connect(&bridge);
+        let mut writer = writer_of(&rx);
+
+        // The driver detaches it: the loop ends instead of reconnecting.
+        writer.shutdown();
+        done.recv_timeout(Duration::from_secs(2))
+            .expect("the detached peer's loop should end");
+        bridge.set_nonblocking(true).unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert!(bridge.accept().is_err(), "a detached peer reconnected");
+        assert!(!lock_or_recover(&config.endpoint, "test")
+            .tunnels
+            .contains_key(&InterfaceId(7)));
+    }
+
     fn template() -> crate::interface::DynamicInterfaceTemplate {
         crate::interface::DynamicInterfaceTemplate {
             parent_id: InterfaceId(5),
@@ -1259,7 +1354,7 @@ mod tests {
         let stream = std::net::TcpStream::connect(stream_pair.local_addr().unwrap()).unwrap();
         let up = peer_up(
             InterfaceId(40),
-            Box::new(I2pWriter { stream }),
+            Box::new(I2pWriter::new(stream).0),
             peer_info(InterfaceId(40), "a.b32.i2p", config.ingress_control, true),
             Some(&template()),
             "I2P to a.b32.i2p".into(),

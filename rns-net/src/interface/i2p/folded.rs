@@ -15,7 +15,7 @@
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::fd::AsRawFd;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -195,7 +195,7 @@ impl Session {
                 peer,
                 id.0
             );
-            let (event, tunnel) = match self.writer(&stream, id, &peer, true) {
+            let (event, tunnel, detached) = match self.writer(&stream, id, &peer, true) {
                 Ok(up) => up,
                 Err(e) => {
                     log::warn!("[{}] failed to clone stream: {}", self.name, e);
@@ -207,7 +207,7 @@ impl Session {
             }
             let source = StreamSource {
                 stream,
-                state: State::Peer(self.peer(id, Some(peer.clone()), tunnel)),
+                state: State::Peer(self.peer(id, Some(peer.clone()), tunnel, detached)),
                 session: Arc::clone(&self),
             };
             match self.tx.register_source(read_key(id), Box::new(source)) {
@@ -228,10 +228,9 @@ impl Session {
         id: InterfaceId,
         remote: &str,
         outbound: bool,
-    ) -> io::Result<(Event, Arc<PeerTunnel>)> {
-        let writer = Box::new(I2pWriter {
-            stream: stream.try_clone()?,
-        });
+    ) -> io::Result<(Event, Arc<PeerTunnel>, Arc<AtomicBool>)> {
+        let (writer, detached) = I2pWriter::new(stream.try_clone()?);
+        let writer = Box::new(writer);
         let tunnel = I2pEndpoint::add_tunnel(&self.endpoint, id, Some(stream));
         let up = peer_up(
             id,
@@ -240,15 +239,22 @@ impl Session {
             self.dynamic_template.as_ref(),
             crate::interface::display::i2p_peer_name(&self.name, remote, outbound),
         );
-        Ok((up, tunnel))
+        Ok((up, tunnel, detached))
     }
 
-    fn peer(&self, id: InterfaceId, outbound: Option<String>, tunnel: Arc<PeerTunnel>) -> Peer {
+    fn peer(
+        &self,
+        id: InterfaceId,
+        outbound: Option<String>,
+        tunnel: Arc<PeerTunnel>,
+        detached: Arc<AtomicBool>,
+    ) -> Peer {
         Peer {
             id,
             decoder: frame_decoder(template_ifac_size(self.dynamic_template.as_ref())),
             outbound,
             tunnel,
+            detached,
         }
     }
 
@@ -351,6 +357,8 @@ struct Peer {
     /// The address an outbound peer is reconnected to.
     outbound: Option<String>,
     tunnel: Arc<PeerTunnel>,
+    /// Set when the driver detaches the peer, which is then not reconnected.
+    detached: Arc<AtomicBool>,
 }
 
 enum State {
@@ -438,14 +446,14 @@ impl StreamSource {
             remote,
             id.0
         );
-        let (up, tunnel) = match session.writer(&self.stream, id, &remote, false) {
+        let (up, tunnel, detached) = match session.writer(&self.stream, id, &remote, false) {
             Ok(up) => up,
             Err(e) => {
                 log::warn!("[{}] failed to clone accepted stream: {}", session.name, e);
                 return Some(SourceStatus::Remove);
             }
         };
-        let mut peer = session.peer(id, None, tunnel);
+        let mut peer = session.peer(id, None, tunnel, detached);
         let frames = peer
             .decoder
             .feed(&data)
@@ -475,6 +483,16 @@ impl StreamSource {
             I2pEndpoint::remove_tunnel(&session.endpoint, peer.id);
             return;
         };
+        if peer.detached.load(Ordering::Relaxed) {
+            // Upstream's detached I2PInterfacePeer stays down.
+            log::info!(
+                "[{}] I2P peer {} was detached, not reconnecting",
+                session.name,
+                address
+            );
+            I2pEndpoint::remove_tunnel(&session.endpoint, peer.id);
+            return;
+        }
         log::warn!(
             "[{}] I2P peer {} disconnected, reconnecting in {}s",
             session.name,
