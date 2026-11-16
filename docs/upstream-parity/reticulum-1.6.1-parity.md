@@ -83,6 +83,36 @@ Gates were run on 2026-11-16 on `upstream-1.6.1@0ac3ab7f`, rebased onto
 - Both VPS nodes still run their current builds; deployment is a separate
   operator step.
 
+## Follow-ups After Acceptance
+
+Resolved on `dev` after promotion (2026-11-16), each with its own tests; the
+caveats above are kept as they were at acceptance.
+
+- rns-rs shared instance clients stamp their own announces and path
+  requests, with their own `[stamps]` section and the shared
+  `storage/stamps`, as upstream clients do (`net: stamp a shared instance
+  client's own announces`). A client started with `RnsNode::connect_shared`,
+  without storage, still announces unstamped.
+- A dialing interface keeps the remote transport's report across
+  reconnects until the next synthesis replaces it, as upstream (`transport:
+  keep a remote transport's report across reconnects`).
+- A Python TCP client synthesizing a tunnel on a Rust server is covered by
+  `rust_server_receives_tunnel_synthesis_from_python_client`, passing against
+  `884f109b`, `c850cdac`, 1.5.4 and 1.4.2.
+
+Three caveats of the 1.6.0 rgit `c850cdac` record are resolved too:
+
+- An announce is held only after its signature, blackholed identity and
+  stamp are checked, as upstream's `preprocess_inbound` orders them; whether
+  the interface was limiting is still taken at arrival (`transport: hold an
+  announce only after validating it`).
+- A detached outbound I2P peer is not reconnected (`i2p: do not reconnect a
+  detached outbound peer`).
+- A node without interface management detaches a static interface after a
+  bad tunnel synthesis or a blackholed transport node, as upstream's forced
+  detach (`net: detach a static interface on a node without interface
+  management`).
+
 ## Promotion Result
 
 Reticulum is accepted at `1.6.1`, normative commit
