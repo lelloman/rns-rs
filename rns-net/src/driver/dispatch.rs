@@ -1148,7 +1148,11 @@ impl Driver {
             completion.retain_ratchet(ratchet_lease.clone());
             let mut selected = 0;
             for entry in self.interfaces.values() {
-                if entry.online && entry.enabled && Some(entry.id) != exclude {
+                if entry.online
+                    && entry.enabled
+                    && Some(entry.id) != exclude
+                    && !self.holepunch_manager.is_direct_interface(entry.id)
+                {
                     selected += 1;
                     let data = entry
                         .ifac
@@ -1170,7 +1174,12 @@ impl Driver {
             return;
         }
         for entry in self.interfaces.values_mut() {
-            if entry.online && entry.enabled && Some(entry.id) != exclude {
+            // A link's direct interface carries only that link.
+            if entry.online
+                && entry.enabled
+                && Some(entry.id) != exclude
+                && !self.holepunch_manager.is_direct_interface(entry.id)
+            {
                 if Self::interface_send_deferred_now(entry) {
                     continue;
                 }
@@ -1753,6 +1762,7 @@ impl Driver {
                             && entry.enabled
                             && entry.info.is_local_client == to_local
                             && Some(entry.id) != exclude
+                            && !self.holepunch_manager.is_direct_interface(entry.id)
                         {
                             if Self::interface_send_deferred_now(entry) {
                                 continue;
@@ -2253,6 +2263,7 @@ impl Driver {
                         }
                     }
                     log::debug!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
+                    // The link's direct interface, if any, goes with it.
                     self.holepunch_manager.link_closed(&link_id);
                     if self.blackhole_update_source(&link_id).is_some() {
                         self.blackhole_update_link_closed(&link_id);
@@ -2679,6 +2690,17 @@ impl Driver {
                         rns_core::types::LinkId(link_id),
                         interface_id,
                     );
+                }
+                HolePunchManagerAction::RemoveDirectInterface {
+                    link_id,
+                    interface_id,
+                } => {
+                    log::debug!(
+                        "Removing direct interface {} of link {:02x?}",
+                        interface_id.0,
+                        &link_id[..4]
+                    );
+                    self.handle_interface_down_event(interface_id);
                 }
                 HolePunchManagerAction::DirectConnectFailed {
                     link_id,
