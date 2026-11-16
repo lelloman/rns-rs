@@ -1284,15 +1284,14 @@ impl HolePunchManager {
         link_id: [u8; 16],
         session_id: [u8; 16],
     ) -> Vec<HolePunchManagerAction> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            session.engine.reset();
-            vec![HolePunchManagerAction::DirectConnectFailed {
-                link_id,
-                session_id,
-                reason: rns_core::holepunch::types::FAIL_PROBE,
-            }]
-        } else {
-            Vec::new()
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return Vec::new();
+        };
+        // A responder tells the initiator instead of leaving it waiting;
+        // the failed session is cleaned up on the next tick.
+        match session.engine.discovery_failed(time::now()) {
+            Ok(actions) => convert_engine_actions(link_id, &actions),
+            Err(_) => Vec::new(),
         }
     }
 }
@@ -1919,6 +1918,37 @@ mod tests {
             matches!(&actions[0], HolePunchManagerAction::DirectConnectFailed { reason, .. }
             if *reason == rns_core::holepunch::types::FAIL_PROBE)
         );
+    }
+
+    #[test]
+    fn responder_probe_failure_rejects_the_request() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x78; 16];
+        let payload = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x45);
+        let (_, accepted) = mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            payload,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert!(accepted.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+        let session_id = mgr.link_to_session[&link_id];
+
+        let actions = mgr.handle_probe_failed(link_id, session_id);
+        assert_eq!(
+            reject_reason(&actions),
+            Some(rns_core::holepunch::REJECT_NO_ENDPOINT)
+        );
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            HolePunchManagerAction::DirectConnectFailed { reason, .. }
+                if *reason == rns_core::holepunch::types::FAIL_PROBE
+        )));
+        // The failed session is cleaned up.
+        mgr.tick(&tx);
+        assert_eq!(mgr.session_count(), 0);
     }
 
     #[test]

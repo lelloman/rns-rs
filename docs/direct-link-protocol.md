@@ -220,7 +220,9 @@ anything:
 ### Phase 3: STUN Discovery + Address Exchange (B ↔ T, B → A)
 
 B sends a UDP probe to T (using the facilitator address from the upgrade
-request). T responds with B's public address (`B_pub`).
+request). T responds with B's public address (`B_pub`). If B gets no answer
+(within 10 seconds), it sends `UPGRADE_REJECT` with reason `0x04` instead of
+leaving A waiting.
 
 B then sends an `UPGRADE_READY` message to A over the existing Reticulum link:
 
@@ -356,7 +358,7 @@ Properties of the facilitator:
 | T unreachable or does not support STUN | 1 | A tries another facilitator or aborts |
 | B does not implement Direct Link | 0 | B never answers `HELLO`; A fails with reason `0x03` and sends nothing else |
 | B rejects the upgrade | 2 | Keep existing Reticulum link |
-| B cannot reach T | 3 | B sends `UPGRADE_REJECT`, keep existing link |
+| B cannot reach T | 3 | B sends `UPGRADE_REJECT` (reason `0x04`), keep existing link |
 | Symmetric NAT on either side | 4 | Hole punch fails (timeout), keep existing link |
 | Hole punch timeout | 4 | Keep existing link. Optionally retry with a different facilitator |
 | Direct path drops after establishment | after 4 | Detected by the keepalives, the link going stale, or exhausted channel retries; both sides fall back to the original route and the link stays open |

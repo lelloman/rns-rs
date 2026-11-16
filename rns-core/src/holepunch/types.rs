@@ -61,6 +61,9 @@ pub fn decode_signal(data: &[u8]) -> Option<(u8, &[u8])> {
 pub const REJECT_POLICY: u8 = 0x01;
 pub const REJECT_BUSY: u8 = 0x02;
 pub const REJECT_UNSUPPORTED: u8 = 0x03;
+/// The responder accepted, but could not learn its public endpoint from the
+/// facilitator named in the request.
+pub const REJECT_NO_ENDPOINT: u8 = 0x04;
 
 // --- Fail reasons ---
 
