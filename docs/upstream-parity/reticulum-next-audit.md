@@ -65,7 +65,7 @@ Dispositions are provisional until each mapping commit lands.
 | 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Integrated | `header_1_announce_leaves_room_for_a_transport_id`; `proptest_codec` generator updated |
 | 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Integrated | `header_1_announce_without_transport_room_counts_a_protocol_violation` |
 | 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Structurally covered | No forked instances (supervisor children are executed, not forked); withdrawal only after a shared-instance registration (documented on `withdraw_from_shared_instance`) |
-| 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Needs coordinated port (with 14) | |
+| 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Integrated | `tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation`, `a_longer_tunnel_synthesis_within_the_mdu_is_accepted`, `an_interface_takes_only_one_tunnel_synthesis`, `longer_synthesis_validates_up_to_the_mdu` |
 | 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Needs coordinated port (with 13) | |
 | 15 | `51fa8413277ef7308925aef610e409f9af0d9c3b` | Enabled stamp generation | Needs port | |
 | 16 | `fd36a97220a40383ce7f0a1d0f40bc7043f4494f` | Updated version | Needs decision | |
@@ -437,13 +437,30 @@ synthesis longer than the MDU or shorter than the required length is a
 protocol violation; a longer one is no longer ignored, which makes room for
 the extension payload of commit 14.
 
-**Rust applicability:** rns-rs ignores a repeated synthesis and a synthesis of
-the wrong length (`an_interface_takes_only_one_tunnel_synthesis`,
-`tunnel_synthesis_of_the_wrong_length_is_ignored`). Ported with commit 14.
+**Rust applicability:** rns-rs ignored a repeated synthesis and a synthesis
+of the wrong length (`an_interface_takes_only_one_tunnel_synthesis`,
+`tunnel_synthesis_of_the_wrong_length_is_ignored`). The handler changes stand
+on their own, so they are ported here; commit 14 then gives the extra bytes
+a meaning.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** The engine records which interfaces have
+received a synthesis (`mark_synthesis_received`, cleared when the interface
+is deregistered). `handle_tunnel_synth_delivery`, after the
+`tunnels_allowed` gate, counts a protocol violation for a synthesis on an
+interface that has a remote transport, then marks the interface and counts
+one for a second synthesis, then for data longer than the MDU or shorter
+than the 176 bytes of fixed fields, in upstream's order and with its log
+texts. `validate_tunnel_synthesize_data` accepts any length in that range;
+at this commit the bytes after the signature are not signed and are
+ignored. Tests: `tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation`
+(one byte short, one byte over the MDU),
+`a_longer_tunnel_synthesis_within_the_mdu_is_accepted`,
+`an_interface_takes_only_one_tunnel_synthesis` (after an established tunnel,
+and after a failed first synthesis), and the rns-core
+`longer_synthesis_validates_up_to_the_mdu`. `docs/rnstatus.md` lists the new
+violations.
 
-**Final disposition:** Needs coordinated port (with 14).
+**Final disposition:** Integrated.
 
 ### 14. `b7a93b9b` — Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces
 

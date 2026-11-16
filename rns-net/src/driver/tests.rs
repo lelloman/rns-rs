@@ -5074,16 +5074,48 @@ fn tunnel_synthesis_with_a_bad_signature_tears_the_interface_down() {
     assert_eq!(server.engine.tunnel_table().iter().count(), 0);
 }
 
-#[test]
-fn tunnel_synthesis_of_the_wrong_length_is_ignored() {
-    let (mut synthesis, _) = client_synthesis();
-    synthesis.pop();
+/// A server whose dynamic TCP client interface 5 has received `frames`.
+fn server_after_synthesis_frames(frames: Vec<Vec<u8>>) -> Driver {
     let mut server = new_test_driver();
     register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
     server.interfaces.get_mut(&InterfaceId(5)).unwrap().dynamic = true;
-    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
-    assert!(server.interfaces.contains_key(&InterfaceId(5)));
-    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+    for frame in frames {
+        server.handle_frame_event(InterfaceId(5), frame, None, None);
+    }
+    server
+}
+
+#[test]
+fn tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation() {
+    // Upstream 13b98a6b: shorter than the fixed fields or longer than the
+    // MDU is a protocol violation, and no tunnel.
+    let (mut short, _) = client_synthesis();
+    short.pop();
+    let (mut long, _) = client_synthesis();
+    let data_len = long.len() - RawPacket::data_offset(constants::HEADER_1);
+    long.extend(std::iter::repeat_n(0x77, constants::MDU + 1 - data_len));
+    for frame in [short, long] {
+        let server = server_after_synthesis_frames(vec![frame]);
+        assert!(server.interfaces.contains_key(&InterfaceId(5)));
+        assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+        assert_eq!(
+            server.interfaces[&InterfaceId(5)].stats.protocol_violations,
+            1
+        );
+    }
+}
+
+#[test]
+fn a_longer_tunnel_synthesis_within_the_mdu_is_accepted() {
+    // Upstream 13b98a6b makes room for data after the signature.
+    let (mut synthesis, client_transport) = client_synthesis();
+    synthesis.extend_from_slice(&[0x77; 32]);
+    let server = server_after_synthesis_frames(vec![synthesis]);
+    assert_eq!(server.engine.tunnel_table().iter().count(), 1);
+    assert_eq!(
+        server.engine.remote_transport(&InterfaceId(5)),
+        Some(client_transport)
+    );
     assert_eq!(
         server.interfaces[&InterfaceId(5)].stats.protocol_violations,
         0
@@ -5186,27 +5218,34 @@ fn synthesis_records_and_reports_the_remote_transport() {
 
 #[test]
 fn an_interface_takes_only_one_tunnel_synthesis() {
+    // Upstream 13b98a6b: a synthesis on an established tunnel is a protocol
+    // violation, and so is a second one after one that failed.
     let (first, first_transport) = client_synthesis();
     let (second, _) = client_synthesis();
-    let mut server = new_test_driver();
-    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
-    server.handle_frame_event(InterfaceId(5), first, None, None);
+    let server = server_after_synthesis_frames(vec![first, second]);
     let tunnel = server
         .engine
         .interface_info(&InterfaceId(5))
         .and_then(|info| info.tunnel_id);
-    server.handle_frame_event(InterfaceId(5), second, None, None);
-    assert_eq!(
-        server
-            .engine
-            .interface_info(&InterfaceId(5))
-            .and_then(|info| info.tunnel_id),
-        tunnel
-    );
+    assert!(tunnel.is_some());
     assert_eq!(server.engine.tunnel_table().iter().count(), 1);
     assert_eq!(
         server.engine.remote_transport(&InterfaceId(5)),
         Some(first_transport)
+    );
+    assert_eq!(
+        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
+        1
+    );
+
+    let (mut short, _) = client_synthesis();
+    short.pop();
+    let (valid, _) = client_synthesis();
+    let server = server_after_synthesis_frames(vec![short, valid]);
+    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+    assert_eq!(
+        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
+        2
     );
 }
 

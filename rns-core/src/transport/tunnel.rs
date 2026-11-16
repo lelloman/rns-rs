@@ -128,9 +128,12 @@ pub fn build_tunnel_synthesize_data(
 
 /// Validate tunnel synthesis data received from a remote transport node.
 ///
-/// Verifies the Ed25519 signature and extracts the tunnel_id.
+/// Verifies the Ed25519 signature and extracts the tunnel_id. Since
+/// upstream 13b98a6b a synthesis may be longer than
+/// [`TUNNEL_SYNTH_LENGTH`], up to the MDU, to make room for an extension
+/// after the signature; the extra bytes are not part of the tunnel.
 pub fn validate_tunnel_synthesize_data(data: &[u8]) -> Result<ValidatedTunnel, TunnelError> {
-    if data.len() != TUNNEL_SYNTH_LENGTH {
+    if !(TUNNEL_SYNTH_LENGTH..=constants::MDU).contains(&data.len()) {
         return Err(TunnelError::InvalidLength);
     }
 
@@ -467,6 +470,31 @@ mod tests {
     fn test_validate_invalid_length() {
         let result = validate_tunnel_synthesize_data(&[0u8; 100]);
         assert!(matches!(result, Err(TunnelError::InvalidLength)));
+    }
+
+    #[test]
+    fn longer_synthesis_validates_up_to_the_mdu() {
+        // Upstream 13b98a6b accepts a synthesis longer than the fixed
+        // fields, up to the MDU.
+        let identity = make_identity();
+        let mut rng = rns_crypto::FixedRng::new(&[0x56; 32]);
+        let (data, tunnel_id) =
+            build_tunnel_synthesize_data(&identity, &[0xCD; 32], &mut rng).unwrap();
+        let mut longer = data.clone();
+        longer.resize(constants::MDU, 0x77);
+        assert_eq!(
+            validate_tunnel_synthesize_data(&longer).unwrap().tunnel_id,
+            tunnel_id
+        );
+        longer.push(0x77);
+        assert!(matches!(
+            validate_tunnel_synthesize_data(&longer),
+            Err(TunnelError::InvalidLength)
+        ));
+        assert!(matches!(
+            validate_tunnel_synthesize_data(&data[..TUNNEL_SYNTH_LENGTH - 1]),
+            Err(TunnelError::InvalidLength)
+        ));
     }
 
     #[test]
