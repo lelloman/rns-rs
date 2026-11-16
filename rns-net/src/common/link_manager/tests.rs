@@ -1363,6 +1363,37 @@ fn responder_acknowledges_ff_probe_after_outbound_silence() {
     assert_eq!(packets[0].data(), [0xfe]);
 }
 
+/// Any packet the responder sends counts as outbound, as with Python's
+/// `Packet.send`, so a probe right after it goes unanswered.
+#[test]
+fn sent_link_packets_refresh_the_outbound_timer() {
+    let (_, mut responder, link_id) = setup_active_link();
+    let now = time::now();
+    let keepalive = responder.links[&link_id].engine.keepalive_interval();
+    responder
+        .links
+        .get_mut(&link_id)
+        .unwrap()
+        .engine
+        .record_outbound(now - keepalive - 1.0, false);
+
+    let actions = responder
+        .try_send_on_link(&link_id, b"data", constants::CONTEXT_NONE, &mut OsRng)
+        .unwrap();
+    let raw = extract_any_send_packet(&actions);
+    responder.record_outbound_packet(&RawPacket::unpack(&raw).unwrap());
+
+    let (raw, packet) = packed_keepalive(&link_id, &[0xff]);
+    let actions = responder.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+    assert!(keepalive_packets(&actions).is_empty());
+}
+
 /// Python's `Link.__receive` reactivates a STALE link before it looks at
 /// the packet, so a stale responder answers the probe that revives it.
 #[test]
