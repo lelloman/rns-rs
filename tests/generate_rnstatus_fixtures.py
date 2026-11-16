@@ -7,7 +7,7 @@ Each case feeds a stats dict to upstream's `program_setup` through a stand-in
 Reticulum instance, with `time.time()` pinned, and stores the inputs
 (`<case>.pickle`) next to upstream's exact output (`<case>.txt`). The Rust
 test `rnstatus_view_matches_upstream` renders the same inputs and compares
-byte for byte. The checkout must be RNS 1.6.0.
+byte for byte. The checkout must be RNS 1.6.1 (rgit 884f109b).
 """
 import contextlib
 import copy
@@ -20,7 +20,7 @@ from pathlib import Path
 import RNS
 import RNS.Utilities.rnstatus as rnstatus
 
-assert RNS.__version__ == "1.6.0", RNS.__version__
+assert RNS.__version__ == "1.6.1", RNS.__version__
 
 NOW = 1_763_200_000.25
 OUT = Path(__file__).resolve().parent / "fixtures/rnstatus"
@@ -49,6 +49,8 @@ def iface(name, **kw):
         "announce_rate_target": None, "announce_rate_grace": None,
         "announce_rate_penalty": None,
         "tunnel_id": None, "remote_transport_id": None,
+        "rem_impl": None, "rem_vers": None, "rem_is_tn": None,
+        "rem_dst_cost": None, "rem_pr_cost": None,
     }
     s.update(kw)
     return s
@@ -90,7 +92,9 @@ TCP_SERVER = iface("TCPServerInterface[Server/0.0.0.0:4242]", clients=1, bitrate
                    announce_rate_grace=2,
                    burst_active=True, burst_activated=NOW - 75.5, burst_count=12,
                    pr_burst_active=True, pr_burst_activated=NOW - 3, pr_burst_count=0,
-                   tunnel_id=bytes([0xAB] * 16), remote_transport_id=None)
+                   tunnel_id=bytes([0xAB] * 16), remote_transport_id=None,
+                   rem_impl="RNS", rem_vers=(1, 6, 1), rem_is_tn=True,
+                   rem_dst_cost=23.5, rem_pr_cost=15.8)
 TCP_CLIENT = iface("TCPInterface[Client on Server/10.0.0.9:51000]", bitrate=10_000_000, mtu=16384,
                    rxb=10, txb=20, tunnel_id=None, remote_transport_id=bytes([0xCD] * 16))
 TCP_OUT = iface("TCPInterface[Uplink/192.0.2.1:4242]", bitrate=10_000_000, mtu=16384,
@@ -120,7 +124,8 @@ WEAVE_PEER = iface("WeaveInterfacePeer[abc]", rxb=1)
 AUTO = iface("AutoInterface[Default]", bitrate=10_000_000, mtu=1196, peers=0, rxb=12, txb=0,
              gravity=-1)
 AUTO_PEER = iface("AutoInterfacePeer[eth0/fe80::1]", rxb=3)
-BACKBONE_CLIENT = iface("BackboneInterface[Client on Backbone]", rxb=4)
+BACKBONE_CLIENT = iface("BackboneInterface[Client on Backbone]", rxb=4,
+                        tunnel_id=bytes([0xEF] * 32), remote_transport_id=bytes([0x12] * 16))
 I2P_OK = iface("I2PInterface[I2P]", clients=1, i2p_connectable=True, tunnelstate="Tunnel active",
                i2p_b32="abcdefghijklmnop.b32.i2p", bitrate=256000, mtu=1064)
 I2P_MANY = iface("I2PInterface[I2P2]", clients=3, i2p_connectable=True, mtu=1064)

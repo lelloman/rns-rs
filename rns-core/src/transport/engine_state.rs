@@ -30,6 +30,8 @@ impl TransportEngine {
             local_tunnel_ids: BTreeMap::new(),
             remote_transports: BTreeMap::new(),
             synthesis_received: BTreeSet::new(),
+            synthesis_emitted: BTreeSet::new(),
+            remote_transport_infos: BTreeMap::new(),
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
             announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
@@ -81,6 +83,8 @@ impl TransportEngine {
         self.local_tunnel_ids.remove(&id);
         self.remote_transports.remove(&id);
         self.synthesis_received.remove(&id);
+        self.synthesis_emitted.remove(&id);
+        self.remote_transport_infos.remove(&id);
         self.drop_paths_for_interface(id);
         self.drop_reverse_for_interface(id);
         self.drop_links_for_interface(id);
@@ -499,10 +503,36 @@ impl TransportEngine {
         self.remote_transports.insert(interface, identity_hash);
     }
 
+    /// Record what the remote transport node reported about itself in its
+    /// synthesis extension (upstream b7a93b9b).
+    pub fn set_remote_transport_info(
+        &mut self,
+        interface: InterfaceId,
+        info: tunnel::RemoteTransportInfo,
+    ) {
+        self.remote_transport_infos.insert(interface, info);
+    }
+
+    /// Forget an interface's tunnel synthesis state when it connects again:
+    /// the remote transport, what it reported, and whether a synthesis was
+    /// received or emitted. Upstream's dialing interfaces reset the first two
+    /// on each connect (b7a93b9b); the synthesis they then send sets the
+    /// emitted flag again.
+    pub fn reset_tunnel_synthesis(&mut self, interface: InterfaceId) {
+        self.remote_transports.remove(&interface);
+        self.remote_transport_infos.remove(&interface);
+        self.synthesis_received.remove(&interface);
+        self.synthesis_emitted.remove(&interface);
+    }
+
     /// Synthesize a tunnel on an interface.
     ///
     /// `identity`: the transport identity (must have private key for signing)
     /// `interface_id`: which interface to send the synthesis on
+    /// `extension`: the signed extension after the signature (upstream
+    /// b7a93b9b), empty for none
+    /// `reverse`: whether this answers a synthesis received on the
+    /// interface; a reverse synthesis records no local tunnel
     /// `rng`: random number generator
     ///
     /// Returns TunnelSynthesize action to send the synthesis packet.
@@ -510,6 +540,8 @@ impl TransportEngine {
         &mut self,
         identity: &rns_crypto::identity::Identity,
         interface_id: InterfaceId,
+        extension: &[u8],
+        reverse: bool,
         rng: &mut dyn Rng,
     ) -> Vec<TransportAction> {
         let mut actions = Vec::new();
@@ -525,9 +557,12 @@ impl TransportEngine {
             return actions;
         };
 
-        match tunnel::build_tunnel_synthesize_data(identity, &interface_hash, rng) {
+        match tunnel::build_tunnel_synthesize_data(identity, &interface_hash, extension, rng) {
             Ok((data, tunnel_id)) => {
-                self.local_tunnel_ids.insert(interface_id, tunnel_id);
+                if !reverse {
+                    self.local_tunnel_ids.insert(interface_id, tunnel_id);
+                }
+                self.synthesis_emitted.insert(interface_id);
                 let dest_hash = crate::destination::destination_hash(
                     "rnstransport",
                     &["tunnel", "synthesize"],

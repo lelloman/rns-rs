@@ -2717,7 +2717,7 @@ fn test_synthesize_tunnel() {
     let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
     let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
 
-    let actions = engine.synthesize_tunnel(&identity, InterfaceId(1), &mut rng);
+    let actions = engine.synthesize_tunnel(&identity, InterfaceId(1), &[], false, &mut rng);
 
     // Should produce a TunnelSynthesize action
     assert_eq!(actions.len(), 1);
@@ -2770,6 +2770,8 @@ fn tunnel_synthesis_uses_hash_cached_at_interface_registration() {
     let actions = engine.synthesize_tunnel(
         &identity,
         InterfaceId(1),
+        &[],
+        false,
         &mut rns_crypto::FixedRng::new(&[0x11; 32]),
     );
 
@@ -2793,6 +2795,8 @@ fn replacing_interface_id_refreshes_cached_tunnel_hash() {
     let actions = engine.synthesize_tunnel(
         &identity,
         InterfaceId(1),
+        &[],
+        false,
         &mut rns_crypto::FixedRng::new(&[0x11; 32]),
     );
 
@@ -2813,7 +2817,7 @@ fn test_synthesize_tunnel_missing_interface_is_dropped() {
     let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
     let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
 
-    let actions = engine.synthesize_tunnel(&identity, InterfaceId(99), &mut rng);
+    let actions = engine.synthesize_tunnel(&identity, InterfaceId(99), &[], false, &mut rng);
 
     assert!(actions.is_empty());
 }
@@ -2829,7 +2833,8 @@ fn test_synthesize_tunnel_public_only_identity_is_dropped() {
         rns_crypto::identity::Identity::from_public_key(&public_key).unwrap();
     let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
 
-    let actions = engine.synthesize_tunnel(&public_only_identity, InterfaceId(1), &mut rng);
+    let actions =
+        engine.synthesize_tunnel(&public_only_identity, InterfaceId(1), &[], false, &mut rng);
 
     assert!(actions.is_empty());
 }

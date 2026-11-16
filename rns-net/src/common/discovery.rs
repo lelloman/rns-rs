@@ -860,6 +860,30 @@ pub fn sanitize_persisted_ifac(value: Option<String>) -> Option<String> {
     value.filter(|text| !text.is_empty() && text != "None")
 }
 
+/// Parse a dotted version into its leading numeric components.
+///
+/// Mirrors upstream `version_tuple`: non-numeric leading text stops the scan,
+/// and a value with no leading number is invalid. Missing trailing components
+/// compare as smaller, because the returned slice is compared lexicographically.
+pub fn parse_version_tuple(version: &str) -> Option<Vec<u32>> {
+    let mut components = Vec::new();
+    for component in version.trim().split('.') {
+        let digits: String = component
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            break;
+        }
+        components.push(digits.parse::<u32>().ok()?);
+    }
+    if components.is_empty() {
+        None
+    } else {
+        Some(components)
+    }
+}
+
 /// Sanitize a discovered interface name like upstream Reticulum.
 pub fn sanitize_discovered_name(name: &str) -> Option<String> {
     let ascii: String = name.chars().filter(|ch| ch.is_ascii()).collect();

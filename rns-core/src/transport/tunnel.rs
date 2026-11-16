@@ -48,6 +48,23 @@ pub struct ValidatedTunnel {
     pub public_key: [u8; 64],
     pub interface_hash: [u8; 32],
     pub random_hash: [u8; 16],
+    /// The signed extension after the signature (upstream b7a93b9b), empty
+    /// when the synthesis has none.
+    pub extension: Vec<u8>,
+}
+
+/// What a remote transport node reports about itself in the extension of
+/// its tunnel synthesis (upstream b7a93b9b): its implementation name and
+/// version, whether it has transport enabled, and the destination and path
+/// request stamp costs of the interface it synthesized on, quantized as
+/// upstream quantizes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteTransportInfo {
+    pub implementation: alloc::string::String,
+    pub version: Vec<u32>,
+    pub is_transport: bool,
+    pub destination_cost: crate::stamp::StampCost,
+    pub pr_cost: crate::stamp::StampCost,
 }
 
 /// Errors from tunnel operations.
@@ -90,13 +107,16 @@ pub fn compute_tunnel_id(public_key: &[u8; 64], interface_hash: &[u8; 32]) -> [u
 
 /// Build tunnel synthesis data for broadcasting.
 ///
-/// Returns (data, tunnel_id) where data = public_key(64) + interface_hash(32)
-/// + random_hash(16) + signature(64) = 176 bytes.
+/// Returns (data, tunnel_id). The data is public_key(64), interface_hash(32),
+/// random_hash(16) and signature(64), 176 bytes, followed by `extension`.
 ///
-/// The signature covers: public_key || interface_hash || random_hash.
+/// The signature covers: public_key || interface_hash || random_hash ||
+/// extension (upstream b7a93b9b; the extension is a msgpack map, empty for a
+/// synthesis without one).
 pub fn build_tunnel_synthesize_data(
     identity: &Identity,
     interface_hash: &[u8; 32],
+    extension: &[u8],
     rng: &mut dyn Rng,
 ) -> Result<(Vec<u8>, [u8; 32]), TunnelError> {
     let public_key = identity
@@ -110,18 +130,22 @@ pub fn build_tunnel_synthesize_data(
     rng.fill_bytes(&mut random_hash);
 
     // signed_data = public_key(64) + interface_hash(32) + random_hash(16)
-    let mut signed_data = Vec::with_capacity(112);
+    // + extension
+    let mut signed_data = Vec::with_capacity(112 + extension.len());
     signed_data.extend_from_slice(&public_key);
     signed_data.extend_from_slice(interface_hash);
     signed_data.extend_from_slice(&random_hash);
+    signed_data.extend_from_slice(extension);
 
     let signature = identity
         .sign(&signed_data)
         .map_err(|_| TunnelError::InvalidSignature)?;
 
-    // data = signed_data(112) + signature(64) = 176
-    let mut data = signed_data;
+    // data = the fixed fields(112) + signature(64) + extension
+    let mut data = Vec::with_capacity(TUNNEL_SYNTH_LENGTH + extension.len());
+    data.extend_from_slice(&signed_data[..112]);
     data.extend_from_slice(&signature);
+    data.extend_from_slice(extension);
 
     Ok((data, tunnel_id))
 }
@@ -130,8 +154,8 @@ pub fn build_tunnel_synthesize_data(
 ///
 /// Verifies the Ed25519 signature and extracts the tunnel_id. Since
 /// upstream 13b98a6b a synthesis may be longer than
-/// [`TUNNEL_SYNTH_LENGTH`], up to the MDU, to make room for an extension
-/// after the signature; the extra bytes are not part of the tunnel.
+/// [`TUNNEL_SYNTH_LENGTH`], up to the MDU: the bytes after the signature
+/// are an extension (b7a93b9b), which the signature also covers.
 pub fn validate_tunnel_synthesize_data(data: &[u8]) -> Result<ValidatedTunnel, TunnelError> {
     if !(TUNNEL_SYNTH_LENGTH..=constants::MDU).contains(&data.len()) {
         return Err(TunnelError::InvalidLength);
@@ -150,11 +174,15 @@ pub fn validate_tunnel_synthesize_data(data: &[u8]) -> Result<ValidatedTunnel, T
     let mut signature = [0u8; 64];
     signature.copy_from_slice(&data[112..176]);
 
-    // Verify signature over (public_key || interface_hash || random_hash)
-    let signed_data = &data[0..112];
+    // Verify signature over (public_key || interface_hash || random_hash ||
+    // extension)
+    let extension = data[TUNNEL_SYNTH_LENGTH..].to_vec();
+    let mut signed_data = Vec::with_capacity(112 + extension.len());
+    signed_data.extend_from_slice(&data[0..112]);
+    signed_data.extend_from_slice(&extension);
     let remote_identity =
         Identity::from_public_key(&public_key).map_err(|_| TunnelError::InvalidPublicKey)?;
-    if !remote_identity.verify(&signature, signed_data) {
+    if !remote_identity.verify(&signature, &signed_data) {
         return Err(TunnelError::InvalidSignature);
     }
 
@@ -166,6 +194,7 @@ pub fn validate_tunnel_synthesize_data(data: &[u8]) -> Result<ValidatedTunnel, T
         public_key,
         interface_hash,
         random_hash,
+        extension,
     })
 }
 
@@ -457,7 +486,7 @@ mod tests {
         let mut rng = rns_crypto::FixedRng::new(&[0x55; 32]);
 
         let (data, tunnel_id) =
-            build_tunnel_synthesize_data(&identity, &iface_hash, &mut rng).unwrap();
+            build_tunnel_synthesize_data(&identity, &iface_hash, &[], &mut rng).unwrap();
         assert_eq!(data.len(), TUNNEL_SYNTH_LENGTH);
 
         let validated = validate_tunnel_synthesize_data(&data).unwrap();
@@ -475,18 +504,25 @@ mod tests {
     #[test]
     fn longer_synthesis_validates_up_to_the_mdu() {
         // Upstream 13b98a6b accepts a synthesis longer than the fixed
-        // fields, up to the MDU.
+        // fields, up to the MDU; since b7a93b9b the extra bytes are a
+        // signed extension.
         let identity = make_identity();
         let mut rng = rns_crypto::FixedRng::new(&[0x56; 32]);
+        let extension = vec![0x77; constants::MDU - TUNNEL_SYNTH_LENGTH];
         let (data, tunnel_id) =
-            build_tunnel_synthesize_data(&identity, &[0xCD; 32], &mut rng).unwrap();
-        let mut longer = data.clone();
-        longer.resize(constants::MDU, 0x77);
-        assert_eq!(
-            validate_tunnel_synthesize_data(&longer).unwrap().tunnel_id,
-            tunnel_id
-        );
-        longer.push(0x77);
+            build_tunnel_synthesize_data(&identity, &[0xCD; 32], &extension, &mut rng).unwrap();
+        assert_eq!(data.len(), constants::MDU);
+        let validated = validate_tunnel_synthesize_data(&data).unwrap();
+        assert_eq!(validated.tunnel_id, tunnel_id);
+        assert_eq!(validated.extension, extension);
+
+        let (longer, _) = build_tunnel_synthesize_data(
+            &identity,
+            &[0xCD; 32],
+            &vec![0x77; constants::MDU - TUNNEL_SYNTH_LENGTH + 1],
+            &mut rng,
+        )
+        .unwrap();
         assert!(matches!(
             validate_tunnel_synthesize_data(&longer),
             Err(TunnelError::InvalidLength)
@@ -495,6 +531,33 @@ mod tests {
             validate_tunnel_synthesize_data(&data[..TUNNEL_SYNTH_LENGTH - 1]),
             Err(TunnelError::InvalidLength)
         ));
+    }
+
+    #[test]
+    fn the_signature_covers_the_extension() {
+        // Upstream b7a93b9b signs the extension with the fixed fields.
+        let identity = make_identity();
+        let mut rng = rns_crypto::FixedRng::new(&[0x57; 32]);
+        let (mut data, _) =
+            build_tunnel_synthesize_data(&identity, &[0xCE; 32], b"extension", &mut rng).unwrap();
+        assert_eq!(&data[TUNNEL_SYNTH_LENGTH..], b"extension");
+        assert_eq!(
+            validate_tunnel_synthesize_data(&data).unwrap().extension,
+            b"extension"
+        );
+        *data.last_mut().unwrap() ^= 0x01;
+        assert!(matches!(
+            validate_tunnel_synthesize_data(&data),
+            Err(TunnelError::InvalidSignature)
+        ));
+        // Without an extension the synthesis is the 1.6.0 layout.
+        let (plain, _) =
+            build_tunnel_synthesize_data(&identity, &[0xCE; 32], &[], &mut rng).unwrap();
+        assert_eq!(plain.len(), TUNNEL_SYNTH_LENGTH);
+        assert!(validate_tunnel_synthesize_data(&plain)
+            .unwrap()
+            .extension
+            .is_empty());
     }
 
     #[test]
@@ -522,7 +585,8 @@ mod tests {
         let iface_hash = [0xDD; 32];
         let mut rng = rns_crypto::FixedRng::new(&[0x66; 32]);
 
-        let (mut data, _) = build_tunnel_synthesize_data(&identity, &iface_hash, &mut rng).unwrap();
+        let (mut data, _) =
+            build_tunnel_synthesize_data(&identity, &iface_hash, &[], &mut rng).unwrap();
 
         // Tamper with the random_hash
         data[100] ^= 0xFF;

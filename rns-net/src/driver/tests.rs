@@ -5074,6 +5074,17 @@ fn tunnel_synthesis_with_a_bad_signature_tears_the_interface_down() {
     assert_eq!(server.engine.tunnel_table().iter().count(), 0);
 }
 
+/// A client synthesis cut to one byte less than the fixed fields.
+fn short_synthesis() -> Vec<u8> {
+    let (mut synthesis, _) = client_synthesis();
+    synthesis.truncate(
+        RawPacket::data_offset(constants::HEADER_1)
+            + rns_core::transport::tunnel::TUNNEL_SYNTH_LENGTH
+            - 1,
+    );
+    synthesis
+}
+
 /// A server whose dynamic TCP client interface 5 has received `frames`.
 fn server_after_synthesis_frames(frames: Vec<Vec<u8>>) -> Driver {
     let mut server = new_test_driver();
@@ -5089,8 +5100,7 @@ fn server_after_synthesis_frames(frames: Vec<Vec<u8>>) -> Driver {
 fn tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation() {
     // Upstream 13b98a6b: shorter than the fixed fields or longer than the
     // MDU is a protocol violation, and no tunnel.
-    let (mut short, _) = client_synthesis();
-    short.pop();
+    let short = short_synthesis();
     let (mut long, _) = client_synthesis();
     let data_len = long.len() - RawPacket::data_offset(constants::HEADER_1);
     long.extend(std::iter::repeat_n(0x77, constants::MDU + 1 - data_len));
@@ -5103,23 +5113,6 @@ fn tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation() {
             1
         );
     }
-}
-
-#[test]
-fn a_longer_tunnel_synthesis_within_the_mdu_is_accepted() {
-    // Upstream 13b98a6b makes room for data after the signature.
-    let (mut synthesis, client_transport) = client_synthesis();
-    synthesis.extend_from_slice(&[0x77; 32]);
-    let server = server_after_synthesis_frames(vec![synthesis]);
-    assert_eq!(server.engine.tunnel_table().iter().count(), 1);
-    assert_eq!(
-        server.engine.remote_transport(&InterfaceId(5)),
-        Some(client_transport)
-    );
-    assert_eq!(
-        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
-        0
-    );
 }
 
 #[test]
@@ -5197,6 +5190,157 @@ fn client_synthesis() -> (Vec<u8>, [u8; 16]) {
     (synthesis, identity_hash)
 }
 
+/// A dialing TCP client that has connected once: the driver, the frames it
+/// sent (its synthesis first) and its transport identity hash.
+fn connected_client() -> (Driver, SentFrames, [u8; 16]) {
+    let (mut client, sent) = dialing_client_driver();
+    client
+        .interfaces
+        .get_mut(&InterfaceId(1))
+        .unwrap()
+        .interface_type = "TCPClientInterface".into();
+    let identity_hash = *client.transport_identity.as_ref().unwrap().hash();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    (client, sent, identity_hash)
+}
+
+/// A server with a transport identity whose spawned TCP client interface 5
+/// records the frames it sends; returns them and the identity hash.
+fn tunnel_server() -> (Driver, SentFrames, [u8; 16]) {
+    let mut server = new_test_driver();
+    let identity = Identity::new(&mut OsRng);
+    let identity_hash = *identity.hash();
+    server.transport_identity = Some(identity);
+    register_typed_interface(&mut server, 5, "spawned-client", "TCPServerClientInterface");
+    let (writer, sent) = MockWriter::new();
+    server.interfaces.get_mut(&InterfaceId(5)).unwrap().writer = Box::new(writer);
+    (server, sent, identity_hash)
+}
+
+/// A synthesis signed by `client`'s transport identity on its interface 1
+/// with `extension` after the signature.
+fn synthesis_with_extension(client: &mut Driver, sent: &SentFrames, extension: &[u8]) -> Vec<u8> {
+    let identity = client.transport_identity.take().unwrap();
+    let actions =
+        client
+            .engine
+            .synthesize_tunnel(&identity, InterfaceId(1), extension, false, &mut OsRng);
+    client.transport_identity = Some(identity);
+    client.dispatch_all(actions);
+    sent.lock().unwrap().last().unwrap().clone()
+}
+
+#[test]
+fn tunnel_synthesis_is_answered_and_both_ends_learn_the_other() {
+    // Upstream b7a93b9b: the synthesis carries a signed extension; the
+    // server records it and answers with a reverse synthesis, which the
+    // client records without answering again or attaching a tunnel.
+    let (mut client, client_sent, client_transport) = connected_client();
+    let synthesis = client_sent.lock().unwrap()[0].clone();
+    let (mut server, server_sent, server_transport) = tunnel_server();
+
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    let reported = server
+        .engine
+        .remote_transport_info(&InterfaceId(5))
+        .cloned()
+        .expect("the client's extension");
+    assert_eq!(reported.implementation, "rns-rs");
+    assert!(!reported.version.is_empty());
+    assert_eq!(
+        server.engine.remote_transport(&InterfaceId(5)),
+        Some(client_transport)
+    );
+    assert_eq!(server.engine.tunnel_table().iter().count(), 1);
+    // The reverse synthesis records no local tunnel on the server.
+    assert_eq!(server.engine.local_tunnel_id(&InterfaceId(5)), None);
+    let reverse = {
+        let sent = server_sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        sent[0].clone()
+    };
+
+    client.handle_frame_event(InterfaceId(1), reverse, None, None);
+    assert_eq!(
+        client.engine.remote_transport(&InterfaceId(1)),
+        Some(server_transport)
+    );
+    assert_eq!(
+        client
+            .engine
+            .remote_transport_info(&InterfaceId(1))
+            .map(|info| info.implementation.as_str()),
+        Some("rns-rs")
+    );
+    assert_eq!(client_sent.lock().unwrap().len(), 1);
+    assert_eq!(client.engine.tunnel_table().iter().count(), 0);
+    assert!(client.engine.local_tunnel_id(&InterfaceId(1)).is_some());
+    assert_eq!(
+        client.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        0
+    );
+
+    // Each end reports what the other said about itself.
+    let QueryResponse::InterfaceStats(stats) = server.handle_query(QueryRequest::InterfaceStats)
+    else {
+        panic!("expected interface stats");
+    };
+    let entry = stats.interfaces.iter().find(|e| e.id == 5).unwrap();
+    assert_eq!(entry.remote_transport_info.as_ref(), Some(&reported));
+
+    // A reconnect starts over: no remote transport until the next answer.
+    client.handle_interface_down_event(InterfaceId(1));
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    assert_eq!(client.engine.remote_transport(&InterfaceId(1)), None);
+    assert!(client
+        .engine
+        .remote_transport_info(&InterfaceId(1))
+        .is_none());
+    assert_eq!(client_sent.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn a_synthesis_without_an_extension_is_not_answered() {
+    // A 1.6.0 synthesis: the tunnel is attached, nothing is reported and no
+    // reverse synthesis is sent.
+    let (mut client, client_sent, client_transport) = connected_client();
+    let synthesis = synthesis_with_extension(&mut client, &client_sent, &[]);
+    assert_eq!(
+        synthesis.len(),
+        RawPacket::data_offset(constants::HEADER_1)
+            + rns_core::transport::tunnel::TUNNEL_SYNTH_LENGTH
+    );
+    let (mut server, server_sent, _) = tunnel_server();
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    assert_eq!(
+        server.engine.remote_transport(&InterfaceId(5)),
+        Some(client_transport)
+    );
+    assert!(server
+        .engine
+        .remote_transport_info(&InterfaceId(5))
+        .is_none());
+    assert_eq!(server.engine.tunnel_table().iter().count(), 1);
+    assert!(server_sent.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_invalid_synthesis_extension_is_a_protocol_violation() {
+    // Upstream b7a93b9b: an extension that does not decode, or lacks a
+    // field, is a protocol violation, with no tunnel and no answer.
+    let (mut client, client_sent, _) = connected_client();
+    let synthesis = synthesis_with_extension(&mut client, &client_sent, b"\xc1");
+    let (mut server, server_sent, _) = tunnel_server();
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    assert_eq!(
+        server.interfaces[&InterfaceId(5)].stats.protocol_violations,
+        1
+    );
+    assert_eq!(server.engine.remote_transport(&InterfaceId(5)), None);
+    assert_eq!(server.engine.tunnel_table().iter().count(), 0);
+    assert!(server_sent.lock().unwrap().is_empty());
+}
+
 #[test]
 fn synthesis_records_and_reports_the_remote_transport() {
     // Upstream 464e7598 `remote_transport_id`.
@@ -5238,10 +5382,8 @@ fn an_interface_takes_only_one_tunnel_synthesis() {
         1
     );
 
-    let (mut short, _) = client_synthesis();
-    short.pop();
     let (valid, _) = client_synthesis();
-    let server = server_after_synthesis_frames(vec![short, valid]);
+    let server = server_after_synthesis_frames(vec![short_synthesis(), valid]);
     assert_eq!(server.engine.tunnel_table().iter().count(), 0);
     assert_eq!(
         server.interfaces[&InterfaceId(5)].stats.protocol_violations,

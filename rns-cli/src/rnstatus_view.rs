@@ -331,19 +331,51 @@ pub fn render(stats: &PickleValue, opts: &ViewOptions, extras: &Extras<'_>, now:
             );
         }
 
-        if opts.tstats && has(ifstat, "tunnel_id") {
-            let tid = match bytes_of(ifstat, "tunnel_id") {
-                Some(b) if !b.is_empty() => prettyhexrep(b),
-                _ => "None".into(),
-            };
+        // Upstream b7a93b9b: the tunnel id as plain hex, then for an
+        // interface with a tunnel what the remote transport node reported.
+        // Upstream indexes these keys directly; a missing key reads as
+        // `None` here, as from an instance that predates them.
+        let tunnel_id = bytes_of(ifstat, "tunnel_id").filter(|b| !b.is_empty());
+        if opts.tstats {
+            let tid = tunnel_id.map(hexrep).unwrap_or_else(|| "None".into());
             p!("    Tunnel ID : {tid}");
         }
-        if opts.tstats && has(ifstat, "remote_transport_id") {
+        if opts.tstats && tunnel_id.is_some() {
             let rid = match bytes_of(ifstat, "remote_transport_id") {
                 Some(b) if !b.is_empty() => prettyhexrep(b),
                 _ => "Unknown".into(),
             };
             p!("    Rem.Tr.ID : {rid}");
+
+            let impl_str = if truthy(get(ifstat, "rem_impl")) {
+                s(ifstat, "rem_impl")
+            } else {
+                "Unknown implementation".into()
+            };
+            let vers_str = match get(ifstat, "rem_vers") {
+                Some(PickleValue::List(components)) if !components.is_empty() => format!(
+                    " {}",
+                    components.iter().map(str_of).collect::<Vec<_>>().join(".")
+                ),
+                _ => ", unknown version".into(),
+            };
+            p!("    Rem.Vers. : {impl_str}{vers_str}");
+
+            let cost = |key: &str, label: &str| {
+                if not_none(ifstat, key) {
+                    format!(
+                        "{label} {}",
+                        crate::format::prettycost(Some(num(ifstat, key).f()))
+                    )
+                } else {
+                    format!("{label} ?")
+                }
+            };
+            p!(
+                "    Rem.Csts. : {}, {}",
+                cost("rem_dst_cost", "Dst"),
+                cost("rem_pr_cost", "PR")
+            );
         }
 
         if has(ifstat, "noise_floor") {

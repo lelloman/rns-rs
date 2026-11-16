@@ -275,6 +275,14 @@ pub struct TransportEngine {
     /// 13b98a6b `Interface.synthesis_received`): another one is a protocol
     /// violation.
     synthesis_received: BTreeSet<InterfaceId>,
+    /// Interfaces this node has sent a synthesis on (upstream b7a93b9b
+    /// `Interface.synthesis_emitted`); one that receives a synthesis with an
+    /// extension and has not emitted one answers with a reverse synthesis.
+    synthesis_emitted: BTreeSet<InterfaceId>,
+    /// What the remote transport node reported in its synthesis extension
+    /// (upstream b7a93b9b `remote_impl`, `remote_vers`, `remote_is_tn`,
+    /// `remote_dst_cost`, `remote_pr_cost`).
+    remote_transport_infos: BTreeMap<InterfaceId, tunnel::RemoteTransportInfo>,
     local_destinations: BTreeMap<[u8; 16], u8>,
     blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
     announce_queues: AnnounceQueues,

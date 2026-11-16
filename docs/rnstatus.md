@@ -77,23 +77,34 @@ For example, after editing an interface section named `Backbone`, run
 `rnstatus --reload Backbone`. Use `rnstatus --attach Backbone` to start it when
 it is not running, or `rnstatus --detach Backbone` to stop it.
 
-`--detach` also takes a tunnel id, as `-T` shows it without the angle
-brackets. It names the interface a remote node's tunnel is attached to, such
+`--detach` also takes a tunnel id, as `-T` shows it. It names the interface a remote node's tunnel is attached to, such
 as one client of a server interface, or the interface this node synthesized
 that tunnel on. A spawned client interface has its connection closed. A
 configured interface is detached as by its name.
 
-With `-T`, each interface shows a `Tunnel ID` line: the tunnel a connected
-transport node synthesized over it, else the one this node synthesized over
-it when dialing out, else `None`. A `Rem.Tr.ID` line follows with the
-transport identity of the node that synthesized a tunnel over the interface,
-or `Unknown`. TCP clients, Backbone clients and outbound I2P peers synthesize a
-tunnel each time they connect, so the remote side keeps their paths across
-reconnects. Tunnels are only accepted over TCP, Backbone and I2P connections,
-one per connection, and a connection whose tunnel synthesis carries a bad
-signature is torn down. A second synthesis on a connection, or one too short
-or longer than the MDU, counts as a protocol violation (upstream
-`13b98a6b`).
+With `-T`, each interface shows a `Tunnel ID` line, in plain hexadecimal:
+the tunnel a connected transport node synthesized over it, else the one this
+node synthesized over it when dialing out, else `None`. An interface with a
+tunnel then shows three more lines (upstream `b7a93b9b`): `Rem.Tr.ID`, the
+transport identity of the node at the other end, or `Unknown`; `Rem.Vers.`,
+the implementation and version it reported, such as `RNS 1.6.1` (rns-rs
+reports `rns-rs` and the `rns-net` version), or `Unknown implementation,
+unknown version`; and `Rem.Csts.`, the
+destination and path request stamp costs of its interface, such as
+`Dst 23.500, PR 15.801`, or `Dst ?, PR ?`.
+
+TCP clients, Backbone clients and outbound I2P peers synthesize a tunnel each
+time they connect, so the remote side keeps their paths across reconnects.
+The synthesis carries a signed extension with the node's implementation,
+version, transport status and interface costs, and the other end answers
+with a synthesis of its own, so both ends know each other. Reticulum before
+1.6.1 ignores a synthesis with an extension, so it records no tunnel from an
+rns-rs client, as it records none from a 1.6.1 Python client. Tunnels are
+only accepted over TCP, Backbone and I2P connections, one per connection, and
+a connection whose tunnel synthesis carries a bad signature is torn down. A
+second synthesis on a connection, one too short or longer than the MDU, or
+one with an extension that does not decode or lacks a field, counts as a
+protocol violation (upstream `13b98a6b`, `b7a93b9b`).
 
 Discovered-interface views (`-d` and `-D`) show the announcing stack's
 implementation and version as `Running` in the table or `Stack` in the detail

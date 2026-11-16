@@ -621,9 +621,12 @@ def inbound_link_closed(link):
 
 destination.set_link_established_callback(inbound_link_established)
 
+import inspect
 emit("ready", port=port, python_dest_hash=destination.hash.hex(),
      link_cost_supported=hasattr(RNS.Identity, "recall_link_cost") and hasattr(RNS.Destination, "set_link_cost"),
-     lr_cost_length=getattr(RNS.Identity, "LRCOSTLENGTH", None))
+     lr_cost_length=getattr(RNS.Identity, "LRCOSTLENGTH", None),
+     transport_identity_hash=RNS.Transport.identity.hash.hex() if RNS.Transport.identity else None,
+     synthesis_extension_supported="reverse" in inspect.signature(RNS.Transport.synthesize_tunnel).parameters)
 
 signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
 try:
@@ -1157,7 +1160,11 @@ fn python_rns_stamped_link_request_interop() {
 #[test]
 fn python_rns_receives_tunnel_synthesis_from_rust_client() {
     // A dialing TCP client synthesizes a tunnel; Python records it on the
-    // interface the client connected through.
+    // interface the client connected through. Since upstream b7a93b9b the
+    // synthesis carries a signed extension, which Python answers with its
+    // own synthesis, so the Rust client learns about Python too. Python
+    // before 1.6.1 only takes a synthesis without an extension and ignores
+    // the longer one, as it ignores a 1.6.1 client's.
     if !rns_available() {
         eprintln!("Skipping: Python RNS not available");
         return;
@@ -1166,11 +1173,17 @@ fn python_rns_receives_tunnel_synthesis_from_rust_client() {
     let mut python = PythonRns::spawn();
     let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
     let port = ready["port"].as_u64().unwrap() as u16;
+    let extension_supported = ready["synthesis_extension_supported"] == true;
     let (rust_tx, _rust_rx) = mpsc::channel();
     let node = start_rust_node(port, rust_tx);
     wait_for_interop_interface(&node);
 
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now()
+        + if extension_supported {
+            TIMEOUT
+        } else {
+            Duration::from_secs(5)
+        };
     let tunnels = loop {
         python.command("tunnels");
         let event = python.wait_for_event(TIMEOUT, |event| event["event"] == "python_tunnels");
@@ -1180,6 +1193,15 @@ fn python_rns_receives_tunnel_synthesis_from_rust_client() {
         }
         std::thread::sleep(Duration::from_millis(200));
     };
+    if !extension_supported {
+        assert!(
+            tunnels.is_empty(),
+            "Python before 1.6.1 should ignore a synthesis with an extension: {tunnels:?}"
+        );
+        python.command("stop");
+        node.shutdown();
+        return;
+    }
     assert_eq!(
         tunnels.len(),
         1,
@@ -1192,6 +1214,41 @@ fn python_rns_receives_tunnel_synthesis_from_rust_client() {
         tunnel["interface"].as_str().unwrap().contains("TCP"),
         "tunnel should sit on the spawned TCP interface: {tunnel:?}"
     );
+
+    // Python's reverse synthesis: the client records Python's transport
+    // identity and what Python reported about itself.
+    let python_transport = ready["transport_identity_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let deadline = Instant::now() + TIMEOUT;
+    let remote = loop {
+        let reported = match node.query(rns_net::event::QueryRequest::InterfaceStats) {
+            Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) => stats
+                .interfaces
+                .into_iter()
+                .find(|iface| iface.remote_transport_info.is_some()),
+            _ => None,
+        };
+        if let Some(iface) = reported {
+            break iface;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the Rust client should record Python's reverse synthesis"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let remote_transport: String = remote
+        .remote_transport_id
+        .expect("the remote transport")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(remote_transport, python_transport);
+    let info = remote.remote_transport_info.unwrap();
+    assert_eq!(info.implementation, "RNS");
+    assert_eq!(info.version.first(), Some(&1));
 
     python.command("stop");
     node.shutdown();

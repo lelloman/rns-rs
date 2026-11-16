@@ -352,6 +352,7 @@ impl Driver {
             // A listener's tunnels belong to its spawned clients.
             tunnel_id: None,
             remote_transport_id: None,
+            remote_transport_info: None,
             status,
             mode: listener.mode,
             gravity: listener.gravity,
@@ -506,6 +507,11 @@ impl Driver {
                     // Upstream 3281e283: else the tunnel this node synthesized.
                     .or_else(|| self.engine.local_tunnel_id(&interface_id)),
                 remote_transport_id: self.engine.remote_transport(&interface_id),
+                remote_transport_info: (!crate::interface::shared_medium_hint(
+                    &entry.interface_type,
+                ))
+                .then(|| self.engine.remote_transport_info(&interface_id).cloned())
+                .flatten(),
                 status: entry.online && entry.enabled,
                 mode: entry.info.mode,
                 gravity: entry.info.gravity,
@@ -645,6 +651,7 @@ impl Driver {
                 // A listener's tunnels belong to its spawned clients.
                 tunnel_id: None,
                 remote_transport_id: None,
+                remote_transport_info: None,
                 status: true,
                 mode: handle.mode,
                 gravity: handle.gravity,

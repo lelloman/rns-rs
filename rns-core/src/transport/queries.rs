@@ -447,6 +447,21 @@ impl TransportEngine {
         self.remote_transports.get(interface).copied()
     }
 
+    /// What the remote transport node reported in its synthesis extension
+    /// over `interface` (upstream b7a93b9b).
+    pub fn remote_transport_info(
+        &self,
+        interface: &InterfaceId,
+    ) -> Option<&tunnel::RemoteTransportInfo> {
+        self.remote_transport_infos.get(interface)
+    }
+
+    /// Whether this node has sent a tunnel synthesis on `interface` since it
+    /// connected (upstream b7a93b9b `synthesis_emitted`).
+    pub fn synthesis_emitted(&self, interface: &InterfaceId) -> bool {
+        self.synthesis_emitted.contains(interface)
+    }
+
     /// The interface a tunnel id names: the one a remote node's tunnel is
     /// attached to, else the one this node synthesized it on (upstream
     /// 3281e283's detach by tunnel id).

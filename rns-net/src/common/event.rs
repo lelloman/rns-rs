@@ -1103,6 +1103,10 @@ pub struct SingleInterfaceStat {
     /// The transport identity hash of the node that synthesized a tunnel
     /// over this interface (upstream 464e7598 `remote_transport_id`).
     pub remote_transport_id: Option<[u8; 16]>,
+    /// What the remote transport node reported in its synthesis extension
+    /// (upstream b7a93b9b `rem_impl`, `rem_vers`, `rem_is_tn`,
+    /// `rem_dst_cost`, `rem_pr_cost`); `None` on a shared medium.
+    pub remote_transport_info: Option<rns_core::transport::tunnel::RemoteTransportInfo>,
     pub status: bool,
     pub mode: u8,
     /// Signed interface preference used by path selection.

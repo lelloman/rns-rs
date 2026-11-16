@@ -4,7 +4,6 @@
     Serving   : 2 programs
     Rate      : 1.00 Gbps, MTU 262144
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑8.19 KB    64 bps
                 ↓4.10 KB    1.20 Kbps
 
@@ -16,8 +15,10 @@
     Mode      : Full (a>i)
     TX Drops  : 4 (2.05 KB)
     Rate      : 10.00 Mbps, MTU 16384
-    Tunnel ID : <abababababababababababababababab>
+    Tunnel ID : abababababababababababababababab
     Rem.Tr.ID : Unknown
+    Rem.Vers. : RNS 1.6.1
+    Rem.Csts. : Dst 23.500, PR 15.801
     Access    : 128-bit IFAC by <…3b3c3d3e3f>
     Violatns. : 2 protocol
     Flt. Hits : 17
@@ -28,7 +29,6 @@
     Status    : Up
     Rate      : 10.00 Mbps, MTU 16384
     Tunnel ID : None
-    Rem.Tr.ID : <cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd>
     Traffic   : ↑20 B       0 bps
                 ↓10 B       0 bps
 
@@ -38,7 +38,6 @@
     Mode      : Gateway
     Rate      : 10.00 Mbps, MTU 16384
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Violatns. : 0 protocol, 3 IFAC
     Traffic   : ↑1.00 KB    0 bps
                 ↓1.50 TB    0 bps
@@ -47,7 +46,6 @@
     Status    : Up
     Rate      : 1.00 Gbps, MTU 262144
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑2 B        0 bps
                 ↓1 B        0 bps
 
@@ -56,7 +54,6 @@
     Mode      : Access Point
     Rate      : 3.12 kbps, MTU 508
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Noise Fl. : -99 dBm
     Intrfrnc. : -71 dBm 1h and 2m ago
     CPU load  : Unknown
@@ -71,7 +68,6 @@
     Mode      : Roaming
     Rate      : 1.95 kbps, MTU 508
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Noise Fl. : -104 dBm
     Intrfrnc. : -80 dBm
     CPU load  : Unknown
@@ -84,7 +80,6 @@
     Status    : Up
     Mode      : Boundary
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Noise Fl. : Unknown
     CPU load  : 17.5 %
     Mem usage : 33.25 %
@@ -95,7 +90,6 @@
     Status    : Up
     Mode      : Point-to-Point
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Noise Fl. : -120 dBm, no interference
     Traffic   : ↑0 B        0 bps
                 ↓0 B        0 bps
@@ -105,7 +99,6 @@
     Mode      : Full
     Rate      : 2.00 Mbps, MTU 1064
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Switch ID : sw1
     Endpoint  : Unknown
     Via       : sw0
@@ -117,7 +110,6 @@
     Status    : Up
     Mode      : Full
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑0 B        0 bps
                 ↓1 B        0 bps
 
@@ -126,7 +118,6 @@
     Mode      : Full
     Rate      : 10.00 Mbps, MTU 1196
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Peers     : 0 reachable
     Traffic   : ↑0 B        0 bps
                 ↓12 B       0 bps
@@ -135,15 +126,16 @@
     Status    : Up
     Mode      : Full
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑0 B        0 bps
                 ↓3 B        0 bps
 
  BackboneInterface[Client on Backbone]
     Status    : Up
     Mode      : Full
-    Tunnel ID : None
-    Rem.Tr.ID : Unknown
+    Tunnel ID : efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef
+    Rem.Tr.ID : <12121212121212121212121212121212>
+    Rem.Vers. : Unknown implementation, unknown version
+    Rem.Csts. : Dst ?, PR ?
     Traffic   : ↑0 B        0 bps
                 ↓4 B        0 bps
 
@@ -153,7 +145,6 @@
     Mode      : Full
     Rate      : 256.00 kbps, MTU 1064
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     I2P       : Tunnel active
     I2P B32   : abcdefghijklmnop.b32.i2p
     Traffic   : ↑0 B        0 bps
@@ -164,7 +155,6 @@
     Peers     : 3 connected I2P endpoints
     Mode      : Full
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑0 B        0 bps
                 ↓0 B        0 bps
 
@@ -172,7 +162,6 @@
     Status    : Up
     Mode      : Full
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑0 B        0 bps
                 ↓9 B        0 bps
 
@@ -181,7 +170,6 @@
     Mode      : Full
     Rate      : 10.00 Mbps, MTU 1064
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑0 B        0 bps
                 ↓0 B        0 bps
 
@@ -190,7 +178,6 @@
     Mode      : Full
     Rate      : 9.60 kbps, MTU 564
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑6 B      
                 ↓5 B      
 
@@ -198,7 +185,6 @@
     Status    : Up
     Serving   : 1 program
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑0 B        0 bps
                 ↓0 B        0 bps
 
@@ -206,7 +192,6 @@
     Status    : Up
     Serving   : 0 programs
     Tunnel ID : None
-    Rem.Tr.ID : Unknown
     Traffic   : ↑0 B        0 bps
                 ↓0 B        0 bps
 
