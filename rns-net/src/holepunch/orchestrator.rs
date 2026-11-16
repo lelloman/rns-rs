@@ -277,6 +277,16 @@ impl HolePunchManager {
         tx: &EventSender,
     ) -> Vec<HolePunchManagerAction> {
         let now = time::now();
+        if self.probe_addrs.is_empty() {
+            log::warn!(
+                "Cannot propose direct connect on link {:02x?}: no probe_addr configured",
+                &link_id[..4]
+            );
+            return vec![not_started(link_id)];
+        }
+        if self.rate_limited(&link_id, now) {
+            return vec![not_started(link_id)];
+        }
         match self.peer_support.get(&link_id) {
             Some(PeerSupport::Supported) => self.start_proposal(link_id, derived_key, rng, tx),
             // Already asking: the proposal starts with the answer.
@@ -331,6 +341,24 @@ impl HolePunchManager {
         actions
     }
 
+    /// One proposal per link per [`PROPOSAL_COOLDOWN`](rns_core::holepunch::types::PROPOSAL_COOLDOWN).
+    fn rate_limited(&self, link_id: &[u8; 16], now: f64) -> bool {
+        let limited = self
+            .link_to_session
+            .get(link_id)
+            .and_then(|session_id| self.sessions.get(session_id))
+            .is_some_and(|session| {
+                now - session.last_proposal < rns_core::holepunch::types::PROPOSAL_COOLDOWN
+            });
+        if limited {
+            log::debug!(
+                "Hole punch proposal rate limited for link {:02x?}",
+                &link_id[..4]
+            );
+        }
+        limited
+    }
+
     /// Start the upgrade on a link whose peer implements Direct Link.
     ///
     /// Per the spec, the initiator first discovers its own public endpoint
@@ -344,18 +372,8 @@ impl HolePunchManager {
     ) -> Vec<HolePunchManagerAction> {
         let now = time::now();
 
-        // Rate limit: one proposal per link per 60s
-        if let Some(session_id) = self.link_to_session.get(&link_id) {
-            if let Some(session) = self.sessions.get(session_id) {
-                let elapsed = now - session.last_proposal;
-                if elapsed < rns_core::holepunch::types::PROPOSAL_COOLDOWN {
-                    log::debug!(
-                        "Hole punch proposal rate limited for link {:02x?}",
-                        &link_id[..4]
-                    );
-                    return Vec::new();
-                }
-            }
+        if self.rate_limited(&link_id, now) {
+            return vec![not_started(link_id)];
         }
 
         // Clean up any existing session for this link
@@ -374,7 +392,7 @@ impl HolePunchManager {
             Ok(a) => a,
             Err(e) => {
                 log::warn!("Failed to propose hole punch: {}", e);
-                return Vec::new();
+                return vec![not_started(link_id)];
             }
         };
 
@@ -1342,6 +1360,15 @@ fn run_probe_worker(
     }
 }
 
+/// A proposal that could not start.
+fn not_started(link_id: [u8; 16]) -> HolePunchManagerAction {
+    HolePunchManagerAction::DirectConnectFailed {
+        link_id,
+        session_id: [0u8; 16],
+        reason: rns_core::holepunch::types::FAIL_NOT_STARTED,
+    }
+}
+
 /// A `HELLO` to the link peer.
 fn hello(link_id: [u8; 16], reply_wanted: bool) -> HolePunchManagerAction {
     HolePunchManagerAction::SendSignal {
@@ -1776,9 +1803,22 @@ mod tests {
 
         mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
 
-        // Immediate second proposal should be rate-limited
+        // Immediate second proposal is rate-limited, and says so
         let actions = mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
-        assert!(actions.is_empty());
+        assert!(matches!(
+            actions[..],
+            [HolePunchManagerAction::DirectConnectFailed {
+                reason: rns_core::holepunch::types::FAIL_NOT_STARTED,
+                ..
+            }]
+        ));
+        // To a peer not yet known as well, before anything is sent.
+        mgr.peer_support.clear();
+        let actions = mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        assert!(matches!(
+            actions[..],
+            [HolePunchManagerAction::DirectConnectFailed { .. }]
+        ));
     }
 
     #[test]
@@ -2096,9 +2136,21 @@ mod tests {
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
-        // Should fail — initiator needs a probe address
-        let actions = mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
-        assert!(actions.is_empty());
+        // Fails at once, and says so — an initiator needs a probe address;
+        // not even HELLO goes to the peer.
+        for propose in [
+            HolePunchManager::propose_to_supported,
+            HolePunchManager::propose,
+        ] {
+            let actions = propose(&mut mgr, link_id, &test_derived_key(), &mut rng, &tx);
+            assert!(matches!(
+                actions[..],
+                [HolePunchManagerAction::DirectConnectFailed {
+                    reason: rns_core::holepunch::types::FAIL_NOT_STARTED,
+                    ..
+                }]
+            ));
+        }
         // No session created since propose() failed
         assert_eq!(mgr.session_count(), 0);
     }

@@ -1107,3 +1107,45 @@ fn both_sides_proposing_at_once_still_upgrade() {
     ));
     pair.shutdown();
 }
+
+#[test]
+fn proposals_that_cannot_start_are_reported() {
+    /// `FAIL_NOT_STARTED` from `rns_core::holepunch`.
+    const FAIL_NOT_STARTED: u8 = 0x12;
+    // Alice has no facilitator to learn her endpoint from.
+    let alice = DirectSettings {
+        policy: Some(HolePunchPolicy::AcceptAll),
+        ..DirectSettings::unconfigured()
+    };
+    let Some(pair) = Pair::start(alice, DirectSettings::willing()) else {
+        return;
+    };
+    assert_eq!(pair.propose(), Err(FAIL_NOT_STARTED));
+
+    // A link that does not exist.
+    let unknown = [0xEE; 16];
+    pair.alice.propose_direct_connect(unknown).unwrap();
+    let outcome = wait_for(
+        &pair.alice_rx,
+        Duration::from_secs(5),
+        |event| match event {
+            TestEvent::DirectFailed(id, reason) if *id == unknown => Some(*reason),
+            _ => None,
+        },
+    );
+    assert_eq!(outcome, Some(FAIL_NOT_STARTED));
+    pair.assert_bob_stayed_out();
+    pair.shutdown();
+}
+
+#[test]
+fn proposing_again_too_soon_is_reported() {
+    /// `FAIL_NOT_STARTED` from `rns_core::holepunch`.
+    const FAIL_NOT_STARTED: u8 = 0x12;
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    pair.upgrade();
+    assert_eq!(pair.propose(), Err(FAIL_NOT_STARTED));
+    pair.shutdown();
+}

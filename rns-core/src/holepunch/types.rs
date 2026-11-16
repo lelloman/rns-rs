@@ -66,9 +66,18 @@ pub const REJECT_UNSUPPORTED: u8 = 0x03;
 pub const REJECT_NO_ENDPOINT: u8 = 0x04;
 
 // --- Fail reasons ---
+//
+// Reported locally (never sent), from 0x10 so they never collide with the
+// reject reasons above, which come from the peer.
 
-pub const FAIL_TIMEOUT: u8 = 0x01;
-pub const FAIL_PROBE: u8 = 0x02;
+/// A step did not complete in time (no ACCEPT, READY or punch answer).
+pub const FAIL_TIMEOUT: u8 = 0x10;
+/// Our endpoint could not be learned from the facilitator.
+pub const FAIL_PROBE: u8 = 0x11;
+/// The proposal could not start: no facilitator is configured, the link is
+/// not active, or a proposal on the link was made less than
+/// [`PROPOSAL_COOLDOWN`] seconds ago.
+pub const FAIL_NOT_STARTED: u8 = 0x12;
 
 // --- Timeouts (seconds) ---
 

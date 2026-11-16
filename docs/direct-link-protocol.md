@@ -364,6 +364,23 @@ Properties of the facilitator:
 | Direct path drops after establishment | after 4 | Detected by the keepalives, the link going stale, or exhausted channel retries; both sides fall back to the original route and the link stays open |
 | NAT remapping (IP change, roaming) | after 4 | As above. Peers may propose again |
 
+### Failure reasons
+
+`on_direct_connect_failed` (and rns-ctl's `direct_failed` event, as
+`reason_code`) reports one of these. Codes below `0x10` are reject reasons,
+the ones a peer sends in `UPGRADE_REJECT` (`0x03` is reported locally when
+the peer never answers `HELLO`); codes from `0x10` are local and never sent.
+
+| Code | Name | Meaning |
+|------|------|---------|
+| `0x01` | `REJECT_POLICY` | The responder's policy refused, or an endpoint in the request was out of range |
+| `0x02` | `REJECT_BUSY` | The responder is pacing requests on the link, has too many sessions, or is already punching toward that address |
+| `0x03` | `REJECT_UNSUPPORTED` | The peer did not answer the capability query |
+| `0x04` | `REJECT_NO_ENDPOINT` | The responder accepted but could not learn its endpoint from the facilitator |
+| `0x10` | `FAIL_TIMEOUT` | No `UPGRADE_ACCEPT`, `UPGRADE_READY` or punch answer in time |
+| `0x11` | `FAIL_PROBE` | This side could not learn its endpoint from the facilitator |
+| `0x12` | `FAIL_NOT_STARTED` | The proposal could not start: no facilitator configured, the link is not active, or the link had a proposal less than 60 seconds ago |
+
 ## Security Considerations
 
 **Public IP disclosure**: The upgrade request includes A's public address, and
