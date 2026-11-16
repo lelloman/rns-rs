@@ -141,6 +141,8 @@ enum RncpEvent {
     StreamFailed(ResourceTransferId),
     StreamProgress(ResourceTransferId, u64, u64),
     ReceiveProgress([u8; 16], u64, u64),
+    /// The segment in transfer on a link: its progress and transfer size.
+    SegmentProgress([u8; 16], f64, u64),
     Response(Vec<u8>),
     RequestFailed,
     FetchRequested([u8; 16], String),
@@ -238,6 +240,18 @@ impl Callbacks for RncpCallbacks {
         let _ = self
             .tx
             .send(RncpEvent::StreamProgress(transfer_id, transferred, total));
+    }
+    fn on_resource_segment_progress(
+        &mut self,
+        link_id: LinkId,
+        segment_progress: f64,
+        transfer_size: u64,
+    ) {
+        let _ = self.tx.send(RncpEvent::SegmentProgress(
+            link_id.0,
+            segment_progress,
+            transfer_size,
+        ));
     }
     fn on_resource_progress(&mut self, link_id: LinkId, received: usize, total: usize) {
         let _ = self.tx.send(RncpEvent::ReceiveProgress(
@@ -473,6 +487,10 @@ struct State {
     status: u8,
     prg: f64,
     total_size: f64,
+    /// upstream's `get_segment_progress()` and `get_transfer_size()` of
+    /// the resource in transfer, for the physical layer rate.
+    segment_progress: f64,
+    transfer_size: f64,
     progress: Progress,
     request_status: Option<&'static str>,
     /// When the fetched resource started, and its size.
@@ -485,6 +503,11 @@ struct State {
 }
 
 impl State {
+    /// upstream's `phy_got`: the bytes of the current segment on the wire.
+    fn phy_got(&self) -> f64 {
+        self.segment_progress * self.transfer_size
+    }
+
     fn apply(&mut self, event: RncpEvent) {
         let ours = |id: &[u8; 16], link: Option<[u8; 16]>| link.as_ref() == Some(id);
         match event {
@@ -501,12 +524,19 @@ impl State {
                 self.status = self.status.max(TRANSFERRING);
                 self.prg = done as f64 / total.max(1) as f64;
                 let got = self.prg * self.total_size;
-                self.progress.update(got, got);
+                self.progress.update(got, self.phy_got());
             }
             RncpEvent::StreamCompleted(t) if Some(t) == self.transfer => {
                 self.status = COMPLETE;
                 self.prg = 1.0;
-                self.progress.update(self.total_size, self.total_size);
+                self.segment_progress = 1.0;
+                self.progress.update(self.total_size, self.phy_got());
+            }
+            RncpEvent::SegmentProgress(id, segment_progress, transfer_size)
+                if ours(&id, self.link_id) =>
+            {
+                self.segment_progress = segment_progress;
+                self.transfer_size = transfer_size as f64;
             }
             RncpEvent::StreamFailed(t) if Some(t) == self.transfer => self.status = FAILED,
             RncpEvent::Response(data) => {
@@ -527,7 +557,7 @@ impl State {
                 self.current_resource = true;
                 self.prg = (received as f64 / total.max(1) as f64).min(1.0);
                 let got = self.prg * self.total_size;
-                self.progress.update(got, got);
+                self.progress.update(got, self.phy_got());
             }
             RncpEvent::FileReceived(id, resource) if ours(&id, self.link_id) => {
                 self.current_resource = true;
@@ -1397,6 +1427,26 @@ fn usage() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_rate_counts_the_segment_on_the_wire() {
+        // upstream's phy_got: get_segment_progress() * get_transfer_size(),
+        // the current segment's encrypted (and maybe compressed) bytes.
+        let link = [7u8; 16];
+        let mut state = State {
+            link_id: Some(link),
+            total_size: 3_000_000.0,
+            ..State::default()
+        };
+        state.apply(RncpEvent::SegmentProgress(link, 0.25, 400_000));
+        assert_eq!(state.phy_got(), 100_000.0);
+        // Another link's segment is not ours.
+        state.apply(RncpEvent::SegmentProgress([8u8; 16], 1.0, 9));
+        assert_eq!(state.phy_got(), 100_000.0);
+        state.apply(RncpEvent::ReceiveProgress(link, 1, 3));
+        assert_eq!(state.progress.stats.last().unwrap().2, 100_000.0);
+        assert_eq!(state.progress.stats.last().unwrap().1, 1_000_000.0);
+    }
 
     fn ns(argv: &[&str]) -> Namespace {
         Namespace::from_args(&Args::parse_spec_from(

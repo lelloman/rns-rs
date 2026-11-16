@@ -815,6 +815,7 @@ impl LinkManager {
         let now = time::now();
         let mut progress_update = None;
         let mut progress_stream_hash = None;
+        let mut segment_progress = None;
         // Requested parts are packed straight from the sender's data.
         let mut parts = core::mem::take(&mut self.resource_part_scratch);
         let mut part_sender = None;
@@ -843,6 +844,10 @@ impl LinkManager {
                 }
                 if sender.sent_parts != before_sent {
                     progress_stream_hash = Some(sender.original_hash);
+                    segment_progress = Some((
+                        (sender.sent_parts as f64 / sender.total_parts().max(1) as f64).min(1.0),
+                        sender.transfer_size as u64,
+                    ));
                     if sender.flags.split {
                         if let Some(split) = link.outgoing_splits.get_mut(&sender.original_hash) {
                             split.current_segment_index = sender.segment_index;
@@ -881,6 +886,13 @@ impl LinkManager {
         self.resource_part_scratch = parts;
         self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
         self.resource_scratch = all_actions;
+        if let Some((segment_progress, transfer_size)) = segment_progress {
+            out.push(LinkManagerAction::ResourceSegmentProgress {
+                link_id: *link_id,
+                segment_progress,
+                transfer_size,
+            });
+        }
         if let Some((received, total)) = progress_update {
             if let Some((stream, transferred)) = progress_stream_hash.and_then(|hash| {
                 self.links.get(link_id).and_then(|link| {
@@ -1002,6 +1014,7 @@ impl LinkManager {
         let mut storage_failure = None;
         // The resource that took the part.
         let mut accepted = None;
+        let mut segment_progress = None;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
             if receiver.status >= rns_core::resource::ResourceStatus::Assembling {
@@ -1011,6 +1024,10 @@ impl LinkManager {
             receiver.receive_part_into(raw_data, now, all_actions);
             if all_actions.len() > before {
                 accepted = Self::resource_hash_key(&receiver.resource_hash);
+                segment_progress = Some((
+                    (receiver.received_count as f64 / receiver.total_parts.max(1) as f64).min(1.0),
+                    receiver.transfer_size,
+                ));
                 if receiver.received_count == receiver.total_parts {
                     assemble_idx = Some(idx);
                 } else if !Self::feeds_decryption() && receiver.has_parts_to_decrypt() {
@@ -1053,6 +1070,13 @@ impl LinkManager {
         }
 
         let _ = link;
+        if let Some((segment_progress, transfer_size)) = segment_progress {
+            out.push(LinkManagerAction::ResourceSegmentProgress {
+                link_id: *link_id,
+                segment_progress,
+                transfer_size,
+            });
+        }
         // Parts held in order go to the decryption feeder as they line up;
         // a resource about to assemble takes its decryption back.
         if let Some(hash) = accepted {
