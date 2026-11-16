@@ -303,6 +303,21 @@ pub fn decide_announce_multipath_with_gravity(
         let blob_is_new = !all_blobs.contains(random_blob);
 
         if !blob_is_new {
+            // An announce already seen, over fewer hops than the primary
+            // path, through another next hop: the same emission reaching
+            // this node by a shorter route. `prefer_shorter_path` takes it,
+            // as `should_update_path` does for the same next hop; otherwise
+            // a newer copy that first arrived over a long route pins that
+            // route until the next announce. Upstream keeps the path, so
+            // without the option the announce is rejected.
+            let shorter = path_set
+                .primary()
+                .is_some_and(|primary| announce_hops < primary.hops);
+            let not_older = trusted_emission_time(announce_emitted_ts, now)
+                >= trusted_timebase_from_random_blobs(&all_blobs, now);
+            if prefer_shorter_path && shorter && not_older {
+                return MultiPathDecision::ReplacePrimary;
+            }
             return MultiPathDecision::Reject;
         }
 
@@ -711,6 +726,40 @@ mod tests {
         // Different next_hop but blob already known → Reject
         assert_eq!(
             decide_announce_multipath(Some(&ps), 4, 100, &blob, &[0xCC; 16], false, 1000.0, false),
+            MultiPathDecision::Reject
+        );
+    }
+
+    #[test]
+    fn known_announce_over_a_shorter_route_replaces_the_primary_with_prefer_shorter_path() {
+        // vps-us, 2026-11-16: an announce first arrived over 4 hops, and the
+        // same announce then arrived directly. With prefer_shorter_path the
+        // direct route wins; without it the path stays, as upstream.
+        let blob = make_blob(100);
+        let ps = PathSet::from_single(make_path_entry(4, &[blob], 9999.0), 1);
+        let decide = |hops, prefer| {
+            decide_announce_multipath(
+                Some(&ps),
+                hops,
+                100,
+                &blob,
+                &[0xCC; 16],
+                false,
+                1000.0,
+                prefer,
+            )
+        };
+        assert_eq!(decide(1, true), MultiPathDecision::ReplacePrimary);
+        assert_eq!(decide(1, false), MultiPathDecision::Reject);
+        // Not shorter: rejected either way.
+        assert_eq!(decide(4, true), MultiPathDecision::Reject);
+        assert_eq!(decide(5, true), MultiPathDecision::Reject);
+
+        // An older announce is not taken, however short its route.
+        let newer = make_blob(200);
+        let ps = PathSet::from_single(make_path_entry(4, &[blob, newer], 9999.0), 1);
+        assert_eq!(
+            decide_announce_multipath(Some(&ps), 1, 100, &blob, &[0xCC; 16], false, 1000.0, true),
             MultiPathDecision::Reject
         );
     }
