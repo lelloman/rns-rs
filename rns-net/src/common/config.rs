@@ -371,7 +371,8 @@ pub struct StampsSection {
 /// The `[filter]` section (upstream 825c2e19): announce filtering by
 /// destination type. `required_only` is read with `as_bool` and assigned,
 /// and the two type lists with `as_list`, as full destination names such as
-/// `lxmf.delivery`.
+/// `lxmf.delivery` or, since upstream e96c81c3, name hashes written as
+/// `<hex>`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilterSection {
     /// `Transport.required_destinations_only` (`required_only`).
@@ -389,14 +390,24 @@ impl FilterSection {
     pub fn destination_filter(
         &self,
     ) -> rns_core::transport::destination_filter::DestinationTypeFilter {
-        use rns_core::transport::destination_filter::{destination_type, DestinationTypeFilter};
+        use rns_core::transport::destination_filter::{
+            configured_destination_type, DestinationTypeFilter,
+        };
         let mut filter = DestinationTypeFilter::default();
         filter.set_required_only(self.required_only);
-        for name in &self.ignored_types {
-            filter.block(destination_type(name));
+        for destination_type in self
+            .ignored_types
+            .iter()
+            .filter_map(|name| configured_destination_type(name))
+        {
+            filter.block(destination_type);
         }
-        for name in &self.allowed_types {
-            filter.allow(destination_type(name));
+        for destination_type in self
+            .allowed_types
+            .iter()
+            .filter_map(|name| configured_destination_type(name))
+        {
+            filter.allow(destination_type);
         }
         filter
     }
@@ -3184,6 +3195,26 @@ direct_connect_policy = identified_only
         let config = parse("").unwrap();
         assert_eq!(config.filter, FilterSection::default());
         assert!(!config.filter.required_only);
+    }
+
+    #[test]
+    fn filter_section_takes_name_hashes_in_brackets() {
+        // Upstream e96c81c3: a destination type can be a `<hex>` name hash.
+        use rns_core::transport::destination_filter::destination_type;
+        let node = destination_type("nomadnetwork.node");
+        let hex: String = node.iter().map(|b| format!("{b:02x}")).collect();
+        let config = parse(&format!(
+            "[filter]\nrequired_only = Yes\nignored_types = <{hex}>\nallowed_types = <{}>\n",
+            destination_type("lxmf.delivery")
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ))
+        .unwrap();
+        let filter = config.filter.destination_filter();
+        assert!(filter.blocks(&node));
+        assert!(filter.allows(&destination_type("lxmf.delivery"), false));
+        assert!(!filter.allows(&destination_type("rncp.receive"), false));
     }
 
     #[test]

@@ -60,7 +60,7 @@ Dispositions are provisional until each mapping commit lands.
 | 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Integrated | `tunnel_synthesis_is_sent_before_the_interface_is_announced_up`, `dialing_interface_synthesizes_a_tunnel_on_each_connect` |
 | 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Structurally covered | Same `InterfaceUp` ordering as commit 5; TCP client and outbound I2P peer bring each connect up through it (comments in `tcp.rs` and `i2p/mod.rs`) |
 | 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Integrated | `withdrawing_from_an_unresponsive_shared_instance_is_bounded`; `SHARED_RPC_EXIT_TIMEOUT` |
-| 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Needs port | |
+| 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Integrated | `configured_destination_types_take_names_or_bracketed_hashes`, `filter_section_takes_name_hashes_in_brackets`; `docs/configuration.md` |
 | 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Needs port | |
 | 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Needs port | |
 | 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Needs port | |
@@ -297,12 +297,27 @@ accept a name hash written as `<hex>` (the first 20 hex characters inside the
 angle brackets) instead of a full destination name. The manual documents it
 for the blocked and allowed destination type options.
 
-**Rust applicability:** The destination type filter config in rns-rs takes
-names only.
+**Rust applicability:** The `[filter]` type lists in rns-rs took names
+only; `FilterSection::destination_filter` is the one place they are hashed.
+Upstream's other callers of `Destination.name_hash`, such as
+`wants_destination_type`, are unchanged.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:**
+`destination_filter::configured_destination_type` reads an entry as upstream
+does: an empty entry is ignored; `<...>` keeps the 20 characters after the
+`<`, decodes them as hex, and if they are not hex (which includes shorter hex
+that keeps the `>`), hashes them as a name. Upstream's `bytes.fromhex` also
+skips whitespace between bytes, giving a short key that matches nothing; such
+an entry is hashed as a name here, which is recorded as a harmless
+difference. `FilterSection::destination_filter` uses it for `ignored_types`
+and `allowed_types`. Tests:
+`configured_destination_types_take_names_or_bracketed_hashes` (names, lower
+and upper case hex, a 32-character hash, non-hex, short hex, empty, an
+unbalanced bracket) and `filter_section_takes_name_hashes_in_brackets`
+(through the config parser). `docs/configuration.md` documents the form with
+upstream's example.
 
-**Final disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 9. `bb63dd44` — Added per-interface hop_limiter option
 

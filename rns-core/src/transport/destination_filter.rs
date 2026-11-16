@@ -7,6 +7,7 @@
 //! destinations get through.
 
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::constants;
@@ -23,6 +24,46 @@ pub fn destination_type(full_name: &str) -> DestinationType {
     let mut name_hash = [0u8; constants::NAME_HASH_LENGTH / 8];
     name_hash.copy_from_slice(&full[..constants::NAME_HASH_LENGTH / 8]);
     name_hash
+}
+
+/// A destination type as `Transport.block_destination_type` and
+/// `allow_destination_type` read it (upstream e96c81c3): a full name such as
+/// `lxmf.delivery`, or a name hash written as `<hex>`.
+///
+/// For the bracketed form upstream keeps the 20 characters after the `<`
+/// (a name hash's length in hex) and decodes them. If they are not hex,
+/// which includes shorter hex that keeps the closing `>`, it hashes those
+/// characters as a name instead. Upstream's `bytes.fromhex` also skips
+/// whitespace between bytes, which this does not; such an entry is hashed
+/// as a name here and gives upstream a short key that matches nothing. An
+/// empty name, which upstream ignores, yields `None`.
+pub fn configured_destination_type(full_name: &str) -> Option<DestinationType> {
+    if full_name.is_empty() {
+        return None;
+    }
+    let hex_len = constants::NAME_HASH_LENGTH / 8 * 2;
+    let Some(inner) = full_name
+        .strip_prefix('<')
+        .filter(|_| full_name.ends_with('>'))
+    else {
+        return Some(destination_type(full_name));
+    };
+    let kept: String = inner.chars().take(hex_len).collect();
+    match decode_hex(&kept) {
+        Some(bytes) => DestinationType::try_from(bytes.as_slice()).ok(),
+        None => Some(destination_type(&kept)),
+    }
+}
+
+/// `bytes.fromhex` for ASCII hex without separators.
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 /// The `Transport` destination type tables: `blocked_destination_types`,
@@ -133,6 +174,44 @@ impl DestinationTypeFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_destination_types_take_names_or_bracketed_hashes() {
+        // Upstream e96c81c3.
+        let lxmf = destination_type("lxmf.delivery");
+        let hex: String = lxmf.iter().map(|b| alloc::format!("{b:02x}")).collect();
+        assert_eq!(configured_destination_type("lxmf.delivery"), Some(lxmf));
+        assert_eq!(
+            configured_destination_type(&alloc::format!("<{hex}>")),
+            Some(lxmf)
+        );
+        assert_eq!(
+            configured_destination_type(&alloc::format!("<{}>", hex.to_uppercase())),
+            Some(lxmf)
+        );
+        // Only the first 20 characters count, so a full 32-character hash
+        // gives its first ten bytes.
+        assert_eq!(
+            configured_destination_type(&alloc::format!("<{hex}00112233445566>")),
+            Some(lxmf)
+        );
+        // Not hex: upstream hashes the 20 kept characters as a name.
+        assert_eq!(
+            configured_destination_type("<lxmf.delivery>"),
+            Some(destination_type("lxmf.delivery>"))
+        );
+        // Shorter hex keeps the closing bracket, so it is hashed as a name.
+        assert_eq!(
+            configured_destination_type("<abcd>"),
+            Some(destination_type("abcd>"))
+        );
+        assert_eq!(configured_destination_type(""), None);
+        // Unbalanced brackets are an ordinary name.
+        assert_eq!(
+            configured_destination_type("<lxmf.delivery"),
+            Some(destination_type("<lxmf.delivery"))
+        );
+    }
 
     #[test]
     fn destination_type_matches_the_destination_name_hash() {
