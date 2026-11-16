@@ -1023,7 +1023,16 @@ impl Driver {
         let is_discovered = candidate.source == BackbonePeerPoolCandidateSource::Discovered;
         let wire_ifac_size = if ifac_enabled { ifac_runtime.size } else { 0 };
         let control = crate::interface::ListenerControl::new();
-        let writer = start_client_with_ifac(
+        // A client that reconnects on its own (an auto-connected one) is
+        // kept, offline, when its target cannot be reached yet, as
+        // upstream's is; one whose owner reconnects it (a peer pool
+        // member) fails to start, which its owner accounts for.
+        let start = if max_reconnect_tries == Some(0) {
+            start_client_with_ifac
+        } else {
+            start_retrying_client
+        };
+        let writer = start(
             client.clone(),
             self.event_tx.clone(),
             wire_ifac_size,

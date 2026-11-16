@@ -16348,6 +16348,57 @@ fn outbound_i2p_peer_is_listed_before_connecting_and_kept_across_reconnects() {
     assert_eq!(listener(&driver).clients, Some(0));
 }
 
+/// Upstream adds an auto-connected BackboneClientInterface whose first
+/// connection fails anyway: listed, down, retrying, until its monitor
+/// detaches it for having been down too long.
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn autoconnected_backbone_client_with_unreachable_target_is_kept_until_detached() {
+    // A loopback port nothing listens on; 127.0.0.1 is never auto-connected to.
+    let port = {
+        let probe = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.enable_upstream_autoconnect(1, Vec::new(), Vec::new());
+    driver.autoconnect_discovered(&make_discovered_backbone(
+        "unreachable",
+        "127.0.0.2",
+        Some(port),
+        0x7d,
+        1,
+        20,
+        time::now(),
+    ));
+
+    let id = driver
+        .interfaces
+        .iter()
+        .find(|(_, entry)| entry.info.name == "unreachable")
+        .map(|(id, _)| *id)
+        .expect("kept although its target cannot be reached");
+    assert!(driver.is_autoconnected(id));
+    let stat = driver
+        .interface_stats()
+        .interfaces
+        .into_iter()
+        .find(|stat| stat.id == id.0)
+        .unwrap();
+    assert!(!stat.status);
+    assert_eq!(stat.interface_type, "BackboneClientInterface");
+
+    // Upstream's monitor detaches it once it was down for 12 seconds.
+    let now = time::now();
+    driver.tick_upstream_autoconnect(now + 5.0);
+    assert!(driver.interfaces.contains_key(&id));
+    driver.tick_upstream_autoconnect(now + 10.0);
+    assert!(driver.interfaces.contains_key(&id));
+    driver.tick_upstream_autoconnect(now + 20.0);
+    assert!(!driver.interfaces.contains_key(&id));
+    assert!(!driver.is_autoconnected(id));
+}
+
 /// Upstream auto-connects a discovered Backbone interface as a
 /// BackboneClientInterface added with a configured bitrate of 5 Mbps,
 /// which sets its hardware MTU to 8192, and which synthesizes a tunnel.
