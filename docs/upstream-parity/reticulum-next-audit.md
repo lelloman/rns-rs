@@ -64,7 +64,7 @@ Dispositions are provisional until each mapping commit lands.
 | 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Integrated | `an_interface_hop_limiter_applies_before_the_transport_one`, `interface_hop_limiter_parser_clamps_and_treats_zero_as_unset`, `dynamic_registration_inherits_announces_to_internal` extended; `docs/configuration.md` |
 | 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Integrated | `header_1_announce_leaves_room_for_a_transport_id`; `proptest_codec` generator updated |
 | 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Integrated | `header_1_announce_without_transport_room_counts_a_protocol_violation` |
-| 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Needs decision | |
+| 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Structurally covered | No forked instances (supervisor children are executed, not forked); withdrawal only after a shared-instance registration (documented on `withdraw_from_shared_instance`) |
 | 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Needs coordinated port (with 14) | |
 | 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Needs coordinated port (with 13) | |
 | 15 | `51fa8413277ef7308925aef610e409f9af0d9c3b` | Enabled stamp generation | Needs port | |
@@ -412,14 +412,21 @@ in a forked child process. Deregistration of wanted destination types at exit
 only runs when connected to a shared instance. Adds
 `Stamps.cancel_all_work` and `Reticulum.get_instance_pid`.
 
-**Rust applicability:** Python `multiprocessing` fork semantics; rns-rs stamp
-workers are threads and the supervisor's children are separate executables
-with their own lifecycles. The shared-instance condition on deregistration
-needs checking against `shared_client.rs`.
+**Rust applicability:** The fix is for Python processes forked from a
+running instance (`multiprocessing`), which inherit its exit and signal
+handlers. rns-rs never forks a running instance: stamp workers are threads,
+and `rns-server`'s supervisor starts `rnsd`, `rns-statsd` and
+`rns-sentineld` by executing `/proc/self/exe` with an internal role, so each
+child runs its own startup and shutdown. `Stamps.cancel_all_work` is not
+called inside RNS; it is API for applications. The condition that only a
+client of a shared instance deregisters its wanted types is already how
+`DestinationTypeRequester` works: it withdraws only after a successful
+registration with a shared instance.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** No behavior change. The mapping commit
+documents the shared-instance condition on `withdraw_from_shared_instance`.
 
-**Final disposition:** Needs decision.
+**Final disposition:** Structurally covered.
 
 ### 13. `13b98a6b` — Cleaned up tunnel synthesis handler
 
