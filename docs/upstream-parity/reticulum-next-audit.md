@@ -62,7 +62,7 @@ Dispositions are provisional until each mapping commit lands.
 | 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Integrated | `withdrawing_from_an_unresponsive_shared_instance_is_bounded`; `SHARED_RPC_EXIT_TIMEOUT` |
 | 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Integrated | `configured_destination_types_take_names_or_bracketed_hashes`, `filter_section_takes_name_hashes_in_brackets`; `docs/configuration.md` |
 | 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Integrated | `an_interface_hop_limiter_applies_before_the_transport_one`, `interface_hop_limiter_parser_clamps_and_treats_zero_as_unset`, `dynamic_registration_inherits_announces_to_internal` extended; `docs/configuration.md` |
-| 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Needs port | |
+| 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Integrated | `header_1_announce_leaves_room_for_a_transport_id`; `proptest_codec` generator updated |
 | 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Needs port | |
 | 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Needs decision | |
 | 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Needs coordinated port (with 14) | |
@@ -209,7 +209,10 @@ violation; a path response and a waiting path request are exempt) and
 byte payloads of a blocked type). The signature cache test that replayed an
 accepted announce's random blob under a known path now removes the path
 first, since the prefilter would drop those variants before the cache is
-consulted. `docs/rnstatus.md` lists the new filtered announces.
+consulted. The `proptest_transport` path model gains the prefilter: a
+destination still in the path table, expired or not, only takes an announce
+emitted after the path's newest one, until the expired path is culled.
+`docs/rnstatus.md` lists the new filtered announces.
 
 **Final disposition:** Integrated.
 
@@ -361,12 +364,22 @@ so examples and integration tests set the new field.
 **Upstream change:** Packing a `HEADER_1` announce fails if the packet would
 exceed the MTU once a transport node inserts its 16-byte transport id.
 
-**Rust applicability:** Applies to rns-core packet packing and to the
-announce builders that can produce near-MTU announces (large app data).
+**Rust applicability:** Applies to rns-core packet packing, which every
+announce builder goes through: `RawPacket::pack` and its shared and in-place
+variants each check the length against the MTU.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** The three packing paths share
+`packet::exceeds_mtu`, which for a `HEADER_1` announce adds the 16 bytes of
+a transport id before comparing with the MTU, so such an announce fails with
+`PacketError::ExceedsMtu` as upstream's `pack` raises. An announce already in
+`HEADER_2` form and every other packet keep the whole MTU. Test:
+`header_1_announce_leaves_room_for_a_transport_id` (the boundary on both
+sides, the shared packer, a data packet and a `HEADER_2` announce). The
+`proptest_codec` packet generator now leaves that room for `HEADER_1`
+announces. The workspace suite passes (3,378 tests), so no existing caller
+builds an announce that large.
 
-**Final disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 11. `715707b1` — Excessive non transport-inserted announce payload protocol violation
 

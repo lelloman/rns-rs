@@ -58,7 +58,17 @@ fn arb_packet_fields() -> impl Strategy<Value = (PacketFlags, u8, [u8; 16], [u8;
         any::<u8>(),
     )
         .prop_flat_map(|(flags, hops, dest, transport_id, context)| {
-            let max_data = constants::MTU - RawPacket::data_offset(flags.header_type);
+            // A HEADER_1 announce leaves room for the transport id a
+            // transport node inserts (upstream d077d1ab).
+            let transport_room = if flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+                && flags.header_type == constants::HEADER_1
+            {
+                constants::TRUNCATED_HASHLENGTH / 8
+            } else {
+                0
+            };
+            let max_data =
+                constants::MTU - RawPacket::data_offset(flags.header_type) - transport_room;
             (
                 Just(flags),
                 Just(hops),
