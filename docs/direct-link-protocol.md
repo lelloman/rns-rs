@@ -178,13 +178,16 @@ B rejects because of its policy or because the request is out of range
 implement Direct Link never sees a request: the capability check failed
 first, with reason `0x03`.
 
-The responder applies `direct_connect_policy` only after fully decoding the
-request. `identified_only` (the default) accepts only when the existing link has
-completed `LINKIDENTIFY`, `accept_all` accepts every well-formed request, and
-`reject` declines all requests. `ask_app` invokes the application callback once with
-the peer identity when known (or no identity otherwise) and honors its boolean
-decision; the default callback rejects. These controls are responder-side only
-and do not change initiation behavior.
+The responder decides only after fully decoding the request. A peer that has
+identified on the link (`LINKIDENTIFY`) with an identity listed in
+`direct_connect_allowed_identities` is accepted. Otherwise
+`direct_connect_policy` decides: `reject` (the default) declines all requests,
+`accept_all` accepts every well-formed request, `identified_only` accepts when
+the link has completed `LINKIDENTIFY` with any identity, and `ask_app` invokes
+the application callback once with the peer identity when known (or no
+identity otherwise) and honors its boolean decision; the default callback
+rejects. These controls are responder-side only and do not change initiation
+behavior.
 
 After the policy accepts a request, the responder also checks it before sending
 anything:
@@ -316,9 +319,10 @@ Properties of the facilitator:
 ## Security Considerations
 
 **Public IP disclosure**: The upgrade request includes A's public address, and
-accepting the upgrade reveals B's public address to A. Peers that wish to remain
-IP-anonymous should reject upgrade requests. This should be a configurable
-policy.
+accepting the upgrade reveals B's public address to A. Requests are rejected
+unless the responder is configured to accept them (see Phase 2), and a node
+with no Direct Link configuration does not even reveal that it implements the
+protocol.
 
 **Facilitator trust**: The facilitator sees the public IP of every peer that
 probes it but does not know which peers are trying to connect to each other
@@ -332,11 +336,13 @@ are already encrypted. The `DirectUdpInterface` does not add or remove any
 encryption — it is a transparent transport, same as TCP or LoRa interfaces.
 
 **No signaling bypass**: Direct-link negotiation travels over an established,
-encrypted Reticulum link, but peer `LINKIDENTIFY` is optional. Operators who do
-not want to disclose the responder's public endpoint to anonymous link peers
-should use `direct_connect_policy = identified_only` or an identity-aware
-`ask_app` callback. Malformed requests are discarded before policy callbacks
-or hole-punch sessions are created.
+encrypted Reticulum link, but peer `LINKIDENTIFY` is optional and any peer can
+identify with a throwaway identity. A responder therefore accepts nothing by
+default: it needs an allowlist (`direct_connect_allowed_identities`), an
+identity-aware `ask_app` callback, or an explicit `accept_all` or
+`identified_only`, each of which discloses its public endpoint to the peers it
+admits. Malformed requests are discarded before policy callbacks or hole-punch
+sessions are created.
 
 ## Future Considerations
 

@@ -155,6 +155,10 @@ impl Driver {
         link_id: [u8; 16],
         peer_identity: Option<[u8; 16]>,
     ) -> bool {
+        if peer_identity.is_some_and(|identity| self.holepunch_manager.identity_allowed(&identity))
+        {
+            return true;
+        }
         match policy {
             crate::event::HolePunchPolicy::Reject => false,
             crate::event::HolePunchPolicy::AcceptAll => true,

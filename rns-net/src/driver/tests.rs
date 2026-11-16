@@ -7159,6 +7159,37 @@ fn direct_connect_policy_is_identity_aware_and_ask_app_calls_once() {
 }
 
 #[test]
+fn allowlisted_identity_is_accepted_whatever_the_policy() {
+    let proposals = Arc::new(Mutex::new(Vec::new()));
+    let callbacks = DirectConnectCallbacks {
+        proposals: proposals.clone(),
+        accept: false,
+    };
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(callbacks));
+    let link = [0x11; 16];
+    let friend = [0x22; 16];
+    let stranger = [0x33; 16];
+    driver
+        .holepunch_manager
+        .set_allowed_identities(vec![friend]);
+
+    for policy in [
+        HolePunchPolicy::Reject,
+        HolePunchPolicy::AskApp,
+        HolePunchPolicy::IdentifiedOnly,
+    ] {
+        assert!(driver.authorize_direct_connect(policy, link, Some(friend)));
+    }
+    // The application is not asked about an allowlisted identity.
+    assert!(proposals.lock().unwrap().is_empty());
+    // Others still go through the policy; an anonymous peer cannot match.
+    assert!(!driver.authorize_direct_connect(HolePunchPolicy::Reject, link, Some(stranger)));
+    assert!(!driver.authorize_direct_connect(HolePunchPolicy::Reject, link, None));
+    assert!(!driver.authorize_direct_connect(HolePunchPolicy::AskApp, link, Some(stranger)));
+}
+
+#[test]
 fn malformed_direct_connect_proposal_does_not_call_application() {
     let proposals = Arc::new(Mutex::new(Vec::new()));
     let callbacks = DirectConnectCallbacks {

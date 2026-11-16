@@ -301,6 +301,7 @@ fn start_rust_node(python_port: u16, tx: Sender<RustEvent>) -> RnsNode {
             probe_addrs: vec![std::net::SocketAddr::from(([127, 0, 0, 1], probe_port))],
             direct_connect_policy: HolePunchPolicy::AcceptAll,
             direct_connect_allow_private_endpoints: true,
+            direct_connect_allowed_identities: Vec::new(),
             ..Default::default()
         },
         Box::new(TestCallbacks(tx)),

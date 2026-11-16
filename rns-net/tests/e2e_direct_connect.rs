@@ -17,7 +17,8 @@ use rns_net::{
     MODE_FULL,
 };
 
-/// `REJECT_UNSUPPORTED` from `rns_core::holepunch`.
+/// `REJECT_POLICY` and `REJECT_UNSUPPORTED` from `rns_core::holepunch`.
+const REJECT_POLICY: u8 = 0x01;
 const REJECT_UNSUPPORTED: u8 = 0x03;
 
 /// The application message type the tests exchange.
@@ -123,6 +124,8 @@ struct DirectSettings {
     use_probe: bool,
     /// `None` keeps the default policy.
     policy: Option<HolePunchPolicy>,
+    /// Put Alice's identity on the allowlist.
+    allow_alice: bool,
 }
 
 impl DirectSettings {
@@ -132,6 +135,7 @@ impl DirectSettings {
             probe_port: None,
             use_probe: true,
             policy: Some(HolePunchPolicy::AcceptAll),
+            allow_alice: false,
         }
     }
 
@@ -141,6 +145,27 @@ impl DirectSettings {
             probe_port: None,
             use_probe: false,
             policy: Some(HolePunchPolicy::Reject),
+            allow_alice: false,
+        }
+    }
+
+    /// No Direct Link settings at all: the node's defaults.
+    fn unconfigured_default() -> Self {
+        DirectSettings {
+            probe_port: None,
+            use_probe: false,
+            policy: None,
+            allow_alice: false,
+        }
+    }
+
+    /// The defaults, plus a facilitator to propose through.
+    fn default_with_probe() -> Self {
+        DirectSettings {
+            probe_port: None,
+            use_probe: true,
+            policy: None,
+            allow_alice: false,
         }
     }
 }
@@ -150,6 +175,7 @@ fn node(
     interface: InterfaceConfig,
     probe_server: std::net::SocketAddr,
     settings: DirectSettings,
+    alice: &Identity,
     tx: mpsc::Sender<TestEvent>,
 ) -> RnsNode {
     let mut config = NodeConfig {
@@ -167,10 +193,14 @@ fn node(
         },
         // Both ends are on this host.
         direct_connect_allow_private_endpoints: true,
+        direct_connect_allowed_identities: Vec::new(),
         ..Default::default()
     };
     if let Some(policy) = settings.policy {
         config.direct_connect_policy = policy;
+    }
+    if settings.allow_alice {
+        config.direct_connect_allowed_identities = vec![*alice.hash()];
     }
     RnsNode::start(config, Box::new(TestCallbacks(tx))).unwrap()
 }
@@ -208,6 +238,7 @@ fn local_address() -> Option<std::net::IpAddr> {
 /// holds an established link to his destination.
 struct Pair {
     alice: RnsNode,
+    alice_id: Identity,
     alice_rx: mpsc::Receiver<TestEvent>,
     bob: RnsNode,
     bob_rx: mpsc::Receiver<TestEvent>,
@@ -228,6 +259,7 @@ impl Pair {
         // its own non-loopback endpoint.
         let probe_server = std::net::SocketAddr::new(local, probe_port);
 
+        let alice_id = Identity::new(&mut OsRng);
         let bob_id = Identity::new(&mut OsRng);
         let bob_dest =
             Destination::single_in("e2e_direct", &["link"], IdentityHash(*bob_id.hash()))
@@ -251,6 +283,7 @@ impl Pair {
                 probe_port: Some(probe_port),
                 ..bob_settings
             },
+            &alice_id,
             bob_tx,
         );
         bob.register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
@@ -264,7 +297,6 @@ impl Pair {
         bob.register_link_destination(bob_dest.hash.0, sig_prv, sig_pub, 0)
             .unwrap();
 
-        let alice_id = Identity::new(&mut OsRng);
         let (alice_tx, alice_rx) = mpsc::channel();
         let alice = node(
             &alice_id,
@@ -280,6 +312,7 @@ impl Pair {
             ),
             probe_server,
             alice_settings,
+            &alice_id,
             alice_tx,
         );
 
@@ -309,6 +342,7 @@ impl Pair {
 
         Some(Pair {
             alice,
+            alice_id,
             alice_rx,
             bob,
             bob_rx,
@@ -346,6 +380,27 @@ impl Pair {
         .expect("no outcome on Bob's side")
         .expect("Bob's side did not connect");
         (alice_iface, bob_iface)
+    }
+
+    /// Alice identifies on the link, as `identity`.
+    fn identify(&self, identity: &Identity) {
+        self.alice
+            .identify_on_link(self.link_id, identity.get_private_key().unwrap())
+            .unwrap();
+        // Let LINKIDENTIFY arrive before anything that depends on it.
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    /// Bob neither connected nor reported anything about Direct Link, and
+    /// neither side has a direct interface.
+    fn assert_bob_stayed_out(&self) {
+        while let Ok(event) = self.bob_rx.try_recv() {
+            if let TestEvent::DirectConnected(..) | TestEvent::DirectFailed(..) = event {
+                panic!("Bob took part in Direct Link: {event:?}");
+            }
+        }
+        assert!(direct_interfaces(&self.alice).is_empty());
+        assert!(direct_interfaces(&self.bob).is_empty());
     }
 
     fn shutdown(self) {
@@ -549,5 +604,70 @@ fn application_channel_messages_in_the_old_signalling_range_reach_the_applicatio
         })
         .unwrap_or_else(|| panic!("message type {msgtype:#06x} did not reach the application"));
     }
+    pair.shutdown();
+}
+
+#[test]
+fn default_configuration_takes_no_part() {
+    // Bob runs a facilitator but has no Direct Link configuration: he does
+    // not even answer the capability query, so an identified peer learns
+    // nothing about him.
+    let Some(pair) = Pair::start(
+        DirectSettings::willing(),
+        DirectSettings::unconfigured_default(),
+    ) else {
+        return;
+    };
+    pair.identify(&Identity::new(&mut OsRng));
+    assert_eq!(pair.propose(), Err(REJECT_UNSUPPORTED));
+    pair.assert_bob_stayed_out();
+    pair.shutdown();
+}
+
+#[test]
+fn default_policy_refuses_identified_strangers() {
+    // Bob can propose himself (a facilitator is configured), so he answers
+    // the capability query, but his default policy refuses a peer that
+    // identified with a throwaway identity, before any probe or punch.
+    let Some(pair) = Pair::start(
+        DirectSettings::willing(),
+        DirectSettings::default_with_probe(),
+    ) else {
+        return;
+    };
+    pair.identify(&Identity::new(&mut OsRng));
+    assert_eq!(pair.propose(), Err(REJECT_POLICY));
+    pair.assert_bob_stayed_out();
+    pair.shutdown();
+}
+
+#[test]
+fn allowlisted_identity_is_accepted_and_others_are_not() {
+    let bob = DirectSettings {
+        allow_alice: true,
+        ..DirectSettings::unconfigured_default()
+    };
+    // Anonymous, or identified as someone else: refused.
+    let Some(pair) = Pair::start(DirectSettings::willing(), bob.clone()) else {
+        return;
+    };
+    assert_eq!(pair.propose(), Err(REJECT_POLICY));
+    pair.shutdown();
+    let Some(pair) = Pair::start(DirectSettings::willing(), bob.clone()) else {
+        return;
+    };
+    pair.identify(&Identity::new(&mut OsRng));
+    assert_eq!(pair.propose(), Err(REJECT_POLICY));
+    pair.assert_bob_stayed_out();
+    pair.shutdown();
+
+    // Identified as the allowlisted identity: upgraded.
+    let Some(pair) = Pair::start(DirectSettings::willing(), bob) else {
+        return;
+    };
+    pair.identify(&Identity::from_private_key(
+        &pair.alice_id.get_private_key().unwrap(),
+    ));
+    pair.upgrade();
     pair.shutdown();
 }
