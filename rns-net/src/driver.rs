@@ -49,7 +49,7 @@ use crate::interface::auto::AutoRuntime;
 use crate::interface::auto::AutoRuntimeConfigHandle;
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
-    start_client_with_ifac, BackboneClientConfig, BackboneClientRuntime,
+    start_client_with_ifac, start_retrying_client, BackboneClientConfig, BackboneClientRuntime,
     BackboneClientRuntimeConfigHandle, BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
 };
 #[cfg(all(feature = "iface-backbone", test))]

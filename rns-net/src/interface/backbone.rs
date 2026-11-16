@@ -1670,12 +1670,13 @@ pub(crate) fn start_client_with_ifac(
     serve_client(config, tx, ifac_size, underlay_mark, control, stream)
 }
 
-/// Start a configured client. As upstream's `BackboneClientInterface`, one
+/// Start a client that reconnects on its own, as a configured or an
+/// auto-connected one does. As upstream's `BackboneClientInterface`, one
 /// whose target cannot be reached yet is left unconnected, reported down,
 /// and tried again every `reconnect_wait` (upstream's `RECONNECT_WAIT`, 5
 /// seconds) until it connects or runs out of `max_reconnect_tries`; the
 /// connection brings its writer in with its `InterfaceUp`.
-pub(crate) fn start_configured_client(
+pub(crate) fn start_retrying_client(
     config: BackboneClientConfig,
     tx: EventSender,
     ifac_size: usize,
@@ -2305,7 +2306,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 };
                 let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
                 let control = ListenerControl::new();
-                let writer = start_configured_client(
+                let writer = start_retrying_client(
                     cfg,
                     ctx.tx,
                     ifac_size,
@@ -3598,7 +3599,7 @@ mod tests {
         config.max_reconnect_tries = None;
         config.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&config)));
         let control = ListenerControl::new();
-        let mut writer = start_configured_client(config, tx, 0, None, control.clone()).unwrap();
+        let mut writer = start_retrying_client(config, tx, 0, None, control.clone()).unwrap();
         assert_eq!(
             writer.send_frame(b"x").unwrap_err().kind(),
             io::ErrorKind::NotConnected
