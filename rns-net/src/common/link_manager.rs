@@ -1134,6 +1134,16 @@ impl LinkManager {
         // attached interface, before dispatch/decryption of its context.
         if packet.flags.packet_type != constants::PACKET_TYPE_LINKREQUEST {
             if let Some(link) = self.links.get_mut(&dest_hash) {
+                // `Link.__receive` drops a keepalive probe arriving at the
+                // initiator, which sends them (an echo of its own probe), before
+                // anything else: it is neither inbound activity nor traffic.
+                if link.engine.is_initiator()
+                    && packet.flags.packet_type == constants::PACKET_TYPE_DATA
+                    && packet.context == constants::CONTEXT_KEEPALIVE
+                    && packet.data() == [0xff]
+                {
+                    return;
+                }
                 link.engine.record_inbound_traffic(packet.data().len());
             }
         }
