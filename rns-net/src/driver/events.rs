@@ -105,6 +105,23 @@ impl Driver {
             }
             return false;
         }
+        // Upstream 715707b1: a HEADER_1 announce without room for the
+        // transport id a transport node would insert is a protocol
+        // violation (an announce built since d077d1ab always has it).
+        if is_announce
+            && parsed_packet.flags.header_type == rns_core::constants::HEADER_1
+            && packet_len + rns_core::constants::TRUNCATED_HASHLENGTH / 8 > rns_core::constants::MTU
+        {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.protocol_violations += 1;
+            }
+            log::debug!(
+                "Protocol violation on interface {}: Excessive announce payload of {} bytes",
+                interface_id.0,
+                parsed_packet.data().len()
+            );
+            return false;
+        }
         // Upstream 096e6726: an announce payload shorter than a public key,
         // a name hash and a random hash is a protocol violation, checked
         // before the destination type filter reads the name hash.
