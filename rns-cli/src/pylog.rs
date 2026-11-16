@@ -50,7 +50,7 @@ pub fn log(msg: &str, level: i32) {
 
 /// Log target for messages upstream logs at `LOG_NOTICE`: shown at the
 /// default level, where this implementation's `info` messages are not.
-pub const NOTICE_TARGET: &str = "rns::notice";
+pub use rns_net::logging::NOTICE_TARGET;
 
 /// The RNS level of a `log` record: errors, warnings, notices (by target),
 /// pathing (by target); `info` is upstream's Verbose, `debug` its Debug,
