@@ -318,6 +318,36 @@ impl HolePunchEngine {
         }
     }
 
+    /// Called when endpoint discovery fails.
+    ///
+    /// Transitions: Discovering -> Failed. A responder, which has already
+    /// accepted, also tells the initiator with `UPGRADE_REJECT`
+    /// (`REJECT_NO_ENDPOINT`) instead of leaving it waiting for READY.
+    pub fn discovery_failed(&mut self, now: f64) -> Result<Vec<HolePunchAction>, HolePunchError> {
+        if self.state != HolePunchState::Discovering {
+            return Err(HolePunchError::InvalidState);
+        }
+        self.state = HolePunchState::Failed;
+        self.state_entered_at = now;
+        Ok(self.discovery_failure_actions())
+    }
+
+    fn discovery_failure_actions(&self) -> Vec<HolePunchAction> {
+        let mut actions = Vec::new();
+        if !self.is_initiator {
+            actions.push(HolePunchAction::SendSignal {
+                link_id: self.link_id,
+                msgtype: UPGRADE_REJECT,
+                payload: encode_upgrade_reject(&self.session_id, REJECT_NO_ENDPOINT),
+            });
+        }
+        actions.push(HolePunchAction::Failed {
+            session_id: self.session_id,
+            reason: FAIL_PROBE,
+        });
+        actions
+    }
+
     /// Called when the punch phase succeeds.
     ///
     /// Transitions: Punching -> Connected.
@@ -359,10 +389,7 @@ impl HolePunchEngine {
             HolePunchState::Discovering if elapsed > DISCOVER_TIMEOUT => {
                 self.state = HolePunchState::Failed;
                 self.state_entered_at = now;
-                alloc::vec![HolePunchAction::Failed {
-                    session_id: self.session_id,
-                    reason: FAIL_PROBE,
-                }]
+                self.discovery_failure_actions()
             }
             HolePunchState::Proposing if elapsed > PROPOSE_TIMEOUT => {
                 self.state = HolePunchState::Failed;
@@ -535,7 +562,13 @@ impl HolePunchEngine {
         payload: &[u8],
         now: f64,
     ) -> Result<Vec<HolePunchAction>, HolePunchError> {
-        if self.state != HolePunchState::Proposing {
+        // A responder may also give up after accepting (its probe failed).
+        if !self.is_initiator
+            || !matches!(
+                self.state,
+                HolePunchState::Proposing | HolePunchState::WaitingReady
+            )
+        {
             return Err(HolePunchError::InvalidState);
         }
 
@@ -1587,5 +1620,90 @@ mod tests {
         assert_eq!(initiator.keepalive_key(), responder.keepalive_key());
         assert_ne!(initiator.keepalive_key(), initiator.punch_token());
         assert_ne!(*initiator.keepalive_key(), [0u8; 32]);
+    }
+
+    #[test]
+    fn responder_that_cannot_probe_rejects_and_initiator_fails_fast() {
+        let derived_key = test_derived_key();
+        let mut initiator =
+            HolePunchEngine::new([0x34; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator
+            .propose(&derived_key, 100.0, &mut make_rng(5))
+            .unwrap();
+        let request = signal(
+            &initiator
+                .endpoints_discovered(test_public_addr_a(), 100.0)
+                .unwrap()[0],
+        )
+        .unwrap()
+        .1;
+        let mut responder = HolePunchEngine::new([0x34; 16], None, ProbeProtocol::Rnsp);
+        let accept = signal(
+            &responder
+                .handle_signal(UPGRADE_REQUEST, &request, Some(&derived_key), 101.0)
+                .unwrap()[0],
+        )
+        .unwrap()
+        .1;
+        initiator
+            .handle_signal(UPGRADE_ACCEPT, &accept, None, 101.5)
+            .unwrap();
+        assert_eq!(initiator.state(), HolePunchState::WaitingReady);
+
+        let actions = responder.discovery_failed(102.0).unwrap();
+        assert_eq!(responder.state(), HolePunchState::Failed);
+        let (kind, reject) = signal(&actions[0]).unwrap();
+        assert_eq!(kind, UPGRADE_REJECT);
+        assert!(matches!(
+            actions[1],
+            HolePunchAction::Failed {
+                reason: FAIL_PROBE,
+                ..
+            }
+        ));
+
+        let failed = initiator
+            .handle_signal(UPGRADE_REJECT, &reject, None, 102.5)
+            .unwrap();
+        assert_eq!(initiator.state(), HolePunchState::Failed);
+        assert!(matches!(
+            failed[0],
+            HolePunchAction::Failed {
+                reason: REJECT_NO_ENDPOINT,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn responder_discovery_timeout_also_rejects() {
+        let derived_key = test_derived_key();
+        let mut initiator =
+            HolePunchEngine::new([0x35; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator
+            .propose(&derived_key, 100.0, &mut make_rng(6))
+            .unwrap();
+        // The initiator's own discovery timing out sends nothing.
+        let actions = initiator.tick(100.0 + DISCOVER_TIMEOUT + 1.0);
+        assert!(actions.iter().all(|a| signal(a).is_none()));
+
+        let mut initiator =
+            HolePunchEngine::new([0x35; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator
+            .propose(&derived_key, 100.0, &mut make_rng(6))
+            .unwrap();
+        let request = signal(
+            &initiator
+                .endpoints_discovered(test_public_addr_a(), 100.0)
+                .unwrap()[0],
+        )
+        .unwrap()
+        .1;
+        let mut responder = HolePunchEngine::new([0x35; 16], None, ProbeProtocol::Rnsp);
+        responder
+            .handle_signal(UPGRADE_REQUEST, &request, Some(&derived_key), 101.0)
+            .unwrap();
+        let actions = responder.tick(101.0 + DISCOVER_TIMEOUT + 1.0);
+        assert_eq!(signal(&actions[0]).unwrap().0, UPGRADE_REJECT);
     }
 }
