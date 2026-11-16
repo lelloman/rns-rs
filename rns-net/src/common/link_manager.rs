@@ -1145,6 +1145,17 @@ impl LinkManager {
                     return;
                 }
                 link.engine.record_inbound_traffic(packet.data().len());
+                // Every packet `Link.__receive` handles counts as inbound
+                // and reactivates a STALE link, before it is dispatched or
+                // decrypted (a responder answering a probe sees an ACTIVE
+                // link). Proofs of sent packets only set `last_proof`, and
+                // LRPROOF activates the link itself.
+                if packet.flags.packet_type == constants::PACKET_TYPE_DATA
+                    || packet.context == constants::CONTEXT_RESOURCE_PRF
+                {
+                    let inbound_actions = link.engine.record_inbound(time::now());
+                    out.extend(self.process_link_actions(&dest_hash, &inbound_actions));
+                }
             }
         }
 
@@ -1587,7 +1598,6 @@ impl LinkManager {
         enum LinkDataResult<'a> {
             DirectLink {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
             },
             Lrrtt {
@@ -1600,7 +1610,6 @@ impl LinkManager {
             },
             Keepalive {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 reply: bool,
                 received_at: f64,
             },
@@ -1610,24 +1619,20 @@ impl LinkManager {
             },
             Channel {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
                 packet_hash: [u8; 32],
             },
             Request {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
                 request_id: [u8; 16],
             },
             Response {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
             },
             Generic {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
                 context: u8,
                 packet_hash: [u8; 32],
@@ -1635,43 +1640,36 @@ impl LinkManager {
             /// Resource advertisement (link-decrypted).
             ResourceAdv {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
             },
             /// Resource part request (link-decrypted).
             ResourceReq {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
             },
             /// Resource hashmap update (link-decrypted).
             ResourceHmu {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
             },
             /// Resource part data (NOT link-decrypted; parts are pre-encrypted by ResourceSender).
             ResourcePart {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 raw_data: &'a [u8],
             },
             /// Resource proof (feed to sender).
             ResourcePrf {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
             },
             /// Resource cancel from initiator (link-decrypted).
             ResourceIcl {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 resource_hash: Vec<u8>,
             },
             /// Resource cancel from receiver (link-decrypted).
             ResourceRcl {
                 link_id: LinkId,
-                inbound_actions: Vec<LinkAction>,
                 resource_hash: Vec<u8>,
             },
             Error,
@@ -1796,10 +1794,6 @@ impl LinkManager {
                 }
                 constants::CONTEXT_KEEPALIVE => {
                     let received_at = time::now();
-                    // As in Python's `Link.__receive`, the packet first
-                    // counts as inbound, which reactivates a STALE link, so
-                    // a stale responder still answers the probe.
-                    let inbound_actions = link.engine.record_inbound(received_at);
                     // On a direct path (an rns-rs peer) every probe is
                     // answered: the initiator's inbound timer then never
                     // depends on the reply-suppression rule, and a stale
@@ -1813,7 +1807,6 @@ impl LinkManager {
                     let link_id = *link.engine.link_id();
                     LinkDataResult::Keepalive {
                         link_id,
-                        inbound_actions,
                         reply,
                         received_at,
                     }
@@ -1831,11 +1824,9 @@ impl LinkManager {
                 },
                 constants::CONTEXT_CHANNEL => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
                         LinkDataResult::Channel {
                             link_id,
-                            inbound_actions,
                             plaintext,
                             packet_hash,
                         }
@@ -1844,12 +1835,10 @@ impl LinkManager {
                 },
                 constants::CONTEXT_REQUEST => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
                         let request_id = packet.get_truncated_hash();
                         LinkDataResult::Request {
                             link_id,
-                            inbound_actions,
                             plaintext,
                             request_id,
                         }
@@ -1859,95 +1848,61 @@ impl LinkManager {
                 rns_core::holepunch::CONTEXT_DIRECT_LINK => {
                     match decrypt(&link.engine, packet.data()) {
                         Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
                             let link_id = *link.engine.link_id();
-                            LinkDataResult::DirectLink {
-                                link_id,
-                                inbound_actions,
-                                plaintext,
-                            }
+                            LinkDataResult::DirectLink { link_id, plaintext }
                         }
                         Err(_) => LinkDataResult::Error,
                     }
                 }
                 constants::CONTEXT_RESPONSE => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
-                        LinkDataResult::Response {
-                            link_id,
-                            inbound_actions,
-                            plaintext,
-                        }
+                        LinkDataResult::Response { link_id, plaintext }
                     }
                     Err(_) => LinkDataResult::Error,
                 },
                 // --- Resource contexts ---
                 constants::CONTEXT_RESOURCE_ADV => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
-                        LinkDataResult::ResourceAdv {
-                            link_id,
-                            inbound_actions,
-                            plaintext,
-                        }
+                        LinkDataResult::ResourceAdv { link_id, plaintext }
                     }
                     Err(_) => LinkDataResult::Error,
                 },
                 constants::CONTEXT_RESOURCE_REQ => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
-                        LinkDataResult::ResourceReq {
-                            link_id,
-                            inbound_actions,
-                            plaintext,
-                        }
+                        LinkDataResult::ResourceReq { link_id, plaintext }
                     }
                     Err(_) => LinkDataResult::Error,
                 },
                 constants::CONTEXT_RESOURCE_HMU => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
-                        LinkDataResult::ResourceHmu {
-                            link_id,
-                            inbound_actions,
-                            plaintext,
-                        }
+                        LinkDataResult::ResourceHmu { link_id, plaintext }
                     }
                     Err(_) => LinkDataResult::Error,
                 },
                 constants::CONTEXT_RESOURCE => {
                     // Resource parts are NOT link-decrypted — they're pre-encrypted by ResourceSender
-                    let inbound_actions = link.engine.record_inbound(time::now());
                     let link_id = *link.engine.link_id();
                     LinkDataResult::ResourcePart {
                         link_id,
-                        inbound_actions,
                         raw_data: packet.data(),
                     }
                 }
                 constants::CONTEXT_RESOURCE_PRF => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
-                        LinkDataResult::ResourcePrf {
-                            link_id,
-                            inbound_actions,
-                            plaintext,
-                        }
+                        LinkDataResult::ResourcePrf { link_id, plaintext }
                     }
                     Err(_) => LinkDataResult::Error,
                 },
                 constants::CONTEXT_RESOURCE_ICL => match decrypt(&link.engine, packet.data()) {
                     Ok(resource_hash) if resource_hash.len() == 32 => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
                         LinkDataResult::ResourceIcl {
                             link_id,
-                            inbound_actions,
                             resource_hash,
                         }
                     }
@@ -1955,11 +1910,9 @@ impl LinkManager {
                 },
                 constants::CONTEXT_RESOURCE_RCL => match decrypt(&link.engine, packet.data()) {
                     Ok(resource_hash) if resource_hash.len() == 32 => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
                         LinkDataResult::ResourceRcl {
                             link_id,
-                            inbound_actions,
                             resource_hash,
                         }
                     }
@@ -1967,11 +1920,9 @@ impl LinkManager {
                 },
                 _ => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
-                        let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
                         LinkDataResult::Generic {
                             link_id,
-                            inbound_actions,
                             plaintext,
                             context: packet.context,
                             packet_hash,
@@ -2021,7 +1972,6 @@ impl LinkManager {
             }
             LinkDataResult::Keepalive {
                 link_id,
-                inbound_actions,
                 reply,
                 received_at,
             } => {
@@ -2029,7 +1979,6 @@ impl LinkManager {
                     "Link keepalive received: link={:02x?} reply={reply}",
                     &link_id[..4]
                 );
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 if reply {
                     out.extend(Self::keepalive_packet(&link_id, 0xfe));
                     if let Some(link) = self.links.get_mut(&link_id) {
@@ -2043,12 +1992,7 @@ impl LinkManager {
             } => {
                 out.extend(self.process_link_actions(&link_id, &teardown_actions));
             }
-            LinkDataResult::DirectLink {
-                link_id,
-                inbound_actions,
-                plaintext,
-            } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+            LinkDataResult::DirectLink { link_id, plaintext } => {
                 out.push(LinkManagerAction::DirectLinkSignal {
                     link_id,
                     data: plaintext,
@@ -2056,11 +2000,9 @@ impl LinkManager {
             }
             LinkDataResult::Channel {
                 link_id,
-                inbound_actions,
                 plaintext,
                 packet_hash,
             } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Feed plaintext to channel
                 if let Some(link) = self.links.get_mut(&link_id) {
                     if let Some(ref mut channel) = link.channel {
@@ -2085,11 +2027,9 @@ impl LinkManager {
             }
             LinkDataResult::Request {
                 link_id,
-                inbound_actions,
                 plaintext,
                 request_id,
             } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 let size_ok = self
                     .links
                     .get(&link_id)
@@ -2106,24 +2046,17 @@ impl LinkManager {
                 }
                 self.recycle_plaintext(plaintext);
             }
-            LinkDataResult::Response {
-                link_id,
-                inbound_actions,
-                plaintext,
-            } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+            LinkDataResult::Response { link_id, plaintext } => {
                 // Unpack msgpack response: [Bin(request_id), response_value]
                 out.extend(self.handle_response(&link_id, &plaintext, None, None));
                 self.recycle_plaintext(plaintext);
             }
             LinkDataResult::Generic {
                 link_id,
-                inbound_actions,
                 plaintext,
                 context,
                 packet_hash,
             } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 out.push(LinkManagerAction::LinkDataReceived {
                     link_id,
                     context,
@@ -2137,64 +2070,35 @@ impl LinkManager {
                     });
                 }
             }
-            LinkDataResult::ResourceAdv {
-                link_id,
-                inbound_actions,
-                plaintext,
-            } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+            LinkDataResult::ResourceAdv { link_id, plaintext } => {
                 out.extend(self.handle_resource_adv(&link_id, &plaintext, rng));
                 self.recycle_plaintext(plaintext);
             }
-            LinkDataResult::ResourceReq {
-                link_id,
-                inbound_actions,
-                plaintext,
-            } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+            LinkDataResult::ResourceReq { link_id, plaintext } => {
                 self.handle_resource_req_into(&link_id, &plaintext, rng, out);
                 self.recycle_plaintext(plaintext);
             }
-            LinkDataResult::ResourceHmu {
-                link_id,
-                inbound_actions,
-                plaintext,
-            } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+            LinkDataResult::ResourceHmu { link_id, plaintext } => {
                 out.extend(self.handle_resource_hmu(&link_id, &plaintext, rng));
                 self.recycle_plaintext(plaintext);
             }
-            LinkDataResult::ResourcePart {
-                link_id,
-                inbound_actions,
-                raw_data,
-            } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+            LinkDataResult::ResourcePart { link_id, raw_data } => {
                 self.handle_resource_part_into(&link_id, raw_data, rng, out);
             }
-            LinkDataResult::ResourcePrf {
-                link_id,
-                inbound_actions,
-                plaintext,
-            } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+            LinkDataResult::ResourcePrf { link_id, plaintext } => {
                 out.extend(self.handle_resource_prf(&link_id, &plaintext, rng));
                 self.recycle_plaintext(plaintext);
             }
             LinkDataResult::ResourceIcl {
                 link_id,
-                inbound_actions,
                 resource_hash,
             } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 out.extend(self.handle_resource_icl(&link_id, &resource_hash));
             }
             LinkDataResult::ResourceRcl {
                 link_id,
-                inbound_actions,
                 resource_hash,
             } => {
-                out.extend(self.process_link_actions(&link_id, &inbound_actions));
                 out.extend(self.handle_resource_rcl(&link_id, &resource_hash));
             }
             LinkDataResult::Error => {}
