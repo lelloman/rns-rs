@@ -1815,6 +1815,16 @@ fn python_rnpath_reads_rust_remote_path_table() {
     // get_rate_table() entries; Python's rnpath reads `value` and `lr_cost`
     // of each. The entries of both implementations have the same keys, in
     // the same order, with values of the same types.
+    // The entries gained `value`, `used` and `lr_cost` in 1.6.0, whose
+    // rnpath prints them and which added `RNS.prettycost`.
+    let mut probe = Command::new("python3");
+    probe.args(["-c", "import RNS; print(hasattr(RNS, 'prettycost'))"]);
+    let probe = run(probe);
+    assert_success(&probe, "probe RNS.prettycost");
+    if String::from_utf8_lossy(&probe.stdout).trim() != "True" {
+        eprintln!("Python Reticulum predates 1.6.0's path table entries; skipping");
+        return;
+    }
     let (python_table, python_rates) = remote_path_tables(Daemon::Python);
     let (rust_table, rust_rates) = remote_path_tables(Daemon::Rust);
     assert_eq!(
