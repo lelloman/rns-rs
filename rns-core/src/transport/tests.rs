@@ -7049,6 +7049,80 @@ fn ingress_limiting_holds_only_valid_announces() {
     assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
 }
 
+/// `signed_announce_with`, relayed by transport node `transport_id` with
+/// `hops` on the wire, as a transport node answers a path request from its
+/// path table.
+fn relayed_announce_with(
+    seed: u8,
+    aspect: &str,
+    random_hash: [u8; 10],
+    context: u8,
+    transport_id: [u8; 16],
+    hops: u8,
+) -> ([u8; 16], Vec<u8>) {
+    let (dest_hash, raw) = signed_announce_with(seed, aspect, random_hash, context);
+    let packet = RawPacket::unpack(&raw).unwrap();
+    let flags = PacketFlags {
+        header_type: constants::HEADER_2,
+        transport_type: constants::TRANSPORT_TRANSPORT,
+        ..packet.flags
+    };
+    let relayed = RawPacket::pack(
+        flags,
+        hops,
+        &dest_hash,
+        Some(&transport_id),
+        context,
+        packet.data(),
+    )
+    .unwrap()
+    .raw;
+    (dest_hash, relayed)
+}
+
+#[test]
+fn a_direct_path_response_replaces_a_relayed_cached_one() {
+    // vps-us, 2026-11-16: a transport node forwards a path request for D on
+    // every interface. Transport node C answers first from its path table
+    // with the announce it holds (3 hops here); D answers directly a moment
+    // later with a fresh path-response announce (1 hop, new blob, newer
+    // emission). Upstream replaces the path with D's answer.
+    let mut config = make_config(true);
+    config.prefer_shorter_path = true;
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(1, constants::MODE_FULL)); // to C
+    engine.register_interface(make_interface(2, constants::MODE_FULL)); // to D
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let now = 10_000.0;
+    let (dest, cached) = relayed_announce_with(
+        0x61,
+        "probe",
+        blob_emitted_at(9_000),
+        constants::CONTEXT_PATH_RESPONSE,
+        [0xCC; 16],
+        2,
+    );
+    engine.record_outbound_path_request(dest, now - 1.0);
+    engine.handle_inbound(InboundFrame::new(&cached, InterfaceId(1), now), &mut rng);
+    assert_eq!(engine.hops_to(&dest), Some(3));
+
+    let (_, direct) = signed_announce_with(
+        0x61,
+        "probe",
+        blob_emitted_at(9_999),
+        constants::CONTEXT_PATH_RESPONSE,
+    );
+    engine.handle_inbound(
+        InboundFrame::new(&direct, InterfaceId(2), now + 0.1),
+        &mut rng,
+    );
+    assert_eq!(
+        engine.hops_to(&dest),
+        Some(1),
+        "the direct answer should win"
+    );
+}
+
 #[test]
 fn waiting_local_path_request_skips_ingress_limiting() {
     // Upstream skips the ingress limit check while a path request, local
