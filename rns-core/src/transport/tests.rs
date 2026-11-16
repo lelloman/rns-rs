@@ -7001,6 +7001,55 @@ fn blackholed_announce_is_a_filtered_announce() {
 }
 
 #[test]
+fn ingress_limiting_holds_only_valid_announces() {
+    // Upstream's preprocess_inbound validates an announce's signature,
+    // blackholed identity and stamp before ingress limiting: while an
+    // interface is limiting, an invalid announce is a protocol violation
+    // and a blackholed one a filtered announce, neither held.
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.started = 0.0;
+    engine.register_interface(inbound);
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+
+    let (forged, mut announce) = signed_announce(0x91, "forged");
+    // The last signature byte: public key, name hash and random blob come
+    // first, then the 64-byte signature.
+    let signature_end = RawPacket::data_offset(constants::HEADER_1) + 64 + 10 + 10 + 64;
+    announce[signature_end - 1] ^= 0x01;
+    let actions = engine.handle_inbound(
+        InboundFrame::new(&announce, InterfaceId(1), 10_000.0),
+        &mut rng,
+    );
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, TransportAction::ProtocolViolation { .. })));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
+    assert!(!engine.has_path(&forged));
+
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x92; 32]));
+    engine.blackhole_identity(*identity.hash(), 0.0, None, None);
+    let (blackholed, announce) = signed_announce(0x92, "blackholed");
+    engine.handle_inbound(
+        InboundFrame::new(&announce, InterfaceId(1), 10_001.0),
+        &mut rng,
+    );
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
+    assert_eq!(filtered_flags(&mut engine), (true, true));
+    assert!(!engine.has_path(&blackholed));
+
+    // A valid announce in the same burst is held.
+    let (_, announce) = signed_announce(0x93, "valid");
+    engine.handle_inbound(
+        InboundFrame::new(&announce, InterfaceId(1), 10_002.0),
+        &mut rng,
+    );
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+}
+
+#[test]
 fn waiting_local_path_request_skips_ingress_limiting() {
     // Upstream skips the ingress limit check while a path request, local
     // or for discovery, waits for the destination (logged since daec67a1).
