@@ -4863,6 +4863,40 @@ fn dialing_interface_synthesizes_a_tunnel_on_each_connect() {
     assert_eq!(sent[0][..2 + 16 + 1 + 96], sent[1][..2 + 16 + 1 + 96]);
 }
 
+/// Records how many frames the interface had sent when the application
+/// heard that it came up.
+struct SentAtInterfaceUp {
+    sent: Arc<Mutex<Vec<Vec<u8>>>>,
+    seen: Arc<Mutex<Vec<usize>>>,
+}
+
+impl Callbacks for SentAtInterfaceUp {
+    fn on_announce(&mut self, _announced: crate::destination::AnnouncedIdentity) {}
+    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
+    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _hash: PacketHash) {}
+    fn on_interface_up(&mut self, _id: InterfaceId) {
+        let count = self.sent.lock().unwrap().len();
+        self.seen.lock().unwrap().push(count);
+    }
+}
+
+#[test]
+fn tunnel_synthesis_is_sent_before_the_interface_is_announced_up() {
+    // Upstream f361a354 and ad6c709e send the synthesis while connecting,
+    // so it is the first frame on the connection. rns-rs sends it before the
+    // callback and the `InterfaceUp` hook can use the interface.
+    let (mut client, sent) = dialing_client_driver();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    client.callbacks = Box::new(SentAtInterfaceUp {
+        sent: sent.clone(),
+        seen: seen.clone(),
+    });
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    client.handle_interface_down_event(InterfaceId(1));
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    assert_eq!(*seen.lock().unwrap(), vec![1, 2]);
+}
+
 #[test]
 fn synthesized_tunnel_attaches_to_the_receiving_interface() {
     // `Transport.tunnel_synthesize_handler` hands the tunnel to the
