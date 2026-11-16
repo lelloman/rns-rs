@@ -2924,7 +2924,12 @@ impl RnsNode {
                     .link_manager
                     .register_management_path(crate::management::path_path_hash());
 
-                log::info!("Remote management enabled on {:02x?}", &mgmt_dest[..4],);
+                log::info!(
+                    target: crate::logging::NOTICE_TARGET,
+                    "Enabled remote management on <rnstransport.remote.management.{}:{}>",
+                    hex_string(&identity_hash),
+                    hex_string(&mgmt_dest),
+                );
 
                 // Set up allowed list
                 if !config.management.remote_management_allowed.is_empty() {
@@ -3001,7 +3006,12 @@ impl RnsNode {
 
             driver.probe_responder_hash = Some(probe_dest);
 
-            log::info!("Probe responder enabled on {:02x?}", &probe_dest[..4],);
+            log::info!(
+                target: crate::logging::NOTICE_TARGET,
+                "Transport Instance will respond to probe requests on <rnstransport.probe.{}:{}>",
+                hex_string(&identity_hash),
+                hex_string(&probe_dest),
+            );
         }
 
         // Spawn timer thread with configurable tick interval, unless the
@@ -5470,6 +5480,11 @@ fn known_destinations_snapshot(
             })
             .collect(),
     )
+}
+
+/// Lowercase hex of `bytes`, as upstream prints hashes in log lines.
+fn hex_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
