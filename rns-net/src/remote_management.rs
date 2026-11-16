@@ -19,9 +19,13 @@ use crate::pickle::PickleValue;
 use crate::shared_client::SharedClientConfig;
 use crate::{Callbacks, RnsNode, TeardownReason};
 
+/// Which of a transport instance's destinations a link goes to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RemotePurpose {
+pub enum RemotePurpose {
+    /// `rnstransport.remote.management`, identified with the management
+    /// identity.
     Management,
+    /// `rnstransport.info.blackhole`, anonymous.
     Blackhole,
 }
 
@@ -164,7 +168,15 @@ impl RemoteManagementClient {
             ),
             None => None,
         };
+        Self::connect_with_identity(config_path, management_identity, timeout)
+    }
 
+    /// [`Self::connect`] with an already loaded management identity.
+    pub fn connect_with_identity(
+        config_path: Option<&Path>,
+        management_identity: Option<Identity>,
+        timeout: Duration,
+    ) -> Result<Self, RemoteManagementError> {
         let (link_tx, link_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
         let (closed_tx, closed_rx) = mpsc::channel();
@@ -209,6 +221,82 @@ impl RemoteManagementClient {
     /// Report each stage of the requests that follow to `progress`.
     pub fn set_progress(&mut self, progress: impl FnMut(RemoteProgress) + Send + 'static) {
         self.progress = Some(Box::new(progress));
+    }
+
+    /// How long each stage of a request waits: the path, the link, the
+    /// response.
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
+    /// The shared instance's estimate of a reasonable path request
+    /// timeout, upstream's `Reticulum.get_medium_path_timeout()`.
+    pub fn medium_path_timeout(&self) -> Option<f64> {
+        self.node.medium_path_timeout().ok()
+    }
+
+    /// Open the link to the transport instance's `purpose` destination, as
+    /// upstream's `connect_remote` does, reporting the path request and the
+    /// link setup but sending nothing. Later requests for `purpose` use it.
+    pub fn open_link(
+        &mut self,
+        purpose: RemotePurpose,
+        transport_identity_hash: [u8; 16],
+    ) -> Result<(), RemoteManagementError> {
+        match purpose {
+            RemotePurpose::Management => {
+                let dest_hash = crate::management::management_dest_hash(&transport_identity_hash);
+                let prv_key = self.management_prv_key()?;
+                self.establish(purpose, dest_hash, Some(prv_key), true)?;
+            }
+            RemotePurpose::Blackhole => {
+                let dest_hash = crate::management::blackhole_dest_hash(&transport_identity_hash);
+                self.establish(purpose, dest_hash, None, false)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Wait for a path to and the identity of `dest_hash`, reporting the
+    /// path request and, once known, the link setup that would follow,
+    /// without opening a link.
+    pub fn locate(&mut self, dest_hash: [u8; 16]) -> Result<(), RemoteManagementError> {
+        if !self.node.has_path(&DestHash(dest_hash)).unwrap_or(false) {
+            self.report(RemoteProgress::PathRequested(dest_hash));
+        }
+        self.wait_for_destination(dest_hash)?;
+        self.report(RemoteProgress::EstablishingLink);
+        Ok(())
+    }
+
+    /// Send a request on the link [`Self::open_link`] opened for `purpose`
+    /// and wait for its response. `data` is the packed request data.
+    pub fn request_on(
+        &mut self,
+        purpose: RemotePurpose,
+        path: &str,
+        data: &[u8],
+    ) -> Result<Vec<u8>, RemoteManagementError> {
+        let link_id =
+            (*lock_link(self.link_slot(purpose))).ok_or(RemoteManagementError::SendFailed)?;
+        self.node
+            .send_request(link_id, path, data)
+            .map_err(|_| RemoteManagementError::SendFailed)?;
+        self.wait_for_response(link_id, path)
+    }
+
+    fn link_slot(&self, purpose: RemotePurpose) -> &Arc<Mutex<Option<[u8; 16]>>> {
+        match purpose {
+            RemotePurpose::Management => &self.management_link,
+            RemotePurpose::Blackhole => &self.blackhole_link,
+        }
+    }
+
+    fn management_prv_key(&self) -> Result<[u8; 64], RemoteManagementError> {
+        self.management_identity
+            .as_ref()
+            .and_then(|id| id.get_private_key())
+            .ok_or(RemoteManagementError::MissingIdentity)
     }
 
     fn report(&mut self, stage: RemoteProgress) {
@@ -303,11 +391,7 @@ impl RemoteManagementClient {
         data: &[u8],
     ) -> Result<Vec<u8>, RemoteManagementError> {
         let dest_hash = crate::management::management_dest_hash(&transport_identity_hash);
-        let prv_key = self
-            .management_identity
-            .as_ref()
-            .and_then(|id| id.get_private_key())
-            .ok_or(RemoteManagementError::MissingIdentity)?;
+        let prv_key = self.management_prv_key()?;
         self.request(
             RemotePurpose::Management,
             dest_hash,
@@ -327,18 +411,30 @@ impl RemoteManagementClient {
         data: &[u8],
         identify_on_new_link: bool,
     ) -> Result<Vec<u8>, RemoteManagementError> {
-        let link_slot = match purpose {
-            RemotePurpose::Management => Arc::clone(&self.management_link),
-            RemotePurpose::Blackhole => Arc::clone(&self.blackhole_link),
-        };
-
-        if let Some(link_id) = *lock_link(&link_slot) {
+        if let Some(link_id) = *lock_link(self.link_slot(purpose)) {
             if self.node.send_request(link_id, path, data).is_ok() {
                 return self.wait_for_response(link_id, path);
             }
-            *lock_link(&link_slot) = None;
+            *lock_link(self.link_slot(purpose)) = None;
         }
 
+        let link_id = self.establish(purpose, dest_hash, identity_prv_key, identify_on_new_link)?;
+        self.report(RemoteProgress::SendingRequest);
+        self.node
+            .send_request(link_id, path, data)
+            .map_err(|_| RemoteManagementError::SendFailed)?;
+        self.wait_for_response(link_id, path)
+    }
+
+    /// Request a path if needed, open a link to `dest_hash`, identify on it
+    /// if asked to, and keep it as `purpose`'s link.
+    fn establish(
+        &mut self,
+        purpose: RemotePurpose,
+        dest_hash: [u8; 16],
+        identity_prv_key: Option<[u8; 64]>,
+        identify_on_new_link: bool,
+    ) -> Result<[u8; 16], RemoteManagementError> {
         if !self.node.has_path(&DestHash(dest_hash)).unwrap_or(false) {
             self.report(RemoteProgress::PathRequested(dest_hash));
         }
@@ -352,7 +448,6 @@ impl RemoteManagementClient {
             .create_link(dest_hash, sig_pub)
             .map_err(|_| RemoteManagementError::LinkTimeout(dest_hash))?;
         self.wait_for_link_established(link_id, dest_hash)?;
-        self.report(RemoteProgress::SendingRequest);
 
         if identify_on_new_link {
             let prv_key = identity_prv_key.ok_or(RemoteManagementError::MissingIdentity)?;
@@ -362,11 +457,8 @@ impl RemoteManagementClient {
             std::thread::sleep(Duration::from_millis(200));
         }
 
-        *lock_link(&link_slot) = Some(link_id);
-        self.node
-            .send_request(link_id, path, data)
-            .map_err(|_| RemoteManagementError::SendFailed)?;
-        self.wait_for_response(link_id, path)
+        *lock_link(self.link_slot(purpose)) = Some(link_id);
+        Ok(link_id)
     }
 
     fn wait_for_destination(

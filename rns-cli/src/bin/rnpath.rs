@@ -106,52 +106,77 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(rns_core::constants::PATH_REQUEST_TIMEOUT);
     let management_identity = args.get("i").or_else(|| args.get("identity"));
-    // upstream's `-p <identity hash>` reads the published list of that
-    // transport instance, as `-R <hash> -p` does here.
-    let (remote_hash, destination) = match (args.get("R"), args.positional.first()) {
-        (Some(remote), destination) => (Some(remote.to_string()), destination.cloned()),
-        (None, Some(publisher)) if remote_blackholed => (Some(publisher.clone()), None),
-        (None, destination) => (None, destination.cloned()),
-    };
+    let destination = args.positional.first().cloned();
+    let list_filter = args.positional.get(1).cloned();
 
     // As upstream, nothing to do without one of these.
-    let has_destination = destination.is_some()
+    let has_destination = destination.as_deref().is_some_and(|d| !d.is_empty())
         || [&drop_hash, &drop_via, &blackhole_hash, &unblackhole_hash]
             .iter()
             .any(|target| target.as_deref().is_some_and(|t| !t.is_empty()));
-    let has_work = drop_queues
-        || show_table
-        || show_rates
-        || has_destination
-        || drop_via.is_some()
-        || show_blackholed
-        || remote_hash.is_some();
+    let has_work = drop_queues || show_table || show_rates || has_destination || show_blackholed;
     if !has_work {
         println!();
         print_usage(usage_name);
         println!();
         return;
     }
+    rns_cli::pylog::set_loglevel(rns_cli::pylog::LOG_NOTICE + i32::from(args.verbosity));
 
-    // Remote management query via -R flag
-    if let Some(ref hash_str) = remote_hash {
+    // `-R`: everything goes through the management link.
+    if let Some(remote) = args.get("R") {
+        let action = if show_blackholed {
+            RemoteAction::Blackholed
+        } else if remote_blackholed {
+            RemoteAction::PublishedList(destination.clone())
+        } else if blackhole_hash.is_some() || unblackhole_hash.is_some() {
+            RemoteAction::Unsupported(
+                "Blackholing identity on remote instances not yet implemented",
+            )
+        } else if show_table {
+            RemoteAction::Table(destination.clone())
+        } else if show_rates {
+            RemoteAction::Rates(destination.clone())
+        } else if drop_queues {
+            RemoteAction::Unsupported(
+                "Dropping announce queues on remote instances not yet implemented",
+            )
+        } else if drop_hash.is_some() {
+            RemoteAction::Unsupported("Dropping path on remote instances not yet implemented")
+        } else if drop_via.is_some() {
+            RemoteAction::Unsupported(
+                "Dropping all paths via specific transport instance on remote instances yet not implemented",
+            )
+        } else {
+            RemoteAction::Unsupported("Requesting paths on remote instances not implemented")
+        };
+        let view = TableView {
+            destination: None,
+            json: json_output,
+            usage: show_usage,
+            sort: false,
+        };
         remote_path(
-            hash_str,
+            remote,
             management_identity,
             config_path.as_deref(),
             remote_timeout,
-            show_table,
-            show_usage,
-            json_output,
-            show_rates,
-            remote_blackholed,
             max_hops,
+            &view,
+            list_filter.as_deref(),
+            action,
+        );
+        return;
+    }
+
+    // upstream's `-p <identity hash> [filter]`: the blackhole list that
+    // transport instance publishes.
+    if remote_blackholed && !show_blackholed {
+        published_blackhole_list(
+            config_path.as_deref(),
             destination.as_deref(),
-            drop_hash.as_deref(),
-            drop_via.as_deref(),
-            drop_queues,
-            blackhole_hash.as_deref(),
-            unblackhole_hash.as_deref(),
+            list_filter.as_deref(),
+            remote_timeout,
         );
         return;
     }
@@ -211,7 +236,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     // In upstream's order, for invocations that combine them.
     if show_blackholed {
-        show_blackholed_list(&mut client, identity.hash());
+        let local = client_transport_identity(&rns_config, &paths);
+        show_blackholed_list(&mut client, local.as_ref(), destination.as_deref());
     } else if let Some(hash_str) = blackhole_hash {
         do_blackhole(&mut client, &hash_str, duration_hours, reason);
     } else if let Some(hash_str) = unblackhole_hash {
@@ -645,7 +671,39 @@ fn pretty_date(elapsed: f64) -> String {
     }
 }
 
-fn show_blackholed_list(client: &mut RpcClient, local_identity: &[u8; 16]) {
+/// `RNS.Transport.identity` of this program, a client of the shared
+/// instance: the stored transport identity with `static_transport_identity`,
+/// else an ephemeral one that no blackhole entry names.
+fn client_transport_identity(
+    rns_config: &config::RnsConfig,
+    paths: &storage::StoragePaths,
+) -> Option<[u8; 16]> {
+    if !rns_config.reticulum.static_transport_identity {
+        return None;
+    }
+    storage::load_identity(&storage::transport_identity_path(paths))
+        .ok()
+        .map(|identity| *identity.hash())
+}
+
+/// [`client_transport_identity`] for the config directory `config_path`.
+fn client_transport_identity_at(config_path: Option<&str>) -> Option<[u8; 16]> {
+    let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
+    let config_file = config_dir.join("config");
+    if !config_file.exists() {
+        return None;
+    }
+    let rns_config = config::parse_file(&config_file).ok()?;
+    let paths = storage::ensure_storage_dirs(&config_dir).ok()?;
+    client_transport_identity(&rns_config, &paths)
+}
+
+/// `rnpath -b [filter]`: the instance's blackholed identities.
+fn show_blackholed_list(
+    client: &mut RpcClient,
+    local_identity: Option<&[u8; 16]>,
+    filter: Option<&str>,
+) {
     // Upstream's call first; an older rns-rs instance only knows `blackholed`.
     let response = match client.call(&PickleValue::Dict(vec![(
         PickleValue::String("get".into()),
@@ -658,10 +716,10 @@ fn show_blackholed_list(client: &mut RpcClient, local_identity: &[u8; 16]) {
         Ok(response) => Ok(response),
     };
     match response {
-        Ok(response) => render_blackholed_list(&response, Some(local_identity)),
+        Ok(response) => render_blackholed_list(&response, local_identity, filter),
         Err(e) => {
-            eprintln!("RPC error: {}", e);
-            process::exit(1);
+            println!("Could not get blackholed identities from RNS instance: {e}");
+            process::exit(20);
         }
     }
 }
@@ -680,6 +738,8 @@ fn blackhole_line(identity_hash: Vec<u8>, fields: &PickleValue) -> BlackholeLine
     let until = fields
         .get("until")
         .and_then(|v| v.as_float().or_else(|| v.as_int().map(|i| i as f64)))
+        // `if until`: a zero time is no expiry.
+        .filter(|until| *until != 0.0)
         .or_else(|| {
             fields
                 .get("expires")
@@ -700,10 +760,32 @@ fn blackhole_line(identity_hash: Vec<u8>, fields: &PickleValue) -> BlackholeLine
     }
 }
 
-/// Print a blackhole list as upstream's `rnpath -b` does: `<hash>
+/// Print a blackhole list as upstream's `rnpath -b` and `-p` do: `<hash>
 /// blackholed for <time>|indefinitely (<reason>) by <source>`, naming the
-/// source only when it is not this node.
-fn render_blackholed_list(response: &PickleValue, local_identity: Option<&[u8; 16]>) {
+/// source unless it is this program's transport identity, and only the
+/// entries whose `<hash> <until> <reason> <by>` contains `filter`.
+fn render_blackholed_list(
+    response: &PickleValue,
+    local_identity: Option<&[u8; 16]>,
+    filter: Option<&str>,
+) {
+    match blackholed_lines(response, local_identity, filter, rns_net::time::now()) {
+        Some(lines) => lines.iter().for_each(|line| println!("{line}")),
+        None => {
+            println!("No blackholed identity data available");
+            process::exit(20);
+        }
+    }
+}
+
+/// The lines [`render_blackholed_list`] prints at `now`, or `None` for an
+/// empty list.
+fn blackholed_lines(
+    response: &PickleValue,
+    local_identity: Option<&[u8; 16]>,
+    filter: Option<&str>,
+    now: f64,
+) -> Option<Vec<String>> {
     let lines: Vec<BlackholeLine> = match response {
         PickleValue::Dict(entries) => entries
             .iter()
@@ -720,10 +802,9 @@ fn render_blackholed_list(response: &PickleValue, local_identity: Option<&[u8; 1
         _ => Vec::new(),
     };
     if lines.is_empty() {
-        println!("No blackholed identity data available");
-        process::exit(20);
+        return None;
     }
-    let now = rns_net::time::now();
+    let mut out = Vec::new();
     for line in lines {
         let until = match line.until {
             Some(until) => format!("for {}", upstream_prettytime((until - now).max(0.0))),
@@ -744,15 +825,38 @@ fn render_blackholed_list(response: &PickleValue, local_identity: Option<&[u8; 1
             }
             _ => String::new(),
         };
-        let by = match (&line.source, local_identity) {
-            (Some(source), Some(local)) if source.as_slice() == local.as_slice() => String::new(),
-            (Some(source), _) => format!(" by {}", pretty(source)),
-            (None, _) => String::new(),
+        let by = match &line.source {
+            Some(source) if local_identity.is_some_and(|l| l.as_slice() == source.as_slice()) => {
+                String::new()
+            }
+            Some(source) => format!(" by {}", pretty(source)),
+            None => String::new(),
         };
-        println!(
-            "{} blackholed {until}{reason}{by}",
-            pretty(&line.identity_hash)
-        );
+        let hash = pretty(&line.identity_hash);
+        if filter.is_some_and(|f| !format!("{hash} {until} {reason} {by}").contains(f)) {
+            continue;
+        }
+        out.push(format!("{hash} blackholed {until}{reason}{by}"));
+    }
+    Some(out)
+}
+
+/// upstream's `parse_hash`, for the identity hash the blackhole options
+/// take; a missing one fails as `len(None)` does.
+fn parse_hash(input: Option<&str>) -> Result<[u8; 16], String> {
+    let Some(input) = input else {
+        return Err("object of type 'NoneType' has no len()".into());
+    };
+    if input.chars().count() != 32 {
+        return Err("Hash length is invalid, must be 32 hexadecimal characters (16 bytes).".into());
+    }
+    match rns_cli::pylog::fromhex(input) {
+        Ok(bytes) if bytes.len() == 16 => {
+            let mut hash = [0u8; 16];
+            hash.copy_from_slice(&bytes);
+            Ok(hash)
+        }
+        _ => Err("Invalid hash entered. Check your input.".into()),
     }
 }
 
@@ -767,16 +871,16 @@ fn do_blackhole(
     duration_hours: Option<f64>,
     reason: Option<String>,
 ) {
-    let hash_bytes = match parse_hex_hash(hash_str) {
-        Some(b) if b.len() == 16 => b,
-        _ => {
-            eprintln!("Invalid identity hash: {}", hash_str);
-            process::exit(1);
+    let hash_bytes = match parse_hash(Some(hash_str)) {
+        Ok(hash) => hash.to_vec(),
+        Err(e) => {
+            println!("Could not blackhole identity: {e}");
+            process::exit(20);
         }
     };
     // Upstream's `blackhole_identity`, with an absolute expiry time.
     let until = duration_hours
-        .filter(|hours| *hours > 0.0)
+        .filter(|hours| *hours != 0.0)
         .map_or(PickleValue::None, |hours| {
             PickleValue::Float(rns_net::time::now() + hours * 3600.0)
         });
@@ -807,11 +911,11 @@ fn do_blackhole(
 }
 
 fn do_unblackhole(client: &mut RpcClient, hash_str: &str) {
-    let hash_bytes = match parse_hex_hash(hash_str) {
-        Some(b) if b.len() == 16 => b,
-        _ => {
-            eprintln!("Invalid identity hash: {}", hash_str);
-            process::exit(1);
+    let hash_bytes = match parse_hash(Some(hash_str)) {
+        Ok(hash) => hash.to_vec(),
+        Err(e) => {
+            println!("Could not unblackhole identity: {e}");
+            process::exit(20);
         }
     };
     match client.call(&PickleValue::Dict(vec![(
@@ -1055,117 +1159,259 @@ fn drop_announce_queues(client: &mut RpcClient) {
     }
 }
 
+/// upstream's `output_rst_str`: blank the line the progress was on.
+const RST: &str = "\r                                                          \r";
+
+/// Print without a newline, at once, as upstream's progress does.
+fn say(text: &str) {
+    print!("{text}");
+    let _ = std::io::stdout().flush();
+}
+
+/// What `rnpath -R` does once the management link is up, in upstream's
+/// order of options.
+enum RemoteAction {
+    /// `-b`: not implemented upstream for remote instances.
+    Blackholed,
+    /// `-p <hash>`: upstream sends the published list's `/list` request on
+    /// the management link that is already up, which fails.
+    PublishedList(Option<String>),
+    /// `-t [destination]`.
+    Table(Option<String>),
+    /// `-r [destination]`.
+    Rates(Option<String>),
+    /// What upstream has no remote version of, with its message.
+    Unsupported(&'static str),
+}
+
+/// A remote request's progress, printed as upstream's `connect_remote`
+/// prints it.
+fn print_progress(client: &mut rns_net::remote_management::RemoteManagementClient) {
+    use rns_net::remote_management::RemoteProgress;
+    client.set_progress(|stage| match stage {
+        RemoteProgress::PathRequested(dest) => {
+            say(&format!("Path to {} requested ", pretty(&dest)))
+        }
+        RemoteProgress::EstablishingLink => say(&format!(
+            "{RST}Establishing link with remote transport instance... "
+        )),
+        RemoteProgress::SendingRequest => say(&format!("{RST}Sending request... ")),
+    });
+}
+
+/// Connect to the shared instance for remote requests, waiting for paths
+/// as long as upstream's `connect_remote` does.
+fn remote_client(
+    config_path: Option<&str>,
+    management_identity: Option<rns_crypto::identity::Identity>,
+    remote_timeout: f64,
+) -> rns_net::remote_management::RemoteManagementClient {
+    let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
+    let mut client = match rns_net::remote_management::RemoteManagementClient::connect_with_identity(
+        config_path.map(Path::new),
+        management_identity,
+        timeout,
+    ) {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("Could not connect to rnsd: {e}");
+            process::exit(1);
+        }
+    };
+    let medium = client.medium_path_timeout().unwrap_or(0.0);
+    client.set_timeout(Duration::from_secs_f64(remote_timeout.max(medium).max(0.2)));
+    print_progress(&mut client);
+    client
+}
+
+/// A failed remote request, reported as upstream's link callbacks and
+/// request checks report it, then exit.
+fn remote_failure(error: rns_net::remote_management::RemoteManagementError, failed: &str) -> ! {
+    use rns_net::remote_management::RemoteManagementError as E;
+    let (message, code) = match error {
+        E::PathTimeout(_) | E::RecallTimeout(_) => ("Path request timed out", 12),
+        E::LinkTimeout(_) | E::LinkClosed(Some(rns_net::TeardownReason::Timeout)) => {
+            ("The link timed out, exiting now", 10)
+        }
+        E::LinkClosed(Some(rns_net::TeardownReason::DestinationClosed)) => {
+            ("The link was closed by the server, exiting now", 10)
+        }
+        E::LinkClosed(_) => ("Link closed unexpectedly, exiting now", 10),
+        _ => (failed, 10),
+    };
+    println!("{RST}{message}");
+    process::exit(code);
+}
+
+/// upstream's `-p <identity hash> [filter]` without `-R`: request the
+/// published blackhole list over a link to the instance's
+/// `rnstransport.info.blackhole` destination.
+fn published_blackhole_list(
+    config_path: Option<&str>,
+    destination: Option<&str>,
+    filter: Option<&str>,
+    remote_timeout: f64,
+) {
+    use rns_net::remote_management::RemotePurpose;
+    let identity_hash = parse_hash(destination).unwrap_or_else(|e| {
+        println!("{e}");
+        process::exit(20);
+    });
+    let mut client = remote_client(config_path, None, remote_timeout);
+    let failed = "The remote request failed.";
+    if let Err(e) = client.open_link(RemotePurpose::Blackhole, identity_hash) {
+        remote_failure(e, failed);
+    }
+    say(&format!("{RST}Sending request... "));
+    let response = client
+        .request_on(
+            RemotePurpose::Blackhole,
+            "/list",
+            &rns_core::msgpack::pack(&rns_core::msgpack::Value::Nil),
+        )
+        .unwrap_or_else(|e| remote_failure(e, failed));
+    show_published_list(&response, config_path, filter);
+}
+
+/// A `/list` response: the blackhole dict, or upstream's failure.
+fn show_published_list(response: &[u8], config_path: Option<&str>, filter: Option<&str>) {
+    let list = rns_core::msgpack::unpack_exact(response)
+        .ok()
+        .map(|value| rns_net::remote_management::msgpack_to_pickle(&value));
+    match list {
+        Some(list @ PickleValue::Dict(_)) => {
+            say(RST);
+            let local = client_transport_identity_at(config_path);
+            render_blackholed_list(&list, local.as_ref(), filter);
+        }
+        _ => {
+            println!("{RST}The remote request failed.");
+            process::exit(10);
+        }
+    }
+}
+
+/// `rnpath -R <hash>`: upstream's remote management, its progress lines,
+/// messages and exit codes.
 #[allow(clippy::too_many_arguments)]
 fn remote_path(
     hash_str: &str,
     management_identity: Option<&str>,
     config_path: Option<&str>,
     remote_timeout: f64,
-    show_table: bool,
-    show_usage: bool,
-    json_output: bool,
-    show_rates: bool,
-    remote_blackholed: bool,
     max_hops: Option<u8>,
-    destination_filter: Option<&str>,
-    drop_hash: Option<&str>,
-    drop_via: Option<&str>,
-    drop_queues: bool,
-    blackhole_hash: Option<&str>,
-    unblackhole_hash: Option<&str>,
+    view: &TableView,
+    list_filter: Option<&str>,
+    action: RemoteAction,
 ) {
-    if drop_hash.is_some()
-        || drop_via.is_some()
-        || drop_queues
-        || blackhole_hash.is_some()
-        || unblackhole_hash.is_some()
-    {
-        eprintln!(
-            "{}",
-            rns_net::remote_management::RemoteManagementError::Unsupported(
-                "remote path mutations are not implemented upstream in Reticulum 1.2.7".into(),
-            )
-        );
-        process::exit(1);
+    use rns_core::msgpack::{self, Value};
+    use rns_net::remote_management::RemotePurpose;
+
+    let fail = |message: &str| -> ! {
+        println!("{message}");
+        process::exit(20);
+    };
+    let transport_hash = match parse_destination(hash_str) {
+        Ok(hash) => hash,
+        Err(message) => fail(message),
+    };
+    let Some(identity_path) = management_identity else {
+        fail("expected str, bytes or os.PathLike object, not NoneType");
+    };
+    let Some(identity) =
+        rns_cli::pylog::identity_from_file(&rns_cli::pylog::expanduser(identity_path))
+    else {
+        fail(&format!(
+            "Could not load management identity from {identity_path}"
+        ));
+    };
+    let mut client = remote_client(config_path, Some(identity), remote_timeout);
+    let auth_failed = "The remote request failed. Likely authentication failure.";
+    if let Err(e) = client.open_link(RemotePurpose::Management, transport_hash) {
+        remote_failure(e, auth_failed);
     }
 
-    let transport_hash = match rns_net::remote_management::parse_transport_identity_hash(hash_str) {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("{e}");
-            process::exit(1);
+    let request = |client: &mut rns_net::remote_management::RemoteManagementClient,
+                   path: &str,
+                   data: Value,
+                   failed: &str|
+     -> Vec<u8> {
+        say(&format!("{RST}Sending request... "));
+        client
+            .request_on(RemotePurpose::Management, path, &msgpack::pack(&data))
+            .unwrap_or_else(|e| remote_failure(e, failed))
+    };
+    let table = |client: &mut rns_net::remote_management::RemoteManagementClient,
+                 data: Value|
+     -> PickleValue {
+        let response = request(client, "/path", data, auth_failed);
+        let value = msgpack::unpack_exact(&response)
+            .ok()
+            .map(|value| rns_net::remote_management::msgpack_to_pickle(&value));
+        match value {
+            Some(value) if truthy(&value) => {
+                say(RST);
+                value
+            }
+            _ => {
+                println!("{RST}{auth_failed}");
+                process::exit(10);
+            }
         }
     };
-    let management_identity_path = match management_identity {
-        Some(path) => Some(Path::new(path)),
-        None if remote_blackholed => None,
-        None => {
-            eprintln!(
-                "{}",
-                rns_net::remote_management::RemoteManagementError::MissingIdentity
+    let hash_value = |hash: Option<[u8; 16]>| hash.map_or(Value::Nil, |h| Value::Bin(h.to_vec()));
+
+    match action {
+        RemoteAction::Blackholed => {
+            println!("{RST}Listing blackholed identities on remote instances not yet implemented");
+            process::exit(255);
+        }
+        RemoteAction::PublishedList(destination) => {
+            let identity_hash = parse_hash(destination.as_deref()).unwrap_or_else(|e| {
+                println!("{e}");
+                process::exit(20);
+            });
+            let blackhole = rns_net::management::blackhole_dest_hash(&identity_hash);
+            if let Err(e) = client.locate(blackhole) {
+                remote_failure(e, "The remote request failed.");
+            }
+            let response = request(
+                &mut client,
+                "/list",
+                Value::Nil,
+                "The remote request failed.",
             );
-            process::exit(1);
+            show_published_list(&response, config_path, list_filter);
         }
-    };
-    let destination_filter = destination_filter.map(|hash| {
-        parse_fixed_hash(hash, "destination").unwrap_or_else(|e| {
-            eprintln!("{e}");
-            process::exit(1);
-        })
-    });
-    let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
-    let mut client = match rns_net::remote_management::RemoteManagementClient::connect(
-        config_path.map(Path::new),
-        management_identity_path,
-        timeout,
-    ) {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!("{e}");
-            process::exit(1);
+        RemoteAction::Table(destination) => {
+            let destination = destination_filter(destination.as_deref());
+            let data = Value::Array(vec![
+                Value::Str("table".into()),
+                hash_value(destination),
+                max_hops.map_or(Value::Nil, |h| Value::UInt(h.into())),
+            ]);
+            let response = table(&mut client, data);
+            let view = TableView {
+                destination,
+                ..*view
+            };
+            render_path_table(&response, &view, rns_net::time::now()).print_and_exit();
         }
-    };
-
-    let remote_view = TableView {
-        destination: destination_filter,
-        json: json_output,
-        usage: show_usage,
-        sort: false,
-    };
-    let result = if show_rates {
-        client.rate_table(transport_hash, destination_filter)
-    } else if remote_blackholed {
-        client.published_blackhole_list(transport_hash)
-    } else if show_table || destination_filter.is_some() || max_hops.is_some() {
-        client.path_table(transport_hash, destination_filter, max_hops)
-    } else {
-        eprintln!("Remote path mode requires -t, -r, or -p/--blackholed-list");
-        process::exit(1);
-    };
-
-    match result {
-        Ok(response) if show_rates => {
-            render_rate_table(&response, &remote_view, rns_net::time::now()).print_and_exit()
+        RemoteAction::Rates(destination) => {
+            let destination = destination_filter(destination.as_deref());
+            let data = Value::Array(vec![Value::Str("rates".into()), hash_value(destination)]);
+            let response = table(&mut client, data);
+            let view = TableView {
+                destination,
+                ..*view
+            };
+            render_rate_table(&response, &view, rns_net::time::now()).print_and_exit();
         }
-        Ok(response) if remote_blackholed => render_blackholed_list(&response, None),
-        Ok(response) => {
-            render_path_table(&response, &remote_view, rns_net::time::now()).print_and_exit()
-        }
-        Err(e) => {
-            eprintln!("Remote path error: {e}");
-            process::exit(1);
+        RemoteAction::Unsupported(message) => {
+            println!("{RST}{message}");
+            process::exit(255);
         }
     }
-}
-
-fn parse_fixed_hash(s: &str, label: &str) -> Result<[u8; 16], String> {
-    let bytes = parse_hex_hash(s).ok_or_else(|| format!("Invalid {label} hash: {s}"))?;
-    if bytes.len() < 16 {
-        return Err(format!("Invalid {label} hash: {s}"));
-    }
-    let mut out = [0u8; 16];
-    out.copy_from_slice(&bytes[..16]);
-    Ok(out)
 }
 
 fn print_usage(usage_name: &str) {
@@ -1464,6 +1710,90 @@ mod tests {
             render_rate_table(&empty, &view(None, false, false), NOW).text,
             "No information available\n"
         );
+    }
+
+    #[test]
+    fn blackhole_list_prints_and_filters_as_upstream() {
+        let entry = |until: PickleValue, reason: PickleValue, source: u8| {
+            dict(vec![
+                ("source", PickleValue::Bytes(vec![source; 16])),
+                ("until", until),
+                ("reason", reason),
+            ])
+        };
+        let list = PickleValue::Dict(vec![
+            (
+                PickleValue::Bytes(vec![0x11; 16]),
+                entry(
+                    PickleValue::Float(NOW + 3725.5),
+                    PickleValue::String("spam".into()),
+                    0xaa,
+                ),
+            ),
+            (
+                PickleValue::Bytes(vec![0x22; 16]),
+                entry(PickleValue::None, PickleValue::None, 0xbb),
+            ),
+            (
+                PickleValue::Bytes(vec![0x33; 16]),
+                entry(
+                    PickleValue::Int(0),
+                    PickleValue::String("x".repeat(80)),
+                    0xaa,
+                ),
+            ),
+        ]);
+        let all = blackholed_lines(&list, Some(&[0xbb; 16]), None, NOW).unwrap();
+        assert_eq!(
+            all,
+            [
+                format!(
+                    "<{}> blackholed for 1h, 2m and 5.5s (spam) by <{}>",
+                    "11".repeat(16),
+                    "aa".repeat(16)
+                ),
+                format!("<{}> blackholed indefinitely", "22".repeat(16)),
+                format!(
+                    "<{}> blackholed indefinitely ({}…) by <{}>",
+                    "33".repeat(16),
+                    "x".repeat(63),
+                    "aa".repeat(16)
+                ),
+            ]
+        );
+        // The filter matches `<hash> <until> <reason> <by>`.
+        let filtered = |filter: &str| {
+            blackholed_lines(&list, Some(&[0xbb; 16]), Some(filter), NOW)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(filtered("indefinitely"), 2);
+        assert_eq!(filtered(" (spam) "), 1);
+        assert_eq!(filtered(&"aa".repeat(16)), 2);
+        assert_eq!(filtered("2222"), 1);
+        assert_eq!(filtered("nothing"), 0);
+        // Without a static transport identity every source is named.
+        assert!(blackholed_lines(&list, None, None, NOW).unwrap()[1]
+            .ends_with(&format!(" by <{}>", "bb".repeat(16))));
+        assert_eq!(
+            blackholed_lines(&PickleValue::Dict(vec![]), None, None, NOW),
+            None
+        );
+    }
+
+    #[test]
+    fn blackhole_hashes_parse_as_upstream() {
+        assert_eq!(parse_hash(Some(HASH)).unwrap()[0], 0x01);
+        let error = |input: Option<&str>| parse_hash(input).unwrap_err();
+        assert_eq!(
+            error(Some("abc")),
+            "Hash length is invalid, must be 32 hexadecimal characters (16 bytes)."
+        );
+        assert_eq!(
+            error(Some("zz23456789abcdef0123456789abcdef")),
+            "Invalid hash entered. Check your input."
+        );
+        assert_eq!(error(None), "object of type 'NoneType' has no len()");
     }
 
     #[test]
