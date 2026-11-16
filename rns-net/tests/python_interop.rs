@@ -294,7 +294,20 @@ struct PythonRns {
 
 impl PythonRns {
     fn spawn() -> Self {
-        let mut child = Command::new("python3")
+        Self::spawn_with_env(None)
+    }
+
+    /// A Python instance that dials a Rust TCP server on `port`.
+    fn spawn_connecting(port: u16) -> Self {
+        Self::spawn_with_env(Some(("INTEROP_CONNECT_PORT", port.to_string())))
+    }
+
+    fn spawn_with_env(env: Option<(&str, String)>) -> Self {
+        let mut command = Command::new("python3");
+        if let Some((key, value)) = env {
+            command.env(key, value);
+        }
+        let mut child = command
             .args(["-c", PYTHON_INTEROP_SCRIPT])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -398,6 +411,62 @@ fn start_rust_node_with(
     cache_dir: Option<std::path::PathBuf>,
     stamps: rns_net::config::StampsSection,
 ) -> RnsNode {
+    start_rust_node_on(
+        tcp_client_interface(port),
+        tx,
+        ratchet_store,
+        cache_dir,
+        stamps,
+    )
+}
+
+fn tcp_client_interface(port: u16) -> InterfaceConfig {
+    InterfaceConfig {
+        stamp_costs: Default::default(),
+        announce_limits: Default::default(),
+        name: String::new(),
+        type_name: "TCPClientInterface".to_string(),
+        config_data: Box::new(TcpClientConfig {
+            name: "interop-tcp".into(),
+            target_host: "127.0.0.1".into(),
+            target_port: port,
+            reconnect_wait: Duration::from_millis(500),
+            max_reconnect_tries: Some(3),
+            connect_timeout: Duration::from_secs(5),
+            ..Default::default()
+        }),
+        mode: MODE_FULL,
+        gravity: 0,
+        hop_limiter: None,
+        recursive_prs: false,
+        announces_from_internal: true,
+        announces_to_internal: None,
+        ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+        ifac: None,
+        discovery: None,
+    }
+}
+
+/// A Rust TCP server on `port`, for Python clients to dial.
+fn tcp_server_interface(port: u16) -> InterfaceConfig {
+    let mut interface = tcp_client_interface(port);
+    interface.type_name = "TCPServerInterface".to_string();
+    interface.config_data = Box::new(rns_net::TcpServerConfig {
+        name: "interop-tcp-server".into(),
+        listen_ip: "127.0.0.1".into(),
+        listen_port: port,
+        ..rns_net::TcpServerConfig::default()
+    });
+    interface
+}
+
+fn start_rust_node_on(
+    interface: InterfaceConfig,
+    tx: Sender<RustEvent>,
+    ratchet_store: Option<std::sync::Arc<dyn rns_net::storage::RatchetStore>>,
+    cache_dir: Option<std::path::PathBuf>,
+    stamps: rns_net::config::StampsSection,
+) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
@@ -407,30 +476,7 @@ fn start_rust_node_with(
             static_transport_identity: false,
             local_hops_delta: false,
             identity: None,
-            interfaces: vec![InterfaceConfig {
-                stamp_costs: Default::default(),
-                announce_limits: Default::default(),
-                name: String::new(),
-                type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "interop-tcp".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    reconnect_wait: Duration::from_millis(500),
-                    max_reconnect_tries: Some(3),
-                    connect_timeout: Duration::from_secs(5),
-                    ..Default::default()
-                }),
-                mode: MODE_FULL,
-                gravity: 0,
-                hop_limiter: None,
-                recursive_prs: false,
-                announces_from_internal: true,
-                announces_to_internal: None,
-                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
-                ifac: None,
-                discovery: None,
-            }],
+            interfaces: vec![interface],
             share_instance: false,
             instance_name: "default".into(),
             shared_instance_port: 37428,
@@ -508,6 +554,23 @@ sock.close()
 
 config_dir = tempfile.mkdtemp()
 config_path = os.path.join(config_dir, "config")
+# INTEROP_CONNECT_PORT makes this instance a TCP client of a Rust server
+# instead of a TCP server for a Rust client.
+connect_port = os.environ.get("INTEROP_CONNECT_PORT")
+if connect_port:
+    interface_block = f"""  [[TCP Client Interface]]
+    type = TCPClientInterface
+    interface_enabled = true
+    target_host = 127.0.0.1
+    target_port = {connect_port}
+"""
+else:
+    interface_block = f"""  [[TCP Server Interface]]
+    type = TCPServerInterface
+    interface_enabled = true
+    listen_ip = 127.0.0.1
+    listen_port = {port}
+"""
 with open(config_path, "w") as f:
     f.write(f"""[reticulum]
   enable_transport = false
@@ -521,12 +584,7 @@ with open(config_path, "w") as f:
   stamp_lrs = yes
 
 [interfaces]
-  [[TCP Server Interface]]
-    type = TCPServerInterface
-    interface_enabled = true
-    listen_ip = 127.0.0.1
-    listen_port = {port}
-""")
+{interface_block}""")
 
 import RNS
 
@@ -740,6 +798,14 @@ try:
                 {"tunnel_id": tid.hex(), "interface": str(entry[1]),
                  "interface_tunnel_id": entry[1].tunnel_id.hex() if entry[1] is not None and entry[1].tunnel_id else None}
                 for tid, entry in list(RNS.Transport.tunnels.items())])
+        elif command == "remote_transports":
+            emit("python_remote_transports", interfaces=[
+                {"interface": str(interface),
+                 "tunnel_id": interface.tunnel_id.hex() if getattr(interface, "tunnel_id", None) else None,
+                 "remote_transport": interface.remote_transport.hash.hex() if getattr(interface, "remote_transport", None) else None,
+                 "remote_impl": getattr(interface, "remote_impl", None),
+                 "remote_vers": list(getattr(interface, "remote_vers", None) or [])}
+                for interface in RNS.Transport.interfaces])
         elif command == "stop":
             break
         elif command:
@@ -1254,6 +1320,119 @@ fn python_rns_receives_tunnel_synthesis_from_rust_client() {
     let info = remote.remote_transport_info.unwrap();
     assert_eq!(info.implementation, "RNS");
     assert_eq!(info.version.first(), Some(&1));
+
+    python.command("stop");
+    node.shutdown();
+}
+
+#[test]
+fn rust_server_receives_tunnel_synthesis_from_python_client() {
+    // The other direction: a Python TCP client synthesizes a tunnel on the
+    // Rust server, which attaches it to the spawned client interface. Since
+    // upstream b7a93b9b the Python client's synthesis carries an extension,
+    // and the Rust server answers with its own, so Python learns the Rust
+    // transport identity and implementation.
+    if !rns_available() {
+        eprintln!("Skipping: Python RNS not available");
+        return;
+    }
+
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let (rust_tx, _rust_rx) = mpsc::channel();
+    let node = start_rust_node_on(
+        tcp_server_interface(port),
+        rust_tx,
+        None,
+        None,
+        Default::default(),
+    );
+    let Ok(rns_net::event::QueryResponse::TransportIdentity(Some(rust_transport))) =
+        node.query(rns_net::event::QueryRequest::TransportIdentity)
+    else {
+        panic!("the Rust transport identity");
+    };
+    let rust_transport: String = rust_transport.iter().map(|b| format!("{b:02x}")).collect();
+
+    let mut python = PythonRns::spawn_connecting(port);
+    let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
+    let extension_supported = ready["synthesis_extension_supported"] == true;
+    let python_transport = ready["transport_identity_hash"]
+        .as_str()
+        .expect("Python's transport identity")
+        .to_string();
+
+    // The Rust server records Python's tunnel on the client's interface.
+    let deadline = Instant::now() + TIMEOUT;
+    let client = loop {
+        let found = match node.query(rns_net::event::QueryRequest::InterfaceStats) {
+            Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) => {
+                stats.interfaces.into_iter().find(|iface| {
+                    iface.remote_transport_id.is_some()
+                        && (!extension_supported || iface.remote_transport_info.is_some())
+                })
+            }
+            _ => None,
+        };
+        if let Some(iface) = found {
+            break iface;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the Rust server should record the Python client's tunnel"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let remote: String = client
+        .remote_transport_id
+        .unwrap()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(remote, python_transport);
+    assert!(client.tunnel_id.is_some(), "{client:?}");
+
+    if !extension_supported {
+        // A synthesis without an extension is not answered.
+        assert!(client.remote_transport_info.is_none());
+        python.command("stop");
+        node.shutdown();
+        return;
+    }
+    let info = client.remote_transport_info.unwrap();
+    assert_eq!(info.implementation, "RNS");
+    assert_eq!(info.version.first(), Some(&1));
+
+    // Python records the Rust server's answer on its client interface.
+    let deadline = Instant::now() + TIMEOUT;
+    let reported = loop {
+        python.command("remote_transports");
+        let event = python.wait_for_event(TIMEOUT, |event| {
+            event["event"] == "python_remote_transports"
+        });
+        let found = event["interfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|iface| iface["remote_impl"].is_string())
+            .cloned();
+        if let Some(found) = found {
+            break found;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Python should record the Rust server's reverse synthesis: {event}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(reported["remote_impl"], "rns-rs");
+    assert_eq!(reported["remote_transport"], rust_transport.as_str());
+    assert!(
+        !reported["remote_vers"].as_array().unwrap().is_empty(),
+        "{reported}"
+    );
 
     python.command("stop");
     node.shutdown();
