@@ -1311,6 +1311,13 @@ impl Driver {
 
     pub(crate) fn handle_interface_down_event(&mut self, id: InterfaceId) {
         self.state_snapshot_schedule.mark_dirty();
+        if let Some(link_id) = self.holepunch_manager.direct_interface_down(id) {
+            log::info!(
+                "[{}] direct interface of link {:02x?} went down",
+                id.0,
+                &link_id[..4]
+            );
+        }
         self.event_tx.remove_interface(id);
         if let Some(entry) = self.interfaces.get(&id) {
             if let Some(tunnel_id) = entry.info.tunnel_id {

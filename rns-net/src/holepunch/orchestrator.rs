@@ -33,6 +33,10 @@ use super::udp_direct;
 
 pub use crate::common::event::HolePunchPolicy;
 
+/// Seconds a closed link's direct interface is kept, so that the link's
+/// closing packets still leave on it.
+const DIRECT_INTERFACE_RETIRE_DELAY: f64 = 1.0;
+
 /// A single hole-punch session's networking state.
 struct HolePunchSession {
     engine: HolePunchEngine,
@@ -89,12 +93,25 @@ enum PeerSupport {
     Querying { since: f64, last_sent: f64 },
 }
 
+/// The direct interface a link was upgraded to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectPath {
+    interface_id: rns_core::transport::types::InterfaceId,
+    session_id: [u8; 16],
+}
+
 /// Manages all hole-punch sessions.
 pub struct HolePunchManager {
     sessions: HashMap<[u8; 16], HolePunchSession>, // session_id -> session
     link_to_session: HashMap<[u8; 16], [u8; 16]>,  // link_id -> session_id
     /// Link peers known to implement Direct Link, or being asked.
     peer_support: HashMap<[u8; 16], PeerSupport>,
+    /// Links upgraded to a direct interface, which belongs to the link and
+    /// goes away with it.
+    direct: HashMap<[u8; 16], DirectPath>,
+    /// Direct interfaces of closed links, removed once the link's last
+    /// packets (its LINKCLOSE) have left: `(link, interface, due)`.
+    retiring: Vec<([u8; 16], rns_core::transport::types::InterfaceId, f64)>,
     policy: HolePunchPolicy,
     /// Configured probe servers (tried sequentially with failover).
     probe_addrs: Vec<SocketAddr>,
@@ -138,6 +155,12 @@ pub enum HolePunchManagerAction {
         /// MTU of the direct interface.
         mtu: u32,
     },
+    /// Remove a direct interface that no longer belongs to a live upgrade
+    /// (its link closed, or a newer upgrade replaced it).
+    RemoveDirectInterface {
+        link_id: [u8; 16],
+        interface_id: rns_core::transport::types::InterfaceId,
+    },
     /// Direct connection failed.
     DirectConnectFailed {
         link_id: [u8; 16],
@@ -156,6 +179,8 @@ impl HolePunchManager {
             sessions: HashMap::new(),
             link_to_session: HashMap::new(),
             peer_support: HashMap::new(),
+            direct: HashMap::new(),
+            retiring: Vec::new(),
             policy: HolePunchPolicy::default(),
             probe_addrs,
             probe_protocol,
@@ -543,6 +568,20 @@ impl HolePunchManager {
         let now = time::now();
         let mut all_actions = Vec::new();
 
+        // Direct interfaces of closed links whose last packets have left.
+        let mut retiring = std::mem::take(&mut self.retiring);
+        retiring.retain(|(link_id, interface_id, due)| {
+            if *due > now {
+                return true;
+            }
+            all_actions.push(HolePunchManagerAction::RemoveDirectInterface {
+                link_id: *link_id,
+                interface_id: *interface_id,
+            });
+            false
+        });
+        self.retiring = retiring;
+
         // Peers asked whether they implement Direct Link: ask again, and
         // after HELLO_TIMEOUT of silence fail the waiting proposal.
         let mut unanswered = Vec::new();
@@ -657,6 +696,7 @@ impl HolePunchManager {
                             socket,
                             peer_addr,
                             interface_id,
+                            completion.link_id,
                             session_id,
                             punch_token,
                             tx.clone(),
@@ -683,6 +723,22 @@ impl HolePunchManager {
                         for action in engine_actions {
                             match action {
                                 HolePunchAction::Succeeded { session_id } if iface_ok => {
+                                    // One direct interface per link: a
+                                    // repeated upgrade replaces the old one.
+                                    if let Some(old) = self.direct.insert(
+                                        completion.link_id,
+                                        DirectPath {
+                                            interface_id,
+                                            session_id,
+                                        },
+                                    ) {
+                                        all_actions.push(
+                                            HolePunchManagerAction::RemoveDirectInterface {
+                                                link_id: completion.link_id,
+                                                interface_id: old.interface_id,
+                                            },
+                                        );
+                                    }
                                     all_actions.push(
                                         HolePunchManagerAction::DirectConnectEstablished {
                                             link_id: completion.link_id,
@@ -750,9 +806,58 @@ impl HolePunchManager {
     }
 
     /// Called when a link is closed — clean up any associated session.
+    /// The link's direct interface is removed by a later [`tick`](Self::tick),
+    /// once the link's closing packets have been sent on it.
     pub fn link_closed(&mut self, link_id: &[u8; 16]) {
         self.remove_link_session(link_id);
         self.peer_support.remove(link_id);
+        if let Some(path) = self.direct.remove(link_id) {
+            self.retiring.push((
+                *link_id,
+                path.interface_id,
+                time::now() + DIRECT_INTERFACE_RETIRE_DELAY,
+            ));
+        }
+    }
+
+    /// Whether `interface_id` is a direct interface, of a live upgrade or
+    /// of a closed link waiting to be removed.
+    pub fn is_direct_interface(
+        &self,
+        interface_id: rns_core::transport::types::InterfaceId,
+    ) -> bool {
+        self.direct
+            .values()
+            .any(|path| path.interface_id == interface_id)
+            || self
+                .retiring
+                .iter()
+                .any(|(_, retiring, _)| *retiring == interface_id)
+    }
+
+    /// The direct interface a link was upgraded to, if any.
+    pub fn direct_interface(
+        &self,
+        link_id: &[u8; 16],
+    ) -> Option<rns_core::transport::types::InterfaceId> {
+        self.direct.get(link_id).map(|path| path.interface_id)
+    }
+
+    /// Called when an interface went down: if it was a link's direct
+    /// interface, forget it and return the link.
+    pub fn direct_interface_down(
+        &mut self,
+        interface_id: rns_core::transport::types::InterfaceId,
+    ) -> Option<[u8; 16]> {
+        self.retiring
+            .retain(|(_, retiring, _)| *retiring != interface_id);
+        let link_id = self
+            .direct
+            .iter()
+            .find(|(_, path)| path.interface_id == interface_id)
+            .map(|(link_id, _)| *link_id)?;
+        self.direct.remove(&link_id);
+        Some(link_id)
     }
 
     /// Responder: replies to resend when `payload` repeats the request of
@@ -2060,5 +2165,64 @@ mod tests {
         assert!(allowlisted.enabled());
         assert!(allowlisted.identity_allowed(&[7; 16]));
         assert!(!allowlisted.identity_allowed(&[8; 16]));
+    }
+
+    fn upgraded(mgr: &mut HolePunchManager, link_id: [u8; 16], interface: u64) {
+        mgr.direct.insert(
+            link_id,
+            DirectPath {
+                interface_id: rns_core::transport::types::InterfaceId(interface),
+                session_id: [interface as u8; 16],
+            },
+        );
+    }
+
+    #[test]
+    fn closed_link_retires_its_direct_interface_after_a_delay() {
+        use rns_core::transport::types::InterfaceId;
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x71; 16];
+        upgraded(&mut mgr, link_id, 50_001);
+        assert_eq!(mgr.direct_interface(&link_id), Some(InterfaceId(50_001)));
+        assert!(mgr.is_direct_interface(InterfaceId(50_001)));
+
+        mgr.link_closed(&link_id);
+        assert_eq!(mgr.direct_interface(&link_id), None);
+        // Still a direct interface (no broadcasts) while it is retiring.
+        assert!(mgr.is_direct_interface(InterfaceId(50_001)));
+        assert!(!mgr
+            .tick(&tx)
+            .iter()
+            .any(|a| matches!(a, HolePunchManagerAction::RemoveDirectInterface { .. })));
+        mgr.retiring[0].2 = time::now() - 0.1;
+        let actions = mgr.tick(&tx);
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            HolePunchManagerAction::RemoveDirectInterface { link_id: l, interface_id }
+                if *l == link_id && *interface_id == InterfaceId(50_001)
+        )));
+        assert!(mgr.retiring.is_empty());
+        assert!(mgr.tick(&tx).is_empty());
+    }
+
+    #[test]
+    fn direct_interface_down_forgets_it() {
+        use rns_core::transport::types::InterfaceId;
+        let mut mgr = accepting_manager();
+        let link_id = [0x72; 16];
+        upgraded(&mut mgr, link_id, 50_002);
+        assert_eq!(mgr.direct_interface_down(InterfaceId(7)), None);
+        assert_eq!(
+            mgr.direct_interface_down(InterfaceId(50_002)),
+            Some(link_id)
+        );
+        assert!(!mgr.is_direct_interface(InterfaceId(50_002)));
+        assert_eq!(mgr.direct_interface_down(InterfaceId(50_002)), None);
+        // A retiring interface that goes down is not removed twice.
+        upgraded(&mut mgr, link_id, 50_003);
+        mgr.link_closed(&link_id);
+        assert_eq!(mgr.direct_interface_down(InterfaceId(50_003)), None);
+        assert!(mgr.retiring.is_empty());
     }
 }

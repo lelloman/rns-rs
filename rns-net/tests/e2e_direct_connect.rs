@@ -671,3 +671,121 @@ fn allowlisted_identity_is_accepted_and_others_are_not() {
     pair.upgrade();
     pair.shutdown();
 }
+
+/// Announce and path-request counters of an interface, received and sent.
+fn signalling_counts(node: &RnsNode, interface: InterfaceId) -> [u64; 4] {
+    let stat = interfaces(node)
+        .into_iter()
+        .find(|i| i.id == interface.0)
+        .expect("interface gone");
+    [
+        stat.traffic.arxc,
+        stat.traffic.atxc,
+        stat.traffic.prxc,
+        stat.traffic.ptxc,
+    ]
+}
+
+#[test]
+fn direct_interface_carries_only_its_link() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    let (alice_iface, bob_iface) = pair.upgrade();
+
+    // Bob announces another destination; Alice asks for a path to an
+    // unknown one. Neither goes over the direct interfaces.
+    let other_id = Identity::new(&mut OsRng);
+    let other = Destination::single_in("e2e_direct", &["other"], IdentityHash(*other_id.hash()));
+    pair.bob
+        .register_destination_with_proof(&other, Some(other_id.get_private_key().unwrap()))
+        .unwrap();
+    for _ in 0..3 {
+        let _ = futures::executor::block_on(pair.bob.announce(&other, &other_id, None));
+        pair.alice.request_path(&DestHash([0x77; 16])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    assert!(
+        eventually(Duration::from_secs(10), || pair
+            .alice
+            .has_path(&other.hash)
+            .unwrap()),
+        "the announce did not reach Alice over TCP"
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(signalling_counts(&pair.alice, alice_iface), [0; 4]);
+    assert_eq!(signalling_counts(&pair.bob, bob_iface), [0; 4]);
+
+    // The link itself still runs over them.
+    let (_, before) = traffic(&pair.alice, alice_iface).unwrap();
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        pair.link_id,
+        b"still direct",
+        Duration::from_secs(10)
+    ));
+    assert!(eventually(Duration::from_secs(5), || traffic(
+        &pair.alice,
+        alice_iface
+    )
+    .unwrap()
+    .1 > before));
+    pair.shutdown();
+}
+
+#[test]
+fn link_teardown_removes_the_direct_interface_on_both_sides() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    pair.upgrade();
+    assert_eq!(direct_interfaces(&pair.alice).len(), 1);
+    assert_eq!(direct_interfaces(&pair.bob).len(), 1);
+
+    pair.alice.teardown_link(pair.link_id).unwrap();
+    let link_id = pair.link_id;
+    wait_for(&pair.bob_rx, Duration::from_secs(10), |event| {
+        matches!(event, TestEvent::LinkClosed(id) if *id == link_id).then_some(())
+    })
+    .expect("Bob's link did not close");
+    assert!(
+        eventually(Duration::from_secs(5), || direct_interfaces(&pair.alice)
+            .is_empty()
+            && direct_interfaces(&pair.bob).is_empty()),
+        "direct interfaces outlived their link: alice {:?} bob {:?}",
+        direct_interfaces(&pair.alice),
+        direct_interfaces(&pair.bob)
+    );
+    pair.shutdown();
+}
+
+#[test]
+fn repeated_upgrade_replaces_the_direct_interface() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    let (first_alice, first_bob) = pair.upgrade();
+    // Proposals on a link are paced to one a minute on both sides.
+    std::thread::sleep(Duration::from_secs(61));
+    let (second_alice, second_bob) = pair.upgrade();
+    assert_ne!(first_alice, second_alice);
+    assert_ne!(first_bob, second_bob);
+    assert!(
+        eventually(Duration::from_secs(5), || {
+            direct_interfaces(&pair.alice) == vec![second_alice.0]
+                && direct_interfaces(&pair.bob) == vec![second_bob.0]
+        }),
+        "alice {:?} bob {:?}",
+        direct_interfaces(&pair.alice),
+        direct_interfaces(&pair.bob)
+    );
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        pair.link_id,
+        b"over the new path",
+        Duration::from_secs(10)
+    ));
+    pair.shutdown();
+}

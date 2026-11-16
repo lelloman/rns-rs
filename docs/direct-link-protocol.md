@@ -247,19 +247,18 @@ routes the link over it. There is no separate confirmation message.
 
 ## DirectUdpInterface
 
-The direct UDP channel is wrapped as a standard Reticulum interface
-(`DirectUdpInterface`). From the perspective of the Reticulum transport engine,
-it is no different from a `TcpClientInterface` or any other interface.
+The punched UDP socket is wrapped as a Reticulum interface, named
+`DirectPeer/<first four bytes of the session id>`. It belongs to the one link
+that was upgraded and carries nothing else:
 
-The `DirectUdpInterface` is responsible for:
-
-| Responsibility | Details |
-|----------------|---------|
-| **Packet send/receive** | Serialize Reticulum packets into UDP datagrams and vice versa |
-| **NAT keepalive** | Send periodic keepalive packets (e.g. every 30 seconds) to prevent NAT pinhole expiry. Typical NAT mapping lifetimes are 30–120 seconds |
-| **Liveness detection** | If no packet (including keepalives) is received within a timeout (e.g. 2 minutes), declare the interface down |
-| **Congestion control** (optional) | Since there is no TCP underneath, the interface may implement simple congestion control (e.g. windowed ACKs, send-rate limiting) if needed for bulk transfers |
-| **Teardown** | Clean removal of the interface when the direct link is no longer needed or has failed |
+| Property | Details |
+|----------|---------|
+| **Link traffic only** | Its reader and writer pass only HEADER_1 link DATA and PROOF packets addressed to the link's id; any other datagram from the peer, and any other frame the node would send, is dropped. Datagrams from any address but the peer's are ignored |
+| **Not an outbound interface** | It is registered with `out_capable = false`, and broadcasts skip it, so the transport engine never sends announces, path requests or broadcasts on it. Since nothing but the link's packets is accepted from it, no path, announce or link request is learned through it and no other traffic is forwarded over it |
+| **Packet send/receive** | One Reticulum packet per UDP datagram, no framing |
+| **NAT keepalive** | Sends a keepalive datagram to the peer periodically to keep the NAT mapping open |
+| **Liveness detection** | Declares itself down when nothing arrives from the peer within its inactivity timeout |
+| **Teardown** | It is removed when its link closes (about a second later, so the link's closing packets still leave on it), when it goes down, and when a newer upgrade of the same link replaces it |
 
 ### Path Preference
 

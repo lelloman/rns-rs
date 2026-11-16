@@ -3,6 +3,12 @@
 //! After hole punching succeeds, this module wraps the punched UDP socket
 //! as a Reticulum interface (implementing Writer + reader thread).
 //! No HDLC framing needed — one datagram = one packet (same as UdpInterface).
+//!
+//! The interface belongs to one link and carries only that link's packets:
+//! it is not an outbound interface for the transport engine (no announces,
+//! path requests or broadcasts are routed to it), and its reader and writer
+//! drop any frame that is not a link DATA or PROOF packet addressed to the
+//! link. Nothing else can reach the peer through it, or the node through it.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -24,20 +30,53 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Timeout for considering the direct connection dead.
 const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Whether `frame` is a packet of the link the direct interface belongs to:
+/// a HEADER_1 link DATA or PROOF packet whose destination is `link_id`.
+pub(crate) fn carries_link(frame: &[u8], link_id: &[u8; 16]) -> bool {
+    use rns_core::constants::{DESTINATION_LINK, HEADER_1, PACKET_TYPE_DATA, PACKET_TYPE_PROOF};
+    let Some(flags) = frame.first() else {
+        return false;
+    };
+    let header_type = (flags >> 6) & 0x01;
+    let destination_type = (flags >> 2) & 0x03;
+    let packet_type = flags & 0x03;
+    header_type == HEADER_1
+        && destination_type == DESTINATION_LINK
+        && (packet_type == PACKET_TYPE_DATA || packet_type == PACKET_TYPE_PROOF)
+        && frame.get(2..18) == Some(&link_id[..])
+}
+
 /// Writer for a direct UDP peer-to-peer connection.
 ///
 /// When dropped, signals the reader thread to stop.
 pub struct UdpDirectWriter {
     socket: Arc<UdpSocket>,
     peer_addr: SocketAddr,
+    /// The link this interface belongs to; other frames are not sent.
+    link_id: [u8; 16],
     running: Arc<AtomicBool>,
     /// Called by the driver directly on a non-blocking socket, with
     /// interface I/O folded (see [`crate::engine::FOLD_IO`]).
     inline: bool,
 }
 
+impl UdpDirectWriter {
+    /// Frames of other traffic are dropped, as a link that cannot carry
+    /// them would.
+    fn admits(&self, data: &[u8]) -> bool {
+        let ok = carries_link(data, &self.link_id);
+        if !ok {
+            log::trace!("Direct UDP interface dropped a frame not of its link");
+        }
+        ok
+    }
+}
+
 impl Writer for UdpDirectWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        if !self.admits(data) {
+            return Ok(());
+        }
         match self.socket.send_to(data, self.peer_addr) {
             // A datagram the socket buffer cannot take is dropped, as the
             // network may drop it.
@@ -47,6 +86,9 @@ impl Writer for UdpDirectWriter {
     }
 
     fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
+        if !self.admits(data) {
+            return Ok(());
+        }
         self.socket.send_to(data, self.peer_addr).map(|_| ())
     }
 
@@ -57,7 +99,9 @@ impl Writer for UdpDirectWriter {
     ) -> io::Result<()> {
         // A full buffer returns WouldBlock with the completion untouched,
         // and the driver retries the frame.
-        self.socket.send_to(data, self.peer_addr)?;
+        if self.admits(data) {
+            self.socket.send_to(data, self.peer_addr)?;
+        }
         if let Some(completion) = completion.take() {
             completion.finish(Ok(()));
         }
@@ -84,6 +128,7 @@ pub fn start_direct_interface(
     socket: UdpSocket,
     peer_addr: SocketAddr,
     interface_id: InterfaceId,
+    link_id: [u8; 16],
     session_id: [u8; 16],
     punch_token: [u8; 32],
     tx: EventSender,
@@ -101,6 +146,7 @@ pub fn start_direct_interface(
     let writer = UdpDirectWriter {
         socket: socket.clone(),
         peer_addr,
+        link_id,
         running: running.clone(),
         inline,
     };
@@ -119,7 +165,10 @@ pub fn start_direct_interface(
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,
-        out_capable: true,
+        // Only its link's packets, sent to it by the link's route, go out
+        // on it: the engine never picks it for announces, path requests
+        // or broadcasts.
+        out_capable: false,
         in_capable: true,
         bitrate: None,
         airtime_profile: None,
@@ -148,6 +197,7 @@ pub fn start_direct_interface(
                 socket,
                 peer_addr,
                 interface_id,
+                link_id,
                 keepalive: puncher::build_keepalive_packet(&session_id, &punch_token),
                 last_inbound: now,
                 last_keepalive: now,
@@ -168,6 +218,7 @@ pub fn start_direct_interface(
                 socket,
                 peer_addr,
                 interface_id,
+                link_id,
                 session_id,
                 punch_token,
                 tx,
@@ -178,10 +229,12 @@ pub fn start_direct_interface(
     Ok((Box::new(writer), info))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_reader(
     socket: Arc<UdpSocket>,
     peer_addr: SocketAddr,
     interface_id: InterfaceId,
+    link_id: [u8; 16],
     session_id: [u8; 16],
     punch_token: [u8; 32],
     tx: EventSender,
@@ -219,8 +272,8 @@ fn run_reader(
                     continue;
                 }
 
-                // Deliver as Reticulum frame
-                if len > 0 {
+                // Deliver as Reticulum frame, if it belongs to the link
+                if carries_link(&buf[..len], &link_id) {
                     let _ = tx.send(Event::Frame {
                         interface_id,
                         data: buf[..len].into(),
@@ -252,6 +305,7 @@ struct DirectSource {
     socket: Arc<UdpSocket>,
     peer_addr: SocketAddr,
     interface_id: InterfaceId,
+    link_id: [u8; 16],
     keepalive: Vec<u8>,
     last_inbound: std::time::Instant,
     last_keepalive: std::time::Instant,
@@ -301,7 +355,7 @@ impl LoopSource for DirectSource {
             if len >= 4 && (cx.buf[..4] == *b"RNSH" || cx.buf[..4] == *b"RNSA") {
                 continue;
             }
-            if len > 0 {
+            if carries_link(&cx.buf[..len], &self.link_id) {
                 frames.push(Event::Frame {
                     interface_id: self.interface_id,
                     data: cx.buf[..len].into(),
@@ -344,6 +398,78 @@ impl LoopSource for DirectSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rns_core::constants;
+
+    const LINK: [u8; 16] = [0x4C; 16];
+
+    /// A HEADER_1 packet with the given destination type, packet type and
+    /// destination.
+    fn frame(destination_type: u8, packet_type: u8, destination: &[u8; 16]) -> Vec<u8> {
+        let mut frame = vec![(destination_type << 2) | packet_type, 0];
+        frame.extend_from_slice(destination);
+        frame.push(constants::CONTEXT_NONE);
+        frame.extend_from_slice(b"payload");
+        frame
+    }
+
+    fn link_data(destination: &[u8; 16], text: &[u8]) -> Vec<u8> {
+        let mut frame = frame(
+            constants::DESTINATION_LINK,
+            constants::PACKET_TYPE_DATA,
+            destination,
+        );
+        frame.extend_from_slice(text);
+        frame
+    }
+
+    #[test]
+    fn only_packets_of_its_link_are_carried() {
+        assert!(carries_link(
+            &frame(
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+                &LINK
+            ),
+            &LINK
+        ));
+        assert!(carries_link(
+            &frame(
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_PROOF,
+                &LINK
+            ),
+            &LINK
+        ));
+        // Another link, announces, link requests, path requests (plain
+        // data), single-destination data: not carried.
+        assert!(!carries_link(&link_data(&[0x11; 16], b""), &LINK));
+        for (destination_type, packet_type) in [
+            (
+                constants::DESTINATION_SINGLE,
+                constants::PACKET_TYPE_ANNOUNCE,
+            ),
+            (
+                constants::DESTINATION_SINGLE,
+                constants::PACKET_TYPE_LINKREQUEST,
+            ),
+            (constants::DESTINATION_PLAIN, constants::PACKET_TYPE_DATA),
+            (constants::DESTINATION_SINGLE, constants::PACKET_TYPE_DATA),
+            (constants::DESTINATION_LINK, constants::PACKET_TYPE_ANNOUNCE),
+        ] {
+            assert!(!carries_link(
+                &frame(destination_type, packet_type, &LINK),
+                &LINK
+            ));
+        }
+        // A transported (HEADER_2) packet is never for a direct path.
+        let mut transported = vec![0x40 | 0x0C, 1];
+        transported.extend_from_slice(&[0x99; 16]);
+        transported.extend_from_slice(&LINK);
+        transported.push(0);
+        assert!(!carries_link(&transported, &LINK));
+        assert!(!carries_link(&[], &LINK));
+        assert!(!carries_link(&[0x0C, 0, 0x4C], &LINK));
+    }
 
     #[test]
     fn test_udp_direct_writer() {
@@ -352,24 +478,35 @@ mod tests {
         let sock_b = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr_b = sock_b.local_addr().unwrap();
         sock_b
-            .set_read_timeout(Some(Duration::from_secs(1)))
+            .set_read_timeout(Some(Duration::from_millis(300)))
             .unwrap();
 
         let mut writer = UdpDirectWriter {
             socket: Arc::new(sock_a),
             peer_addr: addr_b,
+            link_id: LINK,
             running: Arc::new(AtomicBool::new(true)),
             inline: false,
         };
 
-        // Send a frame
-        let data = b"hello direct peer";
-        writer.send_frame(data).unwrap();
+        // Frames of other traffic are dropped without an error.
+        let announce = frame(
+            constants::DESTINATION_SINGLE,
+            constants::PACKET_TYPE_ANNOUNCE,
+            &[0x22; 16],
+        );
+        writer.send_frame(&announce).unwrap();
+        writer.send_frame_confirmed(&announce).unwrap();
 
-        // Receive on other end
-        let mut buf = [0u8; 64];
+        // A frame of the link goes out.
+        let data = link_data(&LINK, b"hello direct peer");
+        writer.send_frame(&data).unwrap();
+
+        // Receive on other end: only the link's frame.
+        let mut buf = [0u8; 128];
         let (len, _src) = sock_b.recv_from(&mut buf).unwrap();
-        assert_eq!(&buf[..len], data);
+        assert_eq!(&buf[..len], &data[..]);
+        assert!(sock_b.recv_from(&mut buf).is_err());
     }
 
     #[test]
@@ -382,15 +519,17 @@ mod tests {
         let peer_addr = peer.local_addr().unwrap();
         let local_addr = local.local_addr().unwrap();
         let (tx, rx) = crate::event::channel();
-        let (writer, _info) = start_direct_interface(
+        let (writer, info) = start_direct_interface(
             local,
             peer_addr,
             InterfaceId(910),
+            LINK,
             [1; 16],
             [2; 32],
             tx.clone(),
         )
         .unwrap();
+        assert!(!info.out_capable);
         assert!(writer.sends_inline());
         // Served on the driver loop: no reader thread.
         assert!(!std::fs::read_dir("/proc/self/task").unwrap().any(|task| {
@@ -400,27 +539,41 @@ mod tests {
         let (mut writer, _) =
             crate::interface::wrap_async_writer(writer, InterfaceId(910), "direct", tx, 16);
 
-        // Inbound from the peer; keepalives and strangers are skipped.
+        // Inbound from the peer; keepalives, strangers and other traffic
+        // are skipped.
         let stranger = UdpSocket::bind("127.0.0.1:0").unwrap();
-        stranger.send_to(b"not from the peer", local_addr).unwrap();
+        stranger
+            .send_to(&link_data(&LINK, b"not from the peer"), local_addr)
+            .unwrap();
         peer.send_to(b"RNSH keepalive", local_addr).unwrap();
-        peer.send_to(b"from the peer", local_addr).unwrap();
+        peer.send_to(
+            &frame(
+                constants::DESTINATION_SINGLE,
+                constants::PACKET_TYPE_ANNOUNCE,
+                &[0x22; 16],
+            ),
+            local_addr,
+        )
+        .unwrap();
+        let from_peer = link_data(&LINK, b"from the peer");
+        peer.send_to(&from_peer, local_addr).unwrap();
         match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
             Event::Frame {
                 interface_id, data, ..
             } => {
                 assert_eq!(interface_id, InterfaceId(910));
-                assert_eq!(&*data, b"from the peer");
+                assert_eq!(&*data, &from_peer[..]);
             }
             other => panic!("expected Frame, got {other:?}"),
         }
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
 
         // Outbound, sent by the driver directly.
-        writer.send_frame(b"to the peer").unwrap();
+        let to_peer = link_data(&LINK, b"to the peer");
+        writer.send_frame(&to_peer).unwrap();
         let mut buf = [0u8; 64];
         peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         let (n, _) = peer.recv_from(&mut buf).unwrap();
-        assert_eq!(&buf[..n], b"to the peer");
+        assert_eq!(&buf[..n], &to_peer[..]);
     }
 }
