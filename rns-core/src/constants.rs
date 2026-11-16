@@ -319,7 +319,12 @@ pub const MAX_RATE_TIMESTAMPS: usize = 16;
 /// Maximum packet hashlist size before rotation
 pub const HASHLIST_MAXSIZE: usize = 250_000;
 
-/// Maximum announce signature cache entries (dedup verified signatures)
+/// Maximum announce signature cache entries (dedup verified signatures).
+/// Upstream's equivalent, `Identity.announce_valid_cache`, holds 384
+/// results since a450be5d (128 before); this cache was already larger, and
+/// `announce_sig_cache_max_entries` configures it. rns-rs keeps no cache of
+/// invalid results (`Identity.announce_invalid_cache`): an invalid announce
+/// is verified again each time it arrives.
 pub const ANNOUNCE_SIG_CACHE_MAXSIZE: usize = 2_000;
 
 /// TTL for announce signature cache entries (seconds)
