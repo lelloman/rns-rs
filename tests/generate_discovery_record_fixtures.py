@@ -3,7 +3,7 @@
 
 PYTHONPATH=/path/to/Reticulum python3 tests/generate_discovery_record_fixtures.py
 
-Builds the `info` dicts the way RNS 1.6.0's InterfaceAnnounceHandler and
+Builds the `info` dicts the way RNS 1.6.1's InterfaceAnnounceHandler and
 InterfaceDiscovery.interface_discovered do (same keys, same order, ids as
 hex strings) and packs them with upstream's umsgpack, as the files under
 storage/discovery/interfaces are written. rns-net's discovery tests read
@@ -14,7 +14,7 @@ from pathlib import Path
 import RNS
 from RNS.vendor import umsgpack as msgpack
 
-assert RNS.__version__ == "1.6.0", RNS.__version__
+assert RNS.__version__ == "1.6.1", RNS.__version__
 OUT = Path(__file__).resolve().parent / "fixtures/discovery"
 OUT.mkdir(parents=True, exist_ok=True)
 
