@@ -5075,6 +5075,37 @@ fn tunnel_synthesis_with_a_bad_signature_tears_the_interface_down() {
     assert_eq!(server.engine.tunnel_table().iter().count(), 0);
 }
 
+#[test]
+fn a_bad_synthesis_detaches_a_static_interface_without_interface_management() {
+    // Upstream detaches the interface with internal_forced, whether or not
+    // interface management is enabled: a node started without a config
+    // file detaches its static TCP client too, and stops its I/O.
+    let (mut synthesis, _) = client_synthesis();
+    let last = synthesis.len() - 1;
+    synthesis[last] ^= 0x01;
+
+    let mut node = new_test_driver();
+    assert!(node.interface_management.is_none());
+    register_typed_interface(&mut node, 5, "static-client", "TCPClientInterface");
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    node.interfaces.get_mut(&InterfaceId(5)).unwrap().writer =
+        Box::new(ShutdownRecorder(Arc::clone(&closed)));
+    let control = crate::interface::ListenerControl::new();
+    node.unmanaged_static_interfaces
+        .insert(InterfaceId(5), Some(control.clone()));
+    node.handle_frame_event(InterfaceId(5), synthesis, None, None);
+
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(control.should_stop());
+    assert!(!node.interfaces.contains_key(&InterfaceId(5)));
+    assert!(node.engine.interface_info(&InterfaceId(5)).is_none());
+
+    // A static interface the driver knows no control for stays.
+    register_typed_interface(&mut node, 6, "other", "TCPClientInterface");
+    assert_eq!(node.teardown_interface(InterfaceId(6)), Some(false));
+    assert!(node.interfaces.contains_key(&InterfaceId(6)));
+}
+
 /// A client synthesis cut to one byte less than the fixed fields.
 fn short_synthesis() -> Vec<u8> {
     let (mut synthesis, _) = client_synthesis();

@@ -2713,6 +2713,10 @@ impl RnsNode {
                                 static_ids: vec![id],
                             },
                         );
+                    } else {
+                        driver
+                            .unmanaged_static_interfaces
+                            .insert(id, managed_control);
                     }
                     register_started_interface(StartedInterface {
                         driver: &mut driver,

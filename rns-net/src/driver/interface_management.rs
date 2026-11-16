@@ -78,26 +78,7 @@ impl Driver {
             self.traffic_samples.remove(&id);
         }
         for id in managed.static_ids {
-            let entry_name = self
-                .interfaces
-                .get(&id)
-                .map(|entry| entry.info.name.clone());
-            if self.interfaces.contains_key(&id) {
-                self.handle_interface_down_event(id);
-                self.interfaces.remove(&id);
-            }
-            if let Some(entry_name) = entry_name {
-                self.interface_runtime_defaults.remove(&entry_name);
-                self.interface_ifac_runtime.remove(&entry_name);
-                self.interface_ifac_runtime_defaults.remove(&entry_name);
-            }
-            self.event_tx.remove_interface(id);
-            self.interface_display_names.remove(&id);
-            self.interface_short_names.remove(&id);
-            if self.engine.interface_info(&id).is_some() {
-                self.engine.deregister_interface(id);
-            }
-            self.traffic_samples.remove(&id);
+            self.remove_static_interface(id);
         }
         self.interface_runtime_defaults.remove(name);
         self.interface_ifac_runtime.remove(name);
@@ -114,6 +95,31 @@ impl Driver {
     /// with an interface instance: a configured interface is detached with
     /// its configuration entry, and a spawned one has its connection closed
     /// and is removed. I2P and local interfaces are not detached.
+    /// Take a static interface out of the driver, the engine and the
+    /// statistics, once its I/O has been told to stop.
+    fn remove_static_interface(&mut self, id: InterfaceId) {
+        let entry_name = self
+            .interfaces
+            .get(&id)
+            .map(|entry| entry.info.name.clone());
+        if self.interfaces.contains_key(&id) {
+            self.handle_interface_down_event(id);
+            self.interfaces.remove(&id);
+        }
+        if let Some(entry_name) = entry_name {
+            self.interface_runtime_defaults.remove(&entry_name);
+            self.interface_ifac_runtime.remove(&entry_name);
+            self.interface_ifac_runtime_defaults.remove(&entry_name);
+        }
+        self.event_tx.remove_interface(id);
+        self.interface_display_names.remove(&id);
+        self.interface_short_names.remove(&id);
+        if self.engine.interface_info(&id).is_some() {
+            self.engine.deregister_interface(id);
+        }
+        self.traffic_samples.remove(&id);
+    }
+
     pub(crate) fn teardown_interface(&mut self, id: InterfaceId) -> Option<bool> {
         let entry = self.interfaces.get(&id)?;
         if matches!(
@@ -137,7 +143,24 @@ impl Driver {
         }
         let entry = self.interfaces.get(&id)?;
         if !entry.dynamic {
-            return Some(false);
+            // A static interface of a node without interface management
+            // (no config file): upstream detaches it all the same, forced.
+            let Some(control) = self.unmanaged_static_interfaces.remove(&id) else {
+                return Some(false);
+            };
+            let name = entry.info.name.clone();
+            if let Some(control) = control {
+                control.request_stop();
+                control.finish();
+                self.listener_controls
+                    .retain(|candidate| !candidate.same_instance(&control));
+            }
+            if let Some(entry) = self.interfaces.get_mut(&id) {
+                entry.writer.shutdown();
+            }
+            self.remove_static_interface(id);
+            log::info!("Interface {name} was detached");
+            return Some(true);
         }
         let name = entry.info.name.clone();
         if let Some(entry) = self.interfaces.get_mut(&id) {
