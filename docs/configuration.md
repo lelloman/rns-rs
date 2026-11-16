@@ -313,6 +313,17 @@ destination type, the full destination name such as `lxmf.delivery`:
   allowed_types = lxmf.delivery
 ```
 
+A type whose full name is not known can be given as its 10-byte name hash,
+20 hexadecimal characters in angle brackets (upstream `e96c81c3`):
+
+```ini
+[filter]
+  ignored_types = application.that.spams, <c4ace368262d845c9dd3>
+```
+
+Only the first 20 characters inside the brackets are read. If they are not
+hexadecimal, they are hashed as a name, as upstream does.
+
 The check runs when an announce arrives, before it is validated, forwarded or
 remembered, so a filtered destination gets no path through this node. Path
 responses are announces too. With `required_only`, the announces that get
