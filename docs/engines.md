@@ -183,8 +183,9 @@ keeps the existing threads (the lazily started `rns-stamper`, and one
 `rns-link-stamp` or discovery thread per request) but each searches on that
 thread alone, where the parallel engine spreads a search over every core.
 The compact engine has no rayon pool at all. One case makes stamping transit
-work: a transport node with `STAMP_PRS` grinds a stamp, per egress
-interface, for every unstamped path request it forwards. A router in that
+work: a transport node with `STAMP_PRS`, on by default since upstream
+`51fa8413`, grinds a stamp, per egress interface, for every unstamped path
+request it forwards. A router in that
 role should run the parallel engine.
 
 Every listener that stays on a thread waits in a poller for a connection

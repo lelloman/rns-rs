@@ -3257,11 +3257,12 @@ direct_connect_policy = identified_only
         let flags = [
             stamps.stamps_enforced,
             stamps.lr_stamps_enforced,
-            stamps.stamp_destinations,
-            stamps.stamp_prs,
             stamps.always_stamp_lrs,
         ];
-        assert_eq!(flags, [false; 5]);
+        assert_eq!(flags, [false; 3]);
+        // 51fa8413: announces and path requests are stamped by default.
+        assert!(stamps.stamp_destinations);
+        assert!(stamps.stamp_prs);
         // a8cc6cb2: link requests are stamped when a cost is announced.
         assert!(stamps.stamp_lrs);
         assert_eq!(stamps.destination_cost, constants::DESTINATION_STAMP_COST);

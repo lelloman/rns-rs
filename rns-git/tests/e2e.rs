@@ -99,6 +99,7 @@ impl E2eHarness {
 
         let server_node =
             RnsNode::from_config(Some(&server_rns_dir), Box::new(NoopCallbacks)).unwrap();
+        unstamped(&server_node);
         wait_for_tcp_port(port);
 
         let server_identity = Identity::new(&mut OsRng);
@@ -138,6 +139,7 @@ impl E2eHarness {
         let (tx, rx) = mpsc::channel();
         let client_node =
             RnsNode::from_config(Some(&client_rns_dir), Box::new(ClientCallbacks { tx })).unwrap();
+        unstamped(&client_node);
 
         Self {
             tmp,
@@ -905,6 +907,23 @@ fn rngit_work_document_local_permissions_work_over_rns_link() {
         comments[0].map_get("content").and_then(Value::as_str),
         Some("Doc-local interact comment")
     );
+}
+
+/// Emit announces and path requests unstamped: upstream 51fa8413 stamps them
+/// by default, and grinding a 25-bit stamp in a debug build takes minutes.
+/// The config file can only turn stamping on, so this uses the runtime keys.
+fn unstamped(node: &RnsNode) {
+    use rns_net::event::{QueryRequest, QueryResponse, RuntimeConfigValue};
+    for key in ["global.stamp_destinations", "global.stamp_path_requests"] {
+        let response = node.query(QueryRequest::SetRuntimeConfig {
+            key: key.into(),
+            value: RuntimeConfigValue::Bool(false),
+        });
+        assert!(
+            matches!(response, Ok(QueryResponse::RuntimeConfigSet(Ok(_)))),
+            "{key}: {response:?}"
+        );
+    }
 }
 
 fn wait_for_announce(

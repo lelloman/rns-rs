@@ -7155,6 +7155,7 @@ fn management_announces_emitted_after_delay() {
         tx.clone(),
         Box::new(cbs),
     );
+    unstamped(&mut driver);
 
     // Register interface so announces can be sent
     let info = make_interface_info(1);
@@ -7289,31 +7290,33 @@ fn runtime_config_list_contains_global_keys() {
 }
 
 #[test]
-fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() {
+fn runtime_config_stamp_flags_default_as_upstream_and_apply_to_engine_and_shared_flag() {
     let mut driver = new_test_driver();
-    for key in [
-        "global.stamp_destinations",
-        "global.stamp_path_requests",
-        "global.stamps_enforced",
-        "global.lr_stamps_enforced",
-        "global.always_stamp_link_requests",
-    ] {
+    // Upstream 51fa8413 stamps announces and path requests by default.
+    let defaults = [
+        ("global.stamp_destinations", true),
+        ("global.stamp_path_requests", true),
+        ("global.stamps_enforced", false),
+        ("global.lr_stamps_enforced", false),
+        ("global.always_stamp_link_requests", false),
+    ];
+    for (key, default) in defaults {
         let QueryResponse::RuntimeConfigEntry(Some(entry)) =
             driver.handle_query(QueryRequest::GetRuntimeConfig { key: key.into() })
         else {
             panic!("expected runtime config entry for {key}");
         };
-        assert_eq!(entry.value, RuntimeConfigValue::Bool(false), "{key}");
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(default), "{key}");
         assert_eq!(entry.source, RuntimeConfigSource::Startup, "{key}");
     }
-    assert!(!driver.engine.stamp_prs());
-    assert!(!driver.stamp_destinations.load(Ordering::Relaxed));
+    assert!(driver.engine.stamp_prs());
+    assert!(driver.stamp_destinations.load(Ordering::Relaxed));
 
     // The node handle reads the same flag the driver flips.
-    let shared = Arc::new(AtomicBool::new(false));
+    let shared = Arc::new(AtomicBool::new(true));
     driver.set_stamp_destinations_flag(Arc::clone(&shared));
 
-    for (key, read_back) in [
+    for ((key, read_back), (_, default)) in [
         (
             "global.stamp_destinations",
             Box::new(|d: &Driver| d.stamp_destinations.load(Ordering::Relaxed))
@@ -7342,17 +7345,20 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
             "global.always_stamp_link_requests",
             Box::new(|d: &Driver| d.stamp_settings.always_stamp_lrs),
         ),
-    ] {
+    ]
+    .into_iter()
+    .zip(defaults)
+    {
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: key.into(),
-            value: RuntimeConfigValue::Bool(true),
+            value: RuntimeConfigValue::Bool(!default),
         });
         let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
             panic!("expected runtime config set success for {key}");
         };
-        assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(!default));
         assert_eq!(entry.source, RuntimeConfigSource::RuntimeOverride);
-        assert!(read_back(&driver), "{key} not applied");
+        assert_eq!(read_back(&driver), !default, "{key} not applied");
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: key.into(),
@@ -7362,17 +7368,21 @@ fn runtime_config_stamp_flags_default_off_and_apply_to_engine_and_shared_flag() 
             panic!("expected a type error for {key}");
         };
         assert_eq!(err.code, RuntimeConfigErrorCode::InvalidType);
-        assert!(read_back(&driver), "{key} changed by a rejected value");
+        assert_eq!(
+            read_back(&driver),
+            !default,
+            "{key} changed by a rejected value"
+        );
 
         let response =
             driver.handle_query_mut(QueryRequest::ResetRuntimeConfig { key: key.into() });
         let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
             panic!("expected runtime config reset success for {key}");
         };
-        assert_eq!(entry.value, RuntimeConfigValue::Bool(false));
-        assert!(!read_back(&driver), "{key} not reset");
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(default));
+        assert_eq!(read_back(&driver), default, "{key} not reset");
     }
-    assert!(!shared.load(Ordering::Relaxed));
+    assert!(shared.load(Ordering::Relaxed));
 }
 
 #[test]
@@ -10073,6 +10083,7 @@ fn request_path_sends_packet() {
         tx.clone(),
         Box::new(cbs),
     );
+    unstamped(&mut driver);
     let info = make_interface_info(1);
     driver.engine.register_interface(info);
     let (writer, sent) = MockWriter::new();
@@ -10114,6 +10125,7 @@ fn recursive_path_request_does_not_reach_offline_interface_writer() {
     let mut config = make_transport_config(true);
     config.identity_hash = Some([0x42; 16]);
     let mut driver = Driver::new(config, rx, tx, Box::new(callbacks));
+    unstamped(&mut driver);
 
     let mut ingress = make_interface_info(1);
     ingress.recursive_prs = true;
@@ -10342,6 +10354,7 @@ fn request_path_includes_transport_id() {
         tx.clone(),
         Box::new(cbs),
     );
+    unstamped(&mut driver);
     let info = make_interface_info(1);
     driver.engine.register_interface(info);
     let (writer, sent) = MockWriter::new();
@@ -13739,6 +13752,7 @@ fn local_path_response_fixture(via_events: bool) -> LocalPathResponseFixture {
     let mut config = make_transport_config(true);
     config.identity_hash = Some(*transport_identity.hash());
     let mut driver = Driver::new(config, rx, tx.clone(), Box::new(callbacks));
+    unstamped(&mut driver);
     let (writer_1, sent_1) = MockWriter::new();
     let (writer_2, sent_2) = MockWriter::new();
     for (id, writer) in [(1, writer_1), (2, writer_2)] {
@@ -14995,6 +15009,13 @@ fn folded_work_verifies_queued_announces() {
 /// The frames a `MockWriter` recorded.
 type SentFrames = Arc<Mutex<Vec<Vec<u8>>>>;
 
+/// Turn off the announce and path request stamping that is on by default
+/// since upstream 51fa8413, for tests of behavior other than stamping.
+fn unstamped(driver: &mut Driver) {
+    driver.engine.set_stamp_prs(false);
+    driver.stamp_destinations.store(false, Ordering::Relaxed);
+}
+
 /// A driver with three online interfaces, each with its own writer.
 fn rediscovery_driver(
     tx: event::EventSender,
@@ -15005,6 +15026,7 @@ fn rediscovery_driver(
     let mut config = make_transport_config(transport_enabled);
     config.identity_hash = Some([0x42; 16]);
     let mut driver = Driver::new(config, rx, tx.clone(), Box::new(cbs));
+    unstamped(&mut driver);
     driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
     driver.set_stamper(Arc::new(crate::stamper::Stamper::with_targets(
         tx,

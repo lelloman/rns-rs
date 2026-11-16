@@ -67,7 +67,7 @@ Dispositions are provisional until each mapping commit lands.
 | 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Structurally covered | No forked instances (supervisor children are executed, not forked); withdrawal only after a shared-instance registration (documented on `withdraw_from_shared_instance`) |
 | 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Integrated | `tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation`, `a_longer_tunnel_synthesis_within_the_mdu_is_accepted`, `an_interface_takes_only_one_tunnel_synthesis`, `longer_synthesis_validates_up_to_the_mdu` |
 | 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Integrated | `tunnel_synthesis_is_answered_and_both_ends_learn_the_other`, `a_synthesis_without_an_extension_is_not_answered`, `an_invalid_synthesis_extension_is_a_protocol_violation`, `tunnel_extension` unit tests, `the_signature_covers_the_extension`, RPC pickle assertions, regenerated `tunnels` rnstatus fixture; interop `python_rns_receives_tunnel_synthesis_from_rust_client` against `884f109b` and `c850cdac` |
-| 15 | `51fa8413277ef7308925aef610e409f9af0d9c3b` | Enabled stamp generation | Needs port | |
+| 15 | `51fa8413277ef7308925aef610e409f9af0d9c3b` | Enabled stamp generation | Integrated | constants test, `stamps_section_defaults_to_the_protocol_constants`, `runtime_config_stamp_flags_default_as_upstream_and_apply_to_engine_and_shared_flag`, the no-store case in `destination_stamp_below_target_value_is_regenerated`; existing stamper tests and e2e stamps suite; interop against `884f109b` and `c850cdac` |
 | 16 | `fd36a97220a40383ce7f0a1d0f40bc7043f4494f` | Updated version | Needs decision | |
 | 17 | `884f109b2b821638c7addd456a52a2cd5bb8c5b1` | Fixed missing wanted destination type for interface discovery | Needs port | |
 
@@ -551,15 +551,42 @@ the exchange, the new lines and the older-Python behavior.
 **Upstream change:** `STAMP_DESTINATIONS` and `STAMP_PRS` default to `True`:
 announces of local destinations and emitted path requests carry stamps.
 
-**Rust applicability:** `rns-core/src/constants.rs` keeps
-`STAMP_DESTINATIONS = false`, and the engine's `stamp_prs` default follows the
-compile-time constant. The stamping paths exist (`rns-net/src/stamper.rs`) but
-switching them on changes every announce and path request this node emits, so
-it needs interop and load checks.
+**Rust applicability:** The stamping paths were ported with 1.6.0
+(`rns-net/src/stamper.rs`, the engine's `stamp_prs`, the node API's
+`announce_needs_stamp`) and exercised with the switches turned on at runtime;
+only the defaults change. Every announce and path request a node emits now
+waits for a stamp the first time, and a transport node grinds one per egress
+interface for each unstamped path request it forwards, as upstream.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:**
 
-**Final disposition:** Needs port.
+- `STAMP_DESTINATIONS` and `STAMP_PRS` are `true` in
+  `rns-core/src/constants.rs`; `StampsSection::default()`, the driver's
+  runtime config defaults, the engine's `stamp_prs` and the node handle's
+  shared flag all follow them. As upstream applies `[stamps]`, `no` cannot
+  turn them off; `global.stamp_destinations` and
+  `global.stamp_path_requests` can, and reset to the new defaults.
+- A node with no stamp store (a shared instance client, or one started in
+  code without storage) used to fail every announce with stamping on, which
+  only runtime switches could reach before; it now announces unstamped, the
+  condition `announce_needs_stamp` already used. Upstream clients stamp
+  their own announces with their own storage; rns-rs shared clients do not
+  yet, which is a known gap (announces are not refused for lack of a stamp
+  until enforcement, planned for 1.6.2). `rnid -a` and the shared client
+  tests run through this path.
+- Tests of other behavior that announced or requested paths unstamped now
+  switch stamping off explicitly: `set_stamp_prs(false)` in the affected
+  rns-core tests, an `unstamped` driver test helper, an unstamped
+  `StampsSection` for the e2e nodes, the runtime keys for the `rngit` e2e
+  nodes, and `STAMP_DESTINATIONS`/`STAMP_PRS` off in the Python interop
+  harness, whose stamp test turns them on itself. The tests of the defaults
+  expect them on.
+- `docs/configuration.md` gives the new defaults, the first-announce delay
+  and the runtime keys as the way to switch emission off;
+  `docs/engines.md` notes that forwarded path request stamping is now the
+  default.
+
+**Final disposition:** Integrated.
 
 ### 16. `fd36a972` — Updated version
 

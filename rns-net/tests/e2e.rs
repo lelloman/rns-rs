@@ -635,6 +635,17 @@ const APP_NAME: &str = "e2e_test";
 mod issue152;
 
 /// Start a transport node (TCP server) on the given port.
+/// Stamp settings for nodes of tests that exercise something other than
+/// stamping: upstream 51fa8413 stamps emitted announces and path requests by
+/// default, and grinding a 25-bit stamp in a debug build takes minutes.
+fn unstamped() -> rns_net::config::StampsSection {
+    rns_net::config::StampsSection {
+        stamp_destinations: false,
+        stamp_prs: false,
+        ..Default::default()
+    }
+}
+
 fn start_transport_node(port: u16) -> RnsNode {
     start_transport_node_with_limits(
         port,
@@ -666,7 +677,7 @@ fn start_transport_node_with_limits(
         NodeConfig {
             panic_on_interface_error: true,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -804,7 +815,7 @@ fn start_client_node_with_options(
         NodeConfig {
             panic_on_interface_error: true,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -1380,7 +1391,7 @@ fn test_direct_link_no_transport() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -2008,7 +2019,7 @@ fn test_plain_message_delivery() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -2279,7 +2290,7 @@ fn test_group_message_delivery() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -2418,7 +2429,7 @@ fn test_group_wrong_key_fails() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -3788,7 +3799,7 @@ fn test_udp_announce_and_message() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -3882,7 +3893,7 @@ fn test_udp_announce_and_message() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -4073,7 +4084,7 @@ fn discovery_announce_received_by_client() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -4189,7 +4200,7 @@ fn discovery_announce_received_by_client() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -4336,7 +4347,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -4447,7 +4458,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -4618,7 +4629,7 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -4819,7 +4830,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -5006,7 +5017,7 @@ fn discovery_announce_through_relay() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -5117,7 +5128,7 @@ fn discovery_announce_through_relay() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -5239,7 +5250,7 @@ fn discovery_announce_through_relay() {
         NodeConfig {
             panic_on_interface_error: false,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: false,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -5377,7 +5388,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
         NodeConfig {
             panic_on_interface_error: true,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -5522,7 +5533,7 @@ fn start_managed_transport_client(
         NodeConfig {
             panic_on_interface_error: true,
             link_proof_verify_threads: Default::default(),
-            stamps: Default::default(),
+            stamps: unstamped(),
             transport_enabled: true,
             static_transport_identity: false,
             local_hops_delta: false,
@@ -6532,9 +6543,9 @@ fn test_path_request_answered_for_destination_hosted_on_transport_node() {
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // Upstream 1.6.0 stamps announces (`STAMP_DESTINATIONS`) and path requests
-// (`STAMP_PRS`) on a background stamper thread. Both flags default to off on
-// both sides; here they are switched on through the `global.stamp_*` runtime
-// config keys so the full path can be exercised: the API returns at once, the
+// (`STAMP_PRS`) on a background stamper thread, by default since 51fa8413.
+// Here they are also switched on explicitly through the `global.stamp_*`
+// runtime config keys so the full path is exercised: the API returns at once, the
 // worker grinds at the protocol cost, the peer validates and records the
 // stamp, and a shared instance stamps requests on behalf of unstamped local
 // clients.

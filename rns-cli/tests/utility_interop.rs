@@ -10,6 +10,15 @@ use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
 use rns_net::{RpcAddr, RpcClient};
 
+/// Every instance here, Python or Rust, stamps the announces and path
+/// requests it emits (upstream 51fa8413, 1.6.1); the config file cannot turn
+/// that off, so the targets are kept low enough to grind at once. The costs
+/// match: a stamp below the receiver's cost is invalid and stays in the
+/// announce's app data, where discovery would read it as its own. Earlier
+/// releases read the section and stamp nothing by default.
+const CHEAP_STAMPS: &str = "[stamps]\n  destination_value = 8\n  destination_cost = 8\n  \
+                            pr_value = 8\n  pr_cost = 8\n\n";
+
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 const FILE_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -112,7 +121,7 @@ impl Harness {
         fs::write(
             listener_config.join("config"),
             format!(
-                "[reticulum]\n\
+                "{CHEAP_STAMPS}[reticulum]\n\
                  enable_transport = Yes\n\
                  share_instance = Yes\n\
                  instance_name = {listener_instance}\n\
@@ -132,7 +141,7 @@ impl Harness {
         fs::write(
             client_config.join("config"),
             format!(
-                "[reticulum]\n\
+                "{CHEAP_STAMPS}[reticulum]\n\
                  enable_transport = Yes\n\
                  share_instance = Yes\n\
                  instance_name = {client_instance}\n\
@@ -1337,7 +1346,7 @@ fn rust_rnstatus_reaches_python_instance_on_unix_sockets() {
     fs::write(
         root.path().join("config"),
         format!(
-            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
              instance_name = {instance}\n  shared_instance_port = {shared_port}\n  \
              instance_control_port = {control_port}\n\
              [logging]\n  loglevel = 4\n\
@@ -1467,7 +1476,7 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
     fs::write(
         publisher_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
              instance_name = bh-publisher-{label}-{pid}\n  shared_instance_port = {pub_shared}\n  \
              instance_control_port = {pub_control}\n  publish_blackhole = Yes\n\
              [logging]\n  loglevel = 4\n\
@@ -1479,7 +1488,7 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
     fs::write(
         fetcher_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
              instance_name = bh-fetcher-{label}-{pid}\n  shared_instance_port = {fetch_shared}\n  \
              instance_control_port = {fetch_control}\n  blackhole_sources = {source}\n\
              [logging]\n  loglevel = 4\n\
@@ -1679,7 +1688,7 @@ fn remote_path_tables(managed: Daemon) -> (String, String) {
     fs::write(
         managed_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
              instance_name = rpath-managed-{label}-{pid}\n  shared_instance_port = {m_shared}\n  \
              instance_control_port = {m_control}\n  enable_remote_management = Yes\n  \
              remote_management_allowed = {management}\n\
@@ -1692,7 +1701,7 @@ fn remote_path_tables(managed: Daemon) -> (String, String) {
     fs::write(
         client_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
              instance_name = rpath-client-{label}-{pid}\n  shared_instance_port = {c_shared}\n  \
              instance_control_port = {c_control}\n  publish_blackhole = Yes\n\
              [logging]\n  loglevel = 4\n\
@@ -1876,7 +1885,7 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
     fs::write(
         publisher_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
              instance_name = disc-publisher-{label}-{pid}\n  shared_instance_port = {pub_shared}\n  \
              instance_control_port = {pub_control}\n  network_identity = {identity}\n\
              [logging]\n  loglevel = 4\n\
@@ -1893,7 +1902,7 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
     fs::write(
         receiver_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
              instance_name = disc-receiver-{label}-{pid}\n  shared_instance_port = {recv_shared}\n  \
              instance_control_port = {recv_control}\n  network_identity = {identity}\n  \
              discover_interfaces = Yes\n  required_discovery_value = 2\n\
@@ -1990,7 +1999,7 @@ fn tcp_shared_instance_with_rpc_key(daemon: Daemon) {
     };
     let instance = format!("tcp-rpc-key-{}-{}", daemon as u8, std::process::id());
     let config = format!(
-        "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+        "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
          instance_name = {instance}\n  shared_instance_type = tcp\n  \
          shared_instance_port = {shared_port}\n  instance_control_port = {control_port}\n  \
          rpc_key = 5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e\n\
@@ -2084,7 +2093,7 @@ fn rust_instance_autoconnects_python_discovered_backbone() {
     fs::write(
         python_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
              instance_name = ac-python-{pid}\n  shared_instance_port = {py_shared}\n  \
              instance_control_port = {py_control}\n\
              [logging]\n  loglevel = 4\n\
@@ -2100,7 +2109,7 @@ fn rust_instance_autoconnects_python_discovered_backbone() {
     fs::write(
         rust_dir.join("config"),
         format!(
-            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
              instance_name = ac-rust-{pid}\n  shared_instance_port = {rs_shared}\n  \
              instance_control_port = {rs_control}\n  discover_interfaces = Yes\n  \
              required_discovery_value = 2\n  autoconnect_discovered_interfaces = 1\n\
@@ -2431,7 +2440,7 @@ impl ProbeInstance {
         fs::write(
             config.join("config"),
             format!(
-                "[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+                "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
                  instance_name = {instance}\n  shared_instance_port = {}\n  \
                  instance_control_port = {}\n  respond_to_probes = Yes\n  \
                  discover_interfaces = No\n\n[logging]\n  loglevel = 4\n\n\
@@ -2592,7 +2601,7 @@ fn rust_shared_client_probes_a_python_destination_enforcing_ratchets() {
     fs::write(
         python_config.join("config"),
         format!(
-            "[reticulum]\n  share_instance = No\n  discover_interfaces = No\n\n\
+            "{CHEAP_STAMPS}[reticulum]\n  share_instance = No\n  discover_interfaces = No\n\n\
              [interfaces]\n  [[TCP Client]]\n    type = TCPClientInterface\n    \
              enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {}\n",
             instance.transport_port
