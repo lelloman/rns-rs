@@ -200,6 +200,19 @@ impl HolePunchManager {
         }
     }
 
+    /// Replace the probe servers, their protocol and the device probes and
+    /// punches are bound to, keeping every other setting.
+    pub fn set_probe_config(
+        &mut self,
+        probe_addrs: Vec<SocketAddr>,
+        probe_protocol: ProbeProtocol,
+        device: Option<String>,
+    ) {
+        self.probe_addrs = probe_addrs;
+        self.probe_protocol = probe_protocol;
+        self.device = device;
+    }
+
     /// Run probes and punches on the loop of the driver that `tx` feeds,
     /// when services are folded.
     pub(crate) fn set_event_sender(&mut self, tx: EventSender) {

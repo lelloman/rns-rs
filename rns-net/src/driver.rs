@@ -1836,15 +1836,11 @@ impl Driver {
         protocol: rns_core::holepunch::ProbeProtocol,
         device: Option<String>,
     ) {
-        let policy = self.holepunch_manager.policy();
-        let allow_private = self.holepunch_manager.allow_private_endpoints();
-        self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
+        self.holepunch_manager
+            .set_probe_config(addrs, protocol, device);
         self.holepunch_manager
             .set_event_sender(self.event_tx.clone());
         self.holepunch_manager.set_underlay_mark(self.underlay_mark);
-        self.holepunch_manager.set_policy(policy);
-        self.holepunch_manager
-            .set_allow_private_endpoints(allow_private);
     }
 }
 
