@@ -2,6 +2,7 @@ pub mod api;
 pub mod args;
 pub mod auth;
 pub mod bridge;
+pub mod cli;
 pub mod cmd;
 pub mod config;
 pub mod encode;

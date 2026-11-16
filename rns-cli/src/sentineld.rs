@@ -18,7 +18,9 @@ use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
 use rns_net::{HookInfo, RpcAddr, RpcClient};
 
+use crate::argparse::{Parser, Ty};
 use crate::args::Args;
+use crate::native_cli::{self, Cli};
 use crate::readiness::ReadyFile;
 
 const VERSION: &str = env!("FULL_VERSION");
@@ -49,8 +51,139 @@ const DEFAULT_FLAP_MAX_CONNECTION_AGE: Duration = Duration::from_secs(10);
 
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
 
+/// rns-sentineld's command line.
+pub static CLI: Cli = Cli::new(
+    Parser {
+        name: "rns-sentineld",
+        description: Some("Backbone peer sentinel for a running Reticulum instance"),
+        actions: &[
+            native_cli::help(),
+            native_cli::value(
+                &["-c", "--config"],
+                "config",
+                "PATH",
+                Ty::Str,
+                "path to config directory",
+            ),
+            native_cli::value(
+                &["--socket"],
+                "socket",
+                "PATH",
+                Ty::Str,
+                "provider bridge socket override",
+            ),
+            native_cli::value(
+                &["--ready-file"],
+                "ready_file",
+                "PATH",
+                Ty::Str,
+                "write readiness contract file once operational",
+            ),
+            native_cli::value(
+                &["--priority"],
+                "priority",
+                "N",
+                Ty::Int,
+                "hook priority (default: 0)",
+            ),
+            native_cli::value(
+                &["--write-stall-threshold"],
+                "write_stall_threshold",
+                "N",
+                Ty::Int,
+                "write stalls before blacklist (default: 2)",
+            ),
+            native_cli::value(
+                &["--idle-timeout-threshold"],
+                "idle_timeout_threshold",
+                "N",
+                Ty::Int,
+                "idle timeouts before blacklist (default: 4)",
+            ),
+            native_cli::value(
+                &["--event-window"],
+                "event_window",
+                "SECS",
+                Ty::Int,
+                "sliding window for event counting (default: 300)",
+            ),
+            native_cli::value(
+                &["--write-stall-window"],
+                "write_stall_window",
+                "SECS",
+                Ty::Int,
+                "sliding window for write stalls (default: event window)",
+            ),
+            native_cli::value(
+                &["--idle-timeout-window"],
+                "idle_timeout_window",
+                "SECS",
+                Ty::Int,
+                "sliding window for idle timeouts (default: event window)",
+            ),
+            native_cli::value(
+                &["--flap-threshold"],
+                "flap_threshold",
+                "N",
+                Ty::Int,
+                "silent reconnect flaps before blacklist (default: 0)",
+            ),
+            native_cli::value(
+                &["--flap-window"],
+                "flap_window",
+                "SECS",
+                Ty::Int,
+                "sliding window for flap detection (default: event window)",
+            ),
+            native_cli::value(
+                &["--flap-max-connection-age"],
+                "flap_max_connection_age",
+                "SECS",
+                Ty::Int,
+                "max silent connection age counted as a flap (default: 10)",
+            ),
+            native_cli::value(
+                &["--connect-rate-threshold"],
+                "connect_rate_threshold",
+                "N",
+                Ty::Int,
+                "connection attempts before blacklist (default: 0)",
+            ),
+            native_cli::value(
+                &["--connect-rate-window"],
+                "connect_rate_window",
+                "SECS",
+                Ty::Int,
+                "sliding window for connect-rate detection (default: event window)",
+            ),
+            native_cli::value(
+                &["--base-blacklist"],
+                "base_blacklist",
+                "SECS",
+                Ty::Int,
+                "base blacklist duration (default: 120)",
+            ),
+            native_cli::value(
+                &["--penalty-decay-interval"],
+                "penalty_decay_interval",
+                "SECS",
+                Ty::Int,
+                "idle time needed to decay blacklist level by 1 (default: 0)",
+            ),
+            native_cli::count(&["-v", "--verbose"], "verbose", "increase verbosity"),
+            native_cli::version(),
+        ],
+    },
+    None,
+);
+
+/// Parse rns-sentineld's command line `argv` (without the program name).
+pub fn parse_args(argv: Vec<String>) -> Args {
+    CLI.parse("rns-sentineld", argv)
+}
+
 pub fn main_entry() {
-    main_entry_from(Args::parse());
+    main_entry_from(parse_args(std::env::args().skip(1).collect()));
 }
 
 pub fn main_entry_from(args: Args) {
@@ -79,7 +212,7 @@ fn run(args: Args) -> Result<(), String> {
         return Ok(());
     }
     if args.has("help") || args.has("h") {
-        print_usage();
+        CLI.print_help("rns-sentineld");
         return Ok(());
     }
 
@@ -891,58 +1024,54 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     SHOULD_STOP.store(true, Ordering::Relaxed);
 }
 
-fn print_usage() {
-    println!("Usage: rns-sentineld [OPTIONS]");
-    println!();
-    println!("Options:");
-    println!("  --config PATH, -c PATH      Path to config directory");
-    println!("  --socket PATH               Provider bridge socket override");
-    println!("  --ready-file PATH           Write readiness contract file once operational");
-    println!("  --priority N                 Hook priority (default: 0)");
-    println!(
-        "  --write-stall-threshold N    Write stalls before blacklist (default: {})",
-        DEFAULT_WRITE_STALL_THRESHOLD
-    );
-    println!(
-        "  --idle-timeout-threshold N   Idle timeouts before blacklist (default: {})",
-        DEFAULT_IDLE_TIMEOUT_THRESHOLD
-    );
-    println!(
-        "  --event-window SECS          Sliding window for event counting (default: {})",
-        DEFAULT_EVENT_WINDOW.as_secs()
-    );
-    println!(
-        "  --write-stall-window SECS    Sliding window for write stalls (default: event-window)"
-    );
-    println!(
-        "  --idle-timeout-window SECS   Sliding window for idle timeouts (default: event-window)"
-    );
-    println!(
-        "  --flap-threshold N           Silent reconnect flaps before blacklist (default: {})",
-        DEFAULT_FLAP_THRESHOLD
-    );
-    println!(
-        "  --flap-window SECS           Sliding window for flap detection (default: event-window)"
-    );
-    println!("  --flap-max-connection-age SECS  Max silent connection age counted as a flap (default: {})", DEFAULT_FLAP_MAX_CONNECTION_AGE.as_secs());
-    println!(
-        "  --connect-rate-threshold N   Connection attempts before blacklist (default: {})",
-        DEFAULT_CONNECT_RATE_THRESHOLD
-    );
-    println!("  --connect-rate-window SECS   Sliding window for connect-rate detection (default: event-window)");
-    println!(
-        "  --base-blacklist SECS        Base blacklist duration (default: {})",
-        DEFAULT_BASE_BLACKLIST_SECS
-    );
-    println!("  --penalty-decay-interval SECS  Idle time needed to decay blacklist level by 1 (default: 0)");
-    println!("  --version                    Print version");
-    println!("  --help, -h                   Print this help");
-    println!("  -v                           Increase verbosity");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_states_the_defaults() {
+        let help = CLI.help_text_at("rns-sentineld", 80);
+        let flat = help
+            .lines()
+            .skip_while(|line| !line.starts_with("options:"))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (option, default) in [
+            (
+                "--write-stall-threshold",
+                DEFAULT_WRITE_STALL_THRESHOLD as u64,
+            ),
+            (
+                "--idle-timeout-threshold",
+                DEFAULT_IDLE_TIMEOUT_THRESHOLD as u64,
+            ),
+            ("--event-window", DEFAULT_EVENT_WINDOW.as_secs()),
+            ("--flap-threshold", DEFAULT_FLAP_THRESHOLD as u64),
+            (
+                "--flap-max-connection-age",
+                DEFAULT_FLAP_MAX_CONNECTION_AGE.as_secs(),
+            ),
+            (
+                "--connect-rate-threshold",
+                DEFAULT_CONNECT_RATE_THRESHOLD as u64,
+            ),
+            ("--base-blacklist", DEFAULT_BASE_BLACKLIST_SECS),
+        ] {
+            // The help after the option, wrapped or not.
+            let at = flat
+                .find(&format!("{option} "))
+                .unwrap_or_else(|| panic!("{option} not in:\n{help}"));
+            let rest = &flat[at..];
+            let default_at = rest.find("(default: ").unwrap();
+            assert!(
+                rest[default_at..].starts_with(&format!("(default: {default})")),
+                "{option}: {rest}"
+            );
+        }
+    }
 
     fn make_event(
         attach_point: &str,

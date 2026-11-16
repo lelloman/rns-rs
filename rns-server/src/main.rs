@@ -39,21 +39,23 @@ fn main() {
 }
 
 fn run_internal_role(role: &str) -> ! {
-    let child_args = CliArgs::parse_from(sanitized_internal_argv());
+    let argv = sanitized_internal_argv();
     match role {
-        "rnsd" => rns_cli::rnsd::main_entry_from(child_args),
+        "rnsd" => rns_cli::rnsd::main_entry_from(CliArgs::parse_from(argv)),
         #[cfg(any(
             feature = "rns-hooks-native",
             feature = "rns-hooks-wasm",
             feature = "rns-hooks-builtin"
         ))]
-        "rns-sentineld" => rns_cli::sentineld::main_entry_from(child_args),
+        "rns-sentineld" => {
+            rns_cli::sentineld::main_entry_from(rns_cli::sentineld::parse_args(argv))
+        }
         #[cfg(any(
             feature = "rns-hooks-native",
             feature = "rns-hooks-wasm",
             feature = "rns-hooks-builtin"
         ))]
-        "rns-statsd" => rns_cli::statsd::main_entry_from(child_args),
+        "rns-statsd" => rns_cli::statsd::main_entry_from(rns_cli::statsd::parse_args(argv)),
         other => {
             eprintln!("rns-server: unknown internal role '{}'", other);
             std::process::exit(1);
