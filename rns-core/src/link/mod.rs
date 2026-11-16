@@ -13,7 +13,7 @@ use rns_crypto::Rng;
 
 use crate::constants::{
     LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, LINK_MTU_MAX,
-    LINK_MTU_MIN, MTU, PATHFINDER_M,
+    LINK_MTU_MIN, LINK_WATCHDOG_MAX_SLEEP, MTU, PATHFINDER_M,
 };
 
 pub use types::{LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason};
@@ -62,9 +62,11 @@ pub struct LinkEngine {
     rtt: Option<f64>,
     keepalive_interval: f64,
     stale_time: f64,
-    /// When the link went stale; it closes `stale_close_timeout` later
-    /// unless inbound traffic recovers it first.
-    stale_since: Option<f64>,
+    /// When the watchdog next runs. Python's `__watchdog_job` sleeps between
+    /// its checks instead of evaluating the link continuously, and the
+    /// moments it wakes decide when keepalives go out and when the link goes
+    /// stale; `tick` replays that schedule.
+    watchdog_at: f64,
     establishment_timeout: f64,
     expected_hops: u8,
     /// Time of the first authenticated terminus hop rebalance.
@@ -161,12 +163,12 @@ impl LinkEngine {
             activated_at: None,
             last_inbound: now,
             last_outbound: now,
-            last_keepalive: now,
+            last_keepalive: 0.0,
             last_proof: 0.0,
             rtt: None,
             keepalive_interval: LINK_KEEPALIVE_MAX,
             stale_time: LINK_KEEPALIVE_MAX * 2.0,
-            stale_since: None,
+            watchdog_at: 0.0,
             establishment_timeout: compute_establishment_timeout(
                 LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
                 hops,
@@ -256,12 +258,12 @@ impl LinkEngine {
             activated_at: None,
             last_inbound: now,
             last_outbound: now,
-            last_keepalive: now,
+            last_keepalive: 0.0,
             last_proof: 0.0,
             rtt: None,
             keepalive_interval: LINK_KEEPALIVE_MAX,
             stale_time: LINK_KEEPALIVE_MAX * 2.0,
-            stale_since: None,
+            watchdog_at: 0.0,
             establishment_timeout: compute_establishment_timeout(
                 LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
                 hops,
@@ -559,7 +561,6 @@ impl LinkEngine {
         self.last_inbound = now;
         if self.state == LinkState::Stale {
             self.state = LinkState::Active;
-            self.stale_since = None;
             return alloc::vec![LinkAction::StateChanged {
                 link_id: self.link_id,
                 new_state: LinkState::Active,
@@ -602,77 +603,88 @@ impl LinkEngine {
         self.tx_bytes = self.tx_bytes.saturating_add(data_len as u64);
     }
 
-    /// Periodic tick: check keepalive, stale, timeouts.
+    /// Periodic tick: run the link watchdog if it is due.
+    ///
+    /// Replays Python's `Link.__watchdog_job`: each run evaluates the link
+    /// once and schedules the next run like the Python thread's sleep, capped
+    /// at `WATCHDOG_MAX_SLEEP`. Calling `tick` before then does nothing, so
+    /// the outcome does not depend on how often the caller ticks.
+    ///
+    /// While ACTIVE, once either direction has been quiet for a keepalive
+    /// interval, an initiator whose last keepalive is at least that old is
+    /// asked to send one ([`LinkAction::SendKeepalive`], recorded as sent),
+    /// and in the same run the link goes STALE if nothing arrived for
+    /// `stale_time`. The keepalive goes out first, so the peer's answer can
+    /// still recover the link. A STALE link closes with `Timeout` on the
+    /// next run unless an inbound packet reactivated it meanwhile.
     pub fn tick(&mut self, now: f64) -> Vec<LinkAction> {
         let mut actions = Vec::new();
+        if now < self.watchdog_at {
+            return actions;
+        }
 
-        match self.state {
+        let sleep = match self.state {
             LinkState::Pending | LinkState::Handshake => {
                 if is_establishment_timeout(self.request_time, self.establishment_timeout, now) {
-                    self.state = LinkState::Closed;
-                    actions.push(LinkAction::StateChanged {
-                        link_id: self.link_id,
-                        new_state: LinkState::Closed,
-                        reason: Some(TeardownReason::Timeout),
-                    });
+                    self.close_on_timeout(&mut actions);
+                    0.001
+                } else {
+                    self.request_time + self.establishment_timeout - now
                 }
             }
             LinkState::Active => {
                 let activated = self.activated_at.unwrap_or(0.0);
                 // Python: max(max(self.last_inbound, self.last_proof), activated_at)
                 let last_inbound = self.last_inbound.max(self.last_proof).max(activated);
+                let keepalive = self.keepalive_interval;
 
-                if should_go_stale(last_inbound, self.stale_time, now) {
-                    self.state = LinkState::Stale;
-                    self.stale_since = Some(now);
-                    actions.push(LinkAction::StateChanged {
-                        link_id: self.link_id,
-                        new_state: LinkState::Stale,
-                        reason: None,
-                    });
+                if now >= last_inbound + keepalive || now >= self.last_outbound + keepalive {
+                    if self.is_initiator
+                        && should_send_keepalive(self.last_keepalive, keepalive, now)
+                    {
+                        actions.push(LinkAction::SendKeepalive {
+                            link_id: self.link_id,
+                        });
+                        self.record_outbound(now, true);
+                    }
+
+                    if should_go_stale(last_inbound, self.stale_time, now) {
+                        self.state = LinkState::Stale;
+                        actions.push(LinkAction::StateChanged {
+                            link_id: self.link_id,
+                            new_state: LinkState::Stale,
+                            reason: None,
+                        });
+                        let rtt = self.rtt.filter(|rtt| rtt.is_finite()).unwrap_or(0.0);
+                        stale_close_timeout(rtt)
+                    } else {
+                        keepalive
+                    }
+                } else {
+                    last_inbound + keepalive - now
                 }
             }
             LinkState::Stale => {
-                // Python's watchdog sleeps `rtt * KEEPALIVE_TIMEOUT_FACTOR +
-                // STALE_GRACE` after marking the link stale and only closes
-                // it if no inbound packet reactivated it meanwhile.
-                let rtt = self.rtt.filter(|rtt| rtt.is_finite()).unwrap_or(0.0);
-                let stale_since = self.stale_since.unwrap_or(now);
-                if now >= stale_since + stale_close_timeout(rtt) {
-                    self.state = LinkState::Closed;
-                    self.stale_since = None;
-                    actions.push(LinkAction::StateChanged {
-                        link_id: self.link_id,
-                        new_state: LinkState::Closed,
-                        reason: Some(TeardownReason::Timeout),
-                    });
-                }
+                // Python sends LINKCLOSE here; the caller does that when it
+                // sees a STALE link close with `Timeout`.
+                self.close_on_timeout(&mut actions);
+                0.001
             }
-            LinkState::Closed => {}
-        }
+            LinkState::Closed => return actions,
+        };
 
+        // A NaN sleep falls back to the cap, like any too-long one.
+        self.watchdog_at = now + sleep.min(LINK_WATCHDOG_MAX_SLEEP);
         actions
     }
 
-    /// Check if a keepalive should be sent. Returns true if conditions are met.
-    pub fn needs_keepalive(&self, now: f64) -> bool {
-        if self.state != LinkState::Active || !self.is_initiator {
-            return false;
-        }
-        let activated = self.activated_at.unwrap_or(0.0);
-        let last_inbound = self.last_inbound.max(self.last_proof).max(activated);
-
-        // Initiators probe whenever either direction has been quiet for a full
-        // interval. In particular, continuous responder-to-initiator traffic
-        // must not suppress the probe that keeps the responder's inbound timer
-        // alive.
-        let inbound_quiet = now >= last_inbound + self.keepalive_interval;
-        let outbound_quiet = now >= self.last_outbound + self.keepalive_interval;
-        if !inbound_quiet && !outbound_quiet {
-            return false;
-        }
-
-        should_send_keepalive(self.last_keepalive, self.keepalive_interval, now)
+    fn close_on_timeout(&mut self, actions: &mut Vec<LinkAction>) {
+        self.state = LinkState::Closed;
+        actions.push(LinkAction::StateChanged {
+            link_id: self.link_id,
+            new_state: LinkState::Closed,
+            reason: Some(TeardownReason::Timeout),
+        });
     }
 
     /// Return whether a received keepalive probe needs a responder reply.
@@ -859,7 +871,7 @@ use alloc::vec;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{LINK_MDU, LINK_STALE_GRACE};
+    use crate::constants::{LINK_KEEPALIVE_MIN, LINK_MDU, LINK_STALE_GRACE};
     use rns_crypto::FixedRng;
 
     fn make_rng(seed: u8) -> FixedRng {
@@ -1170,65 +1182,47 @@ mod tests {
         assert_eq!(engine.state(), LinkState::Closed);
     }
 
+    fn sends_keepalive(actions: &[LinkAction]) -> bool {
+        actions
+            .iter()
+            .any(|action| matches!(action, LinkAction::SendKeepalive { .. }))
+    }
+
+    fn changes_state(actions: &[LinkAction], state: LinkState) -> bool {
+        actions.iter().any(
+            |action| matches!(action, LinkAction::StateChanged { new_state, .. } if *new_state == state),
+        )
+    }
+
+    /// An active pair on a fast path: keepalive 5 s, stale time 10 s.
+    fn fast_link_pair() -> (LinkEngine, LinkEngine) {
+        let (mut initiator, mut responder, _) = active_link_pair();
+        initiator.set_rtt(0.001);
+        responder.set_rtt(0.001);
+        assert_eq!(initiator.keepalive_interval(), LINK_KEEPALIVE_MIN);
+        assert_eq!(initiator.stale_time, 2.0 * LINK_KEEPALIVE_MIN);
+        (initiator, responder)
+    }
+
     #[test]
     fn test_tick_stale_and_close() {
-        let mut rng_id = make_rng(0x01);
-        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
-        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
-        let dest_hash = [0xDD; 16];
-
-        let mut rng_init = make_rng(0x10);
-        let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash,
-            1,
-            LinkMode::Aes256Cbc,
-            Some(500),
-            100.0,
-            &mut rng_init,
-        );
-        let mut hashable = Vec::new();
-        hashable.push(0x00);
-        hashable.push(0x00);
-        hashable.extend_from_slice(&dest_hash);
-        hashable.push(0x00);
-        hashable.extend_from_slice(&request_data);
-        initiator.set_link_id_from_hashable(&hashable, request_data.len());
-
-        let mut rng_resp = make_rng(0x20);
-        let (_, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv,
-            &dest_sig_pub_bytes,
-            &request_data,
-            &hashable,
-            &dest_hash,
-            1,
-            100.5,
-            &mut rng_resp,
-        )
-        .unwrap();
-
-        let mut rng_lrrtt = make_rng(0x30);
-        initiator
-            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
-            .unwrap();
-        assert_eq!(initiator.state(), LinkState::Active);
-
-        // Advance time past stale_time
+        let (mut initiator, _) = fast_link_pair();
         let stale_time = initiator.stale_time;
+
+        // The run that finds the link stale still sends a probe first.
         let went_stale = 100.8 + stale_time + 1.0;
         let actions = initiator.tick(went_stale);
         assert_eq!(initiator.state(), LinkState::Stale);
-        assert_eq!(actions.len(), 1);
+        assert!(sends_keepalive(&actions));
+        assert!(changes_state(&actions, LinkState::Stale));
+        assert!(matches!(actions[0], LinkAction::SendKeepalive { .. }));
 
-        // STALE holds for `rtt * KEEPALIVE_TIMEOUT_FACTOR + STALE_GRACE`
-        // before closing, like the Python watchdog's stale sleep.
-        let grace = stale_close_timeout(initiator.rtt().unwrap());
-        assert!(grace >= LINK_STALE_GRACE);
-        let actions = initiator.tick(went_stale + grace - 0.1);
+        // STALE holds for the watchdog's stale sleep before closing.
+        let actions = initiator.tick(went_stale + LINK_WATCHDOG_MAX_SLEEP - 0.1);
         assert_eq!(initiator.state(), LinkState::Stale);
         assert!(actions.is_empty());
 
-        let actions = initiator.tick(went_stale + grace);
+        let actions = initiator.tick(went_stale + LINK_WATCHDOG_MAX_SLEEP);
         assert_eq!(initiator.state(), LinkState::Closed);
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -1239,11 +1233,27 @@ mod tests {
                 ..
             }
         ));
+        assert!(initiator.tick(went_stale + 100.0).is_empty());
+    }
+
+    #[test]
+    fn stale_grace_is_capped_at_the_watchdog_max_sleep() {
+        // `rtt * KEEPALIVE_TIMEOUT_FACTOR + STALE_GRACE` is 13 s here, but
+        // the Python watchdog never sleeps longer than WATCHDOG_MAX_SLEEP.
+        let (mut initiator, _, _) = active_link_pair();
+        initiator.set_rtt(2.0);
+        assert!(stale_close_timeout(2.0) > LINK_WATCHDOG_MAX_SLEEP);
+        assert!(stale_close_timeout(2.0) >= LINK_STALE_GRACE);
+        let went_stale = 100.8 + initiator.stale_time + 1.0;
+        initiator.tick(went_stale);
+        assert_eq!(initiator.state(), LinkState::Stale);
+        initiator.tick(went_stale + LINK_WATCHDOG_MAX_SLEEP);
+        assert_eq!(initiator.state(), LinkState::Closed);
     }
 
     #[test]
     fn inbound_during_stale_grace_reactivates_the_link() {
-        let (mut initiator, _, _) = active_link_pair();
+        let (mut initiator, _) = fast_link_pair();
         let stale_time = initiator.stale_time;
         let went_stale = 101.0 + stale_time + 1.0;
         initiator.tick(went_stale);
@@ -1253,12 +1263,13 @@ mod tests {
         assert_eq!(initiator.state(), LinkState::Active);
         assert_eq!(actions.len(), 1);
 
-        // The recovered link only goes stale again after a full quiet period.
-        let grace = stale_close_timeout(initiator.rtt().unwrap());
-        assert!(initiator.tick(went_stale + grace + 1.0).is_empty());
+        // The next run finds the link active again; it only goes stale
+        // after another full quiet period.
+        let actions = initiator.tick(went_stale + LINK_WATCHDOG_MAX_SLEEP);
+        assert!(!changes_state(&actions, LinkState::Stale));
         assert_eq!(initiator.state(), LinkState::Active);
-        initiator.tick(went_stale + 1.0 + stale_time);
-        assert_eq!(initiator.state(), LinkState::Stale);
+        let actions = initiator.tick(went_stale + 1.0 + stale_time);
+        assert!(changes_state(&actions, LinkState::Stale));
     }
 
     #[test]
@@ -1267,7 +1278,8 @@ mod tests {
         let stale_time = initiator.stale_time;
         // Only proofs come back for a long stream of confirmed sends.
         initiator.record_proof(101.0 + stale_time - 1.0);
-        assert!(initiator.tick(101.0 + stale_time + 1.0).is_empty());
+        let actions = initiator.tick(101.0 + stale_time + 1.0);
+        assert!(!changes_state(&actions, LinkState::Stale));
         assert_eq!(initiator.state(), LinkState::Active);
 
         // A stale link is not reactivated by a proof alone.
@@ -1278,52 +1290,15 @@ mod tests {
     }
 
     #[test]
-    fn test_needs_keepalive() {
-        let mut rng_id = make_rng(0x01);
-        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
-        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
-        let dest_hash = [0xDD; 16];
-
-        let mut rng_init = make_rng(0x10);
-        let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash,
-            1,
-            LinkMode::Aes256Cbc,
-            Some(500),
-            100.0,
-            &mut rng_init,
-        );
-        let mut hashable = Vec::new();
-        hashable.push(0x00);
-        hashable.push(0x00);
-        hashable.extend_from_slice(&dest_hash);
-        hashable.push(0x00);
-        hashable.extend_from_slice(&request_data);
-        initiator.set_link_id_from_hashable(&hashable, request_data.len());
-
-        let mut rng_resp = make_rng(0x20);
-        let (_, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv,
-            &dest_sig_pub_bytes,
-            &request_data,
-            &hashable,
-            &dest_hash,
-            1,
-            100.5,
-            &mut rng_resp,
-        )
-        .unwrap();
-
-        let mut rng_lrrtt = make_rng(0x30);
-        initiator
-            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
-            .unwrap();
-
-        let ka = initiator.keepalive_interval();
-        // Not yet
-        assert!(!initiator.needs_keepalive(100.8 + ka - 1.0));
-        // Past keepalive
-        assert!(initiator.needs_keepalive(100.8 + ka + 1.0));
+    fn initiator_probes_once_inbound_is_quiet_for_a_keepalive() {
+        let (mut initiator, _) = fast_link_pair();
+        let keepalive = initiator.keepalive_interval();
+        // Activated at 100.8: the first run sleeps until a keepalive after.
+        assert!(initiator.tick(101.0).is_empty());
+        assert!(initiator.tick(100.8 + keepalive - 0.01).is_empty());
+        let actions = initiator.tick(100.8 + keepalive);
+        assert!(sends_keepalive(&actions));
+        assert_eq!(initiator.state(), LinkState::Active);
     }
 
     #[test]
@@ -1335,7 +1310,7 @@ mod tests {
         initiator.record_inbound(now - 0.1);
         initiator.record_outbound(now - keepalive - 0.1, false);
 
-        assert!(initiator.needs_keepalive(now));
+        assert!(sends_keepalive(&initiator.tick(now)));
     }
 
     #[test]
@@ -1347,7 +1322,7 @@ mod tests {
         initiator.record_inbound(now - keepalive - 0.1);
         initiator.record_outbound(now - 0.1, false);
 
-        assert!(initiator.needs_keepalive(now));
+        assert!(sends_keepalive(&initiator.tick(now)));
     }
 
     #[test]
@@ -1358,56 +1333,109 @@ mod tests {
         initiator.record_inbound(now - 0.1);
         initiator.record_outbound(now - 0.1, false);
 
-        assert!(!initiator.needs_keepalive(now));
+        assert!(initiator.tick(now).is_empty());
     }
 
     #[test]
-    fn test_needs_keepalive_responder() {
-        let mut rng_id = make_rng(0x01);
-        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
-        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
-        let dest_hash = [0xDD; 16];
+    fn initiator_does_not_probe_again_within_a_keepalive() {
+        let (mut initiator, _) = fast_link_pair();
+        let now = 1_000.0;
+        initiator.record_inbound(now - 7.0);
+        initiator.record_outbound(now - 7.0, false);
+        initiator.record_outbound(now - 1.0, true);
 
-        let mut rng_init = make_rng(0x10);
-        let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash,
-            1,
-            LinkMode::Aes256Cbc,
-            Some(500),
-            100.0,
-            &mut rng_init,
-        );
-        let mut hashable = Vec::new();
-        hashable.push(0x00);
-        hashable.push(0x00);
-        hashable.extend_from_slice(&dest_hash);
-        hashable.push(0x00);
-        hashable.extend_from_slice(&request_data);
-        initiator.set_link_id_from_hashable(&hashable, request_data.len());
+        // Inbound has been quiet for a keepalive, but the last probe is too
+        // recent to send another.
+        let actions = initiator.tick(now);
+        assert!(!sends_keepalive(&actions));
+    }
 
-        let mut rng_resp = make_rng(0x20);
-        let (mut responder, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv,
-            &dest_sig_pub_bytes,
-            &request_data,
-            &hashable,
-            &dest_hash,
-            1,
-            100.5,
-            &mut rng_resp,
-        )
-        .unwrap();
+    #[test]
+    fn responder_never_probes() {
+        let (_, mut responder) = fast_link_pair();
+        let mut now = 101.0;
+        while now < 200.0 {
+            assert!(!sends_keepalive(&responder.tick(now)));
+            now += 0.5;
+        }
+        // Nothing arrived: it timed out like any silent link.
+        assert_eq!(responder.state(), LinkState::Closed);
+    }
 
-        let mut rng_lrrtt = make_rng(0x30);
-        let (lrrtt_encrypted, _) = initiator
-            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
-            .unwrap();
-        responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
+    #[test]
+    fn the_watchdog_runs_on_its_own_schedule_not_on_every_tick() {
+        // Python's watchdog wakes a keepalive after each probe. A link whose
+        // stale time runs out between two wakes goes stale at the next wake,
+        // together with that wake's probe, not on the first tick past it.
+        let (mut initiator, _) = fast_link_pair();
+        initiator.record_inbound(1_000.0);
+        initiator.record_outbound(1_000.0, false);
+        // The watchdog last ran at 1_000.5 and slept a keepalive.
+        assert!(sends_keepalive(&initiator.tick(1_005.5)));
+        // Unanswered. The stale time runs out at 1_010.0 ...
+        assert!(initiator.tick(1_010.0).is_empty());
+        assert!(initiator.tick(1_010.4).is_empty());
+        assert_eq!(initiator.state(), LinkState::Active);
+        // ... and the link goes stale at the next wake, which probes again.
+        let actions = initiator.tick(1_010.5);
+        assert!(sends_keepalive(&actions));
+        assert!(changes_state(&actions, LinkState::Stale));
+    }
 
-        let ka = responder.keepalive_interval();
-        // Only the initiator emits probes. The responder replies to probes.
-        assert!(!responder.needs_keepalive(101.0 + ka - 1.0));
-        assert!(!responder.needs_keepalive(101.0 + ka + 1.0));
+    #[test]
+    fn the_watchdog_sleeps_until_inbound_goes_quiet() {
+        // While nothing is due it sleeps until `last_inbound + keepalive`,
+        // not longer.
+        let (mut initiator, _) = fast_link_pair();
+        initiator.record_inbound(1_000.0);
+        initiator.record_outbound(1_000.0, false);
+        assert!(initiator.tick(1_002.0).is_empty());
+        assert!(initiator.tick(1_004.99).is_empty());
+        assert!(sends_keepalive(&initiator.tick(1_005.0)));
+    }
+
+    #[test]
+    fn idle_fast_link_survives_unanswered_probes() {
+        // Initiator and responder engines over a path with a few
+        // milliseconds of varying delay, ticked every second like the
+        // driver. The responder skips its answer when it sent anything
+        // within a keepalive, so with probes exactly a keepalive apart some
+        // go unanswered; the watchdog only checks for staleness when it
+        // probes, and that probe's answer keeps the link up.
+        let (mut initiator, mut responder) = fast_link_pair();
+        let delays = [0.004, 0.001, 0.003, 0.0005, 0.002];
+        let mut sent = 0;
+        let mut answered = 0;
+        let mut now = 101.3;
+        let mut step = 0;
+        while now < 101.3 + 600.0 {
+            if sends_keepalive(&initiator.tick(now)) {
+                sent += 1;
+                let delay = delays[step % delays.len()];
+                step += 1;
+                let arrival = now + delay;
+                responder.record_inbound(arrival);
+                if responder.should_reply_keepalive(&[0xff], arrival) {
+                    responder.record_outbound(arrival, true);
+                    answered += 1;
+                    initiator.record_inbound(arrival + delay);
+                }
+            }
+            responder.tick(now);
+            assert_ne!(
+                initiator.state(),
+                LinkState::Closed,
+                "initiator closed at {now}"
+            );
+            assert_ne!(
+                responder.state(),
+                LinkState::Closed,
+                "responder closed at {now}"
+            );
+            now += 1.0;
+        }
+        assert!(sent >= 100, "{sent} probes");
+        assert!(answered < sent, "every probe was answered; nothing tested");
     }
 
     #[test]

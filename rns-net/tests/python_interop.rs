@@ -54,6 +54,10 @@ enum RustEvent {
     ResourceCompleted {
         link_id: [u8; 16],
     },
+    LinkClosed {
+        link_id: [u8; 16],
+        reason: Option<rns_core::link::TeardownReason>,
+    },
 }
 
 struct TestCallbacks {
@@ -84,6 +88,13 @@ impl Callbacks for TestCallbacks {
         let _ = self.tx.send(RustEvent::LinkEstablished {
             link_id: link_id.0,
             is_initiator,
+        });
+    }
+
+    fn on_link_closed(&mut self, link_id: LinkId, reason: Option<rns_core::link::TeardownReason>) {
+        let _ = self.tx.send(RustEvent::LinkClosed {
+            link_id: link_id.0,
+            reason,
         });
     }
 
@@ -600,7 +611,12 @@ def inbound_link_established(link):
         peer_pub_hex=link.peer_pub_bytes.hex(),
         peer_sig_pub_hex=link.peer_sig_pub_bytes.hex(),
     )
+    link.set_link_closed_callback(inbound_link_closed)
     RNS.Packet(link, b"python-to-rust over stamped link").send()
+
+def inbound_link_closed(link):
+    emit("python_inbound_link_closed", link_id=link.link_id.hex(), status=link.status,
+         reason=link.teardown_reason)
 
 destination.set_link_established_callback(inbound_link_established)
 
@@ -706,6 +722,10 @@ try:
                 emit("python_resource_sending", app_flag=app_flag)
                 kwargs = {"app_flag": True} if app_flag else {}
                 RNS.Resource(bytes((i % 251 for i in range(100000))), rust_link, callback=resource_sent, auto_compress=False, **kwargs)
+        elif command == "link_status":
+            emit("python_link_status",
+                 outbound=None if rust_link is None else rust_link.status,
+                 inbound=None if python_inbound_link is None else python_inbound_link.status)
         elif command == "tunnels":
             emit("python_tunnels", tunnels=[
                 {"tunnel_id": tid.hex(), "interface": str(entry[1]),
@@ -1434,4 +1454,140 @@ fn python_rns_local_ratchets_bidirectional_and_restart() {
     assert!(
         python.wait_for_event(TIMEOUT, |e| e["event"] == "ratchet_decrypted")["data_hex"].is_null()
     );
+}
+
+/// Idle links between rns-rs and Python Reticulum stay open, in both
+/// directions. Over TCP loopback the RTT is tiny, so both sides use the
+/// minimum keepalive (5 s) and stale time (10 s): the initiator's probes,
+/// the responder's conditional replies and the stale recovery must line up
+/// with upstream's watchdog, or the link times out after a few probes.
+#[test]
+#[ignore = "keeps two links idle for over a minute"]
+fn python_rns_idle_links_stay_open() {
+    const IDLE: Duration = Duration::from_secs(75);
+
+    if !rns_available() {
+        eprintln!("Skipping: Python RNS not available");
+        return;
+    }
+
+    let mut python = PythonRns::spawn();
+    let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
+    let port = ready["port"].as_u64().unwrap() as u16;
+    let python_dest_hash = DestHash(parse_hex_16(ready["python_dest_hash"].as_str().unwrap()));
+
+    let (rust_tx, rust_rx) = mpsc::channel();
+    let node = start_rust_node(port, rust_tx);
+
+    let rust_identity = Identity::new(&mut OsRng);
+    let rust_dest = Destination::single_in(
+        APP_NAME,
+        &[RUST_ASPECT],
+        IdentityHash(*rust_identity.hash()),
+    );
+    node.register_destination(rust_dest.hash.0, rust_dest.dest_type.to_wire_constant())
+        .expect("Rust destination registration should succeed");
+    let rust_private = rust_identity.get_private_key().unwrap();
+    let rust_public = rust_identity.get_public_key().unwrap();
+    let mut rust_sig_private = [0u8; 32];
+    let mut rust_sig_public = [0u8; 32];
+    rust_sig_private.copy_from_slice(&rust_private[32..64]);
+    rust_sig_public.copy_from_slice(&rust_public[32..64]);
+    node.register_link_destination(rust_dest.hash.0, rust_sig_private, rust_sig_public, 1)
+        .expect("Rust link destination registration should succeed");
+
+    // Rust initiates a link to Python.
+    let python_announce = request_python_announce(&mut python, &rust_rx, python_dest_hash, TIMEOUT);
+    let mut python_sig_pub = [0u8; 32];
+    python_sig_pub.copy_from_slice(&python_announce.public_key[32..64]);
+    let rust_initiated = node
+        .create_link(python_dest_hash.0, python_sig_pub)
+        .expect("Rust should create a link to Python");
+    wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+        RustEvent::LinkEstablished {
+            link_id,
+            is_initiator: true,
+        } if *link_id == rust_initiated => Some(()),
+        _ => None,
+    })
+    .expect("Rust initiator should establish its link");
+    python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_inbound_link_established"
+            && event["link_id"] == hex(&rust_initiated)
+    });
+
+    // Python initiates a link to Rust.
+    node.try_announce(&rust_dest, &rust_identity, Some(RUST_APP_DATA))
+        .expect("Rust announce should be admitted")
+        .wait()
+        .expect("Rust announce should send to Python");
+    python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_sent_packet_to_rust"
+            && event["dest_hash"] == hex(&rust_dest.hash.0)
+    });
+    python.command("link_rust");
+    let python_link =
+        python.wait_for_event(TIMEOUT, |event| event["event"] == "python_link_established");
+    let python_initiated = parse_hex_16(python_link["link_id"].as_str().unwrap());
+    wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+        RustEvent::LinkEstablished {
+            link_id,
+            is_initiator: false,
+        } if *link_id == python_initiated => Some(()),
+        _ => None,
+    })
+    .expect("Rust responder should establish the Python-initiated link");
+
+    eprintln!(
+        "idle links: Rust-initiated {}, Python-initiated {}",
+        hex(&rust_initiated),
+        hex(&python_initiated)
+    );
+
+    // Leave both links idle; neither side may close either of them.
+    let started = Instant::now();
+    let rust_closed = wait_for_rust_event(&rust_rx, IDLE, |event| match event {
+        RustEvent::LinkClosed { link_id, reason } => Some((hex(link_id), *reason)),
+        _ => None,
+    });
+    assert_eq!(
+        rust_closed,
+        None,
+        "a Rust link closed after {:?} idle",
+        started.elapsed()
+    );
+    let python_closed = python.try_wait_for_event(Duration::from_millis(500), |event| {
+        event["event"] == "python_link_closed" || event["event"] == "python_inbound_link_closed"
+    });
+    assert_eq!(python_closed, None, "a Python link closed while idle");
+
+    // Both links are still usable in both directions: STALE recovers to
+    // ACTIVE on the next inbound packet, so only CLOSED (0x04) is a failure.
+    python.command("link_status");
+    let status = python.wait_for_event(TIMEOUT, |event| event["event"] == "python_link_status");
+    assert_ne!(status["outbound"], 0x04, "Python's outbound link closed");
+    assert_ne!(status["inbound"], 0x04, "Python's inbound link closed");
+    for link_id in [rust_initiated, python_initiated] {
+        let state = node
+            .query_link(link_id)
+            .expect("the driver should answer")
+            .map(|link| link.state);
+        assert!(
+            matches!(state.as_deref(), Some("active" | "stale")),
+            "Rust link {} is {state:?}",
+            hex(&link_id)
+        );
+    }
+    futures::executor::block_on(node.send_on_link(rust_initiated, b"still here".to_vec(), 0))
+        .expect("Rust should send on its idle link");
+    python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_inbound_link_packet" && event["data_hex"] == hex(b"still here")
+    });
+    futures::executor::block_on(node.send_on_link(python_initiated, b"still here".to_vec(), 0))
+        .expect("Rust should send on the idle Python-initiated link");
+    python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_link_packet" && event["data_hex"] == hex(b"still here")
+    });
+
+    node.shutdown();
 }
