@@ -1515,6 +1515,70 @@ fn keepalive_ack_does_not_create_ping_pong_reply() {
     assert!(keepalive_packets(&actions).is_empty());
 }
 
+fn packed_link_packet(link_id: &LinkId, packet_type: u8, context: u8, data: &[u8]) -> Vec<u8> {
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_LINK,
+        packet_type,
+    };
+    RawPacket::pack_raw_with_hash(flags, 0, link_id, None, context, data)
+        .unwrap()
+        .0
+}
+
+/// Python's `Link.__receive` counts a packet as inbound before it decrypts
+/// or dispatches it: an undecryptable packet and a resource proof both
+/// reactivate a stale link, a proof of a sent packet does not.
+#[test]
+fn every_received_link_packet_counts_as_inbound() {
+    let cases = [
+        (constants::PACKET_TYPE_DATA, constants::CONTEXT_NONE, true),
+        (
+            constants::PACKET_TYPE_DATA,
+            constants::CONTEXT_REQUEST,
+            true,
+        ),
+        (
+            constants::PACKET_TYPE_DATA,
+            constants::CONTEXT_RESOURCE,
+            true,
+        ),
+        (
+            constants::PACKET_TYPE_PROOF,
+            constants::CONTEXT_RESOURCE_PRF,
+            true,
+        ),
+        (constants::PACKET_TYPE_PROOF, constants::CONTEXT_NONE, false),
+    ];
+    for (packet_type, context, counts) in cases {
+        let (mut initiator, _, link_id) = setup_active_link();
+        let engine = &mut initiator.links.get_mut(&link_id).unwrap().engine;
+        engine.tick(time::now() + 10_000.0);
+        assert_eq!(engine.state(), LinkState::Stale);
+        let raw = packed_link_packet(&link_id, packet_type, context, &[0x42; 64]);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        initiator.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut OsRng,
+        );
+        let expected = if counts {
+            LinkState::Active
+        } else {
+            LinkState::Stale
+        };
+        assert_eq!(
+            initiator.link_state(&link_id),
+            Some(expected),
+            "packet type {packet_type} context {context:#04x}"
+        );
+    }
+}
+
 /// Python drops a keepalive probe arriving at the initiator: it must not
 /// keep the initiator's side of the link alive nor count as traffic.
 #[test]
