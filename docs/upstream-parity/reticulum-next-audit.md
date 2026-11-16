@@ -63,7 +63,7 @@ Dispositions are provisional until each mapping commit lands.
 | 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Integrated | `configured_destination_types_take_names_or_bracketed_hashes`, `filter_section_takes_name_hashes_in_brackets`; `docs/configuration.md` |
 | 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Integrated | `an_interface_hop_limiter_applies_before_the_transport_one`, `interface_hop_limiter_parser_clamps_and_treats_zero_as_unset`, `dynamic_registration_inherits_announces_to_internal` extended; `docs/configuration.md` |
 | 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Integrated | `header_1_announce_leaves_room_for_a_transport_id`; `proptest_codec` generator updated |
-| 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Needs port | |
+| 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Integrated | `header_1_announce_without_transport_room_counts_a_protocol_violation` |
 | 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Needs decision | |
 | 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Needs coordinated port (with 14) | |
 | 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Needs coordinated port (with 13) | |
@@ -387,12 +387,22 @@ builds an announce that large.
 of room left under the MTU is a protocol violation ("Excessive announce
 payload").
 
-**Rust applicability:** The receiving side of commit 10, in the announce
-preprocessing reordered by commit 4.
+**Rust applicability:** The receiving side of commit 10. The announce size
+checks of upstream's preprocessing live in the driver's
+`admit_decoded_inbound`, before the engine's destination type filter.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** After the frame MTU check and before the
+payload-length check of commit 4, as upstream orders them, a `HEADER_1`
+announce whose frame (after IFAC unmasking) plus 16 bytes exceeds the MTU is
+a protocol violation, logged at debug level as "Excessive announce payload",
+and its frame is filtered. Test:
+`header_1_announce_without_transport_room_counts_a_protocol_violation` (one
+byte over and exactly at the boundary, with a blocked type so the one that
+passes admission is dropped without a violation of its own). A peer that
+still sends such announces, rns-rs before commit 10 or Python before
+`d077d1ab`, now gets the same violation count from rns-rs as from upstream.
 
-**Final disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 12. `e35bd08f` — Only run instance teardown at exit from main process
 

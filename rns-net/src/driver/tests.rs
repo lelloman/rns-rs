@@ -4709,6 +4709,47 @@ fn oversized_announce_of_a_blocked_type_counts_a_protocol_violation() {
     );
 }
 
+/// Upstream 715707b1: a HEADER_1 announce that leaves less than a transport
+/// id's room under the MTU is a protocol violation; one with exactly that
+/// room is not.
+#[test]
+fn header_1_announce_without_transport_room_counts_a_protocol_violation() {
+    let header_1_room = constants::MTU - RawPacket::data_offset(constants::HEADER_1);
+    for (len, violations) in [(header_1_room - 15, 1), (header_1_room - 16, 0)] {
+        let mut driver = new_test_driver();
+        register_test_generic_interface(&mut driver, 1, "announce-room");
+        // A blocked type, so an announce that passes admission is dropped
+        // by the type filter without a violation of its own.
+        driver
+            .engine
+            .destination_filter_mut()
+            .block([0x55; constants::NAME_HASH_LENGTH / 8]);
+        let packet = RawPacket::pack_with_max_mtu(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &[0xA8; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &vec![0x55; len],
+            constants::MTU * 2,
+        )
+        .unwrap();
+        let size = packet.raw.len() as u64;
+
+        driver.handle_frame_event(InterfaceId(1), packet.raw, None, None);
+
+        let stats = &driver.interfaces[&InterfaceId(1)].stats;
+        assert_eq!(stats.protocol_violations, violations, "length {len}");
+        assert_eq!(stats.frxb, size, "length {len}");
+    }
+}
+
 /// Upstream 096e6726: an announce payload shorter than a public key, a name
 /// hash and a random hash is a protocol violation, before the destination
 /// type filter, so it is one even for a blocked type. One byte more is not.
