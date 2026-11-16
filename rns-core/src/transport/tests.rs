@@ -6889,13 +6889,14 @@ fn held_announces_limit_applies_only_while_ingress_limiting() {
     let (a, announce_a) = signed_announce(0x11, "a");
     let (b, announce_b) = signed_announce(0x22, "b");
 
-    // Held: received traffic, not filtered.
+    // Held: filtered bytes until released (29dc449a), not a filtered
+    // announce.
     engine.handle_inbound(
         InboundFrame::new(&announce_a, InterfaceId(1), 10_000.0),
         &mut rng,
     );
     assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
-    assert_eq!(filtered_flags(&mut engine), (false, false));
+    assert_eq!(filtered_flags(&mut engine), (true, false));
 
     // Limiting with the hold full: a filtered announce.
     engine.handle_inbound(
@@ -7023,6 +7024,65 @@ fn held_and_released_announces_count_as_received() {
     assert_eq!(
         engine.take_announce_receipts(),
         vec![(InterfaceId(1), announce.len())]
+    );
+}
+
+#[test]
+fn held_frames_are_filtered_and_releases_are_charged_again() {
+    // Upstream 29dc449a: `preprocess_inbound` returns false after holding,
+    // so the held frame's bytes are filtered, and the release goes through
+    // `Transport.inbound` with accounting, so its frame is charged again.
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.started = 0.0;
+    engine.register_interface(inbound);
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let (accepted, announce_accepted) = signed_announce(0x77, "released");
+    let (_, announce_blackholed) = signed_announce(0x78, "blackholed");
+
+    for announce in [&announce_accepted, &announce_blackholed] {
+        engine.handle_inbound(
+            InboundFrame::new(announce, InterfaceId(1), 10_000.0),
+            &mut rng,
+        );
+        // Held: filtered bytes, but not a filtered announce.
+        assert_eq!(filtered_flags(&mut engine), (true, false));
+    }
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 2);
+    assert!(engine.take_released_traffic().is_empty());
+
+    // The second one's identity is blackholed while it is held.
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x78; 32]));
+    engine.blackhole_identity(*identity.hash(), 0.0, None, None);
+
+    engine.interfaces.get_mut(&InterfaceId(1)).unwrap().ia_freq = 0.0;
+    let mut now = 10_000.0 + constants::IC_BURST_PENALTY + 1.0;
+    let mut released = Vec::new();
+    while engine.held_announce_count(&InterfaceId(1)) > 0 {
+        engine.tick(now, &mut rng);
+        released.extend(engine.take_released_traffic());
+        now += constants::IC_HELD_RELEASE_INTERVAL + 1.0;
+    }
+    assert!(engine.has_path(&accepted));
+    released.sort_by_key(|traffic| traffic.filtered);
+    assert_eq!(
+        released,
+        vec![
+            ReleasedTraffic {
+                interface: InterfaceId(1),
+                size: announce_accepted.len(),
+                filtered: false,
+                filtered_announce: false,
+            },
+            ReleasedTraffic {
+                interface: InterfaceId(1),
+                size: announce_blackholed.len(),
+                filtered: true,
+                filtered_announce: true,
+            },
+        ]
     );
 }
 

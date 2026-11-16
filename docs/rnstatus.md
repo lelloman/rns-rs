@@ -133,7 +133,9 @@ blocked or not allowed destination type, failing to unpack or verify, from
 a blackholed identity, without a required stamp, or held by ingress control;
 and path requests that are duplicates, fail a required stamp or join one
 already in flight. A filtered frame is moved out of the received bytes and
-packets. The `frx`, `ftx`, `frxs` and `ftxs` sort keys order interfaces by
+packets. A held announce's frame is counted again when ingress control
+releases it: as received if it is then accepted, as filtered if not
+(upstream `29dc449a`). The `frx`, `ftx`, `frxs` and `ftxs` sort keys order interfaces by
 filtered bytes and rates. As upstream, nothing is counted as filtered on
 transmit, so the outbound figures stay zero.
 

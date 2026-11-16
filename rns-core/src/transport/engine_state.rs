@@ -42,6 +42,7 @@ impl TransportEngine {
             inbound_filtered: false,
             inbound_filtered_announce: false,
             announce_receipts: Vec::new(),
+            released_traffic: Vec::new(),
             stamp_requirements: StampRequirements::default(),
             destination_filter: Default::default(),
             control_destinations: [

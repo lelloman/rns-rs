@@ -56,6 +56,28 @@ impl Driver {
         }
     }
 
+    /// Charge the frames of held announces that ingress control released
+    /// during a tick. Since upstream 29dc449a a release goes through
+    /// `Transport.inbound` with accounting: its bytes count again, in `rxb`
+    /// and as a received packet when preprocessing accepts it, and in `frxb`
+    /// when it drops it, and a filtered announce counts in `afrxc`.
+    pub(crate) fn record_released_traffic(&mut self) {
+        for released in self.engine.take_released_traffic() {
+            if let Some(entry) = self.interfaces.get_mut(&released.interface) {
+                let size = released.size as u64;
+                if released.filtered {
+                    entry.stats.frxb = entry.stats.frxb.saturating_add(size);
+                } else {
+                    entry.stats.rxb = entry.stats.rxb.saturating_add(size);
+                    entry.stats.rx_packets = entry.stats.rx_packets.saturating_add(1);
+                }
+                if released.filtered_announce {
+                    entry.stats.afrxc = entry.stats.afrxc.saturating_add(1);
+                }
+            }
+        }
+    }
+
     /// Count a filtered announce on the receiving interface (upstream
     /// 819076c3 `Interface.filtered_announce`). Upstream also adds it to a
     /// spawned interface's parent; a listener's row sums its children.
@@ -173,9 +195,11 @@ impl Driver {
         if !entry.enabled || !entry.online {
             return;
         }
-        // The only place received traffic is counted. Only frames read from
-        // an interface arrive here: rns-rs keeps no packet cache to replay
-        // into inbound, which upstream d1837919 exempts from accounting.
+        // Where a received frame is counted. Only frames read from an
+        // interface arrive here: rns-rs keeps no packet cache to replay into
+        // inbound, which upstream d1837919 exempts from accounting. The one
+        // frame counted twice is a held announce, filtered when held and
+        // counted again on release (`record_released_traffic`, 29dc449a).
         if let Some(entry) = self.interfaces.get_mut(&interface_id) {
             entry.stats.rxb += data.len() as u64;
             entry.stats.rx_packets += 1;
@@ -700,7 +724,8 @@ impl Driver {
             );
         }
         let actions = self.engine.tick(now, &mut self.rng);
-        // Released held announces (upstream c850cdac).
+        // Released held announces (upstream c850cdac, 29dc449a).
+        self.record_released_traffic();
         self.record_announce_receipts();
         self.dispatch_all(actions);
         let link_actions = self.link_manager.tick(&mut self.rng);
