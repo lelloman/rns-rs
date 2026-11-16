@@ -627,7 +627,8 @@ impl Driver {
                 .map(|(id, tunnel)| (*id, std::sync::Arc::clone(tunnel)))
                 .collect();
             for (id, tunnel) in tunnels {
-                let Some(entry) = self.interfaces.get_mut(&id) else {
+                // Upstream's watchdog runs only while the peer is connected.
+                let Some(entry) = self.interfaces.get_mut(&id).filter(|entry| entry.online) else {
                     continue;
                 };
                 let Some(found) = tunnel.watch(entry.stats.txb) else {
@@ -1056,48 +1057,8 @@ impl Driver {
         self.state_snapshot_schedule.mark_dirty();
         let wants_tunnel;
         let mut replay_shared_announces = false;
-        if let Some(mut info) = info {
-            log::info!("[{}] dynamic interface registered", id.0);
-            if info.is_local_client {
-                if let Some(bitrate) = self.forced_local_bitrate {
-                    info.bitrate = Some(bitrate);
-                }
-            }
-            self.apply_interface_announce_limits(&mut info);
-            self.apply_announce_rate_defaults(&mut info);
-            self.apply_ingress_control_defaults(&mut info);
-            wants_tunnel = info.wants_tunnel;
-            let iface_type = infer_interface_type(&info.name);
-            info.started = time::now();
-            self.register_interface_runtime_defaults(&info);
-            self.engine.register_interface(info.clone());
-            if let Some(writer) = new_writer {
-                if info.is_local_client {
-                    self.name_local_client(id);
-                }
-                let (writer, async_writer_metrics) =
-                    self.wrap_interface_writer(id, &info.name, writer);
-                self.interfaces.insert(
-                    id,
-                    InterfaceEntry {
-                        id,
-                        info,
-                        writer,
-                        async_writer_metrics: Some(async_writer_metrics),
-                        enabled: true,
-                        online: true,
-                        dynamic: true,
-                        ifac: None,
-                        stats: InterfaceStats {
-                            started: time::now(),
-                            ..Default::default()
-                        },
-                        interface_type: iface_type,
-                        send_retry_at: None,
-                        send_retry_backoff: Duration::ZERO,
-                    },
-                );
-            }
+        if let Some(info) = info {
+            wants_tunnel = self.register_dynamic_interface(id, new_writer, info, true);
             self.callbacks.on_interface_up(id);
             #[cfg(feature = "hooks")]
             {
@@ -1136,6 +1097,11 @@ impl Driver {
                 .unwrap_or_else(|| format!("iface-{}", id.0));
             let wrapped_writer =
                 new_writer.map(|writer| self.wrap_interface_writer(id, &interface_name, writer));
+            // A dynamic interface kept while it reconnected counts with
+            // its parent again.
+            if let Some(parent_id) = self.dynamic_interface_parents.get(&id) {
+                self.event_tx.register_dynamic_parent(id, *parent_id);
+            }
             if let Some(entry) = self.interfaces.get_mut(&id) {
                 log::info!("[{}] interface online", id.0);
                 wants_tunnel = entry.info.wants_tunnel;
@@ -1181,6 +1147,58 @@ impl Driver {
         }
     }
 
+    /// Register a new dynamic interface, with its entry when it has a
+    /// writer, `online` or not. Returns whether it wants a tunnel.
+    fn register_dynamic_interface(
+        &mut self,
+        id: InterfaceId,
+        new_writer: Option<Box<dyn crate::interface::Writer>>,
+        mut info: rns_core::transport::types::InterfaceInfo,
+        online: bool,
+    ) -> bool {
+        log::info!("[{}] dynamic interface registered", id.0);
+        if info.is_local_client {
+            if let Some(bitrate) = self.forced_local_bitrate {
+                info.bitrate = Some(bitrate);
+            }
+        }
+        self.apply_interface_announce_limits(&mut info);
+        self.apply_announce_rate_defaults(&mut info);
+        self.apply_ingress_control_defaults(&mut info);
+        let wants_tunnel = info.wants_tunnel;
+        let iface_type = infer_interface_type(&info.name);
+        info.started = time::now();
+        self.register_interface_runtime_defaults(&info);
+        self.engine.register_interface(info.clone());
+        if let Some(writer) = new_writer {
+            if info.is_local_client {
+                self.name_local_client(id);
+            }
+            let (writer, async_writer_metrics) = self.wrap_interface_writer(id, &info.name, writer);
+            self.interfaces.insert(
+                id,
+                InterfaceEntry {
+                    id,
+                    info,
+                    writer,
+                    async_writer_metrics: Some(async_writer_metrics),
+                    enabled: true,
+                    online,
+                    dynamic: true,
+                    ifac: None,
+                    stats: InterfaceStats {
+                        started: time::now(),
+                        ..Default::default()
+                    },
+                    interface_type: iface_type,
+                    send_retry_at: None,
+                    send_retry_backoff: Duration::ZERO,
+                },
+            );
+        }
+        wants_tunnel
+    }
+
     pub(crate) fn handle_dynamic_interface_up_event(
         &mut self,
         id: InterfaceId,
@@ -1212,8 +1230,16 @@ impl Driver {
         let telemetry = registration.telemetry;
         let display_name = registration.display_name;
         let short_name = registration.short_name;
-        self.handle_interface_up_event(id, Some(writer), Some(registration.info));
+        let reconnecting = registration.reconnecting;
+        if reconnecting {
+            // Offline until it connects, so not up yet.
+            self.register_dynamic_interface(id, Some(writer), registration.info, false);
+        } else {
+            self.handle_interface_up_event(id, Some(writer), Some(registration.info));
+        }
         if let Some(entry) = self.interfaces.get_mut(&id) {
+            // Kept, offline, when it goes down.
+            entry.dynamic = !reconnecting;
             if let Some(display_name) = display_name {
                 self.interface_display_names.insert(id, display_name);
             }

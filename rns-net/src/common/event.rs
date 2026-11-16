@@ -96,6 +96,11 @@ pub struct DynamicInterfaceRegistration {
     /// Upstream gives spawned interfaces names that need not be unique
     /// (`Client on {listener}`), so it is kept apart from `info.name`.
     pub short_name: Option<String>,
+    /// Register the interface offline, and keep it while it is down: it
+    /// reconnects on its own, and `InterfaceUp` brings it online each time
+    /// it connects. Upstream keeps an initiating `I2PInterfacePeer` this
+    /// way, from when its I2P interface starts.
+    pub reconnecting: bool,
 }
 
 /// Policy for handling incoming direct-connect proposals.
