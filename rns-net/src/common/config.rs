@@ -94,11 +94,14 @@ pub struct ReticulumSection {
     pub probe_addr: Option<String>,
     /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
     pub probe_protocol: Option<String>,
-    /// Policy for incoming direct-connect proposals.
+    /// Policy for incoming direct-connect proposals (default `reject`).
     pub direct_connect_policy: crate::event::HolePunchPolicy,
     /// Accept direct-connect endpoints in private, shared, link-local,
     /// and unique-local ranges (LAN-only deployments).
     pub direct_connect_allow_private_endpoints: bool,
+    /// Identities whose direct-connect proposals are always accepted
+    /// (`direct_connect_allowed_identities`).
+    pub direct_connect_allowed_identities: Vec<[u8; 16]>,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
@@ -251,8 +254,9 @@ impl Default for ReticulumSection {
             probe_port: None,
             probe_addr: None,
             probe_protocol: None,
-            direct_connect_policy: crate::event::HolePunchPolicy::IdentifiedOnly,
+            direct_connect_policy: crate::event::HolePunchPolicy::Reject,
             direct_connect_allow_private_endpoints: false,
+            direct_connect_allowed_identities: Vec::new(),
             device: None,
             underlay_mark: None,
             discover_interfaces: false,
@@ -1076,6 +1080,21 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 key: "direct_connect_allow_private_endpoints".into(),
                 value: v.clone(),
             })?;
+    }
+    if let Some(v) = kvs.get("direct_connect_allowed_identities") {
+        for hexhash in v.split(',').map(str::trim).filter(|h| !h.is_empty()) {
+            let identity =
+                parse_identity_hash_hex(hexhash).ok_or_else(|| ConfigError::InvalidValue {
+                    key: "direct_connect_allowed_identities".into(),
+                    value: hexhash.to_string(),
+                })?;
+            if !section
+                .direct_connect_allowed_identities
+                .contains(&identity)
+            {
+                section.direct_connect_allowed_identities.push(identity);
+            }
+        }
     }
     if let Some(v) = kvs.get("device") {
         section.device = Some(v.clone());
@@ -3093,18 +3112,50 @@ direct_connect_policy = identified_only
     }
 
     #[test]
-    fn direct_connect_policy_defaults_to_identified_only_and_rejects_invalid() {
+    fn direct_connect_policy_defaults_to_reject_and_rejects_invalid() {
         let config = parse("[reticulum]\n").unwrap();
         assert_eq!(
             config.reticulum.direct_connect_policy,
-            crate::event::HolePunchPolicy::IdentifiedOnly
+            crate::event::HolePunchPolicy::Reject
         );
+        assert!(config
+            .reticulum
+            .direct_connect_allowed_identities
+            .is_empty());
         let config = parse("[reticulum]\ndirect_connect_policy = accept_all\n").unwrap();
         assert_eq!(
             config.reticulum.direct_connect_policy,
             crate::event::HolePunchPolicy::AcceptAll
         );
         assert!(parse("[reticulum]\ndirect_connect_policy = sometimes\n").is_err());
+    }
+
+    #[test]
+    fn direct_connect_allowed_identities_parse_as_a_list() {
+        let config = parse(
+            "[reticulum]\ndirect_connect_allowed_identities = \
+             00112233445566778899aabbccddeeff, ffeeddccbbaa99887766554433221100,\
+             00112233445566778899aabbccddeeff\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.reticulum.direct_connect_allowed_identities,
+            vec![
+                [
+                    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                    0xdd, 0xee, 0xff
+                ],
+                [
+                    0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
+                    0x22, 0x11, 0x00
+                ],
+            ]
+        );
+        assert!(parse("[reticulum]\ndirect_connect_allowed_identities = 0011\n").is_err());
+        assert!(parse(
+            "[reticulum]\ndirect_connect_allowed_identities = zz112233445566778899aabbccddeeff\n"
+        )
+        .is_err());
     }
 
     #[test]

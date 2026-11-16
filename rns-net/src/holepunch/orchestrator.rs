@@ -108,6 +108,8 @@ pub struct HolePunchManager {
     next_interface_id: u64,
     /// Accept private, shared, link-local and unique-local endpoints from peers.
     allow_private_endpoints: bool,
+    /// Identities whose proposals are accepted whatever the policy.
+    allowed_identities: Vec<[u8; 16]>,
     /// Paces inbound upgrade requests per link.
     inbound_limiter: InboundRequestLimiter,
     /// Spawn probe and punch threads (disabled by unit tests).
@@ -161,6 +163,7 @@ impl HolePunchManager {
             underlay_mark: None,
             next_interface_id: 50000, // start high to avoid collision with regular interfaces
             allow_private_endpoints: false,
+            allowed_identities: Vec::new(),
             inbound_limiter: InboundRequestLimiter::new(INBOUND_REQUEST_WINDOW),
             spawn_workers: true,
             event_tx: None,
@@ -185,6 +188,17 @@ impl HolePunchManager {
         self.underlay_mark = underlay_mark;
     }
 
+    /// Identities whose proposals are accepted whatever the policy, once
+    /// they have identified on the link.
+    pub fn set_allowed_identities(&mut self, identities: Vec<[u8; 16]>) {
+        self.allowed_identities = identities;
+    }
+
+    /// Whether `identity` is on the allowlist.
+    pub fn identity_allowed(&self, identity: &[u8; 16]) -> bool {
+        self.allowed_identities.contains(identity)
+    }
+
     /// Accept peer-supplied endpoints in private, shared, link-local,
     /// and unique-local ranges (for LAN-only deployments).
     pub fn set_allow_private_endpoints(&mut self, allow: bool) {
@@ -206,7 +220,9 @@ impl HolePunchManager {
     /// does neither ignores all signalling, as a node without Direct Link
     /// support does.
     pub fn enabled(&self) -> bool {
-        !self.probe_addrs.is_empty() || self.policy != HolePunchPolicy::Reject
+        !self.probe_addrs.is_empty()
+            || self.policy != HolePunchPolicy::Reject
+            || !self.allowed_identities.is_empty()
     }
 
     /// Whether the link peer is known to implement Direct Link.
@@ -1823,11 +1839,13 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_default_is_identified_only() {
+    fn test_policy_default_is_reject() {
         let mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
-        assert_eq!(mgr.policy(), HolePunchPolicy::IdentifiedOnly);
-        assert_eq!(HolePunchPolicy::default(), HolePunchPolicy::IdentifiedOnly);
+        assert_eq!(mgr.policy(), HolePunchPolicy::Reject);
+        assert_eq!(HolePunchPolicy::default(), HolePunchPolicy::Reject);
         assert!(!mgr.allow_private_endpoints());
+        // Out of the box a node takes no part in Direct Link.
+        assert!(!mgr.enabled());
     }
 
     #[test]
@@ -2036,5 +2054,11 @@ mod tests {
             HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         initiator.set_policy(HolePunchPolicy::Reject);
         assert!(initiator.enabled());
+        let mut allowlisted = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
+        allowlisted.set_policy(HolePunchPolicy::Reject);
+        allowlisted.set_allowed_identities(vec![[7; 16]]);
+        assert!(allowlisted.enabled());
+        assert!(allowlisted.identity_allowed(&[7; 16]));
+        assert!(!allowlisted.identity_allowed(&[8; 16]));
     }
 }

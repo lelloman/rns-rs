@@ -32,23 +32,34 @@ On the facilitator (transport node):
   probe_port = 4343
 ```
 
-On a client behind NAT:
+On a client behind NAT that proposes upgrades, and accepts them from two
+known identities:
 
 ```ini
 [reticulum]
   probe_addr = <facilitator_ip>:4343
-  direct_connect_policy = identified_only
+  direct_connect_allowed_identities = <identity hash>, <identity hash>
 ```
 
 | Key | Values | Meaning |
 |-----|--------|---------|
 | `probe_port` | port | Serve STUN-like probe requests on this UDP port |
-| `probe_addr` | `host:port` | Facilitator to use for endpoint discovery |
-| `direct_connect_policy` | `identified_only` (default), `accept_all`, `reject`, `ask_app` | How a responder treats incoming upgrade requests. `identified_only` reveals the responder's public endpoint only after the peer completed Reticulum `LINKIDENTIFY`. `ask_app` fails closed unless the application callback accepts |
+| `probe_addr` | `host:port` | Facilitator to use for endpoint discovery. Needed to propose |
+| `direct_connect_policy` | `reject` (default), `accept_all`, `identified_only`, `ask_app` | How a responder treats incoming upgrade requests from peers not on the allowlist. `identified_only` accepts any peer that completed Reticulum `LINKIDENTIFY`, which anyone can do with a throwaway identity. `ask_app` asks the application callback, which rejects unless it is overridden |
+| `direct_connect_allowed_identities` | comma-separated identity hashes | Peers whose upgrade requests are accepted whatever the policy, once they identify on the link with that identity |
 | `direct_connect_allow_private_endpoints` | `yes`/`no` (default) | By default the facilitator and peer endpoints in an upgrade request must be globally routable unicast addresses. Enable for LAN-only deployments to also accept private, shared (100.64/10), link-local, and IPv6 unique-local addresses |
 
-The policy enum and the `NodeConfig::direct_connect_policy` field are public
-in `rns-net` 0.7.1 and later.
+**Accepting an upgrade reveals your public IP address and port to the link
+peer**, and proposing one reveals yours as well. That is why a node accepts
+nothing by default: out of the box it takes no part in Direct Link at all and
+does not even answer the capability query. A node takes part once it has a
+`probe_addr` (it may propose), a policy other than `reject`, or an allowlist.
+Prefer an allowlist of identities you trust over `accept_all` or
+`identified_only`.
+
+In `rns-net`, the same settings are the `NodeConfig` fields `probe_addrs`,
+`direct_connect_policy`, `direct_connect_allowed_identities` and
+`direct_connect_allow_private_endpoints`.
 
 ## Triggering an upgrade
 

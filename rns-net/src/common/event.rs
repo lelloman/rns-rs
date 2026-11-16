@@ -104,14 +104,21 @@ pub struct DynamicInterfaceRegistration {
 }
 
 /// Policy for handling incoming direct-connect proposals.
+///
+/// Accepting a proposal reveals this node's public IP address and port to
+/// the link peer. Identities listed in
+/// `NodeConfig::direct_connect_allowed_identities` are accepted whatever the
+/// policy once they identify on the link.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HolePunchPolicy {
-    /// Reject all proposals.
+    /// Reject all proposals (the default).
+    #[default]
     Reject,
     /// Accept all proposals automatically.
     AcceptAll,
-    /// Accept proposals only after the Reticulum link peer has identified itself.
-    #[default]
+    /// Accept proposals only after the Reticulum link peer has identified
+    /// itself. Any peer can identify with a throwaway identity, so this
+    /// discloses the endpoint to anyone who asks; prefer an allowlist.
     IdentifiedOnly,
     /// Ask the application callback.
     AskApp,
