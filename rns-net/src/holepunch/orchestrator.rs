@@ -27,6 +27,7 @@ use crate::time;
 use super::admission::{
     endpoint_is_acceptable, InboundRequestLimiter, INBOUND_REQUEST_WINDOW, MAX_CONCURRENT_SESSIONS,
 };
+use super::canonical;
 use super::probe;
 use super::puncher::{self, PunchHandle};
 use super::udp_direct;
@@ -1521,17 +1522,6 @@ fn convert_engine_actions(
         }
     }
     mgr_actions
-}
-
-/// `addr` with an IPv4-mapped IPv6 address as its IPv4 form.
-fn canonical(addr: SocketAddr) -> SocketAddr {
-    match addr {
-        SocketAddr::V6(v6) => match v6.ip().to_ipv4_mapped() {
-            Some(v4) => SocketAddr::new(v4.into(), v6.port()),
-            None => addr,
-        },
-        v4 => v4,
-    }
 }
 
 /// Convert an Endpoint (from rns-core) to a SocketAddr.
