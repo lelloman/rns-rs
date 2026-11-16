@@ -576,12 +576,79 @@ fn coordinator(
             .ok();
     }
 
-    // The control socket (and this thread) must remain alive for the session's lifetime.
-    // We park the coordinator thread here. If control_socket drops, the session ends.
-    let _keep_alive = control_socket;
+    // The session lasts as long as its control socket stays open: serve it
+    // here, and open the session again whenever the bridge closes it. The
+    // peers and the acceptor retry meanwhile, under the same session id.
+    let mut control_socket = control_socket;
     loop {
-        thread::sleep(Duration::from_secs(3600));
+        watch_session(&mut control_socket, &config.name);
+        control_socket = reopen_session(&config, &sam_addr, config.sam_retry_wait());
     }
+}
+
+/// What to answer a line the bridge sent on the session's control socket:
+/// a `PING` keeps the session alive with its `PONG`.
+fn control_reply(line: &str) -> Option<String> {
+    line.strip_prefix("PING")
+        .map(|rest| format!("PONG{}\n", rest))
+}
+
+/// Serve the session's control socket until the bridge closes it.
+fn watch_session(control: &mut std::net::TcpStream, name: &str) {
+    let _ = control.set_read_timeout(None);
+    let mut line = Vec::new();
+    let mut buf = [0u8; 512];
+    loop {
+        match control.read(&mut buf) {
+            Ok(0) => {
+                log::warn!("[{}] the SAM bridge closed the I2P session", name);
+                return;
+            }
+            Ok(n) => {
+                for &byte in &buf[..n] {
+                    if byte != b'\n' {
+                        if line.len() < 4096 {
+                            line.push(byte);
+                        }
+                        continue;
+                    }
+                    let text = String::from_utf8_lossy(&line).into_owned();
+                    line.clear();
+                    if let Some(reply) = control_reply(&text) {
+                        let _ = control.write_all(reply.as_bytes());
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                log::warn!("[{}] I2P session socket failed: {}", name, e);
+                return;
+            }
+        }
+    }
+}
+
+/// Open the session again after the bridge closed it: the interface is
+/// offline meanwhile, as upstream's is while its tunnels are set up again,
+/// and the first attempt waits `wait`, as upstream's tunnel jobs wait
+/// before they retry. Returns the new control socket.
+fn reopen_session(
+    config: &I2pConfig,
+    sam_addr: &SocketAddr,
+    wait: Duration,
+) -> std::net::TcpStream {
+    lock_or_recover(&config.endpoint, "i2p endpoint").online = false;
+    log::warn!(
+        "[{}] reopening the I2P session in {}s",
+        config.name,
+        wait.as_secs_f64()
+    );
+    thread::sleep(wait);
+    let (control, _) = open_session_retrying(config, sam_addr, wait);
+    if config.connectable {
+        I2pEndpoint::set_accepting(&config.endpoint);
+    }
+    control
 }
 
 /// Outbound peer thread: connects to a remote I2P destination, runs HDLC reader loop.
@@ -1014,21 +1081,10 @@ mod tests {
     #[test]
     fn session_is_opened_once_the_sam_bridge_appears() {
         // Upstream keeps retrying its tunnels while the bridge is down.
-        let port = {
-            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            probe.local_addr().unwrap().port()
-        };
-        let storage_dir =
-            std::env::temp_dir().join(format!("rns-i2p-retry-{}-{}", std::process::id(), port));
-        std::fs::create_dir_all(&storage_dir).unwrap();
+        let port = free_port();
         // Existing keys: the session is all the bridge is asked for.
-        std::fs::write(key_file_path(&storage_dir, "I2P test"), [7u8; 64]).unwrap();
-        let config = I2pConfig {
-            name: "I2P test".into(),
-            sam_port: port,
-            storage_dir: storage_dir.clone(),
-            ..I2pConfig::default()
-        };
+        let config = config_with_keys("I2P test", port);
+        let storage_dir = config.storage_dir.clone();
         let sam_addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let (opened_tx, opened) = std::sync::mpsc::channel();
         thread::spawn(move || {
@@ -1040,20 +1096,90 @@ mod tests {
         assert!(opened.recv_timeout(Duration::from_millis(500)).is_err());
 
         let bridge = std::net::TcpListener::bind(sam_addr).unwrap();
+        let _session = answer_session(&bridge, "I2P_test");
+        let (_control, session_id) = opened.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(session_id, "I2P_test");
+        let _ = std::fs::remove_dir_all(storage_dir);
+    }
+
+    /// Answer, as a SAM bridge, the opening of session `id` on `bridge`,
+    /// returning the session's control socket.
+    pub(super) fn answer_session(bridge: &std::net::TcpListener, id: &str) -> std::net::TcpStream {
         let (mut stream, _) = bridge.accept().unwrap();
         assert!(read_command(&mut stream).starts_with("HELLO VERSION"));
         stream
             .write_all(b"HELLO REPLY RESULT=OK VERSION=3.1\n")
             .unwrap();
-        assert!(read_command(&mut stream).starts_with("SESSION CREATE STYLE=STREAM ID=I2P_test"));
+        assert!(
+            read_command(&mut stream).starts_with(&format!("SESSION CREATE STYLE=STREAM ID={id} "))
+        );
         stream.write_all(b"SESSION STATUS RESULT=OK\n").unwrap();
         assert!(read_command(&mut stream).starts_with("NAMING LOOKUP NAME=ME"));
         stream
             .write_all(b"NAMING REPLY RESULT=KEY_NOT_FOUND NAME=ME\n")
             .unwrap();
-        let (_control, session_id) = opened.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert_eq!(session_id, "I2P_test");
-        let _ = std::fs::remove_dir_all(storage_dir);
+        stream
+    }
+
+    /// An interface whose keys exist, so opening its session only asks the
+    /// bridge at `port` for the session. Returns it with its storage.
+    pub(super) fn config_with_keys(name: &str, port: u16) -> I2pConfig {
+        let storage_dir =
+            std::env::temp_dir().join(format!("rns-i2p-{}-{}", std::process::id(), port));
+        std::fs::create_dir_all(&storage_dir).unwrap();
+        std::fs::write(key_file_path(&storage_dir, name), [7u8; 64]).unwrap();
+        I2pConfig {
+            name: name.into(),
+            sam_port: port,
+            storage_dir,
+            connectable: true,
+            ..I2pConfig::default()
+        }
+    }
+
+    pub(super) fn free_port() -> u16 {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    }
+
+    #[test]
+    fn session_closed_by_the_bridge_is_opened_again() {
+        let port = free_port();
+        let config = config_with_keys("I2P lost", port);
+        let sam_addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let bridge = std::net::TcpListener::bind(sam_addr).unwrap();
+        let (watched_tx, watched) = std::sync::mpsc::channel();
+        let (reopened_tx, reopened) = std::sync::mpsc::channel();
+        {
+            let config = config.clone();
+            thread::spawn(move || {
+                let (mut control, _) =
+                    open_session_retrying(&config, &sam_addr, Duration::from_millis(100));
+                I2pEndpoint::set_accepting(&config.endpoint);
+                watch_session(&mut control, &config.name);
+                let _ = watched_tx.send(());
+                let _control = reopen_session(&config, &sam_addr, Duration::from_millis(200));
+                let _ = reopened_tx.send(());
+            });
+        }
+        let mut control = answer_session(&bridge, "I2P_lost");
+        // The session is kept alive while the bridge checks on it.
+        control.write_all(b"PING 42\n").unwrap();
+        assert_eq!(read_command(&mut control), "PONG 42");
+        assert!(watched.recv_timeout(Duration::from_millis(200)).is_err());
+
+        // The bridge goes away: the interface is offline until it is back.
+        drop(control);
+        drop(bridge);
+        watched.recv_timeout(Duration::from_secs(2)).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        assert!(!lock_or_recover(&config.endpoint, "test").online);
+        assert!(reopened.recv_timeout(Duration::from_millis(500)).is_err());
+        let bridge = std::net::TcpListener::bind(sam_addr).unwrap();
+        let _control = answer_session(&bridge, "I2P_lost");
+        reopened.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(lock_or_recover(&config.endpoint, "test").online);
+        let _ = std::fs::remove_dir_all(&config.storage_dir);
     }
 
     fn template() -> crate::interface::DynamicInterfaceTemplate {
