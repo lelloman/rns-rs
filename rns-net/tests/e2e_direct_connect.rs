@@ -40,6 +40,8 @@ enum TestEvent {
 struct Record {
     direct_lost: std::sync::atomic::AtomicUsize,
     links_closed: std::sync::atomic::AtomicUsize,
+    /// Application channel messages received, in order.
+    messages: std::sync::Mutex<Vec<Vec<u8>>>,
 }
 
 impl Record {
@@ -85,6 +87,9 @@ impl Callbacks for TestCallbacks {
     }
 
     fn on_channel_message(&mut self, link_id: rns_net::LinkId, msgtype: u16, payload: Vec<u8>) {
+        if msgtype == APP_MSGTYPE {
+            self.1.messages.lock().unwrap().push(payload.clone());
+        }
         let _ = self.0.send(TestEvent::Channel(link_id.0, msgtype, payload));
     }
 
@@ -988,5 +993,81 @@ fn idle_link_falls_back_when_the_direct_path_dies_silently() {
     assert_eq!(pair.alice_record.links_closed(), 0);
     assert_eq!(pair.bob_record.links_closed(), 0);
     assert_fell_back(&pair, mdu_before);
+    pair.shutdown();
+}
+
+#[test]
+fn channel_messages_in_flight_across_the_upgrade_all_arrive() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    // Alice streams messages while the upgrade happens, so some are
+    // unacknowledged when the link moves to the direct path.
+    let alice = &pair.alice;
+    let link_id = pair.link_id;
+    let upgraded = std::sync::atomic::AtomicBool::new(false);
+    let sent = std::thread::scope(|scope| {
+        let upgraded = &upgraded;
+        let sender = scope.spawn(move || {
+            let mut sent = 0u32;
+            let mut stop_at = u32::MAX;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            // As fast as the channel's window allows, so it is full when
+            // the upgrade completes, and on for a while after it.
+            while sent < stop_at && Instant::now() < deadline {
+                if stop_at == u32::MAX && upgraded.load(std::sync::atomic::Ordering::SeqCst) {
+                    stop_at = sent + 300;
+                }
+                match alice.try_send_channel_message(
+                    link_id,
+                    APP_MSGTYPE,
+                    sent.to_be_bytes().to_vec(),
+                ) {
+                    Ok(()) => sent += 1,
+                    Err(_) => std::thread::sleep(Duration::from_millis(1)),
+                }
+            }
+            (sent, stop_at)
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        pair.upgrade();
+        upgraded.store(true, std::sync::atomic::Ordering::SeqCst);
+        sender.join().unwrap()
+    });
+    let (sent, stop_at) = sent;
+    assert_eq!(sent, stop_at, "the channel stopped taking messages");
+
+    // Every message arrives, in order.
+    let received = || -> Vec<u32> {
+        pair.bob_record
+            .messages
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|data| u32::from_be_bytes(data[..4].try_into().unwrap()))
+            .collect()
+    };
+    assert!(
+        eventually(Duration::from_secs(20), || received().len()
+            >= sent as usize),
+        "{} of {sent} messages arrived",
+        received().len()
+    );
+    assert_eq!(received(), (0..sent).collect::<Vec<_>>());
+    // And the channel keeps working afterwards, both ways.
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        link_id,
+        b"after the stream",
+        Duration::from_secs(10)
+    ));
+    assert!(deliver(
+        &pair.bob,
+        &pair.alice_rx,
+        link_id,
+        b"reply",
+        Duration::from_secs(10)
+    ));
     pair.shutdown();
 }

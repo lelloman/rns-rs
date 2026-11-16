@@ -1,16 +1,6 @@
 use super::*;
 
 impl LinkManager {
-    /// Flush the channel TX ring for a link, clearing outstanding messages.
-    /// Called after holepunch completion where signaling messages are fire-and-forget.
-    pub fn flush_channel_tx(&mut self, link_id: &LinkId) {
-        if let Some(link) = self.links.get_mut(link_id) {
-            if let Some(ref mut channel) = link.channel {
-                channel.flush_tx();
-            }
-        }
-    }
-
     /// Send a channel message on a link.
     pub fn send_channel_message(
         &mut self,

@@ -2765,8 +2765,6 @@ impl Driver {
                         self.holepunch_manager.link_closed(&link_id);
                         continue;
                     }
-                    // Flush holepunch signaling messages from the channel window
-                    self.link_manager.flush_channel_tx(&link_id);
                     self.callbacks.on_direct_connect_established(
                         rns_core::types::LinkId(link_id),
                         interface_id,
