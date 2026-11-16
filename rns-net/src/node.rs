@@ -289,11 +289,13 @@ fn extract_discovery_config(
         .cloned()
         .unwrap_or_else(|| iface_name.to_string());
 
-    // Config value is in seconds. Min 300s (5min), default 21600s (6h).
+    // `announce_interval` is in minutes, as upstream reads it
+    // (`as_int(..)*60`): at least 5 minutes, 6 hours by default. Kept in
+    // seconds from here on.
     let announce_interval = params
         .get("announce_interval")
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|secs| secs.max(300))
+        .and_then(|v| config::parse_config_int(v))
+        .map(|minutes| (minutes.max(0) as u64).saturating_mul(60).max(300))
         .unwrap_or(21600);
 
     // `as_float` since upstream 796ef2d4.
@@ -6419,6 +6421,25 @@ mod tests {
         params.insert("destination_cost".to_string(), "steep".to_string());
         let err = super::parse_interface_stamp_costs(&params).unwrap_err();
         assert!(err.contains("destination_cost"));
+    }
+
+    #[test]
+    fn discovery_announce_interval_is_read_in_minutes() {
+        // Upstream: `as_int("announce_interval")*60`, at least 5 minutes,
+        // 6 hours without the option.
+        let interval = |value: Option<&str>| {
+            let mut params = std::collections::HashMap::new();
+            params.insert("discoverable".to_string(), "yes".to_string());
+            if let Some(value) = value {
+                params.insert("announce_interval".to_string(), value.to_string());
+            }
+            super::extract_discovery_config("Discovery Test", "BackboneInterface", &params)
+                .unwrap()
+                .announce_interval
+        };
+        assert_eq!(interval(None), 6 * 60 * 60);
+        assert_eq!(interval(Some("720")), 12 * 60 * 60);
+        assert_eq!(interval(Some("1")), 5 * 60);
     }
 
     #[test]
