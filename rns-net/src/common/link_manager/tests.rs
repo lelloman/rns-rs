@@ -2560,6 +2560,26 @@ fn drive_link_manager_packets(
                 )
             };
             let target_source = if source == 'i' { 'r' } else { 'i' };
+            // Each progress report follows its segment's progress.
+            let mut segment_reported = false;
+            for action in &target_actions {
+                match action {
+                    LinkManagerAction::ResourceSegmentProgress {
+                        segment_progress,
+                        transfer_size,
+                        ..
+                    } => {
+                        assert!(*segment_progress > 0.0 && *segment_progress <= 1.0);
+                        assert!(*transfer_size > 0);
+                        segment_reported = true;
+                    }
+                    LinkManagerAction::ResourceProgress { .. }
+                    | LinkManagerAction::ResourceStreamProgress { .. } => {
+                        assert!(segment_reported, "progress without segment progress");
+                    }
+                    _ => {}
+                }
+            }
             for action in &target_actions {
                 match action {
                     LinkManagerAction::ResourceReceived { data, .. } => {

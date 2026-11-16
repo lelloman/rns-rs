@@ -287,6 +287,14 @@ pub enum LinkManagerAction {
         transferred: u64,
         total: u64,
     },
+    /// Progress of the segment being transferred, sent or received, ahead
+    /// of the matching `ResourceProgress` or `ResourceStreamProgress`:
+    /// upstream's `get_segment_progress()` and `get_transfer_size()`.
+    ResourceSegmentProgress {
+        link_id: LinkId,
+        segment_progress: f64,
+        transfer_size: u64,
+    },
     /// Query application whether to accept an incoming resource (for AcceptApp strategy).
     ResourceAcceptQuery {
         link_id: LinkId,

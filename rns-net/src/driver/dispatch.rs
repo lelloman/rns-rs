@@ -2394,6 +2394,17 @@ impl Driver {
                         error,
                     );
                 }
+                LinkManagerAction::ResourceSegmentProgress {
+                    link_id,
+                    segment_progress,
+                    transfer_size,
+                } => {
+                    self.callbacks.on_resource_segment_progress(
+                        rns_core::types::LinkId(link_id),
+                        segment_progress,
+                        transfer_size,
+                    );
+                }
                 LinkManagerAction::ResourceStreamProgress {
                     link_id,
                     transfer_id,

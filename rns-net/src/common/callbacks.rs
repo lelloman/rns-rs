@@ -95,6 +95,19 @@ pub trait Callbacks: Send {
     ) {
     }
 
+    /// Called with the progress of the segment of a Resource being sent or
+    /// received on `link_id`, ahead of the Resource's own progress: the
+    /// part of its parts done, and its transfer size (encrypted, after
+    /// any compression), upstream's `get_segment_progress()` and
+    /// `get_transfer_size()`.
+    fn on_resource_segment_progress(
+        &mut self,
+        _link_id: LinkId,
+        _segment_progress: f64,
+        _transfer_size: u64,
+    ) {
+    }
+
     /// Called with logical-byte progress for a streaming Resource.
     fn on_resource_stream_progress(
         &mut self,
