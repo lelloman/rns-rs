@@ -69,7 +69,7 @@ Dispositions are provisional until each mapping commit lands.
 | 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Integrated | `tunnel_synthesis_is_answered_and_both_ends_learn_the_other`, `a_synthesis_without_an_extension_is_not_answered`, `an_invalid_synthesis_extension_is_a_protocol_violation`, `tunnel_extension` unit tests, `the_signature_covers_the_extension`, RPC pickle assertions, regenerated `tunnels` rnstatus fixture; interop `python_rns_receives_tunnel_synthesis_from_rust_client` against `884f109b` and `c850cdac` |
 | 15 | `51fa8413277ef7308925aef610e409f9af0d9c3b` | Enabled stamp generation | Integrated | constants test, `stamps_section_defaults_to_the_protocol_constants`, `runtime_config_stamp_flags_default_as_upstream_and_apply_to_engine_and_shared_flag`, the no-store case in `destination_stamp_below_target_value_is_regenerated`; existing stamper tests and e2e stamps suite; interop against `884f109b` and `c850cdac` |
 | 16 | `fd36a97220a40383ce7f0a1d0f40bc7043f4494f` | Updated version | Integrated | fixture generators assert `1.6.1` and were rerun against `884f109b`: default config, example config, argparse parsers and discovery records unchanged |
-| 17 | `884f109b2b821638c7addd456a52a2cd5bb8c5b1` | Fixed missing wanted destination type for interface discovery | Needs port | |
+| 17 | `884f109b2b821638c7addd456a52a2cd5bb8c5b1` | Fixed missing wanted destination type for interface discovery | Integrated | `a_node_discovering_interfaces_wants_their_announces` |
 
 ## Per-Commit Analysis
 
@@ -614,13 +614,21 @@ names the new release.
 that it wants `rnstransport.discovery.interface` announces, so a node with
 `required_destinations_only` still receives discovery announces.
 
-**Rust applicability:** rns-rs registers wanted types for remote management
-and the blackhole list (`remote_management.rs`); check the discovery start-up
-path.
+**Rust applicability:** rns-rs registered no wanted type for discovery, so
+a node with `discover_interfaces` and `required_only` filtered the
+discovery announces it was listening for.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** `RnsNode::start` (and so `from_config`)
+calls `wants_destination_type("rnstransport.discovery.interface")` once the
+driver runs when `discover_interfaces` is on, with the node's application
+requester as upstream's `Reticulum.wants_destination_type` uses
+`Transport.application_identity`. The registration API, and so this call,
+exists in builds with `iface-local`, as before. Test:
+`a_node_discovering_interfaces_wants_their_announces` (registered with
+discovery, not without). `docs/configuration.md` lists it with the other
+built-in registrations.
 
-**Final disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ## Integration Plan
 
