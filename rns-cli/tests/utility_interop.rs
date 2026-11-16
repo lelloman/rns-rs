@@ -1565,6 +1565,8 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
         }
         thread::sleep(Duration::from_secs(1));
     }
+    compare_rnpath_blackhole_views(&fetcher_config, &source, blackholed);
+
     // The source's list is saved where the next start loads it from.
     let saved = fetcher_dir.join("storage/blackhole").join(&source);
     let deadline = Instant::now() + FILE_SETTLE_TIMEOUT;
@@ -1572,6 +1574,47 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
         thread::sleep(Duration::from_millis(100));
     }
     assert!(saved.exists(), "{} was not written", saved.display());
+}
+
+/// Python's and Rust's `rnpath -b [filter]` and `-p <publisher> [filter]`
+/// print the same, through the shared instance at `config`. Progress
+/// lines depend on what the instance already knows, so for `-p` only what
+/// follows the last line reset is compared.
+#[cfg(target_os = "linux")]
+fn compare_rnpath_blackhole_views(config: &str, publisher: &str, blackholed: &str) {
+    let rnpath = |python: bool, args: &[&str]| {
+        let mut command = if python {
+            let mut command = Command::new("python3");
+            command.env("PYTHONUNBUFFERED", "1");
+            command.args(["-m", "RNS.Utilities.rnpath"]);
+            command
+        } else {
+            Command::new(env!("CARGO_BIN_EXE_rnpath"))
+        };
+        command.args(["--config", config]).args(args);
+        let output = run(command);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let shown = stdout.rsplit('\r').next().unwrap_or_default().to_string();
+        (output.status.code(), shown)
+    };
+    let cases: &[&[&str]] = &[
+        &["-b"],
+        &["-b", "interop"],
+        &["-b", "no such entry"],
+        &["-p", publisher],
+        // upstream's filter text puts the reason after two spaces.
+        &["-p", publisher, "indefinitely  (interop)"],
+        &["-p", publisher, "no such entry"],
+        &["-p", "0123"],
+    ];
+    for args in cases {
+        let python = rnpath(true, args);
+        let rust = rnpath(false, args);
+        assert_eq!(rust, python, "rnpath {args:?}");
+        if !args.contains(&"no such entry") && args.len() > 1 && args[1] != "0123" {
+            assert!(python.1.contains(blackholed), "rnpath {args:?}: {python:?}");
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
