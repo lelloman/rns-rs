@@ -29,10 +29,11 @@ The protocol has four stages:
    addresses simultaneously, punching through NATs to establish a direct
    channel.
 
-Once established, the direct UDP channel is wrapped as a standard Reticulum
-`DirectUdpInterface`. All existing Reticulum functionality (links, LXMF, LXST)
-works over it transparently. The original path through transport nodes remains
-as a fallback.
+Once established, the direct UDP channel is wrapped as a Reticulum interface
+(`DirectUdpInterface`) that belongs to the upgraded link. The link's traffic,
+whatever the application runs over it (LXMF, LXST, resources, channels), moves
+to it transparently; nothing else does. The original path through transport
+nodes remains as a fallback.
 
 ## Terminology
 
@@ -90,9 +91,10 @@ therefore asks before it signals anything:
    sends `HELLO` with `r = true`, repeats it every 2.5 seconds, and waits up
    to 8 seconds.
 2. A node that takes part in Direct Link (it has a facilitator configured,
-   or its policy may accept requests) answers a `HELLO` with `r = true` with
-   its own `HELLO` (`r = false`). A node that takes part in neither ignores
-   all Direct Link packets, exactly as upstream does.
+   a policy other than `reject`, or an allowlist of identities) answers a
+   `HELLO` with `r = true` with its own `HELLO` (`r = false`). A node that
+   takes part in none of these ignores all Direct Link packets, exactly as
+   upstream does.
 3. When B's `HELLO` arrives, A proceeds with Phase 1. If none arrives, A treats
    B as not supporting Direct Link and reports the attempt failed with reason
    `0x03` (unsupported); B has received nothing but the ignored queries.
@@ -184,7 +186,8 @@ B evaluates the request and responds with either:
   continues unchanged.
 
 B rejects because of its policy or because the request is out of range
-(reason `0x01`), or because it is busy (reason `0x02`). A peer that does not
+(reason `0x01`), or because it is busy (reason `0x02`); after accepting, it
+may still give up with reason `0x04` (Phase 3). A peer that does not
 implement Direct Link never sees a request: the capability check failed
 first, with reason `0x03`.
 
@@ -220,9 +223,9 @@ anything:
 ### Phase 3: STUN Discovery + Address Exchange (B ↔ T, B → A)
 
 B sends a UDP probe to T (using the facilitator address from the upgrade
-request). T responds with B's public address (`B_pub`). If B gets no answer
-(within 10 seconds), it sends `UPGRADE_REJECT` with reason `0x04` instead of
-leaving A waiting.
+request). T responds with B's public address (`B_pub`). If the probe fails
+(3 seconds without an answer), or discovery takes over 10 seconds, B sends
+`UPGRADE_REJECT` with reason `0x04` instead of leaving A waiting.
 
 B then sends an `UPGRADE_READY` message to A over the existing Reticulum link:
 
@@ -348,8 +351,6 @@ Properties of the facilitator:
 - **Not necessarily a Reticulum node** — the facilitator only needs to be a
   publicly reachable UDP endpoint. It can be a standalone service, a feature of
   a transport node, or any internet-reachable host.
-- **Discoverable** — facilitators can advertise their STUN capability through
-  Reticulum announces, allowing peers to find them dynamically.
 
 ## Failure Modes
 
@@ -419,6 +420,6 @@ sessions are created.
 - **Relay fallback via facilitator**: If hole-punching fails, the facilitator
   could optionally offer to relay traffic (TURN-style), though this goes against
   the lightweight/stateless design.
-- **Link migration**: If a direct link drops and is re-established (e.g. after
-  NAT remapping), existing Reticulum links could migrate to the new interface
-  rather than being torn down and re-created.
+- **Automatic re-upgrade**: After a fallback the link stays on its original
+  route until the application proposes again; a node could retry by itself,
+  with backoff.
