@@ -16480,3 +16480,45 @@ fn autoconnected_backbone_client_is_configured_as_upstream() {
     );
     drop(listener);
 }
+
+#[test]
+fn direct_upgrade_keeps_unacknowledged_channel_messages() {
+    let mut driver = new_test_driver();
+    let (link_manager, link_id) = active_link_manager_with_route(InterfaceId(1));
+    driver.link_manager = link_manager;
+    let outstanding = |driver: &Driver| {
+        driver
+            .link_manager
+            .link_entries()
+            .into_iter()
+            .find(|entry| entry.link_id == link_id)
+            .and_then(|entry| entry.channel_outstanding)
+    };
+    let mut rng = OsRng;
+    let actions = driver
+        .link_manager
+        .send_channel_message(&link_id, 0x0101, b"in flight", &mut rng)
+        .unwrap();
+    assert!(!actions.is_empty());
+    assert_eq!(outstanding(&driver), Some(1));
+
+    let (writer, _sent) = MockWriter::new();
+    driver.dispatch_holepunch_actions(vec![
+        crate::holepunch::orchestrator::HolePunchManagerAction::DirectConnectEstablished {
+            link_id,
+            session_id: [0x5E; 16],
+            interface_id: InterfaceId(50_000),
+            writer: Box::new(writer),
+            info: Box::new(make_interface_info(50_000)),
+            rtt: 0.001,
+            mtu: 1400,
+        },
+    ]);
+    // The link moved to the direct interface, and the application's
+    // unacknowledged message is still there to be retransmitted.
+    assert_eq!(
+        driver.link_manager.direct_route_interface(&link_id),
+        Some(InterfaceId(50_000))
+    );
+    assert_eq!(outstanding(&driver), Some(1));
+}

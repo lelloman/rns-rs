@@ -173,12 +173,6 @@ impl Channel {
         self.collect_contiguous()
     }
 
-    /// Clear all outstanding TX entries, restoring the window to full capacity.
-    /// Used after holepunch completion where signaling messages are fire-and-forget.
-    pub fn flush_tx(&mut self) {
-        self.tx_ring.clear();
-    }
-
     /// Cancel a send that did not reach the link layer.
     pub fn cancel_send(&mut self, sequence: Sequence) -> bool {
         let Some(pos) = self.tx_ring.iter().position(|e| e.sequence == sequence) else {
