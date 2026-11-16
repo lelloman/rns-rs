@@ -7,8 +7,8 @@
 //!          B responds with UPGRADE_ACCEPT or UPGRADE_REJECT
 //! Phase 3: B probes T (from request) → learns B_pub
 //!          B sends UPGRADE_READY {responder_public: B_pub} → A
-//! Phase 4: Both punch simultaneously
-//! Phase 5: Direct link established
+//! Phase 4: Both punch simultaneously; the first verified punch packet or
+//!          acknowledgement from the peer establishes the direct path
 //!
 //! Methods return `Vec<HolePunchAction>` instead of performing I/O.
 
@@ -66,6 +66,13 @@ pub struct HolePunchEngine {
 
     /// Timestamp of state entry (for timeout tracking).
     state_entered_at: f64,
+
+    /// Initiator: the UPGRADE_REQUEST body, resent until the responder's
+    /// READY arrives.
+    request_payload: Option<Vec<u8>>,
+
+    /// Initiator: when the UPGRADE_REQUEST was last sent.
+    request_sent_at: f64,
 }
 
 impl HolePunchEngine {
@@ -92,7 +99,41 @@ impl HolePunchEngine {
             probe_addr,
             probe_protocol,
             state_entered_at: 0.0,
+            request_payload: None,
+            request_sent_at: 0.0,
         }
+    }
+
+    /// The session an UPGRADE_REQUEST belongs to, without creating a session.
+    pub fn request_session_id(payload: &[u8]) -> Result<[u8; 16], HolePunchError> {
+        decode_upgrade_request(payload).map(|(session_id, _, _, _)| session_id)
+    }
+
+    /// Responder: the replies already sent for this session (ACCEPT, and
+    /// READY once our endpoint is known), for answering a repeated
+    /// UPGRADE_REQUEST whose earlier replies may have been lost.
+    pub fn replay_replies(&self) -> Vec<HolePunchAction> {
+        if self.is_initiator
+            || !matches!(
+                self.state,
+                HolePunchState::Discovering | HolePunchState::Punching | HolePunchState::Connected
+            )
+        {
+            return Vec::new();
+        }
+        let mut actions = alloc::vec![HolePunchAction::SendSignal {
+            link_id: self.link_id,
+            msgtype: UPGRADE_ACCEPT,
+            payload: encode_upgrade_accept(&self.session_id),
+        }];
+        if let Some(ours) = &self.our_public_endpoint {
+            actions.push(HolePunchAction::SendSignal {
+                link_id: self.link_id,
+                msgtype: UPGRADE_READY,
+                payload: encode_upgrade_ready(&self.session_id, ours),
+            });
+        }
+        actions
     }
 
     pub fn state(&self) -> HolePunchState {
@@ -194,6 +235,8 @@ impl HolePunchEngine {
 
             self.state = HolePunchState::Proposing;
             self.state_entered_at = now;
+            self.request_payload = Some(payload.clone());
+            self.request_sent_at = now;
 
             Ok(alloc::vec![HolePunchAction::SendSignal {
                 link_id: self.link_id,
@@ -232,7 +275,7 @@ impl HolePunchEngine {
     /// `derived_key` is needed when handling UPGRADE_REQUEST (responder side).
     pub fn handle_signal(
         &mut self,
-        msgtype: u16,
+        msgtype: u8,
         payload: &[u8],
         derived_key: Option<&[u8]>,
         now: f64,
@@ -242,7 +285,6 @@ impl HolePunchEngine {
             UPGRADE_ACCEPT => self.handle_upgrade_accept(payload, now),
             UPGRADE_REJECT => self.handle_upgrade_reject(payload, now),
             UPGRADE_READY => self.handle_upgrade_ready(payload, now),
-            UPGRADE_COMPLETE => self.handle_upgrade_complete(payload, now),
             _ => Err(HolePunchError::InvalidPayload),
         }
     }
@@ -283,6 +325,7 @@ impl HolePunchEngine {
     /// Periodic tick: check timeouts.
     pub fn tick(&mut self, now: f64) -> Vec<HolePunchAction> {
         let elapsed = now - self.state_entered_at;
+        let retry_due = now - self.request_sent_at >= REQUEST_RETRY_INTERVAL;
         match self.state {
             HolePunchState::Discovering if elapsed > DISCOVER_TIMEOUT => {
                 self.state = HolePunchState::Failed;
@@ -307,6 +350,19 @@ impl HolePunchEngine {
                     session_id: self.session_id,
                     reason: FAIL_TIMEOUT,
                 }]
+            }
+            // Signalling is not acknowledged: until READY arrives, repeat
+            // the request, which the responder answers with its replies.
+            HolePunchState::Proposing | HolePunchState::WaitingReady if retry_due => {
+                self.request_sent_at = now;
+                match &self.request_payload {
+                    Some(payload) => alloc::vec![HolePunchAction::SendSignal {
+                        link_id: self.link_id,
+                        msgtype: UPGRADE_REQUEST,
+                        payload: payload.clone(),
+                    }],
+                    None => Vec::new(),
+                }
             }
             HolePunchState::Punching if elapsed > PUNCH_TIMEOUT => {
                 self.state = HolePunchState::Failed;
@@ -348,6 +404,8 @@ impl HolePunchEngine {
         self.punch_token = [0u8; 32];
         self.probe_protocol = ProbeProtocol::Rnsp;
         self.state_entered_at = 0.0;
+        self.request_payload = None;
+        self.request_sent_at = 0.0;
     }
 
     // --- Private handlers ---
@@ -415,11 +473,21 @@ impl HolePunchEngine {
         payload: &[u8],
         now: f64,
     ) -> Result<Vec<HolePunchAction>, HolePunchError> {
+        let session_id = decode_upgrade_accept(payload)?;
+        // A repeated ACCEPT answers a retransmitted request.
+        if self.is_initiator
+            && session_id == self.session_id
+            && matches!(
+                self.state,
+                HolePunchState::WaitingReady | HolePunchState::Punching | HolePunchState::Connected
+            )
+        {
+            return Ok(Vec::new());
+        }
         if self.state != HolePunchState::Proposing || !self.is_initiator {
             return Err(HolePunchError::InvalidState);
         }
 
-        let session_id = decode_upgrade_accept(payload)?;
         if session_id != self.session_id {
             return Err(HolePunchError::SessionMismatch);
         }
@@ -463,11 +531,21 @@ impl HolePunchEngine {
         payload: &[u8],
         now: f64,
     ) -> Result<Vec<HolePunchAction>, HolePunchError> {
+        let (session_id, responder_public) = decode_upgrade_ready(payload)?;
+        // A repeated READY answers a retransmitted request.
+        if self.is_initiator
+            && session_id == self.session_id
+            && matches!(
+                self.state,
+                HolePunchState::Punching | HolePunchState::Connected
+            )
+        {
+            return Ok(Vec::new());
+        }
         if self.state != HolePunchState::WaitingReady || !self.is_initiator {
             return Err(HolePunchError::InvalidState);
         }
 
-        let (session_id, responder_public) = decode_upgrade_ready(payload)?;
         if session_id != self.session_id {
             return Err(HolePunchError::SessionMismatch);
         }
@@ -483,37 +561,47 @@ impl HolePunchEngine {
             session_id: self.session_id,
         }])
     }
-
-    /// Receives UPGRADE_COMPLETE (over direct UDP channel after punch succeeds).
-    fn handle_upgrade_complete(
-        &mut self,
-        payload: &[u8],
-        now: f64,
-    ) -> Result<Vec<HolePunchAction>, HolePunchError> {
-        if self.state != HolePunchState::Punching && self.state != HolePunchState::Connected {
-            return Err(HolePunchError::InvalidState);
-        }
-
-        let session_id = decode_session_only(payload)?;
-        if session_id != self.session_id {
-            return Err(HolePunchError::SessionMismatch);
-        }
-
-        if self.state == HolePunchState::Connected {
-            // Already connected — peer is confirming
-            return Ok(Vec::new());
-        }
-
-        self.state = HolePunchState::Connected;
-        self.state_entered_at = now;
-
-        Ok(alloc::vec![HolePunchAction::Succeeded {
-            session_id: self.session_id,
-        }])
-    }
 }
 
 // --- Msgpack encode/decode helpers ---
+
+/// A decoded `HELLO`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hello {
+    /// Highest signalling version the sender speaks.
+    pub version: u8,
+    /// The sender has not heard our `HELLO` yet and wants one back.
+    pub reply_wanted: bool,
+}
+
+/// Encode a `HELLO` body: `{"v": version, "r": reply_wanted}`.
+pub fn encode_hello(reply_wanted: bool) -> Vec<u8> {
+    msgpack::pack(&Value::Map(alloc::vec![
+        (
+            Value::Str(alloc::string::String::from("v")),
+            Value::UInt(DIRECT_LINK_VERSION as u64)
+        ),
+        (
+            Value::Str(alloc::string::String::from("r")),
+            Value::Bool(reply_wanted)
+        ),
+    ]))
+}
+
+/// Decode a `HELLO` body. Unknown fields are ignored, so later versions can
+/// extend it.
+pub fn decode_hello(data: &[u8]) -> Result<Hello, HolePunchError> {
+    let (val, _) = msgpack::unpack(data).map_err(|_| HolePunchError::InvalidPayload)?;
+    let version = val
+        .map_get("v")
+        .and_then(|v| v.as_uint())
+        .ok_or(HolePunchError::InvalidPayload)?;
+    let reply_wanted = val.map_get("r").and_then(|v| v.as_bool()).unwrap_or(false);
+    Ok(Hello {
+        version: version.min(u8::MAX as u64) as u8,
+        reply_wanted,
+    })
+}
 
 fn encode_upgrade_request(
     session_id: &[u8; 16],
@@ -658,6 +746,7 @@ fn encode_session_only(session_id: &[u8; 16]) -> Vec<u8> {
     msgpack::pack(&val)
 }
 
+#[cfg(test)]
 fn decode_session_only(data: &[u8]) -> Result<[u8; 16], HolePunchError> {
     let (val, _) = msgpack::unpack(data).map_err(|_| HolePunchError::InvalidPayload)?;
     extract_session_id(&val)
@@ -1073,7 +1162,7 @@ mod tests {
         assert_eq!(sid, session_id);
         assert_eq!(rp, resp_pub);
 
-        // Session only (UPGRADE_COMPLETE)
+        // Session only
         let data = encode_session_only(&session_id);
         let sid = decode_session_only(&data).unwrap();
         assert_eq!(sid, session_id);
@@ -1277,5 +1366,138 @@ mod tests {
             }
             _ => panic!("Expected DiscoverEndpoints"),
         }
+    }
+
+    fn signal(action: &HolePunchAction) -> Option<(u8, Vec<u8>)> {
+        match action {
+            HolePunchAction::SendSignal {
+                msgtype, payload, ..
+            } => Some((*msgtype, payload.clone())),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn hello_round_trips_and_ignores_unknown_fields() {
+        let hello = decode_hello(&encode_hello(true)).unwrap();
+        assert_eq!(
+            hello,
+            Hello {
+                version: DIRECT_LINK_VERSION,
+                reply_wanted: true
+            }
+        );
+        assert!(!decode_hello(&encode_hello(false)).unwrap().reply_wanted);
+        // A later version may add fields and advertise a higher version.
+        let extended = msgpack::pack(&Value::Map(vec![
+            (Value::Str("v".into()), Value::UInt(7)),
+            (Value::Str("x".into()), Value::Bin(vec![1, 2])),
+        ]));
+        assert_eq!(
+            decode_hello(&extended).unwrap(),
+            Hello {
+                version: 7,
+                reply_wanted: false
+            }
+        );
+        assert!(decode_hello(&[0xC0]).is_err());
+    }
+
+    #[test]
+    fn initiator_repeats_its_request_until_ready() {
+        let derived_key = test_derived_key();
+        let mut initiator =
+            HolePunchEngine::new([0x31; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator
+            .propose(&derived_key, 100.0, &mut make_rng(1))
+            .unwrap();
+        let sent = initiator
+            .endpoints_discovered(test_public_addr_a(), 100.0)
+            .unwrap();
+        let request = signal(&sent[0]).unwrap();
+        assert_eq!(request.0, UPGRADE_REQUEST);
+
+        assert!(initiator.tick(101.0).is_empty());
+        let resent = initiator.tick(100.0 + REQUEST_RETRY_INTERVAL);
+        assert_eq!(resent.len(), 1);
+        assert_eq!(signal(&resent[0]), Some(request.clone()));
+
+        // Still repeated after ACCEPT, until READY.
+        let accept = encode_upgrade_accept(initiator.session_id());
+        initiator
+            .handle_signal(UPGRADE_ACCEPT, &accept, None, 102.5)
+            .unwrap();
+        assert_eq!(initiator.state(), HolePunchState::WaitingReady);
+        let resent = initiator.tick(102.5 + REQUEST_RETRY_INTERVAL);
+        assert_eq!(signal(&resent[0]), Some(request));
+        // A repeated ACCEPT is harmless.
+        assert!(initiator
+            .handle_signal(UPGRADE_ACCEPT, &accept, None, 105.0)
+            .unwrap()
+            .is_empty());
+
+        let ready = encode_upgrade_ready(initiator.session_id(), &test_public_addr_b());
+        let punch = initiator
+            .handle_signal(UPGRADE_READY, &ready, None, 105.0)
+            .unwrap();
+        assert!(matches!(punch[0], HolePunchAction::StartUdpPunch { .. }));
+        // Punching: no more requests, and a repeated READY starts nothing.
+        assert!(initiator.tick(105.0 + REQUEST_RETRY_INTERVAL).is_empty());
+        assert!(initiator
+            .handle_signal(UPGRADE_READY, &ready, None, 106.0)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn responder_replays_its_replies() {
+        let derived_key = test_derived_key();
+        let mut initiator =
+            HolePunchEngine::new([0x32; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator
+            .propose(&derived_key, 100.0, &mut make_rng(2))
+            .unwrap();
+        let request = signal(
+            &initiator
+                .endpoints_discovered(test_public_addr_a(), 100.0)
+                .unwrap()[0],
+        )
+        .unwrap()
+        .1;
+        assert_eq!(
+            HolePunchEngine::request_session_id(&request).unwrap(),
+            *initiator.session_id()
+        );
+
+        let mut responder = HolePunchEngine::new([0x32; 16], None, ProbeProtocol::Rnsp);
+        assert!(responder.replay_replies().is_empty());
+        responder
+            .handle_signal(UPGRADE_REQUEST, &request, Some(&derived_key), 101.0)
+            .unwrap();
+        // Before our endpoint is known: ACCEPT only.
+        let replay: Vec<_> = responder
+            .replay_replies()
+            .iter()
+            .filter_map(signal)
+            .collect();
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].0, UPGRADE_ACCEPT);
+
+        responder
+            .endpoints_discovered(test_public_addr_b(), 102.0)
+            .unwrap();
+        let replay: Vec<_> = responder
+            .replay_replies()
+            .iter()
+            .filter_map(signal)
+            .collect();
+        assert_eq!(
+            replay.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+            vec![UPGRADE_ACCEPT, UPGRADE_READY]
+        );
+        let (_, ready_endpoint) = decode_upgrade_ready(&replay[1].1).unwrap();
+        assert_eq!(ready_endpoint, test_public_addr_b());
+        // An initiator has nothing to replay.
+        assert!(initiator.replay_replies().is_empty());
     }
 }

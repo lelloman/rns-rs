@@ -4,7 +4,9 @@
 //! (probe, punch, direct interface). Lives in the Driver, analogous to LinkManager.
 //!
 //! Follows the asymmetric protocol from direct-link-protocol.md:
-//! - Initiator probes STUN first, then sends UPGRADE_REQUEST with facilitator + A_pub
+//! - Initiator first asks the peer whether it implements Direct Link (HELLO)
+//!   and sends nothing else to a peer that does not answer
+//! - Initiator probes STUN, then sends UPGRADE_REQUEST with facilitator + A_pub
 //! - Responder accepts, probes facilitator from request, sends UPGRADE_READY with B_pub
 //! - Both punch simultaneously
 
@@ -13,10 +15,10 @@ use std::net::{SocketAddr, UdpSocket};
 use std::thread;
 use std::time::Instant;
 
-use rns_core::holepunch::types::is_holepunch_msgtype;
+use rns_core::holepunch::types::{is_holepunch_msgtype, HELLO_RETRY_INTERVAL, HELLO_TIMEOUT};
 use rns_core::holepunch::{
-    Endpoint, HolePunchAction, HolePunchEngine, HolePunchState, ProbeProtocol, REJECT_BUSY,
-    REJECT_POLICY, UPGRADE_REQUEST,
+    Endpoint, HolePunchAction, HolePunchEngine, HolePunchState, ProbeProtocol, HELLO, REJECT_BUSY,
+    REJECT_POLICY, REJECT_UNSUPPORTED, UPGRADE_REQUEST,
 };
 
 use crate::event::{Event, EventSender};
@@ -78,10 +80,21 @@ impl HolePunchSession {
     }
 }
 
+/// What is known about a link peer's Direct Link support.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PeerSupport {
+    /// The peer answered a `HELLO` or sent signalling itself.
+    Supported,
+    /// A `HELLO` is out, and a proposal waits for the answer.
+    Querying { since: f64, last_sent: f64 },
+}
+
 /// Manages all hole-punch sessions.
 pub struct HolePunchManager {
     sessions: HashMap<[u8; 16], HolePunchSession>, // session_id -> session
     link_to_session: HashMap<[u8; 16], [u8; 16]>,  // link_id -> session_id
+    /// Link peers known to implement Direct Link, or being asked.
+    peer_support: HashMap<[u8; 16], PeerSupport>,
     policy: HolePunchPolicy,
     /// Configured probe servers (tried sequentially with failover).
     probe_addrs: Vec<SocketAddr>,
@@ -106,10 +119,11 @@ pub struct HolePunchManager {
 
 /// Actions produced by HolePunchManager for the driver to dispatch.
 pub enum HolePunchManagerAction {
-    /// Send a channel message on a link.
-    SendChannelMessage {
+    /// Send a Direct Link signalling message (kind and body) to the link
+    /// peer, in a link packet with `CONTEXT_DIRECT_LINK`.
+    SendSignal {
         link_id: [u8; 16],
-        msgtype: u16,
+        msgtype: u8,
         payload: Vec<u8>,
     },
     /// Direct connection established — register the new interface.
@@ -139,6 +153,7 @@ impl HolePunchManager {
         HolePunchManager {
             sessions: HashMap::new(),
             link_to_session: HashMap::new(),
+            peer_support: HashMap::new(),
             policy: HolePunchPolicy::default(),
             probe_addrs,
             probe_protocol,
@@ -186,13 +201,95 @@ impl HolePunchManager {
             .filter(|addr| endpoint_is_acceptable(addr, self.allow_private_endpoints))
     }
 
+    /// Whether this node takes part in Direct Link at all: it can propose
+    /// (a probe server is configured) or may accept proposals. A node that
+    /// does neither ignores all signalling, as a node without Direct Link
+    /// support does.
+    pub fn enabled(&self) -> bool {
+        !self.probe_addrs.is_empty() || self.policy != HolePunchPolicy::Reject
+    }
+
+    /// Whether the link peer is known to implement Direct Link.
+    pub fn peer_supported(&self, link_id: &[u8; 16]) -> bool {
+        self.peer_support.get(link_id) == Some(&PeerSupport::Supported)
+    }
+
     /// Propose a direct connection on a link.
     ///
-    /// Per the spec, the initiator first discovers its own public endpoint
-    /// (Phase 1), then sends UPGRADE_REQUEST (Phase 2).
+    /// Signalling goes only to a peer known to implement Direct Link. For a
+    /// peer not known yet, this sends a `HELLO` and the proposal starts when
+    /// the peer answers; a peer that stays silent for [`HELLO_TIMEOUT`] is
+    /// taken not to support it, and the proposal fails with
+    /// `REJECT_UNSUPPORTED`.
     ///
     /// `derived_key` is the link's derived session key (from LinkEngine).
     pub fn propose(
+        &mut self,
+        link_id: [u8; 16],
+        derived_key: &[u8],
+        rng: &mut dyn rns_crypto::Rng,
+        tx: &EventSender,
+    ) -> Vec<HolePunchManagerAction> {
+        let now = time::now();
+        match self.peer_support.get(&link_id) {
+            Some(PeerSupport::Supported) => self.start_proposal(link_id, derived_key, rng, tx),
+            // Already asking: the proposal starts with the answer.
+            Some(PeerSupport::Querying { .. }) => Vec::new(),
+            None => {
+                self.peer_support.insert(
+                    link_id,
+                    PeerSupport::Querying {
+                        since: now,
+                        last_sent: now,
+                    },
+                );
+                vec![hello(link_id, true)]
+            }
+        }
+    }
+
+    /// Handle a `HELLO` from a link peer: note that it implements Direct
+    /// Link, answer it when it asks, and start a proposal that waited for it.
+    pub fn handle_hello(
+        &mut self,
+        link_id: [u8; 16],
+        body: &[u8],
+        derived_key: Option<&[u8]>,
+        rng: &mut dyn rns_crypto::Rng,
+        tx: &EventSender,
+    ) -> Vec<HolePunchManagerAction> {
+        let hello_msg = match rns_core::holepunch::decode_hello(body) {
+            Ok(h) => h,
+            Err(e) => {
+                log::debug!("Dropping malformed Direct Link HELLO: {}", e);
+                return Vec::new();
+            }
+        };
+        let mut actions = Vec::new();
+        if hello_msg.reply_wanted {
+            actions.push(hello(link_id, false));
+        }
+        let waiting = matches!(
+            self.peer_support.insert(link_id, PeerSupport::Supported),
+            Some(PeerSupport::Querying { .. })
+        );
+        if waiting {
+            match derived_key {
+                Some(key) => actions.extend(self.start_proposal(link_id, key, rng, tx)),
+                None => log::warn!(
+                    "Cannot propose direct connect: no derived key for link {:02x?}",
+                    &link_id[..4]
+                ),
+            }
+        }
+        actions
+    }
+
+    /// Start the upgrade on a link whose peer implements Direct Link.
+    ///
+    /// Per the spec, the initiator first discovers its own public endpoint
+    /// (Phase 1), then sends UPGRADE_REQUEST (Phase 2).
+    fn start_proposal(
         &mut self,
         link_id: [u8; 16],
         derived_key: &[u8],
@@ -254,7 +351,7 @@ impl HolePunchManager {
     pub fn handle_signal(
         &mut self,
         link_id: [u8; 16],
-        msgtype: u16,
+        msgtype: u8,
         payload: Vec<u8>,
         derived_key: Option<&[u8]>,
         tx: &EventSender,
@@ -265,7 +362,7 @@ impl HolePunchManager {
     fn handle_signal_at(
         &mut self,
         link_id: [u8; 16],
-        msgtype: u16,
+        msgtype: u8,
         payload: Vec<u8>,
         derived_key: Option<&[u8]>,
         tx: &EventSender,
@@ -274,6 +371,8 @@ impl HolePunchManager {
         if !is_holepunch_msgtype(msgtype) {
             return (false, Vec::new());
         }
+        // Only a node implementing Direct Link sends these.
+        self.peer_support.insert(link_id, PeerSupport::Supported);
 
         // For UPGRADE_REQUEST, check policy first
         if msgtype == UPGRADE_REQUEST {
@@ -410,7 +509,7 @@ impl HolePunchManager {
         {
             Ok(a) => a,
             Err(e) => {
-                log::warn!("Error handling signal 0x{:04x}: {}", msgtype, e);
+                log::debug!("Error handling signal 0x{:02x}: {}", msgtype, e);
                 return (true, Vec::new());
             }
         };
@@ -427,6 +526,32 @@ impl HolePunchManager {
     pub fn tick(&mut self, tx: &EventSender) -> Vec<HolePunchManagerAction> {
         let now = time::now();
         let mut all_actions = Vec::new();
+
+        // Peers asked whether they implement Direct Link: ask again, and
+        // after HELLO_TIMEOUT of silence fail the waiting proposal.
+        let mut unanswered = Vec::new();
+        for (link_id, support) in self.peer_support.iter_mut() {
+            if let PeerSupport::Querying { since, last_sent } = support {
+                if now - *since >= HELLO_TIMEOUT {
+                    unanswered.push(*link_id);
+                } else if now - *last_sent >= HELLO_RETRY_INTERVAL {
+                    *last_sent = now;
+                    all_actions.push(hello(*link_id, true));
+                }
+            }
+        }
+        for link_id in unanswered {
+            self.peer_support.remove(&link_id);
+            log::debug!(
+                "Link peer {:02x?} did not answer HELLO: Direct Link unsupported",
+                &link_id[..4]
+            );
+            all_actions.push(HolePunchManagerAction::DirectConnectFailed {
+                link_id,
+                session_id: [0u8; 16],
+                reason: REJECT_UNSUPPORTED,
+            });
+        }
 
         // Build a snapshot of session IDs and their corresponding link IDs
         let session_link_pairs: Vec<([u8; 16], Option<[u8; 16]>)> = self
@@ -611,6 +736,30 @@ impl HolePunchManager {
     /// Called when a link is closed — clean up any associated session.
     pub fn link_closed(&mut self, link_id: &[u8; 16]) {
         self.remove_link_session(link_id);
+        self.peer_support.remove(link_id);
+    }
+
+    /// Responder: replies to resend when `payload` repeats the request of
+    /// the session running on `link_id` (its earlier replies may have been
+    /// lost). `None` for a new request.
+    pub fn replay_for_repeated_request(
+        &self,
+        link_id: [u8; 16],
+        payload: &[u8],
+    ) -> Option<Vec<HolePunchManagerAction>> {
+        let session_id = HolePunchEngine::request_session_id(payload).ok()?;
+        let current = self.link_to_session.get(&link_id)?;
+        if *current != session_id {
+            return None;
+        }
+        let session = self.sessions.get(current)?;
+        if session.engine.is_initiator() {
+            return None;
+        }
+        Some(convert_engine_actions(
+            link_id,
+            &session.engine.replay_replies(),
+        ))
     }
 
     /// Remove the session bound to `link_id`, stopping its punch thread.
@@ -640,10 +789,11 @@ impl HolePunchManager {
             }
         }
         self.link_to_session.clear();
+        self.peer_support.clear();
     }
 
-    /// Check if a message type is a hole-punch signaling message.
-    pub fn is_holepunch_message(msgtype: u16) -> bool {
+    /// Check if a signalling kind is an upgrade negotiation message.
+    pub fn is_holepunch_message(msgtype: u8) -> bool {
         is_holepunch_msgtype(msgtype)
     }
 
@@ -989,6 +1139,15 @@ fn run_probe_worker(
     }
 }
 
+/// A `HELLO` to the link peer.
+fn hello(link_id: [u8; 16], reply_wanted: bool) -> HolePunchManagerAction {
+    HolePunchManagerAction::SendSignal {
+        link_id,
+        msgtype: HELLO,
+        payload: rns_core::holepunch::encode_hello(reply_wanted),
+    }
+}
+
 /// Build an `UPGRADE_REJECT` reply for a request that is not taken up.
 fn refuse_request(link_id: [u8; 16], payload: &[u8], reason: u8) -> Vec<HolePunchManagerAction> {
     match HolePunchEngine::build_reject(link_id, payload, reason) {
@@ -1013,7 +1172,7 @@ fn convert_engine_actions(
                 msgtype,
                 payload,
             } => {
-                mgr_actions.push(HolePunchManagerAction::SendChannelMessage {
+                mgr_actions.push(HolePunchManagerAction::SendSignal {
                     link_id: *link_id,
                     msgtype: *msgtype,
                     payload: payload.clone(),
@@ -1073,6 +1232,19 @@ impl HolePunchManager {
     fn set_spawn_workers(&mut self, spawn: bool) {
         self.spawn_workers = spawn;
     }
+
+    /// Propose on a link whose peer is already known to implement Direct
+    /// Link, skipping the HELLO exchange.
+    pub(crate) fn propose_to_supported(
+        &mut self,
+        link_id: [u8; 16],
+        derived_key: &[u8],
+        rng: &mut dyn rns_crypto::Rng,
+        tx: &EventSender,
+    ) -> Vec<HolePunchManagerAction> {
+        self.peer_support.insert(link_id, PeerSupport::Supported);
+        self.propose(link_id, derived_key, rng, tx)
+    }
 }
 
 #[cfg(test)]
@@ -1131,13 +1303,13 @@ mod tests {
         mgr
     }
 
-    fn is_msg(action: &HolePunchManagerAction, expected: u16) -> bool {
-        matches!(action, HolePunchManagerAction::SendChannelMessage { msgtype, .. } if *msgtype == expected)
+    fn is_msg(action: &HolePunchManagerAction, expected: u8) -> bool {
+        matches!(action, HolePunchManagerAction::SendSignal { msgtype, .. } if *msgtype == expected)
     }
 
     fn reject_reason(actions: &[HolePunchManagerAction]) -> Option<u8> {
         actions.iter().find_map(|a| match a {
-            HolePunchManagerAction::SendChannelMessage {
+            HolePunchManagerAction::SendSignal {
                 msgtype, payload, ..
             } if *msgtype == UPGRADE_REJECT => {
                 let (val, _) = rns_core::msgpack::unpack(payload).ok()?;
@@ -1213,7 +1385,7 @@ mod tests {
         let (tx, _rx) = make_tx();
         let link_id = [0x54; 16];
         let mut rng = make_rng(0x42);
-        mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
         let session_id = *mgr.link_to_session.get(&link_id).unwrap();
         let probe_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let request = mgr.handle_probe_result(
@@ -1227,7 +1399,7 @@ mod tests {
 
         // Responder side builds ACCEPT and READY naming a private endpoint.
         let request_payload = match &request[0] {
-            HolePunchManagerAction::SendChannelMessage { payload, .. } => payload.clone(),
+            HolePunchManagerAction::SendSignal { payload, .. } => payload.clone(),
             _ => unreachable!(),
         };
         let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
@@ -1384,11 +1556,11 @@ mod tests {
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
-        let actions = mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        let actions = mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
 
         assert_eq!(mgr.session_count(), 1);
         assert!(mgr.has_session_for_link(&link_id));
-        // No SendChannelMessage yet — initiator probes first
+        // No SendSignal yet — initiator probes first
         assert!(actions.is_empty());
     }
 
@@ -1399,10 +1571,10 @@ mod tests {
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
-        mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
 
         // Immediate second proposal should be rate-limited
-        let actions = mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        let actions = mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
         assert!(actions.is_empty());
     }
 
@@ -1452,7 +1624,7 @@ mod tests {
         assert!(handled);
         assert_eq!(actions.len(), 1);
         assert!(
-            matches!(&actions[0], HolePunchManagerAction::SendChannelMessage { msgtype, .. } if *msgtype == UPGRADE_REJECT)
+            matches!(&actions[0], HolePunchManagerAction::SendSignal { msgtype, .. } if *msgtype == UPGRADE_REJECT)
         );
         assert_eq!(mgr.session_count(), 0);
     }
@@ -1477,7 +1649,7 @@ mod tests {
 
         assert!(handled);
         // Should send UPGRADE_ACCEPT
-        assert!(actions.iter().any(|a| matches!(a, HolePunchManagerAction::SendChannelMessage { msgtype, .. } if *msgtype == UPGRADE_ACCEPT)));
+        assert!(actions.iter().any(|a| matches!(a, HolePunchManagerAction::SendSignal { msgtype, .. } if *msgtype == UPGRADE_ACCEPT)));
         assert_eq!(mgr.session_count(), 1);
         assert!(mgr.has_session_for_link(&link_id));
     }
@@ -1487,7 +1659,7 @@ mod tests {
         let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
         let (tx, _rx) = make_tx();
 
-        let (handled, actions) = mgr.handle_signal([0x55; 16], 0x0001, vec![1, 2, 3], None, &tx);
+        let (handled, actions) = mgr.handle_signal([0x55; 16], 0x05, vec![1, 2, 3], None, &tx);
 
         assert!(!handled);
         assert!(actions.is_empty());
@@ -1500,7 +1672,7 @@ mod tests {
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
-        mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
         assert_eq!(mgr.session_count(), 1);
 
         mgr.link_closed(&link_id);
@@ -1516,8 +1688,8 @@ mod tests {
         let link_a = [0x11; 16];
         let link_b = [0x22; 16];
 
-        mgr.propose(link_a, &test_derived_key(), &mut rng, &tx);
-        mgr.propose(link_b, &[0xBB; 32], &mut rng, &tx);
+        mgr.propose_to_supported(link_a, &test_derived_key(), &mut rng, &tx);
+        mgr.propose_to_supported(link_b, &[0xBB; 32], &mut rng, &tx);
         assert!(mgr.session_count() >= 1);
 
         mgr.abort_all_sessions();
@@ -1534,7 +1706,7 @@ mod tests {
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
-        mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
         let session_id = *mgr.link_to_session.get(&link_id).unwrap();
 
         let actions = mgr.handle_probe_failed(link_id, session_id);
@@ -1561,7 +1733,7 @@ mod tests {
         let (tx, _rx) = make_tx();
 
         // Propose creates session in Discovering state
-        mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
         let session_id = *mgr.link_to_session.get(&link_id).unwrap();
 
         // Probe result arrives — initiator should send UPGRADE_REQUEST
@@ -1577,7 +1749,7 @@ mod tests {
 
         // Should emit UPGRADE_REQUEST (initiator discovered endpoint -> sends request)
         assert!(actions.iter().any(|a| matches!(a,
-            HolePunchManagerAction::SendChannelMessage { msgtype, .. }
+            HolePunchManagerAction::SendSignal { msgtype, .. }
             if *msgtype == UPGRADE_REQUEST
         )));
     }
@@ -1613,7 +1785,7 @@ mod tests {
         );
 
         assert!(actions.iter().any(|a| matches!(a,
-            HolePunchManagerAction::SendChannelMessage { msgtype, .. }
+            HolePunchManagerAction::SendSignal { msgtype, .. }
             if *msgtype == UPGRADE_READY
         )));
         // The responder punches toward the initiator endpoint from the request.
@@ -1667,10 +1839,10 @@ mod tests {
 
     #[test]
     fn test_is_holepunch_message() {
-        assert!(HolePunchManager::is_holepunch_message(0xFE00));
-        assert!(HolePunchManager::is_holepunch_message(0xFE04));
-        assert!(!HolePunchManager::is_holepunch_message(0x0000));
-        assert!(!HolePunchManager::is_holepunch_message(0xFE05));
+        assert!(HolePunchManager::is_holepunch_message(UPGRADE_REQUEST));
+        assert!(HolePunchManager::is_holepunch_message(UPGRADE_READY));
+        assert!(!HolePunchManager::is_holepunch_message(HELLO));
+        assert!(!HolePunchManager::is_holepunch_message(0x05));
     }
 
     #[test]
@@ -1689,9 +1861,180 @@ mod tests {
         let (tx, _rx) = make_tx();
 
         // Should fail — initiator needs a probe address
-        let actions = mgr.propose(link_id, &test_derived_key(), &mut rng, &tx);
+        let actions = mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
         assert!(actions.is_empty());
         // No session created since propose() failed
         assert_eq!(mgr.session_count(), 0);
+    }
+
+    fn hello_sent(actions: &[HolePunchManagerAction]) -> Vec<bool> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                HolePunchManagerAction::SendSignal {
+                    msgtype, payload, ..
+                } if *msgtype == HELLO => Some(
+                    rns_core::holepunch::decode_hello(payload)
+                        .unwrap()
+                        .reply_wanted,
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn proposal_to_unknown_peer_only_asks_hello() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x61; 16];
+        let actions = mgr.propose(link_id, &test_derived_key(), &mut make_rng(1), &tx);
+        // Nothing but the capability query goes to a peer not known to
+        // implement Direct Link.
+        assert_eq!(actions.len(), 1);
+        assert_eq!(hello_sent(&actions), vec![true]);
+        assert_eq!(mgr.session_count(), 0);
+        assert!(!mgr.peer_supported(&link_id));
+        // Proposing again while asking sends nothing more.
+        assert!(mgr
+            .propose(link_id, &test_derived_key(), &mut make_rng(2), &tx)
+            .is_empty());
+    }
+
+    #[test]
+    fn hello_answer_starts_the_waiting_proposal() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x62; 16];
+        mgr.propose(link_id, &test_derived_key(), &mut make_rng(1), &tx);
+        let actions = mgr.handle_hello(
+            link_id,
+            &rns_core::holepunch::encode_hello(false),
+            Some(&test_derived_key()),
+            &mut make_rng(3),
+            &tx,
+        );
+        // An answer is not answered again.
+        assert!(hello_sent(&actions).is_empty());
+        assert!(mgr.peer_supported(&link_id));
+        assert_eq!(mgr.session_count(), 1);
+        let session_id = mgr.link_to_session[&link_id];
+        assert_eq!(
+            mgr.sessions[&session_id].engine.state(),
+            HolePunchState::Discovering
+        );
+    }
+
+    #[test]
+    fn hello_query_is_answered_without_proposing() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x63; 16];
+        let actions = mgr.handle_hello(
+            link_id,
+            &rns_core::holepunch::encode_hello(true),
+            Some(&test_derived_key()),
+            &mut make_rng(3),
+            &tx,
+        );
+        assert_eq!(hello_sent(&actions), vec![false]);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(mgr.session_count(), 0);
+        assert!(mgr.peer_supported(&link_id));
+        // Malformed HELLOs are dropped.
+        let other = [0x64; 16];
+        assert!(mgr
+            .handle_hello(other, &[0xC1], None, &mut make_rng(3), &tx)
+            .is_empty());
+        assert!(!mgr.peer_supported(&other));
+    }
+
+    #[test]
+    fn unanswered_hello_is_repeated_then_fails_as_unsupported() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x65; 16];
+        mgr.propose(link_id, &test_derived_key(), &mut make_rng(1), &tx);
+        let now = time::now();
+        mgr.peer_support.insert(
+            link_id,
+            PeerSupport::Querying {
+                since: now - HELLO_RETRY_INTERVAL,
+                last_sent: now - HELLO_RETRY_INTERVAL,
+            },
+        );
+        assert_eq!(hello_sent(&mgr.tick(&tx)), vec![true]);
+        assert!(hello_sent(&mgr.tick(&tx)).is_empty());
+
+        mgr.peer_support.insert(
+            link_id,
+            PeerSupport::Querying {
+                since: now - HELLO_TIMEOUT,
+                last_sent: now,
+            },
+        );
+        let actions = mgr.tick(&tx);
+        assert!(hello_sent(&actions).is_empty());
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            HolePunchManagerAction::DirectConnectFailed { link_id: l, reason, .. }
+                if *l == link_id && *reason == REJECT_UNSUPPORTED
+        )));
+        assert!(mgr.peer_support.is_empty());
+        assert_eq!(mgr.session_count(), 0);
+    }
+
+    #[test]
+    fn upgrade_message_marks_the_peer_supported() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x66; 16];
+        let payload = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x42);
+        mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            payload,
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert!(mgr.peer_supported(&link_id));
+        mgr.link_closed(&link_id);
+        assert!(!mgr.peer_supported(&link_id));
+    }
+
+    #[test]
+    fn repeated_request_replays_replies_instead_of_refusing() {
+        let mut mgr = accepting_manager();
+        let (tx, _rx) = make_tx();
+        let link_id = [0x67; 16];
+        let payload = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x42);
+        assert!(mgr.replay_for_repeated_request(link_id, &payload).is_none());
+        let (_, first) = mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            payload.clone(),
+            Some(&test_derived_key()),
+            &tx,
+        );
+        assert!(first.iter().any(|a| is_msg(a, UPGRADE_ACCEPT)));
+        let replay = mgr.replay_for_repeated_request(link_id, &payload).unwrap();
+        assert_eq!(replay.len(), 1);
+        assert!(is_msg(&replay[0], UPGRADE_ACCEPT));
+        // A different session is a new request.
+        let other = make_request(link_id, "1.2.3.4:4343", "5.6.7.8:41000", 0x43);
+        assert!(mgr.replay_for_repeated_request(link_id, &other).is_none());
+    }
+
+    #[test]
+    fn manager_takes_part_only_when_configured() {
+        let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
+        mgr.set_policy(HolePunchPolicy::Reject);
+        assert!(!mgr.enabled());
+        mgr.set_policy(HolePunchPolicy::AcceptAll);
+        assert!(mgr.enabled());
+        let mut initiator =
+            HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
+        initiator.set_policy(HolePunchPolicy::Reject);
+        assert!(initiator.enabled());
     }
 }

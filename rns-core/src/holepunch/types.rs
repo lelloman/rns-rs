@@ -1,17 +1,56 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-// --- Channel message type constants (0xFE00..=0xFE04) ---
+// --- Signalling wire format ---
+//
+// Direct Link signalling travels in Reticulum link DATA packets with the
+// packet context [`CONTEXT_DIRECT_LINK`], encrypted with the link key like
+// any other link packet. The plaintext is
+//
+//   [version: u8] [kind: u8] [body: msgpack map]
+//
+// Upstream Reticulum drops link packets with a context it does not know
+// without a reply or proof, so a peer that does not implement Direct Link
+// never notices the capability query (`HELLO`) and never answers it.
 
-pub const UPGRADE_REQUEST: u16 = 0xFE00;
-pub const UPGRADE_ACCEPT: u16 = 0xFE01;
-pub const UPGRADE_REJECT: u16 = 0xFE02;
-pub const UPGRADE_READY: u16 = 0xFE03;
-pub const UPGRADE_COMPLETE: u16 = 0xFE04;
+/// Link packet context carrying Direct Link signalling (an rns-rs extension;
+/// upstream Reticulum assigns no meaning to it and ignores it).
+pub const CONTEXT_DIRECT_LINK: u8 = 0x80;
 
-/// Check if a channel message type is a hole-punch signaling message.
-pub fn is_holepunch_msgtype(msgtype: u16) -> bool {
-    (UPGRADE_REQUEST..=UPGRADE_COMPLETE).contains(&msgtype)
+/// Signalling format version this implementation speaks. Messages carrying
+/// another version are dropped. `HELLO` is always sent in version 1 framing
+/// and advertises the highest version the sender speaks in its `v` field.
+pub const DIRECT_LINK_VERSION: u8 = 1;
+
+/// Capability query and answer: "I implement Direct Link".
+pub const HELLO: u8 = 0x00;
+pub const UPGRADE_REQUEST: u8 = 0x01;
+pub const UPGRADE_ACCEPT: u8 = 0x02;
+pub const UPGRADE_REJECT: u8 = 0x03;
+pub const UPGRADE_READY: u8 = 0x04;
+
+/// Check if a signalling kind is one of the upgrade negotiation messages.
+pub fn is_holepunch_msgtype(kind: u8) -> bool {
+    (UPGRADE_REQUEST..=UPGRADE_READY).contains(&kind)
+}
+
+/// Frame a signalling message: version, kind, body.
+pub fn encode_signal(kind: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + body.len());
+    out.push(DIRECT_LINK_VERSION);
+    out.push(kind);
+    out.extend_from_slice(body);
+    out
+}
+
+/// Split a signalling message into its kind and body. `None` for a message
+/// too short to carry a header or framed in a version this node does not
+/// speak.
+pub fn decode_signal(data: &[u8]) -> Option<(u8, &[u8])> {
+    match data {
+        [DIRECT_LINK_VERSION, kind, body @ ..] => Some((*kind, body)),
+        _ => None,
+    }
 }
 
 // --- Reject reasons ---
@@ -26,6 +65,18 @@ pub const FAIL_TIMEOUT: u8 = 0x01;
 pub const FAIL_PROBE: u8 = 0x02;
 
 // --- Timeouts (seconds) ---
+
+/// How long an initiator waits for the peer to answer its `HELLO` before
+/// treating the peer as not implementing Direct Link.
+pub const HELLO_TIMEOUT: f64 = 8.0;
+
+/// Interval between `HELLO` retransmissions while waiting for an answer.
+pub const HELLO_RETRY_INTERVAL: f64 = 2.5;
+
+/// Interval between UPGRADE_REQUEST retransmissions while the initiator waits
+/// for the responder's ACCEPT and READY. The responder answers a repeated
+/// request with the replies it already sent.
+pub const REQUEST_RETRY_INTERVAL: f64 = 2.0;
 
 /// Time to wait for UPGRADE_ACCEPT after sending UPGRADE_REQUEST.
 pub const PROPOSE_TIMEOUT: f64 = 10.0;
@@ -82,10 +133,11 @@ pub struct Endpoint {
 /// Actions produced by HolePunchEngine for the caller to dispatch.
 #[derive(Debug, Clone)]
 pub enum HolePunchAction {
-    /// Send a signaling message over the link's channel.
+    /// Send a signalling message to the link peer (kind and body; the caller
+    /// frames it with [`encode_signal`]).
     SendSignal {
         link_id: [u8; 16],
-        msgtype: u16,
+        msgtype: u8,
         payload: Vec<u8>,
     },
     /// Discover our public endpoint by probing the given address.
@@ -137,9 +189,56 @@ mod tests {
         assert!(is_holepunch_msgtype(UPGRADE_ACCEPT));
         assert!(is_holepunch_msgtype(UPGRADE_REJECT));
         assert!(is_holepunch_msgtype(UPGRADE_READY));
-        assert!(is_holepunch_msgtype(UPGRADE_COMPLETE));
-        assert!(!is_holepunch_msgtype(0x0000));
-        assert!(!is_holepunch_msgtype(0xFDFF));
-        assert!(!is_holepunch_msgtype(0xFE05));
+        assert!(!is_holepunch_msgtype(HELLO));
+        assert!(!is_holepunch_msgtype(0x05));
+        assert!(!is_holepunch_msgtype(0xFF));
+    }
+
+    #[test]
+    fn signal_framing_round_trips_and_checks_the_version() {
+        let framed = encode_signal(UPGRADE_ACCEPT, &[0x81, 0xA1, 0x73]);
+        assert_eq!(framed[..2], [DIRECT_LINK_VERSION, UPGRADE_ACCEPT]);
+        assert_eq!(
+            decode_signal(&framed),
+            Some((UPGRADE_ACCEPT, &[0x81, 0xA1, 0x73][..]))
+        );
+        assert_eq!(
+            decode_signal(&encode_signal(HELLO, &[])),
+            Some((HELLO, &[][..]))
+        );
+        // Another version, or no header at all, is not understood.
+        assert_eq!(decode_signal(&[2, UPGRADE_REQUEST, 0x80]), None);
+        assert_eq!(decode_signal(&[DIRECT_LINK_VERSION]), None);
+        assert_eq!(decode_signal(&[]), None);
+    }
+
+    #[test]
+    fn direct_link_context_is_not_an_upstream_context() {
+        use crate::constants::*;
+        for upstream in [
+            CONTEXT_NONE,
+            CONTEXT_RESOURCE,
+            CONTEXT_RESOURCE_ADV,
+            CONTEXT_RESOURCE_REQ,
+            CONTEXT_RESOURCE_HMU,
+            CONTEXT_RESOURCE_PRF,
+            CONTEXT_RESOURCE_ICL,
+            CONTEXT_RESOURCE_RCL,
+            CONTEXT_CACHE_REQUEST,
+            CONTEXT_REQUEST,
+            CONTEXT_RESPONSE,
+            CONTEXT_PATH_RESPONSE,
+            CONTEXT_COMMAND,
+            CONTEXT_COMMAND_STATUS,
+            CONTEXT_CHANNEL,
+            CONTEXT_KEEPALIVE,
+            CONTEXT_LINKIDENTIFY,
+            CONTEXT_LINKCLOSE,
+            CONTEXT_LINKPROOF,
+            CONTEXT_LRRTT,
+            CONTEXT_LRPROOF,
+        ] {
+            assert_ne!(CONTEXT_DIRECT_LINK, upstream);
+        }
     }
 }

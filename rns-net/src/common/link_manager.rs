@@ -310,6 +310,10 @@ pub enum LinkManagerAction {
         msgtype: u16,
         payload: Vec<u8>,
     },
+    /// Direct Link signalling received on a link (decrypted, still framed;
+    /// see `rns_core::holepunch::decode_signal`). Never proven and never
+    /// shown to the application.
+    DirectLinkSignal { link_id: LinkId, data: Vec<u8> },
     /// Generic link data received (CONTEXT_NONE).
     LinkDataReceived {
         link_id: LinkId,
@@ -1464,6 +1468,11 @@ impl LinkManager {
     ) {
         // First pass: perform engine operations, collect results
         enum LinkDataResult<'a> {
+            DirectLink {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
             Lrrtt {
                 link_id: LinkId,
                 link_actions: Vec<LinkAction>,
@@ -1697,6 +1706,20 @@ impl LinkManager {
                     }
                     Err(_) => LinkDataResult::Error,
                 },
+                rns_core::holepunch::CONTEXT_DIRECT_LINK => {
+                    match decrypt(&link.engine, packet.data()) {
+                        Ok(plaintext) => {
+                            let inbound_actions = link.engine.record_inbound(time::now());
+                            let link_id = *link.engine.link_id();
+                            LinkDataResult::DirectLink {
+                                link_id,
+                                inbound_actions,
+                                plaintext,
+                            }
+                        }
+                        Err(_) => LinkDataResult::Error,
+                    }
+                }
                 constants::CONTEXT_RESPONSE => match decrypt(&link.engine, packet.data()) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
@@ -1889,6 +1912,17 @@ impl LinkManager {
                 teardown_actions,
             } => {
                 out.extend(self.process_link_actions(&link_id, &teardown_actions));
+            }
+            LinkDataResult::DirectLink {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
+                out.extend(self.process_link_actions(&link_id, &inbound_actions));
+                out.push(LinkManagerAction::DirectLinkSignal {
+                    link_id,
+                    data: plaintext,
+                });
             }
             LinkDataResult::Channel {
                 link_id,

@@ -1,9 +1,9 @@
 pub mod engine;
 pub mod types;
 
-pub use engine::HolePunchEngine;
+pub use engine::{decode_hello, encode_hello, Hello, HolePunchEngine};
 pub use types::{
-    Endpoint, HolePunchAction, HolePunchError, HolePunchState, ProbeProtocol, REJECT_BUSY,
-    REJECT_POLICY, REJECT_UNSUPPORTED, UPGRADE_ACCEPT, UPGRADE_COMPLETE, UPGRADE_READY,
-    UPGRADE_REJECT, UPGRADE_REQUEST,
+    decode_signal, encode_signal, Endpoint, HolePunchAction, HolePunchError, HolePunchState,
+    ProbeProtocol, CONTEXT_DIRECT_LINK, DIRECT_LINK_VERSION, HELLO, REJECT_BUSY, REJECT_POLICY,
+    REJECT_UNSUPPORTED, UPGRADE_ACCEPT, UPGRADE_READY, UPGRADE_REJECT, UPGRADE_REQUEST,
 };

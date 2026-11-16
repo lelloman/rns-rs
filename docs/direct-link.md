@@ -1,8 +1,9 @@
 # Direct Link
 
-> **rns-rs extension.** Python Reticulum has no equivalent. Peers that do not
-> support Direct Link simply never receive an upgrade offer; nothing else
-> changes for them.
+> **rns-rs extension.** Python Reticulum has no equivalent. A node first asks
+> its link peer whether it implements Direct Link, in a link packet context
+> upstream drops without a reply; a peer that does not answer is never sent
+> anything else, and nothing changes for it.
 
 Reticulum peers on the internet normally talk through transport nodes. Direct
 Link lets two peers with an established link upgrade it to a direct UDP path
@@ -10,10 +11,11 @@ between them, bypassing the transport node. That cuts a hop of latency and
 offloads bandwidth from shared infrastructure, which matters for voice (LXST)
 and large resource transfers.
 
-The mechanism is a STUN-like probe to a facilitator to learn each side's public
-endpoint, negotiation over the existing link's channel, then a simultaneous
-hole punch from both sides. If any step fails the original link keeps working
-unchanged.
+The mechanism is a capability check with the link peer, a STUN-like probe to a
+facilitator to learn each side's public endpoint, negotiation over the existing
+link (in its own link packet context, not the link's channel, so the
+application's channel is never touched), then a simultaneous hole punch from
+both sides. If any step fails the original link keeps working unchanged.
 
 ## Roles
 

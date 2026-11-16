@@ -524,7 +524,8 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
     /// with its own protocol handling (requests and responses, resource
     /// control and parts, keepalives, identification, RTT and close). Only
     /// plain link data and channel messages are proven, so a sent packet in
-    /// one of these contexts has no receipt to wait for.
+    /// one of these contexts has no receipt to wait for. Direct Link
+    /// signalling (an rns-rs extension) is never proven either.
     pub fn is_unproven_link_data(&self) -> bool {
         self.flags.packet_type == constants::PACKET_TYPE_DATA
             && self.flags.destination_type == constants::DESTINATION_LINK
@@ -542,6 +543,7 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
                     | constants::CONTEXT_LINKIDENTIFY
                     | constants::CONTEXT_LRRTT
                     | constants::CONTEXT_LINKCLOSE
+                    | crate::holepunch::CONTEXT_DIRECT_LINK
             )
     }
 
@@ -905,6 +907,7 @@ mod tests {
             constants::CONTEXT_LINKIDENTIFY,
             constants::CONTEXT_LRRTT,
             constants::CONTEXT_LINKCLOSE,
+            crate::holepunch::CONTEXT_DIRECT_LINK,
         ] {
             assert!(
                 link_data(context).is_unproven_link_data(),

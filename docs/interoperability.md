@@ -60,7 +60,12 @@ which were inherited. Physical radio hardware validation remains unclaimed.
   the [surface record](upstream-parity/reticulum-1.6.0-surface-parity.md)
   for what still differs.
 - **Extensions**: [Hooks](hooks.md) and [Direct Link](direct-link.md) are
-  additive. A Python peer never sees them.
+  additive. A Python peer never sees hooks. Direct Link asks a link peer
+  whether it implements it with a link packet in context `0x80`, which
+  upstream drops without a reply or proof; a peer that stays silent is sent
+  no further Direct Link traffic, and its link and channel are left alone.
+  `cargo test -p rns-net --test direct_link_python_interop -- --ignored`
+  checks this against a Python peer with and without a channel.
 
 ## Performance claims
 
