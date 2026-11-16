@@ -514,13 +514,14 @@ impl TransportEngine {
     }
 
     /// Forget an interface's tunnel synthesis state when it connects again:
-    /// the remote transport, what it reported, and whether a synthesis was
-    /// received or emitted. Upstream's dialing interfaces reset the first two
-    /// on each connect (b7a93b9b); the synthesis they then send sets the
-    /// emitted flag again.
+    /// the remote transport and whether a synthesis was received or emitted.
+    /// Upstream's dialing interfaces reset the remote transport and the
+    /// received flag on each connect (b7a93b9b); the synthesis they then send
+    /// sets the emitted flag again. What the remote reported about itself
+    /// stays until its next synthesis replaces it, as upstream keeps the
+    /// interface's `remote_impl`, `remote_vers` and costs.
     pub fn reset_tunnel_synthesis(&mut self, interface: InterfaceId) {
         self.remote_transports.remove(&interface);
-        self.remote_transport_infos.remove(&interface);
         self.synthesis_received.remove(&interface);
         self.synthesis_emitted.remove(&interface);
     }
