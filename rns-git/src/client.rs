@@ -1055,9 +1055,17 @@ def list_refs(path, data, request_id, link_id, remote_identity, requested_at):
     return b"\x001111111111111111111111111111111111111111 refs/heads/main\n"
 
 def identified(link, remote_identity):
-    global identifications
-    identifications += 1
     emit("IDENTIFIED", remote_identity.hash.hex(), identifications)
+
+# Upstream calls remote_identified only for a link's first identification,
+# so count every LINKIDENTIFY packet the link receives instead.
+link_receive = RNS.Link.receive
+def counting_receive(self, packet):
+    global identifications
+    if packet.context == RNS.Packet.LINKIDENTIFY:
+        identifications += 1
+    return link_receive(self, packet)
+RNS.Link.receive = counting_receive
 
 def link_established(link):
     emit("LINK_ESTABLISHED")
