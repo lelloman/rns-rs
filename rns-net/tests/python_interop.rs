@@ -669,6 +669,14 @@ try:
                 stamp, value = generate_stamp(destination.stamp_material(), stamp_cost=stamp_target,
                                               expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
                 destination.stamp, destination.stamp_value = stamp, value
+                # The Rust client's connection is up on its side before this
+                # server has registered the spawned interface; an announce
+                # sent in between goes nowhere.
+                deadline = time.time() + 10
+                while time.time() < deadline and not any(
+                        getattr(i, "parent_interface", None) is not None and i.online
+                        for i in RNS.Transport.interfaces):
+                    time.sleep(0.05)
                 destination.announce()
                 emit("python_stamped_announce", dest_hash=destination.hash.hex(), stamp_value=value,
                      stamp_hex=stamp.hex(), link_cost=destination.get_link_cost(),
