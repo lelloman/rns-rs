@@ -75,6 +75,9 @@ Hooks are opt-in. Each backend is a feature on `rns-net`, `rns-cli`,
 | `rns-hooks-builtin` | Hooks linked into the binary and loaded by ID. No Wasmtime, no `dlopen` |
 | `rns-hooks` | Compatibility alias for `rns-hooks-native` |
 
+Depending on the `rns-hooks` crate directly gives no backend either: enable
+its `wasm` or `native` feature (or both).
+
 ```bash
 cargo build --release --bin rns-server --features rns-hooks-native
 cargo build --release --bin rns-server --features rns-hooks-wasm

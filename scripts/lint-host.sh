@@ -12,3 +12,5 @@ cargo clippy --workspace --all-targets --features rns-hooks -- \
   -D warnings \
   -A clippy::approx_constant \
   -A clippy::never_loop
+# rns-hooks has no backend by default; lint both of its backends too.
+cargo clippy -p rns-hooks --all-targets --features wasm,native -- -D warnings

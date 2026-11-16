@@ -9,7 +9,9 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["wasm"]
+# No backend by default: WASM hooks compile in Wasmtime, a large dependency,
+# so a build asks for the backend it needs (`wasm` or `native`).
+default = []
 wasm = ["dep:wasmtime"]
 native = ["dep:libloading"]
 
@@ -23,6 +25,11 @@ rns-hooks-abi = { version = "0.2.0", path = "sdk/rns-hooks-abi" }
 criterion = { version = "0.8", features = ["html_reports"] }
 wat = "1"
 
+[[test]]
+name = "integration"
+required-features = ["wasm"]
+
 [[bench]]
 name = "hook_dispatch"
 harness = false
+required-features = ["wasm"]
