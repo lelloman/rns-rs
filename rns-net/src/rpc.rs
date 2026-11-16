@@ -2751,6 +2751,10 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
     }
 
     match s.bitrate {
+        Some(br) if s.bitrate_is_float => dict.push((
+            PickleValue::String("bitrate".into()),
+            PickleValue::Float(br as f64),
+        )),
         Some(br) => dict.push((
             PickleValue::String("bitrate".into()),
             PickleValue::Int(br as i64),
@@ -4699,6 +4703,7 @@ mod tests {
                             modulation: None,
                             radio: None,
                             bitrate: Some(10_000_000),
+                            bitrate_is_float: false,
                             mtu: Some(262_144),
                             ifac_size: None,
                             started: 1000.0,
@@ -5332,6 +5337,7 @@ mod tests {
                 modulation: Some("LoRa".into()),
                 radio: None,
                 bitrate: Some(1000000),
+                bitrate_is_float: false,
                 mtu: Some(131_072),
                 ifac_size: Some(16),
                 started: 1000.0,
@@ -5471,6 +5477,18 @@ mod tests {
         let i2p = pickle::decode(&pickle::encode(&single_iface_to_pickle(&i2p))).unwrap();
         assert_eq!(i2p.get("i2p_connectable").unwrap().as_bool(), Some(false));
         assert_eq!(i2p.get("i2p_b32"), Some(&PickleValue::None));
+        // The bitrate is an int, unless upstream holds it as a float, as
+        // it does an auto-connected interface's.
+        assert_eq!(ifaces[0].get("bitrate"), Some(&PickleValue::Int(1000000)));
+        let mut autoconnected = stats.interfaces[0].clone();
+        autoconnected.bitrate = Some(5_000_000);
+        autoconnected.bitrate_is_float = true;
+        let autoconnected =
+            pickle::decode(&pickle::encode(&single_iface_to_pickle(&autoconnected))).unwrap();
+        assert_eq!(
+            autoconnected.get("bitrate"),
+            Some(&PickleValue::Float(5_000_000.0))
+        );
         // Only I2P peers report their tunnel state.
         assert!(ifaces[0].get("tunnelstate").is_none());
         let mut peer = stats.interfaces[0].clone();

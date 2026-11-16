@@ -1133,6 +1133,9 @@ pub struct SingleInterfaceStat {
     /// Channel and device state an RNode reports.
     pub radio: Option<crate::common::interface_stats::RadioStats>,
     pub bitrate: Option<u64>,
+    /// Whether upstream holds the bitrate as a float, and so reports it as
+    /// one: an auto-connected interface's, configured as `5E6`.
+    pub bitrate_is_float: bool,
     /// Hardware MTU advertised for this interface, when known.
     pub mtu: Option<u32>,
     pub ifac_size: Option<usize>,
