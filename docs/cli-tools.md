@@ -57,6 +57,16 @@ In service mode the log goes to `<config dir>/logfile`, rotated at 5 MiB with
 one archive kept, and the configured log level is used as is. In the
 foreground, `-v` and `-q` adjust the configured level.
 
+`-i` differs from upstream. Upstream's `rnsd -i` opens a Python console
+(`code.interact`) once Reticulum is up, with the running instance in reach
+of Python statements. This `rnsd` has no Python interpreter. Its `-i` keeps
+the console's lifecycle: the `>>> ` prompt on stdout, messages on stderr, and
+when the input ends (Ctrl-D, or stdin closed or at `/dev/null`) it prints
+`now exiting InteractiveConsole...` and stops with status 0, as upstream's
+rnsd does. Statements entered at the prompt are not run; each one gets a
+message on stderr saying so. SIGINT and SIGTERM stop it as they stop
+upstream's.
+
 ## `rncp`
 
 ```text

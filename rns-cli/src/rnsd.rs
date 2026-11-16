@@ -197,9 +197,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     let _ = crate::pylog::RnsLogger::install(i32::from(log_level), logging.logtimestamps, out);
 
     log::info!("Starting rnsd {}", VERSION);
-    if args.has("interactive") {
-        log::warn!("Interactive mode is not supported, continuing without it");
-    }
+    let interactive = args.has("interactive");
     if let Err(err) = register_native_sidecar_hooks() {
         log::error!("Failed to register built-in sidecar hooks: {}", err);
         std::process::exit(1);
@@ -246,7 +244,12 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         );
     }
 
-    // Until SIGINT or SIGTERM.
+    if interactive {
+        std::thread::spawn(interactive_console);
+    }
+
+    // Until SIGINT or SIGTERM, or with -i the end of the console's input.
+    // As upstream's signal handlers, SIGINT stops rnsd at the console too.
     stop_rx.wait();
 
     log::info!("Shutting down...");
@@ -326,7 +329,7 @@ impl StopPipe {
         Ok(Self { read_fd: fds[0] })
     }
 
-    /// Block until a signal handler wrote to the pipe.
+    /// Block until a signal handler or the console wrote to the pipe.
     fn wait(&self) {
         let mut byte = 0u8;
         loop {
@@ -346,6 +349,45 @@ impl StopPipe {
 }
 
 extern "C" fn signal_handler(_sig: libc::c_int) {
+    wake();
+}
+
+fn print_usage(usage_name: &str) {
+    crate::argparse::print_help("rnsd", usage_name);
+}
+
+/// The prompt of upstream's console (`code.interact`), on stdout.
+const CONSOLE_PROMPT: &str = ">>> ";
+
+/// `rnsd -i`. Upstream drops into a Python console (`code.interact`) once
+/// Reticulum is up and stops when the console ends. There is no Python
+/// interpreter here: the console keeps that lifecycle and its prompt,
+/// banner and exit message on stderr, and says so for each statement.
+fn interactive_console() {
+    use std::io::BufRead;
+    eprint!(
+        "rnsd {VERSION} interactive console\n\
+         This rnsd has no Python interpreter, statements are not run.\n\
+         End the input (Ctrl-D) to stop rnsd.\n"
+    );
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    loop {
+        print!("{CONSOLE_PROMPT}");
+        let _ = std::io::stdout().flush();
+        line.clear();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) if line.trim().is_empty() => {}
+            Ok(_) => eprintln!("Python statements cannot be run by this rnsd"),
+        }
+    }
+    eprint!("\nnow exiting InteractiveConsole...\n");
+    wake();
+}
+
+/// Wake the main thread to shut down. Async-signal-safe.
+fn wake() {
     let fd = STOP_WRITE_FD.load(std::sync::atomic::Ordering::SeqCst);
     if fd >= 0 {
         let byte = 1u8;
@@ -353,10 +395,6 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
         // for the life of the process.
         unsafe { libc::write(fd, (&byte as *const u8).cast(), 1) };
     }
-}
-
-fn print_usage(usage_name: &str) {
-    crate::argparse::print_help("rnsd", usage_name);
 }
 
 /// What upstream's `rnsd --exampleconfig` prints, byte for byte
