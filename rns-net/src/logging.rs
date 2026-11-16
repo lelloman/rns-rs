@@ -2,6 +2,11 @@
 
 pub use rns_core::logging::PATHING_LOG_TARGET;
 
+/// Log target for `info!` records that upstream would log at `LOG_NOTICE`,
+/// shown at the default log level: `RnsLogger` maps other `info!` records
+/// to `LOG_VERBOSE`.
+pub const NOTICE_TARGET: &str = "rns::notice";
+
 pub const LOG_CRITICAL: u8 = 0;
 pub const LOG_ERROR: u8 = 1;
 pub const LOG_WARNING: u8 = 2;
