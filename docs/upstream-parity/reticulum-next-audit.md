@@ -55,7 +55,7 @@ Dispositions are provisional until each mapping commit lands.
 |---:|---|---|---|---|
 | 1 | `29dc449af89adb41b142141bee63093f6edb76b4` | Traffic counting | Integrated | `held_frames_are_filtered_and_releases_are_charged_again`, `released_announces_are_charged_as_received_traffic`; `held_announces_limit_applies_only_while_ingress_limiting` and `announce_is_held_while_held_announces_have_room` updated |
 | 2 | `85d3697938393fbe68661ae9b06d2047269252d3` | Pre-emptively cull held announce queue for useless announces | Integrated | `held_announces_that_cannot_update_a_path_are_culled`, `announce_prefilter_keeps_only_announces_that_could_update_the_path` |
-| 3 | `a450be5d7ed40c78353f547f1373587bb2b85d9f` | Raised announce validation caches to 384 | Needs decision | |
+| 3 | `a450be5d7ed40c78353f547f1373587bb2b85d9f` | Raised announce validation caches to 384 | Structurally covered | `ANNOUNCE_SIG_CACHE_MAXSIZE` (2,000 entries, 600 s TTL, configurable) documented against upstream's sizes |
 | 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Needs coordinated port (with 2) | |
 | 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Needs port | |
 | 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Needs port | |
@@ -156,14 +156,19 @@ burst).
 `Identity.__invalid_cache_max`, the sizes of the per-process caches of
 announce validation results, go from 128 to 384.
 
-**Rust applicability:** rns-rs has no announce validation result cache, so
-the size has nothing to map to unless such a cache is introduced. Decide
-whether to record this as structurally covered (every announce is validated)
-or to add a bounded cache.
+**Rust applicability:** rns-rs caches verified announce signatures in the
+engine's `AnnounceSignatureCache`, keyed on the signed data and signature
+rather than the packet hash: `ANNOUNCE_SIG_CACHE_MAXSIZE` is 2,000 entries
+with a 600 s TTL, configurable as `announce_sig_cache_max_entries` and
+`announce_sig_cache_ttl_secs`. That is already larger than upstream's new
+384. rns-rs has no cache of invalid results; that predates this range, which
+only changes sizes.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** The mapping commit documents the relation on
+`ANNOUNCE_SIG_CACHE_MAXSIZE`, including the absent invalid-result cache. No
+behavior change.
 
-**Final disposition:** Needs decision.
+**Final disposition:** Structurally covered.
 
 ### 4. `096e6726` — Added announce ingress prefiltering in inbound preprocessing
 
