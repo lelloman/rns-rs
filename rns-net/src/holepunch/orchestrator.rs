@@ -32,7 +32,7 @@ use super::probe;
 use super::puncher::{self, PunchHandle};
 use super::udp_direct;
 
-pub use crate::common::event::HolePunchPolicy;
+pub use crate::common::event::{DirectReupgradeConfig, HolePunchPolicy};
 
 /// Seconds a closed link's direct interface is kept, so that the link's
 /// closing packets still leave on it.
@@ -107,6 +107,41 @@ struct DirectPath {
     session_id: [u8; 16],
     /// Drops the path's traffic both ways when set (for tests).
     blackhole: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// This side proposed the upgrade.
+    initiated: bool,
+    /// When the path was established.
+    since: f64,
+}
+
+/// A link that lost the direct path it proposed, and proposes again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Reupgrade {
+    /// Proposals scheduled since the count last started.
+    attempts: u32,
+    /// When the next proposal is due, if one is scheduled.
+    due: Option<f64>,
+    /// A proposal made for it has not had its outcome yet.
+    in_flight: bool,
+}
+
+/// The delay before re-upgrade proposal number `attempt` (from 0), with
+/// `jitter` in `[0, 1)` adding up to a quarter.
+fn reupgrade_delay(config: &DirectReupgradeConfig, attempt: u32, jitter: f64) -> f64 {
+    let initial = config
+        .initial_delay
+        .as_secs_f64()
+        .max(rns_core::holepunch::types::PROPOSAL_COOLDOWN);
+    let max = config.max_delay.as_secs_f64().max(initial);
+    let base = (initial * 2f64.powi(attempt.min(32) as i32)).min(max);
+    base * (1.0 + 0.25 * jitter.clamp(0.0, 1.0))
+}
+
+/// A random number in `[0, 1)`.
+fn random_unit() -> f64 {
+    use rns_crypto::Rng;
+    let mut bytes = [0u8; 4];
+    rns_crypto::OsRng.fill_bytes(&mut bytes);
+    u32::from_le_bytes(bytes) as f64 / (u32::MAX as f64 + 1.0)
 }
 
 /// Manages all hole-punch sessions.
@@ -141,6 +176,9 @@ pub struct HolePunchManager {
     allowed_identities: Vec<[u8; 16]>,
     /// Paces inbound upgrade requests per link.
     inbound_limiter: InboundRequestLimiter,
+    /// Proposing again after a lost direct path.
+    reupgrade_config: DirectReupgradeConfig,
+    reupgrades: HashMap<[u8; 16], Reupgrade>,
     /// Spawn probe and punch threads (disabled by unit tests).
     spawn_workers: bool,
     /// The driver's queue, for probes and punches run on its loop instead
@@ -176,6 +214,9 @@ pub enum HolePunchManagerAction {
         link_id: [u8; 16],
         interface_id: rns_core::transport::types::InterfaceId,
     },
+    /// Propose again on a link that lost its direct path, if it is still
+    /// active (see [`DirectReupgradeConfig`]).
+    Reupgrade { link_id: [u8; 16] },
     /// Direct connection failed.
     DirectConnectFailed {
         link_id: [u8; 16],
@@ -206,6 +247,8 @@ impl HolePunchManager {
             own_ports: Vec::new(),
             allowed_identities: Vec::new(),
             inbound_limiter: InboundRequestLimiter::new(INBOUND_REQUEST_WINDOW),
+            reupgrade_config: DirectReupgradeConfig::default(),
+            reupgrades: HashMap::new(),
             spawn_workers: true,
             event_tx: None,
         }
@@ -261,6 +304,102 @@ impl HolePunchManager {
 
     pub fn allow_private_endpoints(&self) -> bool {
         self.allow_private_endpoints
+    }
+
+    pub fn set_reupgrade_config(&mut self, config: DirectReupgradeConfig) {
+        self.reupgrade_config = config;
+        if !config.enabled {
+            self.reupgrades.clear();
+        }
+    }
+
+    pub fn reupgrade_config(&self) -> DirectReupgradeConfig {
+        self.reupgrade_config
+    }
+
+    /// The link lost the direct path `path`: if this side proposed it,
+    /// schedule a proposal again.
+    fn direct_path_lost(&mut self, link_id: [u8; 16], path: &DirectPath, now: f64) {
+        let config = self.reupgrade_config;
+        if !config.enabled
+            || config.max_attempts == 0
+            || !path.initiated
+            || self.probe_addrs.is_empty()
+        {
+            self.reupgrades.remove(&link_id);
+            return;
+        }
+        let entry = self.reupgrades.entry(link_id).or_insert(Reupgrade {
+            attempts: 0,
+            due: None,
+            in_flight: false,
+        });
+        // A path that lasted a while starts the count again.
+        if now - path.since >= config.max_delay.as_secs_f64() {
+            entry.attempts = 0;
+        }
+        self.schedule_reupgrade(link_id, now);
+    }
+
+    /// Schedule the link's next re-upgrade proposal, or give up after the
+    /// last one.
+    fn schedule_reupgrade(&mut self, link_id: [u8; 16], now: f64) {
+        let config = self.reupgrade_config;
+        let Some(entry) = self.reupgrades.get_mut(&link_id) else {
+            return;
+        };
+        if entry.attempts >= config.max_attempts {
+            log::info!(
+                "Giving up re-upgrading link {:02x?} after {} attempts",
+                &link_id[..4],
+                entry.attempts
+            );
+            self.reupgrades.remove(&link_id);
+            return;
+        }
+        let delay = reupgrade_delay(&config, entry.attempts, random_unit());
+        entry.attempts += 1;
+        entry.due = Some(now + delay);
+        entry.in_flight = false;
+        log::debug!(
+            "Re-upgrading link {:02x?} in {:.0} s (attempt {} of {})",
+            &link_id[..4],
+            delay,
+            entry.attempts,
+            config.max_attempts
+        );
+    }
+
+    /// A Direct Link attempt on the link failed: if it was a re-upgrade,
+    /// try again later, unless the peer refused by policy or does not
+    /// answer the capability check.
+    pub fn reupgrade_failed(&mut self, link_id: [u8; 16], reason: u8) {
+        if !self
+            .reupgrades
+            .get(&link_id)
+            .is_some_and(|entry| entry.in_flight)
+        {
+            return;
+        }
+        if self.probe_addrs.is_empty() {
+            self.reupgrades.remove(&link_id);
+            return;
+        }
+        if matches!(reason, REJECT_POLICY | REJECT_UNSUPPORTED) {
+            log::info!(
+                "Not re-upgrading link {:02x?}: the peer refused (reason {})",
+                &link_id[..4],
+                reason
+            );
+            self.reupgrades.remove(&link_id);
+            return;
+        }
+        self.schedule_reupgrade(link_id, time::now());
+    }
+
+    /// Stop re-upgrading the link (it is no longer active).
+    pub fn cancel_reupgrade(&mut self, link_id: &[u8; 16]) {
+        self.reupgrades.remove(link_id);
     }
 
     /// UDP ports this node listens on, which it never punches toward at
@@ -683,6 +822,15 @@ impl HolePunchManager {
         });
         self.retiring = retiring;
 
+        // Links due to propose again after losing their direct path.
+        for (link_id, entry) in self.reupgrades.iter_mut() {
+            if !entry.in_flight && entry.due.is_some_and(|due| due <= now) {
+                entry.due = None;
+                entry.in_flight = true;
+                all_actions.push(HolePunchManagerAction::Reupgrade { link_id: *link_id });
+            }
+        }
+
         // Peers asked whether they implement Direct Link: ask again, and
         // after HELLO_TIMEOUT of silence fail the waiting proposal.
         let mut unanswered = Vec::new();
@@ -791,6 +939,10 @@ impl HolePunchManager {
 
                     let mut started = None;
                     let blackhole = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let initiated = self
+                        .sessions
+                        .get(&completion.session_id)
+                        .is_some_and(|session| session.engine.is_initiator());
                     if let Some(session) = self.sessions.get(&completion.session_id) {
                         let params = udp_direct::DirectPathParams {
                             link_id: completion.link_id,
@@ -831,6 +983,8 @@ impl HolePunchManager {
                                             interface_id,
                                             session_id,
                                             blackhole: blackhole.clone(),
+                                            initiated,
+                                            since: now,
                                         },
                                     ) {
                                         all_actions.push(
@@ -839,6 +993,12 @@ impl HolePunchManager {
                                                 interface_id: old.interface_id,
                                             },
                                         );
+                                    }
+                                    if let Some(entry) =
+                                        self.reupgrades.get_mut(&completion.link_id)
+                                    {
+                                        entry.in_flight = false;
+                                        entry.due = None;
                                     }
                                     all_actions.push(
                                         HolePunchManagerAction::DirectConnectEstablished {
@@ -914,6 +1074,7 @@ impl HolePunchManager {
     pub fn link_closed(&mut self, link_id: &[u8; 16]) {
         self.remove_link_session(link_id);
         self.peer_support.remove(link_id);
+        self.reupgrades.remove(link_id);
         if let Some(path) = self.direct.remove(link_id) {
             self.retiring.push((
                 *link_id,
@@ -968,9 +1129,9 @@ impl HolePunchManager {
         &mut self,
         link_id: &[u8; 16],
     ) -> Option<(rns_core::transport::types::InterfaceId, [u8; 16])> {
-        self.direct
-            .remove(link_id)
-            .map(|path| (path.interface_id, path.session_id))
+        let path = self.direct.remove(link_id)?;
+        self.direct_path_lost(*link_id, &path, time::now());
+        Some((path.interface_id, path.session_id))
     }
 
     /// Make the link's direct path silently drop all traffic both ways, as
@@ -1000,6 +1161,7 @@ impl HolePunchManager {
             .find(|(_, path)| path.interface_id == interface_id)
             .map(|(link_id, _)| *link_id)?;
         let path = self.direct.remove(&link_id)?;
+        self.direct_path_lost(link_id, &path, time::now());
         Some((link_id, path.session_id))
     }
 
@@ -1101,6 +1263,7 @@ impl HolePunchManager {
         }
         self.link_to_session.clear();
         self.peer_support.clear();
+        self.reupgrades.clear();
     }
 
     /// Check if a signalling kind is an upgrade negotiation message.
@@ -2560,14 +2723,210 @@ mod tests {
     }
 
     fn upgraded(mgr: &mut HolePunchManager, link_id: [u8; 16], interface: u64) {
+        upgraded_as(mgr, link_id, interface, true, time::now());
+    }
+
+    fn upgraded_as(
+        mgr: &mut HolePunchManager,
+        link_id: [u8; 16],
+        interface: u64,
+        initiated: bool,
+        since: f64,
+    ) {
         mgr.direct.insert(
             link_id,
             DirectPath {
                 interface_id: rns_core::transport::types::InterfaceId(interface),
                 session_id: [interface as u8; 16],
                 blackhole: Default::default(),
+                initiated,
+                since,
             },
         );
+    }
+
+    fn reupgrade_due(mgr: &HolePunchManager, link_id: &[u8; 16]) -> Option<f64> {
+        mgr.reupgrades.get(link_id).and_then(|entry| entry.due)
+    }
+
+    /// Make the link's scheduled re-upgrade due now, and tick.
+    fn run_due_reupgrade(mgr: &mut HolePunchManager, link_id: [u8; 16]) -> bool {
+        let (tx, _rx) = make_tx();
+        if let Some(entry) = mgr.reupgrades.get_mut(&link_id) {
+            if entry.due.is_some() {
+                entry.due = Some(time::now() - 1.0);
+            }
+        }
+        mgr.tick(&tx).iter().any(
+            |a| matches!(a, HolePunchManagerAction::Reupgrade { link_id: id } if *id == link_id),
+        )
+    }
+
+    #[test]
+    fn reupgrade_delay_doubles_up_to_the_cap_with_bounded_jitter() {
+        let config = DirectReupgradeConfig {
+            enabled: true,
+            max_attempts: 10,
+            initial_delay: std::time::Duration::from_secs(60),
+            max_delay: std::time::Duration::from_secs(300),
+        };
+        let delays: Vec<f64> = (0..5).map(|n| reupgrade_delay(&config, n, 0.0)).collect();
+        assert_eq!(delays, vec![60.0, 120.0, 240.0, 300.0, 300.0]);
+        // Jitter adds at most a quarter.
+        let jittered = reupgrade_delay(&config, 1, 0.999_999);
+        assert!(jittered > 149.9 && jittered < 150.0, "{jittered}");
+        assert!(reupgrade_delay(&config, 1000, 0.5) <= 300.0 * 1.25);
+        // Never sooner than a link may be proposed on again.
+        let short = DirectReupgradeConfig {
+            initial_delay: std::time::Duration::from_secs(1),
+            max_delay: std::time::Duration::from_secs(2),
+            ..config
+        };
+        assert_eq!(reupgrade_delay(&short, 0, 0.0), 60.0);
+        assert_eq!(reupgrade_delay(&short, 3, 0.0), 60.0);
+        for _ in 0..100 {
+            let unit = random_unit();
+            assert!((0.0..1.0).contains(&unit));
+        }
+    }
+
+    #[test]
+    fn lost_direct_path_is_proposed_again_with_backoff_until_the_limit() {
+        let mut mgr = accepting_manager();
+        mgr.set_reupgrade_config(DirectReupgradeConfig {
+            max_attempts: 3,
+            ..DirectReupgradeConfig::default()
+        });
+        let link_id = [0x71; 16];
+        upgraded(&mut mgr, link_id, 50_100);
+        let now = time::now();
+        assert!(mgr.take_direct(&link_id).is_some());
+        let due = reupgrade_due(&mgr, &link_id).expect("re-upgrade scheduled");
+        assert!(
+            due >= now + 60.0 && due <= now + 75.0 + 1.0,
+            "{}",
+            due - now
+        );
+        // Not before it is due.
+        let (tx, _rx) = make_tx();
+        assert!(!mgr
+            .tick(&tx)
+            .iter()
+            .any(|a| matches!(a, HolePunchManagerAction::Reupgrade { .. })));
+
+        // Each failed attempt schedules the next, twice as far out.
+        let mut delays = Vec::new();
+        for _ in 0..3 {
+            assert!(run_due_reupgrade(&mut mgr, link_id));
+            // Once handed out, it is not handed out again.
+            assert!(!run_due_reupgrade(&mut mgr, link_id));
+            let before = time::now();
+            mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+            if let Some(due) = reupgrade_due(&mgr, &link_id) {
+                delays.push(due - before);
+            }
+        }
+        assert_eq!(delays.len(), 2, "{delays:?}");
+        assert!(delays[0] >= 120.0 && delays[0] <= 150.0 + 1.0, "{delays:?}");
+        assert!(delays[1] >= 240.0 && delays[1] <= 300.0 + 1.0, "{delays:?}");
+        // The third failure was the last attempt.
+        assert!(!mgr.reupgrades.contains_key(&link_id));
+    }
+
+    #[test]
+    fn reupgrade_stops_on_refusal_success_or_link_close() {
+        let link_id = [0x72; 16];
+        let lost = |mgr: &mut HolePunchManager| {
+            upgraded(mgr, link_id, 50_101);
+            mgr.direct_interface_down(rns_core::transport::types::InterfaceId(50_101));
+            assert!(reupgrade_due(mgr, &link_id).is_some());
+        };
+
+        // The peer refuses by policy, or stopped answering HELLO.
+        for reason in [REJECT_POLICY, REJECT_UNSUPPORTED] {
+            let mut mgr = accepting_manager();
+            lost(&mut mgr);
+            assert!(run_due_reupgrade(&mut mgr, link_id));
+            mgr.reupgrade_failed(link_id, reason);
+            assert!(!mgr.reupgrades.contains_key(&link_id));
+        }
+
+        // A failure while nothing is in flight (the application's own
+        // proposal) does not move the schedule.
+        let mut mgr = accepting_manager();
+        lost(&mut mgr);
+        let due = reupgrade_due(&mgr, &link_id);
+        mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+        assert_eq!(reupgrade_due(&mgr, &link_id), due);
+
+        // The link closes, or the driver finds it no longer active.
+        mgr.link_closed(&link_id);
+        assert!(!mgr.reupgrades.contains_key(&link_id));
+        let mut mgr = accepting_manager();
+        lost(&mut mgr);
+        mgr.cancel_reupgrade(&link_id);
+        assert!(!run_due_reupgrade(&mut mgr, link_id));
+    }
+
+    #[test]
+    fn only_the_proposing_side_reupgrades_and_only_when_enabled() {
+        let link_id = [0x73; 16];
+        // The responder side of the lost upgrade.
+        let mut mgr = accepting_manager();
+        upgraded_as(&mut mgr, link_id, 50_102, false, time::now());
+        mgr.take_direct(&link_id);
+        assert!(!mgr.reupgrades.contains_key(&link_id));
+
+        // Turned off.
+        let mut mgr = accepting_manager();
+        mgr.set_reupgrade_config(DirectReupgradeConfig {
+            enabled: false,
+            ..DirectReupgradeConfig::default()
+        });
+        upgraded(&mut mgr, link_id, 50_103);
+        mgr.take_direct(&link_id);
+        assert!(!mgr.reupgrades.contains_key(&link_id));
+
+        // No facilitator to propose through any more.
+        let mut mgr = accepting_manager();
+        mgr.set_probe_config(vec![], ProbeProtocol::Rnsp, None);
+        upgraded(&mut mgr, link_id, 50_104);
+        mgr.take_direct(&link_id);
+        assert!(!mgr.reupgrades.contains_key(&link_id));
+    }
+
+    #[test]
+    fn a_long_lived_path_starts_the_attempt_count_again() {
+        let link_id = [0x74; 16];
+        let mut mgr = accepting_manager();
+        mgr.set_reupgrade_config(DirectReupgradeConfig {
+            max_attempts: 2,
+            ..DirectReupgradeConfig::default()
+        });
+        upgraded(&mut mgr, link_id, 50_105);
+        mgr.take_direct(&link_id);
+        assert!(run_due_reupgrade(&mut mgr, link_id));
+        mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+        assert_eq!(mgr.reupgrades[&link_id].attempts, 2);
+        // The next attempt succeeds, and the path is lost again soon: the
+        // count goes on, and that was the last attempt.
+        assert!(run_due_reupgrade(&mut mgr, link_id));
+        mgr.reupgrades.get_mut(&link_id).unwrap().in_flight = false;
+        upgraded(&mut mgr, link_id, 50_106);
+        mgr.take_direct(&link_id);
+        assert!(!mgr.reupgrades.contains_key(&link_id));
+
+        // A path that lasted past the longest delay starts over.
+        upgraded(&mut mgr, link_id, 50_107);
+        mgr.take_direct(&link_id);
+        assert!(run_due_reupgrade(&mut mgr, link_id));
+        mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+        assert_eq!(mgr.reupgrades[&link_id].attempts, 2);
+        assert!(run_due_reupgrade(&mut mgr, link_id));
+        mgr.reupgrades.get_mut(&link_id).unwrap().in_flight = false;
+        upgraded_as(&mut mgr, link_id, 50_108, true, time::now() - 1000.0);
+        mgr.take_direct(&link_id);
+        assert_eq!(mgr.reupgrades[&link_id].attempts, 1);
     }
 
     #[test]

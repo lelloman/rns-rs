@@ -228,6 +228,7 @@ fn node(
         // Both ends are on this host.
         direct_connect_allow_private_endpoints: true,
         direct_connect_allowed_identities: Vec::new(),
+        direct_connect_reupgrade: Default::default(),
         ..Default::default()
     };
     if let Some(policy) = settings.policy {
@@ -1002,6 +1003,59 @@ fn link_falls_back_when_the_direct_path_dies_silently() {
         .blackhole_direct_path_for_testing(pair.link_id)
         .unwrap();
     assert_fell_back(&pair, mdu_before);
+    pair.shutdown();
+}
+
+#[test]
+fn lost_direct_path_is_upgraded_again_by_itself() {
+    let Some(pair) = Pair::start(DirectSettings::willing(), DirectSettings::willing()) else {
+        return;
+    };
+    let (alice_iface, bob_iface) = pair.upgrade();
+    pair.bob
+        .blackhole_direct_path_for_testing(pair.link_id)
+        .unwrap();
+    assert!(
+        eventually(Duration::from_secs(40), || pair.alice_record.direct_lost()
+            > 0
+            && pair.bob_record.direct_lost() > 0),
+        "fallback not reported on both sides"
+    );
+
+    // Alice proposed the lost path, so she proposes again by herself, a
+    // minute or so later, and both sides get a new direct path.
+    let link_id = pair.link_id;
+    let again = wait_for(
+        &pair.alice_rx,
+        Duration::from_secs(120),
+        |event| match event {
+            TestEvent::DirectConnected(id, interface) if *id == link_id => Some(*interface),
+            _ => None,
+        },
+    )
+    .expect("no re-upgrade");
+    assert_ne!(again, alice_iface);
+    let bob_again = wait_for(&pair.bob_rx, Duration::from_secs(10), |event| match event {
+        TestEvent::DirectConnected(id, interface) if *id == link_id => Some(*interface),
+        _ => None,
+    })
+    .expect("Bob did not connect again");
+    assert_ne!(bob_again, bob_iface);
+    let before = traffic(&pair.alice, again).unwrap();
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        link_id,
+        b"direct again",
+        Duration::from_secs(10)
+    ));
+    assert!(eventually(Duration::from_secs(5), || traffic(
+        &pair.alice,
+        again
+    )
+    .unwrap()
+    .1 > before.1));
+    assert_eq!(pair.alice_record.links_closed(), 0);
     pair.shutdown();
 }
 

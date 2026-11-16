@@ -124,6 +124,41 @@ pub enum HolePunchPolicy {
     AskApp,
 }
 
+/// Automatic re-upgrade of a link whose direct path was lost.
+///
+/// After the side that proposed an upgrade loses the direct path, it
+/// proposes again by itself while the link stays active: the first time
+/// after `initial_delay`, then after twice the previous delay, at most
+/// `max_delay`, each with up to 25% added at random, and gives up after
+/// `max_attempts` proposals that do not establish a direct path, when the
+/// peer refuses by policy or no longer answers the capability check, or
+/// when the link closes. A direct path that then lasts at least `max_delay`
+/// before it is lost starts the count again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectReupgradeConfig {
+    /// Re-upgrade at all (default on).
+    pub enabled: bool,
+    /// Proposals after a loss before giving up (default 5).
+    pub max_attempts: u32,
+    /// Delay before the first proposal (default 60 seconds). A shorter one
+    /// is taken as 60 seconds, the shortest spacing of two proposals on a
+    /// link.
+    pub initial_delay: std::time::Duration,
+    /// Upper bound of the delay (default 15 minutes).
+    pub max_delay: std::time::Duration,
+}
+
+impl Default for DirectReupgradeConfig {
+    fn default() -> Self {
+        DirectReupgradeConfig {
+            enabled: true,
+            max_attempts: 5,
+            initial_delay: std::time::Duration::from_secs(60),
+            max_delay: std::time::Duration::from_secs(900),
+        }
+    }
+}
+
 /// Scalar runtime-config value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeConfigValue {

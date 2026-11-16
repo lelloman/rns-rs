@@ -491,6 +491,7 @@ fn start_rust_node_on(
             direct_connect_policy: Default::default(),
             direct_connect_allow_private_endpoints: false,
             direct_connect_allowed_identities: Vec::new(),
+            direct_connect_reupgrade: Default::default(),
             device: None,
             underlay_mark: None,
             hooks: Vec::new(),

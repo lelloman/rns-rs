@@ -412,6 +412,27 @@ went stale. The link itself is never closed by a direct-path failure, and
 the application keeps using it unchanged. A new upgrade can be proposed
 afterwards (subject to the usual pacing).
 
+### Re-upgrade
+
+The side that proposed the lost upgrade proposes again by itself (unless
+`direct_connect_reupgrade = no`), with exponential backoff: the first
+proposal 60 seconds after the loss (`direct_connect_reupgrade_delay`, never
+less than the 60 seconds two proposals on a link must be apart), each
+further one after twice the previous delay, at most 15 minutes
+(`direct_connect_reupgrade_max_delay`), each delay with up to 25% added at
+random so that many links that fell back together do not propose together.
+A proposal that establishes a direct path ends the series; one that fails
+schedules the next. It gives up after 5 proposals
+(`direct_connect_reupgrade_attempts`), at once when the peer refuses by
+policy (`0x01`) or does not answer `HELLO` (`0x03`), and when the link
+closes or the node no longer has a facilitator. When a proposal is due on
+a stale link it counts as failed; on a link that is no longer active the
+series stops. A re-established path that is lost before it has lasted the
+maximum delay continues the count; one that lasted longer starts it again.
+The responder of the lost upgrade does not propose by itself. Each
+proposal is an ordinary upgrade, reported to the application like one
+(`on_direct_connect_established` or `on_direct_connect_failed`).
+
 ## Facilitator (STUN) Protocol
 
 The facilitator provides a single service: reflecting a peer's public IP:port
@@ -458,7 +479,7 @@ Properties of the facilitator:
 | Symmetric NAT on either side | 4 | Hole punch fails (timeout), keep existing link |
 | Hole punch timeout | 4 | Keep existing link. Optionally retry with a different facilitator |
 | Direct path drops after establishment | after 4 | Detected by the keepalives, the link going stale, or exhausted channel retries; both sides fall back to the original route and the link stays open |
-| NAT remapping (IP change, roaming) | after 4 | As above. Peers may propose again |
+| NAT remapping (IP change, roaming) | after 4 | As above. The proposing side upgrades again by itself (see [Re-upgrade](#re-upgrade)) |
 
 ### Failure reasons
 
@@ -538,6 +559,6 @@ sessions are created.
 - **Relay fallback via facilitator**: If hole-punching fails, the facilitator
   could optionally offer to relay traffic (TURN-style), though this goes against
   the lightweight/stateless design.
-- **Automatic re-upgrade**: After a fallback the link stays on its original
-  route until the application proposes again; a node could retry by itself,
-  with backoff.
+- **Re-probing the path MTU**: The direct path's MTU is probed once, when
+  it comes up; a path whose MTU later shrinks is only recovered by falling
+  back and upgrading again.
