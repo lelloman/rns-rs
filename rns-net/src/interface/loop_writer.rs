@@ -253,8 +253,11 @@ impl LoopWriter {
             self.out.clear();
             self.head = 0;
         }
-        if self.flush_after.is_some() && self.buffered() == 0 {
-            self.pending_since = Some(Instant::now());
+        if self.buffered() == 0 {
+            if self.flush_after.is_some() {
+                self.pending_since = Some(Instant::now());
+            }
+            self.resume_stall_watch();
         }
         let before = self.out.len();
         crate::hdlc::append_frame(data, &mut self.out);
@@ -392,6 +395,24 @@ impl LoopWriter {
         if self.egress.is_some() {
             self.watch_stall(self.sent > sent_before);
         }
+    }
+
+    /// The writer was idle, and so not evaluated (see `flush_pending`), and
+    /// bytes are buffered again: start the stall watch from now, as the idle
+    /// evaluations would have kept it.
+    fn resume_stall_watch(&mut self) {
+        let sent = self.sent as usize;
+        let Some(egress) = &mut self.egress else {
+            return;
+        };
+        let Some(watch) = &mut egress.stall else {
+            return;
+        };
+        watch.stall_started = None;
+        watch
+            .controller
+            .resume_after_idle(watch.started.elapsed(), sent);
+        egress.control.set_stalled(false);
     }
 
     /// Re-judge a stall-watched peer after a write attempt, and drop it once
@@ -594,6 +615,13 @@ impl Writer for LoopWriter {
             if self.down_report_pending {
                 self.report_down(false);
             }
+            return;
+        }
+        // The driver flushes every writer after each pass. An idle one has
+        // nothing to write and nothing for its stall watch to judge, and a
+        // busy transport node with dozens of peers spent most of its driver
+        // time reading the clock for them; `append` restarts the watch.
+        if self.buffered() == 0 && !self.want_writable {
             return;
         }
         self.drain();

@@ -27,6 +27,17 @@ impl EgressController {
         self.stalled
     }
 
+    /// Start watching again after an idle spell, `now` on the evaluation
+    /// clock. While nothing is buffered, every evaluation does exactly this
+    /// (the peer is not stalled and has nothing to drain), so a writer that
+    /// stops evaluating while idle calls it when bytes are buffered again.
+    pub(crate) fn resume_after_idle(&mut self, now: Duration, total_sent: usize) {
+        self.previous_sent = total_sent;
+        self.zero_ticks = 0;
+        self.last_drain = now;
+        self.stalled = false;
+    }
+
     /// Evaluate one interval. Returns `true` when the peer made no progress
     /// for the dead-peer deadline and should be torn down.
     pub(crate) fn evaluate(
@@ -253,6 +264,21 @@ impl Default for TransmitBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_peer_that_was_idle_is_not_dead_on_its_first_evaluation() {
+        // A loop writer stops evaluating while it has nothing buffered; the
+        // first evaluation after a long idle spell must not read the whole
+        // spell as time without draining.
+        let idle_for = EGRESS_DEAD_TIME * 3;
+        let mut stale = EgressController::default();
+        assert!(stale.evaluate(idle_for, 4096, 4096, 0));
+
+        let mut resumed = EgressController::default();
+        resumed.resume_after_idle(idle_for, 0);
+        assert!(!resumed.evaluate(idle_for + EGRESS_INTERVAL, 4096, 4096, 0));
+        assert!(!resumed.stalled());
+    }
 
     #[derive(Default)]
     struct StepWriter {
