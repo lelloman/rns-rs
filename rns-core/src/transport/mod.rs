@@ -206,6 +206,9 @@ struct VerifiedAnnounceCtx<'a> {
     received_from: [u8; 16],
     random_blob: [u8; 10],
     announce_emitted: u64,
+    /// Whether ingress control was limiting the receiving interface when
+    /// the announce arrived.
+    ingress_limited: bool,
 }
 
 struct TickCtx<'a> {

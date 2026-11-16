@@ -30,6 +30,10 @@ pub struct PendingAnnounce {
     pub best_hops: u8,
     pub emission_ts: u64,
     pub random_blob: [u8; 10],
+    /// Whether ingress control was limiting the receiving interface when
+    /// the announce arrived, which decides whether it is held once its
+    /// signature is verified.
+    pub ingress_limited: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -304,6 +308,7 @@ mod tests {
                 best_hops: hops,
                 emission_ts: 42,
                 random_blob,
+                ingress_limited: false,
             },
         )
     }

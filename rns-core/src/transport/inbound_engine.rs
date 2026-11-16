@@ -701,14 +701,7 @@ impl TransportEngine {
         if self.prefilter_announce(packet, iface, now) {
             return;
         }
-        match self.hold_decision(packet, original_raw, iface, now) {
-            HoldDecision::Pass => {}
-            HoldDecision::Held => return,
-            HoldDecision::Filtered => {
-                self.filter_announce();
-                return;
-            }
-        }
+        let ingress_limited = self.ingress_limited(packet, iface, now);
 
         let sig_cache_key = Self::announce_sig_cache_key(&packet.destination_hash, &announce);
 
@@ -749,6 +742,7 @@ impl TransportEngine {
                 received_from,
                 random_blob,
                 announce_emitted,
+                ingress_limited,
             },
             rng,
             actions,
@@ -867,12 +861,62 @@ impl TransportEngine {
         true
     }
 
-    /// Ingress limiting of an announce for an unknown destination. An
-    /// announce ingress control takes up counts as received without bytes
-    /// (upstream c850cdac). Since upstream 29dc449a `preprocess_inbound`
-    /// returns false after holding, so the held frame's bytes are filtered;
-    /// its release counts them again. One ingress control drops or uses to
-    /// replace a held one is also a filtered announce (819076c3).
+    /// Whether a waiting path request or a known path exempts an announce
+    /// from ingress limiting.
+    fn ingress_exempt(&self, destination_hash: &[u8; 16]) -> bool {
+        if self.has_path(destination_hash) {
+            return true;
+        }
+        // Waiting path requests, local or for discovery, skip ingress
+        // limiting (upstream logs this at pathing level since daec67a1).
+        if self.path_requests.contains_key(destination_hash)
+            || self.discovery_path_requests.contains_key(destination_hash)
+        {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Skipping ingress limit check for {:02x?} due to waiting path requests",
+                &destination_hash[..4],
+            );
+            return true;
+        }
+        false
+    }
+
+    /// Whether ingress control limits an announce as it arrives: one for an
+    /// unknown destination, on an interface in an announce burst. Taken when
+    /// the frame arrives, as upstream's sequential `preprocess_inbound` does,
+    /// so announces queued for verification are not judged by the burst
+    /// they themselves make.
+    fn ingress_limited<B: AsRef<[u8]>>(
+        &mut self,
+        packet: &RawPacket<B>,
+        iface: InterfaceId,
+        now: f64,
+    ) -> bool {
+        if packet.context == constants::CONTEXT_PATH_RESPONSE
+            || self.ingress_exempt(&packet.destination_hash)
+        {
+            return false;
+        }
+        let Some(info) = self.interfaces.get(&iface) else {
+            return false;
+        };
+        self.ingress_control.should_ingress_limit(
+            iface,
+            &info.ingress_control,
+            info.ia_freq,
+            info.started,
+            now,
+        )
+    }
+
+    /// Hold a verified announce that arrived while its interface was
+    /// limiting, unless its destination became known or requested since.
+    /// An announce ingress control takes up counts as received without
+    /// bytes (upstream c850cdac). Since upstream 29dc449a
+    /// `preprocess_inbound` returns false after holding, so the held frame's
+    /// bytes are filtered; its release counts them again. One ingress
+    /// control drops or uses to replace a held one is also a filtered
+    /// announce (819076c3).
     fn hold_decision<B: AsRef<[u8]>>(
         &mut self,
         packet: &RawPacket<B>,
@@ -880,36 +924,12 @@ impl TransportEngine {
         iface: InterfaceId,
         now: f64,
     ) -> HoldDecision {
-        if self.has_path(&packet.destination_hash) {
-            return HoldDecision::Pass;
-        }
-        // Waiting path requests, local or for discovery, skip ingress
-        // limiting (upstream logs this at pathing level since daec67a1).
-        if self.path_requests.contains_key(&packet.destination_hash)
-            || self
-                .discovery_path_requests
-                .contains_key(&packet.destination_hash)
-        {
-            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-                "Skipping ingress limit check for {:02x?} due to waiting path requests",
-                &packet.destination_hash[..4],
-            );
+        if self.ingress_exempt(&packet.destination_hash) {
             return HoldDecision::Pass;
         }
         let Some(info) = self.interfaces.get(&iface) else {
             return HoldDecision::Pass;
         };
-        if packet.context == constants::CONTEXT_PATH_RESPONSE
-            || !self.ingress_control.should_ingress_limit(
-                iface,
-                &info.ingress_control,
-                info.ia_freq,
-                info.started,
-                now,
-            )
-        {
-            return HoldDecision::Pass;
-        }
         // Upstream c850cdac: an announce ingress control takes up counts as
         // received, without bytes, whether it is held or dropped.
         self.announce_receipts.push((iface, 0));
@@ -984,14 +1004,7 @@ impl TransportEngine {
             .original_raw
             .as_deref()
             .expect("announce packets retain original raw bytes");
-        match self.hold_decision(&ctx.packet, original_raw, ctx.iface, ctx.now) {
-            HoldDecision::Pass => {}
-            HoldDecision::Held => return,
-            HoldDecision::Filtered => {
-                self.filter_announce();
-                return;
-            }
-        }
+        let ingress_limited = self.ingress_limited(&ctx.packet, ctx.iface, ctx.now);
 
         let sig_cache_key = Self::announce_sig_cache_key(&ctx.packet.destination_hash, &announce);
         if self.announce_sig_cache.contains(&sig_cache_key) {
@@ -1020,6 +1033,7 @@ impl TransportEngine {
                     received_from,
                     random_blob,
                     announce_emitted,
+                    ingress_limited,
                 },
                 rng,
                 actions,
@@ -1052,6 +1066,7 @@ impl TransportEngine {
                     received_from,
                     random_blob,
                     announce_emitted,
+                    ingress_limited,
                 },
                 rng,
                 actions,
@@ -1084,6 +1099,7 @@ impl TransportEngine {
             best_hops: ctx.packet.hops,
             emission_ts: announce_emitted,
             random_blob,
+            ingress_limited,
         };
         let _ = announce_queue.enqueue(key, pending);
     }
@@ -1110,6 +1126,7 @@ impl TransportEngine {
                 received_from: pending.received_from,
                 random_blob: pending.random_blob,
                 announce_emitted: pending.emission_ts,
+                ingress_limited: pending.ingress_limited,
             },
             rng,
             &mut actions,
@@ -1148,6 +1165,25 @@ impl TransportEngine {
         {
             self.filter_announce();
             return;
+        }
+
+        // Ingress limiting comes after the signature, blackhole and stamp
+        // checks, as in upstream's `preprocess_inbound`, which validates an
+        // announce before it holds it: a held announce is a valid one, and
+        // an invalid one is a violation or filtered whether or not ingress
+        // control would have held it.
+        let hold = if ctx.ingress_limited {
+            self.hold_decision(ctx.packet, ctx.original_raw, ctx.iface, ctx.now)
+        } else {
+            HoldDecision::Pass
+        };
+        match hold {
+            HoldDecision::Pass => {}
+            HoldDecision::Held => return,
+            HoldDecision::Filtered => {
+                self.filter_announce();
+                return;
+            }
         }
 
         let existing_set = self.path_table.get(&ctx.packet.destination_hash);

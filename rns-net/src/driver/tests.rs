@@ -2411,6 +2411,7 @@ fn make_pending_verify_announce(dest: [u8; 16]) -> (AnnounceVerifyKey, PendingAn
             best_hops: 1,
             emission_ts: 42,
             random_blob,
+            ingress_limited: false,
         },
     )
 }
