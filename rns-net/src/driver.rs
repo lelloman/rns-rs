@@ -872,6 +872,11 @@ pub struct Driver {
     pub(crate) listener_controls: Vec<crate::interface::ListenerControl>,
     pub(crate) interface_management: Option<crate::node::InterfaceManagementConfig>,
     pub(crate) managed_interfaces: HashMap<String, ManagedInterface>,
+    /// Static interfaces started without interface management, with their
+    /// stop controls, so transport can still detach one as upstream's
+    /// `_detach_interface(.., internal_forced=True)` does.
+    pub(crate) unmanaged_static_interfaces:
+        HashMap<InterfaceId, Option<crate::interface::ListenerControl>>,
     pub(crate) retired_interface_parents: HashSet<InterfaceId>,
     /// Writers that may hold frames queued without a wakeup.
     pub(crate) writers_to_wake: Vec<InterfaceId>,
@@ -1214,6 +1219,7 @@ impl Driver {
             listener_controls: Vec::new(),
             interface_management: None,
             managed_interfaces: HashMap::new(),
+            unmanaged_static_interfaces: HashMap::new(),
             retired_interface_parents: HashSet::new(),
             published_ingress_bursts: Default::default(),
             writers_to_wake: Vec::new(),
