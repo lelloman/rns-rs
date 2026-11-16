@@ -2801,53 +2801,50 @@ fn link_distribution_to_pickle(entries: &[LinkDistributionEntry]) -> PickleValue
     PickleValue::Dict(dict)
 }
 
+/// Upstream's `get_path_table()` entries, keys in its order.
 fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
     let list: Vec<PickleValue> = entries
         .iter()
         .map(|e| {
+            let key = |k: &str| PickleValue::String(k.into());
             PickleValue::Dict(vec![
-                (
-                    PickleValue::String("hash".into()),
-                    PickleValue::Bytes(e.hash.to_vec()),
-                ),
-                (
-                    PickleValue::String("timestamp".into()),
-                    PickleValue::Float(e.timestamp),
-                ),
-                (
-                    PickleValue::String("via".into()),
-                    PickleValue::Bytes(e.via.to_vec()),
-                ),
-                (
-                    PickleValue::String("hops".into()),
-                    PickleValue::Int(e.hops as i64),
-                ),
-                (
-                    PickleValue::String("expires".into()),
-                    PickleValue::Float(e.expires),
-                ),
-                (
-                    PickleValue::String("used".into()),
-                    PickleValue::Float(e.used),
-                ),
-                (
-                    PickleValue::String("interface".into()),
-                    PickleValue::String(e.interface_display_name.clone()),
-                ),
+                (key("hash"), PickleValue::Bytes(e.hash.to_vec())),
+                (key("timestamp"), PickleValue::Float(e.timestamp)),
+                (key("via"), PickleValue::Bytes(e.via.to_vec())),
+                (key("hops"), PickleValue::Int(e.hops as i64)),
+                (key("expires"), PickleValue::Float(e.expires)),
                 // Upstream 21170877: the known destination's stamp value and
                 // link request cost, None when it is not a known destination
                 // (or announced no cost). rnpath reads both unconditionally.
+                // Upstream remembers a destination without a stamp with
+                // the int 0, and a path never used with the int 0.
                 (
-                    PickleValue::String("value".into()),
-                    e.stamp_value
-                        .map(|value| PickleValue::Float(value.as_f64()))
-                        .unwrap_or(PickleValue::None),
+                    key("value"),
+                    match e.stamp_value {
+                        None => PickleValue::None,
+                        Some(value) if value == rns_core::stamp::StampValue::ZERO => {
+                            PickleValue::Int(0)
+                        }
+                        Some(value) => PickleValue::Float(value.as_f64()),
+                    },
                 ),
                 (
-                    PickleValue::String("lr_cost".into()),
+                    key("used"),
+                    if e.used == 0.0 {
+                        PickleValue::Int(0)
+                    } else {
+                        PickleValue::Float(e.used)
+                    },
+                ),
+                (
+                    key("lr_cost"),
                     e.lr_cost
                         .map(|cost| PickleValue::Float(cost.as_f64()))
                         .unwrap_or(PickleValue::None),
+                ),
+                (
+                    key("interface"),
+                    PickleValue::String(e.interface_display_name.clone()),
                 ),
             ])
         })
@@ -2855,29 +2852,40 @@ fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
     PickleValue::List(list)
 }
 
+/// [`path_table_to_pickle`]'s entries as msgpack, for the remote
+/// management `/path` handler.
+pub(crate) fn path_table_msgpack(entries: &[PathTableEntry]) -> Vec<MsgpackValue> {
+    match pickle_to_msgpack(&path_table_to_pickle(entries)) {
+        MsgpackValue::Array(entries) => entries,
+        _ => Vec::new(),
+    }
+}
+
+/// [`rate_table_to_pickle`]'s entries as msgpack, for the remote
+/// management `/path` handler.
+pub(crate) fn rate_table_msgpack(entries: &[RateTableEntry]) -> Vec<MsgpackValue> {
+    match pickle_to_msgpack(&rate_table_to_pickle(entries)) {
+        MsgpackValue::Array(entries) => entries,
+        _ => Vec::new(),
+    }
+}
+
+/// Upstream's `get_rate_table()` entries: the announce rate table's dict
+/// (`AnnounceRateTable.items()`) with `hash` added last.
 fn rate_table_to_pickle(entries: &[RateTableEntry]) -> PickleValue {
     let list: Vec<PickleValue> = entries
         .iter()
         .map(|e| {
+            let key = |k: &str| PickleValue::String(k.into());
             PickleValue::Dict(vec![
+                (key("last"), PickleValue::Float(e.last)),
                 (
-                    PickleValue::String("hash".into()),
-                    PickleValue::Bytes(e.hash.to_vec()),
-                ),
-                (
-                    PickleValue::String("last".into()),
-                    PickleValue::Float(e.last),
-                ),
-                (
-                    PickleValue::String("rate_violations".into()),
+                    key("rate_violations"),
                     PickleValue::Int(e.rate_violations as i64),
                 ),
+                (key("blocked_until"), PickleValue::Float(e.blocked_until)),
                 (
-                    PickleValue::String("blocked_until".into()),
-                    PickleValue::Float(e.blocked_until),
-                ),
-                (
-                    PickleValue::String("timestamps".into()),
+                    key("timestamps"),
                     PickleValue::List(
                         e.timestamps
                             .iter()
@@ -2885,6 +2893,7 @@ fn rate_table_to_pickle(entries: &[RateTableEntry]) -> PickleValue {
                             .collect(),
                     ),
                 ),
+                (key("hash"), PickleValue::Bytes(e.hash.to_vec())),
             ])
         })
         .collect();
@@ -5263,6 +5272,72 @@ mod tests {
         );
         assert_eq!(entries[1].get("value"), Some(&PickleValue::None));
         assert_eq!(entries[1].get("lr_cost"), Some(&PickleValue::None));
+    }
+
+    #[test]
+    fn path_and_rate_tables_follow_upstreams_keys_and_types() {
+        // Reticulum.get_path_table()'s dict, in its order; a destination
+        // remembered without a stamp has the int value 0, a path never used
+        // the int 0.
+        let entry = PathTableEntry {
+            hash: [0x11; 16],
+            timestamp: 1.5,
+            via: [0x22; 16],
+            hops: 2,
+            expires: 3.5,
+            used: 0.0,
+            interface: crate::InterfaceId(1),
+            interface_name: "iface".into(),
+            interface_display_name: "iface".into(),
+            stamp_value: Some(rns_core::stamp::StampValue::ZERO),
+            lr_cost: None,
+        };
+        let table = path_table_msgpack(&[entry]);
+        let MsgpackValue::Map(fields) = &table[0] else {
+            panic!("expected a map");
+        };
+        let keys: Vec<&str> = fields.iter().filter_map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "hash",
+                "timestamp",
+                "via",
+                "hops",
+                "expires",
+                "value",
+                "used",
+                "lr_cost",
+                "interface"
+            ]
+        );
+        assert_eq!(fields[5].1, MsgpackValue::UInt(0));
+        assert_eq!(fields[6].1, MsgpackValue::UInt(0));
+        assert_eq!(fields[7].1, MsgpackValue::Nil);
+
+        // AnnounceRateTable.items()'s dict, with `hash` added last.
+        let rates = rate_table_msgpack(&[RateTableEntry {
+            hash: [0x33; 16],
+            last: 1.0,
+            rate_violations: 1,
+            blocked_until: 0.0,
+            timestamps: vec![1.0],
+        }]);
+        let MsgpackValue::Map(fields) = &rates[0] else {
+            panic!("expected a map");
+        };
+        let keys: Vec<&str> = fields.iter().filter_map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "last",
+                "rate_violations",
+                "blocked_until",
+                "timestamps",
+                "hash"
+            ]
+        );
+        assert_eq!(fields[2].1, MsgpackValue::Float(0.0));
     }
 
     #[test]

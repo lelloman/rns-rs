@@ -3186,7 +3186,17 @@ impl Driver {
                 self.engine.link_table_count() + self.link_manager.link_count(),
             )
         } else if path_hash == management::path_path_hash() {
-            management::handle_path_request(&data, &self.engine)
+            management::handle_path_request(
+                &data,
+                || match self.handle_path_table_query(None) {
+                    QueryResponse::PathTable(entries) => crate::rpc::path_table_msgpack(&entries),
+                    _ => Vec::new(),
+                },
+                || match self.handle_query(QueryRequest::RateTable) {
+                    QueryResponse::RateTable(entries) => crate::rpc::rate_table_msgpack(&entries),
+                    _ => Vec::new(),
+                },
+            )
         } else if path_hash == management::list_path_hash() {
             management::handle_blackhole_list_request(&self.engine)
         } else {

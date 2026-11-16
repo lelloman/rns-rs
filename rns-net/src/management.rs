@@ -123,43 +123,96 @@ mod tests {
         assert!(status_reply(&msgpack::pack(&Value::Bool(true))).is_none());
     }
 
-    #[test]
-    fn test_path_request_table() {
-        let engine = make_engine();
-        let request = msgpack::pack(&Value::Array(vec![Value::Str("table".into())]));
-        let response = handle_path_request(&request, &engine).unwrap();
-        let val = msgpack::unpack_exact(&response).unwrap();
-        match val {
-            Value::Array(arr) => assert_eq!(arr.len(), 0),
-            _ => panic!("Expected array"),
-        }
+    fn entry(fields: &[(&str, Value)]) -> Value {
+        Value::Map(
+            fields
+                .iter()
+                .map(|(k, v)| (Value::Str((*k).into()), v.clone()))
+                .collect(),
+        )
     }
 
-    #[test]
-    fn test_path_request_rates() {
-        let engine = make_engine();
-        let request = msgpack::pack(&Value::Array(vec![Value::Str("rates".into())]));
-        let response = handle_path_request(&request, &engine).unwrap();
-        let val = msgpack::unpack_exact(&response).unwrap();
-        match val {
-            Value::Array(arr) => assert_eq!(arr.len(), 0),
-            _ => panic!("Expected array"),
-        }
+    fn table() -> Vec<Value> {
+        (1..=3u8)
+            .map(|i| {
+                entry(&[
+                    ("hash", Value::Bin(vec![i; 16])),
+                    ("hops", Value::UInt(i as u64)),
+                ])
+            })
+            .collect()
     }
 
-    #[test]
-    fn test_path_request_unknown_command() {
-        let engine = make_engine();
-        let request = msgpack::pack(&Value::Array(vec![Value::Str("unknown".into())]));
-        let response = handle_path_request(&request, &engine);
-        assert!(response.is_none());
+    fn rates() -> Vec<Value> {
+        vec![entry(&[
+            ("last", Value::Float(1.0)),
+            ("hash", Value::Bin(vec![2; 16])),
+        ])]
     }
 
+    /// The hashes of the entries a `/path` request is answered with.
+    fn answer(request: Value) -> Option<Vec<u8>> {
+        let response = handle_path_request(&msgpack::pack(&request), table, rates)?;
+        let Value::Array(entries) = msgpack::unpack_exact(&response).unwrap() else {
+            panic!("expected a list");
+        };
+        Some(
+            entries
+                .iter()
+                .map(|e| {
+                    e.as_map()
+                        .unwrap()
+                        .iter()
+                        .find(|(k, _)| k.as_str() == Some("hash"))
+                        .and_then(|(_, v)| v.as_bin())
+                        .unwrap()[0]
+                })
+                .collect(),
+        )
+    }
+
+    /// As upstream's `remote_path_handler`.
     #[test]
-    fn test_path_request_invalid_data() {
-        let engine = make_engine();
-        let response = handle_path_request(&[], &engine);
-        assert!(response.is_none());
+    fn path_requests_are_answered_as_upstream() {
+        let s = |s: &str| Value::Str(s.into());
+        assert_eq!(answer(Value::Array(vec![s("table")])), Some(vec![1, 2, 3]));
+        assert_eq!(
+            answer(Value::Array(vec![s("table"), Value::Nil, Value::UInt(2)])),
+            Some(vec![1, 2])
+        );
+        assert_eq!(
+            answer(Value::Array(vec![
+                s("table"),
+                Value::Nil,
+                Value::Float(1.5)
+            ])),
+            Some(vec![1])
+        );
+        assert_eq!(
+            answer(Value::Array(vec![s("table"), Value::Bin(vec![3; 16])])),
+            Some(vec![3])
+        );
+        // A destination that is no entry's hash, whatever its type, matches
+        // none.
+        assert_eq!(
+            answer(Value::Array(vec![s("table"), Value::Bin(vec![3; 4])])),
+            Some(vec![])
+        );
+        assert_eq!(answer(Value::Array(vec![s("table"), s("x")])), Some(vec![]));
+        assert_eq!(answer(Value::Array(vec![s("rates")])), Some(vec![2]));
+        assert_eq!(
+            answer(Value::Array(vec![s("rates"), Value::Bin(vec![1; 16])])),
+            Some(vec![])
+        );
+        // Upstream returns None, which is not sent.
+        assert_eq!(answer(Value::Array(vec![s("unknown")])), None);
+        assert_eq!(answer(Value::Array(vec![])), None);
+        assert_eq!(answer(s("table")), None);
+        assert_eq!(
+            answer(Value::Array(vec![s("table"), Value::Nil, s("2")])),
+            None
+        );
+        assert!(handle_path_request(&[], table, rates).is_none());
     }
 
     #[test]

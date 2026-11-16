@@ -258,92 +258,62 @@ pub fn handle_status_request(
     Some(msgpack::pack(&Value::Array(response)))
 }
 
-/// Handle a `/path` request.
+/// Handle a `/path` request, as upstream's `Transport.remote_path_handler`.
 ///
-/// Request data: msgpack([command, destination_hash?, max_hops?])
-/// - command = "table" → returns path table entries
-/// - command = "rates" → returns rate table entries
-pub fn handle_path_request(data: &[u8], engine: &TransportEngine) -> Option<Vec<u8>> {
+/// Request data: `[command, destination_hash?, max_hops?]`. `"table"`
+/// answers `get_path_table(max_hops)`, `"rates"` `get_rate_table()`, each
+/// narrowed to the entries whose `hash` equals `destination_hash` unless it
+/// is nil. The tables come from `path_table` and `rate_table`, as the
+/// local RPC's entries. Anything else is not answered: upstream's handler
+/// returns None, which sends no response.
+pub fn handle_path_request(
+    data: &[u8],
+    path_table: impl FnOnce() -> Vec<Value>,
+    rate_table: impl FnOnce() -> Vec<Value>,
+) -> Option<Vec<u8>> {
     let arr = match msgpack::unpack_exact(data) {
         Ok(Value::Array(arr)) if !arr.is_empty() => arr,
         _ => return None,
     };
+    let destination = arr.get(1).filter(|v| !matches!(v, Value::Nil));
+    let max_hops = match arr.get(2) {
+        None | Some(Value::Nil) => None,
+        Some(Value::UInt(v)) => Some(*v as f64),
+        Some(Value::Int(v)) => Some(*v as f64),
+        Some(Value::Float(v)) => Some(*v),
+        // `path_hops <= max_hops` raises: logged, and not answered.
+        Some(_) => return None,
+    };
+    let field = |entry: &Value, key: &str| -> Option<Value> {
+        entry.as_map().and_then(|fields| {
+            fields
+                .iter()
+                .find(|(k, _)| k.as_str() == Some(key))
+                .map(|(_, v)| v.clone())
+        })
+    };
+    let wanted =
+        |entry: &Value| destination.is_none_or(|d| field(entry, "hash").as_ref() == Some(d));
 
-    let command = match &arr[0] {
-        Value::Str(s) => s.as_str(),
+    let entries: Vec<Value> = match arr[0].as_str() {
+        Some("table") => path_table()
+            .into_iter()
+            .filter(|entry| {
+                max_hops.is_none_or(|max| {
+                    let hops = match field(entry, "hops") {
+                        Some(Value::UInt(h)) => h as f64,
+                        Some(Value::Int(h)) => h as f64,
+                        _ => return false,
+                    };
+                    hops <= max
+                })
+            })
+            .filter(wanted)
+            .collect(),
+        Some("rates") => rate_table().into_iter().filter(wanted).collect(),
         _ => return None,
     };
-
-    let dest_filter: Option<[u8; 16]> = if arr.len() > 1 {
-        match &arr[1] {
-            Value::Bin(b) if b.len() == 16 => {
-                let mut h = [0u8; 16];
-                h.copy_from_slice(b);
-                Some(h)
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
-
-    let max_hops: Option<u8> = if arr.len() > 2 {
-        arr[2].as_uint().map(|v| v as u8)
-    } else {
-        None
-    };
-
-    match command {
-        "table" => {
-            let paths = engine.get_path_table(max_hops);
-            let mut entries = Vec::new();
-            for p in &paths {
-                if let Some(ref filter) = dest_filter {
-                    if p.0 != *filter {
-                        continue;
-                    }
-                }
-                // p = (dest_hash, timestamp, next_hop, hops, expires, interface)
-                let entry = vec![
-                    (Value::Str("hash".into()), Value::Bin(p.0.to_vec())),
-                    (Value::Str("timestamp".into()), Value::Float(p.1)),
-                    (Value::Str("via".into()), Value::Bin(p.2.to_vec())),
-                    (Value::Str("hops".into()), Value::UInt(p.3 as u64)),
-                    (Value::Str("expires".into()), Value::Float(p.4)),
-                    (Value::Str("used".into()), Value::Float(p.5)),
-                    (Value::Str("interface".into()), Value::Str(p.6.clone())),
-                ];
-                entries.push(Value::Map(entry));
-            }
-            Some(msgpack::pack(&Value::Array(entries)))
-        }
-        "rates" => {
-            let rates = engine.get_rate_table();
-            let mut entries = Vec::new();
-            for r in &rates {
-                if let Some(ref filter) = dest_filter {
-                    if r.0 != *filter {
-                        continue;
-                    }
-                }
-                // r = (dest_hash, last, rate_violations, blocked_until, timestamps)
-                let timestamps: Vec<Value> = r.4.iter().map(|t| Value::Float(*t)).collect();
-                let entry = vec![
-                    (Value::Str("hash".into()), Value::Bin(r.0.to_vec())),
-                    (Value::Str("last".into()), Value::Float(r.1)),
-                    (
-                        Value::Str("rate_violations".into()),
-                        Value::UInt(r.2 as u64),
-                    ),
-                    (Value::Str("blocked_until".into()), Value::Float(r.3)),
-                    (Value::Str("timestamps".into()), Value::Array(timestamps)),
-                ];
-                entries.push(Value::Map(entry));
-            }
-            Some(msgpack::pack(&Value::Array(entries)))
-        }
-        _ => None,
-    }
+    Some(msgpack::pack(&Value::Array(entries)))
 }
 
 /// Handle a `/list` (blackhole list) request.
