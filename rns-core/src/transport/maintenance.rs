@@ -194,8 +194,17 @@ impl TransportEngine {
                     },
                     ctx.rng,
                 );
-                // Upstream c850cdac: a release is not counted as received
-                // traffic again, but an accepted announce counts in arxc.
+                // Since upstream 29dc449a a release goes through
+                // `Transport.inbound` with accounting, so its frame is charged
+                // again, to received or filtered bytes, and a filtered
+                // announce counts in afrxc. An accepted announce counts in
+                // arxc with its size (c850cdac).
+                self.released_traffic.push(ReleasedTraffic {
+                    interface: held.receiving_interface,
+                    size: held.raw.len(),
+                    filtered: core::mem::take(&mut self.inbound_filtered),
+                    filtered_announce: core::mem::take(&mut self.inbound_filtered_announce),
+                });
                 if released_actions
                     .iter()
                     .any(|action| matches!(action, TransportAction::AnnounceReceived(_)))

@@ -497,7 +497,9 @@ than `ic_max_held_announces` are held. Otherwise it is dropped, and an announce
 for a destination already held replaces the held one. Both count as filtered
 announces (`afrxc` in `rnstatus -A`). Outside a burst the limit drops nothing
 (upstream `819076c3`), so on an interface with `ic_max_held_announces = 0`
-announces are only dropped while it bursts.
+announces are only dropped while it bursts. A held announce counts as a
+received announce at once, and its bytes as filtered; when it is released
+they count again, as received or filtered traffic (upstream `29dc449a`).
 
 Ingress control is on by default for Auto, Backbone, TCP client/server, UDP,
 and I2P interfaces, and off for local, serial, KISS, RNode, and Pipe-style

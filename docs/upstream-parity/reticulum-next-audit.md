@@ -53,7 +53,7 @@ Dispositions are provisional until each mapping commit lands.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `29dc449af89adb41b142141bee63093f6edb76b4` | Traffic counting | Needs port | |
+| 1 | `29dc449af89adb41b142141bee63093f6edb76b4` | Traffic counting | Integrated | `held_frames_are_filtered_and_releases_are_charged_again`, `released_announces_are_charged_as_received_traffic`; `held_announces_limit_applies_only_while_ingress_limiting` and `announce_is_held_while_held_announces_have_room` updated |
 | 2 | `85d3697938393fbe68661ae9b06d2047269252d3` | Pre-emptively cull held announce queue for useless announces | Needs coordinated port (with 4) | |
 | 3 | `a450be5d7ed40c78353f547f1373587bb2b85d9f` | Raised announce validation caches to 384 | Needs decision | |
 | 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Needs coordinated port (with 2) | |
@@ -90,11 +90,28 @@ job iterates a copy of `Transport.interfaces` and measures rate intervals with
 cycle (`c850cdac`, rns-rs `1040e200`), where a held frame is accepted traffic
 and a released frame is not counted again. The thread-versus-inline release,
 the interface list copy and the monotonic clock are Python concurrency and
-clock details; the engine releases held announces inline from its tick.
+clock details; the engine releases held announces inline from its tick, and
+the driver's rate sampling has no shared interface list to copy.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** `hold_decision` marks a held frame as
+filtered, so the driver moves its bytes from `rxb` to `frxb` and its packet
+out of `rx_packets`, while it still counts as a received announce without
+bytes. The tick's ingress release records each released frame as a
+`ReleasedTraffic` (interface, size, whether preprocessing filtered it and
+whether it was a filtered announce), read with
+`TransportEngine::take_released_traffic`. The driver's
+`record_released_traffic` charges an accepted release to `rxb` and
+`rx_packets` (upstream counts it in `Transport.rx_packets`) and a filtered
+one to `frxb`, and counts a filtered announce in `afrxc`, which a release
+dropped as blackholed previously lost. An accepted release still counts in
+`arxc`/`arxb` with its size. Tests:
+`held_frames_are_filtered_and_releases_are_charged_again` (rns-core: held
+flags, an accepted and a blackholed release) and
+`released_announces_are_charged_as_received_traffic` (driver); the two hold
+tests that pinned the `c850cdac` accounting are updated.
+`docs/rnstatus.md` and `docs/configuration.md` describe the double count.
 
-**Final disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 2. `85d36979` — Pre-emptively cull held announce queue for useless announces
 

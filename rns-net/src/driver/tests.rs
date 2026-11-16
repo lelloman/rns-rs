@@ -4726,22 +4726,51 @@ fn announce_over_a_full_hold_is_a_filtered_announce() {
 #[test]
 fn announce_is_held_while_held_announces_have_room() {
     let mut driver = driver_holding_one_announce(2);
+    let announce = build_announce_packet(&Identity::new(&mut OsRng));
+    let len = announce.len() as u64;
 
-    driver.handle_frame_event(
-        InterfaceId(1),
-        build_announce_packet(&Identity::new(&mut OsRng)),
-        None,
-        None,
-    );
+    driver.handle_frame_event(InterfaceId(1), announce, None, None);
 
     assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 2);
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
     assert_eq!(stats.ia_timestamps.len(), 1);
-    // Upstream 819076c3: a held announce is received traffic.
-    assert_eq!((stats.frxb, stats.afrxc), (0, 0));
-    assert!(stats.rxb > 0);
+    // Upstream 29dc449a: the held frame's bytes are filtered until the
+    // release counts them again; it is not a filtered announce.
+    assert_eq!((stats.rxb, stats.frxb, stats.afrxc), (0, len, 0));
+    assert_eq!(stats.rx_packets, 0);
     // Upstream c850cdac: and a received announce, without bytes.
     assert_eq!((stats.arxc, stats.arxb), (1, 0));
+}
+
+#[test]
+fn released_announces_are_charged_as_received_traffic() {
+    // Upstream 29dc449a: a release goes through `Transport.inbound` with
+    // accounting, so its frame counts again in `rxb`.
+    let mut driver = driver_holding_one_announce(2);
+    let announce = build_announce_packet(&Identity::new(&mut OsRng));
+    let len = announce.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), announce, None, None);
+    let frxb_held = driver.interfaces[&InterfaceId(1)].stats.frxb;
+
+    // The burst ends; ingress control releases one held announce per tick,
+    // as `handle_tick_event` does.
+    driver
+        .engine
+        .update_interface_freqs(InterfaceId(1), 0.0, 0.0, 0.0, 0);
+    let mut now = time::now() + constants::IC_BURST_PENALTY + 1.0;
+    while driver.engine.held_announce_count(&InterfaceId(1)) > 0 {
+        let actions = driver.engine.tick(now, &mut driver.rng);
+        driver.record_released_traffic();
+        driver.record_announce_receipts();
+        driver.dispatch_all(actions);
+        now += constants::IC_HELD_RELEASE_INTERVAL + 1.0;
+    }
+
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(stats.frxb, frxb_held);
+    assert_eq!(stats.rx_packets, 2);
+    assert!(stats.rxb >= len);
+    assert_eq!(stats.afrxc, 0);
 }
 
 #[test]

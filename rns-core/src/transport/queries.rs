@@ -475,7 +475,9 @@ impl TransportEngine {
     /// Whether the inbound packet handled last was filtered: dropped where
     /// upstream's `preprocess_inbound` drops it (upstream 134dc677), by the
     /// destination type filter, an announce that does not unpack or verify,
-    /// one ingress control drops or uses to replace a held announce, a
+    /// one ingress control holds (upstream 29dc449a; the release is charged
+    /// through [`Self::take_released_traffic`]), drops or uses to replace a
+    /// held announce, a
     /// blackholed identity, a failed stamp,
     /// or a path request that is a duplicate, fails its stamp or joins one
     /// in flight. Covers [`Self::handle_decoded_inbound_into`] and the path
@@ -499,6 +501,12 @@ impl TransportEngine {
     /// c850cdac). Clears the list.
     pub fn take_announce_receipts(&mut self) -> Vec<(InterfaceId, usize)> {
         core::mem::take(&mut self.announce_receipts)
+    }
+
+    /// The frames of held announces released since the last call, to charge
+    /// to received or filtered bytes (upstream 29dc449a). Clears the list.
+    pub fn take_released_traffic(&mut self) -> Vec<ReleasedTraffic> {
+        core::mem::take(&mut self.released_traffic)
     }
 
     /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`).

@@ -89,6 +89,23 @@ pub struct RxMetadata {
     pub snr: Option<f32>,
 }
 
+/// The traffic of a held announce released by ingress control. Since
+/// upstream 29dc449a the release goes through `Transport.inbound` with
+/// accounting, so its frame is charged again; read with
+/// [`TransportEngine::take_released_traffic`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReleasedTraffic {
+    /// The interface the announce was received on.
+    pub interface: InterfaceId,
+    /// The frame's size in bytes.
+    pub size: usize,
+    /// Whether preprocessing dropped it, so its bytes are filtered rather
+    /// than received.
+    pub filtered: bool,
+    /// Whether it was a filtered announce, counted in `afrxc`.
+    pub filtered_announce: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InboundFrame<'a> {
     pub raw: &'a [u8],
@@ -283,6 +300,10 @@ pub struct TransportEngine {
     /// released later with their size (upstream c850cdac); read with
     /// [`TransportEngine::take_announce_receipts`].
     announce_receipts: Vec<(InterfaceId, usize)>,
+    /// Frames of held announces released by ingress control, charged again
+    /// since upstream 29dc449a; read with
+    /// [`TransportEngine::take_released_traffic`].
+    released_traffic: Vec<ReleasedTraffic>,
     /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
     /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
     stamp_requirements: StampRequirements,

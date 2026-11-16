@@ -823,9 +823,12 @@ impl TransportEngine {
         }
     }
 
-    /// Ingress limiting of an announce for an unknown destination. Since
-    /// upstream 819076c3 a held announce is received traffic; one ingress
-    /// control drops or uses to replace a held one is a filtered announce.
+    /// Ingress limiting of an announce for an unknown destination. An
+    /// announce ingress control takes up counts as received without bytes
+    /// (upstream c850cdac). Since upstream 29dc449a `preprocess_inbound`
+    /// returns false after holding, so the held frame's bytes are filtered;
+    /// its release counts them again. One ingress control drops or uses to
+    /// replace a held one is also a filtered announce (819076c3).
     fn hold_decision<B: AsRef<[u8]>>(
         &mut self,
         packet: &RawPacket<B>,
@@ -882,6 +885,7 @@ impl TransportEngine {
             },
         );
         if held {
+            self.inbound_filtered = true;
             HoldDecision::Held
         } else {
             HoldDecision::Filtered
