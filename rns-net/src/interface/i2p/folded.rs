@@ -25,8 +25,8 @@ use rns_core::transport::types::InterfaceId;
 use super::sam::{self, Destination, SamError};
 use super::tunnel::PeerTunnel;
 use super::{
-    frame_decoder, load_or_generate_keypair, peer_info, peer_up, sanitize_name, template_ifac_size,
-    I2pConfig, I2pEndpoint, I2pRuntime, I2pWriter, OutboundPeer,
+    frame_decoder, open_session_retrying, peer_info, peer_up, template_ifac_size, I2pConfig,
+    I2pEndpoint, I2pRuntime, I2pWriter, OutboundPeer,
 };
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
@@ -67,28 +67,8 @@ pub(super) fn setup(
     let sam_addr: SocketAddr = format!("{}:{}", config.sam_host, config.sam_port)
         .parse()
         .map_err(|e| SamError::Io(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
-    let keypair = load_or_generate_keypair(
-        &sam_addr,
-        &config.storage_dir,
-        &config.name,
-        config.underlay_mark,
-    )?;
-    let priv_b64 = sam::i2p_base64_encode(&keypair.private_key);
     // One session carries every stream, outbound and inbound.
-    let session_id = sanitize_name(&config.name);
-    log::info!("[{}] creating SAM session (id={})", config.name, session_id);
-    let mut control =
-        sam::session_create_with_mark(&sam_addr, &session_id, &priv_b64, config.underlay_mark)?;
-    match sam::naming_lookup_on(&mut control, "ME") {
-        Ok(our_dest) => {
-            let b32 = our_dest.base32_address();
-            log::info!("[{}] I2P address: {}", config.name, b32);
-            super::I2pEndpoint::set_address(&config.endpoint, config.connectable, b32);
-        }
-        Err(e) => {
-            log::warn!("[{}] could not look up own destination: {}", config.name, e);
-        }
-    }
+    let (control, session_id) = open_session_retrying(&config, &sam_addr, config.sam_retry_wait());
 
     let session = Arc::new(Session {
         sam_addr,
