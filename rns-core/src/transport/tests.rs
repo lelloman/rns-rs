@@ -7124,6 +7124,41 @@ fn a_direct_path_response_replaces_a_relayed_cached_one() {
 }
 
 #[test]
+fn the_same_announce_over_a_shorter_route_replaces_a_long_path() {
+    // vps-us, 2026-11-16: vps-eu's periodic announce reached vps-us first
+    // over 4 hops, then directly. With prefer_shorter_path the direct route
+    // replaces the long one; without it the long one stays, as upstream.
+    for prefer_shorter_path in [true, false] {
+        let mut config = make_config(true);
+        config.prefer_shorter_path = prefer_shorter_path;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+        let blob = blob_emitted_at(9_990);
+        let (dest, relayed) =
+            relayed_announce_with(0x62, "probe", blob, constants::CONTEXT_NONE, [0xCD; 16], 3);
+        engine.handle_inbound(
+            InboundFrame::new(&relayed, InterfaceId(1), 10_000.0),
+            &mut rng,
+        );
+        assert_eq!(engine.hops_to(&dest), Some(4));
+
+        let (_, direct) = signed_announce_with(0x62, "probe", blob, constants::CONTEXT_NONE);
+        engine.handle_inbound(
+            InboundFrame::new(&direct, InterfaceId(2), 10_000.5),
+            &mut rng,
+        );
+        let expected = if prefer_shorter_path { 1 } else { 4 };
+        assert_eq!(
+            engine.hops_to(&dest),
+            Some(expected),
+            "prefer_shorter_path={prefer_shorter_path}"
+        );
+    }
+}
+
+#[test]
 fn waiting_local_path_request_skips_ingress_limiting() {
     // Upstream skips the ingress limit check while a path request, local
     // or for discovery, waits for the destination (logged since daec67a1).
