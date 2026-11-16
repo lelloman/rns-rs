@@ -102,6 +102,9 @@ pub struct ReticulumSection {
     /// Identities whose direct-connect proposals are always accepted
     /// (`direct_connect_allowed_identities`).
     pub direct_connect_allowed_identities: Vec<[u8; 16]>,
+    /// Automatic re-upgrade after a direct path is lost
+    /// (`direct_connect_reupgrade*`).
+    pub direct_connect_reupgrade: crate::event::DirectReupgradeConfig,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
@@ -257,6 +260,7 @@ impl Default for ReticulumSection {
             direct_connect_policy: crate::event::HolePunchPolicy::Reject,
             direct_connect_allow_private_endpoints: false,
             direct_connect_allowed_identities: Vec::new(),
+            direct_connect_reupgrade: Default::default(),
             device: None,
             underlay_mark: None,
             discover_interfaces: false,
@@ -1229,6 +1233,42 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             {
                 section.direct_connect_allowed_identities.push(identity);
             }
+        }
+    }
+    if let Some(v) = kvs.get("direct_connect_reupgrade") {
+        section.direct_connect_reupgrade.enabled =
+            parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: "direct_connect_reupgrade".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = kvs.get("direct_connect_reupgrade_attempts") {
+        section.direct_connect_reupgrade.max_attempts =
+            v.parse::<u32>().map_err(|_| ConfigError::InvalidValue {
+                key: "direct_connect_reupgrade_attempts".into(),
+                value: v.clone(),
+            })?;
+    }
+    for (key, field) in [
+        (
+            "direct_connect_reupgrade_delay",
+            &mut section.direct_connect_reupgrade.initial_delay,
+        ),
+        (
+            "direct_connect_reupgrade_max_delay",
+            &mut section.direct_connect_reupgrade.max_delay,
+        ),
+    ] {
+        if let Some(v) = kvs.get(key) {
+            *field = v
+                .parse::<f64>()
+                .ok()
+                .filter(|secs| secs.is_finite() && *secs >= 0.0)
+                .and_then(|secs| std::time::Duration::try_from_secs_f64(secs).ok())
+                .ok_or_else(|| ConfigError::InvalidValue {
+                    key: key.into(),
+                    value: v.clone(),
+                })?;
         }
     }
     if let Some(v) = kvs.get("device") {
@@ -3263,6 +3303,40 @@ direct_connect_policy = identified_only
             crate::event::HolePunchPolicy::AcceptAll
         );
         assert!(parse("[reticulum]\ndirect_connect_policy = sometimes\n").is_err());
+    }
+
+    #[test]
+    fn direct_connect_reupgrade_parses_and_defaults() {
+        let config = parse("[reticulum]\n").unwrap();
+        assert_eq!(
+            config.reticulum.direct_connect_reupgrade,
+            crate::event::DirectReupgradeConfig::default()
+        );
+        assert!(config.reticulum.direct_connect_reupgrade.enabled);
+        let config = parse(
+            "[reticulum]\ndirect_connect_reupgrade = no\n\
+             direct_connect_reupgrade_attempts = 3\n\
+             direct_connect_reupgrade_delay = 90\n\
+             direct_connect_reupgrade_max_delay = 600.5\n",
+        )
+        .unwrap();
+        let reupgrade = config.reticulum.direct_connect_reupgrade;
+        assert!(!reupgrade.enabled);
+        assert_eq!(reupgrade.max_attempts, 3);
+        assert_eq!(reupgrade.initial_delay, std::time::Duration::from_secs(90));
+        assert_eq!(
+            reupgrade.max_delay,
+            std::time::Duration::from_secs_f64(600.5)
+        );
+        for bad in [
+            "direct_connect_reupgrade = maybe",
+            "direct_connect_reupgrade_attempts = -1",
+            "direct_connect_reupgrade_delay = soon",
+            "direct_connect_reupgrade_max_delay = -5",
+            "direct_connect_reupgrade_max_delay = inf",
+        ] {
+            assert!(parse(&format!("[reticulum]\n{bad}\n")).is_err(), "{bad}");
+        }
     }
 
     #[test]

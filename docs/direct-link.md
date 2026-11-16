@@ -48,6 +48,10 @@ known identities:
 | `direct_connect_policy` | `reject` (default), `accept_all`, `identified_only`, `ask_app` | How a responder treats incoming upgrade requests from peers not on the allowlist. `identified_only` accepts any peer that completed Reticulum `LINKIDENTIFY`, which anyone can do with a throwaway identity. `ask_app` asks the application callback, which rejects unless it is overridden |
 | `direct_connect_allowed_identities` | comma-separated identity hashes | Peers whose upgrade requests are accepted whatever the policy, once they identify on the link with that identity |
 | `direct_connect_allow_private_endpoints` | `yes`/`no` (default) | By default the facilitator and peer endpoints in an upgrade request must be globally routable unicast addresses. Enable for LAN-only deployments to also accept private, shared (100.64/10), link-local, and IPv6 unique-local addresses |
+| `direct_connect_reupgrade` | `yes` (default)/`no` | After a direct path this node proposed is lost, propose again by itself with exponential backoff while the link is active |
+| `direct_connect_reupgrade_attempts` | count, default `5` | Proposals after a loss before giving up |
+| `direct_connect_reupgrade_delay` | seconds, default `60` | Delay before the first proposal; doubled for each further one. Values below 60 are taken as 60, the shortest spacing of proposals on a link |
+| `direct_connect_reupgrade_max_delay` | seconds, default `900` | Upper bound of the delay. Up to 25% is added to each delay at random |
 
 **Accepting an upgrade reveals your public IP address and port to the link
 peer**, and proposing one reveals yours as well. That is why a node accepts
@@ -58,8 +62,9 @@ Prefer an allowlist of identities you trust over `accept_all` or
 `identified_only`.
 
 In `rns-net`, the same settings are the `NodeConfig` fields `probe_addrs`,
-`direct_connect_policy`, `direct_connect_allowed_identities` and
-`direct_connect_allow_private_endpoints`.
+`direct_connect_policy`, `direct_connect_allowed_identities`,
+`direct_connect_allow_private_endpoints` and `direct_connect_reupgrade`
+(a `DirectReupgradeConfig`).
 
 ## Triggering an upgrade
 
@@ -82,7 +87,11 @@ show the path carries; it is probed once, when it comes up (see
 [Path MTU](direct-link-protocol.md#path-mtu) for the limits). If the direct path dies
 (no keepalive for 15 seconds, the link going stale, or the link's channel
 running out of retries), both sides move the link back to the transport path,
-report `direct_lost`, and the link carries on.
+report `direct_lost`, and the link carries on. The side that proposed the
+upgrade then proposes again by itself, a minute later and then with
+exponential backoff, a bounded number of times while the link stays active
+(see [Re-upgrade](direct-link-protocol.md#re-upgrade)); turn it off with
+`direct_connect_reupgrade = no`.
 
 ## Testing
 

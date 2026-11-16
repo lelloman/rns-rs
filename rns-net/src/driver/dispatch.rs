@@ -2835,11 +2835,45 @@ impl Driver {
                         &session_id[..4],
                         reason
                     );
+                    self.holepunch_manager.reupgrade_failed(link_id, reason);
                     self.callbacks
                         .on_direct_connect_failed(rns_core::types::LinkId(link_id), reason);
                 }
+                HolePunchManagerAction::Reupgrade { link_id } => {
+                    self.reupgrade_direct_link(link_id);
+                }
             }
         }
+    }
+
+    /// Propose again on a link that lost its direct path, if it is still
+    /// active: a stale link waits for the next attempt, a closed one stops.
+    fn reupgrade_direct_link(&mut self, link_id: [u8; 16]) {
+        use rns_core::link::LinkState;
+        let state = self.link_manager.link_state(&link_id);
+        let derived_key = self.link_manager.get_derived_key(&link_id);
+        let derived_key = match (state, derived_key) {
+            (Some(LinkState::Active), Some(key)) if !self.is_draining() => key,
+            (Some(LinkState::Stale), _) => {
+                self.holepunch_manager
+                    .reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_NOT_STARTED);
+                return;
+            }
+            _ => {
+                log::debug!(
+                    "Not re-upgrading link {:02x?}: it is not active",
+                    &link_id[..4]
+                );
+                self.holepunch_manager.cancel_reupgrade(&link_id);
+                return;
+            }
+        };
+        log::info!("Re-upgrading link {:02x?} to a direct path", &link_id[..4]);
+        let tx = self.get_event_sender();
+        let actions = self
+            .holepunch_manager
+            .propose(link_id, &derived_key, &mut self.rng, &tx);
+        self.dispatch_holepunch_actions(actions);
     }
 }
 

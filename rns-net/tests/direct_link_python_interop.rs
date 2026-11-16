@@ -303,6 +303,7 @@ fn start_rust_node(python_port: u16, tx: Sender<RustEvent>) -> RnsNode {
             direct_connect_policy: HolePunchPolicy::AcceptAll,
             direct_connect_allow_private_endpoints: true,
             direct_connect_allowed_identities: Vec::new(),
+            direct_connect_reupgrade: Default::default(),
             ..Default::default()
         },
         Box::new(TestCallbacks(tx)),

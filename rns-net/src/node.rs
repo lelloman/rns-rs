@@ -910,6 +910,9 @@ pub struct NodeConfig {
     /// the policy, once the peer has identified itself on the link
     /// (`LINKIDENTIFY`).
     pub direct_connect_allowed_identities: Vec<[u8; 16]>,
+    /// Re-upgrade a link by itself after losing the direct path it
+    /// proposed (see [`crate::event::DirectReupgradeConfig`]).
+    pub direct_connect_reupgrade: crate::event::DirectReupgradeConfig,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
@@ -1049,6 +1052,7 @@ impl Default for NodeConfig {
             direct_connect_policy: crate::event::HolePunchPolicy::Reject,
             direct_connect_allow_private_endpoints: false,
             direct_connect_allowed_identities: Vec::new(),
+            direct_connect_reupgrade: Default::default(),
             device: None,
             underlay_mark: None,
             hooks: Vec::new(),
@@ -1961,6 +1965,7 @@ impl RnsNode {
                 .reticulum
                 .direct_connect_allowed_identities
                 .clone(),
+            direct_connect_reupgrade: rns_config.reticulum.direct_connect_reupgrade,
             device: rns_config.reticulum.device.clone(),
             underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
             hooks: if private {
@@ -2271,6 +2276,9 @@ impl RnsNode {
         driver
             .holepunch_manager
             .set_allowed_identities(config.direct_connect_allowed_identities.clone());
+        driver
+            .holepunch_manager
+            .set_reupgrade_config(config.direct_connect_reupgrade);
         driver.runtime_config_defaults.direct_connect_policy = config.direct_connect_policy;
         #[cfg(feature = "hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
@@ -6521,6 +6529,7 @@ mod tests {
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -6883,6 +6892,7 @@ share_instance = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -6960,6 +6970,7 @@ share_instance = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -7925,6 +7936,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8011,6 +8023,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8093,6 +8106,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8172,6 +8186,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8291,6 +8306,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8378,6 +8394,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8463,6 +8480,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8561,6 +8579,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8649,6 +8668,7 @@ enable_transport = False
                 direct_connect_policy: Default::default(),
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
+                direct_connect_reupgrade: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),

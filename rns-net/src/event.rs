@@ -11,8 +11,8 @@ use rns_core::transport::types::InterfaceId;
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerPoolMemberStatus,
     BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo,
-    DrainStatus, DynamicInterfaceRegistration, HolePunchPolicy, HookInfo, I2pEndpointStat,
-    InterfaceManagementOperation, InterfaceStatsResponse, InterfaceTelemetry,
+    DirectReupgradeConfig, DrainStatus, DynamicInterfaceRegistration, HolePunchPolicy, HookInfo,
+    I2pEndpointStat, InterfaceManagementOperation, InterfaceStatsResponse, InterfaceTelemetry,
     KnownDestinationEntry, LifecycleState, LinkDatagramError, LinkDistributionEntry, LinkInfoEntry,
     LocalDestinationEntry, NextHopResponse, PacketSignal, PathTableEntry,
     ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
