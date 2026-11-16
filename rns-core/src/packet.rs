@@ -120,6 +120,21 @@ pub struct RawPacket<B = Vec<u8>> {
     pub snr: Option<f32>,
 }
 
+/// Whether a packet of `len` bytes with `flags` is too large for
+/// `max_mtu`. Since upstream d077d1ab a `HEADER_1` announce must also leave
+/// room for the transport id a transport node inserts when it rebroadcasts
+/// the announce, or it could not travel past the first hop.
+fn exceeds_mtu(flags: &PacketFlags, len: usize, max_mtu: usize) -> bool {
+    let transport_room = if flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+        && flags.header_type == constants::HEADER_1
+    {
+        constants::TRUNCATED_HASHLENGTH / 8
+    } else {
+        0
+    };
+    len + transport_room > max_mtu
+}
+
 impl RawPacket {
     /// Offset of the payload in the wire bytes of a packet with this header type.
     #[inline]
@@ -304,7 +319,7 @@ impl RawPacket {
         let transport_id = transport_id.filter(|_| flags.header_type == constants::HEADER_2);
         let header_len = 2 + transport_id.map_or(0, |id| id.len()) + destination_hash.len() + 1;
         let len = header_len + payload_len;
-        if len > max_mtu {
+        if exceeds_mtu(&flags, len, max_mtu) {
             return Err(PacketError::ExceedsMtu);
         }
         let mut shared = Arc::<[u8]>::new_uninit_slice(len);
@@ -347,7 +362,7 @@ impl RawPacket {
         let transport_id = transport_id.filter(|_| flags.header_type == constants::HEADER_2);
         let len =
             2 + transport_id.map_or(0, |id| id.len()) + destination_hash.len() + 1 + data.len();
-        if len > max_mtu {
+        if exceeds_mtu(&flags, len, max_mtu) {
             return Err(PacketError::ExceedsMtu);
         }
         let mut shared = Arc::<[u8]>::new_uninit_slice(len);
@@ -395,7 +410,7 @@ impl RawPacket {
         // flags, hops, [transport id], destination hash, context, data
         let len =
             2 + transport_id.map_or(0, |id| id.len()) + destination_hash.len() + 1 + data.len();
-        if len > max_mtu {
+        if exceeds_mtu(&flags, len, max_mtu) {
             return Err(PacketError::ExceedsMtu);
         }
 
@@ -1376,6 +1391,50 @@ mod tests {
         let data = [0u8; 500]; // way too much data
         let result = RawPacket::pack(flags, 0, &[0; 16], None, 0, &data);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn header_1_announce_leaves_room_for_a_transport_id() {
+        // Upstream d077d1ab: a HEADER_1 announce must still fit the MTU once
+        // a transport node inserts its 16-byte transport id.
+        let flags = |packet_type| PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type,
+        };
+        let header_1_room = constants::MTU - RawPacket::data_offset(constants::HEADER_1);
+        let fits = vec![0u8; header_1_room - 16];
+        let too_large = vec![0u8; header_1_room - 15];
+        let announce = flags(constants::PACKET_TYPE_ANNOUNCE);
+        assert!(RawPacket::pack(announce, 0, &[0; 16], None, 0, &fits).is_ok());
+        assert!(matches!(
+            RawPacket::pack(announce, 0, &[0; 16], None, 0, &too_large),
+            Err(PacketError::ExceedsMtu)
+        ));
+        assert!(matches!(
+            RawPacket::pack_raw_shared_with_max_mtu(
+                announce,
+                0,
+                &[0; 16],
+                None,
+                0,
+                &too_large,
+                constants::MTU
+            ),
+            Err(PacketError::ExceedsMtu)
+        ));
+        // Other packets, and an announce already carrying a transport id,
+        // may use the whole MTU.
+        let data = flags(constants::PACKET_TYPE_DATA);
+        assert!(RawPacket::pack(data, 0, &[0; 16], None, 0, &too_large).is_ok());
+        let mut transported = announce;
+        transported.header_type = constants::HEADER_2;
+        transported.transport_type = constants::TRANSPORT_TRANSPORT;
+        let header_2_room = constants::MTU - RawPacket::data_offset(constants::HEADER_2);
+        let full = vec![0u8; header_2_room];
+        assert!(RawPacket::pack(transported, 0, &[0; 16], Some(&[1; 16]), 0, &full).is_ok());
     }
 
     #[test]
