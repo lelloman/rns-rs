@@ -8,14 +8,40 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.6.0`
-- Version metadata commit: `af8d05819d363240c133e4bc644bfde0d4620a71`
-- Release tag: `1.6.0` on `cb1260891d1b6da8f6e9b21542c4f0cc0725cac4`
-- Normative commit: `c850cdac6c8bd5422af045652216ba451e98aa33`
-- Commit date: `2026-11-14 02:14:38 +0100`
-- Subject: `Traffic counting`
+- Version: `1.6.1`
+- Version metadata commit: `fd36a97220a40383ce7f0a1d0f40bc7043f4494f`
+- Release tag: none yet; no `1.6.1` tag on either remote
+- Normative commit: `884f109b2b821638c7addd456a52a2cd5bb8c5b1`
+- Commit date: `2026-11-15 16:53:08 +0100`
+- Subject: `Fixed missing wanted destination type for interface discovery`
 
-The normative baseline is the canonical `rgit/master` tip `c850cdac`, accepted
+The normative baseline is the canonical `rgit/master` tip `884f109b`, accepted
+on 2026-11-16 as Reticulum 1.6.1 from `c850cdac`. Upstream bumped the version
+without tagging it; the GitHub mirror agrees with rgit. The range has
+seventeen commits:
+
+- Held announces count as filtered traffic and again on release.
+- Announces that cannot update a known path are prefiltered before holding
+  and culled from the held queue.
+- Tunnel synthesis happens before an interface is reported up, rejects
+  repeated, established or wrongly sized syntheses, and carries a signed
+  extension with the node's implementation, version, transport status and
+  stamp costs, answered by a reverse synthesis; `rnstatus -T` shows the
+  remote transport.
+- Shared instance clients withdraw at exit within a bounded time.
+- `[filter]` takes destination name hashes, and interfaces take a
+  `hop_limiter`.
+- Announces must leave room for transport insertion.
+- Emitted announces and path requests are stamped by default.
+- Interface discovery registers its destination type as wanted.
+
+Reticulum before 1.6.1 ignores the extended tunnel synthesis, so it records no
+tunnel from rns-rs clients. Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.1-parity.md`](docs/upstream-parity/reticulum-1.6.1-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.1-audit.md`](docs/upstream-parity/reticulum-1.6.1-audit.md).
+
+The previous baseline was the canonical `rgit/master` tip `c850cdac`, accepted
 on 2026-11-14 as a same-version Reticulum 1.6.0 advancement from `134dc677`.
 The range has thirteen commits:
 

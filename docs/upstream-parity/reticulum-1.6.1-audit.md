@@ -1,4 +1,4 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.6.1 Audit
 
 ## Scope and Baseline
 
@@ -17,7 +17,8 @@
 - commits in range: `17`
 - repositories checked: rgit `master` (normative) and the GitHub mirror `master`
 - local branch and revision inspected: `upstream-1.6.1@474078b0` (branched from
-  `dev@474078b0`; audit opened)
+  `dev@474078b0`; audit opened); gates run on `upstream-1.6.1@0ac3ab7f`, rebased
+  onto `dev@17e0fec0`
 
 Found by the 2026-11-15 daily drift check (9 commits, rgit only) and extended
 by the 2026-11-16 check (17 commits). Both remotes refreshed fresh on
@@ -49,7 +50,7 @@ other work continues on `dev`, and is rebased onto `dev` before it lands.
 ## Commit Inventory
 
 Every commit in the audited range appears exactly once, in ancestry order.
-Dispositions are provisional until each mapping commit lands.
+Every disposition is final; each mapping commit carries an `Upstream-Commit:` trailer.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
@@ -653,15 +654,56 @@ the earlier one recording where its behavior is carried.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
-No gates have been run yet.
+Gates were run on 2026-11-16 on `upstream-1.6.1@0ac3ab7f`: the audit
+opening, the seventeen mapping commits and one test fix, rebased onto
+`dev@17e0fec0`.
+
+- Fixtures: the `rnstatus` `tunnels` fixture was regenerated with upstream's
+  own `rnstatus` at `884f109b` (commit 14); no other `rnstatus` case changed.
+  The default config, example config, argparse and discovery record
+  generators now assert 1.6.1 and were rerun against `884f109b`; their output
+  is unchanged (commit 16).
+- Exact-target interop against a disposable export of `884f109b`
+  (`import RNS` reports 1.6.1): `python_interop` 6/6, including Python
+  recording the Rust client's tunnel, answering with a reverse synthesis and
+  the Rust client recording Python's transport identity and `RNS`
+  implementation; `utility_interop` 24/24 ignored-gated tests, its other 4
+  passing in the workspace suite. The same suites pass against exports of
+  `c850cdac` (1.6.0), 1.5.4 and 1.4.2.
+- Since 1.6.1 every instance stamps what it emits, and neither upstream's nor
+  rns-rs's config file can turn that off. The Python interop harness switches
+  `STAMP_DESTINATIONS` and `STAMP_PRS` off in-process; the utility interop
+  configs set `destination_value`, `destination_cost`, `pr_value` and
+  `pr_cost` to 8 (folded into commit 15), because a stamp below the
+  receiver's cost stays in the announce's app data, where interface
+  discovery reads it as its own stamp.
+- `tests: skip the remote path table comparison before Reticulum 1.6.0`:
+  `python_rnpath_reads_rust_remote_path_table`, added on `dev` at
+  `474078b0`, compares 1.6.0 path table entries and failed against the 1.5.4
+  and 1.4.2 targets; it now skips before 1.6.0.
+- `cargo test --workspace`: 3,379 passed, 0 failed.
+  `cargo test --workspace --features rns-hooks`: 3,446 passed, 0 failed.
+  `rns-net` with the four `compact-threads-*` features: 1,595 passed,
+  0 failed.
+- `cargo fmt --all --check` and `bash scripts/lint-host.sh` are clean.
+- `scripts/check_upstream_drift.py` at 14:44 UTC fetched both remotes fresh:
+  rgit and GitHub tips `884f109b`, exactly the seventeen audited commits. No
+  `1.6.1` tag exists on either remote.
+- The CI interop matrix gains 1.6.1 at the mirror's `884f109b`, to be
+  replaced by the release tag's commit once upstream signs one.
+- Not run: the dual-VPS Backbone smoke and a release build. Docker E2E,
+  ARMv7 build smoke and the CI interop matrix are delegated to the promotion
+  pull request's CI. Physical hardware validation is not claimed.
+
+The final record is [reticulum-1.6.1-parity.md](reticulum-1.6.1-parity.md).

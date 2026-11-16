@@ -270,6 +270,11 @@ jobs:
           - version: 1.6.0
             commit: cb1260891d1b6da8f6e9b21542c4f0cc0725cac4
             rns_tree: 3448fb48deaf018bbe6e8a04795fa085bef2f2b9
+          # Untagged 1.6.1 (the mirror's master at 884f109b); replace with
+          # the release tag's commit once upstream signs one.
+          - version: 1.6.1
+            commit: 884f109b2b821638c7addd456a52a2cd5bb8c5b1
+            rns_tree: 00ef77fcbaadad0ce252306c26bebaa301b77366
 
     steps:
       - name: Report a skipped run
