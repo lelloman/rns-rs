@@ -348,6 +348,66 @@ fn make_announced_identity(
     }
 }
 
+#[test]
+fn the_known_destinations_flush_gets_only_what_changed() {
+    let mut driver = new_test_driver();
+    let changes = |driver: &mut Driver| match driver
+        .handle_query_mut(QueryRequest::KnownDestinationChanges)
+    {
+        QueryResponse::KnownDestinationChanges { changed, removed } => {
+            let mut changed: Vec<_> = changed
+                .into_iter()
+                .map(|(entry, fingerprint)| (entry.dest_hash, fingerprint))
+                .collect();
+            changed.sort();
+            (changed, removed)
+        }
+        other => panic!("unexpected response {other:?}"),
+    };
+    let record = |driver: &mut Driver, stored, removed, seed| {
+        assert!(matches!(
+            driver.handle_query_mut(QueryRequest::RecordKnownDestinationFlush {
+                stored,
+                removed,
+                seed,
+            }),
+            QueryResponse::KnownDestinationFlushRecorded
+        ));
+    };
+    let (a, b) = ([0xA1; 16], [0xB2; 16]);
+    driver.upsert_known_destination(a, make_announced_identity(a, 10.0, InterfaceId(1)));
+    driver.upsert_known_destination(b, make_announced_identity(b, 20.0, InterfaceId(1)));
+
+    // Both are new; once stored, nothing is handed over again.
+    let (changed, removed) = changes(&mut driver);
+    assert_eq!(
+        changed.iter().map(|(hash, _)| *hash).collect::<Vec<_>>(),
+        vec![a, b]
+    );
+    assert!(removed.is_empty());
+    record(&mut driver, changed.clone(), Vec::new(), false);
+    assert_eq!(changes(&mut driver), (Vec::new(), Vec::new()));
+
+    // A use changes one entry; a removal shows as removed.
+    assert!(driver.mark_known_destination_used(&a));
+    driver.known_destinations.remove(&b);
+    let (changed, removed) = changes(&mut driver);
+    assert_eq!(
+        changed.iter().map(|(hash, _)| *hash).collect::<Vec<_>>(),
+        vec![a]
+    );
+    assert_eq!(removed, vec![b]);
+
+    // Not recorded (a failed save), the same changes come back.
+    assert_eq!(changes(&mut driver), (changed.clone(), removed.clone()));
+    record(&mut driver, changed, removed, false);
+    assert_eq!(changes(&mut driver), (Vec::new(), Vec::new()));
+
+    // A seed replaces the record, as with what storage held at start.
+    record(&mut driver, Vec::new(), Vec::new(), true);
+    assert_eq!(changes(&mut driver).0.len(), 1);
+}
+
 #[derive(Default)]
 struct TestRatchetStore {
     remembered: Mutex<Vec<([u8; 16], crate::storage::RatchetEntry)>>,

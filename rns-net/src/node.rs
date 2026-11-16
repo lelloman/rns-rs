@@ -4886,39 +4886,61 @@ impl RnsNode {
 
     /// Write changed known destinations to the database every
     /// `KD_FLUSH_INTERVAL`, as upstream's transport jobs do, so shared
-    /// instance clients, which read it, see what the instance learns.
+    /// instance clients, which read it, see what the instance learns. The
+    /// driver keeps a fingerprint of each flushed entry and hands over only
+    /// the changed ones, as upstream flushes only the destinations it marked
+    /// dirty; `loaded` seeds the fingerprints with what storage holds.
     fn start_known_destinations_flush(
         &mut self,
-        mut last: std::collections::HashMap<[u8; 16], storage::KnownDestination>,
+        loaded: std::collections::HashMap<[u8; 16], storage::KnownDestination>,
     ) {
         let Some(store) = self.known_destinations_store.clone() else {
             return;
         };
+        let seed: Vec<([u8; 16], u64)> = loaded
+            .iter()
+            .map(|(dest_hash, entry)| (*dest_hash, entry.fingerprint()))
+            .collect();
+        drop(loaded);
         let tx = self.tx.clone();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel();
         let handle = thread::Builder::new()
             .name("rns-kd-flush".into())
-            .spawn(move || loop {
-                match stop_rx.recv_timeout(KD_FLUSH_INTERVAL) {
-                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            .spawn(move || {
+                if record_known_destination_flush(&tx, seed, Vec::new(), true).is_none() {
+                    return;
                 }
-                let Some(current) = known_destinations_snapshot(&tx) else {
-                    break;
-                };
-                let upserts: Vec<([u8; 16], &storage::KnownDestination)> = current
-                    .iter()
-                    .filter(|(hash, entry)| last.get(*hash) != Some(*entry))
-                    .map(|(hash, entry)| (*hash, entry))
-                    .collect();
-                let deletes: Vec<[u8; 16]> = last
-                    .keys()
-                    .filter(|hash| !current.contains_key(*hash))
-                    .copied()
-                    .collect();
-                match store.save_changes(&upserts, &deletes) {
-                    Ok(()) => last = current,
-                    Err(err) => log::warn!("failed to flush known destinations: {}", err),
+                loop {
+                    match stop_rx.recv_timeout(KD_FLUSH_INTERVAL) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                    let Some((changed, removed)) = known_destination_changes(&tx) else {
+                        break;
+                    };
+                    if changed.is_empty() && removed.is_empty() {
+                        continue;
+                    }
+                    let upserts: Vec<([u8; 16], storage::KnownDestination)> = changed
+                        .iter()
+                        .map(|(entry, _)| (entry.dest_hash, stored_known_destination(entry)))
+                        .collect();
+                    let upsert_refs: Vec<([u8; 16], &storage::KnownDestination)> =
+                        upserts.iter().map(|(hash, entry)| (*hash, entry)).collect();
+                    match store.save_changes(&upsert_refs, &removed) {
+                        Ok(()) => {
+                            let stored = changed
+                                .iter()
+                                .map(|(entry, fingerprint)| (entry.dest_hash, *fingerprint))
+                                .collect();
+                            if record_known_destination_flush(&tx, stored, removed, false).is_none()
+                            {
+                                break;
+                            }
+                        }
+                        // Not recorded, so the same changes come back next time.
+                        Err(err) => log::warn!("failed to flush known destinations: {}", err),
+                    }
                 }
             });
         match handle {
@@ -5469,6 +5491,71 @@ impl Drop for RnsNode {
 /// `RNS.Transport.kd_flush_interval`.
 const KD_FLUSH_INTERVAL: Duration = Duration::from_secs(10);
 
+/// A known destination entry as storage keeps it.
+fn stored_known_destination(
+    entry: &crate::event::KnownDestinationEntry,
+) -> storage::KnownDestination {
+    storage::KnownDestination {
+        identity_hash: entry.identity_hash,
+        public_key: entry.public_key,
+        app_data: entry.app_data.clone(),
+        hops: entry.hops,
+        received_at: entry.received_at,
+        receiving_interface: entry.receiving_interface.0,
+        was_used: entry.was_used,
+        last_used_at: entry.last_used_at,
+        retained: entry.retained,
+        stamp: entry.stamp.map(|stamp| stamp.to_vec()),
+        stamp_value: entry.stamp_value,
+        lr_cost: entry.lr_cost,
+    }
+}
+
+/// The known destinations changed since the last recorded flush.
+#[allow(clippy::type_complexity)]
+fn known_destination_changes(
+    tx: &EventSender,
+) -> Option<(
+    Vec<(crate::event::KnownDestinationEntry, u64)>,
+    Vec<[u8; 16]>,
+)> {
+    let (response_tx, response_rx) = std::sync::mpsc::channel();
+    tx.send(Event::query(
+        QueryRequest::KnownDestinationChanges,
+        response_tx,
+    ))
+    .ok()?;
+    match response_rx.recv().ok()? {
+        QueryResponse::KnownDestinationChanges { changed, removed } => Some((changed, removed)),
+        _ => None,
+    }
+}
+
+/// Tell the driver what the flush stored (see
+/// `QueryRequest::RecordKnownDestinationFlush`).
+fn record_known_destination_flush(
+    tx: &EventSender,
+    stored: Vec<([u8; 16], u64)>,
+    removed: Vec<[u8; 16]>,
+    seed: bool,
+) -> Option<()> {
+    let (response_tx, response_rx) = std::sync::mpsc::channel();
+    tx.send(Event::query(
+        QueryRequest::RecordKnownDestinationFlush {
+            stored,
+            removed,
+            seed,
+        },
+        response_tx,
+    ))
+    .ok()?;
+    matches!(
+        response_rx.recv().ok()?,
+        QueryResponse::KnownDestinationFlushRecorded
+    )
+    .then_some(())
+}
+
 /// The driver's known destinations, as storage keeps them.
 fn known_destinations_snapshot(
     tx: &EventSender,
@@ -5481,26 +5568,8 @@ fn known_destinations_snapshot(
     };
     Some(
         entries
-            .into_iter()
-            .map(|entry| {
-                (
-                    entry.dest_hash,
-                    storage::KnownDestination {
-                        identity_hash: entry.identity_hash,
-                        public_key: entry.public_key,
-                        app_data: entry.app_data,
-                        hops: entry.hops,
-                        received_at: entry.received_at,
-                        receiving_interface: entry.receiving_interface.0,
-                        was_used: entry.was_used,
-                        last_used_at: entry.last_used_at,
-                        retained: entry.retained,
-                        stamp: entry.stamp.map(|stamp| stamp.to_vec()),
-                        stamp_value: entry.stamp_value,
-                        lr_cost: entry.lr_cost,
-                    },
-                )
-            })
+            .iter()
+            .map(|entry| (entry.dest_hash, stored_known_destination(entry)))
             .collect(),
     )
 }

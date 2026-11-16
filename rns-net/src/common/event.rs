@@ -815,6 +815,17 @@ pub enum QueryRequest {
     RecallDestinationStamp { dest_hash: [u8; 16] },
     /// List known-destination lifecycle state.
     KnownDestinations,
+    /// The known destinations that changed or went away since the last
+    /// committed flush, compared by fingerprint.
+    KnownDestinationChanges,
+    /// Record what the known destinations flush stored: entries with their
+    /// fingerprints, and removed hashes. `seed` replaces the record, as at
+    /// start with what was loaded from storage.
+    RecordKnownDestinationFlush {
+        stored: Vec<([u8; 16], u64)>,
+        removed: Vec<[u8; 16]>,
+        seed: bool,
+    },
     /// Get locally registered destinations.
     LocalDestinations,
     /// Get active links.
@@ -954,6 +965,12 @@ pub enum QueryResponse {
     RecallIdentity(Option<crate::common::destination::AnnouncedIdentity>),
     RecallDestinationStamp(Option<DestinationStampInfo>),
     KnownDestinations(Vec<KnownDestinationEntry>),
+    KnownDestinationChanges {
+        /// Changed or new entries with their fingerprints.
+        changed: Vec<(KnownDestinationEntry, u64)>,
+        removed: Vec<[u8; 16]>,
+    },
+    KnownDestinationFlushRecorded,
     LocalDestinations(Vec<LocalDestinationEntry>),
     Links(Vec<LinkInfoEntry>),
     Resources(Vec<ResourceInfoEntry>),

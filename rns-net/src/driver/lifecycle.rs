@@ -77,6 +77,53 @@ impl Driver {
         }
     }
 
+    /// Fingerprint of a known destination as storage persists it.
+    pub(crate) fn known_destination_fingerprint(state: &KnownDestinationState) -> u64 {
+        crate::storage::known_destination_fingerprint(
+            &state.announced.identity_hash.0,
+            &state.announced.public_key,
+            state.announced.app_data.as_deref(),
+            state.announced.hops,
+            state.announced.received_at,
+            state.announced.receiving_interface.0,
+            state.was_used,
+            state.last_used_at,
+            state.retained,
+            state.stamp.as_ref().map(|stamp| &stamp[..]),
+            state.stamp_value,
+            state.lr_cost,
+        )
+    }
+
+    /// The known destinations that differ from their last flushed
+    /// fingerprint, and the flushed ones that are gone. Only those are
+    /// copied: the flush runs every ten seconds, and copying the whole table
+    /// each time made a busy transport node's memory grow.
+    pub(crate) fn known_destination_changes(
+        &self,
+    ) -> (Vec<(KnownDestinationEntry, u64)>, Vec<[u8; 16]>) {
+        let changed = self
+            .known_destinations
+            .iter()
+            .filter_map(|(dest_hash, state)| {
+                let fingerprint = Self::known_destination_fingerprint(state);
+                (self.known_destinations_flushed.get(dest_hash) != Some(&fingerprint)).then(|| {
+                    (
+                        Self::known_destination_entry(*dest_hash, state),
+                        fingerprint,
+                    )
+                })
+            })
+            .collect();
+        let removed = self
+            .known_destinations_flushed
+            .keys()
+            .filter(|dest_hash| !self.known_destinations.contains_key(*dest_hash))
+            .copied()
+            .collect();
+        (changed, removed)
+    }
+
     pub(crate) fn known_destination_entries(&self) -> Vec<KnownDestinationEntry> {
         let mut entries: Vec<_> = self
             .known_destinations

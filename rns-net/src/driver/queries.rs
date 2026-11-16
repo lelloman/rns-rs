@@ -1263,6 +1263,14 @@ impl Driver {
             QueryRequest::KnownDestinations => {
                 QueryResponse::KnownDestinations(self.known_destination_entries())
             }
+            QueryRequest::KnownDestinationChanges => {
+                let (changed, removed) = self.known_destination_changes();
+                QueryResponse::KnownDestinationChanges { changed, removed }
+            }
+            // Mutating queries are handled by handle_query_mut
+            QueryRequest::RecordKnownDestinationFlush { .. } => {
+                QueryResponse::KnownDestinationFlushRecorded
+            }
             QueryRequest::LocalDestinations => {
                 let entries: Vec<LocalDestinationEntry> = self
                     .local_destinations
@@ -1320,6 +1328,20 @@ impl Driver {
     /// Handle a mutating query request.
     pub(crate) fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
+            QueryRequest::RecordKnownDestinationFlush {
+                stored,
+                removed,
+                seed,
+            } => {
+                if seed {
+                    self.known_destinations_flushed.clear();
+                }
+                self.known_destinations_flushed.extend(stored);
+                for dest_hash in removed {
+                    self.known_destinations_flushed.remove(&dest_hash);
+                }
+                QueryResponse::KnownDestinationFlushRecorded
+            }
             QueryRequest::WantsDestinationType {
                 full_name,
                 requester,

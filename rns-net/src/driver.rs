@@ -897,6 +897,8 @@ pub struct Driver {
     pub(crate) initial_announce_sent: bool,
     /// Cache of known announced identities and lifecycle state, keyed by destination hash.
     pub(crate) known_destinations: HashMap<[u8; 16], KnownDestinationState>,
+    /// Fingerprints of the known destinations as last flushed to storage.
+    pub(crate) known_destinations_flushed: HashMap<[u8; 16], u64>,
     /// RSSI, SNR and link quality of the latest packets received on
     /// interfaces that report them (`Transport.local_client_rssi_cache` and
     /// its SNR and Q siblings), oldest first.
@@ -1235,6 +1237,7 @@ impl Driver {
             last_management_announce: 0.0,
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
+            known_destinations_flushed: HashMap::new(),
             packet_signals: std::collections::VecDeque::new(),
             blackhole_dir: None,
             blackhole_sources: Vec::new(),

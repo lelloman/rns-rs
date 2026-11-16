@@ -47,6 +47,60 @@ pub struct KnownDestination {
     pub lr_cost: Option<rns_core::stamp::StampCost>,
 }
 
+/// A 64-bit fingerprint of everything persisted about a known destination,
+/// so the flush can tell a changed entry without keeping a copy of it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn known_destination_fingerprint(
+    identity_hash: &[u8; 16],
+    public_key: &[u8; 64],
+    app_data: Option<&[u8]>,
+    hops: u8,
+    received_at: f64,
+    receiving_interface: u64,
+    was_used: bool,
+    last_used_at: Option<f64>,
+    retained: bool,
+    stamp: Option<&[u8]>,
+    stamp_value: rns_core::stamp::StampValue,
+    lr_cost: Option<rns_core::stamp::StampCost>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    identity_hash.hash(&mut hasher);
+    public_key.hash(&mut hasher);
+    app_data.hash(&mut hasher);
+    hops.hash(&mut hasher);
+    received_at.to_bits().hash(&mut hasher);
+    receiving_interface.hash(&mut hasher);
+    was_used.hash(&mut hasher);
+    last_used_at.map(f64::to_bits).hash(&mut hasher);
+    retained.hash(&mut hasher);
+    stamp.hash(&mut hasher);
+    stamp_value.hash(&mut hasher);
+    lr_cost.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl KnownDestination {
+    /// See [`known_destination_fingerprint`].
+    pub(crate) fn fingerprint(&self) -> u64 {
+        known_destination_fingerprint(
+            &self.identity_hash,
+            &self.public_key,
+            self.app_data.as_deref(),
+            self.hops,
+            self.received_at,
+            self.receiving_interface,
+            self.was_used,
+            self.last_used_at,
+            self.retained,
+            self.stamp.as_deref(),
+            self.stamp_value,
+            self.lr_cost,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RatchetEntry {
     pub ratchet: [u8; 32],
@@ -1167,6 +1221,63 @@ pub fn load_rpc_identity(paths: &StoragePaths) -> io::Result<Identity> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_known_destination_fingerprint_follows_every_field() {
+        let base = KnownDestination {
+            identity_hash: [1; 16],
+            public_key: [2; 64],
+            app_data: Some(vec![3]),
+            hops: 4,
+            received_at: 5.0,
+            receiving_interface: 6,
+            was_used: false,
+            last_used_at: None,
+            retained: false,
+            stamp: None,
+            stamp_value: rns_core::stamp::StampValue::ZERO,
+            lr_cost: None,
+        };
+        let fingerprint = base.fingerprint();
+        assert_eq!(base.clone().fingerprint(), fingerprint);
+        let variants = [
+            KnownDestination {
+                app_data: None,
+                ..base.clone()
+            },
+            KnownDestination {
+                hops: 5,
+                ..base.clone()
+            },
+            KnownDestination {
+                received_at: 5.5,
+                ..base.clone()
+            },
+            KnownDestination {
+                was_used: true,
+                ..base.clone()
+            },
+            KnownDestination {
+                last_used_at: Some(7.0),
+                ..base.clone()
+            },
+            KnownDestination {
+                retained: true,
+                ..base.clone()
+            },
+            KnownDestination {
+                stamp: Some(vec![8; 32]),
+                ..base.clone()
+            },
+            KnownDestination {
+                lr_cost: Some(rns_core::stamp::StampCost::from_whole(9)),
+                ..base.clone()
+            },
+        ];
+        for variant in variants {
+            assert_ne!(variant.fingerprint(), fingerprint, "{variant:?}");
+        }
+    }
+
     use super::*;
     use rns_core::transport::persistence::PersistedAnnounceRate;
 
