@@ -1667,6 +1667,63 @@ pub(crate) fn start_client_with_ifac(
     control: ListenerControl,
 ) -> io::Result<Box<dyn Writer>> {
     let stream = try_connect_client(&config, underlay_mark)?;
+    serve_client(config, tx, ifac_size, underlay_mark, control, stream)
+}
+
+/// Start a configured client. As upstream's `BackboneClientInterface`, one
+/// whose target cannot be reached yet is left unconnected, reported down,
+/// and tried again every `reconnect_wait` (upstream's `RECONNECT_WAIT`, 5
+/// seconds) until it connects or runs out of `max_reconnect_tries`; the
+/// connection brings its writer in with its `InterfaceUp`.
+pub(crate) fn start_configured_client(
+    config: BackboneClientConfig,
+    tx: EventSender,
+    ifac_size: usize,
+    underlay_mark: Option<u32>,
+    control: ListenerControl,
+) -> io::Result<Box<dyn Writer>> {
+    let stream = match try_connect_client(&config, underlay_mark) {
+        Ok(stream) => stream,
+        Err(error) => {
+            log::warn!(
+                "Initial connection for {} could not be established: {}",
+                crate::interface::display::backbone(
+                    &config.name,
+                    &config.target_host,
+                    config.target_port
+                ),
+                error
+            );
+            let wait = lock_or_recover(&config.runtime, "backbone runtime").reconnect_wait;
+            log::warn!(
+                "Leaving unconnected and retrying connection in {} seconds.",
+                wait.as_secs_f64()
+            );
+            let link = Arc::new(ClientLink {
+                config,
+                tx,
+                ifac_size,
+                underlay_mark,
+                control,
+            });
+            thread::Builder::new()
+                .name(format!("bb-reconn-{}", link.config.interface_id.0))
+                .spawn(move || link.reconnect_loop(Retry::Steady))?;
+            return Ok(Box::new(super::UnavailableWriter));
+        }
+    };
+    serve_client(config, tx, ifac_size, underlay_mark, control, stream)
+}
+
+/// Serve a client's first connection, over `stream`.
+fn serve_client(
+    config: BackboneClientConfig,
+    tx: EventSender,
+    ifac_size: usize,
+    underlay_mark: Option<u32>,
+    control: ListenerControl,
+    stream: TcpStream,
+) -> io::Result<Box<dyn Writer>> {
     let writer_stream = stream.try_clone()?;
 
     let id = config.interface_id;
@@ -1744,7 +1801,7 @@ impl ClientLink {
         let link = Arc::clone(self);
         let spawned = thread::Builder::new()
             .name(format!("bb-reconn-{}", id.0))
-            .spawn(move || link.reconnect_loop());
+            .spawn(move || link.reconnect_loop(Retry::Backoff));
         if let Err(error) = spawned {
             log::error!(
                 "[{}] cannot start reconnecting, giving up: {}",
@@ -1754,11 +1811,15 @@ impl ClientLink {
         }
     }
 
-    fn reconnect_loop(self: Arc<Self>) {
+    fn reconnect_loop(self: Arc<Self>, retry: Retry) {
         loop {
-            let Some(stream) =
-                client_reconnect(&self.config, &self.tx, self.underlay_mark, &self.control)
-            else {
+            let Some(stream) = client_reconnect(
+                &self.config,
+                &self.tx,
+                self.underlay_mark,
+                &self.control,
+                retry,
+            ) else {
                 if !self.control.should_stop() {
                     log::error!("[{}] reconnection failed, giving up", self.config.name);
                 }
@@ -1851,7 +1912,27 @@ pub(crate) fn reconnect_backoff(base: Duration, attempt: u32) -> Duration {
     }
 }
 
-/// Attempt to reconnect with exponential backoff and jitter.
+/// How a client waits between connection attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    /// `reconnect_wait` before every attempt, as upstream's reconnect does;
+    /// for a client that has not connected yet.
+    Steady,
+    /// Exponential backoff with jitter (see [`reconnect_backoff`]), for a
+    /// client that lost its connection.
+    Backoff,
+}
+
+impl Retry {
+    fn wait(self, base: Duration, attempt: u32) -> Duration {
+        match self {
+            Retry::Steady => base,
+            Retry::Backoff => reconnect_backoff(base, attempt),
+        }
+    }
+}
+
+/// Attempt to (re)connect, waiting between attempts as `retry` says.
 /// Returns the new reader stream on success.
 /// Sends the new writer to the driver via InterfaceUp event.
 fn client_reconnect(
@@ -1859,12 +1940,13 @@ fn client_reconnect(
     tx: &EventSender,
     underlay_mark: Option<u32>,
     control: &ListenerControl,
+    retry: Retry,
 ) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
         let runtime = lock_or_recover(&config.runtime, "backbone runtime").clone();
 
-        let jitter = reconnect_backoff(runtime.reconnect_wait, attempts);
+        let jitter = retry.wait(runtime.reconnect_wait, attempts);
         if !wait_while_active(control, jitter) {
             return None;
         }
@@ -2223,7 +2305,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 };
                 let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
                 let control = ListenerControl::new();
-                let writer = start_client_with_ifac(
+                let writer = start_configured_client(
                     cfg,
                     ctx.tx,
                     ifac_size,
@@ -3503,6 +3585,55 @@ mod tests {
             "expected reconnect InterfaceUp, got {:?}",
             event
         );
+    }
+
+    #[test]
+    fn configured_client_with_unreachable_target_retries_until_it_connects() {
+        // Upstream leaves a BackboneClientInterface whose target cannot be
+        // reached unconnected, and tries again every RECONNECT_WAIT, forever.
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let mut config = make_client_config(port, 9380);
+        config.reconnect_wait = Duration::from_millis(100);
+        config.max_reconnect_tries = None;
+        config.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&config)));
+        let control = ListenerControl::new();
+        let mut writer = start_configured_client(config, tx, 0, None, control.clone()).unwrap();
+        assert_eq!(
+            writer.send_frame(b"x").unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+
+        // Many attempts fail meanwhile, and nothing is reported.
+        thread::sleep(Duration::from_millis(1000));
+        if let Ok(event) = recv_non_peer_event(&rx, Duration::from_millis(10)) {
+            panic!("unexpected event while the target is down: {:?}", event);
+        }
+
+        // The target appears: the next attempt, at most one wait later,
+        // brings the client up with its writer.
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let appeared = Instant::now();
+        let (mut server, _) = listener.accept().unwrap();
+        assert!(appeared.elapsed() < Duration::from_millis(500));
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        let Event::InterfaceUp(InterfaceId(9380), Some(mut writer), None) = event else {
+            panic!("expected the client's InterfaceUp, got {:?}", event);
+        };
+        writer.send_frame(b"hello").unwrap();
+        let mut sent = vec![0u8; hdlc::frame(b"hello").len()];
+        server.read_exact(&mut sent).unwrap();
+        assert_eq!(sent, hdlc::frame(b"hello"));
+        control.request_stop();
+    }
+
+    #[test]
+    fn steady_retry_waits_the_same_before_every_attempt() {
+        let base = Duration::from_secs(5);
+        for attempt in 0..10 {
+            assert_eq!(Retry::Steady.wait(base, attempt), base);
+        }
+        assert!(Retry::Backoff.wait(base, 3) > base);
     }
 
     #[test]
