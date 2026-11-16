@@ -59,7 +59,7 @@ Dispositions are provisional until each mapping commit lands.
 | 4 | `096e6726b4361db72e42e519037dc46c0feb6efc` | Added announce ingress prefiltering in inbound preprocessing | Integrated | `announces_that_cannot_update_a_known_path_are_prefiltered`, `announce_with_insufficient_payload_counts_a_protocol_violation`; `announce_with_cached_signature_but_different_fields_is_verified_again` adjusted |
 | 5 | `f361a354ba299f0cd3672f8066683ad0232c43c8` | Ensure early tunnel synthesis on BackboneInterface | Integrated | `tunnel_synthesis_is_sent_before_the_interface_is_announced_up`, `dialing_interface_synthesizes_a_tunnel_on_each_connect` |
 | 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Structurally covered | Same `InterfaceUp` ordering as commit 5; TCP client and outbound I2P peer bring each connect up through it (comments in `tcp.rs` and `i2p/mod.rs`) |
-| 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Needs decision | |
+| 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Integrated | `withdrawing_from_an_unresponsive_shared_instance_is_bounded`; `SHARED_RPC_EXIT_TIMEOUT` |
 | 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Needs port | |
 | 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Needs port | |
 | 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Needs port | |
@@ -270,14 +270,25 @@ client connection, then runs `unwants_all_destination_types` in a daemon
 thread with a 0.5 s timeout, so a signal that arrives during an RPC call
 cannot deadlock shutdown.
 
-**Rust applicability:** `rns-net/src/shared_client.rs` deregisters wanted
-destination types on drop through an RPC call. Check whether that call can
-block shutdown (no timeout, or a held connection) and decide whether a bounded
-deregistration is needed.
+**Rust applicability:** The deadlock itself is Python's: the signal handler
+runs on the main thread in the middle of an RPC call and then makes another
+one. rns-rs shuts down from ordinary control flow, and each RPC call opens
+and closes its own connection, so there are no open client connections to
+close. What does apply is the bound: `RnsNode::shutdown` withdrew this
+application's destination types from the shared instance with a synchronous
+RPC call under 10 s socket timeouts, so an instance that accepts but does not
+answer could hold shutdown up for seconds.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:**
+`DestinationTypeRequester::withdraw_from_shared_instance` makes the call on
+its own thread and waits at most `SHARED_RPC_EXIT_TIMEOUT` (0.5 s, upstream
+`RPC_EXIT_TIMEOUT`), logging a timeout at debug level as upstream does, and
+leaves the call to finish by itself. The request building and the call are
+split out so the thread owns its data. Test:
+`withdrawing_from_an_unresponsive_shared_instance_is_bounded` (a listener
+that accepts and never authenticates; shutdown returns after the bound).
 
-**Final disposition:** Needs decision.
+**Final disposition:** Integrated.
 
 ### 8. `e96c81c3` — Added ability to filter destination types by hash
 
