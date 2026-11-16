@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Suite 21: Stamped emission — the asynchronous stamper queue end to end.
 #
-# Reticulum 1.6.0 can stamp the announces and path requests a node emits
-# (Transport.STAMP_DESTINATIONS / STAMP_PRS, both off by default on both
-# sides). The stamps are ground on a background stamper worker so the API
-# returns at once. This suite switches both flags on for node-a through the
-# `global.stamp_*` runtime config keys and checks, with real binaries over
-# TCP, that:
+# A node stamps the announces and path requests it emits
+# (Transport.STAMP_DESTINATIONS / STAMP_PRS, both on by default since
+# Reticulum 1.6.1). The stamps are ground on a background stamper worker so
+# the API returns at once. This suite drives both flags for node-a through
+# the `global.stamp_*` runtime config keys and checks, with real binaries
+# over TCP, that:
 #   - node-b validates and counts a stamped path request from node-a,
 #   - node-a's stamped announce is validated by node-b and node-c, which
 #     record the stamp value and the announced link request cost,
 #   - the destination stamp is persisted on node-a for reuse,
-#   - the flags read back as false again once reset.
+#   - the flags read back as true again once reset.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,7 +56,7 @@ runtime_reset() {
   docker exec node-a rns-ctl config reset "$1" --config /data >/dev/null 2>&1 || true
 }
 
-# Never leave stamping switched on for later suites.
+# Always leave the stamping defaults in place for later suites.
 trap 'runtime_reset global.stamp_destinations; runtime_reset global.stamp_path_requests' EXIT
 
 # Stamped path requests accepted on any interface of the node at PORT.
@@ -101,8 +101,8 @@ poll_stamp_value() {
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
-assert_eq "$(runtime_get global.stamp_path_requests)" "false" "stamp_path_requests defaults to false"
-assert_eq "$(runtime_get global.stamp_destinations)" "false" "stamp_destinations defaults to false"
+assert_eq "$(runtime_get global.stamp_path_requests)" "true" "stamp_path_requests defaults to true"
+assert_eq "$(runtime_get global.stamp_destinations)" "true" "stamp_destinations defaults to true"
 
 # ── Stamped path request ─────────────────────────────────────────────────────
 # node-c announces a destination; node-a, with STAMP_PRS on, asks node-b for
@@ -165,7 +165,7 @@ fi
 
 runtime_reset global.stamp_destinations
 runtime_reset global.stamp_path_requests
-assert_eq "$(runtime_get global.stamp_destinations)" "false" "stamp_destinations reset to default"
-assert_eq "$(runtime_get global.stamp_path_requests)" "false" "stamp_path_requests reset to default"
+assert_eq "$(runtime_get global.stamp_destinations)" "true" "stamp_destinations reset to default"
+assert_eq "$(runtime_get global.stamp_path_requests)" "true" "stamp_path_requests reset to default"
 
 suite_result "21_stamped_emission"
