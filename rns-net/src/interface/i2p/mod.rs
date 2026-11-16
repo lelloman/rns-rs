@@ -377,6 +377,94 @@ fn load_or_generate_keypair(
     }
 }
 
+/// How long upstream waits before setting a tunnel up again after the SAM
+/// bridge failed (or could not be reached): an outbound peer's tunnel job
+/// retries after 8 seconds.
+const PEER_TUNNEL_RETRY_WAIT: Duration = Duration::from_secs(8);
+
+/// How long upstream waits before setting the interface's own server
+/// tunnel up again after the SAM bridge failed.
+const SERVER_TUNNEL_RETRY_WAIT: Duration = Duration::from_secs(15);
+
+impl I2pConfig {
+    /// How long to wait before trying the SAM bridge again. One session
+    /// serves every stream here, so it is retried as often as the first of
+    /// upstream's tunnel jobs that needs it would retry: the outbound
+    /// peers', if there are any.
+    fn sam_retry_wait(&self) -> Duration {
+        if self.peers.iter().any(|peer| !peer.trim().is_empty()) {
+            PEER_TUNNEL_RETRY_WAIT
+        } else {
+            SERVER_TUNNEL_RETRY_WAIT
+        }
+    }
+}
+
+/// Open the interface's SAM session: load (or generate) its keys, create
+/// the session, which lasts as long as the returned control socket stays
+/// open, and learn its own address. Returns the control socket and the
+/// session id.
+fn open_session(
+    config: &I2pConfig,
+    sam_addr: &SocketAddr,
+) -> Result<(std::net::TcpStream, String), SamError> {
+    let keypair = load_or_generate_keypair(
+        sam_addr,
+        &config.storage_dir,
+        &config.name,
+        config.underlay_mark,
+    )?;
+    let priv_b64 = sam::i2p_base64_encode(&keypair.private_key);
+
+    // We use a single session for all streams (outbound + inbound).
+    // Session ID must be unique; use the interface name sanitized.
+    let session_id = sanitize_name(&config.name);
+
+    log::info!("[{}] creating SAM session (id={})", config.name, session_id);
+    let mut control_socket =
+        sam::session_create_with_mark(sam_addr, &session_id, &priv_b64, config.underlay_mark)?;
+
+    // Look up our own destination via NAMING LOOKUP "ME" on the session control socket.
+    // "ME" requires a session context on the same connection.
+    match sam::naming_lookup_on(&mut control_socket, "ME") {
+        Ok(our_dest) => {
+            let b32 = our_dest.base32_address();
+            log::info!("[{}] I2P address: {}", config.name, b32);
+            I2pEndpoint::set_address(&config.endpoint, config.connectable, b32);
+        }
+        Err(e) => {
+            log::warn!("[{}] could not look up own destination: {}", config.name, e);
+        }
+    }
+    Ok((control_socket, session_id))
+}
+
+/// [`open_session`], tried again every `wait` until it succeeds: upstream
+/// keeps retrying its tunnels while the SAM bridge is unavailable, so the
+/// interface comes up once the bridge does.
+fn open_session_retrying(
+    config: &I2pConfig,
+    sam_addr: &SocketAddr,
+    wait: Duration,
+) -> (std::net::TcpStream, String) {
+    loop {
+        match open_session(config, sam_addr) {
+            Ok(session) => return session,
+            Err(e) => {
+                log::error!(
+                    "Error while while configuring I2PInterface[{}]: {}",
+                    config.name,
+                    e
+                );
+                log::error!(
+                    "Check that I2P is installed and running, and that SAM is enabled. Retrying tunnel setup later."
+                );
+                thread::sleep(wait);
+            }
+        }
+    }
+}
+
 /// Start the I2P interface coordinator. All peer connections are registered
 /// as dynamic interfaces via InterfaceUp events.
 pub fn start(config: I2pConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
@@ -427,35 +515,8 @@ fn coordinator(
         .parse()
         .map_err(|e| SamError::Io(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
 
-    // Load or generate keypair
-    let keypair = load_or_generate_keypair(
-        &sam_addr,
-        &config.storage_dir,
-        &config.name,
-        config.underlay_mark,
-    )?;
-    let priv_b64 = sam::i2p_base64_encode(&keypair.private_key);
-
-    // We use a single session for all streams (outbound + inbound).
-    // Session ID must be unique; use the interface name sanitized.
-    let session_id = sanitize_name(&config.name);
-
-    log::info!("[{}] creating SAM session (id={})", config.name, session_id);
-    let mut control_socket =
-        sam::session_create_with_mark(&sam_addr, &session_id, &priv_b64, config.underlay_mark)?;
-
-    // Look up our own destination via NAMING LOOKUP "ME" on the session control socket.
-    // "ME" requires a session context on the same connection.
-    match sam::naming_lookup_on(&mut control_socket, "ME") {
-        Ok(our_dest) => {
-            let b32 = our_dest.base32_address();
-            log::info!("[{}] I2P address: {}", config.name, b32);
-            I2pEndpoint::set_address(&config.endpoint, config.connectable, b32);
-        }
-        Err(e) => {
-            log::warn!("[{}] could not look up own destination: {}", config.name, e);
-        }
-    }
+    let (control_socket, session_id) =
+        open_session_retrying(&config, &sam_addr, config.sam_retry_wait());
 
     // Spawn outbound peer threads
     for peer in peers {
@@ -931,6 +992,68 @@ mod tests {
             "upstream I2PInterfacePeer.HW_MTU, and what the decoder accepts"
         );
         assert!(!peer_info(InterfaceId(2), "peer.b32.i2p", ic, false).wants_tunnel);
+    }
+
+    #[test]
+    fn sam_bridge_is_retried_as_often_as_upstream_retries_tunnels() {
+        let mut config = I2pConfig::default();
+        assert_eq!(config.sam_retry_wait(), Duration::from_secs(15));
+        config.peers = vec!["a.b32.i2p".into()];
+        assert_eq!(config.sam_retry_wait(), Duration::from_secs(8));
+    }
+
+    fn read_command(stream: &mut std::net::TcpStream) -> String {
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        while stream.read(&mut byte).unwrap() == 1 && byte[0] != b'\n' {
+            line.push(byte[0]);
+        }
+        String::from_utf8(line).unwrap()
+    }
+
+    #[test]
+    fn session_is_opened_once_the_sam_bridge_appears() {
+        // Upstream keeps retrying its tunnels while the bridge is down.
+        let port = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            probe.local_addr().unwrap().port()
+        };
+        let storage_dir =
+            std::env::temp_dir().join(format!("rns-i2p-retry-{}-{}", std::process::id(), port));
+        std::fs::create_dir_all(&storage_dir).unwrap();
+        // Existing keys: the session is all the bridge is asked for.
+        std::fs::write(key_file_path(&storage_dir, "I2P test"), [7u8; 64]).unwrap();
+        let config = I2pConfig {
+            name: "I2P test".into(),
+            sam_port: port,
+            storage_dir: storage_dir.clone(),
+            ..I2pConfig::default()
+        };
+        let sam_addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let (opened_tx, opened) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let session = open_session_retrying(&config, &sam_addr, Duration::from_millis(100));
+            let _ = opened_tx.send(session);
+        });
+
+        // The bridge cannot be reached: the setup keeps waiting.
+        assert!(opened.recv_timeout(Duration::from_millis(500)).is_err());
+
+        let bridge = std::net::TcpListener::bind(sam_addr).unwrap();
+        let (mut stream, _) = bridge.accept().unwrap();
+        assert!(read_command(&mut stream).starts_with("HELLO VERSION"));
+        stream
+            .write_all(b"HELLO REPLY RESULT=OK VERSION=3.1\n")
+            .unwrap();
+        assert!(read_command(&mut stream).starts_with("SESSION CREATE STYLE=STREAM ID=I2P_test"));
+        stream.write_all(b"SESSION STATUS RESULT=OK\n").unwrap();
+        assert!(read_command(&mut stream).starts_with("NAMING LOOKUP NAME=ME"));
+        stream
+            .write_all(b"NAMING REPLY RESULT=KEY_NOT_FOUND NAME=ME\n")
+            .unwrap();
+        let (_control, session_id) = opened.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(session_id, "I2P_test");
+        let _ = std::fs::remove_dir_all(storage_dir);
     }
 
     fn template() -> crate::interface::DynamicInterfaceTemplate {
