@@ -1501,7 +1501,18 @@ impl RnsNode {
                 id
             }
         } else {
-            storage::load_or_create_identity(&paths.identities)?
+            // The transport identity lives in storage/transport_identity, as
+            // upstream keeps it, so a config directory keeps its transport
+            // identity whichever implementation runs it. Directories written
+            // before only hold storage/identities/identity: carry that over.
+            let transport_identity_path = storage::transport_identity_path(&paths);
+            if transport_identity_path.exists() {
+                storage::load_identity(&transport_identity_path)?
+            } else {
+                let identity = storage::load_or_create_identity(&paths.identities)?;
+                storage::save_identity(&identity, &transport_identity_path)?;
+                identity
+            }
         };
         // Python clients derive their RPC key from this persisted identity, even
         // when their non-transport instance uses an ephemeral network identity.
