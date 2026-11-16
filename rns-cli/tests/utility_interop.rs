@@ -393,6 +393,20 @@ enum Side {
 /// the other's: every later client then derives a key the daemon rejects
 /// ("digest received was wrong"). The RPC server only listens once the
 /// daemon's identity is on disk, so wait for it before starting clients.
+/// Reads a file an rncp listener received. The sender exits once the
+/// resource is proved, and the listener proves before it saves the file,
+/// so the file can appear a moment after the sender returns.
+fn read_received(path: &Path, expected: &[u8]) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let data = fs::read(path).unwrap_or_default();
+        if data == expected || Instant::now() >= deadline {
+            return data;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn wait_for_rpc(instance: &str, port: u16, process: &mut ProcessGuard, description: &str) {
     let address = RpcAddr::local(instance, port);
     let deadline = Instant::now() + START_TIMEOUT;
@@ -895,7 +909,10 @@ fn python_rncp_client_sends_to_rust_listener() {
         &destination,
     );
     assert_success(&output, "Python rncp to Rust listener");
-    assert_eq!(fs::read(receive.join("python-send.bin")).unwrap(), expected);
+    assert_eq!(
+        read_received(&receive.join("python-send.bin"), &expected),
+        expected
+    );
     let output = rncp_fetch(
         &harness,
         Implementation::Python,
@@ -946,7 +963,10 @@ fn rust_rncp_client_registers_with_a_filtering_shared_instance() {
         &destination,
     );
     assert_success(&output, "Rust rncp through a filtering shared instance");
-    assert_eq!(fs::read(receive.join("filtered.bin")).unwrap(), expected);
+    assert_eq!(
+        read_received(&receive.join("filtered.bin"), &expected),
+        expected
+    );
 }
 
 #[test]
@@ -997,7 +1017,7 @@ fn python_rncp_client_registers_with_a_filtering_rust_instance() {
     );
     assert_success(&output, "Python rncp through a filtering Rust instance");
     assert_eq!(
-        fs::read(receive.join("python-filtered.bin")).unwrap(),
+        read_received(&receive.join("python-filtered.bin"), &expected),
         expected
     );
 }
@@ -1043,7 +1063,10 @@ fn rust_rncp_client_sends_to_python_listener() {
         &destination,
     );
     assert_success_with_process(&output, "Rust rncp to Python listener", &listener, &harness);
-    assert_eq!(fs::read(receive.join("rust-send.bin")).unwrap(), expected);
+    assert_eq!(
+        read_received(&receive.join("rust-send.bin"), &expected),
+        expected
+    );
     let output = rncp_fetch(
         &harness,
         Implementation::Rust,
