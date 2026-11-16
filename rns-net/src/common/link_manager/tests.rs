@@ -1363,6 +1363,32 @@ fn responder_acknowledges_ff_probe_after_outbound_silence() {
     assert_eq!(packets[0].data(), [0xfe]);
 }
 
+/// Python's `Link.__receive` reactivates a STALE link before it looks at
+/// the packet, so a stale responder answers the probe that revives it.
+#[test]
+fn stale_responder_reactivates_and_acknowledges_probe() {
+    let (_, mut responder, link_id) = setup_active_link();
+    let now = time::now();
+    let engine = &mut responder.links.get_mut(&link_id).unwrap().engine;
+    let keepalive = engine.keepalive_interval();
+    engine.record_outbound(now - keepalive - 1.0, false);
+    engine.tick(now + 10_000.0);
+    assert_eq!(engine.state(), LinkState::Stale);
+    let (raw, packet) = packed_keepalive(&link_id, &[0xff]);
+
+    let actions = responder.handle_local_delivery(
+        packet.destination_hash,
+        &raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut OsRng,
+    );
+    assert_eq!(responder.link_state(&link_id), Some(LinkState::Active));
+    let packets = keepalive_packets(&actions);
+    assert_eq!(packets.len(), 1);
+    assert_eq!(packets[0].data(), [0xfe]);
+}
+
 #[test]
 fn recent_responder_traffic_suppresses_keepalive_ack() {
     let (_, mut responder, link_id) = setup_active_link();

@@ -1786,6 +1786,10 @@ impl LinkManager {
                 }
                 constants::CONTEXT_KEEPALIVE => {
                     let received_at = time::now();
+                    // As in Python's `Link.__receive`, the packet first
+                    // counts as inbound, which reactivates a STALE link, so
+                    // a stale responder still answers the probe.
+                    let inbound_actions = link.engine.record_inbound(received_at);
                     // On a direct path (an rns-rs peer) every probe is
                     // answered: the initiator's inbound timer then never
                     // depends on the reply-suppression rule, and a stale
@@ -1796,7 +1800,6 @@ impl LinkManager {
                         || (link.direct_route.is_some()
                             && !link.engine.is_initiator()
                             && packet.data() == [0xff]);
-                    let inbound_actions = link.engine.record_inbound(received_at);
                     let link_id = *link.engine.link_id();
                     LinkDataResult::Keepalive {
                         link_id,
