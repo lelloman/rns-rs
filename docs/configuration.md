@@ -217,10 +217,13 @@ A destination's first announce therefore goes out only once its stamp is
 found, which at the default value of 25 takes from seconds to minutes
 depending on the CPU; later announces reuse the persisted stamp, and a
 program that announces and exits at once can exit before the first one is
-sent, as upstream's can. A node with no stamp store, such as a client of a
-shared instance or a node started in code without a storage directory,
-announces unstamped: it has nowhere to keep a stamp. Upstream clients stamp
-their own announces; rns-rs shared clients do not yet.
+sent, as upstream's can (`rnid -a` for an identity without a stored stamp,
+for one). A client of a shared instance stamps its own announces and path
+requests with its own `[stamps]` section, as upstream's do, and keeps its
+destination stamps under the config directory's `storage/stamps`, next to the
+instance's. A node with no stamp store, such as a client started with
+`RnsNode::connect_shared` or a node started in code without a storage
+directory, announces unstamped: it has nowhere to keep a stamp.
 
 The emission switches are also runtime config keys, so a running node can be
 switched to unstamped emission and back without a restart. `global.stamp_link_requests`
