@@ -333,7 +333,10 @@ impl LinkManager {
             None => return Vec::new(),
         };
 
-        if link.engine.state() != LinkState::Active {
+        // As with Python's `Link.request`, a request that fits in a packet
+        // also goes out on a STALE link; one sent as a resource needs an
+        // ACTIVE link, like any resource.
+        if !matches!(link.engine.state(), LinkState::Active | LinkState::Stale) {
             return Vec::new();
         }
 
@@ -348,6 +351,9 @@ impl LinkManager {
         pack_msgpack_or_bin(data, &mut plaintext);
 
         if plaintext.len() > link.engine.mdu() {
+            if link.engine.state() != LinkState::Active {
+                return Vec::new();
+            }
             let request_id = rns_core::hash::truncated_hash(&plaintext);
             let now = time::now();
             let senders = match Self::build_resource_senders(

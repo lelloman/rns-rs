@@ -318,8 +318,8 @@ of these shows the direct path failed:
 The side that falls back removes its direct interface, reports the loss to
 the application (`on_direct_connect_lost`; `direct_lost` in rns-ctl's link
 events) and, unless the peer told it, sends `FALLBACK` with `r = true` over
-the original route. Direct Link signalling is sent on a stale link too,
-which other link packets are not. The peer falls back too and answers with `FALLBACK`
+the original route. Direct Link signalling, like any link packet, is sent on
+a stale link too. The peer falls back too and answers with `FALLBACK`
 (`r = false`); that answer is also inbound traffic that revives a link that
 went stale. The link itself is never closed by a direct-path failure, and
 the application keeps using it unchanged. A new upgrade can be proposed

@@ -6632,6 +6632,40 @@ fn responder_on_a_direct_route_answers_every_keepalive() {
     assert!(replies_to_keepalive(&mut resp_mgr, &link_id));
 }
 
+/// Python's `Packet.send` only refuses a CLOSED link, so packets and
+/// single-packet requests still go out on a STALE one; a request sent as a
+/// resource does not, as resources need an ACTIVE link.
+#[test]
+fn packets_and_requests_go_out_on_a_stale_link() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let engine = &mut init_mgr.links.get_mut(&link_id).unwrap().engine;
+    engine.tick(time::now() + 10_000.0);
+    assert_eq!(engine.state(), LinkState::Stale);
+    let mut rng = OsRng;
+    let actions = init_mgr
+        .try_send_on_link(&link_id, b"data", constants::CONTEXT_NONE, &mut rng)
+        .expect("a stale link still sends");
+    assert!(!extract_any_send_packet(&actions).is_empty());
+
+    let actions = init_mgr.send_request(&link_id, "/path", b"small", &mut rng);
+    let raw = extract_any_send_packet(&actions);
+    assert_eq!(
+        RawPacket::unpack(&raw).unwrap().context,
+        constants::CONTEXT_REQUEST
+    );
+
+    let large = vec![0x55; 4 * init_mgr.links[&link_id].engine.mdu()];
+    assert!(init_mgr
+        .send_request(&link_id, "/path", &large, &mut rng)
+        .is_empty());
+
+    // A closed link sends nothing.
+    init_mgr.links.get_mut(&link_id).unwrap().engine.teardown();
+    assert!(init_mgr
+        .try_send_on_link(&link_id, b"data", constants::CONTEXT_NONE, &mut rng)
+        .is_err());
+}
+
 #[test]
 fn direct_link_signalling_still_goes_out_on_a_stale_link() {
     let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
@@ -6639,9 +6673,6 @@ fn direct_link_signalling_still_goes_out_on_a_stale_link() {
     engine.tick(time::now() + 10_000.0);
     assert_eq!(engine.state(), LinkState::Stale);
     let mut rng = OsRng;
-    assert!(init_mgr
-        .try_send_on_link(&link_id, b"data", constants::CONTEXT_NONE, &mut rng)
-        .is_err());
     let actions = init_mgr.send_direct_link_signal(&link_id, b"\x01\x05signal", &mut rng);
     let raw = extract_any_send_packet(&actions);
     assert_eq!(

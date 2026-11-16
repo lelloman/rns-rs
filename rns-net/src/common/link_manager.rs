@@ -2124,12 +2124,12 @@ impl LinkManager {
         context: u8,
         rng: &mut dyn Rng,
     ) -> Result<Vec<LinkManagerAction>, crate::event::LinkDatagramError> {
-        self.pack_on_link(link_id, plaintext, context, false, rng)
+        self.pack_on_link(link_id, plaintext, context, rng)
     }
 
-    /// Send Direct Link signalling on a link. Unlike other link packets it
-    /// also goes out while the link is stale: falling back from a silent
-    /// direct path is what can revive the link.
+    /// Send Direct Link signalling on a link. Like any link packet it also
+    /// goes out while the link is stale: falling back from a silent direct
+    /// path is what can revive the link.
     pub fn send_direct_link_signal(
         &self,
         link_id: &LinkId,
@@ -2140,7 +2140,6 @@ impl LinkManager {
             link_id,
             framed,
             rns_core::holepunch::CONTEXT_DIRECT_LINK,
-            true,
             rng,
         )
         .unwrap_or_default()
@@ -2151,7 +2150,6 @@ impl LinkManager {
         link_id: &LinkId,
         plaintext: &[u8],
         context: u8,
-        allow_stale: bool,
         rng: &mut dyn Rng,
     ) -> Result<Vec<LinkManagerAction>, crate::event::LinkDatagramError> {
         use crate::event::LinkDatagramError;
@@ -2160,11 +2158,9 @@ impl LinkManager {
             None => return Err(LinkDatagramError::LinkNotFound),
         };
 
-        let sendable = match link.engine.state() {
-            LinkState::Active => true,
-            LinkState::Stale => allow_stale,
-            _ => false,
-        };
+        // Python's `Packet.send` only refuses a CLOSED link: a STALE one
+        // still sends, and the peer's answer is what reactivates it.
+        let sendable = matches!(link.engine.state(), LinkState::Active | LinkState::Stale);
         if !sendable {
             return Err(LinkDatagramError::LinkNotActive);
         }
