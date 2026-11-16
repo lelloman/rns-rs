@@ -248,7 +248,9 @@ fn peer_up(
     name: String,
 ) -> Event {
     match template {
-        // Only outbound peers want a tunnel (see `peer_info`).
+        // Only outbound peers want a tunnel (see `peer_info`). Each connect
+        // brings the peer up here, and the driver sends the synthesis as its
+        // first frame (upstream ad6c709e writes it while connecting).
         Some(_) if info.wants_tunnel => Event::InterfaceUp(client_id, Some(writer), None),
         Some(template) => Event::DynamicInterfaceUp {
             id: client_id,
