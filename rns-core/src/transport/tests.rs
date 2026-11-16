@@ -6835,6 +6835,17 @@ fn rediscovery_queue_is_throttled_deduplicated_and_bounded() {
 // =========================================================================
 
 fn signed_announce(seed: u8, aspect: &str) -> ([u8; 16], Vec<u8>) {
+    signed_announce_with(seed, aspect, [seed; 10], constants::CONTEXT_NONE)
+}
+
+/// A signed announce with the given random blob (whose last five bytes are
+/// the emission time) and packet context.
+fn signed_announce_with(
+    seed: u8,
+    aspect: &str,
+    random_hash: [u8; 10],
+    context: u8,
+) -> ([u8; 16], Vec<u8>) {
     let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[seed; 32]));
     let dest_hash =
         crate::destination::destination_hash("filtered", &[aspect], Some(identity.hash()));
@@ -6843,7 +6854,7 @@ fn signed_announce(seed: u8, aspect: &str) -> ([u8; 16], Vec<u8>) {
         &identity,
         &dest_hash,
         &name_hash,
-        &[seed; 10],
+        &random_hash,
         None,
         None,
     )
@@ -6855,17 +6866,17 @@ fn signed_announce(seed: u8, aspect: &str) -> ([u8; 16], Vec<u8>) {
         destination_type: constants::DESTINATION_SINGLE,
         packet_type: constants::PACKET_TYPE_ANNOUNCE,
     };
-    let raw = RawPacket::pack(
-        flags,
-        0,
-        &dest_hash,
-        None,
-        constants::CONTEXT_NONE,
-        &announce_data,
-    )
-    .unwrap()
-    .raw;
+    let raw = RawPacket::pack(flags, 0, &dest_hash, None, context, &announce_data)
+        .unwrap()
+        .raw;
     (dest_hash, raw)
+}
+
+/// A random blob emitted at `emitted` (seconds).
+fn blob_emitted_at(emitted: u64) -> [u8; 10] {
+    let mut blob = [0x5a; 10];
+    blob[5..10].copy_from_slice(&emitted.to_be_bytes()[3..8]);
+    blob
 }
 
 /// (filtered, filtered announce) for the inbound packet handled last.
@@ -7024,6 +7035,71 @@ fn held_and_released_announces_count_as_received() {
     assert_eq!(
         engine.take_announce_receipts(),
         vec![(InterfaceId(1), announce.len())]
+    );
+}
+
+#[test]
+fn held_announces_that_cannot_update_a_path_are_culled() {
+    // Upstream 85d36979: before releasing, ingress control drops held
+    // announces whose destination gained a path they can no longer update.
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut limited = make_interface(1, constants::MODE_FULL);
+    limited.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    limited.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    limited.started = 0.0;
+    engine.register_interface(limited);
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let now = 10_000.0;
+    let (stale, announce_stale_old) = signed_announce_with(
+        0x21,
+        "stale",
+        blob_emitted_at(9_000),
+        constants::CONTEXT_NONE,
+    );
+    let (_, announce_stale_new) = signed_announce_with(
+        0x21,
+        "stale",
+        blob_emitted_at(9_500),
+        constants::CONTEXT_NONE,
+    );
+    let (fresh, announce_fresh) = signed_announce_with(
+        0x22,
+        "fresh",
+        blob_emitted_at(9_000),
+        constants::CONTEXT_NONE,
+    );
+
+    for announce in [&announce_stale_old, &announce_fresh] {
+        engine.handle_inbound(InboundFrame::new(announce, InterfaceId(1), now), &mut rng);
+    }
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 2);
+
+    // A newer announce for the first destination arrives where nothing is
+    // held, so the held one can no longer update its path.
+    engine.handle_inbound(
+        InboundFrame::new(&announce_stale_new, InterfaceId(2), now),
+        &mut rng,
+    );
+    assert!(engine.has_path(&stale));
+
+    // While still bursting nothing is culled.
+    engine.tick(now + constants::IC_BURST_PENALTY + 1.0, &mut rng);
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 2);
+
+    engine.interfaces.get_mut(&InterfaceId(1)).unwrap().ia_freq = 0.0;
+    engine.tick(now + constants::IC_BURST_PENALTY + 2.0, &mut rng);
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
+    assert!(engine.has_path(&fresh));
+    let released = engine.take_released_traffic();
+    assert_eq!(released.len(), 1);
+    assert_eq!(released[0].size, announce_fresh.len());
+    assert_eq!(
+        engine.path_table[&stale]
+            .primary()
+            .unwrap()
+            .receiving_interface,
+        InterfaceId(2)
     );
 }
 

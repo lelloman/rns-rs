@@ -1,5 +1,48 @@
 use super::*;
 
+/// Whether an announce for `destination_hash`, received on `announce_iface`
+/// with announce payload `data`, passes upstream's
+/// `Transport.announce_prefilter`: true when the destination has no path, or
+/// when the announce could still update its path. A free function over the
+/// engine's tables so ingress control can call it while it holds its own
+/// state mutably.
+///
+/// The test assumes upstream's single path per destination. With
+/// `max_paths_per_destination` above 1 an older announce can still add an
+/// alternative path, and with `prefer_shorter_path` a shorter one can
+/// replace the path regardless of emission time, so both keep every
+/// announce.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn announce_passes_prefilter(
+    config: &TransportConfig,
+    path_table: &BTreeMap<[u8; 16], PathSet>,
+    path_states: &BTreeMap<[u8; 16], u8>,
+    interfaces: &BTreeMap<InterfaceId, InterfaceInfo>,
+    destination_hash: &[u8; 16],
+    data: &[u8],
+    announce_iface: InterfaceId,
+    now: f64,
+) -> bool {
+    if config.max_paths_per_destination > 1 || config.prefer_shorter_path {
+        return true;
+    }
+    let Some(existing) = path_table.get(destination_hash).and_then(PathSet::primary) else {
+        return true;
+    };
+    let Some(random_blob) = extract_random_blob(data) else {
+        return true;
+    };
+    let gravity = |iface: &InterfaceId| interfaces.get(iface).map(|info| info.gravity);
+    pathfinder::announce_prefilter(
+        existing,
+        timebase_from_random_blob(&random_blob),
+        gravity(&announce_iface).unwrap_or(0),
+        gravity(&existing.receiving_interface),
+        path_states.get(destination_hash) == Some(&constants::STATE_UNRESPONSIVE),
+        now,
+    )
+}
+
 impl TransportEngine {
     /// Periodic maintenance. Call regularly (e.g., every 250ms).
     pub fn tick(&mut self, now: f64, rng: &mut dyn Rng) -> Vec<TransportAction> {
@@ -178,12 +221,37 @@ impl TransportEngine {
             if !ingress_config.enabled {
                 continue;
             }
+            // Upstream 85d36979: held announces that can no longer update
+            // their destination's path are culled before one is released.
+            let (config, path_table, path_states, interfaces) = (
+                &self.config,
+                &self.path_table,
+                &self.path_states,
+                &self.interfaces,
+            );
+            let now = ctx.now;
+            let keep = |destination_hash: &[u8; 16], held: &ingress_control::HeldAnnounce| {
+                let Ok(packet) = RawPacket::unpack(&held.raw) else {
+                    return true;
+                };
+                announce_passes_prefilter(
+                    config,
+                    path_table,
+                    path_states,
+                    interfaces,
+                    destination_hash,
+                    packet.data(),
+                    held.receiving_interface,
+                    now,
+                )
+            };
             if let Some(held) = self.ingress_control.process_held_announces(
                 iface_id,
                 &ingress_config,
                 ia_freq,
                 started,
                 ctx.now,
+                keep,
             ) {
                 let released_actions = self.handle_inbound(
                     InboundFrame {

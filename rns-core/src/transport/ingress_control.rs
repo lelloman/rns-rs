@@ -225,7 +225,11 @@ impl IngressControl {
     ///
     /// Conditions: not currently limiting, held announces exist,
     /// now >= held_release, freq < threshold.
-    /// Selects the announce with the lowest hop count (closest source).
+    /// First drops every held announce for which `keep` returns false: one
+    /// that can no longer update its destination's path frees its slot
+    /// without being released (upstream 85d36979). Then selects the
+    /// announce with the lowest hop count (closest source); if none is
+    /// left, the release interval does not restart.
     pub fn process_held_announces(
         &mut self,
         interface: InterfaceId,
@@ -233,6 +237,7 @@ impl IngressControl {
         ia_freq: f64,
         interface_started: f64,
         now: f64,
+        mut keep: impl FnMut(&[u8; 16], &HeldAnnounce) -> bool,
     ) -> Option<HeldAnnounce> {
         if !config.enabled {
             return None;
@@ -260,6 +265,10 @@ impl IngressControl {
             return None;
         }
         state.burst_active = false;
+
+        state
+            .held_announces
+            .retain(|destination_hash, held| keep(destination_hash, held));
 
         // Find announce with lowest hops
         let best_key = state
@@ -552,7 +561,8 @@ mod tests {
                 &IngressControlConfig::enabled(),
                 1.0,
                 started,
-                now3
+                now3,
+                |_, _| true
             )
             .is_none());
 
@@ -564,6 +574,7 @@ mod tests {
             1.0,
             started,
             now4,
+            |_, _| true,
         );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 3);
@@ -623,6 +634,7 @@ mod tests {
             1.0,
             started,
             now + constants::IC_BURST_PENALTY + 1.0,
+            |_, _| true,
         );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 3);
@@ -680,6 +692,7 @@ mod tests {
             1.0,
             started,
             release_time,
+            |_, _| true,
         );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 2);
@@ -691,6 +704,7 @@ mod tests {
             1.0,
             started,
             release_time2,
+            |_, _| true,
         );
         assert!(released2.is_some());
         assert_eq!(released2.unwrap().hops, 5);
@@ -726,6 +740,7 @@ mod tests {
                 1.0,
                 started,
                 now,
+                |_, _| true,
             )
             .expect("held announce should release");
         assert_eq!(released.rx, rx);
@@ -915,6 +930,7 @@ mod tests {
             1.0,
             started,
             now,
+            |_, _| true,
         );
         assert!(released.is_some());
 
@@ -926,7 +942,8 @@ mod tests {
                 &IngressControlConfig::enabled(),
                 1.0,
                 started,
-                too_soon
+                too_soon,
+                |_, _| true
             )
             .is_none());
 
@@ -938,7 +955,8 @@ mod tests {
                 &IngressControlConfig::enabled(),
                 1.0,
                 started,
-                ok_time
+                ok_time,
+                |_, _| true
             )
             .is_some());
     }

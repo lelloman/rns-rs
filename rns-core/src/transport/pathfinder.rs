@@ -95,6 +95,42 @@ pub enum PathDecision {
     Reject,
 }
 
+/// Upstream `Transport.announce_prefilter` (the held-announce keep test of
+/// 85d36979, shared with inbound preprocessing since 096e6726): whether an
+/// announce for a destination that already has `existing` as its path could
+/// still update it. One emitted before the path's newest random blob cannot;
+/// one emitted at the same time can only if it arrived on an interface of
+/// higher gravity, or if the path is unresponsive. `path_gravity` is the
+/// gravity of the path's receiving interface, `None` when that interface is
+/// gone, which keeps the announce as upstream does for a path without one.
+///
+/// Emission times are compared as [`should_update_path`] compares them, so
+/// an implausibly-future emission time counts as unknown.
+pub fn announce_prefilter(
+    existing: &PathEntry,
+    announce_emitted_ts: u64,
+    announce_gravity: i64,
+    path_gravity: Option<i64>,
+    path_is_unresponsive: bool,
+    now: f64,
+) -> bool {
+    let Some(path_gravity) = path_gravity else {
+        return true;
+    };
+    let path_timebase = trusted_timebase_from_random_blobs(&existing.random_blobs, now);
+    let announce_emitted_ts = trusted_emission_time(announce_emitted_ts, now);
+    if announce_emitted_ts > path_timebase {
+        return true;
+    }
+    if announce_emitted_ts < path_timebase {
+        return false;
+    }
+    if announce_gravity > path_gravity {
+        return true;
+    }
+    path_is_unresponsive
+}
+
 /// Full path update decision tree from Transport.py:1604-1686.
 ///
 /// Determines whether an incoming announce should update the path table.
@@ -336,6 +372,37 @@ mod tests {
             used: 0.0,
             announce_raw: None,
         }
+    }
+
+    #[test]
+    fn announce_prefilter_keeps_only_announces_that_could_update_the_path() {
+        // Upstream `Transport.announce_prefilter` (85d36979, 096e6726).
+        let path = make_path_entry(2, &[make_blob(1000), make_blob(900)], 99_999.0);
+        let now = 5000.0;
+        let keeps = |emitted: u64, gravity: i64, unresponsive: bool| {
+            announce_prefilter(&path, emitted, gravity, Some(0), unresponsive, now)
+        };
+        // Emitted after the path's newest random blob.
+        assert!(keeps(1001, 0, false));
+        // Emitted before it.
+        assert!(!keeps(999, 0, false));
+        assert!(!keeps(999, 5, true));
+        // Emitted at the same time: higher gravity, or an unresponsive path.
+        assert!(!keeps(1000, 0, false));
+        assert!(keeps(1000, 1, false));
+        assert!(keeps(1000, 0, true));
+        // The path's receiving interface is gone.
+        assert!(announce_prefilter(&path, 999, 0, None, false, now));
+        // An implausibly-future emission time counts as unknown.
+        let far_future = (now as u64) + MAX_EMISSION_TIME_SKEW_SECS + 1;
+        assert!(!announce_prefilter(
+            &path,
+            far_future,
+            0,
+            Some(0),
+            false,
+            now
+        ));
     }
 
     #[test]
