@@ -89,7 +89,7 @@ part of `./tests/docker/run-all.sh`.
 ## Further reading
 
 The [Direct Link Protocol](direct-link-protocol.md) document is the full
-specification: terminology, the five protocol phases, the `DirectUdpInterface`
-behaviour, the facilitator protocol, failure modes, and security
-considerations. The hole-punch state machine itself lives in `rns-core`
+specification: the signalling format and capability check, the protocol
+phases, the `DirectUdpInterface` and its fallback, the facilitator protocol,
+failure modes and reasons, and security considerations. The hole-punch state machine itself lives in `rns-core`
 (`holepunch` module) so it can be reused by embedded targets.
