@@ -183,6 +183,12 @@ pub struct InterfaceInfo {
     pub is_local_client: bool,
     /// Whether this interface wants tunnel synthesis on connect.
     pub wants_tunnel: bool,
+    /// The interface's own hop limiter (upstream bb63dd44
+    /// `Interface.hop_limiter`): an inbound packet whose hop count is not
+    /// below it is a hop limiter hit, checked before the transport-wide
+    /// `[filter] hop_limiter`. `None` when unset, and for a configured 0,
+    /// which upstream treats as unset.
+    pub hop_limiter: Option<u8>,
     /// Tunnel ID associated with this interface, if any.
     pub tunnel_id: Option<[u8; 32]>,
     /// Maximum transmission unit for this interface in bytes.

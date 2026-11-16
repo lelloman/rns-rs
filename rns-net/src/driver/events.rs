@@ -270,11 +270,19 @@ impl Driver {
         };
         // `if not packet.hops < Transport.HOP_LIMITER: return
         // interface.hop_limiter_hit()` (Transport.py:2009), before the packet
-        // filter.
-        if decoded_packet.packet().hops >= self.hop_limiter {
+        // filter, and since upstream bb63dd44 first the same against the
+        // interface's own `hop_limiter`. `hop_limiter_hit` returns `None`, so
+        // `Transport.inbound` charges the frame to filtered bytes.
+        let hops = decoded_packet.packet().hops;
+        let interface_limit = self
+            .interfaces
+            .get(&interface_id)
+            .and_then(|entry| entry.info.hop_limiter);
+        if interface_limit.is_some_and(|limit| hops >= limit) || hops >= self.hop_limiter {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.hop_limiter_hits += 1;
             }
+            self.record_filtered_inbound(interface_id, received_size);
             return;
         }
         if let Some(packet_hash) = decoded_packet.packet_hash() {

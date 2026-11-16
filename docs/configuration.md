@@ -345,6 +345,21 @@ read and logs a warning.
   hop_limiter = 14
 ```
 
+An interface section can set its own `hop_limiter` (upstream `bb63dd44`),
+checked before the instance-wide one, to limit hops on some interfaces only.
+It is clamped to 0-128, and `0` leaves the interface without a limit of its
+own, as upstream. Peers spawned by a TCP server, Backbone, I2P or Weave
+interface inherit it; Auto and local client peers do not, as upstream.
+
+```ini
+[interfaces]
+  [[Public Backbone]]
+    type = BackboneInterface
+    listen_on = 0.0.0.0
+    port = 4242
+    hop_limiter = 8
+```
+
 Applications ask for the types they need with
 `RnsNode::wants_destination_type` (upstream
 `Reticulum.wants_destination_type`) and can drop one again with

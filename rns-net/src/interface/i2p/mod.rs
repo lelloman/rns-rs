@@ -208,6 +208,7 @@ fn peer_info(
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: outbound,
+        hop_limiter: None,
         tunnel_id: None,
         // Upstream's I2PInterfacePeer HW_MTU, which the HDLC decoder also
         // enforces: a larger one would let links negotiate packets that
@@ -1009,6 +1010,7 @@ impl InterfaceFactory for I2pFactory {
                 ifac: ctx.ifac,
                 mode: ctx.mode,
                 gravity: ctx.gravity,
+                hop_limiter: ctx.hop_limiter,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
@@ -1191,6 +1193,7 @@ mod tests {
             ifac: None,
             mode: constants::MODE_FULL,
             gravity: 0,
+            hop_limiter: None,
             recursive_prs: false,
             announces_from_internal: true,
             announces_to_internal: None,

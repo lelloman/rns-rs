@@ -1433,6 +1433,7 @@ impl InterfaceFactory for RNodeFactory {
                 announce_cap: rns_core::constants::ANNOUNCE_CAP,
                 is_local_client: false,
                 wants_tunnel: false,
+                hop_limiter: None,
                 tunnel_id: None,
                 // Upstream RNodeInterface.HW_MTU. Links never negotiate
                 // above the default over a radio (not `mtu_upgradable`).

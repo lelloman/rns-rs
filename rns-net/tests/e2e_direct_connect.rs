@@ -138,6 +138,7 @@ fn interface(type_name: &str, config: Box<dyn rns_net::InterfaceConfigData>) -> 
         config_data: config,
         mode: MODE_FULL,
         gravity: 0,
+        hop_limiter: None,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,

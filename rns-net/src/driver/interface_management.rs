@@ -231,6 +231,7 @@ impl Driver {
             next_dynamic_id: self.next_dynamic_interface_id.clone(),
             mode: config.mode,
             gravity: config.gravity,
+            hop_limiter: config.hop_limiter,
             recursive_prs: config.recursive_prs,
             announces_from_internal: config.announces_from_internal,
             announces_to_internal: config.announces_to_internal,
@@ -268,6 +269,7 @@ impl Driver {
                     ifac_state,
                     ifac_runtime: &ifac_runtime,
                     stamp_costs: config.stamp_costs,
+                    hop_limiter: config.hop_limiter,
                     display_name: display.interface.take(),
                 });
                 (control, vec![id])
@@ -300,6 +302,7 @@ impl Driver {
                         ifac_state: sub_ifac,
                         ifac_runtime: &ifac_runtime,
                         stamp_costs: config.stamp_costs,
+                        hop_limiter: config.hop_limiter,
                         display_name,
                     });
                 }

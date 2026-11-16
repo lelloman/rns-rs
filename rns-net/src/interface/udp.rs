@@ -408,6 +408,7 @@ impl InterfaceFactory for UdpFactory {
             announce_cap: rns_core::constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            hop_limiter: None,
             tunnel_id: None,
             mtu: HW_MTU,
             mtu_upgradable: false,

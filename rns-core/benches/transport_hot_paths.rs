@@ -60,6 +60,7 @@ fn make_interface(id: u64, mode: u8, is_local_client: bool) -> InterfaceInfo {
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client,
         wants_tunnel: false,
+        hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,
         mtu_upgradable: false,

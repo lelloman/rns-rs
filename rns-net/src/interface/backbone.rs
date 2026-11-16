@@ -988,6 +988,7 @@ impl Server {
             announce_cap: constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            hop_limiter: None,
             tunnel_id: None,
             mtu: SERVER_PEER_MTU,
             mtu_upgradable: true,
@@ -2294,6 +2295,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     // Synthesize a tunnel on each connect, as upstream's
                     // BackboneClientInterface does.
                     wants_tunnel: true,
+                    hop_limiter: None,
                     tunnel_id: None,
                     mtu: cfg.hw_mtu() as u32,
                     mtu_upgradable: true,
@@ -2341,6 +2343,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                         ifac: ctx.ifac,
                         mode: ctx.mode,
                         gravity: ctx.gravity,
+                        hop_limiter: ctx.hop_limiter,
                         recursive_prs: ctx.recursive_prs,
                         announces_from_internal: ctx.announces_from_internal,
                         announces_to_internal: ctx.announces_to_internal,

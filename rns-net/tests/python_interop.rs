@@ -423,6 +423,7 @@ fn start_rust_node_with(
                 }),
                 mode: MODE_FULL,
                 gravity: 0,
+                hop_limiter: None,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
