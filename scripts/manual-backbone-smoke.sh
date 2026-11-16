@@ -424,8 +424,11 @@ wait_backbone_interface() {
   local status=""
   while (( SECONDS < deadline )); do
     status="$("$CTL_BIN" --config "$dir" status -j 2>/dev/null || true)"
+    # The configured name is `short_name`; `name` is upstream's
+    # "BackboneInterface[<name>/<host>:<port>]". Older builds put the
+    # configured name in `name`, so accept either.
     if jq -e --arg name "Backbone smoke via ${name}" \
-      '.interfaces[]? | select(.name == $name and .status == true)' \
+      '.interfaces[]? | select((.short_name == $name or .name == $name) and .status == true)' \
       >/dev/null 2>&1 <<<"$status"; then
       stable=$((stable + 1))
       if (( stable >= 3 )); then
