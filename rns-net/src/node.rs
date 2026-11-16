@@ -88,6 +88,16 @@ fn parse_interface_gravity(value: Option<&str>, default_gravity: i64) -> i64 {
         .unwrap_or(default_gravity)
 }
 
+/// Parse an interface's `hop_limiter` option (upstream bb63dd44): `as_int`,
+/// clamped to `0..=PATHFINDER_M`. Upstream checks it as a truth value, so 0
+/// leaves the interface without a limiter of its own, as does a value that
+/// is not an integer.
+pub(crate) fn parse_interface_hop_limiter(value: Option<&str>) -> Option<u8> {
+    let limit = value?.trim().parse::<i64>().ok()?;
+    let limit = limit.clamp(0, i64::from(rns_core::constants::PATHFINDER_M)) as u8;
+    (limit > 0).then_some(limit)
+}
+
 /// Apply Reticulum's mode normalization for discoverable interfaces.
 fn normalize_discovery_mode(
     interface_type: &str,
@@ -740,6 +750,8 @@ pub(crate) struct StartedInterface<'a> {
     pub(crate) ifac_state: Option<crate::ifac::IfacState>,
     pub(crate) ifac_runtime: &'a crate::driver::IfacRuntimeConfig,
     pub(crate) stamp_costs: rns_core::transport::types::InterfaceStampCosts,
+    /// The interface's own `hop_limiter` (upstream bb63dd44).
+    pub(crate) hop_limiter: Option<u8>,
     /// Upstream's display name, when it shows more than `{type}[{name}]`.
     pub(crate) display_name: Option<String>,
 }
@@ -756,6 +768,7 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
         ifac_state,
         ifac_runtime,
         stamp_costs,
+        hop_limiter,
         display_name,
     } = params;
     match display_name {
@@ -767,6 +780,7 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
         }
     }
     info.stamp_costs = stamp_costs;
+    info.hop_limiter = hop_limiter;
     driver.apply_interface_announce_limits(&mut info);
     driver.apply_announce_rate_defaults(&mut info);
     driver.apply_ingress_control_defaults(&mut info);
@@ -1090,6 +1104,8 @@ pub struct InterfaceConfig {
     pub config_data: Box<dyn crate::interface::InterfaceConfigData>,
     pub mode: u8,
     pub gravity: i64,
+    /// The interface's own `hop_limiter` (upstream bb63dd44).
+    pub hop_limiter: Option<u8>,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
@@ -1294,6 +1310,9 @@ pub(crate) fn parse_managed_interface(
         config_data,
         mode,
         gravity,
+        hop_limiter: parse_interface_hop_limiter(
+            iface.params.get("hop_limiter").map(String::as_str),
+        ),
         recursive_prs,
         announces_from_internal,
         announces_to_internal,
@@ -1687,6 +1706,9 @@ impl RnsNode {
                 config_data,
                 mode: iface_mode,
                 gravity,
+                hop_limiter: parse_interface_hop_limiter(
+                    iface.params.get("hop_limiter").map(String::as_str),
+                ),
                 recursive_prs,
                 announces_from_internal,
                 announces_to_internal,
@@ -2631,6 +2653,7 @@ impl RnsNode {
                 next_dynamic_id: next_dynamic_id.clone(),
                 mode: iface_config.mode,
                 gravity: iface_config.gravity,
+                hop_limiter: iface_config.hop_limiter,
                 recursive_prs: iface_config.recursive_prs,
                 announces_from_internal: iface_config.announces_from_internal,
                 announces_to_internal: iface_config.announces_to_internal,
@@ -2701,6 +2724,7 @@ impl RnsNode {
                         ifac_state,
                         ifac_runtime: &ifac_runtime,
                         stamp_costs: iface_config.stamp_costs,
+                        hop_limiter: iface_config.hop_limiter,
                         display_name: display.interface.take(),
                     });
                 }
@@ -2766,6 +2790,7 @@ impl RnsNode {
                             ifac_state: sub_ifac,
                             ifac_runtime: &ifac_runtime,
                             stamp_costs: iface_config.stamp_costs,
+                            hop_limiter: iface_config.hop_limiter,
                             display_name,
                         });
                     }
@@ -5771,6 +5796,7 @@ mod tests {
             announce_cap: rns_core::constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            hop_limiter: None,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
             mtu_upgradable: false,
@@ -5814,6 +5840,7 @@ mod tests {
                 size: 16,
             },
             stamp_costs: Default::default(),
+            hop_limiter: None,
             display_name: None,
         });
 
@@ -5896,6 +5923,7 @@ mod tests {
                     size: 16,
                 },
                 stamp_costs: Default::default(),
+                hop_limiter: None,
                 display_name: None,
             });
             driver.interfaces[&id].info.clone()
@@ -5974,6 +6002,7 @@ mod tests {
                 destination_cost: None,
                 pr_cost: Some(rns_core::stamp::StampCost::from_f64(12.25)),
             },
+            hop_limiter: None,
             display_name: None,
         });
 
@@ -7391,6 +7420,22 @@ enable_transport = True
         assert_eq!(parsed_value(0), Some(true));
         assert_eq!(parsed_value(1), Some(false));
         assert_eq!(parsed_value(2), None);
+    }
+
+    #[test]
+    fn interface_hop_limiter_parser_clamps_and_treats_zero_as_unset() {
+        // Upstream bb63dd44: `as_int`, clamped to 0..=PATHFINDER_M, and 0 is
+        // falsy where it is checked.
+        assert_eq!(parse_interface_hop_limiter(Some("5")), Some(5));
+        assert_eq!(parse_interface_hop_limiter(Some(" 12 ")), Some(12));
+        assert_eq!(
+            parse_interface_hop_limiter(Some("500")),
+            Some(rns_core::constants::PATHFINDER_M)
+        );
+        assert_eq!(parse_interface_hop_limiter(Some("0")), None);
+        assert_eq!(parse_interface_hop_limiter(Some("-3")), None);
+        assert_eq!(parse_interface_hop_limiter(Some("many")), None);
+        assert_eq!(parse_interface_hop_limiter(None), None);
     }
 
     #[test]

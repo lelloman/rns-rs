@@ -155,6 +155,7 @@ pub fn run(role: &str, port: u16, c: Case) -> Result<()> {
                 config_data,
                 mode: constants::MODE_FULL,
                 gravity: 0,
+                hop_limiter: None,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,

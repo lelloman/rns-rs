@@ -2110,6 +2110,7 @@ fn make_interface_info(id: u64) -> InterfaceInfo {
         announce_cap: rns_core::constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: false,
+        hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,
         mtu_upgradable: false,
@@ -4424,6 +4425,55 @@ fn packet_filter_protocol_rejections_are_not_counted_as_duplicate_hits() {
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
     assert_eq!(stats.protocol_violations, 2);
     assert_eq!(stats.packet_filter_hits, 0);
+}
+
+#[test]
+fn an_interface_hop_limiter_applies_before_the_transport_one() {
+    // Upstream bb63dd44: an interface's own `hop_limiter` drops what the
+    // transport-wide limiter would let through, on that interface only.
+    // The dropped frame is filtered traffic: `hop_limiter_hit` returns None.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "limited");
+    register_test_generic_interface(&mut driver, 2, "unlimited");
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(1))
+        .unwrap()
+        .info
+        .hop_limiter = Some(4);
+    let mut frame = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &[0x34; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"how far",
+    )
+    .unwrap()
+    .raw;
+    let size = frame.len() as u64;
+
+    frame[1] = 4;
+    driver.handle_frame_event(InterfaceId(1), frame.clone(), None, None);
+    let limited = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(limited.hop_limiter_hits, 1);
+    assert_eq!((limited.rxb, limited.frxb), (0, size));
+    assert_eq!(limited.protocol_violations, 0);
+
+    driver.handle_frame_event(InterfaceId(2), frame.clone(), None, None);
+    assert_eq!(driver.interfaces[&InterfaceId(2)].stats.hop_limiter_hits, 0);
+
+    // Below the limit; a different payload, so not a duplicate either.
+    frame[1] = 3;
+    *frame.last_mut().unwrap() ^= 0x01;
+    driver.handle_frame_event(InterfaceId(1), frame, None, None);
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.hop_limiter_hits, 1);
 }
 
 #[test]

@@ -61,7 +61,7 @@ Dispositions are provisional until each mapping commit lands.
 | 6 | `ad6c709e800b1e48ab6a4f3a57e1854075b8e858` | Ensure early tunnel synthesis on TCP and I2P interfaces | Structurally covered | Same `InterfaceUp` ordering as commit 5; TCP client and outbound I2P peer bring each connect up through it (comments in `tcp.rs` and `i2p/mod.rs`) |
 | 7 | `29ce7ca5681b2e422f49cf8c0e285d0d61b0e937` | Fixed exit handler deadlock if signal arrives in the middle of an RPC call | Integrated | `withdrawing_from_an_unresponsive_shared_instance_is_bounded`; `SHARED_RPC_EXIT_TIMEOUT` |
 | 8 | `e96c81c3f20b4e08a1c9206d1117ddc54bfa0feb` | Added ability to filter destination types by hash | Integrated | `configured_destination_types_take_names_or_bracketed_hashes`, `filter_section_takes_name_hashes_in_brackets`; `docs/configuration.md` |
-| 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Needs port | |
+| 9 | `bb63dd4406f14eb72bc67b63edec7efdc059caf2` | Added per-interface hop_limiter option | Integrated | `an_interface_hop_limiter_applies_before_the_transport_one`, `interface_hop_limiter_parser_clamps_and_treats_zero_as_unset`, `dynamic_registration_inherits_announces_to_internal` extended; `docs/configuration.md` |
 | 10 | `d077d1ab00bad832f7ff6fdd7c16dbab91e66d05` | Ensure announce conforms to downstream transport insertion MTU at pack time | Needs port | |
 | 11 | `715707b1bfc515b144cf94007de9b21264e1a7c5` | Excessive non transport-inserted announce payload protocol violation | Needs port | |
 | 12 | `e35bd08f186cc7662ad445a974616e97643abe8e` | Only run instance teardown at exit from main process | Needs decision | |
@@ -327,11 +327,34 @@ limiter hit on that interface, before the global limiter. A value of 0 is
 falsy in Python, so it disables the per-interface limit. Spawned TCP server,
 Backbone, I2P and Weave peers inherit the parent's value.
 
-**Rust applicability:** rns-rs has only the global `[filter] hop_limiter`.
+**Rust applicability:** rns-rs had only the global `[filter] hop_limiter`,
+checked in the driver before the engine sees a packet. Per-interface options
+reach a static interface through `register_started_interface` and spawned
+peers through `DynamicInterfaceTemplate`, as `gravity` and the stamp costs
+do; Weave keeps its parent's options on its session.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** `InterfaceInfo::hop_limiter` holds the
+interface's own limit. `parse_interface_hop_limiter` reads the option as
+upstream (`as_int`, clamped to `0..=PATHFINDER_M`, 0 meaning unset; a
+non-integer is ignored, where upstream's `as_int` would refuse the config).
+`InterfaceConfig`, `StartContext`, `StartedInterface` and
+`DynamicInterfaceTemplate` carry it. TCP server, Backbone and I2P templates
+and Weave peers inherit it; the Auto and local server templates set `None`,
+as upstream passes it only to those four. The driver checks it before the
+global limiter.
 
-**Final disposition:** Needs port.
+Found while porting: a frame over either limiter stayed in received bytes,
+while upstream's `hop_limiter_hit` returns `None` so `Transport.inbound`
+charges it to filtered bytes, as `docs/rnstatus.md` already said. Both
+limiters now move the frame to filtered. Tests:
+`an_interface_hop_limiter_applies_before_the_transport_one` (limit on one
+interface only, the frame filtered, a lower hop count passing),
+`interface_hop_limiter_parser_clamps_and_treats_zero_as_unset`, and the
+template registration test now checks inheritance.
+`docs/configuration.md` documents the option. `InterfaceConfig` is public,
+so examples and integration tests set the new field.
+
+**Final disposition:** Integrated.
 
 ### 10. `d077d1ab` — Ensure announce conforms to downstream transport insertion MTU at pack time
 

@@ -90,6 +90,7 @@ fn interface(id: u64, bitrate: Option<u64>, announce_cap: f64) -> InterfaceInfo 
         announce_cap,
         is_local_client: false,
         wants_tunnel: false,
+        hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,
         mtu_upgradable: false,

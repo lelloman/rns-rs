@@ -1454,6 +1454,9 @@ pub struct StartContext {
     pub next_dynamic_id: Arc<AtomicU64>,
     pub mode: u8,
     pub gravity: i64,
+    /// The interface's own `hop_limiter` (upstream bb63dd44). TCP server,
+    /// Backbone, I2P and Weave peers inherit it.
+    pub hop_limiter: Option<u8>,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
@@ -1476,6 +1479,7 @@ pub(crate) fn test_start_context(tx: EventSender) -> StartContext {
         next_dynamic_id: Arc::new(AtomicU64::new(1000)),
         mode: rns_core::constants::MODE_FULL,
         gravity: 0,
+        hop_limiter: None,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,
@@ -1506,6 +1510,9 @@ pub struct DynamicInterfaceTemplate {
     pub ifac: Option<IfacState>,
     pub mode: u8,
     pub gravity: i64,
+    /// The parent's `hop_limiter`, for the peer types that inherit it
+    /// upstream (bb63dd44); `None` for the others.
+    pub hop_limiter: Option<u8>,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
@@ -1520,6 +1527,7 @@ impl DynamicInterfaceTemplate {
     ) -> crate::event::DynamicInterfaceRegistration {
         info.mode = self.mode;
         info.gravity = self.gravity;
+        info.hop_limiter = self.hop_limiter;
         info.recursive_prs = self.recursive_prs;
         info.announces_from_internal = self.announces_from_internal;
         info.announces_to_internal = self.announces_to_internal;
@@ -1773,6 +1781,7 @@ mod tests {
                 announce_cap: constants::ANNOUNCE_CAP,
                 is_local_client: false,
                 wants_tunnel: false,
+                hop_limiter: None,
                 tunnel_id: None,
                 mtu: constants::MTU as u32,
                 mtu_upgradable: false,
@@ -1807,6 +1816,7 @@ mod tests {
             ifac: None,
             mode: constants::MODE_GATEWAY,
             gravity: -3,
+            hop_limiter: Some(9),
             recursive_prs: true,
             announces_from_internal: false,
             announces_to_internal: Some(true),
@@ -1840,6 +1850,7 @@ mod tests {
             announce_cap: constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            hop_limiter: None,
             tunnel_id: None,
             mtu: constants::MTU as u32,
             mtu_upgradable: false,
@@ -1855,6 +1866,8 @@ mod tests {
 
         assert_eq!(registration.info.mode, constants::MODE_GATEWAY);
         assert_eq!(registration.info.gravity, -3);
+        // Upstream bb63dd44: spawned peers take the parent's hop limiter.
+        assert_eq!(registration.info.hop_limiter, Some(9));
         assert!(registration.info.recursive_prs);
         assert!(!registration.info.announces_from_internal);
         assert_eq!(registration.info.announces_to_internal, Some(true));

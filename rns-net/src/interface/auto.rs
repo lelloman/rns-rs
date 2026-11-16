@@ -1457,6 +1457,7 @@ fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
         announce_cap: rns_core::constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: false,
+        hop_limiter: None,
         tunnel_id: None,
         mtu: HW_MTU as u32,
         mtu_upgradable: true,
@@ -1792,6 +1793,8 @@ impl InterfaceFactory for AutoFactory {
                 ifac: ctx.ifac,
                 mode: ctx.mode,
                 gravity: ctx.gravity,
+                // Upstream does not pass `hop_limiter` to these peers.
+                hop_limiter: None,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,

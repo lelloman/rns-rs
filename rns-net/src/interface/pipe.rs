@@ -436,6 +436,7 @@ impl InterfaceFactory for PipeFactory {
             announce_cap: rns_core::constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            hop_limiter: None,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
             mtu_upgradable: false,
