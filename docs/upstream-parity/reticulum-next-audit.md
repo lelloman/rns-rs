@@ -68,7 +68,7 @@ Dispositions are provisional until each mapping commit lands.
 | 13 | `13b98a6bc2fa044ea47c754115f82a6ed0be2845` | Cleaned up tunnel synthesis handler | Integrated | `tunnel_synthesis_of_the_wrong_length_is_a_protocol_violation`, `a_longer_tunnel_synthesis_within_the_mdu_is_accepted`, `an_interface_takes_only_one_tunnel_synthesis`, `longer_synthesis_validates_up_to_the_mdu` |
 | 14 | `b7a93b9b6be76090d052ffbeb3e8a72d9a23d570` | Bidirectional tunnel synthesis and stamp cost exchange on non shared-medium interfaces | Integrated | `tunnel_synthesis_is_answered_and_both_ends_learn_the_other`, `a_synthesis_without_an_extension_is_not_answered`, `an_invalid_synthesis_extension_is_a_protocol_violation`, `tunnel_extension` unit tests, `the_signature_covers_the_extension`, RPC pickle assertions, regenerated `tunnels` rnstatus fixture; interop `python_rns_receives_tunnel_synthesis_from_rust_client` against `884f109b` and `c850cdac` |
 | 15 | `51fa8413277ef7308925aef610e409f9af0d9c3b` | Enabled stamp generation | Integrated | constants test, `stamps_section_defaults_to_the_protocol_constants`, `runtime_config_stamp_flags_default_as_upstream_and_apply_to_engine_and_shared_flag`, the no-store case in `destination_stamp_below_target_value_is_regenerated`; existing stamper tests and e2e stamps suite; interop against `884f109b` and `c850cdac` |
-| 16 | `fd36a97220a40383ce7f0a1d0f40bc7043f4494f` | Updated version | Needs decision | |
+| 16 | `fd36a97220a40383ce7f0a1d0f40bc7043f4494f` | Updated version | Integrated | fixture generators assert `1.6.1` and were rerun against `884f109b`: default config, example config, argparse parsers and discovery records unchanged |
 | 17 | `884f109b2b821638c7addd456a52a2cd5bb8c5b1` | Fixed missing wanted destination type for interface discovery | Needs port | |
 
 ## Per-Commit Analysis
@@ -593,13 +593,20 @@ interface for each unstamped path request it forwards, as upstream.
 **Upstream change:** `RNS/_version.py` goes to `1.6.1`.
 
 **Rust applicability:** rns-rs advertises its own implementation name and
-version (`rns-rs`, crate version) in discovery, and will in the synthesis
-extension. Decide whether any surface claims the upstream protocol version
-(for example the default config or utilities' `--version`) and must follow.
+version (`rns-rs` and the `rns-net` crate version) in discovery announces
+and the tunnel synthesis extension, and its utilities' `--version` prints
+its own version, so no runtime surface claims the upstream version. The
+fixture generators pin the upstream release they read.
 
-**Local handling and evidence:** Pending.
+**Local handling and evidence:** `tests/generate_default_config.py`,
+`generate_example_config.py`, `generate_argparse_fixtures.py` and
+`generate_discovery_record_fixtures.py` now assert `1.6.1` (the `rnstatus`
+generator moved with commit 14). Rerun against an export of `884f109b`,
+the default config, the example config, the argparse parsers and fixtures
+and the discovery records are unchanged; only the generated parsers' header
+names the new release.
 
-**Final disposition:** Needs decision.
+**Final disposition:** Integrated.
 
 ### 17. `884f109b` — Fixed missing wanted destination type for interface discovery
 

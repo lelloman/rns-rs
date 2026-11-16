@@ -15,7 +15,7 @@ from RNS.vendor.configobj import ConfigObj
 import sys
 module = sys.modules["RNS.Reticulum"]
 
-assert RNS.__version__ == "1.6.0", RNS.__version__
+assert RNS.__version__ == "1.6.1", RNS.__version__
 
 ROOT = Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory() as tmp:
