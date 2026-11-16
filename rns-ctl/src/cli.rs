@@ -30,6 +30,13 @@ pub static TOP: Cli = Cli::new(
         actions: &[
             help(),
             version(),
+            value(
+                &["-c", "--config"],
+                "config",
+                "PATH",
+                Ty::Str,
+                "path to config directory, for any command",
+            ),
             positional("command", Nargs::One, "the command to run"),
             positional("args", Nargs::ZeroOrMore, "the command's arguments"),
         ],

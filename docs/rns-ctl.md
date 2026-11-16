@@ -15,7 +15,7 @@ cargo build --release -p rns-ctl
 | `rns-ctl daemon -c DIR` | Run the node, like `rnsd` |
 | `rns-ctl http -c DIR [...]` | Run the node and serve the HTTP/WebSocket API plus the built-in UI |
 | `rns-ctl status` | Interface status, like `rnstatus` |
-| `rns-ctl probe <dest>` | Probe a destination, like `rnprobe` |
+| `rns-ctl probe <full_name> <dest>` | Probe a destination, like `rnprobe` |
 | `rns-ctl path -t` | Path table, like `rnpath` |
 | `rns-ctl id -g PATH` | Identity management, like `rnid` |
 | `rns-ctl config ...` | Read, validate, and apply runtime configuration |
@@ -35,14 +35,19 @@ same way.
 The client subcommands (`status`, `probe`, `path`, `config`, `backbone`) talk
 to a running node over its shared-instance RPC socket. They authenticate with
 a key derived from that node's `storage/transport_identity`, so they must be
-pointed at the node's config directory. Without `-c`, they use
+pointed at the node's config directory. Without one, they use
 `~/.reticulum`, which on a server running `rns-server` from another directory
-holds a different identity, and the call fails authentication:
+holds a different identity, and the call fails authentication. Each takes
+`--config PATH` (`status` also `-c`), and `rns-ctl` itself takes
+`-c/--config PATH` before the subcommand and passes it on:
 
 ```bash
 rns-ctl status -c /var/lib/rns-node
-rns-ctl probe -c /var/lib/rns-node <destination_hash>
+rns-ctl --config /var/lib/rns-node status -j
+rns-ctl probe --config /var/lib/rns-node rnstransport.probe <destination_hash>
 ```
+
+`probe` takes `rnprobe`'s arguments: the destination's full name and its hash.
 
 ## The HTTP server
 

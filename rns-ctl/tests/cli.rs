@@ -19,8 +19,35 @@ fn error(args: &[&str]) -> String {
 }
 
 #[test]
+fn a_config_before_the_command_applies_to_it() {
+    // The daily VPS report and the backbone smoke test run
+    // `rns-ctl --config DIR status -j`; the directory goes to the command.
+    let dir = std::env::temp_dir().join(format!("rns-ctl-top-config-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config"),
+        "[reticulum]\n  share_instance = Yes\n  instance_name = rns-ctl-top-config-test\n",
+    )
+    .unwrap();
+    let dir_s = dir.to_str().unwrap();
+    for args in [
+        vec!["--config", dir_s, "status", "-j"],
+        vec!["-c", dir_s, "status", "-j"],
+    ] {
+        let output = rns_ctl(&args);
+        assert_ne!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "No shared RNS instance available to get status from\n",
+            "{args:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn top_level_errors_are_argparses() {
-    let usage = "usage: rns-ctl [-h] [--version] command [args ...]\n";
+    let usage = "usage: rns-ctl [-h] [--version] [-c PATH] command [args ...]\n";
     assert_eq!(
         error(&[]),
         format!("{usage}rns-ctl: error: the following arguments are required: command, args\n")

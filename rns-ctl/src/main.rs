@@ -7,11 +7,20 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
 
     // As argparse's subparsers: options before the command are rns-ctl's,
-    // everything from the command on is the command's.
-    let at = argv
-        .iter()
-        .position(|arg| !arg.starts_with('-') || arg == "-")
-        .unwrap_or(argv.len());
+    // everything from the command on is the command's. `-c/--config PATH`
+    // takes a value, so it is skipped over to find the command.
+    let mut at = 0;
+    while at < argv.len() {
+        let arg = &argv[at];
+        if arg == "-c" || arg == "--config" {
+            at += 2;
+        } else if arg.starts_with('-') && arg != "-" {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    let at = at.min(argv.len());
     let (head, tail) = argv.split_at(at);
     let top = cli::TOP.parse("rns-ctl", head.to_vec());
     if top.has("version") {
@@ -24,7 +33,16 @@ fn main() {
             "the following arguments are required: command, args",
         );
     };
-    let tail = tail.to_vec();
+    // A config directory given before the command applies to it, as the
+    // daily report and smoke test pass it (`rns-ctl --config DIR status`).
+    let tail = match top.get("config") {
+        Some(config) => {
+            let mut forwarded = vec!["--config".to_string(), config.to_string()];
+            forwarded.extend(tail.iter().cloned());
+            forwarded
+        }
+        None => tail.to_vec(),
+    };
 
     match command.as_str() {
         "config" => cmd::config::run(cli::parse(&cli::CONFIG, "config", tail)),
