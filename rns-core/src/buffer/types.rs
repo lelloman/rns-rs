@@ -73,4 +73,32 @@ mod tests {
             Err(DecompressError::InvalidData)
         );
     }
+
+    #[test]
+    fn unbounded_decompression_is_bounded_decompression_without_a_limit() {
+        struct Doubling;
+        impl Compressor for Doubling {
+            fn compress(&self, _: &[u8]) -> Option<Vec<u8>> {
+                None
+            }
+            fn decompress_bounded(
+                &self,
+                data: &[u8],
+                max_output_size: usize,
+            ) -> Result<Vec<u8>, DecompressError> {
+                assert_eq!(max_output_size, usize::MAX);
+                Ok([data, data].concat())
+            }
+        }
+        assert_eq!(Doubling.decompress(b"ab"), Some(b"abab".to_vec()));
+        assert_eq!(NoopCompressor.decompress(b"ab"), None);
+    }
+
+    #[test]
+    fn errors_describe_themselves() {
+        assert_eq!(
+            BufferError::InvalidStreamId.to_string(),
+            "Invalid stream ID"
+        );
+    }
 }

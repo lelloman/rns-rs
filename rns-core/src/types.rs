@@ -357,4 +357,23 @@ mod tests {
         let s = format!("{:?}", ph);
         assert!(s.starts_with("PacketHash("));
     }
+
+    #[test]
+    fn identifiers_convert_back_to_their_bytes() {
+        let bytes16: [u8; 16] = core::array::from_fn(|i| i as u8 + 1);
+        let bytes32: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
+        assert_eq!(<[u8; 16]>::from(IdentityHash(bytes16)), bytes16);
+        assert_eq!(<[u8; 16]>::from(LinkId(bytes16)), bytes16);
+        let dest = DestHash(bytes16);
+        let identity = IdentityHash(bytes16);
+        let link = LinkId(bytes16);
+        let packet = PacketHash(bytes32);
+        assert_eq!(AsRef::<[u8; 16]>::as_ref(&dest), &bytes16);
+        assert_eq!(AsRef::<[u8; 16]>::as_ref(&identity), &bytes16);
+        assert_eq!(AsRef::<[u8; 16]>::as_ref(&link), &bytes16);
+        assert_eq!(AsRef::<[u8; 32]>::as_ref(&packet), &bytes32);
+        let hex = "0102030405060708090a0b0c0d0e0f10";
+        assert_eq!(identity.to_string(), hex);
+        assert_eq!(link.to_string(), hex);
+    }
 }

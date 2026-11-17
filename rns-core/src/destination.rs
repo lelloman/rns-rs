@@ -152,4 +152,16 @@ mod tests {
         let actual = destination_hash("app", &["aspect"], Some(&id_hash));
         assert_eq!(actual, expected);
     }
+
+    #[test]
+    fn errors_carry_upstreams_messages() {
+        assert_eq!(
+            DestinationError::DotInAppName.to_string(),
+            "Dots can't be used in app names"
+        );
+        assert_eq!(
+            DestinationError::DotInAspect.to_string(),
+            "Dots can't be used in aspects"
+        );
+    }
 }

@@ -865,4 +865,19 @@ mod tests {
         let on = [STAMP_DESTINATIONS, STAMP_PRS, STAMP_LRS];
         assert_eq!((opt_in, on), ([false; 3], [true; 3]));
     }
+
+    #[test]
+    fn derived_sizes_and_lifetimes_match_upstream() {
+        // Identity.RATCHET_EXPIRY = 60*60*24*30
+        assert_eq!(RATCHET_EXPIRY, 2_592_000);
+        // Reticulum.QUEUED_ANNOUNCE_LIFE = 60*60*3
+        assert_eq!(QUEUED_ANNOUNCE_LIFE, 10_800.0);
+        // Link.MDU
+        assert_eq!(LINK_MDU, 431);
+        // Resource.MAX_EFFICIENT_SIZE = 1*1024*1024-1
+        assert_eq!(RESOURCE_MAX_EFFICIENT_SIZE, 1_048_575);
+        // Resource.METADATA_MAX_SIZE = 16*1024*1024-1
+        assert_eq!(RESOURCE_METADATA_MAX_SIZE, 16_777_215);
+        assert_eq!(ANNOUNCE_TABLE_MAX_BYTES, 4_194_304);
+    }
 }
