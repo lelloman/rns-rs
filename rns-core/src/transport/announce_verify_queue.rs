@@ -438,4 +438,157 @@ mod tests {
         assert_eq!(queue.queued_bytes(), 0);
         assert!(queue.take_pending(10.0).is_empty());
     }
+
+    fn key_of(dest: u8) -> AnnounceVerifyKey {
+        AnnounceVerifyKey {
+            destination_hash: [dest; 16],
+            random_blob: [dest; 10],
+            received_from: [dest; 16],
+        }
+    }
+
+    #[test]
+    fn enqueue_keeps_the_queued_entry_against_equal_hops() {
+        let mut queue = AnnounceVerifyQueue::new(8);
+        let (key, mut first) = make_pending([1; 16], [2; 10], [3; 16], 4);
+        first.interface = InterfaceId(1);
+        assert!(queue.enqueue(key, first));
+        let (_, mut second) = make_pending([1; 16], [2; 10], [3; 16], 4);
+        second.interface = InterfaceId(2);
+        assert!(!queue.enqueue(key, second));
+        assert_eq!(queue.pending_interface(&key), Some(InterfaceId(1)));
+    }
+
+    #[test]
+    fn enqueue_admits_an_entry_that_exactly_fills_the_byte_cap() {
+        let (key, entry) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        let size = pending_bytes(&entry);
+        let mut queue = AnnounceVerifyQueue::with_limits(4, size, 30.0, OverflowPolicy::DropNewest);
+        assert!(queue.enqueue(key, entry));
+        assert_eq!(queue.queued_bytes(), size);
+
+        // A second entry that exactly fills the remaining room needs no
+        // eviction either.
+        let (first_key, first) = make_pending([2; 16], [2; 10], [2; 16], 4);
+        let (second_key, second) = make_pending([3; 16], [3; 10], [3; 16], 4);
+        let mut queue =
+            AnnounceVerifyQueue::with_limits(4, 2 * size, 30.0, OverflowPolicy::DropNewest);
+        assert!(queue.enqueue(first_key, first));
+        assert!(queue.enqueue(second_key, second));
+        assert_eq!(queue.len(), 2);
+    }
+
+    #[test]
+    fn oversized_entry_is_refused_without_evicting_anything() {
+        let (key, entry) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        let size = pending_bytes(&entry);
+        let mut queue =
+            AnnounceVerifyQueue::with_limits(4, size + 1, 30.0, OverflowPolicy::DropWorst);
+        assert!(queue.enqueue(key, entry));
+
+        let (big_key, mut big) = make_pending([2; 16], [2; 10], [2; 16], 1);
+        big.original_raw = vec![0; size + 2];
+        assert!(!queue.enqueue(big_key, big));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.pending_size(&key), Some(1));
+    }
+
+    #[test]
+    fn entries_go_stale_only_after_max_stale_secs() {
+        let mut queue = AnnounceVerifyQueue::with_limits(4, 1024, 30.0, OverflowPolicy::DropWorst);
+        let (key, mut entry) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        entry.queued_at = 20.0;
+        assert!(queue.enqueue(key, entry));
+
+        // Exactly max_stale_secs after queueing it is still taken.
+        assert_eq!(queue.take_pending(50.0).len(), 1);
+        assert_eq!(queue.len(), 1);
+        // Past that it is dropped, in flight or not.
+        assert!(queue.take_pending(50.5).is_empty());
+        assert!(queue.is_empty());
+        assert_eq!(queue.queued_bytes(), 0);
+    }
+
+    #[test]
+    fn completion_reports_whether_the_entry_was_queued() {
+        let mut queue = AnnounceVerifyQueue::new(4);
+        let (key, entry) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        assert!(queue.enqueue(key, entry));
+        assert!(!queue.is_empty());
+        assert!(queue.complete_failure(&key));
+        assert!(!queue.complete_failure(&key));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn pending_lookups_describe_the_queued_announce() {
+        let mut queue = AnnounceVerifyQueue::new(4);
+        let (key, mut entry) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        entry.interface = InterfaceId(7);
+        entry.original_raw = vec![0; 5];
+        let mut data = [0u8; 70];
+        for (i, byte) in data.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        entry.packet = RawPacket::pack(
+            entry.packet.flags,
+            4,
+            &[1; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &data,
+        )
+        .unwrap()
+        .map_raw(PacketBytes::from);
+        assert!(queue.enqueue(key, entry));
+
+        assert_eq!(queue.pending_interface(&key), Some(InterfaceId(7)));
+        assert_eq!(queue.pending_size(&key), Some(5));
+        assert_eq!(
+            queue.pending_identity_hash(&key),
+            Some(crate::hash::truncated_hash(&data[..64]))
+        );
+
+        let missing = key_of(9);
+        assert_eq!(queue.pending_interface(&missing), None);
+        assert_eq!(queue.pending_size(&missing), None);
+        assert_eq!(queue.pending_identity_hash(&missing), None);
+    }
+
+    #[test]
+    fn drop_oldest_evicts_by_queue_time_not_key_order() {
+        let mut queue = AnnounceVerifyQueue::with_limits(2, 1024, 30.0, OverflowPolicy::DropOldest);
+        let (newer_key, mut newer) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        newer.queued_at = 12.0;
+        let (older_key, mut older) = make_pending([2; 16], [2; 10], [2; 16], 4);
+        older.queued_at = 11.0;
+        let (key, entry) = make_pending([3; 16], [3; 10], [3; 16], 4);
+        assert!(queue.enqueue(newer_key, newer));
+        assert!(queue.enqueue(older_key, older));
+        assert!(queue.enqueue(key, entry));
+        assert!(queue.pending_size(&older_key).is_none());
+        assert!(queue.pending_size(&newer_key).is_some());
+    }
+
+    #[test]
+    fn queued_bytes_count_the_transport_id() {
+        let mut queue = AnnounceVerifyQueue::new(4);
+        let (key, mut entry) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        let flags = PacketFlags {
+            header_type: constants::HEADER_2,
+            ..entry.packet.flags
+        };
+        entry.packet = RawPacket::pack(
+            flags,
+            4,
+            &[1; 16],
+            Some(&[5; 16]),
+            constants::CONTEXT_NONE,
+            &[4; 8],
+        )
+        .unwrap()
+        .map_raw(PacketBytes::from);
+        assert!(queue.enqueue(key, entry));
+        assert_eq!(queue.queued_bytes(), 1 + 8 + 16);
+    }
 }
