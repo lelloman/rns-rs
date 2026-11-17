@@ -1107,4 +1107,127 @@ mod tests {
         assert!(entry.paths.contains_key(&dest2));
         assert!(entry.paths.contains_key(&dest3));
     }
+
+    fn path_at(timestamp: f64) -> TunnelPath {
+        TunnelPath {
+            timestamp,
+            received_from: [0x11; 16],
+            hops: 2,
+            expires: timestamp + constants::TUNNEL_PATH_TIMEOUT,
+            random_blobs: Vec::new(),
+            packet_hash: [0x22; 32],
+        }
+    }
+
+    #[test]
+    fn tunnel_error_messages() {
+        assert_eq!(
+            TunnelError::InvalidLength.to_string(),
+            "Invalid tunnel synthesis data length"
+        );
+        assert_eq!(
+            TunnelError::InvalidSignature.to_string(),
+            "Invalid tunnel signature"
+        );
+        assert_eq!(
+            TunnelError::InvalidPublicKey.to_string(),
+            "Invalid tunnel synthesis public key"
+        );
+    }
+
+    #[test]
+    fn get_mut_and_is_empty_see_the_tunnels() {
+        let mut table = TunnelTable::new();
+        assert!(table.is_empty());
+        table.handle_tunnel([1; 32], InterfaceId(1), 1000.0, 0.0);
+        assert!(!table.is_empty());
+        table.get_mut(&[1; 32]).unwrap().expires = 1234.0;
+        assert_eq!(table.get(&[1; 32]).unwrap().expires, 1234.0);
+        assert!(table.get_mut(&[2; 32]).is_none());
+    }
+
+    /// Upstream removes a tunnel whose expiry is more than twice
+    /// TUNNEL_TIMEOUT ahead, and keeps one that is exactly that far ahead.
+    #[test]
+    fn cull_removes_tunnels_with_excessive_expiry() {
+        let now = 1000.0;
+        let mut table = TunnelTable::new();
+        for (id, expires) in [
+            (1, now + constants::TUNNEL_TIMEOUT + 3.0),
+            (2, now + constants::TUNNEL_TIMEOUT * 2.0),
+            (3, now + constants::TUNNEL_TIMEOUT * 2.0 + 1.0),
+        ] {
+            table.handle_tunnel([id; 32], InterfaceId(1), now, 0.0);
+            table.get_mut(&[id; 32]).unwrap().expires = expires;
+        }
+        assert_eq!(table.cull(now), vec![[3; 32]]);
+        assert!(table.get(&[1; 32]).is_some());
+        assert!(table.get(&[2; 32]).is_some());
+    }
+
+    /// Upstream drops a tunnel path once it is older than
+    /// TUNNEL_PATH_TIMEOUT, while the tunnel itself is still live.
+    #[test]
+    fn cull_drops_paths_older_than_the_tunnel_path_timeout() {
+        let mut table = TunnelTable::new();
+        table.handle_tunnel([1; 32], InterfaceId(1), 1000.0, 0.0);
+        table.store_tunnel_path(
+            &[1; 32],
+            [0xA1; 16],
+            path_at(1000.0),
+            1000.0,
+            0.0,
+            usize::MAX,
+        );
+        let later = 1000.0 + constants::TUNNEL_PATH_TIMEOUT;
+        table.get_mut(&[1; 32]).unwrap().expires = later + 100.0;
+        assert!(table.cull(later).is_empty());
+        assert_eq!(table.path_count(), 1);
+        assert!(table.cull(later + 1.0).is_empty());
+        assert_eq!(table.path_count(), 0);
+    }
+
+    /// Evicting a tunnel's last path to make room removes the tunnel only
+    /// once it has expired too.
+    #[test]
+    fn destination_cap_removes_an_emptied_tunnel_only_once_expired() {
+        let now = 1000.0;
+        for (expires, removed) in [(now, true), (now + 1.0, false)] {
+            let mut table = TunnelTable::new();
+            table.handle_tunnel([1; 32], InterfaceId(1), now - 10.0, 0.0);
+            table.store_tunnel_path(
+                &[1; 32],
+                [0xA1; 16],
+                path_at(now - 10.0),
+                now - 10.0,
+                0.0,
+                1,
+            );
+            table.handle_tunnel([2; 32], InterfaceId(2), now, 0.0);
+            table.get_mut(&[1; 32]).unwrap().expires = expires;
+
+            table.store_tunnel_path(&[2; 32], [0xB1; 16], path_at(now), now, 0.0, 1);
+            assert_eq!(table.path_count(), 1);
+            assert_eq!(table.get(&[1; 32]).is_none(), removed, "expires {expires}");
+        }
+
+        // A tunnel left with paths is kept whatever its expiry.
+        let mut table = TunnelTable::new();
+        table.handle_tunnel([1; 32], InterfaceId(1), now - 10.0, 0.0);
+        table.store_tunnel_path(
+            &[1; 32],
+            [0xA1; 16],
+            path_at(now - 10.0),
+            now - 10.0,
+            0.0,
+            3,
+        );
+        table.store_tunnel_path(&[1; 32], [0xA2; 16], path_at(now - 5.0), now - 5.0, 0.0, 3);
+        table.handle_tunnel([2; 32], InterfaceId(2), now, 0.0);
+        table.store_tunnel_path(&[2; 32], [0xB1; 16], path_at(now), now, 0.0, 3);
+        table.get_mut(&[1; 32]).unwrap().expires = now;
+        table.store_tunnel_path(&[2; 32], [0xB2; 16], path_at(now), now, 0.0, 3);
+        assert_eq!(table.path_count(), 3);
+        assert_eq!(table.get(&[1; 32]).unwrap().paths.len(), 1);
+    }
 }
