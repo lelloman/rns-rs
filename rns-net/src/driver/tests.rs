@@ -7271,8 +7271,8 @@ fn management_announces_emitted_after_delay() {
     driver.management_config.enable_remote_management = true;
     driver.transport_identity = Some(identity);
 
-    // Set started time to 10 seconds ago so the 5s delay has passed
-    driver.started = time::now() - 10.0;
+    // Started long enough ago for the startup delay to have passed
+    driver.started = time::now() - Driver::MANAGEMENT_ANNOUNCE_DELAY - 5.0;
 
     // Send Tick then Shutdown
     tx.send(Event::Tick).unwrap();
@@ -9279,7 +9279,7 @@ fn management_announces_not_emitted_when_disabled() {
 
     // Management announces disabled (default)
     driver.transport_identity = Some(identity);
-    driver.started = time::now() - 10.0;
+    driver.started = time::now() - Driver::MANAGEMENT_ANNOUNCE_DELAY - 5.0;
 
     tx.send(Event::Tick).unwrap();
     tx.send(Event::Shutdown).unwrap();

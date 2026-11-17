@@ -2777,8 +2777,9 @@ impl Driver {
         self.event_tx.clone()
     }
 
-    /// Delay before first management announce after startup.
-    const MANAGEMENT_ANNOUNCE_DELAY: f64 = 5.0;
+    /// Delay before the first management announces after startup
+    /// (`Transport.start` defers them by 15 seconds).
+    pub(crate) const MANAGEMENT_ANNOUNCE_DELAY: f64 = 15.0;
 
     /// Tick the discovery announcer: start stamp generation if due, send announce if ready.
     pub(crate) fn tick_discovery_announcer(&mut self, now: f64) {

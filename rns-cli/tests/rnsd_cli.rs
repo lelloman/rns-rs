@@ -331,6 +331,29 @@ fn wait_for_abstract_socket(name: &str) {
     }
 }
 
+fn enforcing_instance_name() -> String {
+    format!("enforcing-{}", std::process::id())
+}
+
+/// Asks the shared instance on `instance_dir` over RPC to request a path to
+/// `destination` itself.
+fn instance_request_path(instance_dir: &std::path::Path, destination: &str) {
+    let key = fs::read(instance_dir.join("storage/transport_identity")).unwrap();
+    let auth_key = rns_net::rpc::derive_auth_key(&key);
+    let address = rns_net::RpcAddr::local(enforcing_instance_name(), 37429);
+    let hash: Vec<u8> = (0..destination.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&destination[i..i + 2], 16).unwrap())
+        .collect();
+    let mut client = rns_net::RpcClient::connect(&address, &auth_key).expect("connect to RPC");
+    client
+        .call(&rns_net::pickle::PickleValue::Dict(vec![(
+            rns_net::pickle::PickleValue::String("request_path".into()),
+            rns_net::pickle::PickleValue::Bytes(hash),
+        )]))
+        .expect("request_path over RPC");
+}
+
 /// A publisher rnsd with a network identity, serving TCP, and a shared
 /// instance that dials it and enforces stamps, on `root`. Returns both
 /// processes, the instance's config directory and the publisher's
@@ -358,7 +381,7 @@ fn enforcing_instance_with_publisher(
             network_identity.display()
         ),
     );
-    let instance = format!("enforcing-{}", std::process::id());
+    let instance = enforcing_instance_name();
     let instance_dir = root.join("instance");
     let receiver = spawn_rnsd(
         &instance_dir,
@@ -400,10 +423,15 @@ fn rnpath_finds_a_path_through_a_stamp_enforcing_instance() {
     let root = tempfile::tempdir().unwrap();
     let (mut daemons, instance_dir, destination) = enforcing_instance_with_publisher(root.path());
     let config = instance_dir.to_str().unwrap();
-    // Once the instance holds the path, from the publisher's announce, a
-    // new client only learns it by asking the instance.
+    // Once the instance holds the path, which it requests itself, a new
+    // client only learns it by asking the instance.
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut requested = Instant::now() - Duration::from_secs(10);
     loop {
+        if requested.elapsed() >= Duration::from_secs(2) {
+            instance_request_path(&instance_dir, &destination);
+            requested = Instant::now();
+        }
         let table = Command::new(env!("CARGO_BIN_EXE_rnpath"))
             .args(["--config", config, "-t"])
             .output()
