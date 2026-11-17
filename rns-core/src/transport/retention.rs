@@ -214,3 +214,7 @@ impl TransportEngine {
         self.held_announces.contains_key(&dest_hash)
     }
 }
+
+#[cfg(test)]
+#[path = "retention_tests.rs"]
+mod tests;
