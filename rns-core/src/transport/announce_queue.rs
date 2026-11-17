@@ -45,37 +45,31 @@ impl InterfaceAnnounceQueue {
     }
 
     /// Insert an announce into the queue.
-    /// If an entry for the same destination already exists, update it if the new one
-    /// has fewer hops or is newer.
+    ///
+    /// As upstream's `Transport.outbound` does, a full queue takes nothing
+    /// more, and an announce for a destination already queued replaces the
+    /// queued one only when it was emitted later.
     pub fn insert(&mut self, entry: AnnounceQueueEntry) {
-        // Check for existing entry with same destination
-        if let Some(pos) = self
+        if self.entries.len() >= constants::MAX_QUEUED_ANNOUNCES {
+            return;
+        }
+        if let Some(existing) = self
             .entries
-            .iter()
-            .position(|e| e.destination_hash == entry.destination_hash)
+            .iter_mut()
+            .find(|e| e.destination_hash == entry.destination_hash)
         {
-            let existing = &self.entries[pos];
-            // Update if new entry has fewer hops, or same hops and newer
-            if entry.hops < existing.hops
-                || (entry.hops == existing.hops && entry.emitted > existing.emitted)
-            {
-                self.entries[pos] = entry;
+            if entry.emitted > existing.emitted {
+                *existing = entry;
             }
-            // Otherwise discard the new entry
         } else {
-            // Enforce max queue size
-            if self.entries.len() >= constants::MAX_QUEUED_ANNOUNCES {
-                // Drop oldest entry
-                self.entries.remove(0);
-            }
             self.entries.push(entry);
         }
     }
 
-    /// Remove stale entries (older than QUEUED_ANNOUNCE_LIFE).
+    /// Remove stale entries, those queued more than QUEUED_ANNOUNCE_LIFE ago.
     pub fn remove_stale(&mut self, now: f64) {
         self.entries
-            .retain(|e| now - e.time < constants::QUEUED_ANNOUNCE_LIFE);
+            .retain(|e| now - e.time <= constants::QUEUED_ANNOUNCE_LIFE);
     }
 
     /// Select the next announce to send: minimum hops, then oldest (FIFO).
@@ -192,7 +186,9 @@ impl AnnounceQueues {
 
         let queue = self.queues.entry(interface).or_default();
 
-        if queue.is_allowed(now) {
+        // Announces already waiting go first, as upstream queues behind them
+        // even once the cap has cleared.
+        if queue.entries.is_empty() && queue.is_allowed(now) {
             // Bandwidth available — send now and update allowed_at
             queue.announce_allowed_at = InterfaceAnnounceQueue::calculate_next_allowed(
                 now,
@@ -486,15 +482,19 @@ mod tests {
         queue.insert(make_entry(0x01, 3, 100.0));
         assert_eq!(queue.entries.len(), 1);
 
-        // Insert same dest with fewer hops — should update
-        queue.insert(make_entry(0x01, 1, 200.0));
+        // A later emission replaces the queued announce, whatever its hops.
+        queue.insert(make_entry(0x01, 5, 200.0));
         assert_eq!(queue.entries.len(), 1);
-        assert_eq!(queue.entries[0].hops, 1);
+        assert_eq!(queue.entries[0].hops, 5);
 
-        // Insert same dest with more hops — should NOT update
-        queue.insert(make_entry(0x01, 5, 300.0));
+        // An earlier emission never does, even with fewer hops.
+        queue.insert(make_entry(0x01, 1, 150.0));
         assert_eq!(queue.entries.len(), 1);
-        assert_eq!(queue.entries[0].hops, 1);
+        assert_eq!(queue.entries[0].hops, 5);
+
+        // Nor does the same emission seen again.
+        queue.insert(make_entry(0x01, 2, 200.0));
+        assert_eq!(queue.entries[0].hops, 5);
     }
 
     #[test]
@@ -546,6 +546,11 @@ mod tests {
         queue.insert(make_entry(0x01, 1, 100.0));
         queue.insert(make_entry(0x02, 2, 200.0));
 
+        // At exactly its lifetime an entry is kept, as upstream only drops
+        // one queued more than QUEUED_ANNOUNCE_LIFE ago.
+        queue.remove_stale(100.0 + constants::QUEUED_ANNOUNCE_LIFE);
+        assert_eq!(queue.entries.len(), 2);
+
         // One second beyond the lifetime, only the newer entry remains.
         queue.remove_stale(100.0 + constants::QUEUED_ANNOUNCE_LIFE + 1.0);
         assert_eq!(queue.entries.len(), 1);
@@ -571,9 +576,14 @@ mod tests {
         }
         assert_eq!(queue.entries.len(), constants::MAX_QUEUED_ANNOUNCES);
 
-        // Add one more — oldest should be dropped
+        // A full queue takes nothing more and keeps what it holds.
         queue.insert(make_entry(0xFF, 1, 99999.0));
         assert_eq!(queue.entries.len(), constants::MAX_QUEUED_ANNOUNCES);
+        assert_eq!(queue.entries[0].time, 0.0);
+        assert!(queue
+            .entries
+            .iter()
+            .all(|entry| entry.destination_hash != [0xFF; 16]));
     }
 
     #[test]
@@ -752,6 +762,45 @@ mod tests {
 
         let queue = queues.queue_for(&InterfaceId(1)).unwrap();
         assert_eq!(queue.entries.len(), 1);
+    }
+
+    /// Upstream's `Transport.outbound` sends a forwarded announce at once
+    /// only when nothing is queued on the interface: one arriving after the
+    /// cap has cleared, but before the queue is processed, waits its turn.
+    #[test]
+    fn announce_waits_behind_queued_announces_after_the_cap_clears() {
+        let mut queues = AnnounceQueues::new(1024);
+        let gate = |queues: &mut AnnounceQueues, dest: u8, hops: u8, now: f64| {
+            queues.gate_announce(
+                InterfaceId(1),
+                vec![dest; 100].into(),
+                [dest; 16],
+                hops,
+                now,
+                now,
+                Some(1000),
+                None,
+                0.02,
+            )
+        };
+        assert!(gate(&mut queues, 0xAA, 2, 1000.0).is_some());
+        assert!(gate(&mut queues, 0xBB, 1, 1000.0).is_none());
+
+        let allowed_at = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
+        assert!(gate(&mut queues, 0xCC, 3, allowed_at + 1.0).is_none());
+        assert_eq!(queues.queued_for(&InterfaceId(1)), 2);
+
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1, Some(1000)));
+        let actions = queues.process_queues(allowed_at + 1.0, &interfaces);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { raw, .. } => assert_eq!(raw[0], 0xBB),
+            other => panic!("unexpected action {other:?}"),
+        }
     }
 
     #[test]
