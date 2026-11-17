@@ -1111,6 +1111,7 @@ impl LinkManager {
         };
 
         engine.set_link_id_from_hashable(&packet.get_hashable_part(), request_data.len());
+        engine.add_establishment_cost(packet.raw.len());
         let link_id = *engine.link_id();
 
         engine.record_outbound_traffic(packet.data().len());
@@ -1311,7 +1312,7 @@ impl LinkManager {
         }
 
         // Create responder engine
-        let (engine, lrproof_data) = match LinkEngine::new_responder(
+        let (mut engine, lrproof_data) = match LinkEngine::new_responder(
             &ld.sig_prv,
             &ld.sig_pub_bytes,
             packet.data(),
@@ -1330,6 +1331,7 @@ impl LinkManager {
             }
         };
 
+        engine.add_establishment_cost(packet.raw.len());
         let link_id = *engine.link_id();
         log::debug!(
             "LINKREQUEST accepted: link={:02x?} iface={} header_type={} transport_id_present={} hops={}",
@@ -1398,6 +1400,9 @@ impl LinkManager {
             constants::CONTEXT_LRPROOF,
             &lrproof_data,
         ) {
+            if let Some(link) = self.links.get_mut(&link_id) {
+                link.engine.add_establishment_cost(raw.len());
+            }
             log::debug!(
                 "LRPROOF queued: link={:02x?} route_iface={} route_tid_present={} hops=0",
                 &link_id[..4],
@@ -1600,6 +1605,7 @@ impl LinkManager {
         };
 
         let now = time::now();
+        link.engine.add_establishment_cost(packet.raw.len());
         let (lrrtt_encrypted, link_actions) = match link.engine.handle_lrproof_with_hops(
             packet.data(),
             &dest_sig_pub_bytes,

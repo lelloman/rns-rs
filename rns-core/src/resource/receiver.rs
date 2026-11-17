@@ -65,6 +65,9 @@ pub struct ResourceReceiver {
     sdu: usize,
     /// Link RTT estimate (from link establishment)
     link_rtt: f64,
+    /// Bytes the link's handshake took (upstream `Link.establishment_cost`),
+    /// for the rate estimate before any is measured.
+    establishment_cost: usize,
     /// Retries left
     pub retries_left: usize,
     /// Max retries
@@ -200,6 +203,7 @@ impl ResourceReceiver {
             consecutive_completed_height: -1,
             sdu,
             link_rtt,
+            establishment_cost: 0,
             retries_left: RESOURCE_MAX_RETRIES,
             max_retries: RESOURCE_MAX_RETRIES,
             rtt: None,
@@ -294,6 +298,14 @@ impl ResourceReceiver {
             ResourceAction::Failed(error),
             ResourceAction::TeardownLink,
         ]
+    }
+
+    /// Set the bytes the link's handshake took (upstream
+    /// `Link.establishment_cost`). Until a rate is measured or carried over
+    /// from a previous transfer, the receiver expects them to arrive once
+    /// per RTT.
+    pub fn set_establishment_cost(&mut self, bytes: usize) {
+        self.establishment_cost = bytes;
     }
 
     /// Continue the window and rate estimate the previous segment of the
@@ -945,10 +957,11 @@ impl ResourceReceiver {
             // not time anything.
             prev
         } else {
-            // Fallback: use link_rtt as establishment cost estimate
+            // Upstream: the link's establishment cost per RTT. Without
+            // either, a nominal rate keeps the timeouts finite.
             let rtt = self.rtt.unwrap_or(self.link_rtt);
-            if rtt > 0.0 {
-                (self.sdu as f64 * 8.0) / rtt
+            if rtt > 0.0 && self.establishment_cost > 0 {
+                (self.establishment_cost as f64 * 8.0) / rtt
             } else {
                 10000.0
             }
@@ -2759,18 +2772,24 @@ mod tests {
     }
 
     #[test]
-    fn rate_estimate_prefers_measured_data_rate_then_previous_then_rtt() {
+    fn rate_estimate_prefers_measured_data_rate_then_previous_then_establishment() {
+        // Upstream: the link's establishment cost in bits per RTT, the
+        // receiver's own RTT estimate once it has one, else the link's.
         let (_, mut receiver) = make_sender_receiver();
-        assert_eq!(receiver.compute_eifr(), RESOURCE_SDU as f64 * 8.0 / 0.5);
+        receiver.set_establishment_cost(297);
+        assert_eq!(receiver.compute_eifr(), 297.0 * 8.0 / 0.5);
         receiver.rtt = Some(0.25);
-        assert_eq!(receiver.compute_eifr(), RESOURCE_SDU as f64 * 8.0 / 0.25);
+        assert_eq!(receiver.compute_eifr(), 297.0 * 8.0 / 0.25);
         receiver.previous_eifr = Some(1234.0);
         assert_eq!(receiver.compute_eifr(), 1234.0);
         receiver.req_data_rtt_rate = 1000.0;
         assert_eq!(receiver.compute_eifr(), 8000.0);
         assert_eq!(receiver.eifr, Some(8000.0));
 
+        // Without an establishment cost or an RTT, a nominal rate.
         let (_, mut receiver) = make_sender_receiver();
+        assert_eq!(receiver.compute_eifr(), 10000.0);
+        receiver.set_establishment_cost(297);
         receiver.link_rtt = 0.0;
         assert_eq!(receiver.compute_eifr(), 10000.0);
     }

@@ -418,7 +418,7 @@ impl LinkManager {
         let resource_sdu = Self::resource_sdu_for_link(link);
         let now = time::now();
 
-        let receiver = match ResourceReceiver::from_advertisement(
+        let mut receiver = match ResourceReceiver::from_advertisement(
             adv_plaintext,
             resource_sdu,
             link_rtt,
@@ -433,6 +433,7 @@ impl LinkManager {
                 return self.teardown_link(link_id);
             }
         };
+        receiver.set_establishment_cost(link.engine.establishment_cost());
 
         // Advertisement retries belong to the existing transfer. A second receiver
         // would request the same parts and deliver the payload again. Preserve
@@ -459,10 +460,7 @@ impl LinkManager {
                 &link_id[..4],
                 active_incoming
             );
-            let reject_actions = {
-                let mut receiver = receiver;
-                receiver.reject()
-            };
+            let reject_actions = receiver.reject();
             let _ = link;
             return self.process_resource_actions(link_id, reject_actions, rng);
         }

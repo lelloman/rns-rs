@@ -60,6 +60,9 @@ pub struct LinkEngine {
     last_keepalive: f64,
     last_proof: f64,
     rtt: Option<f64>,
+    /// Bytes of the handshake's LINKREQUEST and LRPROOF packets, as packed
+    /// or received (upstream `Link.establishment_cost`).
+    establishment_cost: usize,
     keepalive_interval: f64,
     stale_time: f64,
     /// When the watchdog next runs. Python's `__watchdog_job` sleeps between
@@ -166,6 +169,7 @@ impl LinkEngine {
             last_keepalive: 0.0,
             last_proof: 0.0,
             rtt: None,
+            establishment_cost: 0,
             keepalive_interval: LINK_KEEPALIVE_MAX,
             stale_time: LINK_KEEPALIVE_MAX * 2.0,
             watchdog_at: 0.0,
@@ -261,6 +265,7 @@ impl LinkEngine {
             last_keepalive: 0.0,
             last_proof: 0.0,
             rtt: None,
+            establishment_cost: 0,
             keepalive_interval: LINK_KEEPALIVE_MAX,
             stale_time: LINK_KEEPALIVE_MAX * 2.0,
             watchdog_at: 0.0,
@@ -751,6 +756,18 @@ impl LinkEngine {
 
     pub fn rtt(&self) -> Option<f64> {
         self.rtt
+    }
+
+    /// Bytes the handshake took, as upstream counts them: the LINKREQUEST
+    /// and LRPROOF packets this end packed or received.
+    pub fn establishment_cost(&self) -> usize {
+        self.establishment_cost
+    }
+
+    /// Count a handshake packet (LINKREQUEST or LRPROOF) of `bytes` bytes
+    /// towards [`Self::establishment_cost`].
+    pub fn add_establishment_cost(&mut self, bytes: usize) {
+        self.establishment_cost = self.establishment_cost.saturating_add(bytes);
     }
 
     pub fn mdu(&self) -> usize {
@@ -2114,5 +2131,14 @@ mod tests {
             LinkError::NoSessionKey.to_string(),
             "No session key established"
         );
+    }
+
+    #[test]
+    fn establishment_cost_adds_up_the_handshake_packets() {
+        let (mut initiator, _, _) = active_link_pair();
+        assert_eq!(initiator.establishment_cost(), 0);
+        initiator.add_establishment_cost(83);
+        initiator.add_establishment_cost(115);
+        assert_eq!(initiator.establishment_cost(), 198);
     }
 }

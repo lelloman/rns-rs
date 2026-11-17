@@ -257,6 +257,13 @@ fn test_full_handshake_via_manager() {
     // Both should have RTT
     assert!(initiator_mgr.link_rtt(&link_id).is_some());
     assert!(responder_mgr.link_rtt(&link_id).is_some());
+
+    // Both count the LINKREQUEST and LRPROOF towards the establishment
+    // cost, as upstream does; the LRRTT is not part of it.
+    let cost = linkrequest_raw.len() + lrproof_raw.len();
+    for mgr in [&initiator_mgr, &responder_mgr] {
+        assert_eq!(mgr.links[&link_id].engine.establishment_cost(), cost);
+    }
 }
 
 #[test]
