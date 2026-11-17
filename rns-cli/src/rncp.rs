@@ -611,8 +611,7 @@ impl Rncp {
     /// to a shared instance, or an instance of its own.
     fn start_reticulum(&mut self, allow_all: bool) {
         let level = (3 + self.args.verbose - self.args.quiet).clamp(0, 8);
-        pylog::set_loglevel(level);
-        let _ = pylog::RnsLogger::install(level, true, Box::new(std::io::stdout()));
+        pylog::install_utility_logging(self.args.config.as_deref(), Some(level), 0, false);
         let config_dir = self.config_dir();
         let (tx, rx) = mpsc::channel();
         let callbacks = || {

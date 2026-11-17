@@ -616,23 +616,15 @@ fn rnpath_finds_the_instance_s_own_destinations() {
 }
 
 /// The startup messages about the configuration and identities in a
-/// utility's output, with hashes normalized as `identity_messages` does.
-/// Rust utilities log as `[time LEVEL target] message`, Python ones as
-/// `[time] [Level]  message`.
+/// utility's output, logged as upstream's `RNS.log` lines
+/// (`[time] [Verbose]  message`), with hashes normalized as
+/// `identity_messages` does.
 fn client_startup_messages(output: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(output);
     let log: String = text
         .lines()
-        .filter_map(|line| {
-            let rest = line.strip_prefix('[')?;
-            let (head, message) = rest.split_once("] ")?;
-            let message = match message.strip_prefix("[Verbose]") {
-                Some(python) => python.trim_start(),
-                None if head.contains(" INFO ") => message,
-                None => return None,
-            };
-            Some(format!("[t] [Verbose] {message}\n"))
-        })
+        .filter(|line| line.starts_with('[') && line.contains("] [Verbose]  "))
+        .map(|line| format!("{line}\n"))
         .collect();
     let (messages, _) = identity_messages(&log);
     let config = log_messages(&log, "Verbose")
@@ -677,11 +669,6 @@ fn shared_clients_log_their_identities_as_upstream() {
     let _ = rnsd.kill();
     let _ = rnsd.wait();
     let messages = client_startup_messages(&rust.stdout);
-    let messages = if messages.is_empty() {
-        client_startup_messages(&rust.stderr)
-    } else {
-        messages
-    };
     assert_eq!(
         messages,
         [

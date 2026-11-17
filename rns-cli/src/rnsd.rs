@@ -258,23 +258,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
 }
 
 fn configured_logging(config_path: Option<&str>) -> rns_net::config::LoggingSection {
-    let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
-    let config_file = config_dir.join("config");
-    if !config_file.exists() {
-        return rns_net::config::LoggingSection::default();
-    }
-
-    match rns_net::config::parse_file(&config_file) {
-        Ok(config) => config.logging,
-        Err(err) => {
-            eprintln!(
-                "Could not parse logging config {}: {}",
-                config_file.display(),
-                err
-            );
-            rns_net::config::LoggingSection::default()
-        }
-    }
+    crate::pylog::configured_logging(config_path)
 }
 
 fn effective_log_level(configured: u8, verbosity: u8, quietness: u8, service_mode: bool) -> u8 {

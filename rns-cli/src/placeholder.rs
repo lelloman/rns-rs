@@ -76,10 +76,14 @@ pub fn main(placeholder: &Placeholder) -> i32 {
         return 0;
     }
 
-    let level = (3i16 + args.verbosity as i16 - args.quiet as i16).clamp(0, 5);
-    let filter = ["off", "error", "warn", "info", "debug", "trace"][level as usize];
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
-        .try_init();
+    // `RNS.Reticulum(configdir, verbosity=verbosity-quietness)`: the
+    // configured level, raised or lowered.
+    crate::pylog::install_utility_logging(
+        args.config_path(),
+        None,
+        i32::from(args.verbosity) - i32::from(args.quiet),
+        false,
+    );
 
     // Start Reticulum as upstream does: attached to a running shared
     // instance, or as an instance of its own.

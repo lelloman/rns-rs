@@ -80,13 +80,15 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         return;
     }
 
-    // As upstream, the first -v adds detail to the output; more raise the
-    // log level.
-    let level = (2i16 + args.verbosity.saturating_sub(1) as i16).clamp(0, 5);
-    let filter = ["off", "error", "warn", "info", "debug", "trace"][level as usize];
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
-        .format_timestamp_secs()
-        .try_init();
+    // As upstream, the first -v adds detail to the output rather than log
+    // level, and without one the level drops to warnings:
+    // `RNS.Reticulum(configdir, loglevel=3+verbosity-1)`.
+    rns_cli::pylog::install_utility_logging(
+        args.config_path(),
+        Some(2 + i32::from(args.verbosity)),
+        0,
+        false,
+    );
 
     let options = match Options::from_args(&args) {
         Ok(options) => options,

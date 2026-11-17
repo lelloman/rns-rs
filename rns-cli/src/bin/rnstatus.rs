@@ -78,15 +78,13 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         return;
     }
 
-    env_logger::Builder::new()
-        .filter_level(match args.verbosity {
-            0 => log::LevelFilter::Warn,
-            1 => log::LevelFilter::Info,
-            2 => log::LevelFilter::Debug,
-            _ => log::LevelFilter::Trace,
-        })
-        .format_timestamp_secs()
-        .init();
+    // `RNS.Reticulum(configdir, loglevel=3+verbosity)`.
+    rns_cli::pylog::install_utility_logging(
+        args.config_path(),
+        Some(rns_cli::pylog::LOG_NOTICE + i32::from(args.verbosity)),
+        0,
+        false,
+    );
 
     let config_path = args.config_path().map(|s| s.to_string());
     let json_output = args.has("j");

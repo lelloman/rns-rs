@@ -546,15 +546,9 @@ impl Rnid {
         if self.args.verbose != 0 || self.args.quiet != 0 {
             level = level + self.args.verbose - self.args.quiet;
         }
-        let filter = match level {
-            i32::MIN..=1 => "error",
-            2..=4 => "warn",
-            5 => "info",
-            6 => "debug",
-            _ => "trace",
-        };
-        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
-            .try_init();
+        // `RNS.Reticulum(configdir, loglevel=...)` with
+        // `RNS.compact_log_fmt`.
+        pylog::install_utility_logging(self.args.config.as_deref(), Some(level), 0, true);
         let config_dir =
             rns_net::storage::resolve_config_dir(self.args.config.as_deref().map(Path::new));
         let node = match rns_net::RnsNode::connect_shared_from_config(

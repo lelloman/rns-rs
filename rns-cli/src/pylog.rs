@@ -78,6 +78,51 @@ pub struct RnsLogger {
     level: i32,
     timestamps: bool,
     out: std::sync::Mutex<Box<dyn std::io::Write + Send>>,
+    /// `RNS.compact_log_fmt`: no level name.
+    compact: bool,
+}
+
+/// The `[logging]` section of the Reticulum config in `config_dir`
+/// (upstream's default when it has none).
+pub fn configured_logging(config_dir: Option<&str>) -> rns_net::config::LoggingSection {
+    let config_dir = rns_net::storage::resolve_config_dir(config_dir.map(std::path::Path::new));
+    let config_file = config_dir.join("config");
+    if !config_file.exists() {
+        return rns_net::config::LoggingSection::default();
+    }
+    match rns_net::config::parse_file(&config_file) {
+        Ok(config) => config.logging,
+        Err(err) => {
+            eprintln!(
+                "Could not parse logging config {}: {}",
+                config_file.display(),
+                err
+            );
+            rns_net::config::LoggingSection::default()
+        }
+    }
+}
+
+/// Log as a utility's `RNS.Reticulum(configdir, loglevel=...)` makes
+/// `RNS.log` log: to stdout, at `loglevel`, or without one at the
+/// configured level raised by `verbosity` (upstream's `verbosity=`
+/// argument), with timestamps unless the config turns them off. `compact`
+/// is `RNS.compact_log_fmt`.
+pub fn install_utility_logging(
+    config_dir: Option<&str>,
+    loglevel: Option<i32>,
+    verbosity: i32,
+    compact: bool,
+) {
+    let logging = configured_logging(config_dir);
+    let level = loglevel.unwrap_or_else(|| (i32::from(logging.loglevel) + verbosity).clamp(0, 8));
+    set_loglevel(level);
+    let _ = RnsLogger::install_with(
+        level,
+        logging.logtimestamps,
+        compact,
+        Box::new(std::io::stdout()),
+    );
 }
 
 impl RnsLogger {
@@ -85,6 +130,16 @@ impl RnsLogger {
     pub fn install(
         level: i32,
         timestamps: bool,
+        out: Box<dyn std::io::Write + Send>,
+    ) -> Result<(), log::SetLoggerError> {
+        Self::install_with(level, timestamps, false, out)
+    }
+
+    /// Install it as the global logger, with `RNS.compact_log_fmt`.
+    pub fn install_with(
+        level: i32,
+        timestamps: bool,
+        compact: bool,
         out: Box<dyn std::io::Write + Send>,
     ) -> Result<(), log::SetLoggerError> {
         let max = match level {
@@ -98,23 +153,30 @@ impl RnsLogger {
             level,
             timestamps,
             out: std::sync::Mutex::new(out),
+            compact,
         }))?;
         log::set_max_level(max);
         Ok(())
     }
 
     fn line(&self, level: i32, msg: &std::fmt::Arguments) -> String {
-        if self.timestamps {
-            format!("[{}] {} {}\n", timestamp(), loglevelname(level), msg)
+        let stamp = if self.timestamps {
+            format!("[{}] ", timestamp())
         } else {
-            format!("{} {}\n", loglevelname(level), msg)
+            String::new()
+        };
+        if self.compact {
+            format!("{stamp}{msg}\n")
+        } else {
+            format!("{stamp}{} {}\n", loglevelname(level), msg)
         }
     }
 }
 
 impl log::Log for RnsLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        rns_level(metadata) <= self.level
+        // `RNS.loglevel = -1` silences it, as rnid --stdout does.
+        loglevel() != LOG_NONE && rns_level(metadata) <= self.level
     }
 
     fn log(&self, record: &log::Record) {
