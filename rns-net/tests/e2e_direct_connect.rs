@@ -910,6 +910,13 @@ fn direct_path_discovers_its_mtu() {
         )
     );
 
+    // Bob runs the probe server both sides probed; Alice runs none.
+    let probe_server = pair.bob.direct_links().unwrap().probe_server;
+    let report = probe_server.expect("Bob's probe server in the status");
+    assert!(report.answered >= 2, "{report:?}");
+    assert_eq!(report.rate_limited, 0);
+    assert_eq!(pair.alice.direct_links().unwrap().probe_server, None);
+
     // The status shows each side's direct path, its candidate, discovered
     // MTU and RTT, and the upgrade counted once.
     for (node, initiator) in [(&pair.alice, true), (&pair.bob, false)] {

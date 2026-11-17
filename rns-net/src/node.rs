@@ -2405,6 +2405,9 @@ impl RnsNode {
                         Arc::clone(tx.poller()),
                     )
                     .map(|server| {
+                        driver
+                            .holepunch_manager
+                            .set_probe_server_counters(server.counters());
                         driver.probe_server = Some(server);
                         None
                     })
@@ -2414,7 +2417,12 @@ impl RnsNode {
                         config.underlay_mark,
                         config.probe_rate_limit,
                     )
-                    .map(Some)
+                    .map(|server| {
+                        driver
+                            .holepunch_manager
+                            .set_probe_server_counters(server.counters());
+                        Some(server)
+                    })
                 };
                 match result {
                     Ok(handle) => {

@@ -666,6 +666,10 @@ fn handle_direct_links(node: &NodeHandle) -> HttpResponse {
                     .iter()
                     .map(|addr| addr.to_string())
                     .collect::<Vec<_>>(),
+                "probe_server": status.probe_server.map(|report| json!({
+                    "answered": report.answered,
+                    "rate_limited": report.rate_limited,
+                })),
                 "totals": direct_counters_json(&status.totals),
                 "links": links,
             }))

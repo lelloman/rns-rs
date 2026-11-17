@@ -120,6 +120,9 @@ in `rns-net`) reports Direct Link on the node:
 
 - `enabled`, whether the node takes part at all, and `probe_servers`, the
   facilitators it probes, in the order it tries them;
+- `probe_server`, when the node runs its own (`probe_port`): the probe
+  requests it has `answered` and those it dropped over its rate limits
+  (`rate_limited`), or `null`;
 - `totals`, counted over the node's life: upgrades `proposed` by this node,
   requests `accepted` as the responder, upgrades `established`, `failed`
   (also `failed_by_reason`, keyed by the names in

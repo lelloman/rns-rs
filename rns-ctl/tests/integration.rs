@@ -928,6 +928,7 @@ fn test_get_direct_links_without_direct_link() {
     assert_eq!(json["enabled"], false);
     assert!(json["links"].as_array().unwrap().is_empty());
     assert!(json["probe_servers"].as_array().unwrap().is_empty());
+    assert!(json["probe_server"].is_null());
     assert_eq!(json["totals"]["proposed"], 0);
     assert_eq!(json["totals"]["failed"], 0);
     server.shutdown();

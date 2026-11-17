@@ -231,6 +231,8 @@ pub struct HolePunchManager {
     /// UDP ports this node listens on (its probe server), never punched
     /// toward at its own public address.
     own_ports: Vec<u16>,
+    /// Counters of this node's own probe server, when it runs one.
+    probe_server_counters: Option<std::sync::Arc<super::probe::ProbeServerCounters>>,
     /// Identities whose proposals are accepted whatever the policy.
     allowed_identities: Vec<[u8; 16]>,
     /// Paces inbound upgrade requests per link.
@@ -314,6 +316,7 @@ impl HolePunchManager {
             next_interface_id: 50000, // start high to avoid collision with regular interfaces
             allow_private_endpoints: false,
             own_ports: Vec::new(),
+            probe_server_counters: None,
             allowed_identities: Vec::new(),
             inbound_limiter: InboundRequestLimiter::new(INBOUND_REQUEST_WINDOW),
             reupgrade_config: DirectReupgradeConfig::default(),
@@ -476,6 +479,12 @@ impl HolePunchManager {
         DirectLinkStatus {
             enabled: self.enabled(),
             probe_servers: self.probe_addrs.clone(),
+            probe_server: self.probe_server_counters.as_ref().map(|counters| {
+                crate::event::ProbeServerReport {
+                    answered: counters.answered(),
+                    rate_limited: counters.rate_limited(),
+                }
+            }),
             totals: self.totals.report(),
             links,
         }
@@ -578,6 +587,14 @@ impl HolePunchManager {
 
     /// UDP ports this node listens on, which it never punches toward at
     /// its own public address.
+    /// Report the counters of this node's own probe server.
+    pub fn set_probe_server_counters(
+        &mut self,
+        counters: std::sync::Arc<super::probe::ProbeServerCounters>,
+    ) {
+        self.probe_server_counters = Some(counters);
+    }
+
     pub fn set_own_listen_ports(&mut self, ports: Vec<u16>) {
         self.own_ports = ports;
     }

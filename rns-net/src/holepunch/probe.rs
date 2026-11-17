@@ -14,7 +14,7 @@ use std::io;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,11 +50,13 @@ pub fn start_probe_server_with_mark(
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
+    let limiter = ProbeLimiter::new(limit);
+    let counters = limiter.counters();
 
     let handle = thread::Builder::new()
         .name("probe-server".into())
         .spawn(move || {
-            run_probe_server(socket, running_clone, ProbeLimiter::new(limit));
+            run_probe_server(socket, running_clone, limiter);
         })?;
 
     Ok(ProbeServerHandle {
@@ -62,6 +64,7 @@ pub fn start_probe_server_with_mark(
         wake,
         local_addr,
         thread: Some(handle),
+        counters,
     })
 }
 
@@ -152,6 +155,26 @@ impl Bucket {
     }
 }
 
+/// Counts of a probe server's work over its life, shared with the node's
+/// status report.
+#[derive(Debug, Default)]
+pub struct ProbeServerCounters {
+    answered: AtomicU64,
+    rate_limited: AtomicU64,
+}
+
+impl ProbeServerCounters {
+    /// Probe requests answered.
+    pub fn answered(&self) -> u64 {
+        self.answered.load(Ordering::Relaxed)
+    }
+
+    /// Probe requests dropped over the rate limits.
+    pub fn rate_limited(&self) -> u64 {
+        self.rate_limited.load(Ordering::Relaxed)
+    }
+}
+
 /// The rate limits of a probe server (see [`ProbeRateLimit`]): a token
 /// bucket per source (an IPv4 address, or an IPv6 /64) and one over all
 /// of them. At most [`MAX_TRACKED_SOURCES`] sources are tracked; when the
@@ -163,6 +186,7 @@ pub(crate) struct ProbeLimiter {
     total: Option<Bucket>,
     refused: u64,
     last_report: Option<Instant>,
+    counters: Arc<ProbeServerCounters>,
 }
 
 impl ProbeLimiter {
@@ -173,7 +197,13 @@ impl ProbeLimiter {
             total: None,
             refused: 0,
             last_report: None,
+            counters: Arc::new(ProbeServerCounters::default()),
         }
+    }
+
+    /// The counters this limiter keeps.
+    pub(crate) fn counters(&self) -> Arc<ProbeServerCounters> {
+        Arc::clone(&self.counters)
     }
 
     /// The source a request from `src` counts against.
@@ -196,6 +226,7 @@ impl ProbeLimiter {
     pub(crate) fn allow(&mut self, src: &SocketAddr, now: Instant) -> bool {
         let allowed = self.check(src, now);
         if !allowed {
+            self.counters.rate_limited.fetch_add(1, Ordering::Relaxed);
             self.refused += 1;
             if self
                 .last_report
@@ -265,7 +296,11 @@ impl ProbeLimiter {
         if !is_probe_request(request) || !self.allow(src, now) {
             return None;
         }
-        answer_probe(request, src)
+        let response = answer_probe(request, src);
+        if response.is_some() {
+            self.counters.answered.fetch_add(1, Ordering::Relaxed);
+        }
+        response
     }
 }
 
@@ -283,6 +318,11 @@ pub(crate) struct FoldedProbeServer {
 }
 
 impl FoldedProbeServer {
+    /// What the server has answered and dropped so far.
+    pub(crate) fn counters(&self) -> Arc<ProbeServerCounters> {
+        self.limiter.counters()
+    }
+
     pub(crate) fn bind(
         listen_addr: SocketAddr,
         underlay_mark: Option<u32>,
@@ -415,12 +455,18 @@ pub struct ProbeServerHandle {
     wake: crate::listen::ListenerWake,
     local_addr: SocketAddr,
     thread: Option<thread::JoinHandle<()>>,
+    counters: Arc<ProbeServerCounters>,
 }
 
 impl ProbeServerHandle {
     /// The address the server answers on.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    /// What the server has answered and dropped so far.
+    pub fn counters(&self) -> Arc<ProbeServerCounters> {
+        Arc::clone(&self.counters)
     }
 
     pub fn stop(&mut self) {
@@ -1090,6 +1136,25 @@ pub(crate) mod tests {
         ProbeRequest::new(rns_core::holepunch::ProbeProtocol::Rnsp)
             .bytes()
             .to_vec()
+    }
+
+    #[test]
+    fn counters_track_answered_and_rate_limited_requests() {
+        let mut limiter = ProbeLimiter::new(ProbeRateLimit {
+            per_source_rate: 1.0,
+            per_source_burst: 2,
+            total_rate: 0,
+        });
+        let counters = limiter.counters();
+        let t0 = Instant::now();
+        let a: SocketAddr = "198.51.100.1:4000".parse().unwrap();
+        for _ in 0..5 {
+            limiter.answer(&request(), &a, t0);
+        }
+        // Junk is neither answered nor counted against the limits.
+        assert!(limiter.answer(b"junk", &a, t0).is_none());
+        assert_eq!(counters.answered(), 2);
+        assert_eq!(counters.rate_limited(), 3);
     }
 
     #[test]

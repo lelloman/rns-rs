@@ -1423,6 +1423,15 @@ pub struct DirectLinkEntry {
     pub reupgrade: Option<(u32, Option<f64>)>,
 }
 
+/// Counts of a node's own probe server over its life.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProbeServerReport {
+    /// Probe requests answered.
+    pub answered: u64,
+    /// Probe requests dropped over the rate limits.
+    pub rate_limited: u64,
+}
+
 /// The state of Direct Link on a node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DirectLinkStatus {
@@ -1430,6 +1439,9 @@ pub struct DirectLinkStatus {
     pub enabled: bool,
     /// The facilitators this node probes, in the order it tries them.
     pub probe_servers: Vec<std::net::SocketAddr>,
+    /// What this node's own probe server (`probe_port`) has answered and
+    /// dropped over its rate limits, when it runs one.
+    pub probe_server: Option<ProbeServerReport>,
     /// Counts over the node's life.
     pub totals: DirectLinkCounters,
     /// Links with Direct Link activity, ordered by link id.
