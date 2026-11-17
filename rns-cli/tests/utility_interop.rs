@@ -71,6 +71,7 @@ struct Harness {
     listener_home: PathBuf,
     client_control_port: u16,
     client_instance: String,
+    listener_instance: String,
     /// Whether listeners wait until the client daemon learns their path. A
     /// filtering client daemon only learns it once a client asks for it.
     wait_for_client_paths: bool,
@@ -199,6 +200,7 @@ impl Harness {
             listener_home,
             client_control_port,
             client_instance,
+            listener_instance,
             wait_for_client_paths: client_sections.is_empty(),
             _client_daemon: client_daemon,
             _listener_daemon: listener_daemon,
@@ -306,8 +308,8 @@ impl Harness {
         listener
     }
 
-    fn wait_for_client_path(&self, destination: &str, listener: &ProcessGuard) {
-        let destination = parse_destination_hash(destination);
+    /// The client daemon's RPC address and key.
+    fn client_rpc(&self) -> (RpcAddr, [u8; 32]) {
         let identity_path = self
             .client_config
             .join("storage")
@@ -321,6 +323,12 @@ impl Harness {
                 .expect("client daemon identity has a private key"),
         );
         let address = RpcAddr::local(self.client_instance.clone(), self.client_control_port);
+        (address, auth_key)
+    }
+
+    fn wait_for_client_path(&self, destination: &str, listener: &ProcessGuard) {
+        let destination = parse_destination_hash(destination);
+        let (address, auth_key) = self.client_rpc();
         let deadline = Instant::now() + START_TIMEOUT;
         let mut requested = false;
         loop {
@@ -1292,6 +1300,73 @@ fn rust_rnx_client_executes_on_python_listener() {
         "/usr/bin/seq 1 1000",
     );
     assert_large_rnx_response(&large, "Rust rnx Resource response from Python");
+}
+
+/// Builds, with a standalone upstream instance, what an upstream shared
+/// client emits when it creates and announces a destination: the announce
+/// and, within the same second, the path response of the destination's
+/// registration. Both go to the shared instance `argv[2]` in one write.
+#[cfg(target_os = "linux")]
+const ANNOUNCE_THEN_PATH_RESPONSE: &str = r#"
+import os, socket, sys, time
+import RNS
+from RNS.Interfaces.util.HDLC import HDLC
+
+config, instance = sys.argv[1], sys.argv[2]
+os.makedirs(config, exist_ok=True)
+with open(os.path.join(config, "config"), "w") as f:
+    f.write("[stamps]\n  destination_value = 8\n  destination_cost = 8\n"
+            "  pr_value = 8\n  pr_cost = 8\n\n"
+            "[reticulum]\n  enable_transport = No\n  share_instance = No\n\n"
+            "[logging]\n  loglevel = 2\n\n[interfaces]\n")
+RNS.Reticulum(config)
+destination = RNS.Destination(RNS.Identity(), RNS.Destination.IN,
+                              RNS.Destination.SINGLE, "order", "check")
+while True:
+    second = int(time.time())
+    announce = destination._announce(send=False)
+    response = destination._announce(path_response=True, send=False)
+    if int(time.time()) == second:
+        break
+announce.pack()
+response.pack()
+connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+connection.connect("\0rns/" + instance)
+connection.sendall(HDLC.frame(announce.raw) + HDLC.frame(response.raw))
+print(destination.hash.hex(), flush=True)
+time.sleep(2)
+connection.close()
+"#;
+
+/// An announce from a shared client is rebroadcast even when the path
+/// response the client's registration sends right after it, in the same
+/// second, arrives before the announce is verified: the instance processes
+/// them in the order they arrived, so the other node learns the path.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rust_instance_rebroadcasts_client_announce_followed_by_path_response() {
+    let harness = Harness::start("announce-order");
+    let mut command = Command::new("python3");
+    command.env("PYTHONUNBUFFERED", "1");
+    command.args(["-c", ANNOUNCE_THEN_PATH_RESPONSE]);
+    command.arg(harness.path("emitter"));
+    command.arg(&harness.listener_instance);
+    let output = run(command);
+    assert_success(&output, "emit announce and path response");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let destination = parse_destination_hash(stdout.lines().last().unwrap_or_default().trim());
+
+    let (address, auth_key) = harness.client_rpc();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !query_has_path(&address, &auth_key, &destination).unwrap_or(false) {
+        assert!(
+            Instant::now() < deadline,
+            "the client announce was not rebroadcast:\nlistener daemon:\n{}",
+            fs::read_to_string(&harness._listener_daemon.log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]

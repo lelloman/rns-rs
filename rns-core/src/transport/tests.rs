@@ -1675,6 +1675,98 @@ fn test_async_announce_completion_inserts_sig_cache_and_prevents_requeue() {
     assert_eq!(queue.len(), 0);
 }
 
+/// A shared client emits the announce of a destination it registers and,
+/// within the same second, the path response its registration sends the
+/// instance. Processed in that order, as upstream processes them, the
+/// announce is rebroadcast and the path response is not newer. The path
+/// response, which needs no queued verification, must not overtake the
+/// announce still being verified.
+#[test]
+fn local_client_path_response_waits_behind_its_queued_announce() {
+    use crate::announce::AnnounceData;
+    use crate::destination::{destination_hash, name_hash};
+    use crate::transport::announce_verify_queue::AnnounceVerifyQueue;
+
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_local_client_interface(2));
+
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x61; 32]));
+    let dest_hash = destination_hash("order", &["check"], Some(identity.hash()));
+    let name_h = name_hash("order", &["check"]);
+    // Different random bytes, the same emission second.
+    let emitted = [0x00, 0x00, 0x00, 0x03, 0xE8];
+    let packet = |random: u8, context: u8| {
+        let mut random_hash = [random; 10];
+        random_hash[5..].copy_from_slice(&emitted);
+        let (data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
+        RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &dest_hash,
+            None,
+            context,
+            &data,
+        )
+        .unwrap()
+    };
+    // The announce's random bytes sort after the path response's, so the
+    // queue's key order alone would not keep their order either.
+    let announce = packet(0xA0, constants::CONTEXT_NONE);
+    let path_response = packet(0x10, constants::CONTEXT_PATH_RESPONSE);
+
+    let mut queue = AnnounceVerifyQueue::new(8);
+    let mut rng = rns_crypto::FixedRng::new(&[0x77; 32]);
+    for (raw, now) in [(&announce.raw, 1000.0), (&path_response.raw, 1000.1)] {
+        let actions = engine.handle_inbound_with_announce_queue(
+            InboundFrame::new(raw, InterfaceId(2), now),
+            &mut rng,
+            Some(&mut queue),
+        );
+        assert!(actions.is_empty(), "{actions:?}");
+    }
+    assert!(!engine.path_table.contains_key(&dest_hash));
+    assert_eq!(queue.len(), 2);
+
+    let batch = queue.take_pending(1000.2);
+    let contexts: Vec<_> = batch
+        .iter()
+        .map(|(_, pending)| pending.packet.context)
+        .collect();
+    assert_eq!(
+        contexts,
+        [constants::CONTEXT_NONE, constants::CONTEXT_PATH_RESPONSE]
+    );
+    for (key, pending) in batch {
+        let announce = AnnounceData::unpack(pending.packet.data(), false).unwrap();
+        let validated = announce.validate(&pending.packet.destination_hash).unwrap();
+        let sig_cache_key = announce.signature_cache_key(&pending.packet.destination_hash);
+        let pending = queue.complete_success(&key).unwrap();
+        engine.complete_verified_announce(pending, validated, sig_cache_key, 1000.2, &mut rng);
+    }
+
+    let path = engine
+        .path_table
+        .get(&dest_hash)
+        .unwrap()
+        .primary()
+        .unwrap();
+    assert_eq!(path.random_blobs.last().unwrap()[0], 0xA0);
+    let entry = engine
+        .announce_table
+        .get(&dest_hash)
+        .expect("the announce is rebroadcast");
+    assert!(!entry.block_rebroadcasts);
+    assert_eq!(entry.attached_interface, None);
+}
+
 fn signed_announce_packet(
     identity_seed: u8,
     app_data: Option<&[u8]>,

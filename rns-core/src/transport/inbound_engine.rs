@@ -1013,8 +1013,15 @@ impl TransportEngine {
             .as_deref()
             .expect("announce packets retain original raw bytes");
 
+        // Upstream processes inbound announces one at a time, in the order
+        // they arrive. An announce that would be processed at once, without
+        // waiting for verification, waits behind an earlier one for the same
+        // destination still being verified: processed first, a shared
+        // client's registration path response would have the announce it
+        // emitted just before rejected as not newer, and not rebroadcast.
+        let behind_queued = announce_queue.has_destination(&ctx.packet.destination_hash);
         let sig_cache_key = Self::announce_sig_cache_key(&ctx.packet.destination_hash, &announce);
-        if self.announce_sig_cache.contains(&sig_cache_key) {
+        if !behind_queued && self.announce_sig_cache.contains(&sig_cache_key) {
             let Ok(validated) =
                 announce.to_validated_with_cached_signature(&ctx.packet.destination_hash)
             else {
@@ -1047,7 +1054,7 @@ impl TransportEngine {
             return;
         }
 
-        if ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
+        if !behind_queued && ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
             let Ok(validated) = announce.validate(&ctx.packet.destination_hash) else {
                 self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
                 self.inbound_filtered = true;

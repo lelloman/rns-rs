@@ -40,7 +40,9 @@ pub enum QueueEntry {
 
 #[derive(Debug, Clone)]
 pub struct AnnounceVerifyQueue {
-    pending: BTreeMap<AnnounceVerifyKey, QueueEntry>,
+    /// Each entry with the arrival sequence number of its announce.
+    pending: BTreeMap<AnnounceVerifyKey, (u64, QueueEntry)>,
+    next_sequence: u64,
     max_entries: usize,
     max_bytes: usize,
     max_stale_secs: f64,
@@ -61,6 +63,7 @@ impl AnnounceVerifyQueue {
     ) -> Self {
         Self {
             pending: BTreeMap::new(),
+            next_sequence: 0,
             max_entries: max_entries.max(1),
             max_bytes: max_bytes.max(1),
             max_stale_secs: max_stale_secs.max(0.001),
@@ -70,7 +73,7 @@ impl AnnounceVerifyQueue {
     }
 
     pub fn enqueue(&mut self, key: AnnounceVerifyKey, entry: PendingAnnounce) -> bool {
-        if let Some(existing) = self.pending.get_mut(&key) {
+        if let Some((_, existing)) = self.pending.get_mut(&key) {
             return match existing {
                 QueueEntry::Pending(current) | QueueEntry::InFlight(current) => {
                     if entry.best_hops < current.best_hops {
@@ -104,16 +107,37 @@ impl AnnounceVerifyQueue {
         }
 
         self.queued_bytes = self.queued_bytes.saturating_add(entry_bytes);
-        self.pending.insert(key, QueueEntry::Pending(entry));
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.wrapping_add(1);
+        self.pending
+            .insert(key, (sequence, QueueEntry::Pending(entry)));
         true
     }
 
+    /// Whether an announce for `destination_hash` is queued or being
+    /// verified. A later announce for it must not be processed before it.
+    pub fn has_destination(&self, destination_hash: &[u8; 16]) -> bool {
+        let first = AnnounceVerifyKey {
+            destination_hash: *destination_hash,
+            random_blob: [0; 10],
+            received_from: [0; 16],
+        };
+        let last = AnnounceVerifyKey {
+            destination_hash: *destination_hash,
+            random_blob: [0xFF; 10],
+            received_from: [0xFF; 16],
+        };
+        self.pending.range(first..=last).next().is_some()
+    }
+
+    /// Take the pending announces for verification, in the order they
+    /// arrived, as upstream processes inbound announces one at a time.
     pub fn take_pending(&mut self, now: f64) -> Vec<(AnnounceVerifyKey, PendingAnnounce)> {
         let stale_before = now - self.max_stale_secs;
         let stale_keys: Vec<_> = self
             .pending
             .iter()
-            .filter_map(|(key, entry)| match entry {
+            .filter_map(|(key, (_, entry))| match entry {
                 QueueEntry::Pending(current) | QueueEntry::InFlight(current)
                     if current.queued_at < stale_before =>
                 {
@@ -126,18 +150,19 @@ impl AnnounceVerifyQueue {
             self.remove_entry(&key);
         }
 
-        let keys: Vec<_> = self
+        let mut keys: Vec<_> = self
             .pending
             .iter()
-            .filter_map(|(key, entry)| match entry {
-                QueueEntry::Pending(_) => Some(*key),
+            .filter_map(|(key, (sequence, entry))| match entry {
+                QueueEntry::Pending(_) => Some((*sequence, *key)),
                 QueueEntry::InFlight(_) => None,
             })
             .collect();
+        keys.sort_unstable_by_key(|(sequence, _)| *sequence);
 
         let mut drained = Vec::with_capacity(keys.len());
-        for key in keys {
-            if let Some(entry) = self.pending.get_mut(&key) {
+        for (_, key) in keys {
+            if let Some((_, entry)) = self.pending.get_mut(&key) {
                 if let QueueEntry::Pending(current) = entry {
                     let cloned = current.clone();
                     *entry = QueueEntry::InFlight(cloned.clone());
@@ -164,18 +189,18 @@ impl AnnounceVerifyQueue {
     pub fn pending_interface(&self, key: &AnnounceVerifyKey) -> Option<InterfaceId> {
         self.pending
             .get(key)
-            .map(|entry| pending_of(entry).interface)
+            .map(|(_, entry)| pending_of(entry).interface)
     }
 
     /// The size of a pending announce as received.
     pub fn pending_size(&self, key: &AnnounceVerifyKey) -> Option<usize> {
         self.pending
             .get(key)
-            .map(|entry| pending_of(entry).original_raw.len())
+            .map(|(_, entry)| pending_of(entry).original_raw.len())
     }
 
     pub fn pending_identity_hash(&self, key: &AnnounceVerifyKey) -> Option<[u8; 16]> {
-        let packet = &pending_of(self.pending.get(key)?).packet;
+        let packet = &pending_of(&self.pending.get(key)?.1).packet;
         Some(crate::hash::truncated_hash(packet.data().get(..64)?))
     }
 
@@ -206,8 +231,8 @@ impl AnnounceVerifyQueue {
                 .pending
                 .iter()
                 .min_by(|a, b| {
-                    queued_at_of(a.1)
-                        .partial_cmp(&queued_at_of(b.1))
+                    queued_at_of(&a.1 .1)
+                        .partial_cmp(&queued_at_of(&b.1 .1))
                         .unwrap_or(core::cmp::Ordering::Equal)
                 })
                 .map(|(key, _)| *key),
@@ -215,7 +240,7 @@ impl AnnounceVerifyQueue {
                 let candidate = self
                     .pending
                     .iter()
-                    .map(|(existing_key, existing_entry)| {
+                    .map(|(existing_key, (_, existing_entry))| {
                         (*existing_key, pending_of(existing_entry))
                     })
                     .max_by(|a, b| {
@@ -235,7 +260,7 @@ impl AnnounceVerifyQueue {
     }
 
     fn remove_entry(&mut self, key: &AnnounceVerifyKey) -> Option<QueueEntry> {
-        let removed = self.pending.remove(key)?;
+        let (_, removed) = self.pending.remove(key)?;
         self.queued_bytes = self
             .queued_bytes
             .saturating_sub(pending_bytes(pending_of(&removed)));
@@ -306,6 +331,34 @@ mod tests {
                 random_blob,
             },
         )
+    }
+
+    #[test]
+    fn announces_are_taken_in_arrival_order() {
+        let mut queue = AnnounceVerifyQueue::new(8);
+        let arrivals = [
+            make_pending([3; 16], [9; 10], [1; 16], 1),
+            make_pending([1; 16], [5; 10], [1; 16], 1),
+            make_pending([1; 16], [2; 10], [1; 16], 1),
+        ];
+        for (key, entry) in arrivals.clone() {
+            assert!(queue.enqueue(key, entry));
+        }
+        assert!(queue.has_destination(&[1; 16]));
+        assert!(!queue.has_destination(&[2; 16]));
+
+        let taken: Vec<_> = queue
+            .take_pending(10.0)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        let expected: Vec<_> = arrivals.iter().map(|(key, _)| *key).collect();
+        assert_eq!(taken, expected);
+        // An announce being verified still holds its destination.
+        assert!(queue.has_destination(&[1; 16]));
+        queue.complete_success(&expected[1]);
+        queue.complete_success(&expected[2]);
+        assert!(!queue.has_destination(&[1; 16]));
     }
 
     #[test]
