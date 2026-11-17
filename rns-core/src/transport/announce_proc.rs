@@ -405,4 +405,68 @@ mod tests {
             now + constants::PATHFINDER_E
         );
     }
+
+    fn retransmit_entry(packet_raw: Vec<u8>, context_flag: u8) -> AnnounceEntry {
+        AnnounceEntry {
+            timestamp: 1000.0,
+            retransmit_timeout: 1001.0,
+            retries: 0,
+            received_from: [0xAA; 16],
+            hops: 2,
+            packet_raw,
+            packet_data: vec![0xEE; 10],
+            destination_hash: [0xDD; 16],
+            context_flag,
+            local_rebroadcasts: 0,
+            block_rebroadcasts: false,
+            attached_interface: None,
+        }
+    }
+
+    /// The retransmit keeps the original destination and packet type bits
+    /// and the context flag; without an original frame it is a single
+    /// destination's announce.
+    #[test]
+    fn retransmit_flags_keep_the_original_type_bits_and_context_flag() {
+        let raw = build_retransmit_announce(&retransmit_entry(vec![0x09, 0x02], 1), &[0xBB; 16]);
+        assert_eq!(raw[0], 0x40 | 0x20 | 0x10 | 0x09);
+
+        let raw = build_retransmit_announce(&retransmit_entry(Vec::new(), 0), &[0xBB; 16]);
+        assert_eq!(
+            raw[0],
+            0x40 | 0x10 | (constants::DESTINATION_SINGLE << 2) | constants::PACKET_TYPE_ANNOUNCE
+        );
+    }
+
+    /// Upstream keeps only the newest MAX_RANDOM_BLOBS random blobs of a
+    /// path, however many it had.
+    #[test]
+    fn random_blobs_are_trimmed_to_the_newest_max_random_blobs() {
+        let blobs: Vec<[u8; 10]> = (0..constants::MAX_RANDOM_BLOBS + 5)
+            .map(|i| [i as u8; 10])
+            .collect();
+        let (path, _) = process_validated_announce(
+            [0xDD; 16],
+            2,
+            &[],
+            &[],
+            [0; 32],
+            0,
+            [0xAA; 16],
+            InterfaceId(1),
+            1000.0,
+            blobs,
+            [0xFF; 10],
+            2000.0,
+            0.0,
+            true,
+            false,
+            false,
+            false,
+            None,
+        );
+        assert_eq!(path.random_blobs.len(), constants::MAX_RANDOM_BLOBS);
+        assert_eq!(path.random_blobs.last(), Some(&[0xFF; 10]));
+        assert_eq!(path.random_blobs[0], [6; 10]);
+    }
 }
