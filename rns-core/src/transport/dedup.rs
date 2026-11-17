@@ -920,6 +920,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn emptiness_follows_retained_hashes() {
+        for policy in policies() {
+            let mut list = PacketHashlist::with_allocation(4, policy);
+            assert!(list.is_empty());
+            list.add(make_hash(1));
+            assert!(!list.is_empty());
+            assert!(list.remove(&make_hash(1)));
+            assert!(list.is_empty());
+        }
+    }
+
+    #[test]
+    fn hashing_seed_reports_the_seed_in_use() {
+        let mut list = PacketHashlist::new(8);
+        assert_eq!(list.hashing_seed(), None);
+        list.seed_hashing(0x0123_4567_89ab_cdef);
+        assert_eq!(list.hashing_seed(), Some(0x0123_4567_89ab_cdef));
+    }
+
+    /// Longest run of occupied active buckets: the probe cluster a lookup
+    /// may walk.
+    fn longest_cluster(set: &PacketHashSet) -> usize {
+        let mut longest = 0;
+        let mut run = 0;
+        for &bucket in &set.buckets[..set.active] {
+            run = if bucket == 0 { 0 } else { run + 1 };
+            longest = longest.max(run);
+        }
+        longest
+    }
+
+    /// An unseeded table places each hash by its leading bits, so hashes
+    /// whose leading bits differ in the low bits do not share probe clusters.
+    #[test]
+    fn unseeded_placement_follows_leading_bits() {
+        let mut list = PacketHashlist::new(64);
+        for n in 0u64..32 {
+            let mut hash = [0; 32];
+            hash[..8].copy_from_slice(&(n * 4).to_le_bytes());
+            list.add(hash);
+        }
+        assert_eq!(longest_cluster(&list.set), 1);
+    }
+
+    /// Hashes ground to share an unseeded probe sequence spread out once the
+    /// table is seeded.
+    #[test]
+    fn seeded_placement_spreads_colliding_hashes() {
+        let ground = |n: u64| {
+            let mut hash = [0; 32];
+            hash[..8].copy_from_slice(&(n << 40).to_le_bytes());
+            hash
+        };
+        let mut unseeded = PacketHashlist::new(64);
+        let mut seeded = PacketHashlist::new(64);
+        seeded.seed_hashing(0x9e37_79b9_7f4a_7c15);
+        for n in 0..32 {
+            unseeded.add(ground(n));
+            seeded.add(ground(n));
+        }
+        assert_eq!(longest_cluster(&unseeded.set), 32);
+        assert!(longest_cluster(&seeded.set) < 8);
+        assert!((0..32).all(|n| seeded.is_duplicate(&ground(n))));
+    }
+
+    /// A table that grows with occupancy doubles its buckets just before
+    /// they would be more than half full, and not earlier.
+    #[test]
+    fn lazy_table_doubles_at_half_load() {
+        let mut list = PacketHashlist::with_allocation(1000, PacketHashlistAllocation::Lazy);
+        for n in 0u64..64 {
+            let mut hash = [0; 32];
+            hash[..8].copy_from_slice(&n.to_le_bytes());
+            list.add(hash);
+        }
+        assert_eq!(list.set.active, 128);
+        let mut hash = [0; 32];
+        hash[..8].copy_from_slice(&64u64.to_le_bytes());
+        list.add(hash);
+        assert_eq!(list.set.active, 256);
+    }
+
     // --- AnnounceSignatureCache tests ---
 
     #[test]
@@ -1054,5 +1137,24 @@ mod tests {
         assert!(!cache.contains(&k));
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.cull(200.0), 0);
+    }
+
+    #[test]
+    fn test_sig_cache_entry_expires_at_exactly_ttl() {
+        let mut cache = AnnounceSignatureCache::new(100, 60.0);
+        cache.insert(make_hash(1), 100.0);
+        assert_eq!(cache.cull(159.5), 0);
+        assert_eq!(cache.cull(160.0), 1);
+        assert!(!cache.contains(&make_hash(1)));
+    }
+
+    #[test]
+    fn test_sig_cache_emptiness() {
+        let mut cache = AnnounceSignatureCache::new(100, 60.0);
+        assert!(cache.is_empty());
+        cache.insert(make_hash(1), 100.0);
+        assert!(!cache.is_empty());
+        cache.cull(1000.0);
+        assert!(cache.is_empty());
     }
 }
