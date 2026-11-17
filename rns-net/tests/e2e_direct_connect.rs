@@ -32,6 +32,7 @@ enum TestEvent {
     DirectConnected([u8; 16], InterfaceId),
     DirectFailed([u8; 16], u8),
     Channel([u8; 16], u16, Vec<u8>),
+    LinkData([u8; 16], Vec<u8>),
 }
 
 /// What happened to a node's links, kept apart from the event queue that
@@ -91,6 +92,12 @@ impl Callbacks for TestCallbacks {
             self.1.messages.lock().unwrap().push(payload.clone());
         }
         let _ = self.0.send(TestEvent::Channel(link_id.0, msgtype, payload));
+    }
+
+    fn on_link_data(&mut self, link_id: rns_net::LinkId, context: u8, data: Vec<u8>) {
+        if context == rns_core::constants::CONTEXT_NONE {
+            let _ = self.0.send(TestEvent::LinkData(link_id.0, data));
+        }
     }
 
     fn on_direct_connect_established(
@@ -285,6 +292,16 @@ struct Pair {
 impl Pair {
     /// `None` when the host has no non-loopback address to punch through.
     fn start(alice_settings: DirectSettings, bob_settings: DirectSettings) -> Option<Pair> {
+        Self::start_with_tcp_mtu(alice_settings, bob_settings, None)
+    }
+
+    /// As [`Pair::start`], with the TCP interfaces' hardware MTU set to
+    /// `tcp_mtu` (`fixed_mtu`), which bounds the link's MTU.
+    fn start_with_tcp_mtu(
+        alice_settings: DirectSettings,
+        bob_settings: DirectSettings,
+        tcp_mtu: Option<u32>,
+    ) -> Option<Pair> {
         let _ = env_logger::builder().is_test(true).try_init();
         let Some(local) = local_address() else {
             eprintln!("skipped: no non-loopback address to punch through");
@@ -314,6 +331,7 @@ impl Pair {
                     listen_ip: "127.0.0.1".into(),
                     listen_port: tcp_port,
                     interface_id: InterfaceId(1),
+                    fixed_mtu: tcp_mtu,
                     ..TcpServerConfig::default()
                 }),
             ),
@@ -347,6 +365,7 @@ impl Pair {
                     target_host: "127.0.0.1".into(),
                     target_port: tcp_port,
                     interface_id: InterfaceId(1),
+                    fixed_mtu: tcp_mtu,
                     ..Default::default()
                 }),
             ),
@@ -864,7 +883,7 @@ fn direct_path_discovers_its_mtu() {
     );
     // The link's MTU over TCP is well above any UDP path's.
     assert!(tcp.0 > mdu_for(1472) && tcp.1 > mdu_for(1472), "{tcp:?}");
-    pair.upgrade();
+    let interfaces = pair.upgrade();
     // It starts at the floor, then each side's probes find that the host
     // carries the largest size probed.
     let expected = (mdu_for(1472), mdu_for(1472));
@@ -879,6 +898,147 @@ fn direct_path_discovers_its_mtu() {
             link_mdu(&pair.bob, pair.link_id)
         )
     );
+    assert_direct_carries_full_mdu(&pair, interfaces);
+    pair.shutdown();
+}
+
+/// Send a link packet with no context and wait until the receiver's
+/// application gets it. Returns whether it arrived within `timeout`.
+fn deliver_packet(
+    from: &RnsNode,
+    to_rx: &mpsc::Receiver<TestEvent>,
+    link_id: [u8; 16],
+    payload: &[u8],
+    timeout: Duration,
+) -> bool {
+    if let Err(error) = from.try_send_link_datagram(
+        link_id,
+        payload.to_vec(),
+        rns_core::constants::CONTEXT_NONE,
+        Duration::from_secs(5),
+    ) {
+        eprintln!("link packet of {} bytes refused: {error:?}", payload.len());
+        return false;
+    }
+    wait_for(to_rx, timeout, |event| match event {
+        TestEvent::LinkData(id, data) if *id == link_id && data == payload => Some(()),
+        _ => None,
+    })
+    .is_some()
+}
+
+/// Once both sides use the 1472-byte direct path, a link packet and a
+/// channel message as large as its MDU allows go both ways, over the
+/// direct interfaces.
+fn assert_direct_carries_full_mdu(pair: &Pair, interfaces: (InterfaceId, InterfaceId)) {
+    let link_id = pair.link_id;
+    let mdu = mdu_for(1472);
+    assert!(
+        eventually(Duration::from_secs(10), || (
+            link_mdu(&pair.alice, link_id),
+            link_mdu(&pair.bob, link_id)
+        ) == (mdu, mdu)),
+        "MDU {:?} on the direct path",
+        (link_mdu(&pair.alice, link_id), link_mdu(&pair.bob, link_id))
+    );
+    let before = (
+        traffic(&pair.alice, interfaces.0).unwrap(),
+        traffic(&pair.bob, interfaces.1).unwrap(),
+    );
+    let packet = vec![0xA5; mdu];
+    let message = vec![0x5A; mdu - rns_core::constants::CHANNEL_ENVELOPE_OVERHEAD];
+    let timeout = Duration::from_secs(10);
+    assert!(deliver_packet(
+        &pair.alice,
+        &pair.bob_rx,
+        link_id,
+        &packet,
+        timeout
+    ));
+    assert!(deliver_packet(
+        &pair.bob,
+        &pair.alice_rx,
+        link_id,
+        &packet,
+        timeout
+    ));
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        link_id,
+        &message,
+        timeout
+    ));
+    assert!(deliver(
+        &pair.bob,
+        &pair.alice_rx,
+        link_id,
+        &message,
+        timeout
+    ));
+    // Each side sent a packet and a message of over 1400 bytes on its
+    // direct interface.
+    let after = (
+        traffic(&pair.alice, interfaces.0).unwrap(),
+        traffic(&pair.bob, interfaces.1).unwrap(),
+    );
+    assert!(after.0 .1 - before.0 .1 >= 2 * 1400, "{before:?} {after:?}");
+    assert!(after.1 .1 - before.1 .1 >= 2 * 1400, "{before:?} {after:?}");
+}
+
+#[test]
+fn direct_path_carries_more_than_a_base_mtu_link_and_falls_back_to_it() {
+    use rns_core::constants::{CHANNEL_ENVELOPE_OVERHEAD, LINK_MDU};
+    // Over TCP with a hardware MTU of 500 the link has the base MTU, as
+    // over any path that does not signal a larger one.
+    let Some(pair) = Pair::start_with_tcp_mtu(
+        DirectSettings::willing(),
+        DirectSettings::willing(),
+        Some(500),
+    ) else {
+        return;
+    };
+    let link_id = pair.link_id;
+    let base = (link_mdu(&pair.alice, link_id), link_mdu(&pair.bob, link_id));
+    assert_eq!(base, (LINK_MDU, LINK_MDU));
+    let interfaces = pair.upgrade();
+    // Both peers accept larger packets on the direct path, so the link
+    // uses the path's MTU there.
+    assert_direct_carries_full_mdu(&pair, interfaces);
+
+    pair.bob.blackhole_direct_path_for_testing(link_id).unwrap();
+    assert_fell_back(&pair, base);
+    // Back on the original path, the link's sizes are the base ones again.
+    let large = vec![0x11; mdu_for(1472) - CHANNEL_ENVELOPE_OVERHEAD];
+    assert!(pair
+        .alice
+        .try_send_channel_message(link_id, APP_MSGTYPE, large)
+        .is_err());
+    assert!(pair
+        .alice
+        .try_send_link_datagram(
+            link_id,
+            vec![0x22; LINK_MDU + 1],
+            rns_core::constants::CONTEXT_NONE,
+            Duration::from_secs(5)
+        )
+        .is_err());
+    let timeout = Duration::from_secs(10);
+    assert!(deliver(
+        &pair.alice,
+        &pair.bob_rx,
+        link_id,
+        &vec![0x33; LINK_MDU - CHANNEL_ENVELOPE_OVERHEAD],
+        timeout
+    ));
+    assert!(deliver_packet(
+        &pair.bob,
+        &pair.alice_rx,
+        link_id,
+        &vec![0x44; LINK_MDU],
+        timeout
+    ));
+    assert_eq!(pair.alice_record.links_closed(), 0);
     pair.shutdown();
 }
 

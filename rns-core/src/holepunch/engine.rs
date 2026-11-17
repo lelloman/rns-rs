@@ -98,6 +98,10 @@ pub struct HolePunchEngine {
 
     /// Initiator: when the UPGRADE_REQUEST was last sent.
     request_sent_at: f64,
+
+    /// Largest link packet the peer accepts on the direct path (`m` in its
+    /// UPGRADE_REQUEST or UPGRADE_READY), if it said.
+    peer_max_packet: Option<u32>,
 }
 
 impl HolePunchEngine {
@@ -127,6 +131,7 @@ impl HolePunchEngine {
             state_entered_at: 0.0,
             request_payload: None,
             request_sent_at: 0.0,
+            peer_max_packet: None,
         }
     }
 
@@ -194,6 +199,12 @@ impl HolePunchEngine {
     /// Peer's discovered public endpoint.
     pub fn peer_public_endpoint(&self) -> Option<&Endpoint> {
         self.peer_public_endpoint.as_ref()
+    }
+
+    /// Largest link packet the peer accepts on the direct path, if it
+    /// advertised one (see [`DIRECT_MAX_PACKET`]).
+    pub fn peer_max_packet(&self) -> Option<u32> {
+        self.peer_max_packet
     }
 
     /// Propose a direct connection (initiator side).
@@ -465,6 +476,7 @@ impl HolePunchEngine {
         self.state_entered_at = 0.0;
         self.request_payload = None;
         self.request_sent_at = 0.0;
+        self.peer_max_packet = None;
     }
 
     // --- Private handlers ---
@@ -502,6 +514,7 @@ impl HolePunchEngine {
 
         // Store A's public address (we'll punch this later)
         self.peer_public_endpoint = Some(initiator_public);
+        self.peer_max_packet = decode_max_packet(payload);
 
         // Use facilitator from the request for our own STUN discovery
         self.facilitator_addr = Some(facilitator.clone());
@@ -617,6 +630,7 @@ impl HolePunchEngine {
         }
 
         self.peer_public_endpoint = Some(responder_public.clone());
+        self.peer_max_packet = decode_max_packet(payload);
 
         self.state = HolePunchState::Punching;
         self.state_entered_at = now;
@@ -710,6 +724,7 @@ fn encode_upgrade_request(
             Value::Str(alloc::string::String::from("a")),
             encode_endpoint(initiator_public)
         ),
+        max_packet_field(),
     ];
     // Only include "p" when not RNSP (backward compat: old nodes don't send it)
     if protocol != ProbeProtocol::Rnsp {
@@ -794,6 +809,7 @@ fn encode_upgrade_ready(session_id: &[u8; 16], responder_public: &Endpoint) -> V
             Value::Str(alloc::string::String::from("a")),
             encode_endpoint(responder_public)
         ),
+        max_packet_field(),
     ]);
     msgpack::pack(&val)
 }
@@ -806,6 +822,22 @@ fn decode_upgrade_ready(data: &[u8]) -> Result<([u8; 16], Endpoint), HolePunchEr
         .and_then(decode_endpoint)
         .ok_or(HolePunchError::InvalidPayload)?;
     Ok((session_id, responder_public))
+}
+
+/// The `m` field of UPGRADE_REQUEST and UPGRADE_READY: the largest link
+/// packet this side accepts on the direct path.
+fn max_packet_field() -> (Value, Value) {
+    (
+        Value::Str(alloc::string::String::from("m")),
+        Value::UInt(DIRECT_MAX_PACKET as u64),
+    )
+}
+
+/// The peer's `m`, if present and a valid size.
+fn decode_max_packet(data: &[u8]) -> Option<u32> {
+    let (val, _) = msgpack::unpack(data).ok()?;
+    let m = val.map_get("m")?.as_uint()?;
+    u32::try_from(m).ok()
 }
 
 fn encode_endpoint(ep: &Endpoint) -> Value {
@@ -1027,6 +1059,60 @@ mod tests {
 
         // Both derive the same punch token
         assert_eq!(initiator.punch_token(), responder.punch_token());
+        // And each knows how large a packet the other accepts directly.
+        assert_eq!(responder.peer_max_packet(), Some(DIRECT_MAX_PACKET));
+        assert_eq!(initiator.peer_max_packet(), Some(DIRECT_MAX_PACKET));
+    }
+
+    #[test]
+    fn peer_without_a_max_packet_advertises_none() {
+        let link_id = [0x22; 16];
+        let derived_key = test_derived_key();
+        let fields = |a: &Endpoint| {
+            alloc::vec![
+                (
+                    Value::Str(alloc::string::String::from("s")),
+                    Value::Bin([0xAB; 16].to_vec())
+                ),
+                (
+                    Value::Str(alloc::string::String::from("f")),
+                    encode_endpoint(&test_probe_addr())
+                ),
+                (
+                    Value::Str(alloc::string::String::from("a")),
+                    encode_endpoint(a)
+                ),
+            ]
+        };
+        let request = msgpack::pack(&Value::Map(fields(&test_public_addr_a())));
+        let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
+        responder
+            .handle_signal(UPGRADE_REQUEST, &request, Some(&derived_key), 1.0)
+            .unwrap();
+        assert_eq!(responder.peer_max_packet(), None);
+
+        let mut rng = make_rng(0x42);
+        let mut initiator =
+            HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator.propose(&derived_key, 1.0, &mut rng).unwrap();
+        initiator
+            .endpoints_discovered(test_public_addr_a(), 2.0)
+            .unwrap();
+        let session = encode_session_only(initiator.session_id());
+        initiator
+            .handle_signal(UPGRADE_ACCEPT, &session, None, 3.0)
+            .unwrap();
+        let mut ready = fields(&test_public_addr_b());
+        ready[0].1 = Value::Bin(initiator.session_id().to_vec());
+        ready.remove(1);
+        let ready = msgpack::pack(&Value::Map(ready));
+        initiator
+            .handle_signal(UPGRADE_READY, &ready, None, 4.0)
+            .unwrap();
+        assert_eq!(initiator.state(), HolePunchState::Punching);
+        assert_eq!(initiator.peer_max_packet(), None);
+        initiator.reset();
+        assert_eq!(initiator.peer_max_packet(), None);
     }
 
     #[test]

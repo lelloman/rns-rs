@@ -32,6 +32,14 @@ pub const UPGRADE_READY: u8 = 0x04;
 /// original path." Sent over the original path.
 pub const FALLBACK: u8 = 0x05;
 
+/// Largest link packet, in bytes, this implementation accepts from its peer
+/// on a direct path. It is advertised as `m` in `UPGRADE_REQUEST` and
+/// `UPGRADE_READY`; a peer that advertises it may send link packets up to
+/// that size (and its own path MTU) on the direct path, above the link's
+/// negotiated MTU. A peer that does not advertise it is sent nothing larger
+/// than the link's MTU.
+pub const DIRECT_MAX_PACKET: u32 = 2048;
+
 /// Check if a signalling kind is one of the upgrade negotiation messages.
 pub fn is_holepunch_msgtype(kind: u8) -> bool {
     (UPGRADE_REQUEST..=UPGRADE_READY).contains(&kind)

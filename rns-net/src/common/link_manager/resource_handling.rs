@@ -52,7 +52,8 @@ impl LinkManager {
         app_flag: bool,
     ) {
         sender.flags.app_flag = app_flag;
-        sender.advertisement_mdu = link.engine.mdu();
+        sender.advertisement_mdu =
+            rns_core::link::compute_mdu(Self::resource_mtu_for_link(link) as usize);
     }
 
     pub(super) fn build_resource_senders(

@@ -2114,6 +2114,21 @@ impl Driver {
                             if let Some(route_hint) =
                                 self.link_manager.get_link_route_hint(&link_id)
                             {
+                                // Packed for a larger MTU than the link has
+                                // now: built for a direct path the link fell
+                                // back from before it went out. The smaller
+                                // route may not carry it. Nothing within the
+                                // base MTU is held back.
+                                let limit = (route_hint.mtu as usize).max(rns_core::constants::MTU);
+                                if packet.raw.len() > limit {
+                                    log::debug!(
+                                        "Link {:02x?}: dropped a {} byte packet over the link MTU {}",
+                                        &link_id[..4],
+                                        packet.raw.len(),
+                                        route_hint.mtu
+                                    );
+                                    continue;
+                                }
                                 attached_interface = Some(route_hint.interface);
                                 if packet.flags.header_type == rns_core::constants::HEADER_1 {
                                     if let Some(next_hop) = route_hint.transport_id {
@@ -2746,7 +2761,7 @@ impl Driver {
     }
 
     /// A direct interface found its path MTU: the link it carries uses it,
-    /// never above the MTU the link had before its direct path.
+    /// never above what the peer accepts on the direct path.
     pub(crate) fn direct_path_mtu_discovered(
         &mut self,
         interface_id: rns_core::transport::types::InterfaceId,
@@ -2793,17 +2808,20 @@ impl Driver {
                     info,
                     rtt,
                     mtu,
+                    peer_max_packet,
                 } => {
                     log::info!(
-                        "Direct connection established for link {:02x?} session {:02x?} iface {} rtt={:.1}ms mtu={}",
-                        &link_id[..4], &session_id[..4], interface_id.0, rtt * 1000.0, mtu
+                        "Direct connection established for link {:02x?} session {:02x?} iface {} rtt={:.1}ms mtu={} peer max packet={:?}",
+                        &link_id[..4], &session_id[..4], interface_id.0, rtt * 1000.0, mtu, peer_max_packet
                     );
                     // The interface is registered before the link uses it.
                     self.handle_interface_up_event(interface_id, Some(writer), Some(*info));
-                    if !self
-                        .link_manager
-                        .attach_direct_route(&link_id, interface_id, mtu)
-                    {
+                    if !self.link_manager.attach_direct_route(
+                        &link_id,
+                        interface_id,
+                        mtu,
+                        peer_max_packet,
+                    ) {
                         // The link closed meanwhile.
                         self.holepunch_manager.link_closed(&link_id);
                         continue;

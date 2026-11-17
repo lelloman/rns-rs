@@ -431,7 +431,7 @@ impl DirectReader {
 const READ_TIMEOUT: Duration = Duration::from_millis(500);
 
 fn run_reader(mut reader: DirectReader) {
-    let mut buf = [0u8; 2048];
+    let mut buf = [0u8; rns_core::holepunch::DIRECT_MAX_PACKET as usize];
     let mut read_timeout = READ_TIMEOUT;
     while !reader.stopped() {
         if reader.on_timer() {

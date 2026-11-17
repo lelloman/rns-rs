@@ -207,6 +207,9 @@ pub enum HolePunchManagerAction {
         rtt: f64,
         /// MTU of the direct interface.
         mtu: u32,
+        /// Largest link packet the peer accepts on the direct path, if it
+        /// advertised one.
+        peer_max_packet: Option<u32>,
     },
     /// Remove a direct interface that no longer belongs to a live upgrade
     /// (its link closed, or a newer upgrade replaced it).
@@ -969,6 +972,7 @@ impl HolePunchManager {
 
                     // Notify engine of success
                     if let Some(session) = self.sessions.get_mut(&completion.session_id) {
+                        let peer_max_packet = session.engine.peer_max_packet();
                         let engine_actions =
                             session.engine.punch_succeeded(now).unwrap_or_default();
                         for action in engine_actions {
@@ -1009,6 +1013,7 @@ impl HolePunchManager {
                                             info: Box::new(info),
                                             rtt: completion.rtt.unwrap_or(0.0),
                                             mtu: udp_direct::DIRECT_MTU,
+                                            peer_max_packet,
                                         },
                                     );
                                 }

@@ -406,13 +406,26 @@ pub struct LinkManager {
 pub struct LinkRouteHint {
     pub interface: rns_core::transport::types::InterfaceId,
     pub transport_id: Option<[u8; 16]>,
+    /// The link's current MTU: no packet of the link larger than this may
+    /// take the route.
+    pub mtu: u32,
 }
 
 impl LinkManager {
+    /// The MTU resources on the link are sized for: the link MTU, or on a
+    /// direct path the MTU both sides started it with (see
+    /// `DirectRoute::resource_mtu`).
+    fn resource_mtu_for_link(link: &ManagedLink) -> u32 {
+        let mtu = link.engine.mtu();
+        link.direct_route
+            .as_ref()
+            .map_or(mtu, |direct| mtu.min(direct.resource_mtu))
+    }
+
     fn resource_sdu_for_link(link: &ManagedLink) -> usize {
         // Python parity: Resource.sdu = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE
         // when MTU signalling is available on the link.
-        let mtu = link.engine.mtu() as usize;
+        let mtu = Self::resource_mtu_for_link(link) as usize;
         let derived = mtu.saturating_sub(constants::HEADER_MAXSIZE + constants::IFAC_MIN_SIZE);
         if derived > 0 {
             derived
@@ -735,6 +748,7 @@ impl LinkManager {
             link.route_interface.map(|interface| LinkRouteHint {
                 interface,
                 transport_id: link.route_transport_id,
+                mtu: link.engine.mtu(),
             })
         })
     }
@@ -761,19 +775,23 @@ impl LinkManager {
     }
 
     /// Route the link over a Direct Link interface, remembering its current
-    /// route and MTU to fall back to. The link MTU is lowered to `mtu` if it
-    /// is larger, never raised. Its RTT and keepalive timing are left as
-    /// measured on the original path, so they stay valid after a fallback.
+    /// route and MTU to fall back to. The link MTU becomes `mtu`, the
+    /// direct interface's, but never more than the peer accepts there:
+    /// `peer_max_packet` when it advertised one, otherwise the link's
+    /// current MTU, which is then never raised. Its RTT and keepalive
+    /// timing are left as measured on the original path, so they stay
+    /// valid after a fallback.
     pub fn attach_direct_route(
         &mut self,
         link_id: &LinkId,
         interface: rns_core::transport::types::InterfaceId,
         mtu: u32,
+        peer_max_packet: Option<u32>,
     ) -> bool {
         let Some(link) = self.links.get_mut(link_id) else {
             return false;
         };
-        let direct = match link.direct_route.take() {
+        let mut direct = match link.direct_route.take() {
             // A newer upgrade: the original route is still the fallback.
             Some(previous) => DirectRoute {
                 interface,
@@ -784,11 +802,16 @@ impl LinkManager {
                 fallback_interface: link.route_interface,
                 fallback_transport_id: link.route_transport_id,
                 fallback_mtu: link.engine.mtu(),
+                ceiling: 0,
+                resource_mtu: 0,
             },
         };
-        if mtu < direct.fallback_mtu {
-            link.engine.set_mtu(mtu);
-        }
+        // Every node accepts packets of the base MTU.
+        direct.ceiling =
+            peer_max_packet.map_or(direct.fallback_mtu, |max| max.max(constants::MTU as u32));
+        let mtu = mtu.min(direct.ceiling);
+        direct.resource_mtu = mtu.min(direct.fallback_mtu);
+        link.engine.set_mtu(mtu);
         link.direct_route = Some(direct);
         link.route_interface = Some(interface);
         link.route_transport_id = None;
@@ -799,8 +822,9 @@ impl LinkManager {
     }
 
     /// The path MTU of the link's direct interface is known: use it, but
-    /// never above the MTU the link had before its direct path. Returns the
-    /// MTU now in use, or `None` if the link does not run over `interface`.
+    /// never above what the peer accepts there (see
+    /// [`LinkManager::attach_direct_route`]). Returns the MTU now in use,
+    /// or `None` if the link does not run over `interface`.
     pub fn set_direct_mtu(
         &mut self,
         link_id: &LinkId,
@@ -812,7 +836,7 @@ impl LinkManager {
         if direct.interface != interface {
             return None;
         }
-        let mtu = mtu.min(direct.fallback_mtu);
+        let mtu = mtu.min(direct.ceiling);
         link.engine.set_mtu(mtu);
         Some(mtu)
     }

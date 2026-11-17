@@ -599,6 +599,7 @@ fn handle_links(node: &NodeHandle) -> HttpResponse {
                         "remote_identity": l.remote_identity.map(|h| to_hex(&h)),
                         "rtt": l.rtt,
                         "expected_hops": l.expected_hops,
+                        "mdu": l.mdu,
                         "tx_packets": l.tx_packets,
                         "rx_packets": l.rx_packets,
                         "tx_bytes": l.tx_bytes,

@@ -854,7 +854,7 @@ impl LinkEngine {
 /// MDU = floor((mtu - IFAC_MIN_SIZE - HEADER_MINSIZE - TOKEN_OVERHEAD) / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
 ///
 /// Saturates at 0 for MTUs too small to carry one AES block.
-fn compute_mdu(mtu: usize) -> usize {
+pub fn compute_mdu(mtu: usize) -> usize {
     use crate::constants::{AES128_BLOCKSIZE, HEADER_MINSIZE, IFAC_MIN_SIZE, TOKEN_OVERHEAD};
     let numerator = mtu.saturating_sub(IFAC_MIN_SIZE + HEADER_MINSIZE + TOKEN_OVERHEAD);
     ((numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE).saturating_sub(1)

@@ -7,9 +7,9 @@ source "${SCRIPT_DIR}/../lib/helpers.sh"
 
 _CURRENT_SUITE="nat-holepunch"
 
-PORT_A=8081
-PORT_B=8082
-PORT_F=8083
+PORT_A=${NAT_PORT_A:-8081}
+PORT_B=${NAT_PORT_B:-8082}
+PORT_F=${NAT_PORT_F:-8083}
 
 echo "=== NAT Hole Punching E2E Test ==="
 
@@ -206,6 +206,94 @@ if [[ "$GOT_MSG_B" -gt 0 ]]; then
 else
   fail_test "channel message A→B delivered" "no channel packet found on node-b"
 fi
+
+# ── Step 9: Packets larger than the base MTU over the direct path ───────────
+
+link_mdu() {
+  ctl_get "$1" "/api/links" 2>/dev/null \
+    | jq -r ".links[] | select(.link_id == \"${LINK_ID}\") | .mdu" 2>/dev/null || true
+}
+
+link_rx_bytes() {
+  ctl_get "$1" "/api/links" 2>/dev/null \
+    | jq -r ".links[] | select(.link_id == \"${LINK_ID}\") | .rx_bytes" 2>/dev/null || echo 0
+}
+
+# Both sides move to the direct path's MTU once its probes are answered.
+echo "  Waiting for the direct path's MTU on both sides (up to 15s)..."
+DEADLINE=$((SECONDS + 15))
+MDU_A=""
+MDU_B=""
+while (( SECONDS < DEADLINE )); do
+  MDU_A=$(link_mdu "$PORT_A")
+  MDU_B=$(link_mdu "$PORT_B")
+  if [[ "$MDU_A" =~ ^[0-9]+$ && "$MDU_B" =~ ^[0-9]+$ ]] \
+    && (( MDU_A > 1200 && MDU_B > 1200 )); then
+    break
+  fi
+  sleep 1
+done
+if [[ "$MDU_A" =~ ^[0-9]+$ && "$MDU_B" =~ ^[0-9]+$ ]] && (( MDU_A > 1200 && MDU_B > 1200 )); then
+  pass_test "link MDU above the base MTU on the direct path (A ${MDU_A}, B ${MDU_B})"
+else
+  fail_test "link MDU above the base MTU on the direct path" "A '${MDU_A}', B '${MDU_B}'"
+fi
+
+# A channel message of 1000 bytes, each way, arrives intact.
+check_large_channel() {
+  local from="$1" to="$2" label="$3" fill="$4"
+  local payload
+  payload=$(head -c 1000 /dev/zero | tr '\0' "$fill" | base64 -w0)
+  if ! send_channel "$from" "$LINK_ID" 2 "$payload" >/dev/null 2>&1; then
+    fail_test "1000-byte channel message ${label}" "send refused"
+    return
+  fi
+  local deadline=$((SECONDS + 10)) got=0
+  while (( SECONDS < deadline )); do
+    got=$(ctl_get "$to" "/api/packets" 2>/dev/null | jq -r --arg p "$payload" \
+      "[.packets[] | select((.dest_hash | startswith(\"channel:\")) and .data_base64 == \$p)] | length" \
+      2>/dev/null || echo 0)
+    [[ "$got" -gt 0 ]] && break
+    sleep 1
+  done
+  if [[ "$got" -gt 0 ]]; then
+    pass_test "1000-byte channel message ${label} delivered"
+  else
+    fail_test "1000-byte channel message ${label} delivered" "not found on the receiver"
+  fi
+}
+check_large_channel "$PORT_B" "$PORT_A" "B→A" "b"
+check_large_channel "$PORT_A" "$PORT_B" "A→B" "a"
+
+# A single link packet of 1000 bytes, each way: sent in one packet, and
+# the receiving end of the link takes it in.
+check_large_packet() {
+  local from="$1" to="$2" label="$3"
+  local payload before after status
+  payload=$(head -c 1000 /dev/urandom | base64 -w0)
+  before=$(link_rx_bytes "$to")
+  status=$(ctl_post "$from" "/api/link/send" \
+    "$(jq -n --arg lid "$LINK_ID" --arg d "$payload" '{link_id: $lid, data: $d}')" \
+    2>/dev/null | jq -r '.status' 2>/dev/null || echo "error")
+  if [[ "$status" != "sent" ]]; then
+    fail_test "1000-byte link packet ${label}" "send status '${status}'"
+    return
+  fi
+  local deadline=$((SECONDS + 10))
+  after=$before
+  while (( SECONDS < deadline )); do
+    after=$(link_rx_bytes "$to")
+    (( after - before >= 1000 )) && break
+    sleep 1
+  done
+  if (( after - before >= 1000 )); then
+    pass_test "1000-byte link packet ${label} received"
+  else
+    fail_test "1000-byte link packet ${label} received" "link rx_bytes ${before} -> ${after}"
+  fi
+}
+check_large_packet "$PORT_B" "$PORT_A" "B→A"
+check_large_packet "$PORT_A" "$PORT_B" "A→B"
 
 # ── Results ──────────────────────────────────────────────────────────────────
 

@@ -61,6 +61,26 @@ impl LinkManager {
                     // emitted, remove the reserved channel sequence so receivers do
                     // not stall on a gap that never reached the wire.
                     let (encrypted, max_mtu) = match self.links.get(link_id) {
+                        // An envelope packed for a larger MTU than the
+                        // link has now (sent over a direct path the link
+                        // fell back from) is not sent on the smaller path,
+                        // and stays outstanding: a late proof delivers it,
+                        // and so does a resend once a direct path is back;
+                        // otherwise its retries run out and the channel
+                        // closes the link, as for any message it cannot
+                        // deliver.
+                        Some(link)
+                            if constants::HEADER_MINSIZE + link.engine.encrypted_len(raw.len())
+                                > link.engine.mtu() as usize =>
+                        {
+                            log::debug!(
+                                "Link {:02x?}: channel message {} too large for the link MTU {}; held",
+                                &link_id[..4],
+                                sequence,
+                                link.engine.mtu()
+                            );
+                            continue;
+                        }
                         Some(link) => match link.engine.encrypt(&raw, rng) {
                             Ok(encrypted) => (encrypted, link.engine.mtu() as usize),
                             Err(_) => {
@@ -122,7 +142,9 @@ impl LinkManager {
                 }
                 rns_core::channel::ChannelAction::PathFailed => {
                     // Retries ran out over a direct path: fall back first,
-                    // then the resends that follow take the original route.
+                    // then the resends that follow take the original route,
+                    // packed for its MTU. The driver completes the fallback.
+                    self.detach_direct_route(link_id);
                     result.push(LinkManagerAction::DirectPathFailed { link_id: *link_id });
                 }
                 rns_core::channel::ChannelAction::TeardownLink => {

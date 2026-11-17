@@ -70,10 +70,10 @@ The decrypted payload is
 | Kind | Name | Body |
 |------|------|------|
 | `0x00` | `HELLO` | `{"v": highest version spoken, "r": reply wanted}` |
-| `0x01` | `UPGRADE_REQUEST` | `{"s": session id, "f": facilitator, "a": initiator public, "p": probe protocol (omitted for RNSP)}` |
+| `0x01` | `UPGRADE_REQUEST` | `{"s": session id, "f": facilitator, "a": initiator public, "p": probe protocol (omitted for RNSP), "m": largest link packet accepted on the direct path}` |
 | `0x02` | `UPGRADE_ACCEPT` | `{"s": session id}` |
 | `0x03` | `UPGRADE_REJECT` | `{"s": session id, "r": reason}` |
-| `0x04` | `UPGRADE_READY` | `{"s": session id, "a": responder public}` |
+| `0x04` | `UPGRADE_READY` | `{"s": session id, "a": responder public, "m": largest link packet accepted on the direct path}` |
 | `0x05` | `FALLBACK` | `{"s": session id of the direct path, "r": reply wanted}` (see [Fallback](#fallback)) |
 
 Endpoints are `[address bytes (4 or 16), port]`. The version is `1`. A
@@ -178,6 +178,7 @@ A sends an `UPGRADE_REQUEST` to B over their existing Reticulum link containing:
 |-------|-------------|
 | `facilitator` | T's public IP:port (STUN endpoint) |
 | `initiator_public` | A's public address as reported by T |
+| `m` | The largest link packet A accepts on the direct path (see [Packet size](#packet-size)) |
 
 B evaluates the request and responds with either:
 
@@ -235,6 +236,7 @@ B then sends an `UPGRADE_READY` message to A over the existing Reticulum link:
 | Field | Description |
 |-------|-------------|
 | `responder_public` | B's public address as reported by T |
+| `m` | The largest link packet B accepts on the direct path |
 
 After this phase, both A and B know each other's public addresses. T's role is
 complete — it is not involved in any further communication.
@@ -322,9 +324,8 @@ with no transport header. Nothing is added to the path table; other
 destinations, including the peer's own, keep their paths.
 
 The link remembers the route it had (interface and next-hop transport id) and
-its MTU. Its MTU is lowered to the direct interface's MTU if it was larger,
-never raised above what it was, so nothing sized for the direct path is too
-large for the original one. The direct interface starts at 1200 bytes and
+its MTU, and takes the direct interface's MTU while on the direct path (see
+[Packet size](#packet-size)). The direct interface starts at 1200 bytes and
 may move up once its path MTU is known (see [Path MTU](#path-mtu)). Its
 RTT, and with it the keepalive interval and stale time, stay as measured on
 the original path.
@@ -347,7 +348,7 @@ size the peer acknowledged: at once when that is the largest of the
 ladder, otherwise one second after the last round. That is at most 9
 probes and about 3 seconds. A size never acknowledged is not used; if none
 is, the interface stays at 1200. The link then uses the discovered MTU,
-again never above the MTU it had before its direct path. While probing,
+never above what the peer accepts (see [Packet size](#packet-size)). While probing,
 the sockets send without fragmentation (on Linux, `IP_PMTUDISC_PROBE`), so
 a probe larger than the local interface or the path is lost rather than
 fragmented; afterwards the kernel's usual path MTU discovery applies.
@@ -387,10 +388,61 @@ can let an idle link go stale for a moment, which on the direct path would
 read as a dead path.) A link that goes stale there is therefore one whose
 direct path has stopped carrying it.
 
+### Packet size
+
+While the link runs over the direct path, its MTU is the direct path's,
+which may be above the MTU the link was established with (500 bytes unless
+the path signalled a larger one), and its MDU follows: a single link packet
+and a channel message can be as large as the direct path carries, 1472
+bytes of packet (an MDU of 1391 bytes, 1385 bytes of channel message) on a
+plain Ethernet path. Sizes on the original path are never changed by this.
+
+Both sides must accept the larger packets. Each side advertises in its
+`UPGRADE_REQUEST` or `UPGRADE_READY` the largest link packet it accepts on
+the direct path, `m`; rns-rs advertises 2048 bytes, the size its direct
+interface reads, and accepts any link packet up to it there. A side sends
+link packets no larger than its own path MTU and the peer's `m` (taken as
+at least 500). A peer that does not advertise `m` is sent nothing larger
+than the link's MTU, as before.
+
+The link's MTU and MDU follow its current path: the direct path's while on
+it, the original ones again after a fallback, and the link MDU an
+application reads (`LinkInfoEntry::mdu`, `mdu` in rns-ctl's
+`/api/links`) is always the current one. A channel message may be up to
+that MDU less 6 bytes of envelope. A send that fits the direct path but not
+the original one is refused (`PayloadTooLarge`, `MessageTooBig`) once the
+link has fallen back, so an application that sends large messages reads
+the MDU, or handles the refusal, instead of assuming one size.
+
+What was sized for the direct path is never sent on the original route,
+which may not carry it:
+
+- **Channel messages.** An unacknowledged channel message too large for the
+  original path is held: it stays in the channel's window, keeps its place
+  in the sequence and is not resent on the original route. A late proof of
+  it delivers it; a direct path that comes back (by
+  [re-upgrade](#re-upgrade)) before its retries run out carries its next
+  resend. Otherwise its retries run out and, as for any message a channel
+  cannot deliver, the link is closed. Messages after it are resent and
+  reach the peer, which delivers them in order once the held one arrives,
+  so the channel never stalls for good. When the channel's retries run out
+  on the direct path, the link falls back before the resends are packed,
+  so they are sized for the original route.
+- **Packets in flight.** A link packet packed for the direct path that has
+  not left yet when the link falls back is dropped instead of being routed
+  over the original path. Single packets are best effort, as on any path;
+  a dropped channel message is resent (or held, as above).
+- **Resources** are sized for the MTU the direct path started with (1200
+  bytes), never above the link's original MTU, on both sides alike: a
+  resource's part count depends on its part size, which both sides must
+  compute the same way, and its parts still fit the original route after a
+  fallback.
+
 ### Fallback
 
-The link returns to its original route, and its MTU to what it was, when any
-of these shows the direct path failed:
+The link returns to its original route, and its MTU and MDU to what they
+were (see [Packet size](#packet-size)), when any of these shows the direct
+path failed:
 
 - the direct interface goes down (15 seconds without a valid keepalive, or a
   socket error);
@@ -399,7 +451,8 @@ of these shows the direct path failed:
 - the link's channel runs out of retries on the direct path: instead of
   tearing the link down, as it would on any other path, the channel resends
   every outstanding message, with its tries reset, over the original route
-  (once per upgrade);
+  (once per upgrade; one too large for that route is held, see
+  [Packet size](#packet-size));
 - the peer says it fell back (`FALLBACK` for the path's session).
 
 The side that falls back removes its direct interface, reports the loss to

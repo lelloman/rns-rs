@@ -1284,7 +1284,11 @@ pub struct LinkInfoEntry {
     pub remote_identity: Option<[u8; 16]>,
     pub rtt: Option<f64>,
     pub expected_hops: u8,
-    /// Maximum plaintext bytes accepted by one direct Link data packet.
+    /// Maximum plaintext bytes accepted by one direct Link data packet, as
+    /// of now: it follows the link's current path, so it is larger while
+    /// the link runs over a Direct Link path that carries more, and back to
+    /// the link's own value after a fallback. A channel message may be up
+    /// to this less `CHANNEL_ENVELOPE_OVERHEAD` (6) bytes.
     pub mdu: usize,
     pub tx_packets: u64,
     pub rx_packets: u64,

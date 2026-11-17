@@ -17068,6 +17068,7 @@ fn direct_upgrade_keeps_unacknowledged_channel_messages() {
             info: Box::new(make_interface_info(50_000)),
             rtt: 0.001,
             mtu: 1400,
+            peer_max_packet: None,
         },
     ]);
     // The link moved to the direct interface, and the application's
@@ -17077,6 +17078,46 @@ fn direct_upgrade_keeps_unacknowledged_channel_messages() {
         Some(InterfaceId(50_000))
     );
     assert_eq!(outstanding(&driver), Some(1));
+}
+
+#[test]
+fn link_packet_packed_for_a_lost_direct_path_does_not_take_the_original_route() {
+    let mut driver = new_test_driver();
+    let (link_manager, link_id) = active_link_manager_with_route(InterfaceId(1));
+    driver.link_manager = link_manager;
+    let (writer, sent) = MockWriter::new();
+    let entry = make_entry(1, Box::new(writer), true);
+    driver.engine.register_interface(entry.info.clone());
+    driver.interfaces.insert(InterfaceId(1), entry);
+    let (direct_writer, _) = MockWriter::new();
+    driver.dispatch_holepunch_actions(vec![
+        crate::holepunch::orchestrator::HolePunchManagerAction::DirectConnectEstablished {
+            link_id,
+            session_id: [0x5E; 16],
+            interface_id: InterfaceId(50_000),
+            writer: Box::new(direct_writer),
+            info: Box::new(make_interface_info(50_000)),
+            rtt: 0.001,
+            mtu: 1200,
+            peer_max_packet: Some(rns_core::holepunch::DIRECT_MAX_PACKET),
+        },
+    ]);
+    let mut rng = OsRng;
+    let large = driver
+        .link_manager
+        .send_channel_message(&link_id, 0x0101, &[0x33; 1000], &mut rng)
+        .unwrap();
+    // The link falls back before the packet goes out.
+    driver.link_manager.detach_direct_route(&link_id);
+    driver.dispatch_link_actions(large);
+    assert!(sent.lock().unwrap().is_empty());
+    // Packets sized for the original route still take it.
+    let small = driver
+        .link_manager
+        .try_send_on_link(&link_id, &[0x44; 100], constants::CONTEXT_NONE, &mut rng)
+        .unwrap();
+    driver.dispatch_link_actions(small);
+    assert_eq!(sent.lock().unwrap().len(), 1);
 }
 
 /// A driver holding one end of an active link, proposing a direct

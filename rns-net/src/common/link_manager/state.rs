@@ -65,6 +65,14 @@ pub(super) struct DirectRoute {
     pub(super) fallback_interface: Option<rns_core::transport::types::InterfaceId>,
     pub(super) fallback_transport_id: Option<[u8; 16]>,
     pub(super) fallback_mtu: u32,
+    /// The largest link MTU the direct path may use: what the peer said it
+    /// accepts there, or the fallback MTU if it did not say.
+    pub(super) ceiling: u32,
+    /// The MTU resources are sized for while on the direct path: the MTU
+    /// the path started with, never above the fallback MTU. Both sides
+    /// derive the same value, which a resource's part count depends on,
+    /// and its parts still fit after a fallback.
+    pub(super) resource_mtu: u32,
 }
 
 pub(super) struct PendingRequest {
