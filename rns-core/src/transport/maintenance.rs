@@ -306,8 +306,10 @@ impl TransportEngine {
         ctx.actions.extend(link_closed_actions);
         jobs::cull_path_states(&mut self.path_states, &self.path_table);
         self.cull_blackholed(ctx.now);
+        // Upstream drops a path request gate, and a discovery path request,
+        // only once its timeout has passed.
         self.path_requests.retain(|_, requested_at| {
-            ctx.now < *requested_at + constants::PATH_REQUEST_GATE_TIMEOUT
+            ctx.now <= *requested_at + constants::PATH_REQUEST_GATE_TIMEOUT
         });
         self.discovery_path_requests.retain(|destination, req| {
             let deadline = self
@@ -315,7 +317,7 @@ impl TransportEngine {
                 .get(destination)
                 .copied()
                 .unwrap_or(req.timestamp + constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
-            ctx.now < deadline
+            ctx.now <= deadline
         });
         self.discovery_path_request_deadlines
             .retain(|destination, _| self.discovery_path_requests.contains_key(destination));
@@ -457,3 +459,7 @@ impl TransportEngine {
         &self.link_table
     }
 }
+
+#[cfg(test)]
+#[path = "maintenance_tests.rs"]
+mod tests;
