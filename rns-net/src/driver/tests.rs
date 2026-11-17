@@ -6504,6 +6504,38 @@ fn query_next_hop() {
 }
 
 #[test]
+fn query_next_hop_of_an_own_destination_is_the_transport_identity() {
+    // Upstream's Transport.next_hop answers a destination this node hosts,
+    // with no path to it, with the transport identity's hash; without a
+    // shared instance interface the interface is unknown.
+    let mut driver = new_test_driver();
+    let identity = Identity::new(&mut OsRng);
+    let identity_hash = *identity.hash();
+    driver.transport_identity = Some(identity);
+    let dest = [0xBD; 16];
+    driver
+        .local_destinations
+        .insert(dest, constants::DESTINATION_SINGLE);
+    let QueryResponse::NextHop(Some(next_hop)) =
+        driver.handle_query(QueryRequest::NextHop { dest_hash: dest })
+    else {
+        panic!("expected a next hop");
+    };
+    assert_eq!(next_hop.next_hop, identity_hash);
+    assert_eq!(next_hop.hops, rns_core::constants::PATHFINDER_M);
+    assert!(matches!(
+        driver.handle_query(QueryRequest::NextHopIfName { dest_hash: dest }),
+        QueryResponse::NextHopIfName(None)
+    ));
+    assert!(matches!(
+        driver.handle_query(QueryRequest::NextHop {
+            dest_hash: [0xBE; 16]
+        }),
+        QueryResponse::NextHop(None)
+    ));
+}
+
+#[test]
 fn query_next_hop_if_name() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();

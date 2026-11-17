@@ -239,6 +239,12 @@ impl Driver {
             .map(|parent| self.interface_display_name(parent))
     }
 
+    /// Whether this node hosts `dest_hash` itself (upstream's
+    /// `Transport.destinations_map`), with no path to it in the table.
+    fn hosts_destination(&self, dest_hash: &[u8; 16]) -> bool {
+        self.local_destinations.contains_key(dest_hash)
+    }
+
     fn shared_instance_listener(&self) -> Option<&ListenerStat> {
         self.listener_stats
             .iter()
@@ -1129,12 +1135,17 @@ impl Driver {
                 QueryResponse::MediumPathTimeout(self.engine.medium_path_timeout())
             }
             QueryRequest::FirstHopTimeout { dest_hash } => {
-                let bitrate = self
-                    .engine
-                    .next_hop_interface(&dest_hash)
-                    .and_then(|id| self.interfaces.get(&id))
-                    .and_then(|entry| entry.info.bitrate)
-                    .filter(|bitrate| *bitrate > 0);
+                let bitrate = match self.engine.next_hop_interface(&dest_hash) {
+                    Some(id) => self
+                        .interfaces
+                        .get(&id)
+                        .and_then(|entry| entry.info.bitrate),
+                    None if self.hosts_destination(&dest_hash) => self
+                        .shared_instance_listener()
+                        .and_then(|listener| listener.bitrate),
+                    None => None,
+                }
+                .filter(|bitrate| *bitrate > 0);
                 let timeout = rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP
                     + bitrate
                         .map(|bitrate| rns_core::constants::MTU as f64 * 8.0 / bitrate as f64)
@@ -1142,26 +1153,47 @@ impl Driver {
                 QueryResponse::FirstHopTimeout(timeout)
             }
             QueryRequest::NextHop { dest_hash } => {
-                let resp = self
-                    .engine
-                    .next_hop(&dest_hash)
-                    .map(|next_hop| NextHopResponse {
+                let resp = match self.engine.next_hop(&dest_hash) {
+                    Some(next_hop) => Some(NextHopResponse {
                         next_hop,
                         hops: self.engine.hops_to(&dest_hash).unwrap_or(0),
                         interface: self
                             .engine
                             .next_hop_interface(&dest_hash)
                             .unwrap_or(InterfaceId(0)),
-                    });
+                    }),
+                    // Upstream's `Transport.next_hop`: this node's own
+                    // destinations are reached through its transport
+                    // identity, on the shared instance interface, with
+                    // hops unknown (`hops_to` answers PATHFINDER_M).
+                    None if self.hosts_destination(&dest_hash) => self
+                        .transport_identity
+                        .as_ref()
+                        .map(|identity| NextHopResponse {
+                            next_hop: *identity.hash(),
+                            hops: rns_core::constants::PATHFINDER_M,
+                            interface: self
+                                .shared_instance_listener()
+                                .map_or(InterfaceId(0), |listener| listener.id),
+                        }),
+                    None => None,
+                };
                 QueryResponse::NextHop(resp)
             }
             QueryRequest::NextHopIfName { dest_hash } => {
-                let name = self
-                    .engine
-                    .next_hop_interface(&dest_hash)
-                    .and_then(|id| self.interfaces.get(&id))
+                let name = match self.engine.next_hop_interface(&dest_hash) {
                     // Upstream answers with str(interface).
-                    .map(|entry| self.interface_display_name(entry));
+                    Some(id) => self
+                        .interfaces
+                        .get(&id)
+                        .map(|entry| self.interface_display_name(entry)),
+                    // Its own destinations are on the shared instance
+                    // interface; without one, `str(None)`.
+                    None if self.hosts_destination(&dest_hash) => self
+                        .shared_instance_listener()
+                        .map(|listener| listener.display_name.clone()),
+                    None => None,
+                };
                 QueryResponse::NextHopIfName(name)
             }
             QueryRequest::LinkCount => QueryResponse::LinkCount(

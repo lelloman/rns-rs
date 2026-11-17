@@ -506,14 +506,7 @@ fn rnpath_finds_a_path_through_a_stamp_enforcing_instance() {
         .expect("run rnpath");
     // Upstream's rnpath is the reference, where a Python Reticulum that
     // stamps its path requests (1.6.1) is installed.
-    let stamping_python = Command::new("python3")
-        .args([
-            "-c",
-            "import RNS; print(getattr(RNS.Transport, 'STAMP_PRS', False))",
-        ])
-        .output()
-        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "True");
-    let python = stamping_python.then(|| {
+    let python = python_reticulum_1_6_1().then(|| {
         Command::new("python3")
             .args([
                 "-m",
@@ -548,6 +541,76 @@ fn rnpath_finds_a_path_through_a_stamp_enforcing_instance() {
             "{}",
             String::from_utf8_lossy(&python.stderr)
         ),
+        None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
+    }
+}
+
+/// Whether a Python Reticulum that stamps its path requests (1.6.1) is
+/// installed, to compare with upstream's utilities.
+fn python_reticulum_1_6_1() -> bool {
+    Command::new("python3")
+        .args([
+            "-c",
+            "import RNS; print(getattr(RNS.Transport, 'STAMP_PRS', False))",
+        ])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "True")
+}
+
+/// rnpath finds a destination the shared instance hosts itself, such as
+/// its `rnstransport.network`, 0 hops away via the instance's transport
+/// identity on the shared instance interface, as upstream's instance
+/// answers from `Transport.destinations_map`.
+#[cfg(target_os = "linux")]
+#[test]
+fn rnpath_finds_the_instance_s_own_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let instance = format!("own-destinations-{}", std::process::id());
+    let network_identity = dir.path().join("network_identity");
+    fs::write(&network_identity, transport_identity_key()).unwrap();
+    let mut rnsd = spawn_rnsd(
+        dir.path(),
+        &format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = {instance}\n  network_identity = {}\n\
+             [logging]\n  loglevel = 4\n[interfaces]\n",
+            network_identity.display()
+        ),
+    );
+    wait_for_abstract_socket(&format!("rns/{instance}/rpc"));
+    let destination = network_destination_hash();
+    let config = dir.path().to_str().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rnpath"))
+        .args(["--config", config, "-w", "10", &destination])
+        .output()
+        .expect("run rnpath");
+    let python = python_reticulum_1_6_1().then(|| {
+        Command::new("python3")
+            .args([
+                "-m",
+                "RNS.Utilities.rnpath",
+                "--config",
+                config,
+                "-w",
+                "10",
+                &destination,
+            ])
+            .env("PYTHONUNBUFFERED", "1")
+            .output()
+            .expect("run Python rnpath")
+    });
+    let _ = rnsd.kill();
+    let _ = rnsd.wait();
+    let found = final_line(&output.stdout);
+    let prefix = format!("Path found, destination <{destination}> is 0 hops away via <");
+    let suffix = format!("> on Shared Instance[rns/{instance}]");
+    assert!(
+        found.starts_with(&prefix) && found.ends_with(&suffix),
+        "{found}\n{}",
+        fs::read_to_string(dir.path().join("rnsd.log")).unwrap_or_default()
+    );
+    match python {
+        Some(python) => assert_eq!(found, final_line(&python.stdout)),
         None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
     }
 }
