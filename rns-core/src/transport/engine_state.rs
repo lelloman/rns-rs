@@ -521,7 +521,9 @@ impl TransportEngine {
 
         // Restore paths to path table if they're better than existing
         for (dest_hash, tunnel_path) in &restored_paths {
-            let should_restore = match self.path_table.get(dest_hash).and_then(|ps| ps.primary()) {
+            let existing = self.path_table.get(dest_hash).and_then(|ps| ps.primary());
+            let replaced = existing.map(|existing| existing.next_hop);
+            let should_restore = match existing {
                 Some(existing) => {
                     // Restore if fewer/equal hops or existing expired, but never
                     // overwrite a path learned from a more recent announce.
@@ -552,6 +554,13 @@ impl TransportEngine {
                     used: 0.0,
                     announce_raw: None,
                 };
+                // As upstream, the restored path takes the place of the one
+                // it was judged against, even when that one ranks better.
+                if let (Some(replaced), Some(paths)) =
+                    (replaced, self.path_table.get_mut(dest_hash))
+                {
+                    paths.retain(|path| path.next_hop != replaced);
+                }
                 self.upsert_path_destination(*dest_hash, entry, now);
                 log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                     "Restored tunnel path to {:02x?}: hops={} via={:02x?} interface={}",
@@ -778,7 +787,10 @@ impl TransportEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::tests::make_config;
+    use crate::transport::tests::{
+        make_config, make_path_entry, make_random_blob, make_tunnel_interface,
+    };
+    use crate::transport::tunnel::TunnelPath;
 
     #[test]
     fn blackhole_lasts_through_its_expiry_time() {
@@ -794,5 +806,89 @@ mod tests {
         assert_eq!(engine.blackholed_entries().count(), 1);
         engine.cull_blackholed(expires + 1.0);
         assert_eq!(engine.blackholed_entries().count(), 0);
+    }
+
+    fn tunnel_path(hops: u8, expires: f64, blob_time: u64) -> TunnelPath {
+        TunnelPath {
+            timestamp: 1000.0,
+            received_from: TUNNEL_HOP,
+            hops,
+            expires,
+            random_blobs: vec![make_random_blob(blob_time)],
+            packet_hash: [0xFF; 32],
+        }
+    }
+
+    /// Next hop of the tunnel's path.
+    const TUNNEL_HOP: [u8; 16] = [0xEE; 16];
+    /// Next hop of the path already in the table.
+    const EXISTING_HOP: [u8; 16] = [0xAB; 16];
+
+    /// Reattach a tunnel holding `path` for a destination at `now`, with
+    /// `existing` in the path table, and return the next hop of the
+    /// resulting path.
+    fn restore(existing: Option<PathEntry>, path: TunnelPath, now: f64) -> Option<[u8; 16]> {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+        let tunnel_id = [0xCC; 32];
+        let dest = [0xDD; 16];
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
+        engine.tunnel_table.store_tunnel_path(
+            &tunnel_id,
+            dest,
+            path,
+            1000.0,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
+        );
+        engine.void_tunnel_interface(&tunnel_id);
+        engine.path_table.remove(&dest);
+        if let Some(existing) = existing {
+            engine
+                .path_table
+                .insert(dest, PathSet::from_single(existing, 1));
+        }
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), now);
+        engine.next_hop(&dest)
+    }
+
+    /// As upstream's handle_tunnel: a tunnel path replaces an existing one
+    /// with as many hops or more, or an expired one, unless the existing
+    /// path is more recent; with no existing path, it is restored until it
+    /// expires.
+    #[test]
+    fn tunnel_reattach_restores_paths_as_upstream() {
+        let now = 2000.0;
+        let existing = |hops: u8, expires: f64, blob_time: u64| PathEntry {
+            random_blobs: vec![make_random_blob(blob_time)],
+            expires,
+            ..make_path_entry(1500.0, hops, InterfaceId(3), EXISTING_HOP)
+        };
+        let live = 5000.0;
+        let cases = [
+            // Fewer or as many hops as a live path: restored.
+            (Some(existing(3, live, 100)), 2, Some(TUNNEL_HOP)),
+            (Some(existing(2, live, 100)), 2, Some(TUNNEL_HOP)),
+            // ... unless the live path comes from a more recent announce.
+            (Some(existing(2, live, 200)), 2, Some(EXISTING_HOP)),
+            // More hops than a live path, or one expiring now: kept.
+            (Some(existing(1, live, 100)), 2, Some(EXISTING_HOP)),
+            (Some(existing(1, now, 100)), 2, Some(EXISTING_HOP)),
+            // More hops than an expired path: restored.
+            (Some(existing(1, now - 1.0, 100)), 2, Some(TUNNEL_HOP)),
+        ];
+        for (n, (existing, hops, expected)) in cases.into_iter().enumerate() {
+            assert_eq!(
+                restore(existing, tunnel_path(hops, live, 100), now),
+                expected,
+                "case {n}"
+            );
+        }
+        // No path: restored only before the tunnel path expires.
+        assert_eq!(
+            restore(None, tunnel_path(2, now + 1.0, 100), now),
+            Some(TUNNEL_HOP)
+        );
+        assert_eq!(restore(None, tunnel_path(2, now, 100), now), None);
     }
 }
