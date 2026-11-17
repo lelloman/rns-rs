@@ -366,4 +366,6 @@ mod outbound_engine;
 #[cfg(test)]
 mod engine_fixtures;
 #[cfg(test)]
+mod link_route_tests;
+#[cfg(test)]
 mod tests;
