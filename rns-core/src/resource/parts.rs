@@ -404,4 +404,22 @@ mod tests {
         assert!(parts.is_empty());
         assert!(hashes.is_empty());
     }
+
+    #[test]
+    fn metadata_size_is_three_big_endian_bytes() {
+        for (size, header) in [(300usize, [0, 1, 44]), (70_000, [1, 0x11, 0x70])] {
+            let metadata: Vec<u8> = (0..size).map(|i| i as u8).collect();
+            let data = b"payload";
+            let packed = prepend_metadata(data, &metadata);
+            assert_eq!(packed[..3], header);
+            assert_eq!(
+                extract_metadata(&packed),
+                Some((metadata.clone(), data.to_vec()))
+            );
+            assert_eq!(
+                extract_metadata_owned(packed),
+                Some((metadata, data.to_vec()))
+            );
+        }
+    }
 }

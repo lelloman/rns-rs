@@ -254,4 +254,16 @@ mod tests {
         assert_eq!(ResourceStatus::Corrupt as u8, 0x08);
         assert_eq!(ResourceStatus::Rejected as u8, 0x09);
     }
+
+    #[test]
+    fn errors_describe_themselves() {
+        assert_eq!(
+            ResourceError::PartCountMismatch.to_string(),
+            "Resource part count does not match transfer size"
+        );
+        assert_eq!(
+            ResourceError::Timeout.to_string(),
+            "Resource transfer timeout"
+        );
+    }
 }

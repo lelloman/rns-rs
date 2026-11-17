@@ -704,4 +704,22 @@ mod tests {
             ResourceError::InvalidAdvertisement
         );
     }
+
+    #[test]
+    fn app_flag_is_read_from_the_flags() {
+        let mut flags = AdvFlags {
+            encrypted: true,
+            compressed: false,
+            split: false,
+            is_request: false,
+            is_response: false,
+            has_metadata: false,
+            app_flag: true,
+        };
+        let adv = ResourceAdvertisement::unpack(&make_adv(flags).pack(0)).unwrap();
+        assert!(adv.app_flag_set());
+        flags.app_flag = false;
+        let adv = ResourceAdvertisement::unpack(&make_adv(flags).pack(0)).unwrap();
+        assert!(!adv.app_flag_set());
+    }
 }

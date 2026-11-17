@@ -245,4 +245,78 @@ mod tests {
         ws.on_window_complete();
         assert_eq!(ws.window, 10);
     }
+
+    #[test]
+    fn timeout_keeps_the_window_at_its_minimum() {
+        let mut ws = WindowState::new();
+        ws.window = ws.window_min;
+        let max = ws.window_max;
+        ws.on_timeout();
+        assert_eq!(ws.window, ws.window_min);
+        assert_eq!(ws.window_max, max);
+    }
+
+    #[test]
+    fn timeout_shrinks_the_maximum_twice_only_beyond_the_flexibility() {
+        // window 5 -> 4, max 8 -> 7: 7 - 4 is within the flexibility.
+        let mut ws = WindowState::new();
+        ws.window = 5;
+        ws.window_max = 8;
+        ws.on_timeout();
+        assert_eq!((ws.window, ws.window_max), (4, 7));
+
+        // window 5 -> 4, max 9 -> 8: 8 - 4 is beyond it, so max -> 7.
+        let mut ws = WindowState::new();
+        ws.window = 5;
+        ws.window_max = 9;
+        ws.on_timeout();
+        assert_eq!((ws.window, ws.window_max), (4, 7));
+    }
+
+    #[test]
+    fn rates_at_the_thresholds_do_not_count() {
+        let mut ws = WindowState::new();
+        ws.update_req_resp_rate(RESOURCE_RATE_FAST);
+        ws.update_data_rate(RESOURCE_RATE_FAST);
+        assert_eq!(ws.fast_rate_rounds, 0);
+        ws.update_data_rate(RESOURCE_RATE_VERY_SLOW);
+        assert_eq!(ws.very_slow_rate_rounds, 0);
+    }
+
+    #[test]
+    fn fast_rounds_raise_the_maximum_only_at_the_threshold() {
+        let mut ws = WindowState::new();
+        for round in 1..RESOURCE_FAST_RATE_THRESHOLD {
+            ws.update_data_rate(RESOURCE_RATE_FAST * 2.0);
+            assert_eq!(ws.fast_rate_rounds, round);
+            assert_eq!(ws.window_max, RESOURCE_WINDOW_MAX_SLOW);
+        }
+        ws.update_data_rate(RESOURCE_RATE_FAST * 2.0);
+        assert_eq!(ws.window_max, RESOURCE_WINDOW_MAX_FAST);
+        // Counting stops at the threshold.
+        ws.update_data_rate(RESOURCE_RATE_FAST * 2.0);
+        assert_eq!(ws.fast_rate_rounds, RESOURCE_FAST_RATE_THRESHOLD);
+    }
+
+    #[test]
+    fn very_slow_rounds_stop_at_the_threshold() {
+        let mut ws = WindowState::new();
+        for _ in 0..RESOURCE_VERY_SLOW_RATE_THRESHOLD + 1 {
+            ws.update_data_rate(RESOURCE_RATE_VERY_SLOW / 2.0);
+        }
+        assert_eq!(ws.very_slow_rate_rounds, RESOURCE_VERY_SLOW_RATE_THRESHOLD);
+        assert_eq!(ws.window_max, RESOURCE_WINDOW_MAX_VERY_SLOW);
+    }
+
+    #[test]
+    fn timeout_keeps_the_maximum_at_the_minimum() {
+        // A window restored above the maximum still shrinks; the maximum,
+        // already at the minimum, does not.
+        let mut ws = WindowState::new();
+        ws.restore(3);
+        ws.window_max = ws.window_min;
+        ws.on_timeout();
+        assert_eq!(ws.window, 2);
+        assert_eq!(ws.window_max, ws.window_min);
+    }
 }
