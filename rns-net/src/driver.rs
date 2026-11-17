@@ -916,8 +916,9 @@ pub struct Driver {
     /// The network identity, when one is configured, kept apart from the
     /// transport identity: it signs this node's discovery announces,
     /// decrypts `discovery_encrypt` announces and their own are encrypted
-    /// to it.
-    pub(crate) discovery_network_identity: Option<rns_crypto::identity::Identity>,
+    /// to it. Unless this node is a shared instance client, it also owns
+    /// the `rnstransport.network` management destinations.
+    pub(crate) network_identity: Option<rns_crypto::identity::Identity>,
     /// The bitrate the shared instance's client interfaces report
     /// (`force_shared_instance_bitrate`).
     pub(crate) forced_local_bitrate: Option<u64>,
@@ -1245,7 +1246,7 @@ impl Driver {
             blackhole_sources: Vec::new(),
             blackhole_updater: None,
             interface_discovery_sources: Vec::new(),
-            discovery_network_identity: None,
+            network_identity: None,
             forced_local_bitrate: None,
             upstream_autoconnect: None,
             ratchet_store: None,

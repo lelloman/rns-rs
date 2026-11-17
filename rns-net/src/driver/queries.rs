@@ -68,7 +68,7 @@ impl Driver {
     ) -> crate::discovery::InterfaceAnnouncer {
         let mut announcer = crate::discovery::InterfaceAnnouncer::new(transport_id, interfaces);
         announcer.set_network_public_key(
-            self.discovery_network_identity
+            self.network_identity
                 .as_ref()
                 .and_then(|identity| identity.get_public_key()),
         );
@@ -759,7 +759,7 @@ impl Driver {
             traffic: total_traffic,
             probe_responder: self.probe_responder_hash,
             network_id: self
-                .discovery_network_identity
+                .network_identity
                 .as_ref()
                 .map(|identity| *identity.hash()),
             #[cfg(feature = "iface-backbone")]

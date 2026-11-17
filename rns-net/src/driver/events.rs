@@ -2819,7 +2819,7 @@ impl Driver {
         // belongs to the network identity when one is configured, and to
         // the transport identity otherwise.
         let identity = match self
-            .discovery_network_identity
+            .network_identity
             .as_ref()
             .or(self.transport_identity.as_ref())
         {
@@ -3055,9 +3055,9 @@ impl Driver {
         );
     }
 
-    /// Emit management and/or blackhole announces if enabled and due.
+    /// Emit the built-in destinations' announces if enabled and due.
     pub(crate) fn tick_management_announces(&mut self, now: f64) {
-        if self.transport_identity.is_none() {
+        if self.transport_identity.is_none() && !self.network_destinations_enabled() {
             return;
         }
 
@@ -3100,28 +3100,87 @@ impl Driver {
             BuiltinDestination::RemoteManagement => self.management_config.enable_remote_management,
             BuiltinDestination::Blackhole => self.management_config.publish_blackhole,
             BuiltinDestination::Probe => self.probe_responder_hash.is_some(),
+            BuiltinDestination::NetworkInstance | BuiltinDestination::Network => {
+                self.network_destinations_enabled()
+            }
         }
+    }
+
+    /// Whether this node hosts the network identity's management
+    /// destinations: with a network identity, unless it is a shared
+    /// instance client.
+    pub(crate) fn network_destinations_enabled(&self) -> bool {
+        self.network_identity.is_some() && !self.connected_to_shared_instance
+    }
+
+    /// Register the network identity's management destinations, so path
+    /// requests for them are answered, when this node hosts them.
+    pub(crate) fn register_network_destinations(&mut self) {
+        use crate::management::BuiltinDestination;
+        if !self.network_destinations_enabled() {
+            return;
+        }
+        for destination in [
+            BuiltinDestination::NetworkInstance,
+            BuiltinDestination::Network,
+        ] {
+            if let Some(dest_hash) = self.builtin_dest_hash(destination) {
+                self.engine
+                    .register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+                self.local_destinations
+                    .insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+            }
+        }
+    }
+
+    /// The identity a built-in destination belongs to.
+    fn builtin_identity(
+        &self,
+        destination: crate::management::BuiltinDestination,
+    ) -> Option<&rns_crypto::identity::Identity> {
+        if destination.uses_network_identity() {
+            self.network_identity.as_ref()
+        } else {
+            self.transport_identity.as_ref()
+        }
+    }
+
+    fn builtin_dest_hash(
+        &self,
+        destination: crate::management::BuiltinDestination,
+    ) -> Option<[u8; 16]> {
+        self.builtin_identity(destination)
+            .map(|identity| destination.dest_hash(identity.hash()))
+    }
+
+    /// The enabled built-in destination whose hash is `dest_hash`.
+    fn enabled_builtin_destination(
+        &self,
+        dest_hash: &[u8; 16],
+    ) -> Option<crate::management::BuiltinDestination> {
+        crate::management::BuiltinDestination::ALL
+            .into_iter()
+            .find(|destination| {
+                self.builtin_dest_hash(*destination).as_ref() == Some(dest_hash)
+                    && self.builtin_destination_enabled(*destination)
+            })
     }
 
     /// Send the announce of the built-in destination whose stamp the
     /// stamper just persisted.
     fn emit_builtin_announce_for(&mut self, dest_hash: [u8; 16], now: f64) {
-        let Some(identity_hash) = self.transport_identity.as_ref().map(|id| *id.hash()) else {
-            return;
-        };
-        let destination = crate::management::BuiltinDestination::ALL
-            .into_iter()
-            .find(|destination| destination.dest_hash(&identity_hash) == dest_hash);
-        if let Some(destination) = destination {
-            if self.builtin_destination_enabled(destination) {
-                let raw = self.build_builtin_announce(destination, now, false);
-                self.emit_local_management_announce(raw, now, destination.label());
-            }
+        if let Some(destination) = self.enabled_builtin_destination(&dest_hash) {
+            let raw = self.build_builtin_announce(destination, now, false);
+            self.emit_local_management_announce(raw, now, destination.label());
         }
     }
 
     /// Build a built-in destination's announce, as `Destination.announce`
     /// does for upstream's management destinations.
+    ///
+    /// The announce is signed by the identity the destination belongs to:
+    /// the network identity for the `rnstransport.network` destinations,
+    /// the transport identity for the others.
     ///
     /// With `STAMP_DESTINATIONS` the announce carries the destination's
     /// persisted stamp and its link cost (`BLACKHOLE_LINK_COST` for the
@@ -3135,7 +3194,7 @@ impl Driver {
         now: f64,
         path_response: bool,
     ) -> Option<Vec<u8>> {
-        let identity = self.transport_identity.as_ref()?;
+        let identity = self.builtin_identity(destination)?;
         let identity_hash = *identity.hash();
         let dest_hash = destination.dest_hash(&identity_hash);
         let mut app_data = None;
@@ -3151,7 +3210,7 @@ impl Driver {
             let material = crate::stamps::destination_stamp_material(
                 &dest_hash,
                 &public_key,
-                &destination.name_hash(),
+                &destination.name_hash(&identity_hash),
             );
             let target = self
                 .stamper
@@ -3178,7 +3237,12 @@ impl Driver {
                 }
             }
         }
-        let identity = self.transport_identity.as_ref()?;
+        // Field by field, so the rng can be borrowed alongside.
+        let identity = if destination.uses_network_identity() {
+            self.network_identity.as_ref()
+        } else {
+            self.transport_identity.as_ref()
+        }?;
         crate::management::build_builtin_announce(
             destination,
             identity,
@@ -3278,18 +3342,13 @@ impl Driver {
     }
 
     /// Build a fresh `PATH_RESPONSE` announce for a local destination.
-    fn build_local_path_response(&mut self, dest_hash: &[u8; 16], now: f64) -> Option<Vec<u8>> {
-        use crate::management;
-
-        if let Some(identity_hash) = self.transport_identity.as_ref().map(|id| *id.hash()) {
-            let destination = management::BuiltinDestination::ALL
-                .into_iter()
-                .find(|destination| destination.dest_hash(&identity_hash) == *dest_hash);
-            if let Some(destination) = destination {
-                if self.builtin_destination_enabled(destination) {
-                    return self.build_builtin_announce(destination, now, true);
-                }
-            }
+    pub(crate) fn build_local_path_response(
+        &mut self,
+        dest_hash: &[u8; 16],
+        now: f64,
+    ) -> Option<Vec<u8>> {
+        if let Some(destination) = self.enabled_builtin_destination(dest_hash) {
+            return self.build_builtin_announce(destination, now, true);
         }
 
         if let Some(record) = self.shared_announces.get(dest_hash).cloned() {

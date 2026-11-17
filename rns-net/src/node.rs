@@ -2484,7 +2484,8 @@ impl RnsNode {
         let discover_interfaces = config.discover_interfaces;
         driver.interface_discovery_sources = config.discovery.interface_discovery_sources.clone();
         driver.forced_local_bitrate = config.shared_instance.force_bitrate;
-        driver.discovery_network_identity = config.network_identity;
+        driver.network_identity = config.network_identity;
+        driver.register_network_destinations();
         driver.autoconnect_interface_mode = config.autoconnect_interface_mode;
         driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
         driver.autoconnect_announces_to_internal =

@@ -7329,7 +7329,7 @@ fn first_discovery_announce(
         .interfaces
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
     driver.transport_identity = Some(transport_identity);
-    driver.discovery_network_identity = network_identity;
+    driver.network_identity = network_identity;
     let announcer = driver.new_interface_announcer(
         identity_hash,
         vec![crate::discovery::DiscoverableInterface {
@@ -15431,6 +15431,148 @@ fn management_announces_stay_unstamped_without_stamp_destinations() {
     let announces = sent_builtin_announces(&sent[0].lock().unwrap(), &blackhole);
     assert_eq!(announces.len(), 1);
     assert!(announces[0].app_data.is_none());
+}
+
+/// The hashes of `rnstransport.network.instance.<hash>` and
+/// `rnstransport.network` under `network_identity`.
+fn network_destination_hashes(network_identity: &Identity) -> [[u8; 16]; 2] {
+    let network_hash = *network_identity.hash();
+    let hex: String = network_hash.iter().map(|b| format!("{b:02x}")).collect();
+    [
+        rns_core::destination::destination_hash(
+            "rnstransport",
+            &["network", "instance", &hex],
+            Some(&network_hash),
+        ),
+        rns_core::destination::destination_hash("rnstransport", &["network"], Some(&network_hash)),
+    ]
+}
+
+fn copy_identity(identity: &Identity) -> Identity {
+    Identity::from_private_key(&identity.get_private_key().unwrap())
+}
+
+#[test]
+fn the_network_identity_announces_its_management_destinations() {
+    // Upstream Transport.start: a network identity gets the
+    // `rnstransport.network.instance.<hash>` and `rnstransport.network`
+    // destinations, announced with the other management destinations
+    // through `Destination.announce`, so stamped at the default link cost.
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = rediscovery_driver(tx.clone(), rx, false);
+    driver.transport_identity = Some(Identity::new(&mut OsRng));
+    let network_identity = Identity::new(&mut OsRng);
+    driver.network_identity = Some(copy_identity(&network_identity));
+    driver.register_network_destinations();
+    driver.stamp_destinations.store(true, Ordering::Relaxed);
+    let dir = tempfile::tempdir().unwrap();
+    driver
+        .stamper
+        .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
+    let dests = network_destination_hashes(&network_identity);
+    for dest in dests {
+        assert!(driver.local_destinations.contains_key(&dest));
+    }
+
+    driver.emit_management_announces(time::now());
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_writers();
+
+    let frames = sent[0].lock().unwrap().clone();
+    let required = StampCost::from_whole(6);
+    for dest in dests {
+        let mut announces = sent_builtin_announces(&frames, &dest);
+        assert_eq!(announces.len(), 1, "{dest:02x?}");
+        assert_eq!(
+            announces[0].public_key,
+            network_identity.get_public_key().unwrap()
+        );
+        assert_eq!(
+            announces[0].apply_stamp(&dest, required),
+            rns_core::announce::AnnounceStampStatus::Valid
+        );
+        assert_eq!(
+            announces[0].lr_cost,
+            Some(rns_core::constants::LINK_REQUEST_STAMP_COST)
+        );
+    }
+    // Only the network destinations: nothing else is enabled.
+    assert_eq!(frames.iter().filter(|raw| is_announce(raw)).count(), 2);
+}
+
+#[test]
+fn path_requests_for_the_network_destinations_are_answered() {
+    let LocalPathResponseFixture {
+        mut driver,
+        tx,
+        sent_1,
+        ..
+    } = local_path_response_fixture(false);
+    let network_identity = Identity::new(&mut OsRng);
+    driver.network_identity = Some(copy_identity(&network_identity));
+    driver.register_network_destinations();
+    let dests = network_destination_hashes(&network_identity);
+    for (dest, tag) in dests.iter().zip([[0xE1; 16], [0xE2; 16]]) {
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: local_path_request_frame(&driver, dest, &tag).into(),
+            rssi: None,
+            snr: None,
+        })
+        .unwrap();
+    }
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let frames = sent_1.lock().unwrap().clone();
+    for dest in dests {
+        let answers = path_responses_for(&frames, &dest);
+        assert_eq!(
+            answers.len(),
+            1,
+            "expected one path response for {dest:02x?}"
+        );
+        let packet = RawPacket::unpack(&answers[0]).unwrap();
+        let announce = AnnounceData::unpack(packet.data(), false)
+            .unwrap()
+            .validate(&dest)
+            .unwrap();
+        assert_eq!(
+            announce.public_key,
+            network_identity.get_public_key().unwrap()
+        );
+    }
+}
+
+#[test]
+fn network_destinations_need_a_network_identity_and_no_shared_instance() {
+    for shared_client in [false, true] {
+        let (tx, rx) = event::channel();
+        let (mut driver, sent) = rediscovery_driver(tx, rx, true);
+        driver.transport_identity = Some(Identity::new(&mut OsRng));
+        let network_identity = Identity::new(&mut OsRng);
+        if shared_client {
+            driver.connected_to_shared_instance = true;
+            driver.network_identity = Some(copy_identity(&network_identity));
+        }
+        let local_before = driver.local_destinations.len();
+        driver.register_network_destinations();
+        assert_eq!(driver.local_destinations.len(), local_before);
+
+        driver.emit_management_announces(time::now());
+        driver.flush_writers();
+        assert!(
+            !sent[0].lock().unwrap().iter().any(|raw| is_announce(raw)),
+            "shared_client {shared_client}"
+        );
+        // Nor are path requests for them answered.
+        for dest in network_destination_hashes(&network_identity) {
+            assert!(driver
+                .build_local_path_response(&dest, time::now())
+                .is_none());
+        }
+    }
 }
 
 #[cfg(feature = "proof-pool")]

@@ -2045,6 +2045,259 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
     }
 }
 
+/// Python receiver of the network identity's management destinations: it
+/// waits until it knows both, requesting their paths with `request`, and
+/// prints what it recalls of each as a JSON line.
+#[cfg(target_os = "linux")]
+const NETWORK_DESTINATIONS_RECEIVER: &str = r#"
+import RNS, sys, time, json, os
+reticulum = RNS.Reticulum(sys.argv[1])
+RNS.Transport.STAMP_DESTINATIONS = False
+RNS.Transport.STAMP_PRS = False
+network = RNS.Identity.from_file(sys.argv[2])
+request = sys.argv[3] == "request"
+pending = {
+    "instance": RNS.Destination.hash(network, "rnstransport", "network", "instance", RNS.hexrep(network.hash, delimit=False)),
+    "network": RNS.Destination.hash(network, "rnstransport", "network"),
+}
+deadline = time.time() + 35
+last_request = 0
+while pending and time.time() < deadline:
+    for name, destination_hash in list(pending.items()):
+        identity = RNS.Identity.recall(destination_hash)
+        if identity != None:
+            print(json.dumps({
+                "name": name,
+                "hash": destination_hash.hex(),
+                "identity": identity.hash.hex(),
+                "stamp_value": RNS.Identity.recall_stamp_value(destination_hash),
+                "link_cost": RNS.Identity.recall_link_cost(destination_hash),
+            }), flush=True)
+            del pending[name]
+    if request and time.time() > last_request + 3:
+        last_request = time.time()
+        for destination_hash in pending.values(): RNS.Transport.request_path(destination_hash)
+    time.sleep(0.25)
+print(json.dumps({"missing": list(pending)}), flush=True)
+os._exit(0)
+"#;
+
+/// The config of a standalone instance that dials 127.0.0.1:`port` and
+/// accepts only announces stamped to `CHEAP_STAMPS`' cost.
+#[cfg(target_os = "linux")]
+fn stamp_enforcing_client_config(port: u16) -> String {
+    format!(
+        "[stamps]\n  enforce_stamps = Yes\n  destination_cost = 8\n\n\
+         [reticulum]\n  enable_transport = No\n  share_instance = No\n\
+         [logging]\n  loglevel = 4\n\
+         [interfaces]\n  [[network link]]\n    type = TCPClientInterface\n    \
+         enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n"
+    )
+}
+
+/// A Rust instance with a `network_identity` announces the network
+/// identity's `rnstransport.network.instance.<hash>` and
+/// `rnstransport.network` destinations, stamped, and answers path requests
+/// for them. A stamp-enforcing Python instance recalls the network identity
+/// for both, with the stamp's value and the default link cost.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_validates_rust_network_destination_announces() {
+    let root = tempfile::tempdir().unwrap();
+    let publisher_dir = root.path().join("publisher");
+    fs::create_dir_all(&publisher_dir).unwrap();
+    let network_identity = root.path().join("network_identity");
+    let port = TcpPortReservation::new().port();
+    fs::write(
+        publisher_dir.join("config"),
+        format!(
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = No\n  \
+             network_identity = {}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[network server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n",
+            network_identity.display()
+        ),
+    )
+    .unwrap();
+
+    let receiver = |name: &str, mode: &str| -> (Command, PathBuf) {
+        let dir = root.path().join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config"), stamp_enforcing_client_config(port)).unwrap();
+        let mut command = Command::new("python3");
+        command.env("PYTHONUNBUFFERED", "1").args([
+            "-c",
+            NETWORK_DESTINATIONS_RECEIVER,
+            dir.to_str().unwrap(),
+            network_identity.to_str().unwrap(),
+            mode,
+        ]);
+        (command, dir)
+    };
+    let check = |output: &Output, publisher_log: &Path| {
+        assert_success(output, "network destinations receiver");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let network_id = identity_file_hash(&network_identity);
+        let lines: Vec<serde_json::Value> = stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let missing = lines.iter().find_map(|line| line.get("missing"));
+        assert_eq!(
+            missing,
+            Some(&serde_json::json!([])),
+            "{stdout}\npublisher log:\n{}",
+            fs::read_to_string(publisher_log).unwrap_or_default()
+        );
+        for name in ["instance", "network"] {
+            let line = lines
+                .iter()
+                .find(|line| line["name"] == name)
+                .unwrap_or_else(|| panic!("no {name} line in {stdout}"));
+            assert_eq!(line["identity"], network_id.as_str(), "{stdout}");
+            assert!(line["stamp_value"].as_f64().unwrap() >= 8.0, "{stdout}");
+            assert_eq!(line["link_cost"], 12.5, "{stdout}");
+        }
+    };
+
+    // The receiver dials before the publisher starts, so it hears the
+    // first management announces, which follow startup by seconds.
+    let (listen, _) = receiver("listener", "listen");
+    let listener = spawn_logged(listen, &root.path().join("listener.out"));
+    let publisher_log = root.path().join("publisher.log");
+    let mut publisher = spawn_daemon(Daemon::Rust, &publisher_dir, &publisher_log);
+    wait_for_port(port, &mut publisher, "publisher TCP server");
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let mut listener = listener;
+    while listener.child.try_wait().unwrap().is_none() {
+        publisher.assert_running("publisher");
+        assert!(Instant::now() < deadline, "the listener did not finish");
+        thread::sleep(Duration::from_millis(100));
+    }
+    let stdout = fs::read(root.path().join("listener.out")).unwrap();
+    let status = listener.child.wait().unwrap();
+    let listened = Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    };
+    check(&listened, &publisher_log);
+
+    // The next announces are hours away: a receiver that starts now learns
+    // the destinations from the publisher's answers to its path requests.
+    let (request, _) = receiver("requester", "request");
+    check(&run(request), &publisher_log);
+}
+
+/// A Python instance's network identity destinations reach a Rust instance
+/// that enforces stamps, and the Rust instance records their stamps.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rust_accepts_python_network_destination_announces() {
+    let root = tempfile::tempdir().unwrap();
+    let publisher_dir = root.path().join("publisher");
+    let receiver_dir = root.path().join("receiver");
+    fs::create_dir_all(&publisher_dir).unwrap();
+    fs::create_dir_all(&receiver_dir).unwrap();
+    let network_identity = root.path().join("network_identity");
+    let ports: Vec<TcpPortReservation> = (0..3).map(|_| TcpPortReservation::new()).collect();
+    let (port, shared, control) = (ports[0].port(), ports[1].port(), ports[2].port());
+    let instance = format!("netdest-receiver-{}", std::process::id());
+    fs::write(
+        publisher_dir.join("config"),
+        format!(
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = No\n  \
+             network_identity = {}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[network server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n",
+            network_identity.display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        receiver_dir.join("config"),
+        format!(
+            "[stamps]\n  enforce_stamps = Yes\n  destination_value = 8\n  destination_cost = 8\n  \
+             pr_value = 8\n  pr_cost = 8\n\n\
+             [reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = {instance}\n  shared_instance_port = {shared}\n  \
+             instance_control_port = {control}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[network link]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n"
+        ),
+    )
+    .unwrap();
+    drop(ports);
+
+    let mut receiver = spawn_daemon(
+        Daemon::Rust,
+        &receiver_dir,
+        &root.path().join("receiver.log"),
+    );
+    wait_for_abstract_socket(&format!("rns/{instance}"), &mut receiver, "receiver");
+    let mut publisher = spawn_daemon(
+        Daemon::Python,
+        &publisher_dir,
+        &root.path().join("publisher.log"),
+    );
+    wait_for_port(port, &mut publisher, "publisher TCP server");
+
+    let mut probe = Command::new("python3");
+    probe.args([
+        "-c",
+        "import RNS, sys; i = RNS.Identity.from_file(sys.argv[1]); \
+         print(RNS.Destination.hash(i, 'rnstransport', 'network', 'instance', \
+         RNS.hexrep(i.hash, delimit=False)).hex()); \
+         print(RNS.Destination.hash(i, 'rnstransport', 'network').hex())",
+        network_identity.to_str().unwrap(),
+    ]);
+    let hashes = run(probe);
+    assert_success(&hashes, "network destination hashes");
+    let hashes: Vec<String> = String::from_utf8_lossy(&hashes.stdout)
+        .lines()
+        .map(|line| line.trim().to_string())
+        .collect();
+    assert_eq!(hashes.len(), 2);
+    // Upstream sends its first management announces 15 seconds after
+    // startup. The path table then lists both, with the value of the stamp
+    // the enforcing instance validated.
+    let receiver_config = receiver_dir.to_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        receiver.assert_running("receiver");
+        publisher.assert_running("publisher");
+        let mut rnpath = Command::new(env!("CARGO_BIN_EXE_rnpath"));
+        rnpath.args(["--config", &receiver_config, "-t"]);
+        let table = run(rnpath);
+        assert_success(&table, "rnpath -t");
+        let table = String::from_utf8_lossy(&table.stdout).into_owned();
+        let listed = |hash: &String| {
+            table.lines().any(|line| {
+                let value = line
+                    .split_once("(dv:")
+                    .and_then(|(_, rest)| rest.split_once('/'))
+                    .and_then(|(value, _)| value.parse::<f64>().ok());
+                line.starts_with(&format!("<{hash}>")) && value.is_some_and(|value| value >= 8.0)
+            })
+        };
+        if hashes.iter().all(listed) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no paths to {hashes:?}:\n{table}\npublisher log:\n{}\nreceiver log:\n{}",
+            fs::read_to_string(root.path().join("publisher.log")).unwrap_or_default(),
+            fs::read_to_string(root.path().join("receiver.log")).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
 /// A shared instance with `shared_instance_type = tcp` and an `rpc_key`,
 /// run by one implementation, answers the other's rnstatus over TCP. The
 /// client runs from a copy of the config without the daemon's storage, so

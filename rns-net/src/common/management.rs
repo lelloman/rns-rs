@@ -5,6 +5,9 @@
 //! - `/path` on `rnstransport.remote.management` destination
 //! - `/list` on `rnstransport.info.blackhole` destination
 //!
+//! and the announces of the built-in destinations, among them the network
+//! identity's `rnstransport.network` and `rnstransport.network.instance.*`.
+//!
 //! Python reference: Transport.py:220-241, 2591-2643, 3243-3249
 
 use rns_core::constants;
@@ -91,8 +94,9 @@ fn announce_context(path_response: bool) -> u8 {
     }
 }
 
-/// A destination this node announces under its transport identity and
-/// answers itself (`Transport.mgmt_destinations`).
+/// A destination this node announces and answers itself
+/// (`Transport.mgmt_destinations`): the management destinations of the
+/// transport identity, and those of the network identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinDestination {
     /// `rnstransport.remote.management`
@@ -101,42 +105,76 @@ pub enum BuiltinDestination {
     Blackhole,
     /// `rnstransport.probe`
     Probe,
+    /// `rnstransport.network.instance.<network identity hash>`, of the
+    /// network identity.
+    NetworkInstance,
+    /// `rnstransport.network`, of the network identity.
+    Network,
 }
 
 impl BuiltinDestination {
-    pub const ALL: [BuiltinDestination; 3] = [
+    /// In the order upstream announces them.
+    pub const ALL: [BuiltinDestination; 5] = [
         BuiltinDestination::RemoteManagement,
         BuiltinDestination::Blackhole,
+        BuiltinDestination::NetworkInstance,
+        BuiltinDestination::Network,
         BuiltinDestination::Probe,
     ];
 
-    pub fn aspects(self) -> &'static [&'static str] {
-        match self {
+    /// Whether the destination belongs to the network identity rather than
+    /// the transport identity.
+    pub fn uses_network_identity(self) -> bool {
+        matches!(
+            self,
+            BuiltinDestination::NetworkInstance | BuiltinDestination::Network
+        )
+    }
+
+    /// The destination's aspects under the identity it belongs to.
+    /// `NetworkInstance` names that identity's hash, as undelimited hex.
+    pub fn aspects(self, identity_hash: &[u8; 16]) -> Vec<String> {
+        let fixed: &[&str] = match self {
             BuiltinDestination::RemoteManagement => &["remote", "management"],
             BuiltinDestination::Blackhole => &["info", "blackhole"],
             BuiltinDestination::Probe => &["probe"],
+            BuiltinDestination::NetworkInstance => &["network", "instance"],
+            BuiltinDestination::Network => &["network"],
+        };
+        let mut aspects: Vec<String> = fixed.iter().map(|a| a.to_string()).collect();
+        if self == BuiltinDestination::NetworkInstance {
+            aspects.push(identity_hash.iter().map(|b| format!("{b:02x}")).collect());
         }
+        aspects
     }
 
-    pub fn dest_hash(self, transport_identity_hash: &[u8; 16]) -> [u8; 16] {
-        destination_hash(
-            "rnstransport",
-            self.aspects(),
-            Some(transport_identity_hash),
-        )
+    fn with_aspects<R>(self, identity_hash: &[u8; 16], f: impl FnOnce(&[&str]) -> R) -> R {
+        let aspects = self.aspects(identity_hash);
+        let aspects: Vec<&str> = aspects.iter().map(String::as_str).collect();
+        f(&aspects)
     }
 
-    pub fn name_hash(self) -> [u8; 10] {
-        rns_core::destination::name_hash("rnstransport", self.aspects())
+    pub fn dest_hash(self, identity_hash: &[u8; 16]) -> [u8; 16] {
+        self.with_aspects(identity_hash, |aspects| {
+            destination_hash("rnstransport", aspects, Some(identity_hash))
+        })
+    }
+
+    pub fn name_hash(self, identity_hash: &[u8; 16]) -> [u8; 10] {
+        self.with_aspects(identity_hash, |aspects| {
+            rns_core::destination::name_hash("rnstransport", aspects)
+        })
     }
 
     /// The destination as the stamper sees it, for grinding its stamp.
-    pub fn destination(self, transport_identity_hash: [u8; 16]) -> crate::destination::Destination {
-        crate::destination::Destination::single_in(
-            "rnstransport",
-            self.aspects(),
-            rns_core::types::IdentityHash(transport_identity_hash),
-        )
+    pub fn destination(self, identity_hash: [u8; 16]) -> crate::destination::Destination {
+        self.with_aspects(&identity_hash, |aspects| {
+            crate::destination::Destination::single_in(
+                "rnstransport",
+                aspects,
+                rns_core::types::IdentityHash(identity_hash),
+            )
+        })
     }
 
     pub fn label(self) -> &'static str {
@@ -144,6 +182,8 @@ impl BuiltinDestination {
             BuiltinDestination::RemoteManagement => "management destination",
             BuiltinDestination::Blackhole => "blackhole info",
             BuiltinDestination::Probe => "probe responder",
+            BuiltinDestination::NetworkInstance => "network instance",
+            BuiltinDestination::Network => "network destination",
         }
     }
 }
@@ -161,7 +201,7 @@ pub fn build_builtin_announce(
     app_data: Option<&[u8]>,
 ) -> Option<Vec<u8>> {
     let dest_hash = destination.dest_hash(identity.hash());
-    let name_hash = destination.name_hash();
+    let name_hash = destination.name_hash(identity.hash());
     let random_hash = announce_random_blob(rng, now);
 
     let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(

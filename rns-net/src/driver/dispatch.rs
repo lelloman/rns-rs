@@ -1570,7 +1570,7 @@ impl Driver {
                                     hops,
                                     self.discovery_required_value,
                                     &mut self.discovery_stamp_cache,
-                                    self.discovery_network_identity.as_ref(),
+                                    self.network_identity.as_ref(),
                                 )
                             {
                                 crate::discovery::apply_transport_autoconnect_mode(
