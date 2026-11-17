@@ -1499,4 +1499,94 @@ mod tests {
         // Should skip transport_id: raw[18:] = dest_hash + context + data
         assert_eq!(&hashable[1..], &pkt.raw[18..]);
     }
+
+    fn header_2_flags() -> PacketFlags {
+        PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        }
+    }
+
+    #[test]
+    fn hash_producing_packers_agree_with_packing_and_parsing() {
+        let flags = header_2_flags();
+        let packet = RawPacket::pack(
+            flags,
+            2,
+            &[0x42; 16],
+            Some(&[0x24; 16]),
+            constants::CONTEXT_NONE,
+            b"payload",
+        )
+        .unwrap();
+        let parsed = RawPacket::unpack(&packet.raw).unwrap();
+        assert_eq!(parsed.packet_hash, packet.packet_hash);
+
+        let (raw, hash) = RawPacket::pack_raw_with_hash(
+            flags,
+            2,
+            &[0x42; 16],
+            Some(&[0x24; 16]),
+            constants::CONTEXT_NONE,
+            b"payload",
+        )
+        .unwrap();
+        assert_eq!(
+            (raw.as_slice(), hash),
+            (packet.raw.as_slice(), packet.packet_hash)
+        );
+
+        let (shared, hash) = RawPacket::pack_raw_shared_with_hash_with_max_mtu(
+            flags,
+            2,
+            &[0x42; 16],
+            Some(&[0x24; 16]),
+            constants::CONTEXT_NONE,
+            b"payload",
+            constants::MTU,
+        )
+        .unwrap();
+        assert_eq!(
+            (&shared[..], hash),
+            (packet.raw.as_slice(), packet.packet_hash)
+        );
+
+        assert_eq!(
+            RawPacket::packet_hash_of(constants::HEADER_2, &packet.raw),
+            packet.packet_hash
+        );
+    }
+
+    #[test]
+    fn borrowed_and_shared_storage_share_the_same_bytes() {
+        let bytes: &[u8] = b"some packet bytes";
+        assert_eq!(&bytes.to_shared()[..], bytes);
+        let arc: Arc<[u8]> = Arc::from(bytes);
+        let shared = arc.to_shared();
+        assert!(Arc::ptr_eq(&shared, &arc));
+    }
+
+    #[test]
+    fn header_2_packet_without_its_context_byte_is_too_short() {
+        let mut raw = vec![header_2_flags().pack(), 0];
+        raw.extend_from_slice(&[0x24; 16]);
+        raw.extend_from_slice(&[0x42; 16]);
+        assert_eq!(raw.len(), constants::HEADER_MAXSIZE - 1);
+        assert!(matches!(
+            RawPacket::unpack(&raw),
+            Err(PacketError::TooShort)
+        ));
+    }
+
+    #[test]
+    fn packet_errors_describe_themselves() {
+        assert_eq!(PacketError::TooShort.to_string(), "Packet too short");
+        assert_eq!(
+            PacketError::InvalidHopCount(200).to_string(),
+            "Invalid hop count: 200"
+        );
+    }
 }
