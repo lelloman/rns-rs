@@ -519,7 +519,9 @@ impl TransportEngine {
             self.config.destination_timeout_secs,
         );
 
-        // Restore paths to path table if they're better than existing
+        // Restore paths to path table if they're better than existing.
+        // As upstream, a path that is not restored leaves the tunnel.
+        let mut deprecated_paths = Vec::new();
         for (dest_hash, tunnel_path) in &restored_paths {
             let existing = self.path_table.get(dest_hash).and_then(|ps| ps.primary());
             let replaced = existing.map(|existing| existing.next_hop);
@@ -574,6 +576,18 @@ impl TransportEngine {
                     "Did not restore tunnel path to {:02x?}: existing path is preferred or tunnel path expired",
                     &dest_hash[..4],
                 );
+                deprecated_paths.push(*dest_hash);
+            }
+        }
+
+        if let Some(entry) = self.tunnel_table.get_mut(&tunnel_id) {
+            for dest_hash in &deprecated_paths {
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Removing path to {:02x?} from tunnel {:02x?}",
+                    &dest_hash[..4],
+                    &tunnel_id[..4],
+                );
+                entry.paths.remove(dest_hash);
             }
         }
 
@@ -968,8 +982,12 @@ mod tests {
 
     /// Reattach a tunnel holding `path` for a destination at `now`, with
     /// `existing` in the path table, and return the next hop of the
-    /// resulting path.
-    fn restore(existing: Option<PathEntry>, path: TunnelPath, now: f64) -> Option<[u8; 16]> {
+    /// resulting path and whether the tunnel still holds its path.
+    fn restore(
+        existing: Option<PathEntry>,
+        path: TunnelPath,
+        now: f64,
+    ) -> (Option<[u8; 16]>, bool) {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_tunnel_interface(1));
         let tunnel_id = [0xCC; 32];
@@ -991,13 +1009,15 @@ mod tests {
                 .insert(dest, PathSet::from_single(existing, 1));
         }
         engine.handle_tunnel(tunnel_id, InterfaceId(1), now);
-        engine.next_hop(&dest)
+        let tunnel = engine.tunnel_table().get(&tunnel_id).unwrap();
+        (engine.next_hop(&dest), tunnel.paths.contains_key(&dest))
     }
 
     /// As upstream's handle_tunnel: a tunnel path replaces an existing one
     /// with as many hops or more, or an expired one, unless the existing
     /// path is more recent; with no existing path, it is restored until it
-    /// expires.
+    /// expires. A path that is not restored leaves the tunnel; a restored
+    /// one stays in it.
     #[test]
     fn tunnel_reattach_restores_paths_as_upstream() {
         let now = 2000.0;
@@ -1020,18 +1040,76 @@ mod tests {
             (Some(existing(1, now - 1.0, 100)), 2, Some(TUNNEL_HOP)),
         ];
         for (n, (existing, hops, expected)) in cases.into_iter().enumerate() {
+            let kept = expected == Some(TUNNEL_HOP);
             assert_eq!(
                 restore(existing, tunnel_path(hops, live, 100), now),
-                expected,
+                (expected, kept),
                 "case {n}"
             );
         }
         // No path: restored only before the tunnel path expires.
         assert_eq!(
             restore(None, tunnel_path(2, now + 1.0, 100), now),
-            Some(TUNNEL_HOP)
+            (Some(TUNNEL_HOP), true)
         );
-        assert_eq!(restore(None, tunnel_path(2, now, 100), now), None);
+        assert_eq!(restore(None, tunnel_path(2, now, 100), now), (None, false));
+    }
+
+    /// The tunnel keeps the paths it restores and drops the others, and
+    /// stays in the table even when none is left.
+    #[test]
+    fn tunnel_reattach_drops_only_the_paths_it_does_not_restore() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+        let tunnel_id = [0xCC; 32];
+        let restored = [0xD1; 16];
+        let beaten = [0xD2; 16];
+        let expired = [0xD3; 16];
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
+        for (dest, path) in [
+            (restored, tunnel_path(2, 5000.0, 100)),
+            (beaten, tunnel_path(2, 5000.0, 100)),
+            (expired, tunnel_path(2, 1500.0, 100)),
+        ] {
+            engine.tunnel_table.store_tunnel_path(
+                &tunnel_id,
+                dest,
+                path,
+                1000.0,
+                constants::DESTINATION_TIMEOUT,
+                usize::MAX,
+            );
+        }
+        engine.void_tunnel_interface(&tunnel_id);
+        for dest in [restored, beaten, expired] {
+            engine.path_table.remove(&dest);
+        }
+        engine.path_table.insert(
+            beaten,
+            PathSet::from_single(
+                PathEntry {
+                    random_blobs: vec![make_random_blob(100)],
+                    expires: 5000.0,
+                    ..make_path_entry(1500.0, 1, InterfaceId(3), EXISTING_HOP)
+                },
+                1,
+            ),
+        );
+
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 2000.0);
+        let paths = &engine.tunnel_table().get(&tunnel_id).unwrap().paths;
+        assert_eq!(paths.keys().copied().collect::<Vec<_>>(), vec![restored]);
+        assert_eq!(engine.next_hop(&restored), Some(TUNNEL_HOP));
+        assert_eq!(engine.next_hop(&beaten), Some(EXISTING_HOP));
+        assert_eq!(engine.next_hop(&expired), None);
+
+        // Reattached again with nothing to restore, the tunnel stays.
+        engine.void_tunnel_interface(&tunnel_id);
+        engine.path_table.remove(&restored);
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 6000.0);
+        let entry = engine.tunnel_table().get(&tunnel_id).unwrap();
+        assert!(entry.paths.is_empty());
+        assert_eq!(entry.interface, Some(InterfaceId(1)));
     }
 
     #[test]
