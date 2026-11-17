@@ -2393,37 +2393,44 @@ impl RnsNode {
             driver.holepunch_manager.set_own_listen_ports(vec![port]);
         }
         let probe_server = if let Some(port) = config.probe_port {
-            let listen_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
-            if crate::engine::FOLD_SERVICES {
-                match crate::holepunch::probe::FoldedProbeServer::bind(
-                    listen_addr,
-                    config.underlay_mark,
-                    config.probe_rate_limit,
-                    Arc::clone(tx.poller()),
-                ) {
-                    Ok(server) => {
-                        log::info!("Probe server started on 0.0.0.0:{}", port);
+            // Dual stack where the host has IPv6, else IPv4 alone.
+            let mut started = None;
+            let mut last_error = None;
+            for listen_addr in crate::holepunch::probe::probe_server_listen_addrs(port) {
+                let result = if crate::engine::FOLD_SERVICES {
+                    crate::holepunch::probe::FoldedProbeServer::bind(
+                        listen_addr,
+                        config.underlay_mark,
+                        config.probe_rate_limit,
+                        Arc::clone(tx.poller()),
+                    )
+                    .map(|server| {
                         driver.probe_server = Some(server);
-                    }
-                    Err(e) => log::error!("Failed to start probe server on port {}: {}", port, e),
-                }
-                None
-            } else {
-                match crate::holepunch::probe::start_probe_server_with_mark(
-                    listen_addr,
-                    config.underlay_mark,
-                    config.probe_rate_limit,
-                ) {
-                    Ok(handle) => {
-                        log::info!("Probe server started on 0.0.0.0:{}", port);
-                        Some(handle)
-                    }
-                    Err(e) => {
-                        log::error!("Failed to start probe server on port {}: {}", port, e);
                         None
+                    })
+                } else {
+                    crate::holepunch::probe::start_probe_server_with_mark(
+                        listen_addr,
+                        config.underlay_mark,
+                        config.probe_rate_limit,
+                    )
+                    .map(Some)
+                };
+                match result {
+                    Ok(handle) => {
+                        log::info!("Probe server started on {}", listen_addr);
+                        started = Some(handle);
+                        break;
                     }
+                    Err(e) => last_error = Some(e),
                 }
             }
+            if started.is_none() {
+                if let Some(e) = last_error {
+                    log::error!("Failed to start probe server on port {}: {}", port, e);
+                }
+            }
+            started.flatten()
         } else {
             None
         };

@@ -299,6 +299,7 @@ impl HolePunchManager {
         probe_protocol: ProbeProtocol,
         device: Option<String>,
     ) -> Self {
+        let probe_addrs = usable_probe_servers(probe_addrs);
         HolePunchManager {
             sessions: HashMap::new(),
             link_to_session: HashMap::new(),
@@ -334,7 +335,7 @@ impl HolePunchManager {
         probe_protocol: ProbeProtocol,
         device: Option<String>,
     ) {
-        self.probe_addrs = probe_addrs;
+        self.probe_addrs = usable_probe_servers(probe_addrs);
         self.probe_protocol = probe_protocol;
         self.device = device;
     }
@@ -1767,6 +1768,21 @@ impl HolePunchManager {
         socket: UdpSocket,
         probe_server: SocketAddr,
     ) -> Vec<HolePunchManagerAction> {
+        // A mapping of another family than the socket's (a probe that went
+        // through a translator) or a synthesized one cannot be punched.
+        let socket_v4 = socket.local_addr().map(|a| a.is_ipv4()).unwrap_or(true);
+        let observed_v4 = canonical(observed_addr).is_ipv4();
+        if super::admission::is_synthesized(&observed_addr.ip())
+            || (socket_v4 && !observed_v4)
+            || (!socket_v4 && observed_v4 && !observed_addr.is_ipv6())
+        {
+            log::warn!(
+                "Probe of session {:02x?} reported {} for a socket of another family; not usable",
+                &session_id[..4],
+                observed_addr
+            );
+            return self.handle_probe_failed(link_id, session_id);
+        }
         let networks = self.local_networks();
         let session = match self.sessions.get_mut(&session_id) {
             Some(s) => s,
@@ -1911,6 +1927,25 @@ fn run_probe_worker(
             });
         }
     }
+}
+
+/// The probe servers that can be used: not addresses synthesized from IPv4
+/// by a translator (NAT64), whose reply would name the translator's IPv4
+/// mapping for an IPv6 socket.
+fn usable_probe_servers(servers: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    servers
+        .into_iter()
+        .filter(|server| {
+            let synthesized = super::admission::is_synthesized(&server.ip());
+            if synthesized {
+                log::warn!(
+                    "Ignoring probe server {}: an address synthesized by NAT64, not a direct endpoint",
+                    server
+                );
+            }
+            !synthesized
+        })
+        .collect()
 }
 
 /// A proposal that could not start.
@@ -2124,6 +2159,79 @@ mod tests {
             assert_eq!(actions.len(), 1, "{initiator}");
             assert_eq!(reject_reason(&actions), Some(REJECT_POLICY), "{initiator}");
             assert_eq!(mgr.session_count(), 0, "{initiator}");
+        }
+    }
+
+    #[test]
+    fn nat64_endpoints_are_never_used() {
+        // In a request, even with private endpoints allowed.
+        for (facilitator, initiator) in [
+            ("[64:ff9b::909:909]:4343", "[2a00:1450::1]:41000"),
+            ("[2a00:1450::9]:4343", "[64:ff9b::102:304]:41000"),
+            ("[2a00:1450::9]:4343", "[64:ff9b:1::a00:1]:41000"),
+        ] {
+            let mut mgr = accepting_manager();
+            mgr.set_allow_private_endpoints(true);
+            let (tx, _rx) = make_tx();
+            let link_id = [0x53; 16];
+            let payload = make_request(link_id, facilitator, initiator, 0x42);
+            let (_, actions) = mgr.handle_signal(
+                link_id,
+                UPGRADE_REQUEST,
+                payload,
+                Some(&test_derived_key()),
+                &tx,
+            );
+            assert_eq!(reject_reason(&actions), Some(REJECT_POLICY), "{initiator}");
+        }
+        // As a configured facilitator.
+        let mgr = HolePunchManager::new(
+            vec![
+                "[64:ff9b::909:909]:4343".parse().unwrap(),
+                "[2a00:1450::9]:4343".parse().unwrap(),
+            ],
+            ProbeProtocol::Rnsp,
+            None,
+        );
+        assert_eq!(
+            mgr.probe_addrs,
+            vec!["[2a00:1450::9]:4343".parse::<SocketAddr>().unwrap()]
+        );
+        // As the peer's endpoint in READY it is outside the accepted
+        // ranges like any other (admission), and the punch never sends to
+        // it (puncher).
+    }
+
+    #[test]
+    fn a_mapping_of_another_family_or_synthesized_fails_the_probe() {
+        for observed in ["1.2.3.4:41000", "[64:ff9b::102:304]:41000"] {
+            let mut mgr = HolePunchManager::new(
+                vec!["[2a00:1450::9]:4343".parse().unwrap()],
+                ProbeProtocol::Rnsp,
+                None,
+            );
+            mgr.set_spawn_workers(false);
+            let (tx, _rx) = make_tx();
+            let link_id = [0x54; 16];
+            let mut rng = make_rng(0x42);
+            mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
+            let session_id = *mgr.link_to_session.get(&link_id).unwrap();
+            let Ok(socket) = UdpSocket::bind("[::1]:0") else {
+                return; // no IPv6 on this host
+            };
+            let actions = mgr.handle_probe_result(
+                link_id,
+                session_id,
+                observed.parse().unwrap(),
+                socket,
+                "[2a00:1450::9]:4343".parse().unwrap(),
+            );
+            assert!(
+                !actions
+                    .iter()
+                    .any(|a| matches!(a, HolePunchManagerAction::SendSignal { .. })),
+                "{observed}"
+            );
         }
     }
 

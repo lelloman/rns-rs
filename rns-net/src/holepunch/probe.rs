@@ -42,7 +42,7 @@ pub fn start_probe_server_with_mark(
     underlay_mark: Option<u32>,
     limit: ProbeRateLimit,
 ) -> io::Result<ProbeServerHandle> {
-    let socket = UdpSocket::bind(listen_addr)?;
+    let socket = bind_server_socket(listen_addr)?;
     crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
     socket.set_nonblocking(true)?;
     let local_addr = socket.local_addr()?;
@@ -289,7 +289,7 @@ impl FoldedProbeServer {
         limit: ProbeRateLimit,
         poller: Arc<Poller>,
     ) -> io::Result<Self> {
-        let socket = UdpSocket::bind(listen_addr)?;
+        let socket = bind_server_socket(listen_addr)?;
         crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
         socket.set_nonblocking(true)?;
         // SAFETY: the socket is kept, open, until `Drop` removes the
@@ -357,7 +357,37 @@ impl Drop for FoldedProbeServer {
     }
 }
 
+/// Bind a probe server's socket. An unspecified IPv6 address (`[::]`)
+/// serves IPv4 too, where the host allows it (dual stack).
+fn bind_server_socket(listen_addr: SocketAddr) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(listen_addr),
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    if let SocketAddr::V6(v6) = listen_addr {
+        if v6.ip().is_unspecified() {
+            // Not fatal: a host with IPv4 off serves IPv6 alone.
+            let _ = socket.set_only_v6(false);
+        }
+    }
+    socket.bind(&listen_addr.into())?;
+    Ok(socket.into())
+}
+
+/// The address a probe server listens on for `port`: every IPv6 and IPv4
+/// address when the host has IPv6, else every IPv4 address.
+pub fn probe_server_listen_addrs(port: u16) -> [SocketAddr; 2] {
+    [
+        SocketAddr::from(([0u16; 8], port)),
+        SocketAddr::from(([0, 0, 0, 0], port)),
+    ]
+}
+
+/// The response to a probe from `src`. An IPv4 client of a dual-stack
+/// server is reported as IPv4, not as an IPv4-mapped IPv6 address.
 fn build_probe_response(nonce: &[u8], src: &SocketAddr) -> Vec<u8> {
+    let src = &super::canonical(*src);
     let mut resp = Vec::with_capacity(36);
     resp.extend_from_slice(PROBE_MAGIC);
     resp.push(PROBE_VERSION);
@@ -1185,6 +1215,42 @@ pub(crate) mod tests {
         // read timeout on some platforms).
         assert!(probe_endpoint(addr, None, Duration::from_millis(300), None).is_err());
         server.stop();
+    }
+
+    #[test]
+    fn dual_stack_server_reflects_ipv4_and_ipv6_clients_in_their_family() {
+        let Ok(mut server) = start_probe_server("[::]:0".parse().unwrap()) else {
+            return; // no IPv6 on this host
+        };
+        let port = server.local_addr().port();
+        let (v4, _) = probe_endpoint(
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            None,
+            Duration::from_secs(3),
+            None,
+        )
+        .expect("IPv4 client answered");
+        assert_eq!(v4.ip(), std::net::Ipv4Addr::LOCALHOST);
+        if let Ok((v6, _)) = probe_endpoint(
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+            None,
+            Duration::from_secs(3),
+            None,
+        ) {
+            assert_eq!(v6.ip(), std::net::Ipv6Addr::LOCALHOST);
+        }
+        server.stop();
+    }
+
+    #[test]
+    fn mapped_sources_are_reported_as_ipv4() {
+        let src: SocketAddr = "[::ffff:198.51.100.7]:4000".parse().unwrap();
+        let response = build_probe_response(&[3; 16], &src);
+        assert_eq!(
+            parse_probe_response(&response, &[3; 16]),
+            Some("198.51.100.7:4000".parse().unwrap())
+        );
+        assert_eq!(response.len(), 28);
     }
 
     #[test]

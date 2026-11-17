@@ -21,6 +21,26 @@ pub const MAX_CONCURRENT_SESSIONS: usize = 4;
 /// Upper bound on the number of links tracked by the inbound request limiter.
 const MAX_TRACKED_LINKS: usize = 1024;
 
+/// Whether `ip` is an IPv6 address synthesized from an IPv4 one by a
+/// translator: the NAT64 well-known prefix 64:ff9b::/96 and the local-use
+/// prefix 64:ff9b:1::/48 (RFC 6052, RFC 8215), IPv4-translated addresses
+/// (::ffff:0:a.b.c.d, RFC 2765) and the deprecated IPv4-compatible
+/// addresses (::a.b.c.d). Traffic to one goes through a translator to some
+/// IPv4 address, possibly a private one, so it is never a direct endpoint.
+pub fn is_synthesized_ipv6(ip: &Ipv6Addr) -> bool {
+    let s = ip.segments();
+    let nat64_wkp = s[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+    let nat64_local = s[..3] == [0x64, 0xff9b, 1];
+    let translated = s[..6] == [0, 0, 0, 0, 0xffff, 0];
+    let compatible = s[..6] == [0; 6] && !ip.is_unspecified() && !ip.is_loopback();
+    nat64_wkp || nat64_local || translated || compatible
+}
+
+/// Whether `ip` is a synthesized IPv6 address (see [`is_synthesized_ipv6`]).
+pub fn is_synthesized(ip: &IpAddr) -> bool {
+    matches!(ip, IpAddr::V6(v6) if is_synthesized_ipv6(v6))
+}
+
 /// Returns true if `addr` may be used as a probe or punch target named by a
 /// link peer.
 ///
@@ -29,7 +49,9 @@ const MAX_TRACKED_LINKS: usize = 1024;
 /// reserved (240.0.0.0/4) ranges. Rejected unless `allow_private` is set:
 /// IPv4 private (10/8, 172.16/12, 192.168/16), shared address space
 /// (100.64/10), link-local (169.254/16, fe80::/10) and IPv6 unique-local
-/// (fc00::/7). IPv4-mapped IPv6 addresses are checked as their IPv4 form.
+/// (fc00::/7). IPv4-mapped IPv6 addresses are checked as their IPv4 form;
+/// other IPv6 addresses synthesized from IPv4 ones (NAT64 and the like, see
+/// [`is_synthesized_ipv6`]) are always rejected.
 pub fn endpoint_is_acceptable(addr: &SocketAddr, allow_private: bool) -> bool {
     if addr.port() == 0 {
         return false;
@@ -72,6 +94,7 @@ fn ipv6_is_acceptable(ip: Ipv6Addr, allow_private: bool) -> bool {
     if ip.is_unspecified()
         || ip.is_loopback()
         || ip.is_multicast()
+        || is_synthesized_ipv6(&ip)
         || documentation
         || documentation_3fff
         || benchmarking
@@ -178,6 +201,16 @@ mod tests {
             ("[::ffff:10.0.0.1]:4343", false, true),
             ("[::ffff:192.168.1.10]:4343", false, true),
             ("[::ffff:169.254.1.1]:4343", false, true),
+            // Synthesized from IPv4 by a translator: never
+            ("[64:ff9b::808:808]:4343", false, false),
+            ("[64:ff9b::a00:1]:4343", false, false),
+            ("[64:ff9b:1::808:808]:4343", false, false),
+            ("[64:ff9b:1:ffff::1]:4343", false, false),
+            ("[::ffff:0:808:808]:4343", false, false),
+            ("[::808:808]:4343", false, false),
+            // ...but their neighbours are ordinary addresses
+            ("[64:ff9c::808:808]:4343", true, true),
+            ("[64:ff9b:2::1]:4343", true, true),
             // Neighbours of the private ranges stay public
             ("172.32.0.1:4343", true, true),
             ("100.128.0.1:4343", true, true),

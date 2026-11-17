@@ -81,7 +81,7 @@ const DEFAULT_LIMITS: PunchLimits = PunchLimits {
 };
 
 /// Whether `addr` can be a punch target at all: a unicast address with a
-/// port. Which unicast ranges a peer may name is decided before the punch
+/// port, not synthesized from IPv4 by a translator (NAT64). Which unicast ranges a peer may name is decided before the punch
 /// starts (see [`super::admission`]).
 fn plausible_target(addr: &SocketAddr) -> bool {
     let ip = match addr.ip() {
@@ -95,7 +95,7 @@ fn plausible_target(addr: &SocketAddr) -> bool {
         std::net::IpAddr::V4(v4) => !v4.is_broadcast() && !v4.is_multicast(),
         std::net::IpAddr::V6(v6) => !v6.is_multicast(),
     };
-    addr.port() != 0 && !ip.is_unspecified() && unicast
+    addr.port() != 0 && !ip.is_unspecified() && unicast && !super::admission::is_synthesized(&ip)
 }
 
 /// The endpoints a punch sends to, each with whether it is a host
@@ -1154,6 +1154,7 @@ mod tests {
             vec!["0.0.0.0:4000".parse().unwrap()],
             vec!["[ff02::1]:4000".parse().unwrap()],
             vec!["[::ffff:255.255.255.255]:4000".parse().unwrap()],
+            vec!["[64:ff9b::7f00:1]:4000".parse().unwrap()],
             vec![],
         ] {
             let started = start_udp_punch(

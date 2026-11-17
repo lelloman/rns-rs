@@ -53,11 +53,11 @@ known identities:
 
 | Key | Values | Meaning |
 |-----|--------|---------|
-| `probe_port` | port | Serve STUN-like probe requests on this UDP port |
+| `probe_port` | port | Serve STUN-like probe requests on this UDP port, over IPv6 and IPv4 where the host has both |
 | `probe_source_rate` | requests a second, default `1` | Requests the probe server answers per source (an IPv4 address or an IPv6 /64) once its burst is used up. `0` turns the per-source limit off |
 | `probe_source_burst` | count, default `10` | Requests a source may send at once |
 | `probe_total_rate` | requests a second, default `1000` | Requests the probe server answers over all sources. `0` turns the limit off |
-| `probe_addr` | `host:port` | Facilitator to use for endpoint discovery. Needed to propose |
+| `probe_addr` | `ip:port`, `[ipv6]:port`, comma-separated | Facilitators to use for endpoint discovery, tried in order. Needed to propose. The punch runs over the family of the one that answers. NAT64 addresses (64:ff9b::/96) are ignored |
 | `direct_connect_policy` | `reject` (default), `accept_all`, `identified_only`, `ask_app` | How a responder treats incoming upgrade requests from peers not on the allowlist. `identified_only` accepts any peer that completed Reticulum `LINKIDENTIFY`, which anyone can do with a throwaway identity. `ask_app` asks the application callback, which rejects unless it is overridden |
 | `direct_connect_allowed_identities` | comma-separated identity hashes | Peers whose upgrade requests are accepted whatever the policy, once they identify on the link with that identity |
 | `direct_connect_allow_private_endpoints` | `yes`/`no` (default) | By default the facilitator and peer endpoints in an upgrade request must be globally routable unicast addresses. Enable for LAN-only deployments to also accept private, shared (100.64/10), link-local, and IPv6 unique-local addresses |

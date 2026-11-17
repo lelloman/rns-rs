@@ -215,6 +215,12 @@ anything:
   link-local (169.254/16, fe80::/10) and IPv6 unique-local (fc00::/7) addresses
   are declined unless `direct_connect_allow_private_endpoints = yes` is set in
   `[reticulum]`. IPv4-mapped IPv6 addresses are checked as their IPv4 form.
+  IPv6 addresses synthesized from IPv4 ones are always declined: the NAT64
+  prefixes 64:ff9b::/96 and 64:ff9b:1::/48, IPv4-translated
+  (::ffff:0:a.b.c.d) and IPv4-compatible (::a.b.c.d) addresses. Traffic to
+  one goes through a translator to an IPv4 address that could be anything,
+  private ones included, so it is never a direct endpoint (see
+  [IPv6](#ipv6)).
   The initiator applies the same check to `responder_public` in
   `UPGRADE_READY` before punching. Out-of-range requests receive
   `UPGRADE_REJECT` with reason `0x01`.
@@ -627,6 +633,26 @@ Properties of the facilitator:
 - **Not necessarily a Reticulum node** — the facilitator only needs to be a
   publicly reachable UDP endpoint. It can be a standalone service, a feature of
   a transport node, or any internet-reachable host.
+
+### IPv6
+
+Reflection and punching work over IPv6 as over IPv4. An rns-rs
+facilitator's probe server listens on `[::]` with IPv4 accepted on the same
+socket where the host allows it (dual stack), else on `0.0.0.0`, and
+reports an IPv4 client as IPv4 rather than as an IPv4-mapped address. A
+node probes over the family of its facilitator (`probe_addr =
+[2001:db8::1]:4343` for IPv6; a list may mix families, tried in order), and
+the punch then runs over that family: the peer's endpoint must be of the
+same family as the mapping the probe found, and host candidates are of
+that family too.
+
+Addresses synthesized by NAT64 and the like (see the endpoint ranges of
+Phase 2) are never used: a configured facilitator with such an address is
+ignored, with a warning; a peer's facilitator, public endpoint or host
+candidate with one is declined; the punch never sends to one; and a probe
+whose reply names a mapping of another family than its socket (as one
+through a translator does) or a synthesized one counts as a failed probe
+(`0x11`).
 
 ## Failure Modes
 
