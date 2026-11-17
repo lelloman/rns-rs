@@ -888,15 +888,28 @@ fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn 
     stream.writer()
 }
 
+/// `str()` of upstream's `LocalClientInterface` on `stream`:
+/// `LocalInterface[rns/{instance}]` or `LocalInterface[{port}]`.
+fn local_client_display(config: &LocalClientConfig, stream: &LocalClientStream) -> String {
+    #[cfg(target_os = "linux")]
+    let endpoint = match stream {
+        LocalClientStream::Unix(_) => {
+            crate::interface::display::LocalEndpoint::Unix(config.instance_name.clone())
+        }
+        LocalClientStream::Tcp(_) => crate::interface::display::LocalEndpoint::Tcp(config.port),
+    };
+    #[cfg(not(target_os = "linux"))]
+    let endpoint = {
+        let _ = stream;
+        crate::interface::display::LocalEndpoint::Tcp(config.port)
+    };
+    crate::interface::display::local_client(&endpoint)
+}
+
 fn try_connect_tcp(config: &LocalClientConfig) -> io::Result<TcpStream> {
     let addr = format!("127.0.0.1:{}", config.port);
     let stream = TcpStream::connect(&addr)?;
     stream.set_nodelay(true)?;
-    log::info!(
-        "[{}] Connected to shared instance via TCP {}",
-        config.name,
-        addr
-    );
     Ok(stream)
 }
 
@@ -906,16 +919,9 @@ fn try_connect_local_client(config: &LocalClientConfig) -> io::Result<LocalClien
         return try_connect_tcp(config).map(LocalClientStream::Tcp);
     }
     match unix_socket::try_connect_unix(&config.instance_name) {
-        Ok(stream) => {
-            log::info!(
-                "[{}] Connected to shared instance via Unix socket: rns/{}",
-                config.name,
-                config.instance_name
-            );
-            Ok(LocalClientStream::Unix(stream))
-        }
+        Ok(stream) => Ok(LocalClientStream::Unix(stream)),
         Err(e) => {
-            log::info!(
+            log::debug!(
                 "[{}] Unix socket connect failed ({}), trying TCP",
                 config.name,
                 e
@@ -942,6 +948,11 @@ fn reconnect_local_client(config: &LocalClientConfig, tx: &EventSender) -> Local
                         &config.name,
                     );
                     let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(writer), None));
+                    log::info!(
+                        target: crate::logging::INFO_TARGET,
+                        "Reconnected socket for {}.",
+                        local_client_display(config, &stream)
+                    );
                     return stream;
                 }
                 Err(e) => {
@@ -1005,6 +1016,10 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
     let stream = try_connect_local_client(&config)?;
     let writer = local_client_stream_writer(&stream)?;
     maybe_spawn_local_client_phy_keepalive(&stream, id, &config.name)?;
+    log::debug!(
+        "Connected to locally available Reticulum instance via: {}",
+        local_client_display(&config, &stream)
+    );
 
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 

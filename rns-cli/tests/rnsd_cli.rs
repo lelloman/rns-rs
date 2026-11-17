@@ -688,8 +688,26 @@ fn shared_clients_log_their_identities_as_upstream() {
         "{}",
         String::from_utf8_lossy(&rust.stderr)
     );
+    // Nothing else at Verbose: upstream's client logs its connection to the
+    // instance only at Debug.
+    let verbose = |output: &[u8]| -> Vec<String> {
+        log_messages(&String::from_utf8_lossy(output), "Verbose")
+            .into_iter()
+            .map(|msg| msg.split('<').next().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert!(
+        !verbose(&rust.stdout)
+            .iter()
+            .any(|msg| msg.contains("interface online") || msg.contains("Connected to")),
+        "{}",
+        String::from_utf8_lossy(&rust.stdout)
+    );
     match python {
-        Some(python) => assert_eq!(messages, client_startup_messages(&python.stdout)),
+        Some(python) => {
+            assert_eq!(messages, client_startup_messages(&python.stdout));
+            assert_eq!(verbose(&rust.stdout), verbose(&python.stdout));
+        }
         None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
     }
 }

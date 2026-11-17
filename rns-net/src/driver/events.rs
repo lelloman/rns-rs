@@ -1148,7 +1148,8 @@ impl Driver {
                 self.event_tx.register_dynamic_parent(id, *parent_id);
             }
             if let Some(entry) = self.interfaces.get_mut(&id) {
-                log::info!("[{}] interface online", id.0);
+                // Upstream logs no such line.
+                log::debug!("[{}] interface online", id.0);
                 wants_tunnel = entry.info.wants_tunnel;
                 entry.online = true;
                 if let Some((writer, async_writer_metrics)) = wrapped_writer {

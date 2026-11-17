@@ -124,7 +124,7 @@ impl std::io::Write for RnsLogDestination {
 pub use rns_net::logging::NOTICE_TARGET;
 
 /// Log target for messages upstream logs at `LOG_INFO`.
-pub const INFO_TARGET: &str = "rns::info";
+pub use rns_net::logging::INFO_TARGET;
 
 /// The RNS level of a `log` record: errors, warnings, notices (by target),
 /// pathing (by target); `info` is upstream's Verbose, `debug` its Debug,
@@ -644,6 +644,7 @@ mod tests {
             rns_level(&meta(log::Level::Info, NOTICE_TARGET)),
             LOG_NOTICE
         );
+        assert_eq!(rns_level(&meta(log::Level::Info, INFO_TARGET)), LOG_INFO);
         assert_eq!(
             rns_level(&meta(log::Level::Info, "rns_net::node")),
             LOG_VERBOSE
