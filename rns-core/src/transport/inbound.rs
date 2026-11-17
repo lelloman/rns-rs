@@ -659,6 +659,99 @@ mod tests {
             route_via_link_table(&packet, &link, InterfaceId(1), LocalHopRewrite::default());
         assert!(result.is_none());
     }
+
+    /// Stripping the transport header keeps the destination and packet type
+    /// bits, as upstream does when it rebuilds the flags for the last hop.
+    #[test]
+    fn stripping_transport_header_keeps_destination_and_packet_type() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet =
+            RawPacket::pack(flags, 1, &[0x11; 16], Some(&[0x22; 16]), 0, b"proof").unwrap();
+        for remaining_hops in [0, 1] {
+            let forwarded =
+                forward_transport_packet(&packet, [0x11; 16], remaining_hops, InterfaceId(1));
+            let forwarded = PacketFlags::unpack(forwarded[0]);
+            assert_eq!(forwarded.header_type, constants::HEADER_1);
+            assert_eq!(forwarded.destination_type, constants::DESTINATION_LINK);
+            assert_eq!(forwarded.packet_type, constants::PACKET_TYPE_PROOF);
+        }
+    }
+
+    /// The link table is keyed by the link ID, which leaves out the MTU
+    /// signalling bytes, so a signalled request maps to the same entry its
+    /// proof will name.
+    #[test]
+    fn link_entry_id_excludes_mtu_signalling() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_LINKREQUEST,
+        };
+        let public_keys = [0x5A; constants::LINK_ECPUBSIZE];
+        let mut signalled_data = public_keys.to_vec();
+        signalled_data.extend_from_slice(&[0x20, 0x01, 0xF4]);
+        let plain = RawPacket::pack(flags, 1, &[0x11; 16], None, 0, &public_keys).unwrap();
+        let signalled = RawPacket::pack(flags, 1, &[0x11; 16], None, 0, &signalled_data).unwrap();
+
+        let entry = |packet: &RawPacket| {
+            create_link_entry(
+                packet,
+                [0x33; 16],
+                InterfaceId(2),
+                1,
+                InterfaceId(1),
+                0.0,
+                6.0,
+            )
+            .0
+        };
+        let expected = compute_link_id(&plain.get_hashable_part(), 0);
+        assert_eq!(entry(&plain), expected);
+        assert_eq!(entry(&signalled), expected);
+    }
+
+    /// When the link's next hop is on the interface the request came in on,
+    /// traffic in either direction goes back out that interface, as long as
+    /// its hop count matches one of the link's directions.
+    #[test]
+    fn route_via_link_table_same_interface_accepts_either_direction() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let link = LinkEntry {
+            timestamp: 100.0,
+            next_hop_transport_id: [0; 16],
+            next_hop_interface: InterfaceId(1),
+            remaining_hops: 3,
+            received_interface: InterfaceId(1),
+            taken_hops: 5,
+            destination_hash: [0xAA; 16],
+            validated: true,
+            proof_timeout: 200.0,
+        };
+        for (hops, routed) in [(3, true), (5, true), (4, false)] {
+            let packet = RawPacket::pack(flags, hops, &[0xAA; 16], None, 0, b"data").unwrap();
+            let result =
+                route_via_link_table(&packet, &link, InterfaceId(1), LocalHopRewrite::default());
+            assert_eq!(
+                result.map(|(iface, _)| iface),
+                routed.then_some(InterfaceId(1)),
+                "hops {hops}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -707,6 +800,39 @@ mod link_request_mtu_tests {
         clamp_forwarded_link_request_mtu(&mut raw, false, Some(500), Some(500));
         assert_eq!(raw, vec![0xAA; 19 + 64]);
     }
+    /// The middle signalling byte carries MTU bits too: 600 is 0x000258.
+    #[test]
+    fn clamps_mtu_spanning_two_signalling_bytes() {
+        let mut raw = request(600, LinkMode::Aes256Cbc);
+        clamp_forwarded_link_request_mtu(&mut raw, true, None, Some(590));
+        assert_eq!(raw, request(590, LinkMode::Aes256Cbc));
+    }
+
+    /// A receiving interface reporting no MTU does not limit the forwarded
+    /// request; only the next hop's does.
+    #[test]
+    fn forwarded_request_ignores_zero_receiving_mtu() {
+        let mut raw = request(524_288, LinkMode::Aes256Cbc);
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(0), Some(16_384));
+        assert_eq!(raw, request(16_384, LinkMode::Aes256Cbc));
+    }
+
+    #[test]
+    fn local_request_without_signalling_is_untouched() {
+        let mut raw = request(262_144, LinkMode::Aes256Cbc);
+        clamp_local_link_request_mtu(&mut raw, false, Some(500), false);
+        assert_eq!(raw, request(262_144, LinkMode::Aes256Cbc));
+    }
+
+    #[test]
+    fn local_request_on_interface_with_zero_mtu_is_untouched() {
+        for upgradable in [false, true] {
+            let mut raw = request(262_144, LinkMode::Aes256Cbc);
+            clamp_local_link_request_mtu(&mut raw, true, Some(0), upgradable);
+            assert_eq!(raw, request(262_144, LinkMode::Aes256Cbc));
+        }
+    }
+
     #[test]
     fn local_request_clamps_to_upgradable_receiving_interface() {
         let mut raw = request(262_144, LinkMode::Aes128Cbc);
