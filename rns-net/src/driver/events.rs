@@ -397,13 +397,11 @@ impl Driver {
         }
 
         if let Some(entry) = self.interfaces.get(&interface_id) {
-            self.engine.update_interface_freqs(
+            let now = time::now();
+            super::sync_interface_frequencies(
+                &mut self.engine,
                 interface_id,
-                entry.stats.incoming_announce_freq(),
-                entry.stats.incoming_announce_samples(),
-                entry.stats.incoming_path_request_freq(),
-                entry.stats.outgoing_path_request_freq(),
-                entry.stats.outgoing_path_request_samples(),
+                entry.stats.frequencies(now),
             );
         }
 
@@ -737,6 +735,19 @@ impl Driver {
         }
     }
 
+    /// As upstream's once-a-second traffic count, read every interface's
+    /// frequencies, decaying their stale samples, and give them to the
+    /// engine.
+    pub(crate) fn sample_interface_frequencies(&mut self, now: f64) {
+        for (id, entry) in &mut self.interfaces {
+            super::sync_interface_frequencies(
+                &mut self.engine,
+                *id,
+                entry.stats.sample_frequencies(now),
+            );
+        }
+    }
+
     pub(crate) fn handle_tick_event(&mut self) {
         if crate::engine::FOLD_TIMERS {
             self.queue_folded_persistence();
@@ -780,16 +791,7 @@ impl Driver {
 
         let now = time::now();
         self.sample_interface_traffic(now);
-        for (id, entry) in &self.interfaces {
-            self.engine.update_interface_freqs(
-                *id,
-                entry.stats.incoming_announce_freq(),
-                entry.stats.incoming_announce_samples(),
-                entry.stats.incoming_path_request_freq(),
-                entry.stats.outgoing_path_request_freq(),
-                entry.stats.outgoing_path_request_samples(),
-            );
-        }
+        self.sample_interface_frequencies(now);
         let actions = self.engine.tick(now, &mut self.rng);
         // Released held announces (upstream c850cdac, 29dc449a).
         self.record_released_traffic();

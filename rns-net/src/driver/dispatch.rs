@@ -920,9 +920,10 @@ impl Driver {
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
         if is_path_request {
+            let now = time::now();
             let live_rate = self.interfaces.get(&interface).map(|entry| {
                 (
-                    entry.stats.outgoing_path_request_freq(),
+                    entry.stats.outgoing_path_request_freq(now),
                     entry.stats.outgoing_path_request_samples(),
                 )
             });
@@ -1016,13 +1017,10 @@ impl Driver {
             entry
                 .stats
                 .record_outgoing_path_request_bytes(now, send_len);
-            self.engine.update_interface_freqs(
+            super::sync_interface_frequencies(
+                &mut self.engine,
                 interface,
-                entry.stats.incoming_announce_freq(),
-                entry.stats.incoming_announce_samples(),
-                entry.stats.incoming_path_request_freq(),
-                entry.stats.outgoing_path_request_freq(),
-                entry.stats.outgoing_path_request_samples(),
+                entry.stats.frequencies(now),
             );
         }
         // Forwarded frames postpone the writer wakeup; the driver wakes each
@@ -1206,13 +1204,10 @@ impl Driver {
                     entry
                         .stats
                         .record_outgoing_path_request_bytes(now, send_len);
-                    self.engine.update_interface_freqs(
+                    super::sync_interface_frequencies(
+                        &mut self.engine,
                         entry.id,
-                        entry.stats.incoming_announce_freq(),
-                        entry.stats.incoming_announce_samples(),
-                        entry.stats.incoming_path_request_freq(),
-                        entry.stats.outgoing_path_request_freq(),
-                        entry.stats.outgoing_path_request_samples(),
+                        entry.stats.frequencies(now),
                     );
                 }
                 let send_result = if entry.ifac.is_some() {
@@ -1317,13 +1312,10 @@ impl Driver {
                     entry
                         .stats
                         .record_incoming_path_request_bytes(now, raw.len());
-                    self.engine.update_interface_freqs(
+                    super::sync_interface_frequencies(
+                        &mut self.engine,
                         receiving_interface,
-                        entry.stats.incoming_announce_freq(),
-                        entry.stats.incoming_announce_samples(),
-                        entry.stats.incoming_path_request_freq(),
-                        entry.stats.outgoing_path_request_freq(),
-                        entry.stats.outgoing_path_request_samples(),
+                        entry.stats.frequencies(now),
                     );
                 }
                 let actions = self

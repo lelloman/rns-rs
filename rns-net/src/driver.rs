@@ -417,7 +417,7 @@ impl<'a> EngineAccess for EngineRef<'a> {
     fn announce_rate(&self, id: u64) -> Option<i32> {
         self.interfaces
             .get(&InterfaceId(id))
-            .map(|e| (e.stats.outgoing_announce_freq() * 1000.0) as i32)
+            .map(|e| (e.stats.outgoing_announce_freq(time::now()) * 1000.0) as i32)
     }
     fn link_state(&self, link_hash: &[u8; 16]) -> Option<u8> {
         use rns_core::link::types::LinkState;
@@ -769,6 +769,22 @@ pub(crate) struct TrafficSample {
     ptxb: u64,
     frxb: u64,
     ftxb: u64,
+}
+
+/// Give the engine an interface's frequencies and sample counts.
+pub(crate) fn sync_interface_frequencies(
+    engine: &mut TransportEngine,
+    id: InterfaceId,
+    sample: crate::common::interface_stats::FrequencySample,
+) {
+    engine.update_interface_freqs(
+        id,
+        sample.ia_freq,
+        sample.ia_samples,
+        sample.ip_freq,
+        sample.op_freq,
+        sample.op_samples,
+    );
 }
 
 impl TrafficSample {

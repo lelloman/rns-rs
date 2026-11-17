@@ -4969,6 +4969,51 @@ fn released_announces_are_charged_as_received_traffic() {
 }
 
 #[test]
+fn held_announces_are_released_once_announces_stop_after_a_burst() {
+    // As upstream, the incoming announce frequency is taken over the time
+    // since the oldest sample and stale samples decay, so it falls once
+    // announces stop and the held announce is released without another
+    // announce arriving.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "burst");
+    let start = 1_000_000.0;
+    driver
+        .interfaces
+        .get_mut(&InterfaceId(1))
+        .unwrap()
+        .stats
+        .ia_timestamps = (0..20).map(|i| start + i as f64 * 0.05).collect();
+    let mut now = start + 1.0;
+    driver.sample_interface_frequencies(now);
+    let identity = Identity::new(&mut OsRng);
+    let dest_hash =
+        rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
+    let raw = build_announce_packet(&identity);
+    driver.engine.handle_inbound(
+        rns_core::transport::InboundFrame {
+            raw: &raw,
+            iface: InterfaceId(1),
+            now,
+            rx: rns_core::transport::RxMetadata::default(),
+        },
+        &mut driver.rng,
+    );
+    assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 1);
+
+    let deadline = now + 120.0;
+    while driver.engine.held_announce_count(&InterfaceId(1)) > 0 && now < deadline {
+        now += 1.0;
+        driver.sample_interface_frequencies(now);
+        let actions = driver.engine.tick(now, &mut driver.rng);
+        driver.dispatch_all(actions);
+    }
+    assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 0);
+    assert!(driver.engine.has_path(&dest_hash));
+    // The stale samples decayed.
+    assert!(driver.interfaces[&InterfaceId(1)].stats.ia_timestamps.len() < 20);
+}
+
+#[test]
 fn apply_stamp_config_sets_the_engine_hop_limiter() {
     // The path table is culled against `[filter] hop_limiter` (f96cef7e).
     let mut driver = new_test_driver();
@@ -5948,10 +5993,13 @@ fn query_interface_stats() {
         ftxs: 0.0,
     };
     entry.stats.frxb = 70;
-    entry.stats.ia_timestamps = vec![1.0, 2.0, 3.0];
-    entry.stats.oa_timestamps = vec![1.0, 3.0];
-    entry.stats.ip_timestamps = vec![1.0, 3.0, 5.0];
-    entry.stats.op_timestamps = vec![1.0, 5.0];
+    // Frequencies run over the time since the oldest sample, up to the
+    // query, a moment after these.
+    let t = time::now();
+    entry.stats.ia_timestamps = vec![t - 2.0, t - 1.0, t];
+    entry.stats.oa_timestamps = vec![t - 2.0, t];
+    entry.stats.ip_timestamps = vec![t - 4.0, t - 2.0, t];
+    entry.stats.op_timestamps = vec![t - 4.0, t];
     driver.interfaces.insert(InterfaceId(1), entry);
 
     let (local_writer, _) = MockWriter::new();
@@ -5986,8 +6034,16 @@ fn query_interface_stats() {
             assert_eq!((stats.total_rxb, stats.total_txb), (1_000, 2_000));
             assert_eq!((stats.traffic.arxs, stats.traffic.atxs), (80.0, 160.0));
             assert_eq!((stats.traffic.prxs, stats.traffic.ptxs), (240.0, 320.0));
-            assert_eq!((stats.traffic.arxf, stats.traffic.atxf), (1.5, 1.0));
-            assert_eq!((stats.traffic.prxf, stats.traffic.ptxf), (0.75, 0.5));
+            let close = |actual: f64, expected: f64| {
+                assert!(
+                    actual <= expected && actual > expected * 0.95,
+                    "{actual} not just under {expected}"
+                );
+            };
+            close(stats.traffic.arxf, 1.5);
+            close(stats.traffic.atxf, 1.0);
+            close(stats.traffic.prxf, 0.75);
+            close(stats.traffic.ptxf, 0.5);
         }
         _ => panic!("unexpected response"),
     }
@@ -10397,8 +10453,9 @@ fn recursive_path_request_is_late_limited_before_interface_send() {
     );
 
     let entry = driver.interfaces.get_mut(&InterfaceId(2)).unwrap();
-    entry.stats.record_outgoing_path_request(1000.0);
-    entry.stats.record_outgoing_path_request(1000.5);
+    let now = time::now();
+    entry.stats.record_outgoing_path_request(now - 0.4);
+    entry.stats.record_outgoing_path_request(now - 0.2);
 
     driver.dispatch_all(actions);
 

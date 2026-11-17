@@ -10,6 +10,14 @@ pub const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 2;
 /// Minimum number of incoming path request samples before frequency is meaningful.
 pub const INCOMING_PATH_REQUEST_MIN_SAMPLE: usize = 2;
 
+/// Age (seconds) past which the oldest announce sample decays, upstream's
+/// `AR_FREQ_DECAY` (1 / `AR_MINFREQ_HZ`).
+pub const AR_FREQ_DECAY: f64 = 10.0;
+
+/// Age (seconds) past which the oldest path request sample decays,
+/// upstream's `PR_FREQ_DECAY` (1 / `PR_MINFREQ_HZ`).
+pub const PR_FREQ_DECAY: f64 = 10.0;
+
 /// What an RNode reports about its channel and itself (upstream
 /// `RNodeInterface`'s `r_airtime_*`, `r_channel_load_*`, `r_noise_floor`,
 /// `r_interference`, battery and temperature), as interface statistics
@@ -189,22 +197,73 @@ impl InterfaceStats {
         self.record_outgoing_path_request(now);
     }
 
-    /// Compute announce frequency (per second) from timestamps.
-    fn compute_frequency(timestamps: &[f64], min_sample: usize) -> f64 {
+    /// Frequency (per second) of the samples in `timestamps` at `now`, as
+    /// upstream's `incoming_announce_frequency` and its siblings compute it:
+    /// zero unless there are more than `min_sample` samples, otherwise the
+    /// sample count over the time since the oldest one.
+    fn compute_frequency(timestamps: &[f64], min_sample: usize, now: f64) -> f64 {
         let sample_count = timestamps.len();
         if sample_count <= min_sample {
             return 0.0;
         }
-        let span = timestamps[sample_count - 1] - timestamps[0];
+        let span = now - timestamps[0];
         if span <= 0.0 {
             return 0.0;
         }
         sample_count as f64 / span
     }
 
-    /// Incoming announce frequency (per second).
-    pub fn incoming_announce_freq(&self) -> f64 {
-        Self::compute_frequency(&self.ia_timestamps, INCOMING_ANNOUNCE_MIN_SAMPLE)
+    /// The decay step that follows each of upstream's frequency reads: with
+    /// more than `min_sample` samples, the oldest goes once it is older than
+    /// `decay` seconds. One sample at most goes per read.
+    fn decay(timestamps: &mut Vec<f64>, min_sample: usize, decay: f64, now: f64) {
+        if timestamps.len() > min_sample && now - timestamps[0] > decay {
+            timestamps.remove(0);
+        }
+    }
+
+    /// The frequencies and sample counts the transport engine works from,
+    /// at `now`, without decaying any sample.
+    pub fn frequencies(&self, now: f64) -> FrequencySample {
+        FrequencySample {
+            ia_freq: self.incoming_announce_freq(now),
+            ia_samples: self.ia_timestamps.len(),
+            ip_freq: self.incoming_path_request_freq(now),
+            op_freq: self.outgoing_path_request_freq(now),
+            op_samples: self.op_timestamps.len(),
+        }
+    }
+
+    /// Read every frequency as upstream's once-a-second traffic count
+    /// does, decaying each set of samples after its read, and return what
+    /// the transport engine is given, with the sample counts left after
+    /// the decay.
+    pub fn sample_frequencies(&mut self, now: f64) -> FrequencySample {
+        let read = self.frequencies(now);
+        Self::decay(
+            &mut self.ia_timestamps,
+            INCOMING_ANNOUNCE_MIN_SAMPLE,
+            AR_FREQ_DECAY,
+            now,
+        );
+        Self::decay(&mut self.oa_timestamps, 1, AR_FREQ_DECAY, now);
+        Self::decay(
+            &mut self.ip_timestamps,
+            INCOMING_PATH_REQUEST_MIN_SAMPLE,
+            PR_FREQ_DECAY,
+            now,
+        );
+        Self::decay(&mut self.op_timestamps, 1, PR_FREQ_DECAY, now);
+        FrequencySample {
+            ia_samples: self.ia_timestamps.len(),
+            op_samples: self.op_timestamps.len(),
+            ..read
+        }
+    }
+
+    /// Incoming announce frequency (per second) at `now`.
+    pub fn incoming_announce_freq(&self, now: f64) -> f64 {
+        Self::compute_frequency(&self.ia_timestamps, INCOMING_ANNOUNCE_MIN_SAMPLE, now)
     }
 
     /// Number of incoming announce samples currently held.
@@ -212,25 +271,35 @@ impl InterfaceStats {
         self.ia_timestamps.len()
     }
 
-    /// Outgoing announce frequency (per second).
-    pub fn outgoing_announce_freq(&self) -> f64 {
-        Self::compute_frequency(&self.oa_timestamps, 1)
+    /// Outgoing announce frequency (per second) at `now`.
+    pub fn outgoing_announce_freq(&self, now: f64) -> f64 {
+        Self::compute_frequency(&self.oa_timestamps, 1, now)
     }
 
-    /// Incoming path request frequency (per second).
-    pub fn incoming_path_request_freq(&self) -> f64 {
-        Self::compute_frequency(&self.ip_timestamps, INCOMING_PATH_REQUEST_MIN_SAMPLE)
+    /// Incoming path request frequency (per second) at `now`.
+    pub fn incoming_path_request_freq(&self, now: f64) -> f64 {
+        Self::compute_frequency(&self.ip_timestamps, INCOMING_PATH_REQUEST_MIN_SAMPLE, now)
     }
 
-    /// Outgoing path request frequency (per second).
-    pub fn outgoing_path_request_freq(&self) -> f64 {
-        Self::compute_frequency(&self.op_timestamps, 1)
+    /// Outgoing path request frequency (per second) at `now`.
+    pub fn outgoing_path_request_freq(&self, now: f64) -> f64 {
+        Self::compute_frequency(&self.op_timestamps, 1, now)
     }
 
     /// Number of outgoing path request samples currently held.
     pub fn outgoing_path_request_samples(&self) -> usize {
         self.op_timestamps.len()
     }
+}
+
+/// The frequencies and sample counts the transport engine works from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrequencySample {
+    pub ia_freq: f64,
+    pub ia_samples: usize,
+    pub ip_freq: f64,
+    pub op_freq: f64,
+    pub op_samples: usize,
 }
 
 #[cfg(test)]
@@ -246,7 +315,7 @@ mod tests {
         }
 
         assert_eq!(
-            stats.incoming_announce_freq(),
+            stats.incoming_announce_freq(100.0),
             0.0,
             "incoming announce frequency must stay zero until more than the minimum samples exist"
         );
@@ -278,20 +347,18 @@ mod tests {
     }
 
     #[test]
-    fn incoming_frequency_uses_sample_count_over_oldest_span() {
+    fn incoming_frequency_uses_sample_count_over_time_since_oldest() {
         let mut stats = InterfaceStats::default();
 
         for i in 0..12 {
             stats.record_incoming_announce(i as f64);
         }
 
-        let expected = 12.0 / 11.0;
-        assert!(
-            (stats.incoming_announce_freq() - expected).abs() < f64::EPSILON,
-            "incoming frequency should be samples / span, got {} expected {}",
-            stats.incoming_announce_freq(),
-            expected
-        );
+        // As upstream, the span runs to now, not to the newest sample, so
+        // the frequency falls while no announce arrives.
+        assert_eq!(stats.incoming_announce_freq(11.0), 12.0 / 11.0);
+        assert_eq!(stats.incoming_announce_freq(24.0), 12.0 / 24.0);
+        assert_eq!(stats.incoming_announce_freq(0.0), 0.0);
     }
 
     #[test]
@@ -304,9 +371,50 @@ mod tests {
         stats.record_outgoing_path_request(10.0);
         stats.record_outgoing_path_request(12.0);
 
-        assert_eq!(stats.incoming_path_request_freq(), 3.0 / 2.0);
-        assert_eq!(stats.outgoing_path_request_freq(), 2.0 / 2.0);
+        assert_eq!(stats.incoming_path_request_freq(2.0), 3.0 / 2.0);
+        assert_eq!(stats.outgoing_path_request_freq(12.0), 2.0 / 2.0);
         assert_eq!(stats.outgoing_path_request_samples(), 2);
+        // An outgoing frequency needs two samples, an incoming one three.
+        stats.op_timestamps.pop();
+        assert_eq!(stats.outgoing_path_request_freq(12.0), 0.0);
+    }
+
+    /// As upstream, each read decays the oldest sample once it is older
+    /// than the decay time, one sample per read, and never below the
+    /// minimum a frequency needs.
+    #[test]
+    fn sampling_decays_one_stale_sample_per_read() {
+        let mut stats = InterfaceStats::default();
+        for i in 0..5 {
+            stats.record_incoming_announce(i as f64);
+            stats.record_outgoing_announce(i as f64);
+            stats.record_incoming_path_request(i as f64);
+            stats.record_outgoing_path_request(i as f64);
+        }
+
+        // Nothing is older than the decay time yet.
+        let sample = stats.sample_frequencies(AR_FREQ_DECAY);
+        assert_eq!(sample.ia_freq, 5.0 / AR_FREQ_DECAY);
+        assert_eq!(sample.ip_freq, 5.0 / PR_FREQ_DECAY);
+        assert_eq!(sample.op_freq, 5.0 / PR_FREQ_DECAY);
+        assert_eq!((sample.ia_samples, sample.op_samples), (5, 5));
+
+        // The frequency is read before the oldest sample goes.
+        let now = 100.0;
+        let sample = stats.sample_frequencies(now);
+        assert_eq!(sample.ia_freq, 5.0 / now);
+        assert_eq!((sample.ia_samples, sample.op_samples), (4, 4));
+        assert_eq!(stats.oa_timestamps.len(), 4);
+        assert_eq!(stats.ip_timestamps.len(), 4);
+
+        for _ in 0..10 {
+            stats.sample_frequencies(now);
+        }
+        assert_eq!(stats.ia_timestamps.len(), INCOMING_ANNOUNCE_MIN_SAMPLE);
+        assert_eq!(stats.ip_timestamps.len(), INCOMING_PATH_REQUEST_MIN_SAMPLE);
+        assert_eq!(stats.oa_timestamps.len(), 1);
+        assert_eq!(stats.op_timestamps.len(), 1);
+        assert_eq!(stats.sample_frequencies(now).ia_freq, 0.0);
     }
 
     #[test]

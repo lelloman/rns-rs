@@ -1,6 +1,6 @@
 use super::*;
 
-fn traffic_detail(stats: &crate::interface::InterfaceStats) -> TrafficDetail {
+fn traffic_detail(stats: &crate::interface::InterfaceStats, now: f64) -> TrafficDetail {
     TrafficDetail {
         rxs: stats.traffic_rates.rxs,
         txs: stats.traffic_rates.txs,
@@ -21,10 +21,10 @@ fn traffic_detail(stats: &crate::interface::InterfaceStats) -> TrafficDetail {
         ptxc: stats.ptxc,
         prxs: stats.traffic_rates.prxs,
         ptxs: stats.traffic_rates.ptxs,
-        arxf: stats.incoming_announce_freq(),
-        atxf: stats.outgoing_announce_freq(),
-        prxf: stats.incoming_path_request_freq(),
-        ptxf: stats.outgoing_path_request_freq(),
+        arxf: stats.incoming_announce_freq(now),
+        atxf: stats.outgoing_announce_freq(now),
+        prxf: stats.incoming_path_request_freq(now),
+        ptxf: stats.outgoing_path_request_freq(now),
     }
 }
 
@@ -479,7 +479,7 @@ impl Driver {
         let mut tx_pps = 0.0;
         let mut total_traffic = TrafficDetail::default();
         for entry in self.interfaces.values() {
-            let traffic = traffic_detail(&entry.stats);
+            let traffic = traffic_detail(&entry.stats, now);
             if !entry.info.is_local_client {
                 total_rxb += entry.stats.rxb;
                 total_txb += entry.stats.txb;
@@ -573,10 +573,10 @@ impl Driver {
                 mtu: Some(entry.info.mtu),
                 ifac_size: entry.ifac.as_ref().map(|s| s.size),
                 started: entry.stats.started,
-                ia_freq: entry.stats.incoming_announce_freq(),
-                oa_freq: entry.stats.outgoing_announce_freq(),
-                ip_freq: entry.stats.incoming_path_request_freq(),
-                op_freq: entry.stats.outgoing_path_request_freq(),
+                ia_freq: entry.stats.incoming_announce_freq(now),
+                oa_freq: entry.stats.outgoing_announce_freq(now),
+                ip_freq: entry.stats.incoming_path_request_freq(now),
+                op_freq: entry.stats.outgoing_path_request_freq(now),
                 op_samples: entry.stats.outgoing_path_request_samples(),
                 burst_active: self.engine.burst_active(&interface_id),
                 burst_activated: self.engine.burst_activated(&interface_id),
@@ -625,7 +625,7 @@ impl Driver {
             for (child_id, parent_id) in &self.dynamic_interface_parents {
                 if *parent_id == handle.interface_id {
                     if let Some(child) = self.interfaces.get(child_id) {
-                        add_traffic(&mut traffic, traffic_detail(&child.stats));
+                        add_traffic(&mut traffic, traffic_detail(&child.stats, now));
                         protocol_violations += child.stats.protocol_violations;
                         ifac_violations += child.stats.ifac_violations;
                         packet_filter_hits += child.stats.packet_filter_hits;
