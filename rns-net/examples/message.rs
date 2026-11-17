@@ -164,6 +164,7 @@ fn main() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -279,6 +280,7 @@ fn main() {
             identity: Some(Identity::from_private_key(
                 &alice_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -391,6 +393,7 @@ fn main() {
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),

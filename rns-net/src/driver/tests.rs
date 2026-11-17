@@ -7287,12 +7287,16 @@ fn management_announces_emitted_after_delay() {
     );
 }
 
-#[test]
-fn discovery_announcer_emits_local_synthetic_announce() {
+/// Runs a driver whose interface announcer publishes one discoverable
+/// interface until it sends its first discovery announce, and returns it.
+fn first_discovery_announce(
+    transport_identity: Identity,
+    network_identity: Option<Identity>,
+    encrypt: bool,
+) -> RawPacket {
     let (tx, rx) = event::channel();
     let (cbs, _announces, _, _, _, _) = MockCallbacks::new();
-    let identity = Identity::new(&mut OsRng);
-    let identity_hash = *identity.hash();
+    let identity_hash = *transport_identity.hash();
     let mut driver = Driver::new(
         TransportConfig {
             transport_enabled: true,
@@ -7324,14 +7328,15 @@ fn discovery_announcer_emits_local_synthetic_announce() {
     driver
         .interfaces
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
-    driver.transport_identity = Some(identity);
-    driver.interface_announcer = Some(crate::discovery::InterfaceAnnouncer::new(
+    driver.transport_identity = Some(transport_identity);
+    driver.discovery_network_identity = network_identity;
+    let announcer = driver.new_interface_announcer(
         identity_hash,
         vec![crate::discovery::DiscoverableInterface {
             interface_name: "public".into(),
             config: crate::discovery::DiscoveryConfig {
                 publish_ifac: false,
-                encrypt: false,
+                encrypt,
                 radio: Default::default(),
                 stamp_costs: Default::default(),
                 discovery_name: "Public Test".into(),
@@ -7350,7 +7355,8 @@ fn discovery_announcer_emits_local_synthetic_announce() {
             ifac_netname: None,
             ifac_netkey: None,
         }],
-    ));
+    );
+    driver.interface_announcer = Some(announcer);
 
     let now = time::now();
     driver.tick_discovery_announcer(now);
@@ -7365,10 +7371,61 @@ fn discovery_announcer_emits_local_synthetic_announce() {
         !sent_packets.is_empty(),
         "discovery announce should be sent on a registered local synthetic destination"
     );
-    let packet =
-        RawPacket::unpack(&sent_packets[0]).expect("sent discovery announce should unpack");
+    RawPacket::unpack(&sent_packets[0]).expect("sent discovery announce should unpack")
+}
+
+#[test]
+fn discovery_announcer_emits_local_synthetic_announce() {
+    let packet = first_discovery_announce(Identity::new(&mut OsRng), None, false);
     assert_eq!(packet.flags.packet_type, constants::PACKET_TYPE_ANNOUNCE);
     assert_eq!(packet.flags.destination_type, constants::DESTINATION_SINGLE);
+}
+
+/// With a network identity, the discovery destination belongs to it while
+/// the announce carries the transport identity's hash, as upstream's
+/// `InterfaceAnnouncer` does, and an encrypted announce is read with the
+/// network identity alone.
+#[test]
+fn discovery_announces_come_from_the_network_identity() {
+    let transport_identity = Identity::new(&mut OsRng);
+    let transport_hash = *transport_identity.hash();
+    let network_identity = Identity::new(&mut OsRng);
+    let network_hash = *network_identity.hash();
+    let packet = first_discovery_announce(
+        transport_identity,
+        Some(Identity::from_private_key(
+            &network_identity.get_private_key().unwrap(),
+        )),
+        true,
+    );
+    assert_eq!(
+        packet.destination_hash,
+        rns_core::destination::destination_hash(
+            crate::discovery::APP_NAME,
+            &["discovery", "interface"],
+            Some(&network_hash),
+        )
+    );
+    let announce = rns_core::announce::AnnounceData::unpack(packet.data(), false).unwrap();
+    let announced_hash = *Identity::from_public_key(&announce.public_key)
+        .unwrap()
+        .hash();
+    assert_eq!(announced_hash, network_hash);
+    let app_data = announce.app_data.unwrap();
+    let parse = |identity: Option<&Identity>| {
+        crate::discovery::parse_interface_announce_with_identity(
+            &app_data,
+            &announced_hash,
+            0,
+            rns_core::stamp::StampCost::ZERO,
+            &mut crate::discovery::DiscoveryStampCache::default(),
+            identity,
+        )
+    };
+    let discovered = parse(Some(&network_identity)).expect("decrypts with the network identity");
+    assert_eq!(discovered.transport_id, transport_hash);
+    assert_eq!(discovered.network_id, network_hash);
+    assert!(parse(None).is_none());
 }
 
 #[test]

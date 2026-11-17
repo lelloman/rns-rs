@@ -53,6 +53,7 @@ error; see [Building](building.md#selecting-interfaces).
 |-----|---------|-------|
 | `enable_transport` | `false` | Forward traffic for other nodes |
 | `static_transport_identity` | `false` | With transport disabled, the transport-facing identity is ephemeral unless this is set |
+| `network_identity` | unset | Path (`~` expanded) of an identity shared by a set of transport instances; created there when missing. It signs their interface discovery announces and keys `discovery_encrypt`. The transport identity stays in `storage/transport_identity` |
 | `local_hops_delta` | `false` | Mask local zero-hop SINGLE/LINK traffic on external interfaces |
 | `enable_interface_management` | `true` | Set to `false` to block `rnstatus --attach/--detach/--reload` |
 | `panic_on_interface_error` | `false` | Abort instead of continuing when an interface fails |

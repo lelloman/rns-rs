@@ -58,6 +58,7 @@ fn main() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: None,
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),

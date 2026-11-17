@@ -476,6 +476,7 @@ fn start_rust_node_on(
             static_transport_identity: false,
             local_hops_delta: false,
             identity: None,
+            network_identity: None,
             interfaces: vec![interface],
             share_instance: false,
             instance_name: "default".into(),

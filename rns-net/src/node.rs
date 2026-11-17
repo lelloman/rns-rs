@@ -263,6 +263,49 @@ fn effective_static_transport_identity(
     configured || (!transport_enabled && has_discoverable_interface)
 }
 
+/// Load the `network_identity` configured at `path`, or create and save one
+/// there when the file is missing, logging as upstream's
+/// `Reticulum.__apply_config` does.
+fn load_network_identity(path: &str) -> io::Result<Identity> {
+    let identity_path = expand_home(path);
+    let load = || -> io::Result<Identity> {
+        if !identity_path.is_file() {
+            let identity = Identity::new(&mut OsRng);
+            storage::save_identity(&identity, &identity_path)?;
+            log::info!(
+                "Network identity generated and persisted to {}",
+                identity_path.display()
+            );
+            Ok(identity)
+        } else {
+            let identity = storage::load_identity(&identity_path)?;
+            log::info!("Network identity loaded from {}", identity_path.display());
+            Ok(identity)
+        }
+    };
+    load().map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("Could not set network identity from {path}: {e}"),
+        )
+    })
+}
+
+/// Expand a leading `~` or `~/` to `$HOME`, as `os.path.expanduser` does.
+fn expand_home(path: &str) -> std::path::PathBuf {
+    let home = || std::env::var_os("HOME").map(std::path::PathBuf::from);
+    if path == "~" {
+        if let Some(home) = home() {
+            return home;
+        }
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = home() {
+            return home.join(rest);
+        }
+    }
+    std::path::PathBuf::from(path)
+}
+
 /// Extract discovery configuration from interface params, if `discoverable` is set.
 fn extract_discovery_config(
     iface_name: &str,
@@ -856,9 +899,6 @@ pub struct DiscoverySettings {
     /// Network identities whose discovered interfaces are accepted
     /// (`interface_discovery_sources`); empty accepts any.
     pub interface_discovery_sources: Vec<[u8; 16]>,
-    /// The node identity is the configured `network_identity`, which
-    /// encrypts and decrypts `discovery_encrypt` announces.
-    pub network_identity: bool,
     /// Upstream's `autoconnect_discovered_interfaces` under
     /// `autoconnect_policy = upstream`: how many discovered interfaces to
     /// auto-connect; 0 auto-connects none.
@@ -874,6 +914,11 @@ pub struct NodeConfig {
     pub static_transport_identity: bool,
     pub local_hops_delta: bool,
     pub identity: Option<Identity>,
+    /// The configured `network_identity`, kept apart from the transport
+    /// identity as upstream's `Transport.network_identity`. It signs this
+    /// node's interface discovery announces and encrypts and decrypts
+    /// `discovery_encrypt` ones.
+    pub network_identity: Option<Identity>,
     /// Interface configurations (parsed via registry factories).
     pub interfaces: Vec<InterfaceConfig>,
     /// Enable shared instance server for local clients (rns-ctl, etc.)
@@ -1037,6 +1082,7 @@ impl Default for NodeConfig {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: None,
+            network_identity: None,
             interfaces: Vec::new(),
             share_instance: false,
             instance_name: "default".into(),
@@ -1494,48 +1540,33 @@ impl RnsNode {
         #[cfg(feature = "iface-backbone")]
         crate::interface::backbone::load_blocked_ips_file(config_dir);
 
-        // Load or create identity
-        let identity = if let Some(ref id_path_str) = rns_config.reticulum.network_identity {
-            let id_path = std::path::PathBuf::from(id_path_str);
-            if id_path.exists() {
-                storage::load_identity(&id_path)?
-            } else {
-                let id = Identity::new(&mut OsRng);
-                storage::save_identity(&id, &id_path)?;
-                id
-            }
-        } else {
-            // The transport identity lives in storage/transport_identity, as
-            // upstream keeps it, so a config directory keeps its transport
-            // identity whichever implementation runs it. Directories written
-            // before only hold storage/identities/identity: carry that over.
-            let transport_identity_path = storage::transport_identity_path(&paths);
-            if transport_identity_path.exists() {
-                storage::load_identity(&transport_identity_path)?
-            } else {
-                let identity = storage::load_or_create_identity(&paths.identities)?;
-                storage::save_identity(&identity, &transport_identity_path)?;
-                identity
-            }
+        // Upstream loads the configured network identity while it reads the
+        // config, creating it when the file is missing. It is kept apart
+        // from the transport identity.
+        let network_identity = match rns_config.reticulum.network_identity {
+            Some(ref path) => Some(load_network_identity(path)?),
+            None => None,
         };
-        // Python clients derive their RPC key from this persisted identity, even
-        // when their non-transport instance uses an ephemeral network identity.
+        // The transport identity lives in storage/transport_identity, as
+        // upstream keeps it, so a config directory keeps its transport
+        // identity whichever implementation runs it. Directories written
+        // before only hold storage/identities/identity: carry that over.
+        let transport_identity_path = storage::transport_identity_path(&paths);
+        let identity = if transport_identity_path.exists() {
+            storage::load_identity(&transport_identity_path)?
+        } else {
+            let identity = storage::load_or_create_identity(&paths.identities)?;
+            storage::save_identity(&identity, &transport_identity_path)?;
+            identity
+        };
+        // Python clients derive their RPC key from the persisted transport
+        // identity, even when their non-transport instance uses an
+        // ephemeral one.
         let rpc_auth_key = if !private && rns_config.reticulum.share_instance {
-            let transport_identity_path = storage::transport_identity_path(&paths);
-            let rpc_identity = if transport_identity_path.exists() {
-                storage::load_identity(&transport_identity_path)?
-            } else {
-                storage::save_identity(&identity, &transport_identity_path)?;
-                Identity::from_private_key(
-                    &identity
-                        .get_private_key()
-                        .expect("node identity has private key"),
-                )
-            };
             Some(crate::rpc::derive_auth_key(
-                &rpc_identity
+                &identity
                     .get_private_key()
-                    .expect("RPC identity has private key"),
+                    .expect("transport identity has private key"),
             ))
         } else {
             None
@@ -1936,6 +1967,7 @@ impl RnsNode {
             static_transport_identity: rns_config.reticulum.static_transport_identity,
             local_hops_delta: rns_config.reticulum.local_hops_delta,
             identity: Some(identity),
+            network_identity,
             share_instance: !private && rns_config.reticulum.share_instance,
             instance_name: rns_config.reticulum.instance_name.clone(),
             shared_instance_port: rns_config.reticulum.shared_instance_port,
@@ -1979,7 +2011,6 @@ impl RnsNode {
                     .reticulum
                     .interface_discovery_sources
                     .clone(),
-                network_identity: rns_config.reticulum.network_identity.is_some(),
                 autoconnect_discovered_interfaces: if upstream_policy {
                     rns_config.reticulum.autoconnect_discovered_interfaces
                 } else {
@@ -2453,11 +2484,7 @@ impl RnsNode {
         let discover_interfaces = config.discover_interfaces;
         driver.interface_discovery_sources = config.discovery.interface_discovery_sources.clone();
         driver.forced_local_bitrate = config.shared_instance.force_bitrate;
-        if config.discovery.network_identity {
-            driver.discovery_network_identity = identity
-                .get_private_key()
-                .map(|key| Identity::from_private_key(&key));
-        }
+        driver.discovery_network_identity = config.network_identity;
         driver.autoconnect_interface_mode = config.autoconnect_interface_mode;
         driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
         driver.autoconnect_announces_to_internal =
@@ -6583,6 +6610,7 @@ mod tests {
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -6946,6 +6974,7 @@ share_instance = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: Some(identity),
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -7024,6 +7053,7 @@ share_instance = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -7990,6 +8020,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8077,6 +8108,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8160,6 +8192,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8240,6 +8273,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8360,6 +8394,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8448,6 +8483,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8534,6 +8570,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8633,6 +8670,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),
@@ -8722,6 +8760,7 @@ enable_transport = False
                 static_transport_identity: false,
                 local_hops_delta: false,
                 identity: None,
+                network_identity: None,
                 interfaces: vec![],
                 share_instance: false,
                 instance_name: "default".into(),

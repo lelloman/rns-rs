@@ -913,8 +913,10 @@ pub struct Driver {
     /// Network identities whose discovered interfaces are accepted; empty
     /// accepts any (`interface_discovery_sources`).
     pub(crate) interface_discovery_sources: Vec<[u8; 16]>,
-    /// The network identity, when one is configured: it decrypts
-    /// `discovery_encrypt` announces and their own are encrypted to it.
+    /// The network identity, when one is configured, kept apart from the
+    /// transport identity: it signs this node's discovery announces,
+    /// decrypts `discovery_encrypt` announces and their own are encrypted
+    /// to it.
     pub(crate) discovery_network_identity: Option<rns_crypto::identity::Identity>,
     /// The bitrate the shared instance's client interfaces report
     /// (`force_shared_instance_bitrate`).

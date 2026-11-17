@@ -682,6 +682,7 @@ fn start_transport_node_with_limits(
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -823,6 +824,7 @@ fn start_client_node_with_options(
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -1400,6 +1402,7 @@ fn test_direct_link_no_transport() {
             identity: Some(Identity::from_private_key(
                 &bob_id.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -2029,6 +2032,7 @@ fn test_plain_message_delivery() {
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -2301,6 +2305,7 @@ fn test_group_message_delivery() {
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -2441,6 +2446,7 @@ fn test_group_wrong_key_fails() {
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -3812,6 +3818,7 @@ fn test_udp_announce_and_message() {
             identity: Some(Identity::from_private_key(
                 &alice_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -3907,6 +3914,7 @@ fn test_udp_announce_and_message() {
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -4099,6 +4107,7 @@ fn discovery_announce_received_by_client() {
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -4216,6 +4225,7 @@ fn discovery_announce_received_by_client() {
             identity: Some(Identity::from_private_key(
                 &client_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -4364,6 +4374,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -4474,6 +4485,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -4646,6 +4658,7 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
+            network_identity: None,
             interfaces: Vec::new(),
             share_instance: false,
             instance_name: "default".into(),
@@ -4850,6 +4863,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -5038,6 +5052,7 @@ fn discovery_announce_through_relay() {
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -5148,6 +5163,7 @@ fn discovery_announce_through_relay() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
+            network_identity: None,
             interfaces: vec![
                 InterfaceConfig {
                     stamp_costs: Default::default(),
@@ -5271,6 +5287,7 @@ fn discovery_announce_through_relay() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -5410,6 +5427,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),
@@ -5558,6 +5576,7 @@ fn start_managed_transport_client(
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),
+            network_identity: None,
             interfaces: vec![InterfaceConfig {
                 stamp_costs: Default::default(),
                 announce_limits: Default::default(),

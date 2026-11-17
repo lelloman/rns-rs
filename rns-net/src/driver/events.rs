@@ -2815,7 +2815,14 @@ impl Driver {
             }
         };
 
-        let identity = match self.transport_identity.as_ref() {
+        // As upstream's `InterfaceAnnouncer`, the discovery destination
+        // belongs to the network identity when one is configured, and to
+        // the transport identity otherwise.
+        let identity = match self
+            .discovery_network_identity
+            .as_ref()
+            .or(self.transport_identity.as_ref())
+        {
             Some(id) => id,
             None => {
                 log::warn!("Discovery: stamp ready but no transport identity");
@@ -2823,7 +2830,8 @@ impl Driver {
             }
         };
 
-        // Discovery is a SINGLE destination — the dest hash includes the transport identity
+        // Discovery is a SINGLE destination: the dest hash includes the
+        // announcing identity.
         let identity_hash = identity.hash();
         let disc_dest = rns_core::destination::destination_hash(
             crate::discovery::APP_NAME,

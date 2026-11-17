@@ -1883,9 +1883,27 @@ fn spawn_daemon(implementation: Daemon, dir: &Path, log: &Path) -> ProcessGuard 
     spawn_logged(command, log)
 }
 
+/// The hex hash of the identity whose private key is in the file at `path`.
+#[cfg(target_os = "linux")]
+fn identity_file_hash(path: &Path) -> String {
+    let mut command = Command::new("python3");
+    command.env("PYTHONUNBUFFERED", "1");
+    command.args([
+        "-c",
+        "import RNS, sys; print(RNS.Identity.from_file(sys.argv[1]).hash.hex())",
+        path.to_str().unwrap(),
+    ]);
+    let output = run(command);
+    assert_success(&output, "read identity hash");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().last().unwrap_or_default().trim().to_string()
+}
+
 /// An encrypted discovery announce (`discovery_encrypt`) from a publisher
 /// run by one implementation is read by a receiver run by the other, both
-/// holding the same `network_identity`.
+/// holding the same `network_identity`. The announce comes from the network
+/// identity and names the publisher's own transport identity, kept in its
+/// storage/transport_identity.
 #[cfg(target_os = "linux")]
 fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
     let root = tempfile::tempdir().unwrap();
@@ -1997,10 +2015,22 @@ fn encrypted_discovery(publisher: Daemon, receiver: Daemon) {
                 command
             }
         };
-        rnstatus.args(["--config", &receiver_config, "-d"]);
+        rnstatus.args(["--config", &receiver_config, "-d", "-D"]);
         let listed = run(rnstatus);
         let stdout = String::from_utf8_lossy(&listed.stdout);
         if stdout.contains(name) {
+            let network_id = identity_file_hash(&network_identity);
+            let transport_id =
+                identity_file_hash(&publisher_dir.join("storage").join("transport_identity"));
+            assert_ne!(network_id, transport_id);
+            assert!(
+                stdout.contains(&format!("Network   ID : {network_id}")),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains(&format!("Transport ID : {transport_id}")),
+                "{stdout}"
+            );
             break;
         }
         if Instant::now() >= deadline {

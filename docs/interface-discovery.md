@@ -45,6 +45,12 @@ These per-interface keys work as upstream's:
   in its discovery announces, so nodes that discover it can join. Without it
   they are left out, as upstream does; before this, rns-rs announced them
   whenever the interface had IFAC configured.
+- With a `network_identity` set in `[reticulum]`, discovery announces come
+  from that identity, so nodes discovering the interface see which network
+  it belongs to (its `network_id`), while the announce still names the
+  node's own transport identity (`transport_id`, kept in
+  `storage/transport_identity`). Without one, they come from the transport
+  identity.
 - `discovery_encrypt = yes` encrypts the announce to the `network_identity`
   set in `[reticulum]`, so only nodes holding that identity can read it. A
   node with a `network_identity` decrypts such announces from its network and

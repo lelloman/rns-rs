@@ -69,20 +69,24 @@ fn transport_identity_key() -> Vec<u8> {
         .collect()
 }
 
-/// Starts a transport rnsd with probes and remote management on `dir`, waits
-/// for it to finish starting, stops it and returns its notice messages other
-/// than the version line.
-fn management_notices(dir: &std::path::Path) -> Vec<String> {
-    fs::write(
-        dir.join("config"),
+/// The config of a transport rnsd with probes and remote management,
+/// logging at `loglevel`, with `extra` added to its `[reticulum]` section.
+fn management_config(loglevel: u8, extra: &str) -> String {
+    format!(
         "[reticulum]\n  enable_transport = Yes\n  share_instance = No\n  \
-         respond_to_probes = Yes\n  enable_remote_management = Yes\n\
-         [logging]\n  loglevel = 4\n[interfaces]\n",
+         respond_to_probes = Yes\n  enable_remote_management = Yes\n{extra}\
+         [logging]\n  loglevel = {loglevel}\n[interfaces]\n"
     )
-    .unwrap();
+}
+
+/// Starts rnsd with `config` on `dir`, with `dir` as its home directory,
+/// waits for it to finish starting, stops it and returns its log.
+fn rnsd_startup_log(dir: &std::path::Path, config: &str) -> String {
+    fs::write(dir.join("config"), config).unwrap();
     let log = dir.join("rnsd.log");
     let mut child = Command::new(env!("CARGO_BIN_EXE_rnsd"))
         .args(["--config", dir.to_str().unwrap()])
+        .env("HOME", dir)
         .stdin(Stdio::null())
         .stdout(fs::File::create(&log).unwrap())
         .stderr(Stdio::null())
@@ -102,11 +106,30 @@ fn management_notices(dir: &std::path::Path) -> Vec<String> {
     let _ = child.kill();
     let _ = child.wait();
     output
-        .lines()
-        .filter_map(|line| line.split_once("] [Notice]   ").map(|(_, msg)| msg))
-        .filter(|msg| !msg.starts_with("Started rnsd version"))
-        .map(str::to_string)
+}
+
+/// The messages `log` holds at the level named `level`.
+fn log_messages(log: &str, level: &str) -> Vec<String> {
+    let tag = format!("] [{level}]");
+    log.lines()
+        .filter_map(|line| line.split_once(tag.as_str()).map(|(_, msg)| msg))
+        .map(|msg| msg.trim_start().to_string())
         .collect()
+}
+
+/// The notice messages of `log` other than the version line.
+fn management_notices_of(log: &str) -> Vec<String> {
+    log_messages(log, "Notice")
+        .into_iter()
+        .filter(|msg| !msg.starts_with("Started rnsd version"))
+        .collect()
+}
+
+/// Starts a transport rnsd with probes and remote management on `dir`, waits
+/// for it to finish starting, stops it and returns its notice messages other
+/// than the version line.
+fn management_notices(dir: &std::path::Path) -> Vec<String> {
+    management_notices_of(&rnsd_startup_log(dir, &management_config(4, "")))
 }
 
 /// A transport instance announces its probe responder and remote management
@@ -137,6 +160,47 @@ fn rnsd_carries_the_node_identity_over_to_transport_identity() {
     )
     .unwrap();
     assert_eq!(management_notices(dir.path()), MANAGEMENT_NOTICES);
+    assert_eq!(
+        fs::read(dir.path().join("storage/transport_identity")).unwrap(),
+        transport_identity_key()
+    );
+}
+
+/// With `network_identity` configured, the transport identity still comes
+/// from storage/transport_identity, and the network identity is created at
+/// the configured path, after `~` expansion, then loaded from it, with
+/// upstream's log lines.
+#[test]
+fn rnsd_keeps_the_network_identity_apart_from_the_transport_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("storage")).unwrap();
+    fs::write(
+        dir.path().join("storage/transport_identity"),
+        transport_identity_key(),
+    )
+    .unwrap();
+    let network_identity_path = dir.path().join("network_identity");
+    let config = management_config(5, "  network_identity = ~/network_identity\n");
+
+    let log = rnsd_startup_log(dir.path(), &config);
+    assert_eq!(management_notices_of(&log), MANAGEMENT_NOTICES, "{log}");
+    let generated = format!(
+        "Network identity generated and persisted to {}",
+        network_identity_path.display()
+    );
+    assert!(log_messages(&log, "Verbose").contains(&generated), "{log}");
+    let network_identity = fs::read(&network_identity_path).unwrap();
+    assert_eq!(network_identity.len(), 64);
+    assert_ne!(network_identity, transport_identity_key());
+
+    let log = rnsd_startup_log(dir.path(), &config);
+    assert_eq!(management_notices_of(&log), MANAGEMENT_NOTICES, "{log}");
+    let loaded = format!(
+        "Network identity loaded from {}",
+        network_identity_path.display()
+    );
+    assert!(log_messages(&log, "Verbose").contains(&loaded), "{log}");
+    assert_eq!(fs::read(&network_identity_path).unwrap(), network_identity);
     assert_eq!(
         fs::read(dir.path().join("storage/transport_identity")).unwrap(),
         transport_identity_key()
