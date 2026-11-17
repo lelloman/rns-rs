@@ -5,18 +5,19 @@ Reads `cargo llvm-cov report --summary-only` on stdin, sums line coverage
 per crate (the path's first component) and compares it with FLOORS. Raise a
 floor when coverage rises; never lower one to make a run pass.
 
-    cargo llvm-cov -p rns-core -p rns-net --lib --summary-only \
+    cargo llvm-cov -p rns-core -p rns-net -p rns-crypto --lib --summary-only \
         | python3 scripts/coverage-floor.py
 """
 
 import sys
 
 # Line coverage of the unit tests (`--lib`), percent. Measured 2026-11-14:
-# rns-core 95.80, rns-net 79.70, rns-crypto 82.85.
+# rns-core 95.80, rns-net 79.70. rns-crypto measured 2026-11-17 with its own
+# tests included: 96.41.
 FLOORS = {
     "rns-core": 95.5,
     "rns-net": 79.5,
-    "rns-crypto": 82.5,
+    "rns-crypto": 96.0,
 }
 
 

@@ -45,7 +45,7 @@ jobs:
 
       - name: Measure
         run: |
-          cargo llvm-cov -p rns-core -p rns-net --lib --lcov --output-path lcov.info
+          cargo llvm-cov -p rns-core -p rns-net -p rns-crypto --lib --lcov --output-path lcov.info
           cargo llvm-cov report --summary-only | tee coverage.txt
 
       # Floors live in the script; raise them as coverage rises.
@@ -85,11 +85,13 @@ jobs:
         with:
           key: miri
 
+      # rust-toolchain.toml pins a stable toolchain, which has no Miri, so
+      # the nightly one is named explicitly.
       - name: Set up Miri
-        run: cargo miri setup
+        run: cargo +nightly miri setup
 
       - name: Test
-        run: cargo miri test -p rns-core --lib -- transport::dedup packet::tests
+        run: cargo +nightly miri test -p rns-core --lib -- transport::dedup packet::tests
 
   mutants:
     name: Mutants (rns-core, shard ${{ matrix.shard }}/16)
