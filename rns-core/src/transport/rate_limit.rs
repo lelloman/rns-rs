@@ -35,8 +35,12 @@ impl AnnounceRateLimiter {
         self.table.insert(dest_hash, entry);
     }
 
-    /// Remove entries for destinations that are neither active nor recently used.
-    /// Returns the number of removed entries.
+    /// Remove entries for destinations that are neither active, recently
+    /// used, nor still blocked. Returns the number of removed entries.
+    ///
+    /// As upstream's `AnnounceRateTable.cull`, an entry stays while its last
+    /// announce is at most `ttl_secs` old or its block has not yet run out,
+    /// so culling never lifts a block early.
     pub fn cull_stale(
         &mut self,
         active_destinations: &alloc::collections::BTreeSet<[u8; 16]>,
@@ -44,8 +48,11 @@ impl AnnounceRateLimiter {
         ttl_secs: f64,
     ) -> usize {
         let before = self.table.len();
-        self.table
-            .retain(|k, entry| active_destinations.contains(k) || now - entry.last < ttl_secs);
+        self.table.retain(|k, entry| {
+            active_destinations.contains(k)
+                || now - entry.last <= ttl_secs
+                || entry.blocked_until > now
+        });
         before - self.table.len()
     }
 
@@ -230,5 +237,23 @@ mod tests {
 
         assert_eq!(removed, 0);
         assert_eq!(limiter.entries().count(), 1);
+    }
+
+    #[test]
+    fn cull_keeps_entries_at_exactly_the_ttl_and_while_blocked() {
+        let mut limiter = AnnounceRateLimiter::new();
+        let active = alloc::collections::BTreeSet::new();
+        assert!(!limiter.check_and_update(&dest(1), 100.0, Some(10.0), 0, 30.0));
+        assert_eq!(limiter.cull_stale(&active, 140.0, 40.0), 0);
+        assert_eq!(limiter.cull_stale(&active, 140.5, 40.0), 1);
+
+        // Blocked until 100 + 10 + 300 = 410, long after the ttl has passed:
+        // the entry, and so the block, stays until then.
+        assert!(!limiter.check_and_update(&dest(2), 100.0, Some(10.0), 0, 300.0));
+        assert!(limiter.check_and_update(&dest(2), 101.0, Some(10.0), 0, 300.0));
+        assert_eq!(limiter.cull_stale(&active, 400.0, 40.0), 0);
+        assert!(limiter.check_and_update(&dest(2), 400.0, Some(10.0), 0, 300.0));
+        assert_eq!(limiter.cull_stale(&active, 410.0, 40.0), 1);
+        assert!(limiter.is_empty());
     }
 }
