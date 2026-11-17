@@ -93,16 +93,21 @@ pub(crate) struct DestinationTypeRequester {
 
 impl Default for DestinationTypeRequester {
     fn default() -> Self {
+        Self::new(*Identity::new(&mut rns_crypto::OsRng).hash())
+    }
+}
+
+impl DestinationTypeRequester {
+    /// A requester named by the hash of the application identity.
+    pub(crate) fn new(requester: [u8; 16]) -> Self {
         DestinationTypeRequester {
-            requester: *Identity::new(&mut rns_crypto::OsRng).hash(),
+            requester,
             shared_client: false,
             shared_rpc: None,
             registered: AtomicBool::new(false),
         }
     }
-}
 
-impl DestinationTypeRequester {
     /// Send one destination type call to the shared instance. A failed call
     /// or one the instance does not understand reports `false`.
     fn call_shared_instance(&self, key: &str, value: PickleValue) -> bool {

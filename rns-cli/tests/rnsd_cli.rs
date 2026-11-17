@@ -207,60 +207,100 @@ fn rnsd_keeps_the_network_identity_apart_from_the_transport_identity() {
     );
 }
 
-/// The Verbose messages of `log` about the transport identity, in order.
-fn transport_identity_messages(log: &str) -> Vec<String> {
-    log_messages(log, "Verbose")
+/// The Verbose messages of `log` about identities, in order, with each
+/// `<hash>` replaced by `<A>`, `<B>`, ... in order of first appearance, and
+/// the hashes in that order.
+fn identity_messages(log: &str) -> (Vec<String>, Vec<String>) {
+    let mut hashes: Vec<String> = Vec::new();
+    let messages = log_messages(log, "Verbose")
         .into_iter()
-        .filter(|msg| msg.contains("Transport Identity") || msg.contains("transport identity"))
+        .filter(|msg| msg.contains("dentity"))
+        .map(|msg| {
+            let Some((head, rest)) = msg.split_once('<') else {
+                return msg;
+            };
+            let Some((hash, tail)) = rest.split_once('>') else {
+                return msg;
+            };
+            assert!(
+                hash.len() == 32
+                    && hash
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "{msg}"
+            );
+            let index = hashes.iter().position(|h| h == hash).unwrap_or_else(|| {
+                hashes.push(hash.to_string());
+                hashes.len() - 1
+            });
+            format!("{head}<{}>{tail}", (b'A' + index as u8) as char)
+        })
+        .collect();
+    (messages, hashes)
+}
+
+/// The hex hash of the identity whose private key is in `path`.
+fn identity_file_hash(path: &std::path::Path) -> String {
+    let key: [u8; 64] = fs::read(path).unwrap().try_into().unwrap();
+    rns_crypto::identity::Identity::from_private_key(&key)
+        .hash()
+        .iter()
+        .map(|b| format!("{b:02x}"))
         .collect()
 }
 
-/// rnsd logs where its transport identity comes from with upstream's
-/// Verbose lines: created when storage holds none, loaded from
-/// storage/transport_identity or carried over from the node identity, and,
-/// on an instance without transport, the ephemeral identity it uses
-/// instead.
+/// rnsd logs the identities it creates and where its transport identity
+/// comes from with upstream's Verbose lines, in upstream's order: the
+/// network identity, then the transport identity, created when storage holds
+/// none, loaded from storage/transport_identity or carried over from the
+/// node identity, on an instance without transport the ephemeral identity
+/// it uses instead, and the application identity.
 #[test]
 fn rnsd_logs_its_transport_identity_as_upstream() {
     let non_transport = "[reticulum]\n  enable_transport = No\n  share_instance = No\n\
                          [logging]\n  loglevel = 5\n[interfaces]\n";
-    let ephemeral = |msg: &str| -> bool {
-        let Some(hash) = msg
-            .strip_prefix("Initialized ephemeral transport identity <")
-            .and_then(|rest| rest.strip_suffix('>'))
-        else {
-            return false;
-        };
-        hash.len() == 32
-            && hash
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    };
 
     // A new directory: created, then replaced by an ephemeral identity.
     let dir = tempfile::tempdir().unwrap();
     let log = rnsd_startup_log(dir.path(), non_transport);
-    let messages = transport_identity_messages(&log);
-    assert_eq!(messages.len(), 2, "{log}");
+    let (messages, hashes) = identity_messages(&log);
     assert_eq!(
-        messages[0], "No valid Transport Identity in storage, creating...",
+        messages,
+        [
+            "No valid Transport Identity in storage, creating...",
+            "Identity keys created for <A>",
+            "Identity keys created for <B>",
+            "Initialized ephemeral transport identity <B>",
+            "Identity keys created for <C>",
+        ],
         "{log}"
     );
-    assert!(ephemeral(&messages[1]), "{log}");
-    let first_ephemeral = messages[1].clone();
+    assert_eq!(
+        hashes[0],
+        identity_file_hash(&dir.path().join("storage/transport_identity"))
+    );
+    let first_ephemeral = hashes[1].clone();
 
     // Restarted: loaded, with a new ephemeral identity.
     let log = rnsd_startup_log(dir.path(), non_transport);
-    let messages = transport_identity_messages(&log);
-    assert_eq!(messages.len(), 2, "{log}");
+    let (messages, hashes) = identity_messages(&log);
     assert_eq!(
-        messages[0], "Loaded Transport Identity from storage",
+        messages,
+        [
+            "Loaded Transport Identity from storage",
+            "Identity keys created for <A>",
+            "Initialized ephemeral transport identity <A>",
+            "Identity keys created for <B>",
+        ],
         "{log}"
     );
-    assert!(ephemeral(&messages[1]), "{log}");
-    assert_ne!(messages[1], first_ephemeral);
+    assert_ne!(hashes[0], first_ephemeral);
 
     // A transport instance uses the stored identity itself.
+    let loaded = [
+        "Loaded Transport Identity from storage",
+        "Identity keys created for <A>",
+    ];
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("storage")).unwrap();
     fs::write(
@@ -269,11 +309,7 @@ fn rnsd_logs_its_transport_identity_as_upstream() {
     )
     .unwrap();
     let log = rnsd_startup_log(dir.path(), &management_config(5, ""));
-    assert_eq!(
-        transport_identity_messages(&log),
-        ["Loaded Transport Identity from storage"],
-        "{log}"
-    );
+    assert_eq!(identity_messages(&log).0, loaded, "{log}");
 
     // The node identity rns-rs kept before is carried over, so loaded.
     let dir = tempfile::tempdir().unwrap();
@@ -284,12 +320,30 @@ fn rnsd_logs_its_transport_identity_as_upstream() {
     )
     .unwrap();
     let log = rnsd_startup_log(dir.path(), &management_config(5, ""));
+    assert_eq!(identity_messages(&log).0, loaded, "{log}");
+    assert_eq!(management_notices_of(&log), MANAGEMENT_NOTICES, "{log}");
+
+    // A new network identity comes first, while the config is read.
+    let network_identity = dir.path().join("network_identity");
+    let log = rnsd_startup_log(
+        dir.path(),
+        &management_config(5, "  network_identity = ~/network_identity\n"),
+    );
+    let (messages, hashes) = identity_messages(&log);
     assert_eq!(
-        transport_identity_messages(&log),
-        ["Loaded Transport Identity from storage"],
+        messages,
+        [
+            "Identity keys created for <A>".to_string(),
+            format!(
+                "Network identity generated and persisted to {}",
+                network_identity.display()
+            ),
+            "Loaded Transport Identity from storage".to_string(),
+            "Identity keys created for <B>".to_string(),
+        ],
         "{log}"
     );
-    assert_eq!(management_notices_of(&log), MANAGEMENT_NOTICES, "{log}");
+    assert_eq!(hashes[0], identity_file_hash(&network_identity));
 }
 
 /// The hash of `rnstransport.network` for the network identity whose

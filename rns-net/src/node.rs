@@ -266,11 +266,21 @@ fn effective_static_transport_identity(
 /// Load the `network_identity` configured at `path`, or create and save one
 /// there when the file is missing, logging as upstream's
 /// `Reticulum.__apply_config` does.
+/// A new identity, logged as upstream's `Identity.create_keys` logs it.
+fn create_identity() -> Identity {
+    let identity = Identity::new(&mut OsRng);
+    log::info!(
+        "Identity keys created for <{}>",
+        hex_string(identity.hash())
+    );
+    identity
+}
+
 fn load_network_identity(path: &str) -> io::Result<Identity> {
     let identity_path = expand_home(path);
     let load = || -> io::Result<Identity> {
         if !identity_path.is_file() {
-            let identity = Identity::new(&mut OsRng);
+            let identity = create_identity();
             storage::save_identity(&identity, &identity_path)?;
             log::info!(
                 "Network identity generated and persisted to {}",
@@ -1557,15 +1567,18 @@ impl RnsNode {
             log::info!("Loaded Transport Identity from storage");
             identity
         } else {
-            let carried_over = paths.identities.join("identity").exists();
-            if !carried_over {
-                log::info!("No valid Transport Identity in storage, creating...");
-            }
-            let identity = storage::load_or_create_identity(&paths.identities)?;
-            storage::save_identity(&identity, &transport_identity_path)?;
-            if carried_over {
+            let node_identity_path = paths.identities.join("identity");
+            let identity = if node_identity_path.exists() {
+                let identity = storage::load_identity(&node_identity_path)?;
                 log::info!("Loaded Transport Identity from storage");
-            }
+                identity
+            } else {
+                log::info!("No valid Transport Identity in storage, creating...");
+                let identity = create_identity();
+                storage::save_identity(&identity, &node_identity_path)?;
+                identity
+            };
+            storage::save_identity(&identity, &transport_identity_path)?;
             identity
         };
         // Python clients derive their RPC key from the persisted transport
@@ -2236,13 +2249,16 @@ impl RnsNode {
                     .expect("node identity must expose a private key"),
             )
         } else {
-            let identity = Identity::new(&mut OsRng);
+            let identity = create_identity();
             log::info!(
                 "Initialized ephemeral transport identity <{}>",
                 hex_string(identity.hash())
             );
             identity
         };
+        // `Transport.application_identity`, which names this application's
+        // registrations with a shared instance.
+        let application_identity = create_identity();
 
         let local_hops_delta = if config.local_hops_delta {
             let mut byte = [0u8; 1];
@@ -3365,8 +3381,12 @@ impl RnsNode {
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
             #[cfg(feature = "iface-local")]
-            destination_types: Default::default(),
+            destination_types: crate::shared_client::DestinationTypeRequester::new(
+                *application_identity.hash(),
+            ),
         };
+        #[cfg(not(feature = "iface-local"))]
+        let _ = application_identity;
         // Destination stamps live under `storage/stamps` next to the cache
         // directory, the layout `from_config_dirs` uses; a node without a
         // cache directory cannot stamp its announces.
