@@ -787,8 +787,9 @@ impl TransportEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packet::PacketFlags;
     use crate::transport::tests::{
-        make_config, make_path_entry, make_random_blob, make_tunnel_interface,
+        make_config, make_interface, make_path_entry, make_random_blob, make_tunnel_interface,
     };
     use crate::transport::tunnel::TunnelPath;
 
@@ -806,6 +807,147 @@ mod tests {
         assert_eq!(engine.blackholed_entries().count(), 1);
         engine.cull_blackholed(expires + 1.0);
         assert_eq!(engine.blackholed_entries().count(), 0);
+    }
+
+    #[test]
+    fn blackhole_without_positive_duration_never_expires() {
+        let mut engine = TransportEngine::new(make_config(true));
+        for (n, duration) in [(1u8, None), (2, Some(0.0)), (3, Some(-1.0))] {
+            let identity = [n; 16];
+            assert!(engine.blackhole_identity(identity, 1000.0, duration, None));
+            assert!(engine.is_blackholed(&identity, 1e12), "{duration:?}");
+        }
+        engine.cull_blackholed(1e12);
+        assert_eq!(engine.blackholed_entries().count(), 3);
+    }
+
+    #[test]
+    fn deregistering_an_interface_drops_only_its_pending_path_requests() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        engine
+            .pending_local_path_requests
+            .insert([1; 16], (InterfaceId(1), 10.0));
+        engine
+            .pending_local_path_requests
+            .insert([2; 16], (InterfaceId(2), 10.0));
+        engine.deregister_interface(InterfaceId(1));
+        assert_eq!(
+            engine
+                .pending_local_path_requests
+                .keys()
+                .collect::<Vec<_>>(),
+            [&[2; 16]]
+        );
+    }
+
+    #[test]
+    fn next_hop_is_the_primary_paths() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let dest = [0xD1; 16];
+        assert_eq!(engine.next_hop(&dest), None);
+        engine.upsert_path_destination(
+            dest,
+            make_path_entry(1000.0, 2, InterfaceId(1), [0x77; 16]),
+            1000.0,
+        );
+        assert_eq!(engine.next_hop(&dest), Some([0x77; 16]));
+    }
+
+    /// An unresponsive primary path with an alternative fails over to it
+    /// instead of marking the destination unresponsive.
+    #[test]
+    fn unresponsive_primary_fails_over_to_alternative() {
+        let mut config = make_config(true);
+        config.max_paths_per_destination = 2;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        let dest = [0xD2; 16];
+        let mut paths =
+            PathSet::from_single(make_path_entry(1000.0, 1, InterfaceId(1), [0x01; 16]), 2);
+        paths.upsert(make_path_entry(1000.0, 2, InterfaceId(1), [0x02; 16]));
+        engine.path_table.insert(dest, paths);
+
+        engine.mark_path_unresponsive(&dest, Some(InterfaceId(1)));
+        assert_eq!(engine.next_hop(&dest), Some([0x02; 16]));
+        assert!(!engine.path_is_unresponsive(&dest));
+    }
+
+    #[test]
+    fn rebalancing_destination_hops_reports_whether_a_path_changed() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let dest = [0xD3; 16];
+        assert!(!engine.rebalance_destination_path_hops(&dest, 4));
+        engine.upsert_path_destination(
+            dest,
+            make_path_entry(1000.0, 2, InterfaceId(1), [0x77; 16]),
+            1000.0,
+        );
+        assert!(engine.rebalance_destination_path_hops(&dest, 4));
+        assert_eq!(engine.hops_to(&dest), Some(4));
+    }
+
+    fn lrproof_frame(link_id: &[u8; 16], packet_type: u8, context: u8) -> Vec<u8> {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type,
+        };
+        RawPacket::pack(flags, 0, link_id, None, context, &[0x5A; 99])
+            .unwrap()
+            .raw
+    }
+
+    /// An LRPROOF whose hops disagree with an unvalidated relayed link,
+    /// arriving from the link's next hop, is offered for rebalancing with
+    /// its post-ingress hop count; other packets for the link are not.
+    #[test]
+    fn lrproof_rebalance_candidate_is_only_a_mismatched_lrproof() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        let link_id = [0x4C; 16];
+        let dest = [0xD4; 16];
+        engine.register_link(
+            link_id,
+            LinkEntry {
+                timestamp: 1000.0,
+                next_hop_transport_id: [0x33; 16],
+                next_hop_interface: InterfaceId(2),
+                remaining_hops: 3,
+                received_interface: InterfaceId(1),
+                taken_hops: 1,
+                destination_hash: dest,
+                validated: false,
+                proof_timeout: 2000.0,
+            },
+        );
+
+        let proof = lrproof_frame(
+            &link_id,
+            constants::PACKET_TYPE_PROOF,
+            constants::CONTEXT_LRPROOF,
+        );
+        let candidate = engine
+            .inbound_lrproof_rebalance_candidate(&proof, InterfaceId(2))
+            .expect("mismatched LRPROOF is a candidate");
+        assert_eq!(candidate.0, link_id);
+        assert_eq!(candidate.1, dest);
+        assert_eq!(candidate.2, 1);
+        assert_eq!(candidate.3, vec![0x5A; 99]);
+
+        for (packet_type, context) in [
+            (constants::PACKET_TYPE_DATA, constants::CONTEXT_LRPROOF),
+            (constants::PACKET_TYPE_PROOF, constants::CONTEXT_NONE),
+        ] {
+            let frame = lrproof_frame(&link_id, packet_type, context);
+            assert!(engine
+                .inbound_lrproof_rebalance_candidate(&frame, InterfaceId(2))
+                .is_none());
+        }
     }
 
     fn tunnel_path(hops: u8, expires: f64, blob_time: u64) -> TunnelPath {
@@ -890,5 +1032,65 @@ mod tests {
             Some(TUNNEL_HOP)
         );
         assert_eq!(restore(None, tunnel_path(2, now, 100), now), None);
+    }
+
+    #[test]
+    fn synthesis_state_is_recorded_and_reset_per_interface() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+        let iface = InterfaceId(1);
+        assert!(engine.mark_synthesis_received(iface));
+        assert!(!engine.mark_synthesis_received(iface));
+
+        engine.set_remote_transport(iface, [0x77; 16]);
+        assert_eq!(engine.remote_transport(&iface), Some([0x77; 16]));
+        let info = tunnel::RemoteTransportInfo {
+            implementation: "rns".into(),
+            version: vec![1, 2, 3],
+            is_transport: true,
+            destination_cost: Default::default(),
+            pr_cost: Default::default(),
+        };
+        engine.set_remote_transport_info(iface, info.clone());
+        assert_eq!(engine.remote_transport_info(&iface), Some(&info));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+        engine.synthesize_tunnel(&identity, iface, &[], false, &mut rng);
+        assert!(engine.synthesis_emitted(&iface));
+
+        engine.reset_tunnel_synthesis(iface);
+        assert_eq!(engine.remote_transport(&iface), None);
+        assert!(!engine.synthesis_emitted(&iface));
+        assert!(engine.mark_synthesis_received(iface));
+        // What the remote reported stays until its next synthesis.
+        assert_eq!(engine.remote_transport_info(&iface), Some(&info));
+    }
+
+    /// A reverse synthesis answers the remote's and records no local tunnel.
+    #[test]
+    fn only_a_forward_synthesis_records_a_local_tunnel() {
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        for reverse in [false, true] {
+            let mut engine = TransportEngine::new(make_config(true));
+            engine.register_interface(make_tunnel_interface(1));
+            let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+            engine.synthesize_tunnel(&identity, InterfaceId(1), &[], reverse, &mut rng);
+            assert_eq!(engine.local_tunnel_id(&InterfaceId(1)).is_some(), !reverse);
+        }
+    }
+
+    #[test]
+    fn released_tunnel_waits_the_reconnect_window() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+        let tunnel_id = [0xCE; 32];
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
+        engine.release_tunnel_interface(&tunnel_id, 1500.0);
+        let entry = engine.tunnel_table().get(&tunnel_id).unwrap();
+        assert_eq!(entry.interface, None);
+        assert_eq!(entry.expires, 1500.0 + constants::TUNNEL_RECONNECT_WINDOW);
     }
 }
