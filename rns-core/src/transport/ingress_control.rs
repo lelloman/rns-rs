@@ -618,6 +618,131 @@ mod tests {
             .is_some());
     }
 
+    /// An interface is new for `new_time` after it started and mature from
+    /// then on, as upstream's `age() < ic_new_time`: a rate between the two
+    /// thresholds is a burst only while it is new.
+    #[test]
+    fn thresholds_follow_interface_age() {
+        let config = IngressControlConfig::enabled();
+        let started = 1_000.0;
+        let freq = 5.0;
+        for (age, new) in [
+            (config.new_time - 1.0, true),
+            (config.new_time, false),
+            (9_000.0, false),
+        ] {
+            let now = started + age;
+            let mut ic = IngressControl::new();
+            assert_eq!(
+                ic.should_ingress_limit(iface(1), &config, freq, started, now),
+                new
+            );
+            assert_eq!(
+                ic.should_ingress_limit_pr(iface(1), &config, freq, started, now),
+                new
+            );
+
+            // Held announces wait for the rate to fall below the same
+            // threshold.
+            let mut ic = IngressControl::new();
+            assert!(ic.hold_announce(iface(1), &config, [1; 16], held(3, now)));
+            let released =
+                ic.process_held_announces(iface(1), &config, freq, started, now, |_, _| true);
+            assert_eq!(released.is_none(), new, "age {age}");
+        }
+    }
+
+    /// As upstream, a burst starts only above the threshold, and a rate
+    /// back at the threshold keeps it going.
+    #[test]
+    fn rate_at_threshold_neither_starts_nor_ends_a_burst() {
+        let config = IngressControlConfig::enabled();
+        let now = 10_000.0;
+        let mut ic = IngressControl::new();
+        assert!(!ic.should_ingress_limit(iface(1), &config, config.burst_freq, 0.0, now));
+        assert!(!ic.should_ingress_limit_pr(iface(1), &config, config.pr_burst_freq, 0.0, now));
+        assert!(!ic.burst_active(&iface(1)));
+        assert!(!ic.pr_burst_active(&iface(1)));
+
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, now));
+        assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, now));
+        let later = now + config.burst_hold + 1.0;
+        assert!(ic.should_ingress_limit(iface(1), &config, config.burst_freq, 0.0, later));
+        assert!(ic.burst_active(&iface(1)));
+        for step in 1..=5 {
+            let at = later + f64::from(step);
+            assert!(ic.should_ingress_limit_pr(iface(1), &config, config.pr_burst_freq, 0.0, at));
+        }
+        assert!(ic.pr_burst_active(&iface(1)));
+    }
+
+    /// A burst lasts until `burst_hold` has passed since its last high
+    /// sample, not until the instant it ends.
+    #[test]
+    fn burst_outlasts_the_instant_its_hold_ends() {
+        let config = IngressControlConfig::enabled();
+        let now = 10_000.0;
+        let mut ic = IngressControl::new();
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, now));
+        assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, now));
+        // Sustained by a later high sample.
+        let sustained = now + 5.0;
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, sustained));
+        assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, sustained));
+        let hold_end = sustained + config.burst_hold;
+        assert!(ic.should_ingress_limit(iface(1), &config, 1.0, 0.0, hold_end));
+        assert!(ic.burst_active(&iface(1)));
+        // The path request burst would count down its cooldown here.
+        for _ in 0..5 {
+            assert!(ic.should_ingress_limit_pr(iface(1), &config, 1.0, 0.0, hold_end));
+        }
+        assert!(ic.pr_burst_active(&iface(1)));
+    }
+
+    #[test]
+    fn burst_state_is_reported_per_interface() {
+        let config = IngressControlConfig::enabled();
+        let mut ic = IngressControl::new();
+        assert!(!ic.burst_active(&iface(1)));
+        assert_eq!(ic.burst_activated(&iface(1)), 0.0);
+        assert_eq!(ic.pr_burst_activated(&iface(1)), 0.0);
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, 10_000.0));
+        assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, 10_500.0));
+        assert!(ic.burst_active(&iface(1)));
+        assert!(!ic.burst_active(&iface(2)));
+        assert_eq!(ic.burst_activated(&iface(1)), 10_000.0);
+        assert_eq!(ic.pr_burst_activated(&iface(1)), 10_500.0);
+        assert_eq!(ic.burst_activated(&iface(2)), 0.0);
+    }
+
+    #[test]
+    fn clear_drops_bursts_and_held_announces() {
+        let config = IngressControlConfig::enabled();
+        let mut ic = IngressControl::new();
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, 10_000.0));
+        assert!(ic.hold_announce(iface(1), &config, [1; 16], held(3, 10_000.0)));
+        ic.clear();
+        assert!(!ic.burst_active(&iface(1)));
+        assert_eq!(ic.held_count(&iface(1)), 0);
+        assert!(ic.interfaces_with_held().is_empty());
+    }
+
+    /// The egress limit judges the rate the pending request would make:
+    /// with n samples at rate r, (n + 1) / n * r, and limits only above
+    /// the configured rate, as upstream's `op_freq > freq_threshold`.
+    #[test]
+    fn egress_limit_judges_the_prospective_rate() {
+        let mut config = IngressControlConfig::enabled();
+        config.egress_enabled = true;
+        let mut ic = IngressControl::new();
+        let limit = config.egress_pr_freq;
+        // 10 samples at 0.8 of the limit: the next one makes 0.88.
+        assert!(!ic.should_egress_limit_pr(iface(1), &config, limit * 0.8, 10));
+        // 4 samples at 0.8 of the limit: the next one makes exactly it.
+        assert!(!ic.should_egress_limit_pr(iface(1), &config, limit * 0.8, 4));
+        assert!(ic.should_egress_limit_pr(iface(1), &config, limit * 0.9, 4));
+    }
+
     #[test]
     fn held_announce_rejects_pathfinder_boundary() {
         let mut control = IngressControl::new();
