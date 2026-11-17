@@ -86,7 +86,7 @@ Endpoints:
 | Destinations and identities | `GET /api/destinations`, `POST /api/destination`, `/api/identity/...` |
 | Packets and links | `GET /api/packets`, `POST /api/send`, `GET /api/proofs`, `GET /api/links`, `POST /api/link`, `POST /api/link/send`, `POST /api/link/close`, `GET /api/link_events`, `POST /api/channel` |
 | Resources | `GET /api/resources`, `POST /api/resource`, `GET /api/resource_events` |
-| Direct Link | `POST /api/direct_connect` (see [Direct Link](direct-link.md)) |
+| Direct Link | `POST /api/direct_connect`, `GET /api/direct_links` (see [Direct Link](direct-link.md#status)) |
 | Backbone | `GET /api/backbone/peers`, `/api/backbone/blacklist` |
 | Hooks | `GET /api/hooks`, `POST /api/hook/load`, `/unload`, `/reload`, `/enable`, `/disable`, `/priority` |
 | Config | `GET /api/config`, `GET /api/config/schema`, `GET /api/config/status`, `POST /api/config/validate`, `POST /api/config`, `POST /api/config/apply` |

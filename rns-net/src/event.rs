@@ -8,17 +8,20 @@ use std::time::{Duration, Instant};
 use crate::packet_header::PacketHeader;
 use rns_core::transport::types::InterfaceId;
 
+pub use crate::common::event::direct_link_reason_name;
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerPoolMemberStatus,
     BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo,
-    DirectReupgradeConfig, DrainStatus, DynamicInterfaceRegistration, HolePunchPolicy, HookInfo,
-    I2pEndpointStat, InterfaceManagementOperation, InterfaceStatsResponse, InterfaceTelemetry,
-    KnownDestinationEntry, LifecycleState, LinkDatagramError, LinkDistributionEntry, LinkInfoEntry,
-    LocalDestinationEntry, NextHopResponse, PacketSignal, PathTableEntry, ProbeRateLimit,
-    ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
-    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SendProbeError,
-    SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
+    DirectCandidateKind, DirectLinkCounters, DirectLinkEntry, DirectLinkStatus, DirectLossCause,
+    DirectPathStatus, DirectReupgradeConfig, DrainStatus, DynamicInterfaceRegistration,
+    HolePunchPolicy, HookInfo, I2pEndpointStat, InterfaceManagementOperation,
+    InterfaceStatsResponse, InterfaceTelemetry, KnownDestinationEntry, LifecycleState,
+    LinkDatagramError, LinkDistributionEntry, LinkInfoEntry, LocalDestinationEntry,
+    NextHopResponse, PacketSignal, PathTableEntry, ProbeRateLimit, ProviderBridgeConsumerStats,
+    ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry,
+    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
+    RuntimeConfigSource, RuntimeConfigValue, SendProbeError, SingleInterfaceStat, TrafficDetail,
+    MAX_PROBE_PAYLOAD_SIZE,
 };
 
 /// Concrete Event type using boxed sync Writer.

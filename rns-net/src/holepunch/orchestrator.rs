@@ -21,7 +21,10 @@ use rns_core::holepunch::{
     REJECT_POLICY, REJECT_UNSUPPORTED, UPGRADE_REQUEST,
 };
 
-use crate::event::{Event, EventSender};
+use crate::event::{
+    DirectCandidateKind, DirectLinkCounters, DirectLinkEntry, DirectLinkStatus, DirectLossCause,
+    DirectPathStatus, Event, EventSender,
+};
 use crate::time;
 
 use super::admission::{
@@ -53,6 +56,8 @@ struct HolePunchSession {
     /// endpoint it saw for us.
     facilitator: Option<SocketAddr>,
     observed: Option<SocketAddr>,
+    /// The candidates the punch sends to, with their kinds.
+    candidates: Vec<(SocketAddr, DirectCandidateKind)>,
 }
 
 impl HolePunchSession {
@@ -65,6 +70,7 @@ impl HolePunchSession {
             punch_target: None,
             facilitator: None,
             observed: None,
+            candidates: Vec::new(),
         }
     }
 
@@ -111,6 +117,59 @@ struct DirectPath {
     initiated: bool,
     /// When the path was established.
     since: f64,
+    /// The peer's address on the path, and what kind of candidate it was.
+    peer_addr: SocketAddr,
+    candidate: DirectCandidateKind,
+    candidates: Vec<(SocketAddr, DirectCandidateKind)>,
+    /// Round trip measured by the punch, in seconds.
+    rtt: f64,
+    mtu: u32,
+    mtu_discovered: bool,
+    /// Largest link packet the peer said it accepts on the path.
+    peer_max_packet: Option<u32>,
+}
+
+/// Counts of upgrades, kept node-wide and per link.
+#[derive(Debug, Clone, Default)]
+struct Counters {
+    proposed: u64,
+    accepted: u64,
+    established: u64,
+    failed: std::collections::BTreeMap<u8, u64>,
+    lost: u64,
+}
+
+impl Counters {
+    fn report(&self) -> DirectLinkCounters {
+        DirectLinkCounters {
+            proposed: self.proposed,
+            accepted: self.accepted,
+            established: self.established,
+            failed: self.failed.iter().map(|(r, n)| (*r, *n)).collect(),
+            lost: self.lost,
+        }
+    }
+}
+
+/// What is recorded about a link's upgrades, for status reports.
+#[derive(Debug, Clone, Default)]
+struct LinkHistory {
+    counters: Counters,
+    last_failure: Option<(u8, f64)>,
+    last_loss: Option<(DirectLossCause, f64)>,
+}
+
+/// The name of an upgrade state in status reports.
+fn state_name(state: HolePunchState) -> Option<&'static str> {
+    match state {
+        HolePunchState::Idle => None,
+        HolePunchState::Discovering => Some("discovering"),
+        HolePunchState::Proposing => Some("proposing"),
+        HolePunchState::WaitingReady => Some("waiting_ready"),
+        HolePunchState::Punching => Some("punching"),
+        HolePunchState::Connected => Some("connected"),
+        HolePunchState::Failed => Some("failed"),
+    }
 }
 
 /// A link that lost the direct path it proposed, and proposes again.
@@ -184,6 +243,9 @@ pub struct HolePunchManager {
     /// The driver's queue, for probes and punches run on its loop instead
     /// of threads (see [`crate::engine::FOLD_SERVICES`]).
     event_tx: Option<EventSender>,
+    /// Upgrade counts over the node's life, and per link while it is open.
+    totals: Counters,
+    history: HashMap<[u8; 16], LinkHistory>,
 }
 
 /// Actions produced by HolePunchManager for the driver to dispatch.
@@ -254,6 +316,8 @@ impl HolePunchManager {
             reupgrades: HashMap::new(),
             spawn_workers: true,
             event_tx: None,
+            totals: Counters::default(),
+            history: HashMap::new(),
         }
     }
 
@@ -320,9 +384,110 @@ impl HolePunchManager {
         self.reupgrade_config
     }
 
+    /// Count something about `link_id`'s upgrades, node-wide and for the
+    /// link.
+    fn count(&mut self, link_id: [u8; 16], update: impl Fn(&mut Counters)) {
+        update(&mut self.totals);
+        update(&mut self.history.entry(link_id).or_default().counters);
+    }
+
+    /// An upgrade on `link_id` failed with `reason` (reported to the
+    /// application as `on_direct_connect_failed`).
+    pub fn note_failed(&mut self, link_id: [u8; 16], reason: u8) {
+        self.count(link_id, |c| *c.failed.entry(reason).or_default() += 1);
+        if let Some(history) = self.history.get_mut(&link_id) {
+            history.last_failure = Some((reason, time::now()));
+        }
+    }
+
+    /// The direct interface `interface_id` found its path MTU.
+    pub fn note_direct_mtu(
+        &mut self,
+        interface_id: rns_core::transport::types::InterfaceId,
+        mtu: u32,
+    ) {
+        if let Some(path) = self
+            .direct
+            .values_mut()
+            .find(|path| path.interface_id == interface_id)
+        {
+            path.mtu = mtu;
+            path.mtu_discovered = true;
+        }
+    }
+
+    /// The state of Direct Link on this node, for status reports.
+    pub fn status(&self) -> DirectLinkStatus {
+        let mut link_ids: Vec<[u8; 16]> = self
+            .history
+            .keys()
+            .chain(self.direct.keys())
+            .chain(self.link_to_session.keys())
+            .chain(self.peer_support.keys())
+            .chain(self.reupgrades.keys())
+            .copied()
+            .collect();
+        link_ids.sort_unstable();
+        link_ids.dedup();
+        let links = link_ids
+            .into_iter()
+            .map(|link_id| {
+                let history = self.history.get(&link_id);
+                DirectLinkEntry {
+                    link_id,
+                    direct: self.direct.get(&link_id).map(|path| DirectPathStatus {
+                        interface_id: path.interface_id,
+                        session_id: path.session_id,
+                        initiator: path.initiated,
+                        peer_addr: path.peer_addr,
+                        candidate: path.candidate,
+                        candidates: path.candidates.clone(),
+                        rtt: path.rtt,
+                        mtu: path.mtu,
+                        mtu_discovered: path.mtu_discovered,
+                        peer_max_packet: path.peer_max_packet,
+                        since: path.since,
+                    }),
+                    session_state: self
+                        .link_to_session
+                        .get(&link_id)
+                        .and_then(|session_id| self.sessions.get(session_id))
+                        .and_then(|session| state_name(session.engine.state())),
+                    peer_supported: match self.peer_support.get(&link_id) {
+                        Some(PeerSupport::Supported) => Some(true),
+                        _ => None,
+                    },
+                    counters: history.map(|h| h.counters.report()).unwrap_or_default(),
+                    last_failure: history.and_then(|h| h.last_failure),
+                    last_loss: history.and_then(|h| h.last_loss),
+                    reupgrade: self
+                        .reupgrades
+                        .get(&link_id)
+                        .map(|entry| (entry.attempts, entry.due)),
+                }
+            })
+            .collect();
+        DirectLinkStatus {
+            enabled: self.enabled(),
+            probe_servers: self.probe_addrs.clone(),
+            totals: self.totals.report(),
+            links,
+        }
+    }
+
     /// The link lost the direct path `path`: if this side proposed it,
     /// schedule a proposal again.
-    fn direct_path_lost(&mut self, link_id: [u8; 16], path: &DirectPath, now: f64) {
+    fn direct_path_lost(
+        &mut self,
+        link_id: [u8; 16],
+        path: &DirectPath,
+        cause: DirectLossCause,
+        now: f64,
+    ) {
+        self.count(link_id, |c| c.lost += 1);
+        if let Some(history) = self.history.get_mut(&link_id) {
+            history.last_loss = Some((cause, now));
+        }
         let config = self.reupgrade_config;
         if !config.enabled
             || config.max_attempts == 0
@@ -606,6 +771,7 @@ impl HolePunchManager {
         self.link_to_session.insert(link_id, session_id);
         self.sessions
             .insert(session_id, HolePunchSession::new(engine, now));
+        self.count(link_id, |c| c.proposed += 1);
 
         let mgr_actions = convert_engine_actions(link_id, &actions);
 
@@ -763,6 +929,7 @@ impl HolePunchManager {
             let mut session = HolePunchSession::new(engine, now);
             session.punch_target = Some(initiator_addr);
             self.sessions.insert(session_id, session);
+            self.count(link_id, |c| c.accepted += 1);
 
             let mgr_actions = convert_engine_actions(link_id, &actions);
 
@@ -946,6 +1113,15 @@ impl HolePunchManager {
                         .sessions
                         .get(&completion.session_id)
                         .is_some_and(|session| session.engine.is_initiator());
+                    let candidates = self
+                        .sessions
+                        .get(&completion.session_id)
+                        .map(|session| session.candidates.clone())
+                        .unwrap_or_default();
+                    let candidate = candidates
+                        .iter()
+                        .find(|(addr, _)| canonical(*addr) == canonical(peer_addr))
+                        .map_or(DirectCandidateKind::PeerReflexive, |(_, kind)| *kind);
                     if let Some(session) = self.sessions.get(&completion.session_id) {
                         let params = udp_direct::DirectPathParams {
                             link_id: completion.link_id,
@@ -989,6 +1165,13 @@ impl HolePunchManager {
                                             blackhole: blackhole.clone(),
                                             initiated,
                                             since: now,
+                                            peer_addr,
+                                            candidate,
+                                            candidates: candidates.clone(),
+                                            rtt: completion.rtt.unwrap_or(0.0),
+                                            mtu: udp_direct::DIRECT_MTU,
+                                            mtu_discovered: false,
+                                            peer_max_packet,
                                         },
                                     ) {
                                         all_actions.push(
@@ -998,6 +1181,7 @@ impl HolePunchManager {
                                             },
                                         );
                                     }
+                                    self.count(completion.link_id, |c| c.established += 1);
                                     if let Some(entry) =
                                         self.reupgrades.get_mut(&completion.link_id)
                                     {
@@ -1078,6 +1262,7 @@ impl HolePunchManager {
     /// once the link's closing packets have been sent on it.
     pub fn link_closed(&mut self, link_id: &[u8; 16]) {
         self.remove_link_session(link_id);
+        self.history.remove(link_id);
         self.peer_support.remove(link_id);
         self.reupgrades.remove(link_id);
         if let Some(path) = self.direct.remove(link_id) {
@@ -1133,9 +1318,10 @@ impl HolePunchManager {
     pub fn take_direct(
         &mut self,
         link_id: &[u8; 16],
+        cause: DirectLossCause,
     ) -> Option<(rns_core::transport::types::InterfaceId, [u8; 16])> {
         let path = self.direct.remove(link_id)?;
-        self.direct_path_lost(*link_id, &path, time::now());
+        self.direct_path_lost(*link_id, &path, cause, time::now());
         Some((path.interface_id, path.session_id))
     }
 
@@ -1166,7 +1352,7 @@ impl HolePunchManager {
             .find(|(_, path)| path.interface_id == interface_id)
             .map(|(link_id, _)| *link_id)?;
         let path = self.direct.remove(&link_id)?;
-        self.direct_path_lost(link_id, &path, time::now());
+        self.direct_path_lost(link_id, &path, DirectLossCause::InterfaceDown, time::now());
         Some((link_id, path.session_id))
     }
 
@@ -1453,6 +1639,7 @@ impl HolePunchManager {
             }
         };
         session.punch_target = Some(peer_addr);
+        session.candidates = vec![(peer_addr, DirectCandidateKind::Reflexive)];
 
         if !self.spawn_workers {
             return Vec::new();
@@ -2746,6 +2933,16 @@ mod tests {
                 blackhole: Default::default(),
                 initiated,
                 since,
+                peer_addr: "203.0.113.9:4000".parse().unwrap(),
+                candidate: DirectCandidateKind::Reflexive,
+                candidates: vec![(
+                    "203.0.113.9:4000".parse().unwrap(),
+                    DirectCandidateKind::Reflexive,
+                )],
+                rtt: 0.02,
+                mtu: udp_direct::DIRECT_MTU,
+                mtu_discovered: false,
+                peer_max_packet: Some(rns_core::holepunch::DIRECT_MAX_PACKET),
             },
         );
     }
@@ -2805,7 +3002,9 @@ mod tests {
         let link_id = [0x71; 16];
         upgraded(&mut mgr, link_id, 50_100);
         let now = time::now();
-        assert!(mgr.take_direct(&link_id).is_some());
+        assert!(mgr
+            .take_direct(&link_id, DirectLossCause::LinkFailed)
+            .is_some());
         let due = reupgrade_due(&mgr, &link_id).expect("re-upgrade scheduled");
         assert!(
             due >= now + 60.0 && due <= now + 75.0 + 1.0,
@@ -2879,7 +3078,7 @@ mod tests {
         // The responder side of the lost upgrade.
         let mut mgr = accepting_manager();
         upgraded_as(&mut mgr, link_id, 50_102, false, time::now());
-        mgr.take_direct(&link_id);
+        mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
         assert!(!mgr.reupgrades.contains_key(&link_id));
 
         // Turned off.
@@ -2889,14 +3088,14 @@ mod tests {
             ..DirectReupgradeConfig::default()
         });
         upgraded(&mut mgr, link_id, 50_103);
-        mgr.take_direct(&link_id);
+        mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
         assert!(!mgr.reupgrades.contains_key(&link_id));
 
         // No facilitator to propose through any more.
         let mut mgr = accepting_manager();
         mgr.set_probe_config(vec![], ProbeProtocol::Rnsp, None);
         upgraded(&mut mgr, link_id, 50_104);
-        mgr.take_direct(&link_id);
+        mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
         assert!(!mgr.reupgrades.contains_key(&link_id));
     }
 
@@ -2909,7 +3108,7 @@ mod tests {
             ..DirectReupgradeConfig::default()
         });
         upgraded(&mut mgr, link_id, 50_105);
-        mgr.take_direct(&link_id);
+        mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
         assert!(run_due_reupgrade(&mut mgr, link_id));
         mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
         assert_eq!(mgr.reupgrades[&link_id].attempts, 2);
@@ -2918,20 +3117,71 @@ mod tests {
         assert!(run_due_reupgrade(&mut mgr, link_id));
         mgr.reupgrades.get_mut(&link_id).unwrap().in_flight = false;
         upgraded(&mut mgr, link_id, 50_106);
-        mgr.take_direct(&link_id);
+        mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
         assert!(!mgr.reupgrades.contains_key(&link_id));
 
         // A path that lasted past the longest delay starts over.
         upgraded(&mut mgr, link_id, 50_107);
-        mgr.take_direct(&link_id);
+        mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
         assert!(run_due_reupgrade(&mut mgr, link_id));
         mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
         assert_eq!(mgr.reupgrades[&link_id].attempts, 2);
         assert!(run_due_reupgrade(&mut mgr, link_id));
         mgr.reupgrades.get_mut(&link_id).unwrap().in_flight = false;
         upgraded_as(&mut mgr, link_id, 50_108, true, time::now() - 1000.0);
-        mgr.take_direct(&link_id);
+        mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
         assert_eq!(mgr.reupgrades[&link_id].attempts, 1);
+    }
+
+    #[test]
+    fn status_reports_paths_counts_failures_and_losses() {
+        let mut mgr = accepting_manager();
+        let link_id = [0x51; 16];
+        let other = [0x52; 16];
+        assert!(mgr.status().links.is_empty());
+
+        upgraded(&mut mgr, link_id, 50_201);
+        mgr.count(link_id, |c| c.established += 1);
+        mgr.note_direct_mtu(rns_core::transport::types::InterfaceId(50_201), 1400);
+        mgr.note_failed(other, rns_core::holepunch::types::FAIL_TIMEOUT);
+        mgr.note_failed(other, rns_core::holepunch::types::FAIL_TIMEOUT);
+        mgr.note_failed(other, REJECT_BUSY);
+
+        let status = mgr.status();
+        assert_eq!(
+            status.links.iter().map(|l| l.link_id).collect::<Vec<_>>(),
+            vec![link_id, other]
+        );
+        let direct = status.links[0].direct.as_ref().unwrap();
+        assert_eq!(direct.mtu, 1400);
+        assert!(direct.mtu_discovered);
+        assert_eq!(direct.candidate, DirectCandidateKind::Reflexive);
+        assert_eq!(
+            status.totals.failed,
+            vec![
+                (REJECT_BUSY, 1),
+                (rns_core::holepunch::types::FAIL_TIMEOUT, 2)
+            ]
+        );
+        assert_eq!(status.totals.failed_total(), 3);
+        assert_eq!(status.totals.established, 1);
+        assert_eq!(status.links[1].last_failure.map(|f| f.0), Some(REJECT_BUSY));
+
+        mgr.take_direct(&link_id, DirectLossCause::PeerFallback);
+        let status = mgr.status();
+        assert!(status.links[0].direct.is_none());
+        assert_eq!(
+            status.links[0].last_loss.map(|l| l.0),
+            Some(DirectLossCause::PeerFallback)
+        );
+        assert_eq!(status.totals.lost, 1);
+
+        // A closed link leaves the report; the totals stay.
+        mgr.link_closed(&link_id);
+        mgr.link_closed(&other);
+        let status = mgr.status();
+        assert!(status.links.is_empty());
+        assert_eq!(status.totals.failed_total(), 3);
     }
 
     #[test]

@@ -3454,6 +3454,17 @@ impl RnsNode {
         }
     }
 
+    /// The state of Direct Link: node-wide counters and each link with
+    /// Direct Link activity, with its current path (direct or the original
+    /// one), the direct path's candidate, MTU and RTT, and its upgrade
+    /// attempts and failures.
+    pub fn direct_links(&self) -> Result<crate::event::DirectLinkStatus, SendError> {
+        match self.query(QueryRequest::DirectLinks)? {
+            QueryResponse::DirectLinks(status) => Ok(status),
+            _ => Err(SendError),
+        }
+    }
+
     /// Snapshot active Link metadata, including the negotiated direct-data MDU.
     pub fn links(&self) -> Result<Vec<crate::event::LinkInfoEntry>, SendError> {
         match self.query(QueryRequest::Links)? {

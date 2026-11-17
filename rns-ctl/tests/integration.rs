@@ -920,6 +920,20 @@ fn test_get_links_empty() {
 }
 
 #[test]
+fn test_get_direct_links_without_direct_link() {
+    let server = start_test_server();
+    let res = http_get(server.port, "/api/direct_links");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["enabled"], false);
+    assert!(json["links"].as_array().unwrap().is_empty());
+    assert!(json["probe_servers"].as_array().unwrap().is_empty());
+    assert_eq!(json["totals"]["proposed"], 0);
+    assert_eq!(json["totals"]["failed"], 0);
+    server.shutdown();
+}
+
+#[test]
 fn test_get_resources_empty() {
     let server = start_test_server();
     let res = http_get(server.port, "/api/resources");

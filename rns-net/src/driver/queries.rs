@@ -1315,6 +1315,9 @@ impl Driver {
                 QueryResponse::LocalDestinations(entries)
             }
             QueryRequest::Links => QueryResponse::Links(self.link_info_entries()),
+            QueryRequest::DirectLinks => {
+                QueryResponse::DirectLinks(self.holepunch_manager.status())
+            }
             QueryRequest::Resources => {
                 QueryResponse::Resources(self.link_manager.resource_entries())
             }

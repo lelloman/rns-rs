@@ -2542,7 +2542,11 @@ impl Driver {
                         "Direct path of link {:02x?} failed; falling back",
                         &link_id[..4]
                     );
-                    self.fall_back_from_direct(link_id, true);
+                    self.fall_back_from_direct(
+                        link_id,
+                        crate::event::DirectLossCause::LinkFailed,
+                        true,
+                    );
                 }
                 LinkManagerAction::LinkDataReceived {
                     link_id,
@@ -2762,7 +2766,7 @@ impl Driver {
                 "Link peer fell back from the direct path of link {:02x?}",
                 &link_id[..4]
             );
-            self.fall_back_from_direct(link_id, false);
+            self.fall_back_from_direct(link_id, crate::event::DirectLossCause::PeerFallback, false);
         }
         if reply_wanted {
             self.send_fallback(link_id, session_id, false);
@@ -2786,8 +2790,13 @@ impl Driver {
     /// route and MTU, remove the direct interface, tell the application,
     /// and with `notify_peer` tell the peer over the original route (asking
     /// for an answer, which also shows the link that path is alive).
-    pub(crate) fn fall_back_from_direct(&mut self, link_id: [u8; 16], notify_peer: bool) {
-        let direct = self.holepunch_manager.take_direct(&link_id);
+    pub(crate) fn fall_back_from_direct(
+        &mut self,
+        link_id: [u8; 16],
+        cause: crate::event::DirectLossCause,
+        notify_peer: bool,
+    ) {
+        let direct = self.holepunch_manager.take_direct(&link_id, cause);
         let detached = self.link_manager.detach_direct_route(&link_id);
         let Some(interface_id) = direct.map(|(interface, _)| interface).or(detached) else {
             return;
@@ -2827,6 +2836,7 @@ impl Driver {
         if let Some(entry) = self.interfaces.get_mut(&interface_id) {
             entry.info.mtu = mtu;
         }
+        self.holepunch_manager.note_direct_mtu(interface_id, mtu);
         if let Some(applied) = self
             .link_manager
             .set_direct_mtu(&link_id, interface_id, mtu)
@@ -2901,12 +2911,14 @@ impl Driver {
                     session_id,
                     reason,
                 } => {
-                    log::debug!(
-                        "Direct connection failed for link {:02x?} session {:02x?} reason={}",
+                    log::info!(
+                        "Direct connection failed for link {:02x?} session {:02x?}: {} (0x{:02x})",
                         &link_id[..4],
                         &session_id[..4],
+                        crate::event::direct_link_reason_name(reason),
                         reason
                     );
+                    self.holepunch_manager.note_failed(link_id, reason);
                     self.holepunch_manager.reupgrade_failed(link_id, reason);
                     self.callbacks
                         .on_direct_connect_failed(rns_core::types::LinkId(link_id), reason);

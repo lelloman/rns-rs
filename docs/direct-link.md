@@ -103,6 +103,39 @@ exponential backoff, a bounded number of times while the link stays active
 (see [Re-upgrade](direct-link-protocol.md#re-upgrade)); turn it off with
 `direct_connect_reupgrade = no`.
 
+## Status
+
+`GET /api/direct_links` on [rns-ctl](rns-ctl.md) (`RnsNode::direct_links()`
+in `rns-net`) reports Direct Link on the node:
+
+- `enabled`, whether the node takes part at all, and `probe_servers`, the
+  facilitators it probes, in the order it tries them;
+- `totals`, counted over the node's life: upgrades `proposed` by this node,
+  requests `accepted` as the responder, upgrades `established`, `failed`
+  (also `failed_by_reason`, keyed by the names in
+  [Failure reasons](direct-link-protocol.md#failure-reasons): `policy`,
+  `busy`, `unsupported`, `no_endpoint`, `timeout`, `probe`, `not_started`)
+  and direct paths `lost`;
+- `links`, each open link with Direct Link activity: its `path`
+  (`direct` or `transport`), the state of an upgrade in progress
+  (`session_state`), whether the peer is known to implement Direct Link,
+  the same counters for the link, its `last_failure` (reason and time),
+  its `last_loss` (`interface_down`, `link_failed` or `peer_fallback`, and
+  time), and a scheduled `reupgrade`. On the direct path, `direct` gives the
+  interface, session and role, the peer's address and its candidate type
+  (`reflexive`), every candidate the punch tried, the RTT the punch
+  measured, the MTU (`mtu_discovered` once path MTU discovery has
+  reported), and `peer_max_packet`, the largest link packet the peer said
+  it accepts on the path (see
+  [Packet size](direct-link-protocol.md#packet-size); `null` from a peer that
+  did not say).
+
+The direct interface itself is listed with the node's other interfaces
+(`DirectPeer/<session>`) while it exists. Upgrades that establish, fail
+(with the reason's name and code) and fall back are also logged at the
+info level. A node that does not use Direct Link reports `enabled: false`
+and no links, and nothing else it reports changes.
+
 ## Testing
 
 The NAT traversal Docker suite under `tests/docker/nat-punch/` builds two

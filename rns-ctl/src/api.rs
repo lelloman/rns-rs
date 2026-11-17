@@ -151,6 +151,7 @@ pub fn handle_request(
         ("GET", "/api/destinations") => handle_destinations(node, state),
         ("GET", "/api/paths") => handle_paths(req, node),
         ("GET", "/api/links") => handle_links(node),
+        ("GET", "/api/direct_links") => handle_direct_links(node),
         ("GET", "/api/resources") => handle_resources(node),
         ("GET", "/api/announces") => handle_event_list(req, state, "announces"),
         ("GET", "/api/packets") => handle_event_list(req, state, "packets"),
@@ -582,6 +583,94 @@ fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
             }
             _ => HttpResponse::internal_error("Query failed"),
         }
+    })
+}
+
+fn direct_counters_json(counters: &rns_net::event::DirectLinkCounters) -> Value {
+    let failed: serde_json::Map<String, Value> = counters
+        .failed
+        .iter()
+        .map(|(reason, count)| {
+            (
+                rns_net::event::direct_link_reason_name(*reason).to_string(),
+                json!(count),
+            )
+        })
+        .collect();
+    json!({
+        "proposed": counters.proposed,
+        "accepted": counters.accepted,
+        "established": counters.established,
+        "failed": counters.failed_total(),
+        "failed_by_reason": failed,
+        "lost": counters.lost,
+    })
+}
+
+fn handle_direct_links(node: &NodeHandle) -> HttpResponse {
+    with_node(node, |n| match n.query(QueryRequest::DirectLinks) {
+        Ok(QueryResponse::DirectLinks(status)) => {
+            let links: Vec<Value> = status
+                .links
+                .iter()
+                .map(|l| {
+                    let direct = l.direct.as_ref().map(|d| {
+                        json!({
+                            "interface_id": d.interface_id.0,
+                            "session_id": to_hex(&d.session_id),
+                            "initiator": d.initiator,
+                            "peer_addr": d.peer_addr.to_string(),
+                            "candidate": d.candidate.as_str(),
+                            "candidates": d
+                                .candidates
+                                .iter()
+                                .map(|(addr, kind)| json!({
+                                    "addr": addr.to_string(),
+                                    "type": kind.as_str(),
+                                }))
+                                .collect::<Vec<_>>(),
+                            "rtt": d.rtt,
+                            "mtu": d.mtu,
+                            "mtu_discovered": d.mtu_discovered,
+                            "peer_max_packet": d.peer_max_packet,
+                            "since": d.since,
+                        })
+                    });
+                    json!({
+                        "link_id": to_hex(&l.link_id),
+                        "path": if l.direct.is_some() { "direct" } else { "transport" },
+                        "direct": direct,
+                        "session_state": l.session_state,
+                        "peer_supported": l.peer_supported,
+                        "counters": direct_counters_json(&l.counters),
+                        "last_failure": l.last_failure.map(|(reason, at)| json!({
+                            "reason_code": reason,
+                            "reason": rns_net::event::direct_link_reason_name(reason),
+                            "at": at,
+                        })),
+                        "last_loss": l.last_loss.map(|(cause, at)| json!({
+                            "cause": cause.as_str(),
+                            "at": at,
+                        })),
+                        "reupgrade": l.reupgrade.map(|(attempts, next_at)| json!({
+                            "attempts": attempts,
+                            "next_at": next_at,
+                        })),
+                    })
+                })
+                .collect();
+            HttpResponse::ok(json!({
+                "enabled": status.enabled,
+                "probe_servers": status
+                    .probe_servers
+                    .iter()
+                    .map(|addr| addr.to_string())
+                    .collect::<Vec<_>>(),
+                "totals": direct_counters_json(&status.totals),
+                "links": links,
+            }))
+        }
+        _ => HttpResponse::internal_error("Query failed"),
     })
 }
 

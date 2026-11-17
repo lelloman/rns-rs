@@ -858,6 +858,9 @@ pub enum QueryRequest {
     LocalDestinations,
     /// Get active links.
     Links,
+    /// Get the state of Direct Link: node-wide counters and each link
+    /// with Direct Link activity.
+    DirectLinks,
     /// Get active resource transfers.
     Resources,
     /// Inject a path entry into the path table.
@@ -1001,6 +1004,7 @@ pub enum QueryResponse {
     KnownDestinationFlushRecorded,
     LocalDestinations(Vec<LocalDestinationEntry>),
     Links(Vec<LinkInfoEntry>),
+    DirectLinks(DirectLinkStatus),
     Resources(Vec<ResourceInfoEntry>),
     InjectPath(bool),
     InjectIdentity(bool),
@@ -1296,6 +1300,155 @@ pub struct SingleInterfaceStat {
 pub struct LocalDestinationEntry {
     pub hash: [u8; 16],
     pub dest_type: u8,
+}
+
+/// What kind of endpoint a Direct Link candidate is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectCandidateKind {
+    /// The peer's public mapping, as the facilitator saw it.
+    Reflexive,
+    /// An address of one of the peer's own interfaces, for a peer on the
+    /// same network.
+    Host,
+    /// An address the peer's authenticated punch packets came from that
+    /// it did not signal (a NAT that maps each destination apart).
+    PeerReflexive,
+}
+
+impl DirectCandidateKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DirectCandidateKind::Reflexive => "reflexive",
+            DirectCandidateKind::Host => "host",
+            DirectCandidateKind::PeerReflexive => "peer_reflexive",
+        }
+    }
+}
+
+/// Counts of Direct Link upgrades, node-wide or for one link.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DirectLinkCounters {
+    /// Upgrades this node proposed (each that got as far as probing).
+    pub proposed: u64,
+    /// Upgrade requests from a peer this node took up as the responder.
+    pub accepted: u64,
+    /// Upgrades that established a direct path.
+    pub established: u64,
+    /// Upgrades that failed, each counted under its reason code (see
+    /// `rns_core::holepunch::types`), in ascending order of the code.
+    pub failed: Vec<(u8, u64)>,
+    /// Direct paths lost after they were established.
+    pub lost: u64,
+}
+
+impl DirectLinkCounters {
+    /// All failures, whatever their reason.
+    pub fn failed_total(&self) -> u64 {
+        self.failed.iter().map(|(_, n)| n).sum()
+    }
+}
+
+/// The direct path a link runs over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirectPathStatus {
+    pub interface_id: rns_core::transport::types::InterfaceId,
+    pub session_id: [u8; 16],
+    /// This side proposed the upgrade.
+    pub initiator: bool,
+    /// The peer's address on the direct path.
+    pub peer_addr: std::net::SocketAddr,
+    /// What kind of candidate that address was.
+    pub candidate: DirectCandidateKind,
+    /// The candidates the punch sent to, with their kinds.
+    pub candidates: Vec<(std::net::SocketAddr, DirectCandidateKind)>,
+    /// Round trip measured by the punch, in seconds.
+    pub rtt: f64,
+    /// MTU of the direct interface: 1200 until path MTU discovery finds a
+    /// larger one.
+    pub mtu: u32,
+    /// Path MTU discovery has reported.
+    pub mtu_discovered: bool,
+    /// Largest link packet the peer accepts on the path, as it advertised
+    /// during the upgrade (`m`); `None` from a peer that did not, which is
+    /// sent nothing above the link's MTU.
+    pub peer_max_packet: Option<u32>,
+    /// When the path was established.
+    pub since: f64,
+}
+
+/// Why a link left its direct path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectLossCause {
+    /// The direct interface went down: no keepalive for its timeout, or a
+    /// socket error.
+    InterfaceDown,
+    /// The link went stale, or its channel ran out of retries, on the
+    /// direct path.
+    LinkFailed,
+    /// The peer said it fell back.
+    PeerFallback,
+}
+
+impl DirectLossCause {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DirectLossCause::InterfaceDown => "interface_down",
+            DirectLossCause::LinkFailed => "link_failed",
+            DirectLossCause::PeerFallback => "peer_fallback",
+        }
+    }
+}
+
+/// Direct Link state of one link.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirectLinkEntry {
+    pub link_id: [u8; 16],
+    /// The direct path the link runs over, or `None` when it runs over its
+    /// original (transport) path.
+    pub direct: Option<DirectPathStatus>,
+    /// The state of the upgrade in progress or last run on the link
+    /// (`discovering`, `proposing`, `waiting_ready`, `punching`,
+    /// `connected`, `failed`), if any.
+    pub session_state: Option<&'static str>,
+    /// The link peer implements Direct Link: `Some(true)` once it answered
+    /// or signalled, `None` when not known.
+    pub peer_supported: Option<bool>,
+    pub counters: DirectLinkCounters,
+    /// The reason code of the last failure and when it happened.
+    pub last_failure: Option<(u8, f64)>,
+    /// Why and when the link last lost its direct path.
+    pub last_loss: Option<(DirectLossCause, f64)>,
+    /// Re-upgrade proposals made since the last loss, and when the next
+    /// is due, while the link proposes again by itself.
+    pub reupgrade: Option<(u32, Option<f64>)>,
+}
+
+/// The state of Direct Link on a node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirectLinkStatus {
+    /// The node takes part in Direct Link at all.
+    pub enabled: bool,
+    /// The facilitators this node probes, in the order it tries them.
+    pub probe_servers: Vec<std::net::SocketAddr>,
+    /// Counts over the node's life.
+    pub totals: DirectLinkCounters,
+    /// Links with Direct Link activity, ordered by link id.
+    pub links: Vec<DirectLinkEntry>,
+}
+
+/// The name of a Direct Link failure or reject reason code.
+pub fn direct_link_reason_name(reason: u8) -> &'static str {
+    use rns_core::holepunch::types as t;
+    match reason {
+        t::REJECT_POLICY => "policy",
+        t::REJECT_BUSY => "busy",
+        t::REJECT_UNSUPPORTED => "unsupported",
+        t::REJECT_NO_ENDPOINT => "no_endpoint",
+        t::FAIL_TIMEOUT => "timeout",
+        t::FAIL_PROBE => "probe",
+        t::FAIL_NOT_STARTED => "not_started",
+        _ => "unknown",
+    }
 }
 
 /// Information about an active link.

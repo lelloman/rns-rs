@@ -612,6 +612,16 @@ fn peer_without_direct_link_is_never_signalled() {
     let started = Instant::now();
     assert_eq!(pair.propose(), Err(REJECT_UNSUPPORTED));
     assert!(started.elapsed() < Duration::from_secs(15));
+    let status = pair.alice.direct_links().unwrap();
+    assert_eq!(status.totals.failed, vec![(REJECT_UNSUPPORTED, 1)]);
+    let entry = status
+        .links
+        .iter()
+        .find(|entry| entry.link_id == pair.link_id)
+        .expect("link in the status");
+    assert!(entry.direct.is_none());
+    assert_eq!(entry.peer_supported, None);
+    assert_eq!(entry.last_failure.map(|f| f.0), Some(REJECT_UNSUPPORTED));
 
     // The link and its channel keep working both ways, and Bob's
     // application saw only the application's own messages.
@@ -899,6 +909,40 @@ fn direct_path_discovers_its_mtu() {
             link_mdu(&pair.bob, pair.link_id)
         )
     );
+
+    // The status shows each side's direct path, its candidate, discovered
+    // MTU and RTT, and the upgrade counted once.
+    for (node, initiator) in [(&pair.alice, true), (&pair.bob, false)] {
+        let status = node.direct_links().unwrap();
+        assert!(status.enabled);
+        let counters = &status.totals;
+        assert_eq!(counters.established, 1, "{status:?}");
+        assert_eq!(counters.failed_total(), 0, "{status:?}");
+        let entry = status
+            .links
+            .iter()
+            .find(|entry| entry.link_id == pair.link_id)
+            .expect("link in the status");
+        let direct = entry.direct.as_ref().expect("on the direct path");
+        assert_eq!(direct.initiator, initiator);
+        assert_eq!(
+            direct.candidate,
+            rns_net::event::DirectCandidateKind::Reflexive
+        );
+        assert!(direct.mtu_discovered);
+        assert_eq!(direct.mtu, 1472);
+        assert_eq!(
+            direct.peer_max_packet,
+            Some(rns_core::holepunch::DIRECT_MAX_PACKET)
+        );
+        assert!(direct.rtt >= 0.0 && direct.rtt < 5.0);
+        assert_eq!(entry.peer_supported, Some(true));
+        if initiator {
+            assert_eq!(entry.counters.proposed, 1);
+        } else {
+            assert_eq!(entry.counters.accepted, 1);
+        }
+    }
     assert_direct_carries_full_mdu(&pair, interfaces);
     pair.shutdown();
 }
@@ -1137,6 +1181,26 @@ fn link_falls_back_when_the_direct_interface_goes_down() {
         .send(rns_net::event::Event::InterfaceDown(bob_iface))
         .unwrap();
     assert_fell_back(&pair, mdu_before);
+    // Bob saw his interface go down; Alice heard of it from him.
+    let loss = |node: &RnsNode| {
+        let status = node.direct_links().unwrap();
+        assert_eq!(status.totals.lost, 1);
+        let entry = status
+            .links
+            .into_iter()
+            .find(|entry| entry.link_id == pair.link_id)
+            .unwrap();
+        assert!(entry.direct.is_none());
+        entry.last_loss.map(|(cause, _)| cause)
+    };
+    assert_eq!(
+        loss(&pair.bob),
+        Some(rns_net::event::DirectLossCause::InterfaceDown)
+    );
+    assert_eq!(
+        loss(&pair.alice),
+        Some(rns_net::event::DirectLossCause::PeerFallback)
+    );
     pair.shutdown();
 }
 
