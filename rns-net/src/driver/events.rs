@@ -3474,7 +3474,7 @@ impl Driver {
                         dest: responder.destination.clone(),
                         identity_prv_key: record.identity_prv_key,
                     };
-                    if self.stamper.enqueue_destination_stamp(job).is_err() {
+                    if self.stamper.enqueue_path_response_stamp(job).is_err() {
                         log::debug!(
                             "Stamp queue full, dropping path response for {:02x?}",
                             &dest_hash[..4]

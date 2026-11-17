@@ -415,6 +415,19 @@ impl Stamper {
         )
     }
 
+    /// Queue the stamp of a destination whose path response waits for it;
+    /// the worker posts [`Event::DestinationStampReady`] once the stamp is
+    /// persisted. As upstream queues a path response's announce, it goes
+    /// with path requests and has no key, so it neither replaces nor is
+    /// replaced by a queued announce of the same destination.
+    pub fn enqueue_path_response_stamp(&self, job: DestinationStampJob) -> Result<(), QueueFull> {
+        self.put(
+            PRIORITY_PATH_REQUEST,
+            None,
+            Job::DestinationStamp(Box::new(job)),
+        )
+    }
+
     /// The store destination stamps are persisted in, if any.
     pub fn stamp_store(&self) -> Option<DestinationStampStore> {
         self.inner.stamp_store()
@@ -801,6 +814,36 @@ mod tests {
                 (Some(first_hash.to_vec()), PRIORITY_ANNOUNCE),
             ],
             "the replaced announce moves to the back; path requests drain first"
+        );
+    }
+
+    #[test]
+    fn path_response_stamps_and_announces_of_a_destination_keep_each_other() {
+        let (stamper, _rx) = frozen_stamper();
+        stamper.inner.lock_queues().worker_alive = true;
+        let (announce, identity) = announce_job(0x33);
+        let dest = announce.dest.clone();
+        let hash = dest.hash.0;
+        let path_response = || DestinationStampJob {
+            dest: dest.clone(),
+            identity_prv_key: identity.get_private_key().unwrap(),
+        };
+        stamper.enqueue_announce(announce).unwrap();
+        stamper
+            .enqueue_path_response_stamp(path_response())
+            .unwrap();
+        stamper
+            .enqueue_path_response_stamp(path_response())
+            .unwrap();
+        let (later_announce, _) = announce_job(0x33);
+        stamper.enqueue_announce(later_announce).unwrap();
+        assert_eq!(
+            drain_queued(&stamper),
+            vec![
+                (None, PRIORITY_PATH_REQUEST),
+                (None, PRIORITY_PATH_REQUEST),
+                (Some(hash.to_vec()), PRIORITY_ANNOUNCE),
+            ]
         );
     }
 
