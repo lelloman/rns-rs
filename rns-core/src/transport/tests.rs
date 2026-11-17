@@ -2949,6 +2949,28 @@ fn stamped_path_request_is_forwarded_without_treating_extension_as_tag() {
 }
 
 #[test]
+fn a_shared_instance_client_puts_its_transport_id_in_its_path_requests() {
+    // A client keeps `identity_hash` unset; its requests still carry a
+    // transport id, so a stamped one has the stamped length and an
+    // enforcing instance reads its stamp.
+    let mut config = make_config(false);
+    config.identity_hash = None;
+    let mut engine = TransportEngine::new(config);
+    let dest = [0xDB; 16];
+    let tag = [0x0B; 16];
+    let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
+    ext[0] = constants::EXT_PAYLOAD_MARKER;
+    engine.set_client_transport_id(Some([0x77; 16]));
+    let raw = engine.build_path_request(&dest, &tag, Some(&ext)).unwrap();
+    let packet = RawPacket::unpack(&raw).unwrap();
+    assert_eq!(
+        packet.data(),
+        make_stamped_path_request_data(&dest, &[0x77; 16], &tag, &ext)
+    );
+    assert_eq!(packet.data().len(), constants::PATH_REQUEST_STAMPED_LENGTH);
+}
+
+#[test]
 fn unstamped_relay_payload_has_marker_and_sentinel_flags() {
     let ext = crate::transport::path_requests::unstamped_relay_payload();
     assert_eq!(ext[0], constants::EXT_PAYLOAD_MARKER);

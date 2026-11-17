@@ -291,3 +291,181 @@ fn rnsd_logs_its_transport_identity_as_upstream() {
     );
     assert_eq!(management_notices_of(&log), MANAGEMENT_NOTICES, "{log}");
 }
+
+/// The hash of `rnstransport.network` for the network identity whose
+/// private key is `TRANSPORT_IDENTITY`.
+fn network_destination_hash() -> String {
+    let identity = rns_crypto::identity::Identity::from_private_key(
+        &transport_identity_key().try_into().unwrap(),
+    );
+    rns_core::destination::destination_hash("rnstransport", &["network"], Some(identity.hash()))
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Starts rnsd on `dir` with `config`, logging to `dir/rnsd.log`.
+fn spawn_rnsd(dir: &std::path::Path, config: &str) -> std::process::Child {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("config"), config).unwrap();
+    Command::new(env!("CARGO_BIN_EXE_rnsd"))
+        .args(["--config", dir.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(fs::File::create(dir.join("rnsd.log")).unwrap())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start rnsd")
+}
+
+/// Waits until a socket named `name` listens in the abstract namespace.
+fn wait_for_abstract_socket(name: &str) {
+    let needle = format!("@{name}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !fs::read_to_string("/proc/net/unix")
+        .unwrap_or_default()
+        .lines()
+        .any(|line| line.split_whitespace().last() == Some(needle.as_str()))
+    {
+        assert!(Instant::now() < deadline, "nothing listens on {needle}");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A publisher rnsd with a network identity, serving TCP, and a shared
+/// instance that dials it and enforces stamps, on `root`. Returns both
+/// processes, the instance's config directory and the publisher's
+/// `rnstransport.network` destination.
+fn enforcing_instance_with_publisher(
+    root: &std::path::Path,
+) -> ([std::process::Child; 2], std::path::PathBuf, String) {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let stamps = "[stamps]\n  enforce_stamps = Yes\n  destination_value = 8\n  \
+                  destination_cost = 8\n  pr_value = 8\n  pr_cost = 8\n\n";
+    let network_identity = root.join("network_identity");
+    fs::write(&network_identity, transport_identity_key()).unwrap();
+    let publisher = spawn_rnsd(
+        &root.join("publisher"),
+        &format!(
+            "{stamps}[reticulum]\n  enable_transport = No\n  share_instance = No\n  \
+             network_identity = {}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n",
+            network_identity.display()
+        ),
+    );
+    let instance = format!("enforcing-{}", std::process::id());
+    let instance_dir = root.join("instance");
+    let receiver = spawn_rnsd(
+        &instance_dir,
+        &format!(
+            "{stamps}[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = {instance}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[client]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n"
+        ),
+    );
+    wait_for_abstract_socket(&format!("rns/{instance}/rpc"));
+    (
+        [publisher, receiver],
+        instance_dir,
+        network_destination_hash(),
+    )
+}
+
+/// The last line rnpath printed, after its spinner.
+fn final_line(stdout: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout);
+    stdout
+        .trim_end()
+        .rsplit(['\r', '\n'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// rnpath, a client of a shared instance that enforces stamps, learns a
+/// path through it. Its path request carries its transport identity hash,
+/// so the stamp after it is read as one; without it the stamped request
+/// had the length of an unstamped one and the instance dropped it.
+#[cfg(target_os = "linux")]
+#[test]
+fn rnpath_finds_a_path_through_a_stamp_enforcing_instance() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut daemons, instance_dir, destination) = enforcing_instance_with_publisher(root.path());
+    let config = instance_dir.to_str().unwrap();
+    // Once the instance holds the path, from the publisher's announce, a
+    // new client only learns it by asking the instance.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let table = Command::new(env!("CARGO_BIN_EXE_rnpath"))
+            .args(["--config", config, "-t"])
+            .output()
+            .expect("run rnpath -t");
+        if String::from_utf8_lossy(&table.stdout).contains(&format!("<{destination}>")) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the instance never learned {destination}:\n{}",
+            fs::read_to_string(instance_dir.join("rnsd.log")).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(250));
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_rnpath"))
+        .args(["--config", config, "-w", "5", &destination])
+        .output()
+        .expect("run rnpath");
+    // Upstream's rnpath is the reference, where a Python Reticulum that
+    // stamps its path requests (1.6.1) is installed.
+    let stamping_python = Command::new("python3")
+        .args([
+            "-c",
+            "import RNS; print(getattr(RNS.Transport, 'STAMP_PRS', False))",
+        ])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "True");
+    let python = stamping_python.then(|| {
+        Command::new("python3")
+            .args([
+                "-m",
+                "RNS.Utilities.rnpath",
+                "--config",
+                config,
+                "-w",
+                "5",
+                &destination,
+            ])
+            .env("PYTHONUNBUFFERED", "1")
+            .output()
+            .expect("run Python rnpath")
+    });
+    for daemon in &mut daemons {
+        let _ = daemon.kill();
+        let _ = daemon.wait();
+    }
+    assert!(
+        final_line(&output.stdout).starts_with(&format!(
+            "Path found, destination <{destination}> is 1 hop away"
+        )),
+        "{}\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        fs::read_to_string(instance_dir.join("rnsd.log")).unwrap_or_default(),
+        fs::read_to_string(root.path().join("publisher/rnsd.log")).unwrap_or_default()
+    );
+    match python {
+        Some(python) => assert_eq!(
+            final_line(&output.stdout),
+            final_line(&python.stdout),
+            "{}",
+            String::from_utf8_lossy(&python.stderr)
+        ),
+        None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
+    }
+}

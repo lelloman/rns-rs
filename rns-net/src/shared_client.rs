@@ -329,6 +329,14 @@ impl RnsNode {
         let (tx, rx) = event::channel();
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        // As upstream's client without transport, an ephemeral transport
+        // identity, whose hash its path requests carry. Without it a stamped
+        // request has the length of an unstamped one, and an instance that
+        // enforces stamps drops it.
+        let transport_identity = Identity::new(&mut rns_crypto::OsRng);
+        driver
+            .engine
+            .set_client_transport_id(Some(*transport_identity.hash()));
         driver.connected_to_shared_instance = true;
         // A client stamps the announces and path requests it emits itself
         // (upstream 51fa8413), with the node handle and the driver sharing

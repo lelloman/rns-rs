@@ -412,6 +412,13 @@ impl TransportEngine {
         self.stamp_prs
     }
 
+    /// Set the transport id this shared instance client's own path requests
+    /// carry, as upstream's client sends its (ephemeral) transport
+    /// identity's hash.
+    pub fn set_client_transport_id(&mut self, transport_id: Option<[u8; 16]>) {
+        self.client_transport_id = transport_id;
+    }
+
     /// Override the compile-time `STAMP_PRS` default.
     #[doc(hidden)]
     pub fn set_stamp_prs(&mut self, enabled: bool) {
@@ -456,7 +463,10 @@ impl TransportEngine {
     ) -> Option<Vec<u8>> {
         build_path_request_packet(
             destination_hash,
-            self.config.identity_hash.as_ref(),
+            self.config
+                .identity_hash
+                .as_ref()
+                .or(self.client_transport_id.as_ref()),
             tag,
             ext_payload,
         )

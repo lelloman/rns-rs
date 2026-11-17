@@ -298,6 +298,10 @@ pub struct TransportEngine {
     /// node are stamped (`Transport.STAMP_PRS`). Defaults to the compile-time
     /// constant; settable so the stamping path can be exercised.
     stamp_prs: bool,
+    /// The transport id a shared instance client puts in its own path
+    /// requests. Upstream's requests always carry one, but a client keeps
+    /// `identity_hash` unset, since that marks a node serving local clients.
+    client_transport_id: Option<[u8; 16]>,
     /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`,
     /// upstream f96cef7e); `[filter] hop_limiter`.
     hop_limiter: u8,

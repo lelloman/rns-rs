@@ -7001,13 +7001,14 @@ fn test_shared_instance_stamps_path_requests_forwarded_for_local_clients() {
         true,
     );
 
-    // A local client of the daemon, which never stamps its own requests.
+    // A local client of the daemon that does not stamp its own requests.
     let (client_tx, client_rx) = mpsc::channel();
     let client = start_shared_client(
         shared_port,
         &instance_name,
         Box::new(TestCallbacks::new(client_tx)),
     );
+    set_runtime_bool(&client, "global.stamp_path_requests", false);
     wait_for_event(&uplink_rx, TIMEOUT, |e| {
         matches!(e, TestEvent::InterfaceUp(_)).then_some(())
     })

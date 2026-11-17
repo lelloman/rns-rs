@@ -41,6 +41,7 @@ impl TransportEngine {
             discovery_pr_tag_set: BTreeSet::new(),
             path_requests: BTreeMap::new(),
             stamp_prs: constants::STAMP_PRS,
+            client_transport_id: None,
             hop_limiter: constants::HOP_LIMITER,
             inbound_filtered: false,
             inbound_filtered_announce: false,
