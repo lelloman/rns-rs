@@ -412,7 +412,10 @@ impl LoopSource for RNodeSource {
         if let Err(e) = lock_or_recover(&self.link.writer, "rnode shared writer")
             .write_all(&rnode_kiss::detect_request())
         {
-            log::debug!("[{}] keepalive write failed: {}", self.link.config.name, e);
+            // Not while the device is away: that was said already.
+            if e.kind() != io::ErrorKind::NotConnected {
+                log::debug!("[{}] keepalive write failed: {}", self.link.config.name, e);
+            }
         }
         SourceStatus::Rearm
     }
