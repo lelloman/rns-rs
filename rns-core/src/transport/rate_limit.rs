@@ -256,4 +256,65 @@ mod tests {
         assert_eq!(limiter.cull_stale(&active, 410.0, 40.0), 1);
         assert!(limiter.is_empty());
     }
+
+    #[test]
+    fn len_counts_tracked_destinations() {
+        let mut limiter = AnnounceRateLimiter::new();
+        assert!(limiter.is_empty());
+        assert_eq!(limiter.len(), 0);
+        for seed in 1..=3 {
+            limiter.check_and_update(&dest(seed), 100.0, Some(10.0), 0, 30.0);
+        }
+        assert!(!limiter.is_empty());
+        assert_eq!(limiter.len(), 3);
+    }
+
+    /// Announces exactly the target interval apart keep to the rate, as
+    /// upstream counts a violation only for a shorter interval.
+    #[test]
+    fn announces_exactly_at_the_target_rate_are_no_violation() {
+        let mut limiter = AnnounceRateLimiter::new();
+        for now in [100.0, 110.0, 120.0, 130.0] {
+            assert!(!limiter.check_and_update(&dest(1), now, Some(10.0), 0, 30.0));
+        }
+        assert_eq!(limiter.entries().next().unwrap().1.rate_violations, 0);
+    }
+
+    /// A block holds through `blocked_until` itself: upstream only checks
+    /// the rate again once `now` is past it.
+    #[test]
+    fn block_still_holds_at_its_end_time() {
+        let mut limiter = AnnounceRateLimiter::new();
+        assert!(!limiter.check_and_update(&dest(1), 100.0, Some(10.0), 0, 30.0));
+        assert!(limiter.check_and_update(&dest(1), 101.0, Some(10.0), 0, 30.0));
+        assert!(limiter.check_and_update(&dest(1), 140.0, Some(10.0), 0, 30.0));
+        let entry = limiter.entries().next().unwrap().1;
+        assert_eq!(entry.rate_violations, 1);
+        assert_eq!(entry.last, 100.0);
+    }
+
+    /// Upstream keeps the last MAX_RATE_TIMESTAMPS announce times of a
+    /// destination, also for an entry restored with more.
+    #[test]
+    fn timestamps_are_capped_at_max_rate_timestamps() {
+        let mut limiter = AnnounceRateLimiter::new();
+        limiter.restore(
+            dest(1),
+            RateEntry {
+                last: 0.0,
+                rate_violations: 0,
+                blocked_until: 0.0,
+                timestamps: (0..constants::MAX_RATE_TIMESTAMPS + 4)
+                    .map(|i| i as f64)
+                    .collect(),
+            },
+        );
+        for now in [100.0, 200.0] {
+            limiter.check_and_update(&dest(1), now, Some(10.0), 0, 30.0);
+        }
+        let timestamps = &limiter.entries().next().unwrap().1.timestamps;
+        assert_eq!(timestamps.len(), constants::MAX_RATE_TIMESTAMPS);
+        assert_eq!(timestamps.last(), Some(&200.0));
+        assert_eq!(timestamps[timestamps.len() - 2], 100.0);
+    }
 }
