@@ -902,9 +902,7 @@ impl TransportEngine {
         iface: InterfaceId,
         now: f64,
     ) -> bool {
-        if packet.context == constants::CONTEXT_PATH_RESPONSE
-            || self.ingress_exempt(&packet.destination_hash)
-        {
+        if self.ingress_exempt(&packet.destination_hash) {
             return false;
         }
         let Some(info) = self.interfaces.get(&iface) else {
@@ -2056,14 +2054,17 @@ mod tests {
     }
 
     /// Ingress control holds an announce for an unknown destination during
-    /// a burst, but never a path response, and nothing outside a burst.
+    /// a burst, a path response too, unless a path request for it is
+    /// waiting (upstream `Transport.inbound`); nothing outside a burst.
     #[test]
     fn ingress_control_holds_only_unrequested_announces_during_a_burst() {
         use super::local_client_announce_tests::announce_in_context;
-        for (ia_freq, context, held) in [
-            (100.0, constants::CONTEXT_NONE, true),
-            (100.0, constants::CONTEXT_PATH_RESPONSE, false),
-            (0.0, constants::CONTEXT_NONE, false),
+        for (ia_freq, context, requested, held) in [
+            (100.0, constants::CONTEXT_NONE, false, true),
+            (100.0, constants::CONTEXT_PATH_RESPONSE, false, true),
+            (100.0, constants::CONTEXT_PATH_RESPONSE, true, false),
+            (100.0, constants::CONTEXT_NONE, true, false),
+            (0.0, constants::CONTEXT_NONE, false, false),
         ] {
             let mut engine = TransportEngine::new(make_config(true));
             engine.register_interface(InterfaceInfo {
@@ -2072,11 +2073,14 @@ mod tests {
                 ..make_interface(1, constants::MODE_FULL)
             });
             let announce = announce_in_context(7, false, constants::HEADER_1, 0, context);
+            if requested {
+                engine.path_requests.insert(announce.destination_hash, 0.0);
+            }
             let actions = receive(&mut engine, &announce, 1);
             assert_eq!(
                 announced(&actions),
                 !held,
-                "freq {ia_freq} context {context}"
+                "freq {ia_freq} context {context} requested {requested}"
             );
             assert_eq!(
                 engine.held_announce_count(&InterfaceId(1)),
