@@ -1894,4 +1894,225 @@ mod tests {
         assert!(engine.is_initiator());
         assert_eq!(engine.state(), LinkState::Pending);
     }
+
+    /// A pending initiator, the responder that answered its request, the
+    /// responder's LRPROOF and the destination's signing key.
+    fn pending_pair() -> (LinkEngine, LinkEngine, Vec<u8>, [u8; 32]) {
+        let mut rng_id = make_rng(0x01);
+        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
+        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
+        let dest_hash = [0xDD; 16];
+        let mut rng_init = make_rng(0x10);
+        let (mut initiator, request_data) = LinkEngine::new_initiator(
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
+        );
+        let mut hashable = vec![0x00, 0x00];
+        hashable.extend_from_slice(&dest_hash);
+        hashable.push(0x00);
+        hashable.extend_from_slice(&request_data);
+        initiator.set_link_id_from_hashable(&hashable, request_data.len());
+        let mut rng_resp = make_rng(0x20);
+        let (responder, lrproof) = LinkEngine::new_responder(
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
+        (initiator, responder, lrproof, dest_sig_pub_bytes)
+    }
+
+    #[test]
+    fn handshake_messages_are_taken_once_and_by_the_right_end() {
+        let (mut initiator, mut responder, lrproof, dest_sig_pub) = pending_pair();
+        let mut rng = make_rng(0x30);
+        let (lrrtt, _) = initiator
+            .handle_lrproof(&lrproof, &dest_sig_pub, 100.8, &mut rng)
+            .unwrap();
+        // Upstream: RTT from the request to the proof.
+        assert!((initiator.rtt().unwrap() - 0.8).abs() < 1e-9);
+        assert_eq!(initiator.activated_at(), Some(100.8));
+        responder.handle_lrrtt(&lrrtt, 101.0).unwrap();
+        assert_eq!(responder.activated_at(), Some(101.0));
+
+        assert_eq!(
+            initiator
+                .handle_lrproof(&lrproof, &dest_sig_pub, 200.0, &mut rng)
+                .err(),
+            Some(LinkError::InvalidState)
+        );
+        assert_eq!(
+            responder.handle_lrrtt(&lrrtt, 200.0).err(),
+            Some(LinkError::InvalidState)
+        );
+        assert_eq!(initiator.activated_at(), Some(100.8));
+        assert_eq!(responder.activated_at(), Some(101.0));
+    }
+
+    #[test]
+    fn link_identify_is_taken_by_the_responder_only() {
+        let (mut initiator, responder, _) = active_link_pair();
+        let mut rng = make_rng(0x40);
+        let identity = rns_crypto::identity::Identity::new(&mut rng);
+        let identify = responder.build_identify(&identity, &mut rng).unwrap();
+        assert_eq!(
+            initiator.handle_identify(&identify).err(),
+            Some(LinkError::InvalidState)
+        );
+        assert!(initiator.remote_identity().is_none());
+    }
+
+    #[test]
+    fn session_crypto_round_trips_between_the_ends() {
+        let (pending, _, _, _) = pending_pair();
+        assert!(!pending.can_encrypt());
+        assert!(pending.decrypt_stream(0).is_none());
+        assert_eq!(pending.derived_key(), None);
+
+        let (initiator, responder, _) = active_link_pair();
+        assert!(initiator.can_encrypt());
+        assert_eq!(initiator.derived_key(), responder.derived_key());
+        assert_eq!(initiator.derived_key().map(<[u8]>::len), Some(64));
+
+        let mut rng = make_rng(0x50);
+        let plaintext: Vec<u8> = (0..100u8).collect();
+        let len = initiator.encrypted_len(plaintext.len());
+        assert_eq!(len, initiator.encrypt(&plaintext, &mut rng).unwrap().len());
+
+        let mut ciphertext = vec![0u8; len];
+        initiator
+            .encrypt_into(&plaintext, &mut rng, &mut ciphertext)
+            .unwrap();
+        assert_eq!(responder.decrypt(&ciphertext).unwrap(), plaintext);
+
+        let mut out = vec![0xEE; 3];
+        responder.decrypt_into(&ciphertext, &mut out).unwrap();
+        assert_eq!(out, plaintext);
+
+        let (head, tail) = ciphertext.split_at(40);
+        assert_eq!(
+            responder.decrypt_chunks(&[head, tail], 4).unwrap(),
+            plaintext[4..]
+        );
+        let mut stream = responder.decrypt_stream(4).unwrap();
+        stream.update(head);
+        stream.update(tail);
+        assert_eq!(stream.finish().unwrap(), plaintext[4..]);
+    }
+
+    #[test]
+    fn each_end_knows_the_others_signing_key() {
+        let (initiator, responder, _) = active_link_pair();
+        assert_eq!(
+            initiator.peer_signing_key().map(|key| key.public_bytes()),
+            Some(responder.signing_key().public_key().public_bytes())
+        );
+        assert_eq!(
+            responder.peer_signing_key().map(|key| key.public_bytes()),
+            Some(initiator.signing_key().public_key().public_bytes())
+        );
+    }
+
+    #[test]
+    fn link_reports_its_ends_and_counters() {
+        let (mut initiator, mut responder, _) = active_link_pair();
+        assert!(initiator.is_initiator());
+        assert!(!responder.is_initiator());
+        assert_eq!(initiator.destination_hash(), &[0xDD; 16]);
+        assert_eq!(responder.destination_hash(), &[0xDD; 16]);
+
+        initiator.record_outbound_traffic(10);
+        initiator.record_outbound_traffic(20);
+        responder.record_inbound_traffic(10);
+        responder.record_inbound_traffic(20);
+        assert_eq!(initiator.tx_packets(), 2);
+        assert_eq!(initiator.tx_bytes(), 30);
+        assert_eq!(responder.rx_packets(), 2);
+        assert_eq!(responder.rx_bytes(), 30);
+        assert_eq!(initiator.rx_packets(), 0);
+
+        assert_eq!(initiator.last_proof(), 0.0);
+        initiator.record_proof(123.5);
+        assert_eq!(initiator.last_proof(), 123.5);
+    }
+
+    #[test]
+    fn set_mtu_resizes_the_mdu() {
+        let (mut initiator, _, _) = active_link_pair();
+        initiator.set_mtu(1200);
+        assert_eq!(initiator.mtu(), 1200);
+        assert_eq!(initiator.mdu(), compute_mdu(1200));
+        assert_ne!(compute_mdu(1200), compute_mdu(500));
+    }
+
+    #[test]
+    fn cleared_session_cannot_encrypt() {
+        let (mut initiator, _, _) = active_link_pair();
+        initiator.clear_session_for_testing();
+        assert!(!initiator.can_encrypt());
+        assert_eq!(initiator.derived_key(), None);
+        let mut rng = make_rng(0x60);
+        assert_eq!(
+            initiator.encrypt(b"x", &mut rng).err(),
+            Some(LinkError::NoSessionKey)
+        );
+    }
+
+    #[test]
+    fn link_request_stamp_is_checked_against_the_cost() {
+        let mut rng = rns_crypto::OsRng;
+        let dest_hash = [0xAB; 16];
+        let cost = crate::stamp::StampCost::from_whole(4);
+        let (_engine, data) = LinkEngine::new_initiator_stamped(
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            None,
+            0.0,
+            &mut rng,
+            cost,
+        );
+        assert_eq!(
+            handshake::link_request_stamp_valid(&dest_hash, &data, cost),
+            Some(true)
+        );
+        let value = handshake::link_request_stamp_value(&dest_hash, &data).unwrap();
+        let above = crate::stamp::StampCost::from_whole(40);
+        assert_eq!(
+            handshake::link_request_stamp_valid(&dest_hash, &data, above),
+            Some(value.meets(above))
+        );
+        assert!(!value.meets(above));
+        assert_eq!(
+            handshake::link_request_stamp_valid(&dest_hash, &data[..10], cost),
+            None
+        );
+    }
+
+    #[test]
+    fn stale_link_waits_for_the_keepalive_timeout_and_grace() {
+        assert_eq!(
+            keepalive::stale_close_timeout(2.0),
+            2.0 * crate::constants::LINK_KEEPALIVE_TIMEOUT_FACTOR + LINK_STALE_GRACE
+        );
+        assert_eq!(keepalive::stale_close_timeout(0.0), LINK_STALE_GRACE);
+    }
+
+    #[test]
+    fn link_errors_describe_themselves() {
+        assert_eq!(LinkError::InvalidState.to_string(), "Invalid link state");
+        assert_eq!(
+            LinkError::NoSessionKey.to_string(),
+            "No session key established"
+        );
+    }
 }
