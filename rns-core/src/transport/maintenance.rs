@@ -265,21 +265,14 @@ impl TransportEngine {
                 // Since upstream 29dc449a a release goes through
                 // `Transport.inbound` with accounting, so its frame is charged
                 // again, to received or filtered bytes, and a filtered
-                // announce counts in afrxc. An accepted announce counts in
-                // arxc with its size (c850cdac).
+                // announce counts in afrxc. Inbound processing records it as
+                // a received announce (c850cdac).
                 self.released_traffic.push(ReleasedTraffic {
                     interface: held.receiving_interface,
                     size: held.raw.len(),
                     filtered: core::mem::take(&mut self.inbound_filtered),
                     filtered_announce: core::mem::take(&mut self.inbound_filtered_announce),
                 });
-                if released_actions
-                    .iter()
-                    .any(|action| matches!(action, TransportAction::AnnounceReceived(_)))
-                {
-                    self.announce_receipts
-                        .push((held.receiving_interface, held.raw.len()));
-                }
                 ctx.actions.extend(released_actions);
             }
         }

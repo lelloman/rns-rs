@@ -7423,6 +7423,62 @@ fn waiting_local_path_request_skips_ingress_limiting() {
 }
 
 #[test]
+fn only_valid_announces_start_or_end_an_announce_burst() {
+    // As upstream's `preprocess_inbound`, ingress control judges an
+    // announce only after its signature and identity pass, so an invalid
+    // or blackholed one neither starts nor ends a burst.
+    let config = crate::transport::types::IngressControlConfig::enabled();
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.ingress_control = config;
+    inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.ia_samples = constants::IC_DEQUE_MIN_SAMPLE + 1;
+    inbound.started = 0.0;
+    engine.register_interface(inbound);
+    let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+    let blackholed_identity =
+        rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x41; 32]));
+    engine.blackhole_identity(*blackholed_identity.hash(), 0.0, None, None);
+    let (_, blackholed) = signed_announce(0x41, "blackholed");
+    let (_, mut invalid) = signed_announce(0x42, "invalid");
+    *invalid.last_mut().unwrap() ^= 0xFF;
+
+    let mut now = 10_000.0;
+    for raw in [&blackholed, &invalid] {
+        engine.handle_inbound(InboundFrame::new(raw, InterfaceId(1), now), &mut rng);
+        assert!(!engine.ingress_control.burst_active(&InterfaceId(1)));
+    }
+    assert!(engine.take_announce_receipts().is_empty());
+
+    let (_, starts) = signed_announce(0x43, "starts");
+    engine.handle_inbound(InboundFrame::new(&starts, InterfaceId(1), now), &mut rng);
+    assert!(engine.ingress_control.burst_active(&InterfaceId(1)));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    assert_eq!(engine.take_announce_receipts(), vec![(InterfaceId(1), 0)]);
+
+    // Past the hold, with the frequency down, only a valid announce ends
+    // the burst; it is still limited, and the next one passes, counted as
+    // received with its bytes.
+    engine.interfaces.get_mut(&InterfaceId(1)).unwrap().ia_freq = 0.0;
+    now += config.burst_hold + 1.0;
+    for raw in [&blackholed, &invalid] {
+        engine.handle_inbound(InboundFrame::new(raw, InterfaceId(1), now), &mut rng);
+        assert!(engine.ingress_control.burst_active(&InterfaceId(1)));
+    }
+    let (_, ends) = signed_announce(0x44, "ends");
+    engine.handle_inbound(InboundFrame::new(&ends, InterfaceId(1), now), &mut rng);
+    assert!(!engine.ingress_control.burst_active(&InterfaceId(1)));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 2);
+    let (passes_dest, passes) = signed_announce(0x45, "passes");
+    engine.handle_inbound(InboundFrame::new(&passes, InterfaceId(1), now), &mut rng);
+    assert!(engine.has_path(&passes_dest));
+    assert_eq!(
+        engine.take_announce_receipts(),
+        vec![(InterfaceId(1), 0), (InterfaceId(1), passes.len())]
+    );
+}
+
+#[test]
 fn held_and_released_announces_count_as_received() {
     // Upstream c850cdac: an announce ingress control takes up counts as
     // received without bytes; once released and accepted, with its size.
@@ -7653,6 +7709,16 @@ fn held_frames_are_filtered_and_releases_are_charged_again() {
                 size: announce_blackholed.len(),
                 filtered: true,
                 filtered_announce: true,
+            },
+            // As upstream, the blackholed one is filtered before ingress
+            // control sees it, so the burst outlasts it; the accepted one
+            // ends the burst on its first release and is held again:
+            // filtered bytes, but not a filtered announce.
+            ReleasedTraffic {
+                interface: InterfaceId(1),
+                size: announce_accepted.len(),
+                filtered: true,
+                filtered_announce: false,
             },
         ]
     );

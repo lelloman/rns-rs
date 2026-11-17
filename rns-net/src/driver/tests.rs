@@ -2472,7 +2472,6 @@ fn make_pending_verify_announce(dest: [u8; 16]) -> (AnnounceVerifyKey, PendingAn
             best_hops: 1,
             emission_ts: 42,
             random_blob,
-            ingress_limited: false,
         },
     )
 }
@@ -4926,13 +4925,36 @@ fn announce_is_held_while_held_announces_have_room() {
 
     assert_eq!(driver.engine.held_announce_count(&InterfaceId(1)), 2);
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
-    assert_eq!(stats.ia_timestamps.len(), 1);
+    // As upstream's `received_announce`, each held announce is a sample
+    // of the incoming announce frequency.
+    assert_eq!(stats.ia_timestamps.len(), 2);
     // Upstream 29dc449a: the held frame's bytes are filtered until the
     // release counts them again; it is not a filtered announce.
     assert_eq!((stats.rxb, stats.frxb, stats.afrxc), (0, len, 0));
     assert_eq!(stats.rx_packets, 0);
     // Upstream c850cdac: and a received announce, without bytes.
     assert_eq!((stats.arxc, stats.arxb), (1, 0));
+}
+
+#[test]
+fn only_valid_announces_are_received_announce_samples() {
+    // As upstream's `received_announce`, a valid announce counts in arxc
+    // with its bytes and as an incoming announce sample; an invalid one
+    // counts in neither.
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "samples");
+    let mut invalid = build_announce_packet(&Identity::new(&mut OsRng));
+    *invalid.last_mut().unwrap() ^= 0xFF;
+    driver.handle_frame_event(InterfaceId(1), invalid, None, None);
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!((stats.arxc, stats.ia_timestamps.len()), (0, 0));
+
+    let valid = build_announce_packet(&Identity::new(&mut OsRng));
+    let len = valid.len() as u64;
+    driver.handle_frame_event(InterfaceId(1), valid, None, None);
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!((stats.arxc, stats.arxb), (1, len));
+    assert_eq!(stats.ia_timestamps.len(), 1);
 }
 
 #[test]

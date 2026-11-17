@@ -712,7 +712,6 @@ impl TransportEngine {
         if self.prefilter_announce(packet, iface, now) {
             return;
         }
-        let ingress_limited = self.ingress_limited(packet, iface, now);
 
         let sig_cache_key = Self::announce_sig_cache_key(&packet.destination_hash, &announce);
 
@@ -753,7 +752,6 @@ impl TransportEngine {
                 received_from,
                 random_blob,
                 announce_emitted,
-                ingress_limited,
             },
             rng,
             actions,
@@ -895,11 +893,9 @@ impl TransportEngine {
         false
     }
 
-    /// Whether ingress control limits an announce as it arrives: one for an
-    /// unknown destination, on an interface in an announce burst. Taken when
-    /// the frame arrives, as upstream's sequential `preprocess_inbound` does,
-    /// so announces queued for verification are not judged by the burst
-    /// they themselves make.
+    /// Whether ingress control limits a valid announce: one for an unknown
+    /// destination, on an interface in an announce burst. Asking may start
+    /// or end the burst.
     fn ingress_limited<B: AsRef<[u8]>>(
         &mut self,
         packet: &RawPacket<B>,
@@ -925,7 +921,7 @@ impl TransportEngine {
     }
 
     /// Hold a verified announce that arrived while its interface was
-    /// limiting, unless its destination became known or requested since.
+    /// limiting.
     /// An announce ingress control takes up counts as received without
     /// bytes (upstream c850cdac). Since upstream 29dc449a
     /// `preprocess_inbound` returns false after holding, so the held frame's
@@ -939,9 +935,6 @@ impl TransportEngine {
         iface: InterfaceId,
         now: f64,
     ) -> HoldDecision {
-        if self.ingress_exempt(&packet.destination_hash) {
-            return HoldDecision::Pass;
-        }
         let Some(info) = self.interfaces.get(&iface) else {
             return HoldDecision::Pass;
         };
@@ -1019,7 +1012,6 @@ impl TransportEngine {
             .original_raw
             .as_deref()
             .expect("announce packets retain original raw bytes");
-        let ingress_limited = self.ingress_limited(&ctx.packet, ctx.iface, ctx.now);
 
         let sig_cache_key = Self::announce_sig_cache_key(&ctx.packet.destination_hash, &announce);
         if self.announce_sig_cache.contains(&sig_cache_key) {
@@ -1048,7 +1040,6 @@ impl TransportEngine {
                     received_from,
                     random_blob,
                     announce_emitted,
-                    ingress_limited,
                 },
                 rng,
                 actions,
@@ -1081,7 +1072,6 @@ impl TransportEngine {
                     received_from,
                     random_blob,
                     announce_emitted,
-                    ingress_limited,
                 },
                 rng,
                 actions,
@@ -1114,7 +1104,6 @@ impl TransportEngine {
             best_hops: ctx.packet.hops,
             emission_ts: announce_emitted,
             random_blob,
-            ingress_limited,
         };
         let _ = announce_queue.enqueue(key, pending);
     }
@@ -1141,7 +1130,6 @@ impl TransportEngine {
                 received_from: pending.received_from,
                 random_blob: pending.random_blob,
                 announce_emitted: pending.emission_ts,
-                ingress_limited: pending.ingress_limited,
             },
             rng,
             &mut actions,
@@ -1159,9 +1147,6 @@ impl TransportEngine {
     ) {
         if self.is_blackholed(&ctx.validated.identity_hash, ctx.now) {
             self.filter_announce();
-            return;
-        }
-        if ctx.packet.hops > constants::PATHFINDER_M {
             return;
         }
 
@@ -1182,12 +1167,11 @@ impl TransportEngine {
             return;
         }
 
-        // Ingress limiting comes after the signature, blackhole and stamp
-        // checks, as in upstream's `preprocess_inbound`, which validates an
-        // announce before it holds it: a held announce is a valid one, and
-        // an invalid one is a violation or filtered whether or not ingress
-        // control would have held it.
-        let hold = if ctx.ingress_limited {
+        // As upstream's `preprocess_inbound`, ingress control judges an
+        // announce only once its signature, identity and stamp have passed,
+        // so an invalid or blackholed one neither starts nor ends a burst,
+        // and judges it by the announces received before it.
+        let hold = if self.ingress_limited(ctx.packet, ctx.iface, ctx.now) {
             self.hold_decision(ctx.packet, ctx.original_raw, ctx.iface, ctx.now)
         } else {
             HoldDecision::Pass
@@ -1199,6 +1183,15 @@ impl TransportEngine {
                 self.filter_announce();
                 return;
             }
+        }
+        // Upstream's `received_announce(size)`: a valid announce that was
+        // not held counts as received, with its bytes, whatever the path
+        // table then makes of it.
+        self.announce_receipts
+            .push((ctx.iface, ctx.original_raw.len()));
+
+        if ctx.packet.hops > constants::PATHFINDER_M {
+            return;
         }
 
         let existing_set = self.path_table.get(&ctx.packet.destination_hash);

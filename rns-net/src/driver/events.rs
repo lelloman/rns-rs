@@ -44,14 +44,16 @@ impl Driver {
         }
     }
 
-    /// Count the announces the engine received outside a frame's own
-    /// `arxc` accounting: taken up by ingress control, with no bytes, or
-    /// released from it (upstream c850cdac).
+    /// Count the announces the engine received, as upstream's
+    /// `received_announce` does: in `arxc` and `arxb`, and as a sample of
+    /// the incoming announce frequency. The engine reports a valid announce
+    /// with its bytes, and one ingress control or the prefilter took up
+    /// without (upstream c850cdac).
     pub(crate) fn record_announce_receipts(&mut self) {
+        let now = time::now();
         for (interface_id, size) in self.engine.take_announce_receipts() {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                entry.stats.arxc = entry.stats.arxc.saturating_add(1);
-                entry.stats.arxb = entry.stats.arxb.saturating_add(size as u64);
+                entry.stats.record_incoming_announce_bytes(now, size);
             }
         }
     }
@@ -388,14 +390,6 @@ impl Driver {
             }
         };
 
-        let packet = &decoded_packet.packet().raw;
-        if packet.len() > 2 && (packet[0] & 0x03) == 0x01 {
-            let now = time::now();
-            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                entry.stats.record_incoming_announce(now);
-            }
-        }
-
         if let Some(entry) = self.interfaces.get(&interface_id) {
             let now = time::now();
             super::sync_interface_frequencies(
@@ -496,18 +490,6 @@ impl Driver {
                 None,
                 &mut actions,
             );
-        }
-        if actions.iter().any(|action| {
-            matches!(
-                action,
-                TransportAction::AnnounceReceived(announce)
-                    if announce.receiving_interface == interface_id
-            )
-        }) {
-            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                entry.stats.arxc = entry.stats.arxc.saturating_add(1);
-                entry.stats.arxb = entry.stats.arxb.saturating_add(received_size as u64);
-            }
         }
 
         #[cfg(feature = "hooks")]
@@ -673,6 +655,16 @@ impl Driver {
         if let Some(pending) = pending {
             let interface = pending.interface;
             let received_size = pending.original_raw.len();
+            // Ingress control judges the announce by the ones received
+            // before it.
+            let now = time::now();
+            if let Some(entry) = self.interfaces.get(&interface) {
+                super::sync_interface_frequencies(
+                    &mut self.engine,
+                    interface,
+                    entry.stats.frequencies(now),
+                );
+            }
             let actions = self.engine.complete_verified_announce(
                 pending,
                 validated,
@@ -680,15 +672,7 @@ impl Driver {
                 time::now(),
                 &mut self.rng,
             );
-            if actions
-                .iter()
-                .any(|action| matches!(action, TransportAction::AnnounceReceived(_)))
-            {
-                if let Some(entry) = self.interfaces.get_mut(&interface) {
-                    entry.stats.arxc = entry.stats.arxc.saturating_add(1);
-                    entry.stats.arxb = entry.stats.arxb.saturating_add(received_size as u64);
-                }
-            }
+            self.record_announce_receipts();
             // A blackholed identity or a failed stamp (134dc677).
             if self.engine.take_inbound_filtered() {
                 self.record_filtered_inbound(interface, received_size);
