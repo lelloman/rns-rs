@@ -280,6 +280,22 @@ fn rnsd_logs_its_transport_identity_as_upstream() {
         identity_file_hash(&dir.path().join("storage/transport_identity"))
     );
     let first_ephemeral = hashes[1].clone();
+    // The known destinations come first, as upstream loads them before
+    // Transport.start, with how long the load took.
+    let verbose = log_messages(&log, "Verbose");
+    let loaded = verbose
+        .iter()
+        .position(|msg| msg.starts_with("Loaded 0 known destinations from storage in "))
+        .unwrap_or_else(|| panic!("{log}"));
+    let creating = verbose
+        .iter()
+        .position(|msg| msg == "No valid Transport Identity in storage, creating...")
+        .unwrap();
+    assert!(loaded < creating, "{log}");
+    assert!(
+        verbose[loaded].ends_with("µs") || verbose[loaded].ends_with("ms"),
+        "{log}"
+    );
 
     // Restarted: loaded, with a new ephemeral identity.
     let log = rnsd_startup_log(dir.path(), non_transport);

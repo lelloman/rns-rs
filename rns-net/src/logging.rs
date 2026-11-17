@@ -187,3 +187,63 @@ mod tests {
         assert_eq!(adjust_log_level(4, 0, u8::MAX), LOG_CRITICAL);
     }
 }
+
+/// `RNS.prettyshorttime(time)`: `1s, 2ms and 3.5µs`, or `0us`.
+pub fn prettyshorttime(time: f64) -> String {
+    let mut time = time * 1e6;
+    let neg = time < 0.0;
+    if neg {
+        time = time.abs();
+    }
+    let seconds = (time / 1e6).floor();
+    time -= seconds * 1e6;
+    let milliseconds = (time / 1e3).floor();
+    time -= milliseconds * 1e3;
+    let microseconds = (time * 100.0).round() / 100.0;
+
+    let mut components = Vec::new();
+    if seconds > 0.0 {
+        components.push(format!("{}s", seconds as u64));
+    }
+    if milliseconds > 0.0 {
+        components.push(format!("{}ms", milliseconds as u64));
+    }
+    if microseconds > 0.0 {
+        // Python's str() of a float keeps a ".0".
+        let mut text = format!("{microseconds}");
+        if !text.contains('.') {
+            text.push_str(".0");
+        }
+        components.push(format!("{text}µs"));
+    }
+    let count = components.len();
+    let mut text = String::new();
+    for (i, component) in components.iter().enumerate() {
+        if i > 0 {
+            text.push_str(if i + 1 < count { ", " } else { " and " });
+        }
+        text.push_str(component);
+    }
+    if text.is_empty() {
+        "0us".into()
+    } else if neg {
+        format!("-{text}")
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod prettyshorttime_tests {
+    use super::prettyshorttime;
+
+    #[test]
+    fn matches_upstream() {
+        assert_eq!(prettyshorttime(0.0), "0us");
+        assert_eq!(prettyshorttime(0.000036), "36.0µs");
+        assert_eq!(prettyshorttime(0.00002623), "26.23µs");
+        assert_eq!(prettyshorttime(0.0012), "1ms and 200.0µs");
+        assert_eq!(prettyshorttime(2.003), "2s and 3ms");
+        assert_eq!(prettyshorttime(1.0025), "1s, 2ms and 500.0µs");
+    }
+}

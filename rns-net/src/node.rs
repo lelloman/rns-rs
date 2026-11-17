@@ -1561,6 +1561,87 @@ impl RnsNode {
             None => None,
         };
         log::info!("Configuration loaded from {}", config_file.display());
+        // Upstream loads the known destinations next, before Transport.start.
+        let known_destinations_db = crate::storage_sqlite::default_path(&paths.storage);
+        let mut known_destinations_store: Option<
+            Arc<crate::storage_sqlite::KnownDestinationsStore>,
+        > = None;
+        let (known_destinations, ratchet_store): (
+            std::collections::HashMap<[u8; 16], storage::KnownDestination>,
+            Arc<dyn storage::RatchetStore>,
+        ) = match crate::storage_sqlite::KnownDestinationsStore::open(&known_destinations_db, 16) {
+            Ok(store) => {
+                let store = Arc::new(store);
+                let started = std::time::Instant::now();
+                let mut destinations: std::collections::HashMap<
+                    [u8; 16],
+                    storage::KnownDestination,
+                > = store
+                    .load_all()
+                    .map(|entries| entries.into_iter().collect())
+                    .unwrap_or_else(|err| {
+                        log::warn!("failed to load known destinations from database: {}", err);
+                        Default::default()
+                    });
+                if destinations.is_empty() && known_destinations_path.is_file() {
+                    match store.import_legacy(&known_destinations_path) {
+                        Ok(imported) if imported > 0 => {
+                            log::info!(
+                                "Imported {} known destinations from legacy storage into the known destinations database",
+                                imported
+                            );
+                            let _ = std::fs::rename(
+                                &known_destinations_path,
+                                known_destinations_path.with_extension("imported"),
+                            );
+                            destinations = store
+                                .load_all()
+                                .map(|entries| entries.into_iter().collect())
+                                .unwrap_or_default();
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            log::warn!("could not import legacy known destinations: {}", err)
+                        }
+                    }
+                }
+                log::info!(
+                    "Loaded {} known destinations from storage in {}",
+                    destinations.len(),
+                    crate::logging::prettyshorttime(started.elapsed().as_secs_f64())
+                );
+                let known_destination_hashes: HashSet<[u8; 16]> =
+                    destinations.keys().copied().collect();
+                if let Err(err) = store.import_legacy_ratchets(
+                    &paths.ratchets,
+                    time::now() - rns_config.reticulum.ratchet_expiry as f64,
+                    &known_destination_hashes,
+                ) {
+                    log::warn!("could not import legacy ratchets: {}", err);
+                }
+                known_destinations_store = Some(Arc::clone(&store));
+                (destinations, store)
+            }
+            Err(err) => {
+                log::warn!(
+                        "could not initialise known destinations database, falling back to legacy storage: {}",
+                        err
+                    );
+                let destinations = match storage::load_known_destinations(&known_destinations_path)
+                {
+                    Ok(destinations) => destinations,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => Default::default(),
+                    Err(err) => {
+                        log::warn!("failed to load known destinations: {}", err);
+                        Default::default()
+                    }
+                };
+                (
+                    destinations,
+                    Arc::new(storage::FsRatchetStore::new(paths.ratchets.clone())),
+                )
+            }
+        };
         // The transport identity lives in storage/transport_identity, as
         // upstream keeps it, so a config directory keeps its transport
         // identity whichever implementation runs it. Directories written
@@ -1856,80 +1937,6 @@ impl RnsNode {
             _ => rns_core::holepunch::ProbeProtocol::Rnsp,
         };
 
-        let known_destinations_db = crate::storage_sqlite::default_path(&paths.storage);
-        let mut known_destinations_store: Option<
-            Arc<crate::storage_sqlite::KnownDestinationsStore>,
-        > = None;
-        let (known_destinations, ratchet_store): (
-            std::collections::HashMap<[u8; 16], storage::KnownDestination>,
-            Arc<dyn storage::RatchetStore>,
-        ) = match crate::storage_sqlite::KnownDestinationsStore::open(&known_destinations_db, 16) {
-            Ok(store) => {
-                let store = Arc::new(store);
-                let mut destinations: std::collections::HashMap<
-                    [u8; 16],
-                    storage::KnownDestination,
-                > = store
-                    .load_all()
-                    .map(|entries| entries.into_iter().collect())
-                    .unwrap_or_else(|err| {
-                        log::warn!("failed to load known destinations from database: {}", err);
-                        Default::default()
-                    });
-                if destinations.is_empty() && known_destinations_path.is_file() {
-                    match store.import_legacy(&known_destinations_path) {
-                        Ok(imported) if imported > 0 => {
-                            log::info!(
-                                "imported {} known destinations from legacy storage",
-                                imported
-                            );
-                            let _ = std::fs::rename(
-                                &known_destinations_path,
-                                known_destinations_path.with_extension("imported"),
-                            );
-                            destinations = store
-                                .load_all()
-                                .map(|entries| entries.into_iter().collect())
-                                .unwrap_or_default();
-                        }
-                        Ok(_) => {}
-                        Err(err) => {
-                            log::warn!("could not import legacy known destinations: {}", err)
-                        }
-                    }
-                }
-                let known_destination_hashes: HashSet<[u8; 16]> =
-                    destinations.keys().copied().collect();
-                if let Err(err) = store.import_legacy_ratchets(
-                    &paths.ratchets,
-                    time::now() - rns_config.reticulum.ratchet_expiry as f64,
-                    &known_destination_hashes,
-                ) {
-                    log::warn!("could not import legacy ratchets: {}", err);
-                }
-                known_destinations_store = Some(Arc::clone(&store));
-                (destinations, store)
-            }
-            Err(err) => {
-                log::warn!(
-                        "could not initialise known destinations database, falling back to legacy storage: {}",
-                        err
-                    );
-                let destinations = match storage::load_known_destinations(&known_destinations_path)
-                {
-                    Ok(destinations) => destinations,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => Default::default(),
-                    Err(err) => {
-                        log::warn!("failed to load known destinations: {}", err);
-                        Default::default()
-                    }
-                };
-                (
-                    destinations,
-                    Arc::new(storage::FsRatchetStore::new(paths.ratchets.clone())),
-                )
-            }
-        };
         let known_destination_hashes: HashSet<[u8; 16]> =
             known_destinations.keys().copied().collect();
         match ratchet_store.cleanup(
