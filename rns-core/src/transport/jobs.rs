@@ -1097,4 +1097,112 @@ mod tests {
         assert_eq!(count, 0);
         assert_eq!(table.len(), 1);
     }
+
+    fn link(
+        validated: bool,
+        timestamp: f64,
+        proof_timeout: f64,
+        next: u64,
+        recv: u64,
+    ) -> LinkEntry {
+        LinkEntry {
+            timestamp,
+            next_hop_transport_id: [0x77; 16],
+            next_hop_interface: InterfaceId(next),
+            remaining_hops: 2,
+            received_interface: InterfaceId(recv),
+            taken_hops: 2,
+            destination_hash: [0x99; 16],
+            validated,
+            proof_timeout,
+        }
+    }
+
+    /// Upstream culls a validated link once more than LINK_TIMEOUT has
+    /// passed since its last activity or when either of its interfaces is
+    /// gone, and an unvalidated one once past its proof timeout.
+    #[test]
+    fn cull_link_table_follows_upstream_timeouts_and_interfaces() {
+        let now = 2000.0;
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+        interfaces.insert(InterfaceId(2), make_interface_info(2));
+        let mut table = BTreeMap::new();
+        let entries = [
+            (
+                0x01,
+                link(true, now - constants::LINK_TIMEOUT, 0.0, 2, 1),
+                false,
+            ),
+            (
+                0x02,
+                link(true, now - constants::LINK_TIMEOUT - 1.0, 0.0, 2, 1),
+                true,
+            ),
+            (0x03, link(true, now, 0.0, 9, 1), true),
+            (0x04, link(true, now, 0.0, 2, 9), true),
+            (0x05, link(false, now, now, 2, 1), false),
+            (0x06, link(false, now, now - 1.0, 2, 1), true),
+        ];
+        for (id, entry, _) in &entries {
+            table.insert([*id; 16], entry.clone());
+        }
+        let (count, actions) = cull_link_table(&mut table, &interfaces, now);
+        let stale: Vec<_> = entries
+            .iter()
+            .filter(|(_, _, stale)| *stale)
+            .map(|(id, _, _)| [*id; 16])
+            .collect();
+        assert_eq!(count, stale.len());
+        assert_eq!(actions.len(), stale.len());
+        let left: Vec<_> = table.keys().copied().collect();
+        assert_eq!(left, vec![[0x01; 16], [0x05; 16]]);
+    }
+
+    /// Transport.py:956-961: an announce is retransmitted once the time is
+    /// past its retransmit timeout, and the next one is due PATHFINDER_G +
+    /// PATHFINDER_RW later.
+    #[test]
+    fn retransmit_waits_until_past_its_timeout_and_reschedules() {
+        let dest = [0x12; 16];
+        let mut table = BTreeMap::new();
+        table.insert(dest, make_announce_entry(dest, 1000.0, 0, 0));
+        let mut held = BTreeMap::new();
+        assert!(process_pending_announces(&mut table, &mut held, &[0xBB; 16], 1000.0).is_empty());
+        assert!(!process_pending_announces(&mut table, &mut held, &[0xBB; 16], 1000.5).is_empty());
+        assert_eq!(
+            table[&dest].retransmit_timeout,
+            1000.5 + constants::PATHFINDER_G + constants::PATHFINDER_RW
+        );
+    }
+
+    /// The cull count covers paths removed from a destination that keeps
+    /// other paths.
+    #[test]
+    fn unused_pool_cull_counts_paths_removed_from_a_remaining_set() {
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+        let mut set = path_with_usage(100.0, 1000.0, 0.0);
+        let mut second = set.primary().unwrap().clone();
+        second.next_hop = [0x01; 16];
+        second.expires = 3000.0;
+        set = {
+            let mut grown =
+                super::super::tables::PathSet::from_single(set.primary().unwrap().clone(), 2);
+            grown.upsert(second);
+            grown
+        };
+        let mut table = BTreeMap::new();
+        table.insert([0x61; 16], set);
+        let count = cull_path_table(
+            &mut table,
+            &interfaces,
+            200.0,
+            9999.0,
+            UnusedPoolLimits::fixed(1),
+            crate::constants::HOP_LIMITER,
+        );
+        assert_eq!(count, 1);
+        assert_eq!(table[&[0x61; 16]].len(), 1);
+    }
 }
