@@ -2245,6 +2245,12 @@ impl Driver {
                         self.blackhole_update_link_established(link_id);
                         continue;
                     }
+                    // Upstream keeps links to its built-in destinations
+                    // inside Transport: the application never hears of them.
+                    if !is_initiator && self.builtin_link_destinations.contains(&dest_hash) {
+                        self.builtin_links.insert(link_id);
+                        continue;
+                    }
                     self.callbacks.on_link_established(
                         rns_core::types::LinkId(link_id),
                         rns_core::types::DestHash(dest_hash),
@@ -2285,6 +2291,9 @@ impl Driver {
                         self.blackhole_update_link_closed(&link_id);
                         continue;
                     }
+                    if self.builtin_links.remove(&link_id) {
+                        continue;
+                    }
                     self.callbacks
                         .on_link_closed(rns_core::types::LinkId(link_id), reason);
                 }
@@ -2311,6 +2320,9 @@ impl Driver {
                         &link_id[..4],
                         &identity_hash[..4],
                     );
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_remote_identified(
                         rns_core::types::LinkId(link_id),
                         rns_core::types::IdentityHash(identity_hash),
@@ -2346,6 +2358,9 @@ impl Driver {
                     metadata,
                     app_flag,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_received_with_app_flag(
                         rns_core::types::LinkId(link_id),
                         data,
@@ -2354,6 +2369,9 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::ResourceFileReceived { link_id, resource } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks
                         .on_resource_file_received(rns_core::types::LinkId(link_id), resource);
                 }
@@ -2363,6 +2381,9 @@ impl Driver {
                     offset,
                     data,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_segment(
                         rns_core::types::LinkId(link_id),
                         original_hash,
@@ -2371,14 +2392,23 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::ResourceStreamReceived { link_id, resource } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks
                         .on_resource_stream_received(rns_core::types::LinkId(link_id), resource);
                 }
                 LinkManagerAction::ResourceCompleted { link_id } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks
                         .on_resource_completed(rns_core::types::LinkId(link_id));
                 }
                 LinkManagerAction::ResourceFailed { link_id, error } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     log::debug!("Resource failed on link {:02x?}: {}", &link_id[..4], error);
                     self.callbacks
                         .on_resource_failed(rns_core::types::LinkId(link_id), error);
@@ -2388,6 +2418,9 @@ impl Driver {
                     resource_hash,
                     data_size,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_started(
                         rns_core::types::LinkId(link_id),
                         resource_hash,
@@ -2399,6 +2432,9 @@ impl Driver {
                     received,
                     total,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_progress(
                         rns_core::types::LinkId(link_id),
                         received,
@@ -2409,6 +2445,9 @@ impl Driver {
                     link_id,
                     transfer_id,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_stream_completed(
                         rns_core::types::LinkId(link_id),
                         transfer_id,
@@ -2419,6 +2458,9 @@ impl Driver {
                     transfer_id,
                     error,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_stream_failed(
                         rns_core::types::LinkId(link_id),
                         transfer_id,
@@ -2430,6 +2472,9 @@ impl Driver {
                     segment_progress,
                     transfer_size,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_segment_progress(
                         rns_core::types::LinkId(link_id),
                         segment_progress,
@@ -2442,6 +2487,9 @@ impl Driver {
                     transferred,
                     total,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_resource_stream_progress(
                         rns_core::types::LinkId(link_id),
                         transfer_id,
@@ -2477,6 +2525,9 @@ impl Driver {
                     msgtype,
                     payload,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks.on_channel_message(
                         rns_core::types::LinkId(link_id),
                         msgtype,
@@ -2498,6 +2549,9 @@ impl Driver {
                     context,
                     data,
                 } => {
+                    if self.builtin_links.contains(&link_id) {
+                        continue;
+                    }
                     self.callbacks
                         .on_link_data(rns_core::types::LinkId(link_id), context, data);
                 }

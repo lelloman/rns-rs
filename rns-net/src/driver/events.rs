@@ -3143,6 +3143,7 @@ impl Driver {
                     .register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
                 self.local_destinations
                     .insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+                self.builtin_link_destinations.insert(dest_hash);
                 self.link_manager
                     .register_link_destination_without_requests(
                         dest_hash,

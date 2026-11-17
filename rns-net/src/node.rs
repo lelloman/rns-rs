@@ -2991,6 +2991,7 @@ impl RnsNode {
                     .insert(mgmt_dest, rns_core::constants::DESTINATION_SINGLE);
 
                 // Register as link destination in link manager
+                driver.builtin_link_destinations.insert(mgmt_dest);
                 driver.link_manager.register_link_destination(
                     mgmt_dest,
                     sig_prv,
@@ -3038,6 +3039,7 @@ impl RnsNode {
                 driver
                     .engine
                     .register_destination(bh_dest, rns_core::constants::DESTINATION_SINGLE);
+                driver.builtin_link_destinations.insert(bh_dest);
                 driver.link_manager.register_link_destination(
                     bh_dest,
                     sig_prv,

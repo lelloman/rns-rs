@@ -974,6 +974,13 @@ pub struct Driver {
     pub(crate) proof_keys: HashMap<[u8; 16], rns_crypto::ed25519::Ed25519PublicKey>,
     /// Locally registered destinations: hash → dest_type.
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
+    /// The built-in destinations links are accepted to (remote management,
+    /// the blackhole list, the network identity's): upstream keeps them
+    /// inside Transport, so the application never hears of those links.
+    pub(crate) builtin_link_destinations: HashSet<[u8; 16]>,
+    /// Links established to `builtin_link_destinations`, whose events are
+    /// not reported to the callbacks.
+    pub(crate) builtin_links: HashSet<[u8; 16]>,
     /// Latest explicit SINGLE announces to replay after shared-client reconnect.
     shared_announces: HashMap<[u8; 16], SharedAnnounceRecord>,
     /// Keys of SINGLE IN destinations registered with their identity, to
@@ -1266,6 +1273,8 @@ impl Driver {
             pending_probes: std::collections::HashSet::new(),
             proof_keys: HashMap::new(),
             local_destinations,
+            builtin_link_destinations: HashSet::new(),
+            builtin_links: HashSet::new(),
             shared_announces: HashMap::new(),
             path_responders: HashMap::new(),
             shared_reconnect_pending: HashMap::new(),

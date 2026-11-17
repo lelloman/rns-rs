@@ -17386,3 +17386,72 @@ fn probe_config_keeps_the_direct_connect_settings() {
     );
     assert!(driver.holepunch_manager.enabled());
 }
+
+#[test]
+fn links_to_built_in_destinations_are_not_reported_to_the_application() {
+    // Upstream keeps links to its management destinations inside
+    // Transport; the application hears only of its own.
+    let (tx, rx) = event::channel();
+    let (mut cbs, established, closed, _identified) = MockCallbacks::with_link_tracking();
+    let link_data = Arc::new(Mutex::new(Vec::new()));
+    cbs.link_data = link_data.clone();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(cbs));
+    let builtin = [0xB1; 16];
+    let app_dest = [0xA1; 16];
+    driver.builtin_link_destinations.insert(builtin);
+    let established_link = |link_id: [u8; 16], dest_hash: [u8; 16], is_initiator: bool| {
+        LinkManagerAction::LinkEstablished {
+            link_id,
+            dest_hash,
+            hops: 1,
+            rebalanced_at: None,
+            rtt: 0.1,
+            is_initiator,
+        }
+    };
+    // A responder link to a built-in destination, one to an app
+    // destination, and a link this node initiated to a built-in
+    // destination elsewhere with the same hash.
+    for (link_id, dest_hash, is_initiator) in [
+        ([1; 16], builtin, false),
+        ([2; 16], app_dest, false),
+        ([3; 16], builtin, true),
+    ] {
+        driver.dispatch_link_actions(vec![
+            established_link(link_id, dest_hash, is_initiator),
+            LinkManagerAction::LinkDataReceived {
+                link_id,
+                context: 0,
+                data: b"data".to_vec(),
+            },
+            LinkManagerAction::LinkClosed {
+                link_id,
+                reason: None,
+            },
+        ]);
+    }
+    let reported = |ids: Vec<TypedLinkId>| ids.into_iter().map(|id| id.0).collect::<Vec<_>>();
+    assert_eq!(
+        established
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| event.0 .0)
+            .collect::<Vec<_>>(),
+        vec![[2; 16], [3; 16]]
+    );
+    assert_eq!(
+        reported(closed.lock().unwrap().clone()),
+        vec![[2; 16], [3; 16]]
+    );
+    assert_eq!(
+        link_data
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| event.0 .0)
+            .collect::<Vec<_>>(),
+        vec![[2; 16], [3; 16]]
+    );
+    assert!(driver.builtin_links.is_empty());
+}
