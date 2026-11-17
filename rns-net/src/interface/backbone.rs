@@ -1459,6 +1459,11 @@ fn is_ip_blacklisted(peers: &mut HashMap<IpAddr, PeerBehaviorState>, peer_ip: Ip
     false
 }
 
+/// Upstream `BackboneClientInterface.set_timeouts_linux`, for connected and
+/// accepted peers alike: keepalive probes after 5 s idle, and on Linux a
+/// `TCP_USER_TIMEOUT` of 24 s. Keepalive only probes an idle connection; with
+/// data waiting to be sent, only the user timeout drops a peer that stopped
+/// acknowledging, where retransmission would keep it "up" for many minutes.
 fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
     let sock = SockRef::from(stream);
     let mut keepalive = TcpKeepalive::new()
@@ -1468,8 +1473,15 @@ fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
     {
         keepalive = keepalive.with_retries(12);
     }
-    sock.set_tcp_keepalive(&keepalive)
+    sock.set_tcp_keepalive(&keepalive)?;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    sock.set_tcp_user_timeout(Some(TCP_USER_TIMEOUT))?;
+    Ok(())
 }
+
+/// Upstream `BackboneClientInterface.TCP_USER_TIMEOUT`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const TCP_USER_TIMEOUT: Duration = Duration::from_secs(24);
 
 // ---------------------------------------------------------------------------
 // Client mode
@@ -3096,6 +3108,23 @@ mod tests {
             }
         }
         assert!(down, "the hung-up gated peer was not disconnected");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn backbone_sockets_get_upstreams_user_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        for stream in [&client, &accepted] {
+            set_tcp_keepalive(stream).unwrap();
+            let sock = SockRef::from(stream);
+            assert_eq!(
+                sock.tcp_user_timeout().unwrap(),
+                Some(Duration::from_secs(24))
+            );
+            assert!(sock.keepalive().unwrap());
+        }
     }
 
     #[test]
