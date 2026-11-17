@@ -92,15 +92,14 @@ impl IngressControl {
         };
 
         if state.burst_active {
-            // Check if burst can deactivate
+            // As upstream, the announce that ends a burst is still limited;
+            // only the ones after it pass.
             if ia_freq < threshold
                 && now > state.burst_activated + config.burst_hold
                 && now > state.burst_sustained + config.burst_hold
             {
                 state.burst_active = false;
-                return false;
-            }
-            if ia_freq >= threshold {
+            } else if ia_freq >= threshold {
                 state.burst_sustained = now;
             }
             true
@@ -458,14 +457,23 @@ mod tests {
             now
         ));
 
-        // After hold period with low freq
+        // After hold period with low freq the burst ends, but the announce
+        // that ends it is still limited.
         let now2 = now + constants::IC_BURST_HOLD + 1.0;
-        assert!(!ic.should_ingress_limit(
+        assert!(ic.should_ingress_limit(
             iface(1),
             &IngressControlConfig::enabled(),
             1.0,
             started,
             now2
+        ));
+        assert!(!ic.burst_active(&iface(1)));
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now2 + 1.0
         ));
     }
 
@@ -486,13 +494,14 @@ mod tests {
             started,
             sustained + config.burst_hold - 1.0
         ));
-        assert!(!ic.should_ingress_limit(
+        assert!(ic.should_ingress_limit(
             iface(1),
             &config,
             1.0,
             started,
             sustained + config.burst_hold + 1.0
         ));
+        assert!(!ic.burst_active(&iface(1)));
     }
 
     #[test]
