@@ -14,3 +14,6 @@ cargo clippy --workspace --all-targets --features rns-hooks -- \
   -A clippy::never_loop
 # rns-hooks has no backend by default; lint both of its backends too.
 cargo clippy -p rns-hooks --all-targets --features wasm,native -- -D warnings
+# The BLE RNode transport is not a default feature (it links libdbus).
+cargo clippy -p rns-net -p rns-cli -p rns-ctl --all-targets \
+  --features rns-net/iface-rnode-ble,rns-cli/iface-rnode-ble,rns-ctl/iface-rnode-ble -- -D warnings

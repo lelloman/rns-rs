@@ -216,6 +216,10 @@ jobs:
           echo "cargo test $CARGO_TEST_ARGS"
           # shellcheck disable=SC2086 # one word per package argument
           cargo test $CARGO_TEST_ARGS
+      - name: Install libdbus for the BLE RNode transport
+        if: needs.changes.outputs.compact_engine != 'false'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+
       - name: Test the compact engine
         if: needs.changes.outputs.compact_engine != 'false'
         # The workspace build above runs the parallel engine (rns-cli asks for
@@ -226,6 +230,8 @@ jobs:
         run: |
           cargo test -p rns-net
           cargo test -p rns-net --features compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io
+          # The BLE RNode transport is not a default feature (it links libdbus).
+          cargo test -p rns-net --lib --features iface-rnode-ble rnode
 
   esp32-lockfile:
     name: ESP32 Lockfile
@@ -515,6 +521,9 @@ jobs:
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install libdbus for the BLE RNode transport
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
 
       - name: Run Clippy
         run: bash scripts/lint-host.sh
