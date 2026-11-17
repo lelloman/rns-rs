@@ -17,11 +17,12 @@ use std::time::{Duration, Instant};
 
 use rns_core::transport::types::InterfaceId;
 
+use super::setup::{self, RadioReports};
 use super::transport::Transport;
 use super::DeviceWriter;
 use super::{
-    clear_pending_rx_metadata, detect_and_configure, open_until_configured, phy_telemetry,
-    process_flow_queue, radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
+    clear_pending_rx_metadata, open_until_configured, phy_telemetry, process_flow_queue,
+    radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
     update_pending_rx_metadata, update_radio_stats, wait_while_running, RNodeConfig, SubFlowState,
 };
 use crate::common::interface_stats::RadioStats;
@@ -74,38 +75,39 @@ impl RNodeLink {
         thread::Builder::new()
             .name(format!("rnode-setup-{}", self.config.base_interface_id.0))
             .spawn(move || {
-                let Some(mut reader) = reader else {
-                    if let Some(reader) = open_until_configured(
+                let configured = reader.and_then(|mut reader| {
+                    match setup::setup_device(
+                        &mut reader,
+                        &self.writer,
+                        &self.config,
+                        &self.running,
+                    ) {
+                        Ok(()) => Some(reader),
+                        Err(e) => {
+                            log::debug!("[{}] initial RNode setup failed: {}", self.config.name, e);
+                            None
+                        }
+                    }
+                });
+                let (reader, reopened) = match configured {
+                    Some(reader) => (reader, false),
+                    // As upstream, keep trying to bring the device up.
+                    None => match open_until_configured(
                         &self.config,
                         &self.writer,
                         &self.flow_states,
                         &self.running,
                     ) {
-                        signal_interface_up(
-                            &self.tx,
-                            &self.config,
-                            &self.writer,
-                            &self.flow_states,
-                            true,
-                        );
-                        self.serve_or_reconnect(reader);
-                    }
-                    return;
+                        Some(reader) => (reader, true),
+                        None => return,
+                    },
                 };
-                // Initial delay for hardware init (matches Python: sleep(2.0))
-                if !wait_while_running(&self.running, Duration::from_secs(2)) {
-                    return;
-                }
-                if let Err(e) = detect_and_configure(&mut reader, &self.writer, &self.config) {
-                    log::error!("[{}] initial RNode setup failed: {}", self.config.name, e);
-                    return;
-                }
                 signal_interface_up(
                     &self.tx,
                     &self.config,
                     &self.writer,
                     &self.flow_states,
-                    false,
+                    reopened,
                 );
                 self.serve_or_reconnect(reader);
             })?;
@@ -140,6 +142,8 @@ impl RNodeLink {
                 last_rssi: None,
                 last_snr: None,
                 radio: RadioStats::default(),
+                reports: RadioReports::default(),
+                name: setup::display_name(&self.config),
                 keepalive_at: Instant::now() + KEEPALIVE_INTERVAL,
                 link: Arc::clone(self),
             }),
@@ -162,7 +166,9 @@ impl RNodeLink {
             match reopen_connection(&self.config, &self.writer) {
                 Ok(mut reader) => {
                     reset_flow_states(&self.flow_states);
-                    if let Err(e) = detect_and_configure(&mut reader, &self.writer, &self.config) {
+                    if let Err(e) =
+                        setup::setup_device(&mut reader, &self.writer, &self.config, &self.running)
+                    {
                         log::warn!("[{}] reconnect configure failed: {}", self.config.name, e);
                     } else {
                         signal_interface_up(
@@ -223,6 +229,10 @@ struct RNodeSource {
     last_snr: Option<f32>,
     /// What the device reports about its channel and itself.
     radio: RadioStats,
+    /// What a single RNode reports about its radio, logged as upstream.
+    reports: RadioReports,
+    /// The interface as upstream writes it.
+    name: String,
     keepalive_at: Instant,
     link: Arc<RNodeLink>,
 }
@@ -267,6 +277,9 @@ impl RNodeSource {
             read += n;
             let mut events = Vec::new();
             for event in self.decoder.feed(&cx.buf[..n]) {
+                if !config.multi {
+                    self.reports.apply(&event, &self.name);
+                }
                 if update_radio_stats(&event, &mut self.radio, crate::time::now(), &config.name) {
                     events.extend(radio_telemetry(config, &self.radio));
                     continue;
@@ -306,7 +319,7 @@ impl RNodeSource {
                             }
                         }
                     }
-                    rnode_kiss::RNodeEvent::Error(code) => {
+                    rnode_kiss::RNodeEvent::Error(code) if config.multi => {
                         log::error!("[{}] RNode error: 0x{:02X}", config.name, code);
                     }
                     _ => {
