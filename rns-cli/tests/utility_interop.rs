@@ -859,6 +859,13 @@ fn rust_rnsh_delivers_burst_output_and_reuses_listener() {
             .contains("Channel send failed: NotReady"),
         "burst did not exercise channel backpressure"
     );
+    // Upstream's ListenerSession logs each session it starts.
+    assert!(
+        fs::read_to_string(listener_app_config.join("logfile"))
+            .unwrap_or_default()
+            .contains("] [Info]     Session started for Outlet on <"),
+        "no session line"
+    );
     listener.assert_running("rnsh listener after burst output");
 
     let mut followup = harness.rnsh_command(Side::Client, &client_app_config, &client_identity);

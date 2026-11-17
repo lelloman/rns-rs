@@ -1676,7 +1676,9 @@ fn flush_listener_session(
         return;
     }
     if let Err(error) = session.pending_output.flush(transport, link_id) {
-        log::warn!(
+        // Upstream checks the channel before it sends, and has no such
+        // line.
+        log::debug!(
             "Closing rnsh session {} after output send failed: {error}",
             prettyhexrep(&link_id)
         );
@@ -1869,9 +1871,15 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
                 is_initiator: false,
                 ..
             }) => {
-                sessions
-                    .entry(link_id)
-                    .or_insert_with(|| ListenerSession::new(link_id, config.clone()));
+                sessions.entry(link_id).or_insert_with(|| {
+                    // Upstream's ListenerSession, created for each link.
+                    log::info!(
+                        target: crate::pylog::INFO_TARGET,
+                        "Session started for Outlet on {}",
+                        prettyhexrep(&link_id)
+                    );
+                    ListenerSession::new(link_id, config.clone())
+                });
             }
             Ok(RnshEvent::RemoteIdentified {
                 link_id,
