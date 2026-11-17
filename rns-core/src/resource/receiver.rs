@@ -2521,4 +2521,490 @@ mod tests {
         receiver.receive_part(&parts[0], 1002.0);
         assert_eq!(receiver.rtt, Some(0.5));
     }
+
+    #[test]
+    fn advertisement_with_a_short_random_or_original_hash_is_refused() {
+        let mut adv = sized_advertisement(1, 1);
+        adv.random_hash = vec![0x22; RESOURCE_RANDOM_HASH_SIZE - 1];
+        assert_eq!(
+            receive_advertisement(&adv, RESOURCE_SDU).err(),
+            Some(ResourceError::InvalidAdvertisement)
+        );
+        let mut adv = sized_advertisement(1, 1);
+        adv.original_hash = vec![0x33; 16];
+        assert_eq!(
+            receive_advertisement(&adv, RESOURCE_SDU).err(),
+            Some(ResourceError::InvalidAdvertisement)
+        );
+    }
+
+    #[test]
+    fn data_size_limit_applies_to_unsplit_resources_only() {
+        let limit = RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64;
+        let mut adv = sized_advertisement(1, 1);
+        adv.data_size = limit;
+        assert!(receive_advertisement(&adv, RESOURCE_SDU).is_ok());
+        adv.data_size = limit + 1;
+        assert_eq!(
+            receive_advertisement(&adv, RESOURCE_SDU).err(),
+            Some(ResourceError::TooLarge)
+        );
+        // A segment of a split resource carries the size of the whole.
+        adv.flags.split = true;
+        adv.total_segments = 100;
+        assert!(receive_advertisement(&adv, RESOURCE_SDU).is_ok());
+    }
+
+    #[test]
+    fn completed_receiver_ignores_cancels() {
+        let mut receiver = ready_receiver();
+        let actions = receiver.assemble(&identity_decrypt, &NoopCompressor);
+        assert!(actions.contains(&ResourceAction::Completed));
+        assert_eq!(receiver.status, ResourceStatus::Complete);
+        assert!(receiver.cancel().is_empty());
+        assert!(receiver.handle_cancel().is_empty());
+        assert_eq!(receiver.status, ResourceStatus::Complete);
+    }
+
+    #[test]
+    fn continued_segment_takes_the_previous_window_and_rate() {
+        let (_, mut receiver) = make_sender_receiver();
+        let mut window = WindowState::new();
+        window.window = 7;
+        window.window_max = 20;
+        receiver.continue_from(window, Some(1234.0));
+        assert_eq!(receiver.window.window, 7);
+        assert_eq!(receiver.window.window_max, 20);
+        assert_eq!(receiver.compute_eifr(), 1234.0);
+        // Without a rate of its own, the previous segment's is kept.
+        receiver.continue_from(WindowState::new(), None);
+        assert_eq!(receiver.window.window, RESOURCE_WINDOW);
+        assert_eq!(receiver.compute_eifr(), 1234.0);
+    }
+
+    #[test]
+    fn assembling_receiver_has_nothing_left_to_decrypt() {
+        let token = rns_crypto::token::Token::new(&[0x5A; 64]).unwrap();
+        let decrypt =
+            |parts: &[&[u8]], skip: usize| token.decrypt_chunks(parts, skip).map_err(|_| ());
+        let mut receiver = encrypted_receiver(&token, 5000, 100);
+        assert!(receiver.decrypts());
+        assert!(receiver.has_parts_to_decrypt());
+        let Ok(_assembly) = receiver.prepare_assembly(&decrypt) else {
+            panic!("assembly should start");
+        };
+        assert_eq!(receiver.status, ResourceStatus::Assembling);
+        assert!(!receiver.decrypts());
+        assert!(!receiver.has_parts_to_decrypt());
+    }
+
+    #[test]
+    fn unencrypted_resource_is_delivered_without_its_random_prefix() {
+        let mut rng = rns_crypto::FixedRng::new(&[0x42; 64]);
+        let data: Vec<u8> = (0..1000).map(|i| (i * 13 + 5) as u8).collect();
+        let mut sender = ResourceSender::new(
+            &data,
+            None,
+            100,
+            &identity_encrypt,
+            &NoopCompressor,
+            &mut rng,
+            1000.0,
+            false,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+        sender.flags.encrypted = false;
+        let mut receiver = ResourceReceiver::from_advertisement(
+            &sender.get_advertisement(0),
+            100,
+            0.5,
+            1000.0,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(receiver.total_parts > 1);
+        let pending = receiver.accept(1000.0);
+        assert!(!receiver.decrypts());
+        let (_, actions) = run_transfer(&mut sender, &mut receiver, pending);
+        assert!(actions.contains(&ResourceAction::DataReceived {
+            data,
+            metadata: None,
+            app_flag: false,
+        }));
+    }
+
+    #[test]
+    fn decryption_handed_back_is_ignored_when_it_does_not_fit() {
+        let token = rns_crypto::token::Token::new(&[0x5A; 64]).unwrap();
+        let other = rns_crypto::token::Token::new(&[0x5B; 64]).unwrap();
+        let decrypt =
+            |parts: &[&[u8]], skip: usize| token.decrypt_chunks(parts, skip).map_err(|_| ());
+        let delivered = |actions: &[ResourceAction]| {
+            actions
+                .iter()
+                .any(|action| matches!(action, ResourceAction::DataReceived { .. }))
+        };
+
+        // Claiming more parts than are held.
+        let mut receiver = encrypted_receiver(&token, 5000, 100);
+        let total = receiver.total_parts;
+        let mut stream = token.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE);
+        receiver.prepare_decrypt_stream(&mut stream);
+        receiver.resume_decrypt(Box::new(stream), total + 1);
+        assert!(delivered(&receiver.assemble(&decrypt, &NoopCompressor)));
+
+        // After the receiver decrypted ahead itself.
+        let mut receiver = encrypted_receiver(&token, 5000, 100);
+        receiver.decrypt_next_part(|| Some(token.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE)));
+        receiver.resume_decrypt(Box::new(other.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE)), 0);
+        assert!(delivered(
+            &receiver.assemble(&|_, _| panic!("decrypted again"), &NoopCompressor)
+        ));
+    }
+
+    #[test]
+    fn held_parts_are_decrypted_up_to_the_budget() {
+        let token = rns_crypto::token::Token::new(&[0x5A; 64]).unwrap();
+        let start = || Some(token.decrypt_stream(RESOURCE_RANDOM_HASH_SIZE));
+        let mut receiver = encrypted_receiver(&token, 5000, 100);
+        assert!(receiver.decrypt_held_parts(start, 200));
+        assert_eq!(receiver.decrypted_parts, 2);
+        // At least one part, however small the budget.
+        assert!(receiver.decrypt_held_parts(start, 1));
+        assert_eq!(receiver.decrypted_parts, 3);
+        assert!(receiver.decrypt_held_parts(start, 250));
+        assert_eq!(receiver.decrypted_parts, 6);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "{actual} is not {expected}"
+        );
+    }
+
+    #[test]
+    fn part_arrivals_measure_rtt_and_rates() {
+        let (mut sender, mut receiver) = sender_receiver(1000, 100);
+        assert!(receiver.total_parts > 9);
+
+        // First window: requested at 1000.0.
+        let request = request_of(receiver.accept(1000.0));
+        let parts = parts_for(&mut sender, &request, 1000.0);
+        assert_eq!(parts.len(), RESOURCE_WINDOW);
+        receiver.receive_part(&parts[0], 1000.25);
+        assert_eq!(receiver.rtt, Some(0.5));
+        assert_close(
+            receiver.req_resp_rtt_rate,
+            (parts[0].len() + request.len()) as f64 / 0.25,
+        );
+        let mut actions = Vec::new();
+        for part in &parts[1..] {
+            actions = receiver.receive_part(part, 1000.5);
+        }
+        let window_bytes: usize = parts.iter().map(Vec::len).sum();
+        assert_close(receiver.req_data_rtt_rate, window_bytes as f64 / 0.5);
+
+        // Second window, requested at 1000.5, answered faster than the
+        // estimate: it drops by 5%.
+        let request = request_of(actions);
+        let parts = parts_for(&mut sender, &request, 1000.5);
+        assert_eq!(parts.len(), RESOURCE_WINDOW + 1);
+        receiver.receive_part(&parts[0], 1000.7);
+        assert_close(receiver.rtt.unwrap(), 0.475);
+        let mut actions = Vec::new();
+        for part in &parts[1..] {
+            actions = receiver.receive_part(part, 1001.0);
+        }
+        let window_bytes: usize = parts.iter().map(Vec::len).sum();
+        assert_close(receiver.req_data_rtt_rate, window_bytes as f64 / 0.5);
+
+        // Third window, answered slower: the estimate rises by 5%.
+        let request = request_of(actions);
+        let parts = parts_for(&mut sender, &request, 1001.0);
+        receiver.receive_part(&parts[0], 1003.0);
+        assert_close(receiver.rtt.unwrap(), 0.475 * 1.05);
+    }
+
+    #[test]
+    fn parts_arriving_with_no_time_elapsed_measure_no_rate() {
+        let (mut sender, mut receiver) = sender_receiver(1000, 100);
+        let request = request_of(receiver.accept(1000.0));
+        let parts = parts_for(&mut sender, &request, 1000.0);
+        for part in &parts {
+            receiver.receive_part(part, 1000.0);
+        }
+        assert_eq!(receiver.received_count, parts.len());
+        assert_eq!(receiver.req_resp_rtt_rate, 0.0);
+        assert_eq!(receiver.req_data_rtt_rate, 0.0);
+        assert_eq!(receiver.window.fast_rate_rounds, 0);
+    }
+
+    #[test]
+    fn part_received_before_any_request_measures_no_data_rate() {
+        let (mut sender, mut receiver) = sender_receiver(1000, 100);
+        let request = request_of(receiver.request_next(1000.0));
+        let parts = parts_for(&mut sender, &request, 1000.0);
+        let (_, mut fresh) = sender_receiver(1000, 100);
+        assert_eq!(fresh.req_sent, 0.0);
+        fresh.receive_part(&parts[0], 1001.0);
+        assert_eq!(fresh.received_count, 1);
+        assert_eq!(fresh.req_data_rtt_rate, 0.0);
+    }
+
+    #[test]
+    fn hmu_missing_its_hashmap_cancels_waiting_receiver() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = true;
+        let mut update = receiver.resource_hash.clone();
+        update.extend_from_slice(&crate::msgpack::pack(&crate::msgpack::Value::Array(vec![
+            crate::msgpack::Value::UInt(0),
+        ])));
+
+        let actions = receiver.handle_hashmap_update(&update, 1001.0);
+
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelReceiver(_))));
+    }
+
+    #[test]
+    fn hmu_longer_than_a_hashmap_segment_cancels_waiting_receiver() {
+        let (_, sender) = multi_hashmap_sender(LINK_MDU);
+        let mut receiver = ResourceReceiver::from_advertisement(
+            &sender.get_advertisement(0),
+            RESOURCE_SDU,
+            0.5,
+            1000.0,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(receiver.total_parts > RESOURCE_HASHMAP_MAX_LEN + 1);
+        receiver.accept(1000.0);
+        receiver.waiting_for_hmu = true;
+        let update = hmu(
+            &receiver.resource_hash,
+            0,
+            vec![0x99; (RESOURCE_HASHMAP_MAX_LEN + 1) * RESOURCE_MAPHASH_LEN],
+        );
+
+        let actions = receiver.handle_hashmap_update(&update, 1001.0);
+
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelReceiver(_))));
+    }
+
+    #[test]
+    fn request_stops_at_the_first_unknown_map_hash() {
+        let (_, mut receiver) = sender_receiver(1000, 100);
+        let first = *receiver.hash_at(0).unwrap();
+        let last_known = *receiver.hash_at(receiver.hashmap_height - 1).unwrap();
+        receiver.hashmap[1] = None;
+
+        let request = request_of(receiver.accept(1000.0));
+
+        assert_eq!(receiver.outstanding_parts, 1);
+        assert!(receiver.waiting_for_hmu);
+        let mut expected = vec![RESOURCE_HASHMAP_IS_EXHAUSTED];
+        expected.extend_from_slice(&last_known);
+        expected.extend_from_slice(&receiver.resource_hash);
+        expected.extend_from_slice(&first);
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn failed_or_hmu_waiting_receiver_requests_nothing() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        receiver.cancel();
+        assert!(!receiver.waiting_for_hmu);
+        assert!(receiver.request_next(1001.0).is_empty());
+
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        receiver.waiting_for_hmu = true;
+        assert!(receiver.request_next(1001.0).is_empty());
+    }
+
+    fn timed_out(receiver: &mut ResourceReceiver, now: f64) -> bool {
+        let retries = receiver.retries_left;
+        receiver.tick(now, &identity_decrypt, &NoopCompressor);
+        receiver.retries_left < retries
+    }
+
+    /// A receiver that requested its single part at 1000.0 and is waiting
+    /// for it, at the given rate estimate.
+    fn waiting_receiver(eifr: f64) -> ResourceReceiver {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        assert_eq!(receiver.outstanding_parts, 1);
+        receiver.previous_eifr = Some(eifr);
+        receiver
+    }
+
+    #[test]
+    fn part_timeout_is_strictly_after_its_deadline() {
+        let eifr = 10_000.0;
+        let deadline = base_timeout(&waiting_receiver(eifr), eifr);
+        assert!(!timed_out(&mut waiting_receiver(eifr), deadline));
+        assert!(timed_out(&mut waiting_receiver(eifr), deadline + 1e-6));
+    }
+
+    #[test]
+    fn each_retry_used_extends_the_part_timeout() {
+        let eifr = 10_000.0;
+        let deadline = base_timeout(&waiting_receiver(eifr), eifr) + 2.0 * RESOURCE_PER_RETRY_DELAY;
+        let retried = || {
+            let mut receiver = waiting_receiver(eifr);
+            receiver.retries_left = RESOURCE_MAX_RETRIES - 2;
+            receiver
+        };
+        assert!(!timed_out(&mut retried(), deadline - 1e-6));
+        assert!(timed_out(&mut retried(), deadline + 1e-6));
+    }
+
+    #[test]
+    fn timeout_with_nothing_outstanding_waits_for_a_hashmap_update() {
+        let eifr = 10_000.0;
+        let idle = || {
+            let mut receiver = waiting_receiver(eifr);
+            receiver.outstanding_parts = 0;
+            receiver
+        };
+        let deadline = hmu_timeout(&idle(), eifr);
+        assert!(!timed_out(&mut idle(), deadline - 1e-6));
+        assert!(timed_out(&mut idle(), deadline + 1e-6));
+    }
+
+    #[test]
+    fn timeout_without_a_rate_estimate_falls_back() {
+        let deadline = 1000.0 + RESOURCE_PART_TIMEOUT_FACTOR * 10.0 + RESOURCE_RETRY_GRACE_TIME;
+        for outstanding in [0, 1] {
+            let unrated = || {
+                let mut receiver = waiting_receiver(0.0);
+                receiver.outstanding_parts = outstanding;
+                receiver
+            };
+            assert!(!timed_out(&mut unrated(), deadline - 1e-6));
+            assert!(timed_out(&mut unrated(), deadline + 1e-6));
+        }
+    }
+
+    #[test]
+    fn rate_estimate_prefers_measured_data_rate_then_previous_then_rtt() {
+        let (_, mut receiver) = make_sender_receiver();
+        assert_eq!(receiver.compute_eifr(), RESOURCE_SDU as f64 * 8.0 / 0.5);
+        receiver.rtt = Some(0.25);
+        assert_eq!(receiver.compute_eifr(), RESOURCE_SDU as f64 * 8.0 / 0.25);
+        receiver.previous_eifr = Some(1234.0);
+        assert_eq!(receiver.compute_eifr(), 1234.0);
+        receiver.req_data_rtt_rate = 1000.0;
+        assert_eq!(receiver.compute_eifr(), 8000.0);
+        assert_eq!(receiver.eifr, Some(8000.0));
+
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.link_rtt = 0.0;
+        assert_eq!(receiver.compute_eifr(), 10000.0);
+    }
+
+    #[test]
+    fn progress_and_transfer_state_report_the_transfer() {
+        let (mut sender, mut receiver) = sender_receiver(1000, 100);
+        let total = receiver.total_parts;
+        let request = request_of(receiver.accept(1000.0));
+        let parts = parts_for(&mut sender, &request, 1000.0);
+        receiver.receive_part(&parts[0], 1000.1);
+        receiver.receive_part(&parts[1], 1000.1);
+        assert_eq!(receiver.progress(), (2, total));
+        receiver.window.window = 7;
+        receiver.req_data_rtt_rate = 1000.0;
+        receiver.compute_eifr();
+        assert_eq!(receiver.get_transfer_state(), (7, Some(8000.0)));
+    }
+
+    #[test]
+    fn compressed_assembly_is_handed_to_the_caller_to_decompress() {
+        // ExpandingCompressor keeps the first half, and doubles on the way
+        // back, so data made of a repeated half survives the round trip.
+        let half: Vec<u8> = (0..400).map(|i| (i * 7) as u8).collect();
+        let data = [half.as_slice(), half.as_slice()].concat();
+        let mut rng = rns_crypto::FixedRng::new(&[0x93; 64]);
+        let mut sender = ResourceSender::new(
+            &data,
+            None,
+            RESOURCE_SDU,
+            &identity_encrypt,
+            &ExpandingCompressor,
+            &mut rng,
+            1000.0,
+            true,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+        let mut receiver = ResourceReceiver::from_advertisement(
+            &sender.get_advertisement(0),
+            RESOURCE_SDU,
+            0.5,
+            1000.0,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(receiver.flags.compressed);
+        let pending = receiver.accept(1000.0);
+        run_transfer_parts(&mut sender, &mut receiver, pending);
+
+        let mut assembly = receiver.prepare_assembly(&identity_decrypt).unwrap();
+        assert!(assembly.is_compressed());
+        assert_eq!(assembly.max_output_size(), RESOURCE_AUTO_COMPRESS_MAX_SIZE);
+        assert!(assembly.input_capacity() >= half.len());
+        let compressed = assembly.take_compressed_data();
+        assert_eq!(compressed, half);
+        let decompressed = ExpandingCompressor.decompress(&compressed).unwrap();
+        let actions = receiver.complete_assembly(assembly.finish_decompressed(decompressed, None));
+        assert!(actions.contains(&ResourceAction::DataReceived {
+            data,
+            metadata: None,
+            app_flag: false,
+        }));
+
+        let mut receiver = ready_receiver();
+        let assembly = receiver.prepare_assembly(&identity_decrypt).unwrap();
+        assert!(!assembly.is_compressed());
+    }
+
+    /// Runs a transfer until the receiver holds every part.
+    fn run_transfer_parts(
+        sender: &mut ResourceSender,
+        receiver: &mut ResourceReceiver,
+        mut pending: Vec<ResourceAction>,
+    ) {
+        while let Some(action) = pending.pop() {
+            if let ResourceAction::SendRequest(request) = action {
+                for part in parts_for(sender, &request, 1001.0) {
+                    pending.extend(receiver.receive_part(&part, 1001.0));
+                }
+            }
+        }
+        assert_eq!(receiver.received_count, receiver.total_parts);
+    }
 }
