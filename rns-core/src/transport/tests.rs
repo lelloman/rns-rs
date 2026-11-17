@@ -4372,6 +4372,71 @@ fn test_local_client_forward_to_external_applies_local_hops_delta() {
 }
 
 #[test]
+fn forwarding_a_packet_marks_its_path_used() {
+    let transport_id = [0x42; 16];
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    let dest_hash = [0xB9; 16];
+    engine.upsert_path_destination(
+        dest_hash,
+        make_path_entry(1000.0, 2, InterfaceId(2), [0x29; 16]),
+        1000.0,
+    );
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &dest_hash,
+        Some(&transport_id),
+        constants::CONTEXT_NONE,
+        b"relayed",
+    )
+    .unwrap();
+
+    let mut rng = rns_crypto::FixedRng::new(&[0x44; 32]);
+    let actions = engine.handle_inbound(
+        InboundFrame::new(&packet.raw, InterfaceId(1), 1500.0),
+        &mut rng,
+    );
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        TransportAction::SendOnInterface { interface, .. } if *interface == InterfaceId(2)
+    )));
+    let path = engine.path_table[&dest_hash].primary().unwrap();
+    // Used, so the unused path pool culling keeps it; the announce time
+    // stays what it was.
+    assert_eq!(path.used, 1500.0);
+    assert_eq!(path.timestamp, 1000.0);
+}
+
+#[test]
+fn relayed_link_traffic_marks_the_destination_path_used() {
+    let link_id = [0x4D; 16];
+    let mut engine = relay_with_validated_link(link_id);
+    engine.upsert_path_destination(
+        [0xBB; 16],
+        make_path_entry(1000.0, 1, InterfaceId(2), [0xBB; 16]),
+        1000.0,
+    );
+    let packet = link_data_packet(&link_id, constants::CONTEXT_NONE, b"link payload");
+    let decoded = DecodedPacket::unpack(&packet.raw).unwrap();
+    let actions = handle_decoded_at(&mut engine, decoded, 1500.0);
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, TransportAction::SendOnInterface { .. })));
+    assert_eq!(
+        engine.path_table[&[0xBB; 16]].primary().unwrap().used,
+        1500.0
+    );
+}
+
+#[test]
 fn transported_link_proof_timeout_uses_outbound_interface_bitrate() {
     let mut engine = TransportEngine::new(make_config(true));
     let mut inbound = make_interface(1, constants::MODE_FULL);

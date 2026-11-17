@@ -113,6 +113,17 @@ Three caveats of the 1.6.0 rgit `c850cdac` record are resolved too:
   detach (`net: detach a static interface on a node without interface
   management`).
 
+A gap in the 1.6.0 integration of `e24d2073` (2026-11-17): upstream marks a
+path used when it forwards a packet along it, or traffic on a relayed link to
+its destination, where rns-rs refreshed the path's timestamp only. On a busy
+transport node, paths that carried only relayed traffic counted as never used,
+and the unused path pool culled them first: vps-us lost its direct path to
+vps-eu between announces (`transport: mark a path used when forwarding along
+it`). Still open: upstream's `mark_path_responsive` also refreshes a path's
+timestamp, expiry and use when a link proof proves the destination alive;
+rns-rs keeps only the responsive state, and its transport link proof routing
+does not validate the proof's signature, which that refresh requires.
+
 ## Promotion Result
 
 Reticulum is accepted at `1.6.1`, normative commit

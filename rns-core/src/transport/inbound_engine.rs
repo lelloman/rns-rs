@@ -524,12 +524,14 @@ impl TransportEngine {
             raw: new_raw.into(),
         });
 
+        // Transport.py (1.6.0) marks the path used, so the unused path pool
+        // culling keeps paths that carry traffic through this node.
         if let Some(entry) = self
             .path_table
             .get_mut(&ctx.packet.destination_hash)
             .and_then(|ps| ps.primary_mut())
         {
-            entry.timestamp = ctx.now;
+            entry.used = ctx.now;
         }
     }
 
@@ -589,6 +591,15 @@ impl TransportEngine {
 
         if let Some(entry) = self.link_table.get_mut(&ctx.packet.destination_hash) {
             entry.timestamp = ctx.now;
+        }
+        // As in Transport.py, traffic on a relayed link uses the path to the
+        // link's destination.
+        if let Some(entry) = self
+            .path_table
+            .get_mut(&link_entry.destination_hash)
+            .and_then(|ps| ps.primary_mut())
+        {
+            entry.used = ctx.now;
         }
     }
 
