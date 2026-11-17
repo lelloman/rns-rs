@@ -136,10 +136,33 @@ fn start_with_template(
 ) -> io::Result<ListenerControl> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
+    serve_listener(
+        listener,
+        config,
+        tx,
+        next_id,
+        dynamic_template,
+        underlay_mark,
+    )
+}
+
+/// Serve an already bound listener as `start_with_template` does.
+fn serve_listener(
+    listener: TcpListener,
+    config: TcpServerConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
+) -> io::Result<ListenerControl> {
     super::apply_underlay_mark(listener.as_raw_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;
 
-    log::debug!("[{}] TCP server listening on {}", config.name, addr);
+    log::debug!(
+        "[{}] TCP server listening on {}",
+        config.name,
+        listener.local_addr()?
+    );
 
     let name = config.name.clone();
     let ifac_size = dynamic_template
@@ -740,7 +763,12 @@ mod tests {
 
     #[test]
     fn typed_registration_carries_exact_type_mode_parent_and_ifac() {
-        let port = find_free_port();
+        // The listener takes a port from the OS rather than from the shared
+        // allocator: a port the allocator hands out may still be dialed by
+        // a reconnecting client of another test process, whose connection
+        // would then be the registration this test reads.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
         let (tx, rx) = crate::event::channel();
         let ifac = crate::ifac::derive_ifac(Some("network"), Some("key"), 8).unwrap();
         let template = crate::interface::DynamicInterfaceTemplate {
@@ -756,7 +784,8 @@ mod tests {
             stamp_costs: Default::default(),
             announce_limits: Default::default(),
         };
-        start_with_template(
+        serve_listener(
+            listener,
             make_server_config(port, 77, None),
             tx,
             Arc::new(AtomicU64::new(1200)),
@@ -764,7 +793,6 @@ mod tests {
             None,
         )
         .unwrap();
-        thread::sleep(Duration::from_millis(50));
         let client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
         let client_port = client.local_addr().unwrap().port();
         match rx.recv_timeout(Duration::from_secs(2)).unwrap() {

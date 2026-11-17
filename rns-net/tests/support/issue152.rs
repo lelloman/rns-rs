@@ -306,8 +306,10 @@ fn run_burst(async_api: bool) {
         );
     }
     release_tx.send(()).unwrap();
-    // Let the retry timer expire before sending the end marker.
-    std::thread::sleep(Duration::from_secs(1));
+    // The end marker needs an admission slot, and every slot is held until
+    // its send is transmitted: wait for the first one before sending it.
+    let mut receipts = receipts.into_iter();
+    futures::executor::block_on(receipts.next().unwrap()).unwrap();
     let marker = b"issue152-end".to_vec();
     let marker_receipt = alice
         .try_send_on_link(link, marker.clone(), CONTEXT)
