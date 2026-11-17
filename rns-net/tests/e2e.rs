@@ -4322,10 +4322,12 @@ fn discovery_announce_received_by_client() {
     })
     .expect("Client InterfaceUp timed out");
 
-    // The transport's announcer fires on the first tick (last_announced=0, so it's
-    // immediately due). Stamp generation at cost=8 is near-instant. The announce
-    // should propagate to the client within a few ticks (~seconds).
-    // Wait up to 30s for the client to receive the discovery announce.
+    // The transport announces its discoverable interface on its first tick
+    // and then only every announce_interval, so a client that connects
+    // after that first announce never hears it. Make it announce again now
+    // that the client is connected. Stamp generation at cost=8 is
+    // near-instant, so the announce reaches the client within seconds.
+    reannounce_discovery_once_connected(&transport, "Discoverable TCP", &client, "Client TCP");
     let mut found = false;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_secs(1));
