@@ -518,9 +518,12 @@ fn discovery_storage_guard() -> MutexGuard<'static, ()> {
 // Stamp Generation (parallel PoW search)
 // ============================================================================
 
-/// Generate a discovery stamp with the given cost: on the rayon pool on the
-/// parallel engine, on the calling thread on the compact one
-/// (see [`crate::stamps::search`]).
+/// Generate a discovery stamp with the given cost: on threads of its own on
+/// the parallel engine, on the calling thread on the compact one
+/// (see [`crate::stamps::search`]). A discovery stamp is the costliest grind
+/// a node runs: on the rayon pool it held up the short searches there, and
+/// on a two-core host path requests were cancelled when their stamp missed
+/// its deadline behind it.
 ///
 /// Returns `(stamp, value)` on success. This is a blocking, CPU-intensive operation.
 pub fn generate_discovery_stamp(
@@ -534,7 +537,7 @@ pub fn generate_discovery_stamp(
     let infohash = sha256(packed_data);
     let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
 
-    let stamp = search(SearchPool::Rayon, |stop| {
+    let stamp = search(SearchPool::Dedicated, |stop| {
         let mut rng = OsRng;
         let mut nonce = [0u8; STAMP_SIZE];
         loop {
@@ -2267,6 +2270,36 @@ mod tests {
         let infohash = sha256(packed);
         let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
         assert!(stamp_valid(&stamp, cost, &workblock));
+    }
+
+    #[cfg(feature = "engine-parallel")]
+    #[test]
+    fn a_discovery_stamp_search_leaves_the_rayon_pool_free() {
+        // An expensive discovery grind must not hold up the short searches
+        // that run on the rayon pool, such as a path request stamp with its
+        // deadline (vps-us cancelled path requests while one ran). The grind
+        // fills the pool only when it has no more threads than the search
+        // uses, as on a two-core host: run with RAYON_NUM_THREADS=2 to see
+        // the difference on a larger machine.
+        let grind = std::thread::spawn(|| {
+            let started = std::time::Instant::now();
+            generate_discovery_stamp(b"busy discovery grind", StampCost::from_whole(20));
+            started.elapsed()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let asked = std::time::Instant::now();
+        let ran = std::sync::Mutex::new(Vec::new());
+        rayon::scope(|scope| {
+            for _ in 0..rayon::current_num_threads() {
+                scope.spawn(|_| ran.lock().unwrap().push(asked.elapsed()));
+            }
+        });
+        let waited = ran.into_inner().unwrap().into_iter().max().unwrap();
+        let grind_took = grind.join().unwrap();
+        assert!(
+            waited < std::time::Duration::from_millis(500) || grind_took < waited,
+            "rayon work waited {waited:?} behind a discovery grind of {grind_took:?}"
+        );
     }
 
     #[test]
