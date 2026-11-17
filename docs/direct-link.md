@@ -150,8 +150,25 @@ and no links, and nothing else it reports changes.
 ## Testing
 
 The NAT traversal Docker suite under `tests/docker/nat-punch/` builds two
-NATed peers and a facilitator and asserts a successful upgrade. It runs as
-part of `./tests/docker/run-all.sh`.
+NATed peers and a facilitator and asserts a successful upgrade.
+
+`tests/docker/nat-matrix/` runs a matrix of NAT behaviours in one
+privileged container (`--network none`), building its networks from
+namespaces on 172.29.0.0/16 and iptables rules inside it, so nothing but
+the container is created on the host. Peer A's NAT is full-cone,
+address-restricted, port-restricted or symmetric, with B behind a
+port-restricted NAT; a symmetric NAT also meets a full-cone and an
+address-restricted one; both peers share one NAT in the same-LAN case;
+and the IPv6 case does NAT66 on both sides and probes and punches over
+IPv6. Each case asserts whether the link upgrades and over which
+candidate type (`reflexive`, `peer_reflexive` or `host`), or that it
+correctly stays on its transport path (symmetric against
+port-restricted), and that the link carries messages both ways. No
+router hairpins. `run.sh [case ...]` runs some of the cases; the
+restricted-cone case needs the host kernel's `xt_recent` module, which
+the kernel loads on demand.
+
+Both run as part of `./tests/docker/run-all.sh`.
 
 ## Further reading
 

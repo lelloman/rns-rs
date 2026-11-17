@@ -94,6 +94,7 @@ first build compiles the dependencies.
 ./tests/docker/run.sh --topology chain-3 --suite 01       # one suite on one topology
 ./tests/docker/run.sh --topology chain-5 --suite 03,08    # several suites, comma-separated
 ./tests/docker/nat-punch/run.sh
+./tests/docker/nat-matrix/run.sh [case ...]               # needs a privileged container
 ./tests/docker/rns-server/run.sh
 ./tests/docker/shared-client-reconnect/run.sh
 ./tests/docker/shared-instance-links/run.sh
