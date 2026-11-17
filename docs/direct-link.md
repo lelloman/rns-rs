@@ -95,7 +95,7 @@ say during the upgrade. The link MDU (`mdu` in `/api/links`, or
 `LinkInfoEntry::mdu`) always reports the current value; after a fallback
 it is the original one again, and larger sends are refused (see
 [Packet size](direct-link-protocol.md#packet-size)). If the direct path dies
-(no keepalive for 15 seconds, the link going stale, or the link's channel
+(no keepalive for 45 seconds, the link going stale, or the link's channel
 running out of retries), both sides move the link back to the transport path,
 report `direct_lost`, and the link carries on. The side that proposed the
 upgrade then proposes again by itself, a minute later and then with

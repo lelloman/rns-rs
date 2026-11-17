@@ -312,9 +312,45 @@ that was upgraded and carries nothing else:
 | **Not an outbound interface** | It is registered with `out_capable = false`, and broadcasts skip it, so the transport engine never sends announces, path requests or broadcasts on it. Since nothing but the link's packets is accepted from it, no path, announce or link request is learned through it and no other traffic is forwarded over it |
 | **Packet send/receive** | One Reticulum packet per UDP datagram, no framing |
 | **MTU** | 1200 bytes, raised to the largest of a short ladder of sizes the path is shown to carry (see [Path MTU](#path-mtu)) |
-| **Keepalive** | Sends an authenticated keepalive every 5 seconds, which also keeps the NAT mapping open: `"RNSK"`, the session id, a 64-bit counter and the first 16 bytes of HMAC-SHA256 over those 28 bytes, keyed with `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-keepalive-v1")`. The key never appears on the wire |
-| **Liveness detection** | Only a valid keepalive from the peer with a counter above the last one accepted counts as a sign of life; link packets and anything forged or replayed do not. Without one for 15 seconds (three missed) the interface declares itself down |
+| **Keepalive** | Sends an authenticated keepalive every 15 seconds, which also keeps the NAT mappings open (see [Keepalives](#keepalives)) |
+| **Liveness detection** | Only a valid keepalive from the peer counts as a sign of life. Without one for 45 seconds (three missed) the interface declares itself down |
 | **Teardown** | It is removed when its link closes (about a second later, so the link's closing packets still leave on it), when it goes down, and when a newer upgrade of the same link replaces it |
+
+### Keepalives
+
+Each side sends a keepalive on the direct path every 15 seconds, the
+first as soon as the interface is up. Keepalives are raw UDP datagrams of
+44 bytes:
+
+```
+"RNSK" [session id: 16] [counter: u64 BE] [tag: 16]
+```
+
+The counter starts at 1 and goes up by one with every keepalive. The tag
+is the first 16 bytes of HMAC-SHA256 over the preceding 28 bytes, keyed
+with `HKDF(ikm=derived_key, salt=session_id,
+info="rns-holepunch-keepalive-v1")`: like the punch token it comes from
+the link key, is known only to the two link peers, and never appears on
+the wire, but it is a different key, so a punch packet cannot pass for a
+keepalive. The path MTU probes of the path use the same key under their
+own magic.
+
+A keepalive counts as a sign of life only if it comes from the peer's
+address and port, has the right length, magic and session id, carries a
+valid tag, and its counter is above the last one accepted. Anything else
+is ignored: an off-path sender cannot forge one, and a replayed or
+reordered one is stale. Link packets do not count either, so nothing but
+the peer's own keepalives keeps a direct interface up. Without a valid
+keepalive for 45 seconds (three missed) the interface goes down and the
+link falls back (see [Fallback](#fallback)); a link with traffic usually
+notices sooner, by going stale.
+
+The interval keeps the path's NAT mappings open: NATs forget an idle UDP
+mapping after as little as 30 seconds, and a keepalive every 15 seconds
+refreshes it even when one is lost. Earlier builds sent one every 5
+seconds and gave up after 15 seconds without one, so a direct path
+between such a build and this one does not last: the earlier side
+declares it down and the link falls back.
 
 ### Routing the link
 
@@ -444,7 +480,7 @@ The link returns to its original route, and its MTU and MDU to what they
 were (see [Packet size](#packet-size)), when any of these shows the direct
 path failed:
 
-- the direct interface goes down (15 seconds without a valid keepalive, or a
+- the direct interface goes down (45 seconds without a valid keepalive, or a
   socket error);
 - the link goes stale (no inbound traffic for its stale time) while on the
   direct path, which on a fast link happens before the keepalive timeout;

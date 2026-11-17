@@ -31,11 +31,15 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::Writer;
 
-/// Interval between keepalives, which also keep the NAT mapping open.
-pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+/// Interval between keepalives. It also keeps the NAT mappings of the path
+/// open: NATs commonly forget an idle UDP mapping after 30 seconds, the
+/// shortest seen, so a keepalive every 15 seconds refreshes it even when
+/// one is lost.
+pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Without a valid keepalive for this long the direct path is dead.
-pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(15);
+/// Without a valid keepalive for this long (three missed) the direct path
+/// is dead. A link with traffic notices sooner, by going stale.
+pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// MTU a direct interface starts with, until its path MTU discovery (see
 /// [`super::path_mtu`]) finds a larger one.
@@ -764,6 +768,31 @@ mod tests {
             .is_none());
         assert!(reader.receive(&link_data(&LINK, b"data"), peer).is_none());
         assert_eq!(reader.last_inbound, stale);
+    }
+
+    #[test]
+    fn keepalives_refresh_a_30_second_nat_mapping_and_allow_two_losses() {
+        assert!(KEEPALIVE_INTERVAL * 2 <= Duration::from_secs(30));
+        assert_eq!(INACTIVITY_TIMEOUT, KEEPALIVE_INTERVAL * 3);
+    }
+
+    #[test]
+    fn keepalives_of_another_session_or_direction_do_not_count() {
+        let params = params();
+        let mut ours = Keepalives::new(params.keepalive_key, params.session_id);
+        // Another session's keepalives, even under the same key.
+        let mut other_session = Keepalives::new(params.keepalive_key, [0x77; 16]);
+        assert!(!ours.accept(&other_session.next_packet()));
+        // A path MTU probe under the same key is not a keepalive.
+        let mut probe = ours.next_packet();
+        probe[..4].copy_from_slice(b"RNSM");
+        assert!(!ours.accept(&probe));
+        // A keepalive whose counter was altered fails its tag.
+        let mut peer = Keepalives::new(params.keepalive_key, params.session_id);
+        let mut bumped = peer.next_packet();
+        bumped[27] ^= 0x01;
+        assert!(!ours.accept(&bumped));
+        assert!(ours.accept(&peer.next_packet()));
     }
 
     #[test]
