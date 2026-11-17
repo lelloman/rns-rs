@@ -1062,6 +1062,7 @@ impl HolePunchManager {
             succeeded: bool,
             socket: Option<std::net::UdpSocket>,
             peer_addr: Option<SocketAddr>,
+            learned: Vec<SocketAddr>,
             rtt: Option<f64>,
         }
         let mut completions: Vec<PunchCompletion> = Vec::new();
@@ -1092,6 +1093,7 @@ impl HolePunchManager {
                                         succeeded: true,
                                         socket: Some(result.socket),
                                         peer_addr: Some(result.peer_addr),
+                                        learned: result.learned,
                                         rtt: Some(rtt_secs),
                                     });
                                 }
@@ -1104,6 +1106,7 @@ impl HolePunchManager {
                                 succeeded: false,
                                 socket: None,
                                 peer_addr: None,
+                                learned: Vec::new(),
                                 rtt: None,
                             });
                         }
@@ -1127,11 +1130,17 @@ impl HolePunchManager {
                         .sessions
                         .get(&completion.session_id)
                         .is_some_and(|session| session.engine.is_initiator());
-                    let candidates = self
+                    let mut candidates = self
                         .sessions
                         .get(&completion.session_id)
                         .map(|session| session.candidates.clone())
                         .unwrap_or_default();
+                    candidates.extend(
+                        completion
+                            .learned
+                            .iter()
+                            .map(|addr| (*addr, DirectCandidateKind::PeerReflexive)),
+                    );
                     let candidate = candidates
                         .iter()
                         .find(|(addr, _)| canonical(*addr) == canonical(peer_addr))

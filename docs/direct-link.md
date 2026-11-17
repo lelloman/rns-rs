@@ -21,7 +21,11 @@ Two peers behind the same NAT (on the same LAN) also offer each other their
 LAN addresses as host candidates, and use the LAN path when it works, so
 they connect directly even when their NAT does not forward traffic from
 inside back inside (see
-[Host candidates](direct-link-protocol.md#host-candidates)).
+[Host candidates](direct-link-protocol.md#host-candidates)). A peer
+behind a symmetric NAT, which gives its punches another port than the
+facilitator saw, is reached at the port its punches come from (see
+[Peer-reflexive candidates](direct-link-protocol.md#peer-reflexive-candidates)),
+as long as the other side's NAT lets them in.
 
 ## Roles
 
@@ -129,9 +133,10 @@ in `rns-net`) reports Direct Link on the node:
   its `last_loss` (`interface_down`, `link_failed` or `peer_fallback`, and
   time), and a scheduled `reupgrade`. On the direct path, `direct` gives the
   interface, session and role, the peer's address and its candidate type
-  (`reflexive`, or `host` for a peer on the same LAN), every candidate the
-  punch tried, the RTT the punch measured, the MTU (`mtu_discovered` once
-  path MTU discovery has reported), and `peer_max_packet`, the largest link
+  (`reflexive`, `host` for a peer on the same LAN, or `peer_reflexive`
+  for a port learned from the peer's punches), every candidate the punch
+  tried, the RTT the punch measured, the MTU (`mtu_discovered` once path
+  MTU discovery has reported), and `peer_max_packet`, the largest link
   packet the peer said it accepts on the path (see
   [Packet size](direct-link-protocol.md#packet-size); `null` from a peer that
   did not say).

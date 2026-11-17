@@ -15,6 +15,11 @@
 //! network. A host candidate that is acknowledged is preferred: once the
 //! punch has succeeded over another candidate, it waits up to
 //! [`HOST_GRACE`] for a host candidate still unanswered.
+//!
+//! A fresh, authenticated punch from a port of a candidate's IP that is
+//! not a candidate itself (a NAT that maps each destination to its own
+//! port) makes that address a peer-reflexive candidate, punched like the
+//! others (see [`MAX_PEER_REFLEXIVE`]).
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -43,6 +48,11 @@ pub const UNVERIFIED_BURST: u32 = 16;
 /// After its burst, an endpoint that has not answered gets one punch
 /// packet per this interval, enough to keep a NAT mapping toward it open.
 const UNVERIFIED_INTERVAL: Duration = Duration::from_secs(1);
+/// Most peer-reflexive candidates one punch session learns.
+pub const MAX_PEER_REFLEXIVE: usize = 2;
+/// Punch nonces remembered per session, so that a replayed punch does not
+/// teach a peer-reflexive candidate.
+const MAX_SEEN_NONCES: usize = 256;
 /// How long a punch that succeeded over its public endpoint waits for a
 /// host candidate to answer as well, so that peers on the same network use
 /// it.
@@ -121,6 +131,8 @@ pub struct PunchResult {
     pub socket: UdpSocket,
     /// The peer address that responded.
     pub peer_addr: SocketAddr,
+    /// Peer-reflexive candidates the punch learned.
+    pub learned: Vec<SocketAddr>,
     /// Measured RTT: time from first punch send to first valid ACK received.
     pub rtt: Duration,
 }
@@ -323,6 +335,10 @@ struct PunchState {
     first_ack_time: Option<Instant>,
     /// When both sides had first confirmed.
     succeeded_at: Option<Instant>,
+    /// Nonces of the punches received, for telling a replay.
+    seen_nonces: Vec<[u8; NONCE_LEN]>,
+    /// Peer-reflexive candidates learned, in order.
+    learned: Vec<SocketAddr>,
 }
 
 /// One endpoint a punch sends to.
@@ -381,7 +397,31 @@ impl PunchState {
             acked_from: Vec::new(),
             first_ack_time: None,
             succeeded_at: None,
+            seen_nonces: Vec::new(),
+            learned: Vec::new(),
         }
+    }
+
+    /// A fresh, authenticated punch came from `src`, at the IP of a
+    /// candidate: if that address is no candidate, punch it too, as a
+    /// peer-reflexive candidate (verified, since the peer is there).
+    fn learn_peer_reflexive(&mut self, src: SocketAddr) {
+        if self.endpoints.iter().any(|ep| ep.addr == src)
+            || self.learned.len() >= MAX_PEER_REFLEXIVE
+            || self.endpoints.len() >= MAX_PUNCH_CANDIDATES
+            || !plausible_target(&src)
+        {
+            return;
+        }
+        self.endpoints.push(Candidate {
+            addr: src,
+            host: false,
+            verified: true,
+            acked: false,
+            sent: 0,
+            last_sent: None,
+        });
+        self.learned.push(src);
     }
 
     fn end(&self) -> Instant {
@@ -434,6 +474,14 @@ impl PunchState {
             return None;
         }
         if let Some(nonce) = open_control(data, PUNCH_MAGIC, &self.session_id, &self.punch_token) {
+            let fresh = !self.seen_nonces.contains(&nonce);
+            if fresh {
+                if self.seen_nonces.len() >= MAX_SEEN_NONCES {
+                    self.seen_nonces.remove(0);
+                }
+                self.seen_nonces.push(nonce);
+                self.learn_peer_reflexive(src);
+            }
             // A punch from the peer: acknowledge it, echoing its nonce.
             if self.ack_packets_sent < self.limits.max_ack_packets {
                 let ack = build_ack_packet(&self.session_id, &self.punch_token, &nonce);
@@ -525,6 +573,7 @@ impl PunchSource {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PunchResult {
             socket,
             peer_addr,
+            learned: self.punch.learned.clone(),
             rtt,
         });
         self.finish(STATUS_SUCCEEDED)
@@ -658,6 +707,7 @@ fn run_udp_punch(
                 return Some(PunchResult {
                     socket,
                     peer_addr,
+                    learned: punch.learned.clone(),
                     rtt,
                 });
             }
@@ -668,6 +718,7 @@ fn run_udp_punch(
             return Some(PunchResult {
                 socket,
                 peer_addr,
+                learned: punch.learned.clone(),
                 rtt,
             });
         }
@@ -885,6 +936,99 @@ mod tests {
                 ("192.168.1.7:4000".parse().unwrap(), true),
             ]
         );
+    }
+
+    #[test]
+    fn a_punch_from_an_unsignalled_port_is_learned_and_punched() {
+        let (session_id, token) = ([7; 16], [8; 32]);
+        let signalled = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let actual = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let actual_addr = actual.local_addr().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut punch = PunchState::new(
+            vec![(signalled.local_addr().unwrap(), false)],
+            session_id,
+            token,
+            DEFAULT_LIMITS,
+        );
+        // A punch from another port of the candidate's IP is answered and
+        // that address becomes a candidate.
+        let pkt = build_punch_packet(&session_id, &token, &[1; 16]);
+        punch.receive(&sender, &pkt, actual_addr);
+        assert_eq!(punch.learned, vec![actual_addr]);
+        assert!(punch
+            .endpoints
+            .iter()
+            .any(|ep| ep.addr == actual_addr && ep.verified));
+        // Its replay from yet another port teaches nothing.
+        let elsewhere: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        punch.receive(&sender, &pkt, elsewhere);
+        assert_eq!(punch.learned, vec![actual_addr]);
+        // A forged punch teaches nothing either.
+        let forged = build_punch_packet(&session_id, &[0; 32], &[2; 16]);
+        punch.receive(&sender, &forged, elsewhere);
+        assert_eq!(punch.learned.len(), 1);
+        // The next round punches the learned address at full rate.
+        drain(&actual);
+        punch.send_round(&sender);
+        let mut buf = [0u8; 128];
+        actual
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let (n, _) = actual.recv_from(&mut buf).unwrap();
+        assert!(open_control(&buf[..n], PUNCH_MAGIC, &session_id, &token).is_some());
+    }
+
+    #[test]
+    fn peer_reflexive_candidates_are_bounded() {
+        let (session_id, token) = ([7; 16], [8; 32]);
+        let signalled: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut punch =
+            PunchState::new(vec![(signalled, false)], session_id, token, DEFAULT_LIMITS);
+        for port in 0..5u16 {
+            let pkt = build_punch_packet(&session_id, &token, &[port as u8 + 1; 16]);
+            punch.receive(
+                &sender,
+                &pkt,
+                SocketAddr::from(([127, 0, 0, 1], 41000 + port)),
+            );
+        }
+        assert_eq!(punch.learned.len(), MAX_PEER_REFLEXIVE);
+        // Never from another IP than a candidate's.
+        let pkt = build_punch_packet(&session_id, &token, &[99; 16]);
+        let mut punch =
+            PunchState::new(vec![(signalled, false)], session_id, token, DEFAULT_LIMITS);
+        punch.receive(&sender, &pkt, "127.0.0.2:41000".parse().unwrap());
+        assert!(punch.learned.is_empty());
+    }
+
+    #[test]
+    fn a_peer_behind_a_port_changing_nat_is_reached_over_its_learned_port() {
+        // B's punches leave from another socket (another NAT port) than
+        // the one A was told about, and only that socket is reachable.
+        let sock_a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr_a = sock_a.local_addr().unwrap();
+        let told = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sock_b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr_b = sock_b.local_addr().unwrap();
+        let session_id = [0x21; 16];
+        let token = [0x31; 32];
+        let handle_a = start_udp_punch(
+            sock_a,
+            vec![told.local_addr().unwrap()],
+            vec![],
+            session_id,
+            token,
+        )
+        .unwrap();
+        let handle_b = start_udp_punch(sock_b, vec![addr_a], vec![], session_id, token).unwrap();
+        let a = handle_a.join().expect("A connects");
+        let b = handle_b.join().expect("B connects");
+        assert_eq!(a.peer_addr, addr_b);
+        assert_eq!(a.learned, vec![addr_b]);
+        assert_eq!(b.peer_addr, addr_a);
+        assert!(b.learned.is_empty());
     }
 
     #[test]

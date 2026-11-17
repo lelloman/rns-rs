@@ -266,7 +266,8 @@ The hole punch procedure:
    acknowledgement packets whose source IP matches the peer endpoint being
    punched (the port may differ, for a NAT that does not preserve it), and
    an acknowledgement only if it echoes the nonce of a punch it sent to that
-   IP.
+   IP. A punch from a port that is not a candidate becomes a
+   [peer-reflexive candidate](#peer-reflexive-candidates).
 4. If no packet is received within the timeout, the hole punch has failed.
 
 ### Punch packets
@@ -301,6 +302,27 @@ unchanged.
 
 Each side creates its `DirectUdpInterface` as soon as its punch succeeds and
 routes the link over it. There is no separate confirmation message.
+
+### Peer-reflexive candidates
+
+A NAT with endpoint-dependent mapping (a "symmetric" NAT) gives each
+destination its own public port, so the peer's punches arrive from
+another port than the one the facilitator saw and the peer signalled; a
+punch sent to the signalled port is dropped by that NAT. When a side
+receives a punch that is valid (right length, session and tag) and fresh
+(its nonce not seen before in the session) from an address that is not
+one of its candidates, but at the IP of one, it takes that address as a
+peer-reflexive candidate and punches it like the others, at the full
+rate, since the peer has shown it is there. At most 2 are learned per
+session, within the cap of 4 candidates. The address the peer's
+acknowledgements then come from is its address on the direct path.
+
+This lets a peer behind a symmetric NAT connect to one behind a NAT that
+accepts its punches from a new port: a full-cone or an address-restricted
+NAT. Two symmetric NATs, or a symmetric NAT and a port-restricted one,
+still fail and the link stays on its transport path. A NAT that also
+changes the public IP per destination is not followed: candidates are
+only learned at a signalled IP.
 
 ### Host candidates
 
@@ -614,7 +636,7 @@ Properties of the facilitator:
 | B does not implement Direct Link | 0 | B never answers `HELLO`; A fails with reason `0x03` and sends nothing else |
 | B rejects the upgrade | 2 | Keep existing Reticulum link |
 | B cannot reach T | 3 | B sends `UPGRADE_REJECT` (reason `0x04`), keep existing link |
-| Symmetric NAT on either side | 4 | Hole punch fails (timeout), keep existing link |
+| Symmetric NAT on both sides, or with a port-restricted NAT on the other | 4 | Hole punch fails (timeout), keep existing link. With a full-cone or address-restricted NAT on the other side it succeeds over a [peer-reflexive candidate](#peer-reflexive-candidates) |
 | Hole punch timeout | 4 | Keep existing link. Optionally retry with a different facilitator |
 | Direct path drops after establishment | after 4 | Detected by the keepalives, the link going stale, or exhausted channel retries; both sides fall back to the original route and the link stays open |
 | NAT remapping (IP change, roaming) | after 4 | As above. The proposing side upgrades again by itself (see [Re-upgrade](#re-upgrade)) |
@@ -673,7 +695,10 @@ to a third party. What such a target can receive is bounded instead:
   `direct_connect_allow_private_endpoints`, are punched only for a peer
   behind the node's own NAT and only on a network the node is on, at most
   2 of them, under the same per-target budget (see
-  [Host candidates](#host-candidates)).
+  [Host candidates](#host-candidates));
+- a peer-reflexive candidate is learned only from a fresh punch carrying
+  the session's punch tag, only at a signalled IP, and at most 2 per
+  session, so it is always the peer.
 
 Loopback is always refused because it would make the node send to services
 on its own host; link-local addresses are only meaningful on the local
