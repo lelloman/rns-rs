@@ -2821,4 +2821,242 @@ mod tests {
         drop(master2);
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
     }
+
+    /// Every line logged while the tests run, as (level, message).
+    fn logged() -> &'static Mutex<Vec<(log::Level, String)>> {
+        struct Capture;
+        static LINES: std::sync::OnceLock<Mutex<Vec<(log::Level, String)>>> =
+            std::sync::OnceLock::new();
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                if let Some(lines) = LINES.get() {
+                    lines
+                        .lock()
+                        .unwrap()
+                        .push((record.level(), record.args().to_string()));
+                }
+            }
+            fn flush(&self) {}
+        }
+        static CAPTURE: Capture = Capture;
+        let lines = LINES.get_or_init(|| Mutex::new(Vec::new()));
+        static INSTALLED: std::sync::Once = std::sync::Once::new();
+        INSTALLED.call_once(|| {
+            log::set_logger(&CAPTURE).expect("no other logger in these tests");
+            log::set_max_level(log::LevelFilter::Trace);
+        });
+        lines
+    }
+
+    /// The lines logged so far about `iface` reporting on its radio.
+    fn radio_lines(iface: &str) -> Vec<(log::Level, String)> {
+        logged()
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, line)| {
+                line.starts_with(iface)
+                    && (line.contains(" Radio reporting ") || line.contains(" On-air bitrate "))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The radio timing the mock firmware reports for 125 kHz, SF8.
+    const MOCK_PHY: [u16; 6] = [2048, 488, 18, 37, 24, 48];
+
+    /// A mock RNode answering the host as the firmware does, including
+    /// where it reports its radio timing: only while the radio is on, each
+    /// time bandwidth, spreading factor or coding rate change and when the
+    /// radio starts. Returns the commands it got.
+    fn mock_firmware(
+        mut master: Transport,
+        radio_on: bool,
+        stop: Arc<AtomicBool>,
+    ) -> thread::JoinHandle<Vec<(u8, Vec<u8>)>> {
+        thread::spawn(move || {
+            let mut online = radio_on;
+            let mut got = Vec::new();
+            let mut pending = Vec::new();
+            let mut buf = [0u8; 1024];
+            let phy: Vec<u8> = MOCK_PHY.iter().flat_map(|v| v.to_be_bytes()).collect();
+            let answer = |master: &mut Transport, command: u8, data: &[u8]| {
+                master
+                    .write_all(&rnode_kiss::rnode_command(command, data))
+                    .unwrap();
+            };
+            while !stop.load(Ordering::Relaxed) {
+                if !poll_read(master.as_raw_fd(), 50) {
+                    continue;
+                }
+                let n = match master.read(&mut buf) {
+                    Ok(n) if n > 0 => n,
+                    _ => break,
+                };
+                pending.extend_from_slice(&buf[..n]);
+                while let Some(end) = pending.iter().skip(1).position(|b| *b == kiss::FEND) {
+                    let frame: Vec<u8> = pending.drain(..=end).collect();
+                    let frame = kiss::unescape(&frame[1..]);
+                    let Some((&command, data)) = frame.split_first() else {
+                        continue;
+                    };
+                    got.push((command, data.to_vec()));
+                    match command {
+                        rnode_kiss::CMD_DETECT => mock_respond_detect(&mut master),
+                        rnode_kiss::CMD_FREQUENCY | rnode_kiss::CMD_TXPOWER => {
+                            answer(&mut master, command, data)
+                        }
+                        rnode_kiss::CMD_BANDWIDTH | rnode_kiss::CMD_SF | rnode_kiss::CMD_CR => {
+                            if online {
+                                answer(&mut master, rnode_kiss::CMD_STAT_PHYPRM, &phy);
+                            }
+                            answer(&mut master, command, data);
+                        }
+                        rnode_kiss::CMD_RADIO_STATE => {
+                            if data == [rnode_kiss::RADIO_STATE_ON] && !online {
+                                online = true;
+                                for _ in 0..3 {
+                                    answer(&mut master, rnode_kiss::CMD_STAT_PHYPRM, &phy);
+                                }
+                            } else if data == [rnode_kiss::RADIO_STATE_OFF] {
+                                online = false;
+                            }
+                            answer(&mut master, command, &[u8::from(online)]);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            got
+        })
+    }
+
+    /// A single RNode interface up on a pty, served by the mock firmware.
+    struct MockRNode {
+        rx: crate::event::EventReceiver,
+        control: super::super::ListenerControl,
+        stop: Arc<AtomicBool>,
+        firmware: thread::JoinHandle<Vec<(u8, Vec<u8>)>>,
+        _slave: Transport,
+        _dir: tempfile::TempDir,
+    }
+
+    impl MockRNode {
+        fn start(name: &str, id: u64, radio_on: bool) -> MockRNode {
+            // Capture from the start.
+            logged();
+            let dir = tempdir().unwrap();
+            let port_path = dir.path().join("rnode-port");
+            let (master_fd, slave_fd) = open_pty_pair().unwrap();
+            std::os::unix::fs::symlink(slave_tty_path(slave_fd), &port_path).unwrap();
+            let master = unsafe { transport_from_raw_fd(master_fd) };
+            // Kept open so the pty does not hang up.
+            let slave = unsafe { transport_from_raw_fd(slave_fd) };
+            let mut config = RNodeConfig {
+                name: name.into(),
+                port: port_path.display().to_string(),
+                subinterfaces: vec![RNodeSubConfig {
+                    name: name.into(),
+                    vport: 0,
+                    outgoing: true,
+                    frequency: 868_000_000,
+                    bandwidth: 125_000,
+                    txpower: 14,
+                    spreading_factor: 8,
+                    coding_rate: 5,
+                    flow_control: false,
+                    st_alock: None,
+                    lt_alock: None,
+                }],
+                interface_id: InterfaceId(id),
+                base_interface_id: InterfaceId(id),
+                ..Default::default()
+            };
+            config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
+            let stop = Arc::new(AtomicBool::new(false));
+            let firmware = mock_firmware(master, radio_on, Arc::clone(&stop));
+            let (tx, rx) = event::channel();
+            let (_writers, control) = start_with_control(config, tx).unwrap();
+            wait_for_interface_event(
+                &rx,
+                Duration::from_secs(6),
+                |event| matches!(event, Event::InterfaceUp(InterfaceId(i), _, _) if *i == id),
+            );
+            MockRNode {
+                rx,
+                control,
+                stop,
+                firmware,
+                _slave: slave,
+                _dir: dir,
+            }
+        }
+
+        /// Shut the interface down as the driver does, and return the
+        /// commands the device got.
+        fn shut_down(self) -> Vec<(u8, Vec<u8>)> {
+            self.control.request_stop();
+            self.control.finish();
+            // Whatever the device still answers has time to be read.
+            let _ = self.rx.recv_timeout(Duration::from_millis(300));
+            self.stop.store(true, Ordering::Relaxed);
+            self.firmware.join().unwrap()
+        }
+    }
+
+    fn debug_lines(iface: &str, lines: &[&str]) -> Vec<(log::Level, String)> {
+        lines
+            .iter()
+            .map(|line| {
+                let level = if line.starts_with("On-air") {
+                    log::Level::Info
+                } else {
+                    log::Level::Debug
+                };
+                (level, format!("{} {}", iface, line))
+            })
+            .collect()
+    }
+
+    const TIMING_LINES: [&str; 4] = [
+        "Radio reporting symbol time is 2.05ms (488 baud)",
+        "Radio reporting preamble is 18 symbols (37ms)",
+        "Radio reporting CSMA slot time is 24ms",
+        "Radio reporting DIFS time is 48ms",
+    ];
+
+    /// The radio timing is logged where the device reports it: a radio
+    /// still off reports it once started, after the settings are
+    /// answered; a radio left on reports it with the first setting that
+    /// changes its timing, the bandwidth.
+    #[test]
+    fn rnode_logs_radio_timing_where_the_device_reports_it() {
+        let settings = [
+            "Radio reporting bandwidth is 125.0 KHz",
+            "Radio reporting TX power is 14 dBm",
+            "Radio reporting spreading factor is 8",
+            "Radio reporting coding rate is 5",
+            "On-air bitrate is now 3.12 kbps",
+        ];
+        let frequency = "Radio reporting frequency is 868.0 MHz";
+
+        let iface = "RNodeInterface[timing-radio-off]";
+        let rnode = MockRNode::start("timing-radio-off", 61, false);
+        let mut want = vec![frequency];
+        want.extend(settings);
+        want.extend(TIMING_LINES);
+        assert_eq!(radio_lines(iface), debug_lines(iface, &want));
+        rnode.shut_down();
+
+        let iface = "RNodeInterface[timing-radio-on]";
+        let rnode = MockRNode::start("timing-radio-on", 62, true);
+        let mut want = vec![frequency];
+        want.extend(TIMING_LINES);
+        want.extend(settings);
+        assert_eq!(radio_lines(iface), debug_lines(iface, &want));
+        rnode.shut_down();
+    }
 }
