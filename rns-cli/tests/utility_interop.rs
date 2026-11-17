@@ -1800,6 +1800,141 @@ fn remote_path_tables(managed: Daemon) -> (String, String) {
     (json(&["-t", "-j"]), json(&["-r", "-j"]))
 }
 
+/// Remote management on an instance run by `managed` without transport:
+/// its management destination belongs to its ephemeral transport
+/// identity, named in its notice, and a Python rnpath with the management
+/// identity reads its path table through it with `-R`.
+#[cfg(target_os = "linux")]
+fn remote_management_without_transport(managed: Daemon) {
+    let root = tempfile::tempdir().unwrap();
+    let managed_dir = root.path().join("managed");
+    let client_dir = root.path().join("client");
+    fs::create_dir_all(&managed_dir).unwrap();
+    fs::create_dir_all(&client_dir).unwrap();
+    let management_identity = root.path().join("management");
+    let mut prepare = Command::new("python3");
+    prepare.env("PYTHONUNBUFFERED", "1").args([
+        "-c",
+        "import RNS, sys; m = RNS.Identity(); m.to_file(sys.argv[1]); print(m.hash.hex())",
+        management_identity.to_str().unwrap(),
+    ]);
+    let prepared = run(prepare);
+    assert_success(&prepared, "prepare management identity");
+    let management = String::from_utf8_lossy(&prepared.stdout)
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    let ports: Vec<TcpPortReservation> = (0..3).map(|_| TcpPortReservation::new()).collect();
+    let (transport_port, c_shared, c_control) = (ports[0].port(), ports[1].port(), ports[2].port());
+    let pid = std::process::id();
+    let label = if managed == Daemon::Python {
+        "py"
+    } else {
+        "rs"
+    };
+    fs::write(
+        managed_dir.join("config"),
+        format!(
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = No\n  \
+             enable_remote_management = Yes\n  remote_management_allowed = {management}\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[managed server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        client_dir.join("config"),
+        format!(
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = Yes\n  \
+             instance_name = rmgmt-client-{label}-{pid}\n  shared_instance_port = {c_shared}\n  \
+             instance_control_port = {c_control}\n  publish_blackhole = Yes\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[client]]\n    type = TCPClientInterface\n    \
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    drop(ports);
+
+    let managed_log = root.path().join("managed.log");
+    let mut managed_daemon = spawn_daemon(managed, &managed_dir, &managed_log);
+    wait_for_port(transport_port, &mut managed_daemon, "managed TCP server");
+    // The ephemeral transport identity, as the notice names it.
+    let notice = "Enabled remote management on <rnstransport.remote.management.";
+    let deadline = Instant::now() + START_TIMEOUT;
+    let transport = loop {
+        managed_daemon.assert_running("managed");
+        let found = fs::read_to_string(&managed_log)
+            .unwrap_or_default()
+            .lines()
+            .find_map(|line| {
+                let rest = &line[line.find(notice)? + notice.len()..];
+                Some(rest.split(':').next()?.to_string())
+            });
+        if let Some(found) = found {
+            break found;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{label}: no remote management notice:\n{}",
+            fs::read_to_string(&managed_log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
+    let stored = identity_file_hash(&managed_dir.join("storage").join("transport_identity"));
+    assert_ne!(transport, stored, "{label}: not the ephemeral identity");
+    let mut client_daemon =
+        spawn_daemon(Daemon::Python, &client_dir, &root.path().join("client.log"));
+    wait_for_abstract_socket(
+        &format!("rns/rmgmt-client-{label}-{pid}/rpc"),
+        &mut client_daemon,
+        "client RPC",
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        managed_daemon.assert_running("managed");
+        client_daemon.assert_running("client");
+        let mut command = Command::new("python3");
+        command.env("PYTHONUNBUFFERED", "1");
+        command.args(["-m", "RNS.Utilities.rnpath", "--config"]);
+        command.arg(&client_dir);
+        command.args(["-R", &transport, "-i"]);
+        command.arg(&management_identity);
+        command.args(["-W", "15", "-t"]);
+        let output = run(command);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let shown = stdout.rsplit('\r').next().unwrap_or_default().to_string();
+        if output.status.code() == Some(0) && shown.lines().any(|line| line.starts_with('<')) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{label}: no remote path table: {shown}\nmanaged log:\n{}",
+            fs::read_to_string(&managed_log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnpath_manages_rust_instance_without_transport() {
+    remote_management_without_transport(Daemon::Rust);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_rnpath_manages_python_instance_without_transport() {
+    remote_management_without_transport(Daemon::Python);
+}
+
 /// The first entry of a table `rnpath -j` printed: its keys in the order
 /// printed, each with the JSON type of its value.
 #[cfg(target_os = "linux")]

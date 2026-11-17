@@ -2989,17 +2989,27 @@ impl RnsNode {
             );
         }
 
+        // The management destinations belong to the transport identity,
+        // `Transport.identity`: on an instance without transport and
+        // without static_transport_identity, the ephemeral one.
+        let transport_id = Identity::from_private_key(
+            &driver
+                .transport_identity
+                .as_ref()
+                .and_then(|identity| identity.get_private_key())
+                .expect("the node has a transport identity"),
+        );
         // Set up management destinations if enabled
         if config.management.enable_remote_management {
-            if let Some(prv_key) = identity.get_private_key() {
-                let identity_hash = *identity.hash();
+            if let Some(prv_key) = transport_id.get_private_key() {
+                let identity_hash = *transport_id.hash();
                 let mgmt_dest = crate::management::management_dest_hash(&identity_hash);
 
                 // Extract Ed25519 signing keys from the identity
                 let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
                     &prv_key[32..64].try_into().unwrap(),
                 );
-                let sig_pub_bytes: [u8; 32] = identity.get_public_key().unwrap()[32..64]
+                let sig_pub_bytes: [u8; 32] = transport_id.get_public_key().unwrap()[32..64]
                     .try_into()
                     .unwrap();
 
@@ -3046,20 +3056,23 @@ impl RnsNode {
         }
 
         if config.management.publish_blackhole {
-            if let Some(prv_key) = identity.get_private_key() {
-                let identity_hash = *identity.hash();
+            if let Some(prv_key) = transport_id.get_private_key() {
+                let identity_hash = *transport_id.hash();
                 let bh_dest = crate::management::blackhole_dest_hash(&identity_hash);
 
                 let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
                     &prv_key[32..64].try_into().unwrap(),
                 );
-                let sig_pub_bytes: [u8; 32] = identity.get_public_key().unwrap()[32..64]
+                let sig_pub_bytes: [u8; 32] = transport_id.get_public_key().unwrap()[32..64]
                     .try_into()
                     .unwrap();
 
                 driver
                     .engine
                     .register_destination(bh_dest, rns_core::constants::DESTINATION_SINGLE);
+                driver
+                    .local_destinations
+                    .insert(bh_dest, rns_core::constants::DESTINATION_SINGLE);
                 driver.builtin_link_destinations.insert(bh_dest);
                 driver.link_manager.register_link_destination(
                     bh_dest,
@@ -3078,15 +3091,16 @@ impl RnsNode {
                     .set(bh_dest, rns_core::constants::BLACKHOLE_LINK_COST.as_f64());
 
                 log::info!(
-                    "Blackhole list publishing enabled on {:02x?}",
-                    &bh_dest[..4],
+                    target: crate::logging::NOTICE_TARGET,
+                    "Enabled blackhole list publishing for transport identity <{}>",
+                    hex_string(&identity_hash),
                 );
             }
         }
 
         // Set up probe responder if enabled
         if config.respond_to_probes && config.transport_enabled {
-            let identity_hash = *identity.hash();
+            let identity_hash = *transport_id.hash();
             let probe_dest = crate::management::probe_dest_hash(&identity_hash);
 
             // Register as SINGLE destination in transport engine
@@ -3099,7 +3113,7 @@ impl RnsNode {
 
             // Register PROVE_ALL proof strategy with transport identity
             let probe_identity = rns_crypto::identity::Identity::from_private_key(
-                &identity.get_private_key().unwrap(),
+                &transport_id.get_private_key().unwrap(),
             );
             driver.proof_strategies.insert(
                 probe_dest,
@@ -9148,6 +9162,9 @@ enable_transport = False
                 identity: Some(Identity::from_private_key(
                     &identity.get_private_key().unwrap(),
                 )),
+                // On a transport instance the blackhole destination
+                // belongs to this identity, not an ephemeral one.
+                transport_enabled: true,
                 management: crate::ManagementConfig {
                     publish_blackhole: true,
                     ..Default::default()
