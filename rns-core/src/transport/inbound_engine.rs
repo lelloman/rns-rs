@@ -1391,9 +1391,11 @@ impl TransportEngine {
         if let Some(ann) = announce_entry {
             self.insert_announce_entry(ctx.packet.destination_hash, ann, ctx.now);
         } else if is_path_response && self.serves_local_client(ctx.iface) {
-            // Transport.py:2375-2395: relay a local client's path response,
-            // immediately and once, to an interface that asked for it.
-            if let Some((requesting_interface, _)) = self
+            // As upstream, a local client's path response that answers a
+            // pending request is retransmitted at once and once only, as a
+            // plain announce on every interface (no attached interface, no
+            // blocked rebroadcast).
+            if let Some((_requesting_interface, _)) = self
                 .pending_local_path_requests
                 .remove(&ctx.packet.destination_hash)
             {
@@ -1408,8 +1410,8 @@ impl TransportEngine {
                     destination_hash: ctx.packet.destination_hash,
                     context_flag: ctx.packet.flags.context_flag,
                     local_rebroadcasts: 0,
-                    block_rebroadcasts: true,
-                    attached_interface: Some(requesting_interface),
+                    block_rebroadcasts: false,
+                    attached_interface: None,
                 };
                 self.insert_announce_entry(ctx.packet.destination_hash, entry, ctx.now);
             }
@@ -2114,9 +2116,10 @@ mod tests {
         }
     }
 
-    /// As upstream, a path response is passed on to a network interface
-    /// that asked for it only when it comes from a local client; one from
-    /// the network is not retransmitted.
+    /// As upstream, a path response that answers a pending request is
+    /// retransmitted only when it comes from a local client, and then as a
+    /// plain announce on every interface; one from the network is not
+    /// retransmitted.
     #[test]
     fn only_a_local_clients_path_response_answers_a_pending_request() {
         use super::local_client_announce_tests::announce_in_context;
@@ -2142,8 +2145,8 @@ mod tests {
                 engine
                     .announce_table
                     .get(&dest)
-                    .map(|entry| entry.attached_interface),
-                answered.then_some(Some(InterfaceId(3))),
+                    .map(|entry| (entry.attached_interface, entry.block_rebroadcasts)),
+                answered.then_some((None, false)),
                 "from {from}"
             );
         }
