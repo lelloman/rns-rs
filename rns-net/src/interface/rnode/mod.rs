@@ -458,13 +458,14 @@ fn start_with_control(
     }
     let running = Arc::new(AtomicBool::new(true));
     let shared_writer_for_leave = Arc::clone(&shared_writer);
+    let finish_config = config.clone();
     if crate::engine::FOLD_IO {
         folded::RNodeLink::new(config, tx, shared_writer, flow_states, Arc::clone(&running))
             .start(reader_file)?;
         let control = super::ListenerControl::with_running_flag(running);
         return Ok((
             writers,
-            with_leave_on_finish(control, shared_writer_for_leave),
+            with_leave_on_finish(control, shared_writer_for_leave, &finish_config),
         ));
     }
     let reader_config = config.clone();
@@ -507,18 +508,37 @@ fn start_with_control(
     let control = super::ListenerControl::with_running_flag(running);
     Ok((
         writers,
-        with_leave_on_finish(control, shared_writer_for_leave),
+        with_leave_on_finish(control, shared_writer_for_leave, &finish_config),
     ))
 }
 
-/// Send LEAVE when the interface finishes, as upstream's `detach()`: the
-/// device can then stop bridging instead of waiting for the host.
+/// Turn the radios off and send LEAVE when the interface finishes, as
+/// upstream's `detach()`: the device can then stop bridging instead of
+/// waiting for the host.
 fn with_leave_on_finish(
     control: super::ListenerControl,
     writer: Arc<Mutex<DeviceWriter>>,
+    config: &RNodeConfig,
 ) -> super::ListenerControl {
+    let multi = config.multi;
+    let vports: Vec<u8> = config.subinterfaces.iter().map(|sub| sub.vport).collect();
     control.with_on_finish(move || {
         let mut writer = lock_or_recover(&writer, "rnode shared writer");
+        let off = [rnode_kiss::RADIO_STATE_OFF];
+        if multi {
+            for &vport in &vports {
+                let _ = writer.write_all(&rnode_kiss::rnode_select_command(
+                    vport,
+                    rnode_kiss::CMD_RADIO_STATE,
+                    &off,
+                ));
+            }
+        } else {
+            let _ = writer.write_all(&rnode_kiss::rnode_command(
+                rnode_kiss::CMD_RADIO_STATE,
+                &off,
+            ));
+        }
         let _ = writer.write_all(&rnode_kiss::leave_request());
         // A BLE device is disconnected, as upstream's detach does.
         writer.transport().close();
