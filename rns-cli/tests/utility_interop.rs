@@ -940,6 +940,68 @@ fn python_rncp_client_sends_to_rust_listener() {
     );
 }
 
+/// A file of `size` bytes that does not compress, so a transfer carries
+/// every byte.
+fn incompressible_file(path: &Path, size: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491u32;
+    let data: Vec<u8> = (0..size)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        })
+        .collect();
+    fs::write(path, &data).unwrap();
+    data
+}
+
+/// A Resource of several segments, each with several hashmap updates,
+/// crosses between Rust and Python in both directions.
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn large_rncp_transfers_cross_between_rust_and_python() {
+    for (sender, listener_side, name) in [
+        (
+            Implementation::Rust,
+            Implementation::Python,
+            "rust-to-python-large",
+        ),
+        (
+            Implementation::Python,
+            Implementation::Rust,
+            "python-to-rust-large",
+        ),
+    ] {
+        let harness = Harness::start(name);
+        let listener_identity = harness.path("listener.identity");
+        let client_identity = harness.path("client.identity");
+        let receive = harness.path("receive");
+        fs::create_dir_all(&receive).unwrap();
+        let source = harness.path("large.bin");
+        // Three segments of upstream's largest efficient size.
+        let expected = incompressible_file(&source, 2 * 1024 * 1024 + 300_007);
+        let destination = harness.destination(listener_side, "rncp", &listener_identity);
+        let listener = harness.listener(
+            listener_side,
+            "rncp",
+            &listener_identity,
+            &destination,
+            &[
+                "--no-auth".into(),
+                "--save".into(),
+                receive.to_string_lossy().into_owned(),
+                "-b".into(),
+                "1".into(),
+            ],
+        );
+        let output = rncp_send(&harness, sender, &client_identity, &source, &destination);
+        assert_success_with_process(&output, name, &listener, &harness);
+        assert_eq!(
+            read_received(&receive.join("large.bin"), &expected),
+            expected
+        );
+    }
+}
+
 /// Upstream 825c2e19: a shared instance with `[filter] required_only`
 /// drops announces of destination types no local application asked for.
 const REQUIRED_ONLY_FILTER: &str = "[filter]\nrequired_only = Yes\n";
