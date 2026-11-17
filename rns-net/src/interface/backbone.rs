@@ -1255,6 +1255,11 @@ impl LoopSource for PeerSource {
             .clients
             .get(&self.key)
             .is_some_and(|client| client.dp_ingress_gated)
+            // A hung-up socket stays ready even unwatched (epoll always
+            // reports hang-ups and errors): holding it would serve it again
+            // on every pass for as long as the hold lasts. Read it instead,
+            // which finds the end of the stream.
+            && !crate::interface::stream_read::socket_hung_up(self.stream.as_raw_fd())
         {
             // Throttled: the server re-arms it when the hold ends.
             return SourceStatus::Hold;
@@ -3032,6 +3037,65 @@ mod tests {
             matches!(released, Event::Frame { data, .. } if data == vec![1u8; 32].into()),
             "held producer was not released after DATA pressure recovered"
         );
+    }
+
+    #[test]
+    fn a_gated_peer_that_hangs_up_is_disconnected_while_gated() {
+        let port = find_free_port();
+        let capacities = crate::event::InboundQueueCapacities {
+            data: 200,
+            announce: 8,
+            path_request: 8,
+            ingress_limited: 8,
+        };
+        let (tx, rx) = crate::event::channel_with_queue_capacities(16, capacities);
+        let observer = tx.clone();
+        let next_id = Arc::new(AtomicU64::new(8076));
+        let config = make_server_config(port, 80, None, None, None, BackboneAbuseConfig::default());
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+
+        let framed = hdlc::frame(&[0u8; 32]);
+        let mut burst = Vec::with_capacity(framed.len() * 180);
+        for _ in 0..180 {
+            burst.extend_from_slice(&framed);
+        }
+        client.write_all(&burst).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while observer.inbound_queue_snapshot().heights[0] < 180 && Instant::now() < deadline {
+            serve_for(&rx, Duration::from_millis(5));
+        }
+        serve_for(&rx, Duration::from_millis(100));
+        assert!(observer.inbound_queue_snapshot().heights[0] >= 180);
+
+        // Gated, with the queue still full: a reset (reported even while the
+        // peer is unwatched) must be noticed now, not once the hold ends.
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        // SAFETY: valid socket and option buffer for the call.
+        unsafe {
+            libc::setsockopt(
+                std::os::fd::AsRawFd::as_raw_fd(&client),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                (&linger as *const libc::linger).cast(),
+                std::mem::size_of::<libc::linger>() as libc::socklen_t,
+            );
+        }
+        drop(client);
+        serve_for(&rx, Duration::from_millis(200));
+        let mut down = false;
+        while let Some(received) = rx.try_recv_classified().unwrap() {
+            if matches!(received.event, Event::InterfaceDown(InterfaceId(8076))) {
+                down = true;
+            }
+        }
+        assert!(down, "the hung-up gated peer was not disconnected");
     }
 
     #[test]

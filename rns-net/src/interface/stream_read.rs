@@ -133,6 +133,35 @@ fn read_frames(
     StreamRead::Rearm
 }
 
+/// Whether a socket's peer has closed it or it failed: the next `recv`
+/// would return end of stream or an error rather than data or EAGAIN.
+/// Consumes nothing.
+pub(crate) fn socket_hung_up(fd: std::os::fd::RawFd) -> bool {
+    let mut byte = 0u8;
+    loop {
+        // SAFETY: `byte` is a valid one-byte buffer for the call.
+        let n = unsafe {
+            libc::recv(
+                fd,
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        if n > 0 {
+            return false;
+        }
+        if n == 0 {
+            return true;
+        }
+        match io::Error::last_os_error().kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::WouldBlock => return false,
+            _ => return true,
+        }
+    }
+}
+
 /// What the accept loop does after `accept` returns an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AcceptStep {
