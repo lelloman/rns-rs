@@ -290,6 +290,10 @@ pub enum DecodeError {
     UnsupportedGlobal(String),
     /// A pickled integer outside the range of `i64`.
     IntegerOutOfRange,
+    /// The memo would copy more than [`MAX_MEMO_COPY`] in all: a pickle
+    /// that refers back to its own containers can describe a value
+    /// exponentially larger than itself.
+    TooLarge,
 }
 
 impl std::fmt::Display for DecodeError {
@@ -305,11 +309,27 @@ impl std::fmt::Display for DecodeError {
                 write!(f, "unsupported global: {}", name)
             }
             DecodeError::IntegerOutOfRange => write!(f, "pickled integer out of range"),
+            DecodeError::TooLarge => write!(f, "pickle expands beyond the decode limit"),
         }
     }
 }
 
 impl std::error::Error for DecodeError {}
+
+/// Most the memo may copy while decoding one pickle, in [`Item::weight`]
+/// units (about one per value plus one per string or bytes byte). Values
+/// are copied in and out of the memo rather than shared, so a few bytes
+/// that store a container and fetch it back into itself again and again
+/// would otherwise grow without bound. The RPC's largest real messages
+/// copy a small fraction of this.
+pub const MAX_MEMO_COPY: usize = 16 * 1024 * 1024;
+
+/// Charge `item`'s weight against the memo copy `budget`.
+fn charge_copy(budget: &mut usize, item: &Item) -> Result<(), DecodeError> {
+    let weight = item.weight(*budget).ok_or(DecodeError::TooLarge)?;
+    *budget -= weight;
+    Ok(())
+}
 
 /// Decode pickle protocol 2 bytes into a PickleValue.
 pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
@@ -320,6 +340,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
     let mut marks: Vec<usize> = Vec::new();
     let mut memo: HashMap<u32, Item> = HashMap::new();
     let mut memo_counter: u32 = 0;
+    let mut copy_budget = MAX_MEMO_COPY;
     let mut pos = 0;
 
     // Skip protocol header if present
@@ -509,6 +530,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
             MEMOIZE => {
                 // Protocol 4: implicit memo, auto-assigns next index
                 if let Some(val) = stack.last() {
+                    charge_copy(&mut copy_budget, val)?;
                     memo.insert(memo_counter, val.clone());
                 }
                 memo_counter += 1;
@@ -649,6 +671,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 let idx = data[pos] as u32;
                 pos += 1;
                 if let Some(val) = stack.last() {
+                    charge_copy(&mut copy_budget, val)?;
                     memo.insert(idx, val.clone());
                 }
             }
@@ -660,6 +683,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 pos += 4;
                 if let Some(val) = stack.last() {
+                    charge_copy(&mut copy_budget, val)?;
                     memo.insert(idx, val.clone());
                 }
             }
@@ -669,8 +693,9 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 }
                 let idx = data[pos] as u32;
                 pos += 1;
-                let val = memo.get(&idx).cloned().ok_or(DecodeError::StackUnderflow)?;
-                stack.push(val);
+                let val = memo.get(&idx).ok_or(DecodeError::StackUnderflow)?;
+                charge_copy(&mut copy_budget, val)?;
+                stack.push(val.clone());
             }
             LONG_BINGET => {
                 if pos + 4 > data.len() {
@@ -679,8 +704,9 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 let idx =
                     u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 pos += 4;
-                let val = memo.get(&idx).cloned().ok_or(DecodeError::StackUnderflow)?;
-                stack.push(val);
+                let val = memo.get(&idx).ok_or(DecodeError::StackUnderflow)?;
+                charge_copy(&mut copy_budget, val)?;
+                stack.push(val.clone());
             }
             GLOBAL => {
                 // Read module\nname\n
@@ -772,6 +798,40 @@ enum Item {
 }
 
 impl Item {
+    /// The cost of copying this item: one per value, plus the length of
+    /// each string and bytes value. `None` once it passes `limit`, which
+    /// bounds the walk as well.
+    fn weight(&self, limit: usize) -> Option<usize> {
+        fn walk(value: &PickleValue, total: &mut usize, limit: usize) -> Option<()> {
+            *total += 1;
+            match value {
+                PickleValue::String(s) => *total += s.len(),
+                PickleValue::Bytes(b) => *total += b.len(),
+                PickleValue::List(items) => {
+                    for item in items {
+                        walk(item, total, limit)?;
+                    }
+                }
+                PickleValue::Dict(pairs) => {
+                    for (key, value) in pairs {
+                        walk(key, total, limit)?;
+                        walk(value, total, limit)?;
+                    }
+                }
+                _ => {}
+            }
+            (*total <= limit).then_some(())
+        }
+        match self {
+            Item::Value(value) => {
+                let mut total = 0;
+                walk(value, &mut total, limit)?;
+                Some(total)
+            }
+            Item::CodecsEncode => (limit >= 1).then_some(1),
+        }
+    }
+
     /// The decoded value, or an error for a callable found where data is
     /// expected (it has no `PickleValue` form).
     fn into_value(self) -> Result<PickleValue, DecodeError> {
@@ -820,6 +880,40 @@ fn pop_mark(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pickle_that_doubles_itself_through_the_memo_is_refused() {
+        // [] put 0, then 40 times: a new list holding memo 0 twice, put
+        // back as memo 0, so the value doubles each round.
+        let mut data = vec![PROTO, 2, EMPTY_LIST, BINPUT, 0];
+        for _ in 0..40 {
+            data.extend_from_slice(&[EMPTY_LIST, BINGET, 0, APPEND, BINGET, 0, APPEND, BINPUT, 0]);
+        }
+        data.push(STOP);
+        assert!(matches!(decode(&data), Err(DecodeError::TooLarge)));
+
+        // A few rounds stay within the limit and decode in full.
+        let mut data = vec![PROTO, 2, EMPTY_LIST, BINPUT, 0];
+        for _ in 0..4 {
+            data.extend_from_slice(&[EMPTY_LIST, BINGET, 0, APPEND, BINGET, 0, APPEND, BINPUT, 0]);
+        }
+        data.push(STOP);
+        fn leaves(value: &PickleValue) -> usize {
+            match value {
+                PickleValue::List(items) if items.is_empty() => 1,
+                PickleValue::List(items) => items.iter().map(leaves).sum(),
+                _ => 0,
+            }
+        }
+        assert_eq!(leaves(&decode(&data).unwrap()), 16);
+    }
+
+    #[test]
+    fn the_fuzzed_memo_bomb_is_refused_without_exhausting_memory() {
+        // Found by the pickle_decode fuzz target: it went past 2 GB.
+        let data = include_bytes!("../../tests/fixtures/pickle/memo_bomb_oom.bin");
+        assert!(decode(data).is_err());
+    }
+
     /// Lengths read from the stream are checked without overflowing: a
     /// negative BINSTRING length (an i32) or a huge 8-byte length used to
     /// overflow `pos + len` (found by fuzzing the RPC decoder).
