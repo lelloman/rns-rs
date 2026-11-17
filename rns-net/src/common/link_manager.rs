@@ -2174,7 +2174,7 @@ impl LinkManager {
                 link_id,
                 resource_hash,
             } => {
-                out.extend(self.handle_resource_icl(&link_id, &resource_hash));
+                out.extend(self.handle_resource_icl(&link_id, &resource_hash, rng));
             }
             LinkDataResult::ResourceRcl {
                 link_id,

@@ -3896,7 +3896,16 @@ fn resource_cancellation_cleans_only_matching_split_storage_and_stream() {
             constants::CONTEXT_RESOURCE_ICL,
             &mut OsRng,
         ));
-        assert_eq!(deliver_cancel_packet(&mut receiver, &icl).len(), 1);
+        let actions = deliver_cancel_packet(&mut receiver, &icl);
+        // The cancelled transfer fails and, as upstream, answers with RCL.
+        assert_eq!(actions.len(), 2);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }))
+                .count(),
+            1
+        );
         assert!(!paths[0].exists());
         assert!(paths[1].exists());
         assert_eq!(receiver.links[&link].incoming_splits.len(), 1);
@@ -4077,13 +4086,26 @@ fn test_resource_cancel_icl() {
     let hash = resp_mgr.links[&link_id].incoming_resources[0]
         .resource_hash
         .clone();
-    let icl_actions = resp_mgr.handle_resource_icl(&link_id, &hash);
+    let icl_actions = resp_mgr.handle_resource_icl(&link_id, &hash, &mut rng);
 
     // Should have resource failed
     let has_failed = icl_actions
         .iter()
         .any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }));
     assert!(has_failed, "ICL should produce ResourceFailed");
+    // And, as upstream cancels the incoming resource in turn, answer with
+    // RESOURCE_RCL naming it.
+    let rcl: Vec<_> = icl_actions
+        .iter()
+        .filter_map(|a| match a {
+            LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw).ok(),
+            _ => None,
+        })
+        .filter(|p| p.context == constants::CONTEXT_RESOURCE_RCL)
+        .collect();
+    assert_eq!(rcl.len(), 1);
+    let link = &resp_mgr.links[&link_id];
+    assert_eq!(link.engine.decrypt(rcl[0].data()).unwrap(), hash);
 }
 
 #[test]

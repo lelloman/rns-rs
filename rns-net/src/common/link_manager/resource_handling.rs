@@ -1701,6 +1701,7 @@ impl LinkManager {
         &mut self,
         link_id: &LinkId,
         resource_hash: &[u8],
+        rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         let Some(hash) = Self::resource_hash_key(resource_hash) else {
             return Vec::new();
@@ -1736,17 +1737,11 @@ impl LinkManager {
         }
         // Removing its assembly identity invalidates only this transfer's worker
         // result. Other transfers retain their link generation and pending work.
-        receiver
-            .handle_cancel()
-            .into_iter()
-            .filter_map(|action| match action {
-                ResourceAction::Failed(error) => Some(LinkManagerAction::ResourceFailed {
-                    link_id: *link_id,
-                    error: error.to_string(),
-                }),
-                _ => None,
-            })
-            .collect()
+        // Upstream cancels the incoming resource in turn, which answers the
+        // sender with RESOURCE_RCL.
+        let actions = receiver.handle_cancel();
+        let _ = link;
+        self.process_resource_actions(link_id, actions, rng)
     }
 
     /// Reject only the outgoing transfer named by an authenticated RCL packet.

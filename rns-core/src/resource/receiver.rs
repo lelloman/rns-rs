@@ -877,13 +877,14 @@ impl ResourceReceiver {
         })
     }
 
-    /// Handle cancel from sender (RESOURCE_ICL).
+    /// Handle cancel from sender (RESOURCE_ICL). Upstream cancels the
+    /// incoming resource in turn, which answers with RESOURCE_RCL.
     pub fn handle_cancel(&mut self) -> Vec<ResourceAction> {
-        if self.status < ResourceStatus::Complete {
-            self.status = ResourceStatus::Failed;
-            return vec![ResourceAction::Failed(ResourceError::Rejected)];
+        let mut actions = self.cancel();
+        if !actions.is_empty() {
+            actions.push(ResourceAction::Failed(ResourceError::Rejected));
         }
-        vec![]
+        actions
     }
 
     /// Periodic tick. Checks for timeouts.
@@ -939,8 +940,11 @@ impl ResourceReceiver {
                     self.waiting_for_hmu = false;
                     return self.request_next(now);
                 } else {
-                    self.status = ResourceStatus::Failed;
-                    return vec![ResourceAction::Failed(ResourceError::MaxRetriesExceeded)];
+                    // Upstream gives up by cancelling: the sender is told
+                    // with RESOURCE_RCL.
+                    let mut actions = self.cancel();
+                    actions.push(ResourceAction::Failed(ResourceError::MaxRetriesExceeded));
+                    return actions;
                 }
             }
         }
@@ -1922,8 +1926,18 @@ mod tests {
     fn test_handle_cancel() {
         let (_, mut receiver) = make_sender_receiver();
         receiver.accept(1000.0);
-        let _actions = receiver.handle_cancel();
+        // Upstream cancels the incoming resource in turn, answering with
+        // RESOURCE_RCL.
+        let actions = receiver.handle_cancel();
         assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert_eq!(
+            actions,
+            vec![
+                ResourceAction::SendCancelReceiver(receiver.resource_hash.clone()),
+                ResourceAction::Failed(ResourceError::Rejected)
+            ]
+        );
+        assert!(receiver.handle_cancel().is_empty());
     }
 
     #[test]
@@ -2379,8 +2393,16 @@ mod tests {
         receiver.rtt = Some(0.001);
         receiver.eifr = Some(100000.0);
 
-        let _actions = receiver.tick(9999.0, &identity_decrypt, &NoopCompressor);
+        // Upstream gives up by cancelling, telling the sender.
+        let actions = receiver.tick(9999.0, &identity_decrypt, &NoopCompressor);
         assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert_eq!(
+            actions,
+            vec![
+                ResourceAction::SendCancelReceiver(receiver.resource_hash.clone()),
+                ResourceAction::Failed(ResourceError::MaxRetriesExceeded)
+            ]
+        );
     }
 
     /// A sender of `len` bytes in parts of `sdu` bytes, and a receiver of its

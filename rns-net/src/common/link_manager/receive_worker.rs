@@ -674,7 +674,7 @@ mod tests {
                     let hash = manager.links[&link].incoming_resources[0]
                         .resource_hash
                         .clone();
-                    manager.handle_resource_icl(&link, &hash);
+                    manager.handle_resource_icl(&link, &hash, &mut rng);
                 }
                 "cancel_all" => {
                     manager.cancel_all_resources(&mut rng);

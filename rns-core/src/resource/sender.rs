@@ -577,8 +577,7 @@ impl ResourceSender {
                     + RESOURCE_PROCESSING_GRACE;
                 if now > timeout {
                     if self.retries_left == 0 {
-                        self.status = ResourceStatus::Failed;
-                        return vec![ResourceAction::Failed(ResourceError::Timeout)];
+                        return self.time_out();
                     }
                     self.retries_left -= 1;
                     self.last_activity = now;
@@ -596,8 +595,7 @@ impl ResourceSender {
                     + self.sender_grace_time
                     + max_extra_wait;
                 if now > self.last_activity + max_wait {
-                    self.status = ResourceStatus::Failed;
-                    return vec![ResourceAction::Failed(ResourceError::Timeout)];
+                    return self.time_out();
                 }
             }
             ResourceStatus::AwaitingProof => {
@@ -607,8 +605,7 @@ impl ResourceSender {
                     + self.sender_grace_time;
                 if now > timeout {
                     if self.retries_left == 0 {
-                        self.status = ResourceStatus::Failed;
-                        return vec![ResourceAction::Failed(ResourceError::Timeout)];
+                        return self.time_out();
                     }
                     self.retries_left -= 1;
                     self.last_part_sent = now;
@@ -620,6 +617,14 @@ impl ResourceSender {
         }
 
         vec![]
+    }
+
+    /// Give up on a timeout as upstream does, by cancelling: the receiver
+    /// is told with RESOURCE_ICL.
+    fn time_out(&mut self) -> Vec<ResourceAction> {
+        let mut actions = self.cancel();
+        actions.push(ResourceAction::Failed(ResourceError::Timeout));
+        actions
     }
 
     /// The bytes of part `index` as sent, or `None` past the last part.
@@ -1021,9 +1026,16 @@ mod tests {
         sender.advertise(1000.0);
         sender.retries_left = 0;
 
-        // Way past timeout
-        let _actions = sender.tick(2000.0);
+        // Way past timeout: upstream cancels, telling the receiver.
+        let actions = sender.tick(2000.0);
         assert_eq!(sender.status, ResourceStatus::Failed);
+        assert_eq!(
+            actions,
+            vec![
+                ResourceAction::SendCancelInitiator(sender.resource_hash.to_vec()),
+                ResourceAction::Failed(ResourceError::Timeout)
+            ]
+        );
     }
 
     #[test]
@@ -1244,7 +1256,10 @@ mod tests {
         let mut sender = transferring();
         assert_eq!(
             sender.tick(deadline + 1e-6),
-            vec![ResourceAction::Failed(ResourceError::Timeout)]
+            vec![
+                ResourceAction::SendCancelInitiator(sender.resource_hash.to_vec()),
+                ResourceAction::Failed(ResourceError::Timeout)
+            ]
         );
         assert_eq!(sender.status, ResourceStatus::Failed);
     }
@@ -1269,7 +1284,10 @@ mod tests {
         sender.retries_left = 0;
         assert_eq!(
             sender.tick(deadline + 100.0),
-            vec![ResourceAction::Failed(ResourceError::Timeout)]
+            vec![
+                ResourceAction::SendCancelInitiator(sender.resource_hash.to_vec()),
+                ResourceAction::Failed(ResourceError::Timeout)
+            ]
         );
         assert_eq!(sender.status, ResourceStatus::Failed);
     }
