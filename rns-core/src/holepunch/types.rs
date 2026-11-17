@@ -271,4 +271,12 @@ mod tests {
             assert_ne!(CONTEXT_DIRECT_LINK, upstream);
         }
     }
+
+    #[test]
+    fn errors_describe_themselves() {
+        assert_eq!(
+            HolePunchError::SessionMismatch.to_string(),
+            "Session ID mismatch"
+        );
+    }
 }

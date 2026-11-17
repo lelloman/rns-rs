@@ -2120,4 +2120,197 @@ mod tests {
         let actions = responder.tick(101.0 + DISCOVER_TIMEOUT + 1.0);
         assert_eq!(signal(&actions[0]).unwrap().0, UPGRADE_REJECT);
     }
+
+    fn request_payload_of(actions: &[HolePunchAction]) -> Vec<u8> {
+        match &actions[0] {
+            HolePunchAction::SendSignal {
+                msgtype: UPGRADE_REQUEST,
+                payload,
+                ..
+            } => payload.clone(),
+            other => panic!("expected UPGRADE_REQUEST, got {other:?}"),
+        }
+    }
+
+    /// An initiator that sent its request at 101.0, and the responder that
+    /// accepted it at 102.0.
+    fn proposing_pair() -> (HolePunchEngine, HolePunchEngine, Vec<u8>) {
+        let link_id = [0x33; 16];
+        let derived_key = test_derived_key();
+        let mut rng = make_rng(0x42);
+        let mut initiator =
+            HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
+        let request = request_payload_of(
+            &initiator
+                .endpoints_discovered(test_public_addr_a(), 101.0)
+                .unwrap(),
+        );
+        let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
+        responder
+            .handle_signal(UPGRADE_REQUEST, &request, Some(&derived_key), 102.0)
+            .unwrap();
+        (initiator, responder, request)
+    }
+
+    #[test]
+    fn session_keys_are_derived_from_the_link_key_and_session() {
+        let (initiator, responder, _) = proposing_pair();
+        let derived_key = test_derived_key();
+        let session_id = *initiator.session_id();
+        assert_eq!(
+            derive_keepalive_key(&derived_key, &session_id).unwrap()[..],
+            hkdf(
+                32,
+                &derived_key,
+                Some(&session_id),
+                Some(b"rns-holepunch-keepalive-v1")
+            )
+            .unwrap()[..]
+        );
+        for engine in [&initiator, &responder] {
+            assert_eq!(
+                engine.punch_token(),
+                &derive_punch_token(&derived_key, &session_id).unwrap()
+            );
+            assert_eq!(
+                engine.keepalive_key(),
+                &derive_keepalive_key(&derived_key, &session_id).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn each_side_knows_its_role_and_the_peer_endpoint() {
+        let (initiator, responder, request) = proposing_pair();
+        assert!(initiator.is_initiator());
+        assert!(!responder.is_initiator());
+        assert_eq!(
+            responder.peer_public_endpoint(),
+            Some(&test_public_addr_a())
+        );
+        assert!(HolePunchEngine::validate_upgrade_request(&request).is_ok());
+        assert_eq!(
+            HolePunchEngine::validate_upgrade_request(&[0x90]),
+            Err(HolePunchError::InvalidPayload)
+        );
+    }
+
+    #[test]
+    fn overridden_facilitator_is_sent_in_the_request() {
+        let mut rng = make_rng(0x42);
+        let mut initiator =
+            HolePunchEngine::new([0x44; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator
+            .propose(&test_derived_key(), 100.0, &mut rng)
+            .unwrap();
+        let other = Endpoint {
+            addr: vec![9, 9, 9, 9],
+            port: 7000,
+        };
+        initiator.set_facilitator(other.clone());
+        let request = request_payload_of(
+            &initiator
+                .endpoints_discovered(test_public_addr_a(), 101.0)
+                .unwrap(),
+        );
+        assert_eq!(decode_upgrade_request(&request).unwrap().facilitator, other);
+    }
+
+    #[test]
+    fn timeouts_fire_strictly_after_their_duration() {
+        let mut rng = make_rng(0x42);
+        for (state, timeout) in [
+            (HolePunchState::Discovering, DISCOVER_TIMEOUT),
+            (HolePunchState::Proposing, PROPOSE_TIMEOUT),
+            (HolePunchState::WaitingReady, READY_TIMEOUT),
+            (HolePunchState::Punching, PUNCH_TIMEOUT),
+        ] {
+            let mut engine =
+                HolePunchEngine::new([0x55; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+            engine
+                .propose(&test_derived_key(), 100.0, &mut rng)
+                .unwrap();
+            engine.state = state;
+            engine.state_entered_at = 200.0;
+            engine.request_sent_at = 200.0 + timeout;
+            assert!(engine.tick(200.0 + timeout).is_empty(), "{state:?}");
+            assert_eq!(engine.state(), state);
+            engine.tick(200.0 + timeout + 0.001);
+            assert_eq!(engine.state(), HolePunchState::Failed, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn initiator_takes_replies_only_in_the_state_awaiting_them() {
+        // Still discovering its own endpoint: no request went out yet.
+        let mut rng = make_rng(0x42);
+        let derived_key = test_derived_key();
+        let mut initiator =
+            HolePunchEngine::new([0x66; 16], Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
+        let session_id = *initiator.session_id();
+        for (msgtype, payload) in [
+            (UPGRADE_ACCEPT, encode_upgrade_accept(&session_id)),
+            (
+                UPGRADE_REJECT,
+                encode_upgrade_reject(&session_id, REJECT_POLICY),
+            ),
+            (
+                UPGRADE_READY,
+                encode_upgrade_ready(&session_id, &test_public_addr_b(), &[]),
+            ),
+        ] {
+            assert_eq!(
+                initiator
+                    .handle_signal(msgtype, &payload, None, 101.0)
+                    .err(),
+                Some(HolePunchError::InvalidState),
+                "{msgtype}"
+            );
+            assert_eq!(initiator.state(), HolePunchState::Discovering);
+        }
+
+        // READY before ACCEPT.
+        let (mut initiator, _, _) = proposing_pair();
+        let session_id = *initiator.session_id();
+        let ready = encode_upgrade_ready(&session_id, &test_public_addr_b(), &[]);
+        assert_eq!(
+            initiator
+                .handle_signal(UPGRADE_READY, &ready, None, 103.0)
+                .err(),
+            Some(HolePunchError::InvalidState)
+        );
+        assert_eq!(initiator.state(), HolePunchState::Proposing);
+        assert_eq!(initiator.peer_public_endpoint(), None);
+        initiator
+            .handle_signal(
+                UPGRADE_ACCEPT,
+                &encode_upgrade_accept(&session_id),
+                None,
+                103.0,
+            )
+            .unwrap();
+        initiator
+            .handle_signal(UPGRADE_READY, &ready, None, 104.0)
+            .unwrap();
+        assert_eq!(
+            initiator.peer_public_endpoint(),
+            Some(&test_public_addr_b())
+        );
+    }
+
+    #[test]
+    fn endpoint_needs_an_address_and_a_port_and_ignores_the_rest() {
+        let ep = test_public_addr_a();
+        let mut fields = vec![Value::Bin(ep.addr.clone()), Value::UInt(ep.port as u64)];
+        assert_eq!(
+            decode_endpoint(&Value::Array(fields.clone())),
+            Some(ep.clone())
+        );
+        fields.push(Value::Nil);
+        assert_eq!(decode_endpoint(&Value::Array(fields.clone())), Some(ep));
+        fields.truncate(1);
+        assert_eq!(decode_endpoint(&Value::Array(fields)), None);
+    }
 }
