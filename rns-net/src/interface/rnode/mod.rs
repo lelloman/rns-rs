@@ -89,6 +89,9 @@ pub struct RNodeConfig {
     /// What a BLE connection (`port = ble://...`) remembers between
     /// connections.
     pub ble: Arc<Mutex<BleLinkState>>,
+    /// The radio timing a single RNode last reported, kept across
+    /// connections: upstream logs it only when it changes.
+    pub reported_phy: Arc<Mutex<Option<[u16; 6]>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +163,7 @@ impl Default for RNodeConfig {
                 writer: None,
             })),
             ble: Default::default(),
+            reported_phy: Default::default(),
         };
         let startup = RNodeRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));
@@ -671,7 +675,7 @@ fn reader_loop_connected(
     let name = setup::display_name(&config);
     while running.load(Ordering::Relaxed) {
         let mut decoder = rnode_kiss::RNodeDecoder::new();
-        let mut reports = setup::RadioReports::default();
+        let mut reports = setup::RadioReports::new(&config);
         let mut buf = [0u8; 4096];
         let disconnected = loop {
             if !running.load(Ordering::Relaxed) {
@@ -695,11 +699,12 @@ fn reader_loop_connected(
                 }
                 Ok(n) => {
                     for event in decoder.feed(&buf[..n]) {
-                        if !config.multi {
+                        if config.multi {
+                            log_multi_radio_report(&event, &config.name);
+                        } else {
                             reports.apply(&event, &name);
                         }
-                        if update_radio_stats(&event, &mut radio, crate::time::now(), &config.name)
-                        {
+                        if update_radio_stats(&event, &mut radio, crate::time::now()) {
                             publish_radio_telemetry(&tx, &config, &radio);
                             continue;
                         }
@@ -978,12 +983,7 @@ fn signal_interface_up(
 /// Apply a device report to `radio`, as upstream `RNodeInterface` keeps
 /// it. Returns whether it changed what the interface reports; PHY and CSMA
 /// reports are only logged, as upstream.
-fn update_radio_stats(
-    event: &rnode_kiss::RNodeEvent,
-    radio: &mut RadioStats,
-    now: f64,
-    name: &str,
-) -> bool {
+fn update_radio_stats(event: &rnode_kiss::RNodeEvent, radio: &mut RadioStats, now: f64) -> bool {
     const RSSI_OFFSET: i16 = 157;
     match *event {
         rnode_kiss::RNodeEvent::ChannelStats {
@@ -1018,6 +1018,16 @@ fn update_radio_stats(
             radio.temperature = (-30..=90).contains(&celsius).then_some(celsius);
             true
         }
+        // Logged by the caller, as upstream logs them.
+        rnode_kiss::RNodeEvent::PhyStats { .. } | rnode_kiss::RNodeEvent::CsmaStats { .. } => false,
+        _ => false,
+    }
+}
+
+/// Log the radio timing and contention reports of an RNodeMultiInterface
+/// device (a single RNode's are logged as upstream by its reports).
+fn log_multi_radio_report(event: &rnode_kiss::RNodeEvent, name: &str) {
+    match *event {
         rnode_kiss::RNodeEvent::PhyStats {
             symbol_time_us,
             symbol_rate,
@@ -1025,35 +1035,29 @@ fn update_radio_stats(
             preamble_ms,
             csma_slot_ms,
             difs_ms,
-        } => {
-            log::debug!(
-                "[{}] radio reports {:.2} ms symbols ({} baud), {}-symbol preamble ({} ms), \
-                 CSMA slot {} ms, DIFS {} ms",
-                name,
-                f64::from(symbol_time_us) / 1000.0,
-                symbol_rate,
-                preamble_symbols,
-                preamble_ms,
-                csma_slot_ms,
-                difs_ms
-            );
-            false
-        }
+        } => log::debug!(
+            "[{}] radio reports {:.2} ms symbols ({} baud), {}-symbol preamble ({} ms), \
+             CSMA slot {} ms, DIFS {} ms",
+            name,
+            f64::from(symbol_time_us) / 1000.0,
+            symbol_rate,
+            preamble_symbols,
+            preamble_ms,
+            csma_slot_ms,
+            difs_ms
+        ),
         rnode_kiss::RNodeEvent::CsmaStats {
             band,
             window_min,
             window_max,
-        } => {
-            log::trace!(
-                "[{}] radio reports contention window band {} ({}-{} slots)",
-                name,
-                band,
-                window_min,
-                window_max
-            );
-            false
-        }
-        _ => false,
+        } => log::trace!(
+            "[{}] radio reports contention window band {} ({}-{} slots)",
+            name,
+            band,
+            window_min,
+            window_max
+        ),
+        _ => {}
     }
 }
 
@@ -1478,6 +1482,7 @@ impl InterfaceFactory for RNodeFactory {
                 writer: None,
             })),
             ble: Default::default(),
+            reported_phy: Default::default(),
         }))
     }
 
@@ -2018,7 +2023,7 @@ mod tests {
             noise_floor: 58,
             interference: 0xFF,
         };
-        assert!(update_radio_stats(&channel, &mut radio, 100.0, "t"));
+        assert!(update_radio_stats(&channel, &mut radio, 100.0));
         assert_eq!(radio.airtime_short, 6.97);
         assert_eq!(radio.airtime_long, 0.02);
         assert_eq!(radio.channel_load_short, 11.13);
@@ -2037,11 +2042,11 @@ mod tests {
             noise_floor: 58,
             interference: 77,
         };
-        assert!(update_radio_stats(&busy, &mut radio, 200.0, "t"));
+        assert!(update_radio_stats(&busy, &mut radio, 200.0));
         assert_eq!(radio.interference, Some(-80));
         assert_eq!(radio.interference_last, Some((200.0, -80)));
         // Cleared now, but the last sighting stays.
-        assert!(update_radio_stats(&channel, &mut radio, 300.0, "t"));
+        assert!(update_radio_stats(&channel, &mut radio, 300.0));
         assert_eq!(radio.interference, None);
         assert_eq!(radio.interference_last, Some((200.0, -80)));
 
@@ -2049,15 +2054,15 @@ mod tests {
             state: 2,
             percent: 140,
         };
-        assert!(update_radio_stats(&battery, &mut radio, 0.0, "t"));
+        assert!(update_radio_stats(&battery, &mut radio, 0.0));
         assert_eq!(radio.battery_state_name(), "charging");
         assert_eq!(radio.battery_percent, 100);
 
         // Temperature is offset by 120 and kept only between -30 and 90.
         let temp = |raw| rnode_kiss::RNodeEvent::Temperature(raw);
-        assert!(update_radio_stats(&temp(178), &mut radio, 0.0, "t"));
+        assert!(update_radio_stats(&temp(178), &mut radio, 0.0));
         assert_eq!(radio.temperature, Some(58));
-        assert!(update_radio_stats(&temp(250), &mut radio, 0.0, "t"));
+        assert!(update_radio_stats(&temp(250), &mut radio, 0.0));
         assert_eq!(radio.temperature, None);
 
         let phy = rnode_kiss::RNodeEvent::PhyStats {
@@ -2068,12 +2073,11 @@ mod tests {
             csma_slot_ms: 24,
             difs_ms: 48,
         };
-        assert!(!update_radio_stats(&phy, &mut radio, 0.0, "t"));
+        assert!(!update_radio_stats(&phy, &mut radio, 0.0));
         assert!(!update_radio_stats(
             &rnode_kiss::RNodeEvent::Ready,
             &mut radio,
-            0.0,
-            "t"
+            0.0
         ));
     }
 
@@ -2689,6 +2693,7 @@ mod tests {
                 writer: None,
             })),
             ble: Default::default(),
+            reported_phy: Default::default(),
         };
         config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
 

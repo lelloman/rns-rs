@@ -147,7 +147,7 @@ impl RNodeLink {
                 last_rssi: None,
                 last_snr: None,
                 radio: RadioStats::default(),
-                reports: RadioReports::default(),
+                reports: RadioReports::new(&self.config),
                 name: setup::display_name(&self.config),
                 keepalive_at: Instant::now() + KEEPALIVE_INTERVAL,
                 link: Arc::clone(self),
@@ -298,10 +298,12 @@ impl RNodeSource {
             read += n;
             let mut events = Vec::new();
             for event in self.decoder.feed(&cx.buf[..n]) {
-                if !config.multi {
+                if config.multi {
+                    super::log_multi_radio_report(&event, &config.name);
+                } else {
                     self.reports.apply(&event, &self.name);
                 }
-                if update_radio_stats(&event, &mut self.radio, crate::time::now(), &config.name) {
+                if update_radio_stats(&event, &mut self.radio, crate::time::now()) {
                     events.extend(radio_telemetry(config, &self.radio));
                     continue;
                 }
