@@ -5,11 +5,13 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+      - "**/.cargo/audit.toml"
       - ".github/workflows/rustsec.yml"
   pull_request:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+      - "**/.cargo/audit.toml"
       - ".github/workflows/rustsec.yml"
   schedule:
     - cron: "17 4 * * 1"
