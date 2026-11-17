@@ -527,4 +527,50 @@ mod tests {
         assert_eq!(cfg.announce_queue_max_entries, 256);
         assert_eq!(cfg.announce_queue_max_interfaces, 1024);
     }
+
+    fn lora(
+        spreading_factor: u8,
+        coding_rate: u8,
+        explicit_header: bool,
+        crc: bool,
+    ) -> AirtimeProfile {
+        AirtimeProfile::Lora {
+            bandwidth: 125_000,
+            spreading_factor,
+            coding_rate,
+            preamble_symbols: 8,
+            explicit_header,
+            crc,
+        }
+    }
+
+    /// LoRa time on air: (preamble + 4.25 + 8 + ceil((8PL - 4SF + 28 +
+    /// 16CRC - 20IH) / (4(SF - 2DE))) * CR) symbols of 2^SF / BW seconds,
+    /// with low data rate optimisation (DE) from SF11 at 125 kHz or less.
+    #[test]
+    fn lora_airtime_follows_the_time_on_air_formula() {
+        // SF12/BW125 with DE: (8 + 4.25 + 8 + ceil(244 / 40) * 5) symbols
+        // of 32.768 ms.
+        let airtime = lora(12, 5, true, true).transmit_time_secs(31);
+        assert!((airtime - 55.25 * 0.032768).abs() < 1e-9, "{airtime}");
+
+        // SF7/BW125, implicit header, no CRC: (8 + 4.25 + 8 + ceil(28 / 28)
+        // * 8) symbols of 1.024 ms.
+        let airtime = lora(7, 8, false, false).transmit_time_secs(6);
+        assert!((airtime - 28.25 * 0.001024).abs() < 1e-9, "{airtime}");
+    }
+
+    #[test]
+    fn lora_airtime_without_bandwidth_or_spreading_factor_is_zero() {
+        let profile = AirtimeProfile::Lora {
+            bandwidth: 0,
+            spreading_factor: 7,
+            coding_rate: 5,
+            preamble_symbols: 8,
+            explicit_header: true,
+            crc: true,
+        };
+        assert_eq!(profile.transmit_time_secs(30), 0.0);
+        assert_eq!(lora(0, 5, true, true).transmit_time_secs(30), 0.0);
+    }
 }
