@@ -88,6 +88,10 @@ pub(super) struct LinkDestination {
     pub(super) sig_pub_bytes: [u8; 32],
     pub(super) resource_strategy: ResourceStrategy,
     pub(super) max_request_size: Option<usize>,
+    /// Whether requests on links to it reach the request handlers. Off for
+    /// a destination that has none of its own, whose requests upstream
+    /// leaves unanswered.
+    pub(super) answers_requests: bool,
 }
 
 /// A registered request handler for a path.

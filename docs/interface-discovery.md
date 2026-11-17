@@ -54,7 +54,8 @@ These per-interface keys work as upstream's:
   A node with a `network_identity` that is not a shared instance client also
   announces the identity's `rnstransport.network` and
   `rnstransport.network.instance.<network identity hash>` destinations with
-  its other management destinations, and answers path requests for them.
+  its other management destinations, answers path requests for them and
+  accepts links to them, on which requests go unanswered.
 - `discovery_encrypt = yes` encrypts the announce to the `network_identity`
   set in `[reticulum]`, so only nodes holding that identity can read it. A
   node with a `network_identity` decrypts such announces from its network and

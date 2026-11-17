@@ -405,9 +405,10 @@ impl LinkManager {
         adv_plaintext: &[u8],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        let has_request_handlers = !self.request_handlers.is_empty()
+        let has_request_handlers = (!self.request_handlers.is_empty()
             || !self.deferred_request_handlers.is_empty()
-            || !self.management_paths.is_empty();
+            || !self.management_paths.is_empty())
+            && self.link_answers_requests(link_id);
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),

@@ -913,8 +913,40 @@ impl LinkManager {
                 sig_pub_bytes,
                 resource_strategy,
                 max_request_size: None,
+                answers_requests: true,
             },
         );
+    }
+
+    /// Register a destination that accepts incoming links but has no
+    /// request handlers of its own, as upstream's management destinations
+    /// without any: links to it are established, and requests on them and
+    /// resources offered over them are left unanswered.
+    pub fn register_link_destination_without_requests(
+        &mut self,
+        dest_hash: [u8; 16],
+        sig_prv: Ed25519PrivateKey,
+        sig_pub_bytes: [u8; 32],
+    ) {
+        self.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
+        if let Some(destination) = self.link_destinations.get_mut(&dest_hash) {
+            destination.answers_requests = false;
+        }
+    }
+
+    /// Whether requests on `link_id` may reach the request handlers: not on
+    /// a link to a destination registered without requests.
+    pub(super) fn link_answers_requests(&self, link_id: &LinkId) -> bool {
+        self.links.get(link_id).is_none_or(|link| {
+            self.link_destinations
+                .get(&link.dest_hash)
+                .is_none_or(|destination| destination.answers_requests)
+        })
     }
 
     /// Configure the maximum request size for this destination.

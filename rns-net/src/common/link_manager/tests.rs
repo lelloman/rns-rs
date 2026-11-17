@@ -394,6 +394,72 @@ fn test_request_response() {
     assert!(has_response, "Handler should produce a response packet");
 }
 
+/// Links to a destination registered without requests are established,
+/// and requests on them go unanswered, even for paths other destinations
+/// answer, as upstream's Destination without request handlers.
+#[test]
+fn requests_on_a_destination_without_requests_go_unanswered() {
+    let mut rng = OsRng;
+    let dest_hash = [0xDE; 16];
+    let mut resp_mgr = LinkManager::new();
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    resp_mgr.register_link_destination_without_requests(dest_hash, sig_prv, sig_pub_bytes);
+    resp_mgr.register_request_handler("/status", None, |_link_id, _path, _data, _remote| {
+        Some(b"OK".to_vec())
+    });
+    resp_mgr.register_management_path(crate::management::path_path_hash());
+
+    let mut init_mgr = LinkManager::new();
+    let (link_id, init_actions) = init_mgr.create_link(
+        &dest_hash,
+        &sig_pub_bytes,
+        1,
+        constants::MTU as u32,
+        &mut rng,
+    );
+    let deliver = |mgr: &mut LinkManager, raw: &[u8], rng: &mut OsRng| {
+        let packet = RawPacket::unpack(raw).unwrap();
+        mgr.handle_local_delivery(
+            packet.destination_hash,
+            raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            rng,
+        )
+    };
+    let resp_actions = deliver(&mut resp_mgr, &extract_send_packet(&init_actions), &mut rng);
+    let init_actions = deliver(
+        &mut init_mgr,
+        &extract_send_packet_at(&resp_actions, 1),
+        &mut rng,
+    );
+    deliver(
+        &mut resp_mgr,
+        &extract_any_send_packet(&init_actions),
+        &mut rng,
+    );
+    assert_eq!(
+        resp_mgr.link_state(&link_id),
+        Some(rns_core::link::LinkState::Active)
+    );
+
+    for path in ["/status", "/path"] {
+        let req_actions = init_mgr.send_request(&link_id, path, b"query", &mut rng);
+        let resp_actions = deliver(
+            &mut resp_mgr,
+            &extract_send_packet_from(&req_actions),
+            &mut rng,
+        );
+        assert!(
+            !resp_actions.iter().any(|a| matches!(
+                a,
+                LinkManagerAction::SendPacket { .. } | LinkManagerAction::ManagementRequest { .. }
+            )),
+            "{path} was answered"
+        );
+    }
+}
+
 #[test]
 fn packet_request_at_exact_size_limit_is_dispatched() {
     use std::sync::{Arc, Mutex};

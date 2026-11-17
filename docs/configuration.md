@@ -53,7 +53,7 @@ error; see [Building](building.md#selecting-interfaces).
 |-----|---------|-------|
 | `enable_transport` | `false` | Forward traffic for other nodes |
 | `static_transport_identity` | `false` | With transport disabled, the transport-facing identity is ephemeral unless this is set |
-| `network_identity` | unset | Path (`~` expanded) of an identity shared by a set of transport instances; created there when missing. It signs their interface discovery announces and keys `discovery_encrypt`. A node that is not a shared instance client also hosts the identity's `rnstransport.network` and `rnstransport.network.instance.<identity hash>` destinations: it announces them, stamped, with its other management destinations and answers path requests for them. The transport identity stays in `storage/transport_identity` |
+| `network_identity` | unset | Path (`~` expanded) of an identity shared by a set of transport instances; created there when missing. It signs their interface discovery announces and keys `discovery_encrypt`. A node that is not a shared instance client also hosts the identity's `rnstransport.network` and `rnstransport.network.instance.<identity hash>` destinations: it announces them, stamped, with its other management destinations, answers path requests for them, and accepts links to them, on which requests go unanswered. The transport identity stays in `storage/transport_identity` |
 | `local_hops_delta` | `false` | Mask local zero-hop SINGLE/LINK traffic on external interfaces |
 | `enable_interface_management` | `true` | Set to `false` to block `rnstatus --attach/--detach/--reload` |
 | `panic_on_interface_error` | `false` | Abort instead of continuing when an interface fails |

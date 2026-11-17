@@ -2298,6 +2298,117 @@ fn rust_accepts_python_network_destination_announces() {
     }
 }
 
+/// Python peer that links to `rnstransport.network` of the network
+/// identity, sends a packet and requests paths the instance's other
+/// management destinations serve, and prints how each request ended.
+#[cfg(target_os = "linux")]
+const NETWORK_DESTINATION_LINKER: &str = r#"
+import RNS, sys, time, json, os
+reticulum = RNS.Reticulum(sys.argv[1])
+RNS.Transport.STAMP_DESTINATIONS = False
+RNS.Transport.STAMP_PRS = False
+network = RNS.Identity.from_file(sys.argv[2])
+destination_hash = RNS.Destination.hash(network, "rnstransport", "network")
+result = {"established": False}
+deadline = time.time() + 30
+while not RNS.Transport.has_path(destination_hash) and time.time() < deadline:
+    RNS.Transport.request_path(destination_hash)
+    time.sleep(1)
+if RNS.Transport.has_path(destination_hash):
+    destination = RNS.Destination(RNS.Identity.recall(destination_hash), RNS.Destination.OUT,
+                                  RNS.Destination.SINGLE, "rnstransport", "network")
+    link = RNS.Link(destination)
+    while link.status != RNS.Link.ACTIVE and time.time() < deadline: time.sleep(0.1)
+    result["established"] = link.status == RNS.Link.ACTIVE
+    if result["established"]:
+        RNS.Packet(link, b"ignored").send()
+        for path in ["/status", "/path", "/list"]:
+            outcome = []
+            link.request(path, data=[True], timeout=4,
+                         response_callback=lambda receipt: outcome.append("response"),
+                         failed_callback=lambda receipt: outcome.append("failed"))
+            until = time.time() + 8
+            while not outcome and time.time() < until: time.sleep(0.1)
+            result[path] = outcome[0] if outcome else "none"
+        result["active"] = link.status == RNS.Link.ACTIVE
+print(json.dumps(result), flush=True)
+os._exit(0)
+"#;
+
+/// A Python peer links to the `rnstransport.network` destination of an
+/// instance run by `publisher`: the link is established and stays up, and
+/// requests on it go unanswered, even for paths the instance's remote
+/// management and blackhole destinations answer.
+#[cfg(target_os = "linux")]
+fn network_destination_link(publisher: Daemon) {
+    let root = tempfile::tempdir().unwrap();
+    let publisher_dir = root.path().join("publisher");
+    let peer_dir = root.path().join("peer");
+    fs::create_dir_all(&publisher_dir).unwrap();
+    fs::create_dir_all(&peer_dir).unwrap();
+    let network_identity = root.path().join("network_identity");
+    let port = TcpPortReservation::new().port();
+    fs::write(
+        publisher_dir.join("config"),
+        format!(
+            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = No\n  \
+             network_identity = {}\n  enable_remote_management = Yes\n  \
+             publish_blackhole = Yes\n\
+             [logging]\n  loglevel = 4\n\
+             [interfaces]\n  [[network server]]\n    type = TCPServerInterface\n    \
+             enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n",
+            network_identity.display()
+        ),
+    )
+    .unwrap();
+    fs::write(peer_dir.join("config"), stamp_enforcing_client_config(port)).unwrap();
+    let publisher_log = root.path().join("publisher.log");
+    let mut daemon = spawn_daemon(publisher, &publisher_dir, &publisher_log);
+    wait_for_port(port, &mut daemon, "publisher TCP server");
+
+    let mut linker = Command::new("python3");
+    linker.env("PYTHONUNBUFFERED", "1").args([
+        "-c",
+        NETWORK_DESTINATION_LINKER,
+        peer_dir.to_str().unwrap(),
+        network_identity.to_str().unwrap(),
+    ]);
+    let output = run(linker);
+    assert_success(&output, "network destination linker");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result: serde_json::Value = stdout
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap_or_else(|| panic!("no result in {stdout}"));
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "established": true,
+            "/status": "failed",
+            "/path": "failed",
+            "/list": "failed",
+            "active": true,
+        }),
+        "publisher log:\n{}",
+        fs::read_to_string(&publisher_log).unwrap_or_default()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_links_to_rust_network_destination() {
+    network_destination_link(Daemon::Rust);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_links_to_python_network_destination() {
+    network_destination_link(Daemon::Python);
+}
+
 /// A shared instance with `shared_instance_type = tcp` and an `rpc_key`,
 /// run by one implementation, answers the other's rnstatus over TCP. The
 /// client runs from a copy of the config without the daemon's storage, so

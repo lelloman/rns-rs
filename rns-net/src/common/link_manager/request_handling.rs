@@ -11,6 +11,10 @@ impl LinkManager {
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, ValueRef};
 
+        if !self.link_answers_requests(link_id) {
+            return Vec::new();
+        }
+
         // Python-compatible format: msgpack([timestamp, Bin(path_hash), data_value])
         let request = match msgpack::unpack_exact_ref(plaintext) {
             Ok(request @ ValueRef::Array { len, .. }) if len >= 3 => request,

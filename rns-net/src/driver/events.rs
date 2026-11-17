@@ -3114,13 +3114,26 @@ impl Driver {
         self.network_identity.is_some() && !self.connected_to_shared_instance
     }
 
-    /// Register the network identity's management destinations, so path
-    /// requests for them are answered, when this node hosts them.
+    /// Register the network identity's management destinations when this
+    /// node hosts them: path requests for them are answered, and links to
+    /// them established. They have no request handlers, so, as upstream,
+    /// requests on such a link go unanswered.
     pub(crate) fn register_network_destinations(&mut self) {
         use crate::management::BuiltinDestination;
         if !self.network_destinations_enabled() {
             return;
         }
+        let Some((prv_key, pub_key)) = self
+            .network_identity
+            .as_ref()
+            .and_then(|identity| Some((identity.get_private_key()?, identity.get_public_key()?)))
+        else {
+            return;
+        };
+        let mut sig_prv = [0u8; 32];
+        sig_prv.copy_from_slice(&prv_key[32..64]);
+        let mut sig_pub = [0u8; 32];
+        sig_pub.copy_from_slice(&pub_key[32..64]);
         for destination in [
             BuiltinDestination::NetworkInstance,
             BuiltinDestination::Network,
@@ -3130,6 +3143,12 @@ impl Driver {
                     .register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
                 self.local_destinations
                     .insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+                self.link_manager
+                    .register_link_destination_without_requests(
+                        dest_hash,
+                        rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv),
+                        sig_pub,
+                    );
             }
         }
     }
