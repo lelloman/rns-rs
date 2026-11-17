@@ -1181,4 +1181,145 @@ mod tests {
         assert_eq!(queues.queue_for(&InterfaceId(1)).unwrap().entries.len(), 1);
         assert_eq!(queues.interface_cap_drop_count(), 0);
     }
+
+    fn lora_profile() -> AirtimeProfile {
+        AirtimeProfile::Lora {
+            bandwidth: 125_000,
+            spreading_factor: 8,
+            coding_rate: 5,
+            preamble_symbols: 8,
+            explicit_header: true,
+            crc: true,
+        }
+    }
+
+    /// Among announces with the fewest hops, upstream sends the one queued
+    /// first, and on a tie in queue time the one earlier in the queue.
+    #[test]
+    fn select_next_keeps_queue_order_among_equal_announces() {
+        let mut queue = InterfaceAnnounceQueue::new();
+        queue.insert(make_entry(0x01, 2, 100.0));
+        queue.insert(make_entry(0x02, 2, 200.0));
+        assert_eq!(queue.select_next(), Some(0));
+
+        let mut queue = InterfaceAnnounceQueue::new();
+        queue.insert(make_entry(0x01, 2, 100.0));
+        queue.insert(make_entry(0x02, 2, 100.0));
+        assert_eq!(queue.select_next(), Some(0));
+    }
+
+    /// An interface with no bitrate, or a zero one, and no airtime model has
+    /// no announce cap: announces and recursive path requests pass without
+    /// any queue state being kept for it.
+    #[test]
+    fn interface_without_timing_model_keeps_no_queue_state() {
+        let mut queues = AnnounceQueues::new(8);
+        for (id, bitrate) in [(1, None), (2, Some(0))] {
+            let sent = queues.gate_announce(
+                InterfaceId(id),
+                vec![0x01; 100].into(),
+                [0xAA; 16],
+                2,
+                1000.0,
+                1000.0,
+                bitrate,
+                None,
+                0.02,
+            );
+            assert!(sent.is_some());
+            queues.reserve_recursive_path_request(
+                InterfaceId(id),
+                100,
+                1000.0,
+                bitrate,
+                None,
+                0.02,
+            );
+            assert!(!queues.blocks_recursive_path_request(InterfaceId(id), 1000.0));
+        }
+        assert_eq!(queues.queue_count(), 0);
+    }
+
+    /// Upstream holds a recursive path request back while announces are
+    /// queued on the interface, even once its announce cap has cleared.
+    #[test]
+    fn queued_announces_block_recursive_path_requests_after_the_cap_clears() {
+        let mut queues = AnnounceQueues::new(8);
+        for dest in [0xAA, 0xBB] {
+            let _ = queues.gate_announce(
+                InterfaceId(1),
+                vec![dest; 100].into(),
+                [dest; 16],
+                2,
+                1000.0,
+                1000.0,
+                Some(1000),
+                None,
+                0.02,
+            );
+        }
+        let allowed_at = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
+        assert!(queues.blocks_recursive_path_request(InterfaceId(1), allowed_at + 1.0));
+    }
+
+    /// A recursive path request on an interface with only an airtime model
+    /// reserves its airtime, and one on an interface already tracked does
+    /// so even when no new interface queue may be added.
+    #[test]
+    fn recursive_path_request_reserves_airtime_on_a_tracked_interface_at_capacity() {
+        let mut queues = AnnounceQueues::new(1);
+        queues.reserve_recursive_path_request(
+            InterfaceId(1),
+            100,
+            1000.0,
+            None,
+            Some(lora_profile()),
+            0.02,
+        );
+        let first = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
+        assert!((first - 1015.3856).abs() < 0.0001);
+        assert!(queues.blocks_recursive_path_request(InterfaceId(1), 1010.0));
+
+        queues.reserve_recursive_path_request(
+            InterfaceId(1),
+            100,
+            2000.0,
+            None,
+            Some(lora_profile()),
+            0.02,
+        );
+        let second = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
+        assert!((second - 2015.3856).abs() < 0.0001);
+        assert_eq!(queues.interface_cap_drop_count(), 0);
+    }
+
+    #[test]
+    fn queued_counts_report_entries_and_bytes_per_interface() {
+        let mut queues = AnnounceQueues::new(8);
+        for (dest, len) in [(0xAA, 100), (0xBB, 40), (0xCC, 60)] {
+            let _ = queues.gate_announce(
+                InterfaceId(1),
+                vec![dest; len].into(),
+                [dest; 16],
+                2,
+                1000.0,
+                1000.0,
+                Some(1000),
+                None,
+                0.02,
+            );
+        }
+        assert_eq!(queues.queued_for(&InterfaceId(1)), 2);
+        assert_eq!(queues.queued_for(&InterfaceId(2)), 0);
+        assert_eq!(queues.total_queued_bytes(), 100);
+    }
 }
