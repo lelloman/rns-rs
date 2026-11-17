@@ -138,12 +138,11 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
             return;
         };
         while !driven.failed && driven.head < driven.out.len() {
-            let pending = &driven.out[driven.head..];
-            // SAFETY: `pending` is a valid initialized slice.
-            let written = unsafe { libc::write(fd, pending.as_ptr().cast(), pending.len()) };
-            if written < 0 {
-                let error = io::Error::last_os_error();
-                match error.kind() {
+            // Through the transport, which may frame what it writes (a BLE
+            // connection writes at most one attribute value at a time).
+            let written = match self.transport.write(&driven.out[driven.head..]) {
+                Ok(written) => written,
+                Err(error) => match error.kind() {
                     io::ErrorKind::Interrupted => continue,
                     io::ErrorKind::WouldBlock => break,
                     _ => {
@@ -155,12 +154,12 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
                         driven.head = 0;
                         break;
                     }
-                }
-            }
+                },
+            };
             if written == 0 {
                 break;
             }
-            driven.head += written as usize;
+            driven.head += written;
         }
         if driven.head == driven.out.len() {
             driven.out.clear();
