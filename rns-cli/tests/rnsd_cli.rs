@@ -614,3 +614,95 @@ fn rnpath_finds_the_instance_s_own_destinations() {
         None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
     }
 }
+
+/// The startup messages about the configuration and identities in a
+/// utility's output, with hashes normalized as `identity_messages` does.
+/// Rust utilities log as `[time LEVEL target] message`, Python ones as
+/// `[time] [Level]  message`.
+fn client_startup_messages(output: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(output);
+    let log: String = text
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix('[')?;
+            let (head, message) = rest.split_once("] ")?;
+            let message = match message.strip_prefix("[Verbose]") {
+                Some(python) => python.trim_start(),
+                None if head.contains(" INFO ") => message,
+                None => return None,
+            };
+            Some(format!("[t] [Verbose] {message}\n"))
+        })
+        .collect();
+    let (messages, _) = identity_messages(&log);
+    let config = log_messages(&log, "Verbose")
+        .into_iter()
+        .filter(|msg| msg.starts_with("Configuration loaded from"));
+    config.chain(messages).collect()
+}
+
+/// A shared instance client logs upstream's startup lines at Verbose, as
+/// upstream's client runs Transport.start: the network identity and the
+/// configuration, the stored transport identity, the ephemeral one it uses
+/// instead, and its application identity.
+#[cfg(target_os = "linux")]
+#[test]
+fn shared_clients_log_their_identities_as_upstream() {
+    let dir = tempfile::tempdir().unwrap();
+    let instance = format!("client-identities-{}", std::process::id());
+    let network_identity = dir.path().join("network_identity");
+    fs::write(&network_identity, transport_identity_key()).unwrap();
+    let mut rnsd = spawn_rnsd(
+        dir.path(),
+        &format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = {instance}\n  network_identity = {}\n\
+             [logging]\n  loglevel = 4\n[interfaces]\n",
+            network_identity.display()
+        ),
+    );
+    wait_for_abstract_socket(&format!("rns/{instance}/rpc"));
+    let config = dir.path().to_str().unwrap();
+    let rust = Command::new(env!("CARGO_BIN_EXE_rnstatus"))
+        .args(["--config", config, "-vv"])
+        .output()
+        .expect("run rnstatus");
+    let python = python_reticulum_1_6_1().then(|| {
+        Command::new("python3")
+            .args(["-m", "RNS.Utilities.rnstatus", "--config", config, "-vv"])
+            .env("PYTHONUNBUFFERED", "1")
+            .output()
+            .expect("run Python rnstatus")
+    });
+    let _ = rnsd.kill();
+    let _ = rnsd.wait();
+    let messages = client_startup_messages(&rust.stdout);
+    let messages = if messages.is_empty() {
+        client_startup_messages(&rust.stderr)
+    } else {
+        messages
+    };
+    assert_eq!(
+        messages,
+        [
+            format!(
+                "Configuration loaded from {}",
+                dir.path().join("config").display()
+            ),
+            format!(
+                "Network identity loaded from {}",
+                network_identity.display()
+            ),
+            "Loaded Transport Identity from storage".into(),
+            "Identity keys created for <A>".into(),
+            "Initialized ephemeral transport identity <A>".into(),
+            "Identity keys created for <B>".into(),
+        ],
+        "{}",
+        String::from_utf8_lossy(&rust.stderr)
+    );
+    match python {
+        Some(python) => assert_eq!(messages, client_startup_messages(&python.stdout)),
+        None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
+    }
+}

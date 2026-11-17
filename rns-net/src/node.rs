@@ -267,7 +267,7 @@ fn effective_static_transport_identity(
 /// there when the file is missing, logging as upstream's
 /// `Reticulum.__apply_config` does.
 /// A new identity, logged as upstream's `Identity.create_keys` logs it.
-fn create_identity() -> Identity {
+pub(crate) fn create_identity() -> Identity {
     let identity = Identity::new(&mut OsRng);
     log::info!(
         "Identity keys created for <{}>",
@@ -276,7 +276,7 @@ fn create_identity() -> Identity {
     identity
 }
 
-fn load_network_identity(path: &str) -> io::Result<Identity> {
+pub(crate) fn load_network_identity(path: &str) -> io::Result<Identity> {
     let identity_path = expand_home(path);
     let load = || -> io::Result<Identity> {
         if !identity_path.is_file() {
@@ -1557,6 +1557,7 @@ impl RnsNode {
             Some(ref path) => Some(load_network_identity(path)?),
             None => None,
         };
+        log::info!("Configuration loaded from {}", config_file.display());
         // The transport identity lives in storage/transport_identity, as
         // upstream keeps it, so a config directory keeps its transport
         // identity whichever implementation runs it. Directories written
@@ -5637,7 +5638,7 @@ fn known_destinations_snapshot(
 }
 
 /// Lowercase hex of `bytes`, as upstream prints hashes in log lines.
-fn hex_string(bytes: &[u8]) -> String {
+pub(crate) fn hex_string(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

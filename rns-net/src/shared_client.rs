@@ -293,6 +293,7 @@ impl RnsNode {
             None,
             &crate::config::StampsSection::default(),
             rns_core::constants::HOP_LIMITER,
+            false,
         )
     }
 
@@ -302,6 +303,8 @@ impl RnsNode {
     /// shares the instance's storage path. Without it the client announces
     /// unstamped. `stamps` and `hop_limiter` are the client's own `[stamps]`
     /// and `[filter] hop_limiter`, which upstream applies in every instance.
+    /// With `static_transport_identity` the client uses the stored transport
+    /// identity rather than an ephemeral one.
     fn connect_shared_with_reconnect_wait(
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,
@@ -309,6 +312,7 @@ impl RnsNode {
         instance_storage: Option<std::path::PathBuf>,
         stamps: &crate::config::StampsSection,
         hop_limiter: u8,
+        static_transport_identity: bool,
     ) -> io::Result<Self> {
         let transport_config = TransportConfig {
             transport_enabled: false,
@@ -334,14 +338,6 @@ impl RnsNode {
         let (tx, rx) = event::channel();
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
-        // As upstream's client without transport, an ephemeral transport
-        // identity, whose hash its path requests carry. Without it a stamped
-        // request has the length of an unstamped one, and an instance that
-        // enforces stamps drops it.
-        let transport_identity = Identity::new(&mut rns_crypto::OsRng);
-        driver
-            .engine
-            .set_client_transport_id(Some(*transport_identity.hash()));
         driver.connected_to_shared_instance = true;
         // A client stamps the announces and path requests it emits itself
         // (upstream 51fa8413), with the node handle and the driver sharing
@@ -362,6 +358,31 @@ impl RnsNode {
             .as_deref()
             .map(load_instance_known_destinations)
             .unwrap_or_default();
+        // Upstream's client runs Transport.start too: it loads the stored
+        // transport identity, or creates and stores one, then, without
+        // static_transport_identity, uses an ephemeral one, and creates its
+        // application identity. Its path requests carry the transport
+        // identity's hash; without one a stamped request has the length of
+        // an unstamped one, and an instance that enforces stamps drops it.
+        let stored_identity = match instance_storage.as_deref() {
+            Some(storage_dir) => Some(load_or_create_transport_identity(storage_dir)?),
+            None => None,
+        };
+        let transport_identity = match stored_identity {
+            Some(identity) if static_transport_identity => identity,
+            _ => {
+                let identity = crate::node::create_identity();
+                log::info!(
+                    "Initialized ephemeral transport identity <{}>",
+                    crate::node::hex_string(identity.hash())
+                );
+                identity
+            }
+        };
+        driver
+            .engine
+            .set_client_transport_id(Some(*transport_identity.hash()));
+        let application_identity = crate::node::create_identity();
         let ratchet_store: Arc<dyn storage::RatchetStore> =
             Arc::new(storage::SharedClientRatchetStore::new(instance_storage));
         driver.ratchet_store = Some(Arc::clone(&ratchet_store));
@@ -479,6 +500,7 @@ impl RnsNode {
 
         let mut node =
             RnsNode::from_parts(tx, driver_handle, None, tick_interval_ms, accepting_work);
+        node.destination_types = DestinationTypeRequester::new(*application_identity.hash());
         node.destination_types.shared_client = true;
         node.ratchet_store = Some(ratchet_store);
         node.attach_stamper(
@@ -520,6 +542,12 @@ impl RnsNode {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
         };
 
+        // Upstream loads the network identity while it reads the config,
+        // before it knows it is a client.
+        if let Some(ref path) = rns_config.reticulum.network_identity {
+            crate::node::load_network_identity(path)?;
+        }
+        log::info!("Configuration loaded from {}", config_file.display());
         let shared_config = SharedClientConfig::from_reticulum(&rns_config.reticulum);
         let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
@@ -530,6 +558,7 @@ impl RnsNode {
             Some(config_dir.join("storage")),
             &rns_config.stamps,
             rns_config.reticulum.hop_limiter,
+            rns_config.reticulum.static_transport_identity,
         )?;
         node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
         Ok(node)
@@ -866,6 +895,20 @@ pub fn bench_shared_client_replay_once(
     Ok(frames.len())
 }
 
+/// The transport identity in the instance's `storage_dir`, as upstream's
+/// client loads it, or a new one stored there when it holds none.
+fn load_or_create_transport_identity(storage_dir: &std::path::Path) -> io::Result<Identity> {
+    let path = storage_dir.join("transport_identity");
+    if let Ok(identity) = storage::load_identity(&path) {
+        log::info!("Loaded Transport Identity from storage");
+        return Ok(identity);
+    }
+    log::info!("No valid Transport Identity in storage, creating...");
+    let identity = crate::node::create_identity();
+    storage::save_identity(&identity, &path)?;
+    Ok(identity)
+}
+
 /// `Identity.load_known_destinations` on a shared instance client: what
 /// the instance knows, read from its database without writing to it (or
 /// from its older snapshot file).
@@ -878,7 +921,7 @@ fn load_instance_known_destinations(
             .and_then(|store| store.load_all())
         {
             Ok(entries) => {
-                log::debug!(
+                log::info!(
                     "Loaded {} known destinations from shared instance database",
                     entries.len()
                 );
@@ -1211,6 +1254,7 @@ mod tests {
             Some(storage.path().to_path_buf()),
             &stamps,
             rns_core::constants::HOP_LIMITER,
+            false,
         )
         .unwrap();
 
