@@ -7,6 +7,7 @@
 //! Matches Python `RNodeInterface.py` and `RNodeMultiInterface.py`.
 
 mod folded;
+mod setup;
 mod transport;
 
 use std::io::{self, Read, Write};
@@ -393,6 +394,7 @@ fn start_with_control(
             parity: Parity::None,
             stop_bits: 1,
         };
+        setup::log_opening(&config);
         match Transport::open(&serial_config, config.underlay_mark) {
             Ok((reader, writer)) => (Some(reader), writer),
             // As upstream, the interface still comes up, offline, and
@@ -546,25 +548,24 @@ fn reader_loop(
     flow_states: Vec<Arc<Mutex<SubFlowState>>>,
     running: Arc<AtomicBool>,
 ) {
-    let mut reader = match reader {
-        Some(reader) => reader,
-        None => match open_until_configured(&config, &writer, &flow_states, &running) {
-            Some(reader) => {
-                signal_interface_up(&tx, &config, &writer, &flow_states, true);
-                return reader_loop_connected(reader, writer, config, tx, flow_states, running);
+    let configured = reader.and_then(|mut reader| {
+        match setup::setup_device(&mut reader, &writer, &config, &running) {
+            Ok(()) => Some(reader),
+            Err(e) => {
+                log::debug!("[{}] initial RNode setup failed: {}", config.name, e);
+                None
             }
+        }
+    });
+    let (reader, reopened) = match configured {
+        Some(reader) => (reader, false),
+        // As upstream, keep trying to bring the device up.
+        None => match open_until_configured(&config, &writer, &flow_states, &running) {
+            Some(reader) => (reader, true),
             None => return,
         },
     };
-    // Initial delay for hardware init (matches Python: sleep(2.0))
-    if !wait_while_running(&running, Duration::from_secs(2)) {
-        return;
-    }
-    if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
-        log::error!("[{}] initial RNode setup failed: {}", config.name, e);
-        return;
-    }
-    signal_interface_up(&tx, &config, &writer, &flow_states, false);
+    signal_interface_up(&tx, &config, &writer, &flow_states, reopened);
     reader_loop_connected(reader, writer, config, tx, flow_states, running);
 }
 
@@ -585,36 +586,67 @@ fn open_until_configured(
         if !wait_while_running(running, OPEN_RETRY_WAIT) {
             return None;
         }
-        log::debug!(
-            "[{}] attempting to reconnect serial port {}",
-            config.name,
-            config.port
-        );
+        if config.multi {
+            log::debug!(
+                "[{}] attempting to reconnect serial port {}",
+                config.name,
+                config.port
+            );
+        } else {
+            log::info!(
+                "Attempting to reconnect serial port {} for {}...",
+                config.port,
+                setup::display_name(config)
+            );
+        }
         match reopen_connection(config, writer) {
             Ok(mut reader) => {
                 reset_flow_states(flow_states);
-                // Initial delay for hardware init, as on a first open.
-                if !wait_while_running(running, Duration::from_secs(2)) {
-                    return None;
-                }
-                match detect_and_configure(&mut reader, writer, config) {
+                match setup::setup_device(&mut reader, writer, config, running) {
                     Ok(()) => {
-                        log::info!("[{}] reconnected serial port {}", config.name, config.port);
+                        if config.multi {
+                            log::info!("[{}] reconnected serial port {}", config.name, config.port);
+                        } else {
+                            log::info!(
+                                target: crate::logging::NOTICE_TARGET,
+                                "Reconnected port for {}",
+                                setup::display_name(config)
+                            );
+                        }
                         return Some(reader);
                     }
-                    Err(e) => log::error!(
-                        "[{}] error while reconnecting port, the contained exception was: {}",
-                        config.name,
-                        e
-                    ),
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => return None,
+                    // Upstream logs why the device did not come up while
+                    // setting it up.
+                    Err(e) if !config.multi && setup_error_logged(&e) => {}
+                    Err(e) => log_reconnect_error(config, &e),
                 }
             }
-            Err(e) => log::error!(
-                "[{}] error while reconnecting port, the contained exception was: {}",
-                config.name,
-                e
-            ),
+            Err(e) => log_reconnect_error(config, &e),
         }
+    }
+}
+
+/// Whether setting a single RNode up already said why it failed.
+fn setup_error_logged(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::InvalidData
+    )
+}
+
+fn log_reconnect_error(config: &RNodeConfig, error: &io::Error) {
+    if config.multi {
+        log::error!(
+            "[{}] error while reconnecting port, the contained exception was: {}",
+            config.name,
+            error
+        );
+    } else {
+        log::error!(
+            "Error while reconnecting port, the contained exception was: {}",
+            error
+        );
     }
 }
 
@@ -637,8 +669,10 @@ fn reader_loop_connected(
     let mut last_snr: Option<f32> = None;
     // What the device reports about its channel and itself.
     let mut radio = RadioStats::default();
+    let name = setup::display_name(&config);
     while running.load(Ordering::Relaxed) {
         let mut decoder = rnode_kiss::RNodeDecoder::new();
+        let mut reports = setup::RadioReports::default();
         let mut buf = [0u8; 4096];
         let disconnected = loop {
             if !running.load(Ordering::Relaxed) {
@@ -658,6 +692,9 @@ fn reader_loop_connected(
                 }
                 Ok(n) => {
                     for event in decoder.feed(&buf[..n]) {
+                        if !config.multi {
+                            reports.apply(&event, &name);
+                        }
                         if update_radio_stats(&event, &mut radio, crate::time::now(), &config.name)
                         {
                             publish_radio_telemetry(&tx, &config, &radio);
@@ -712,7 +749,7 @@ fn reader_loop_connected(
                                     }
                                 }
                             }
-                            rnode_kiss::RNodeEvent::Error(code) => {
+                            rnode_kiss::RNodeEvent::Error(code) if config.multi => {
                                 log::error!("[{}] RNode error: 0x{:02X}", config.name, code);
                             }
                             _ => {
@@ -745,7 +782,7 @@ fn reader_loop_connected(
                 Ok(new_reader) => {
                     reset_flow_states(&flow_states);
                     reader = new_reader;
-                    if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
+                    if let Err(e) = setup::setup_device(&mut reader, &writer, &config, &running) {
                         log::warn!("[{}] reconnect configure failed: {}", config.name, e);
                         if !wait_while_running(&running, backoff) {
                             return;
@@ -1104,6 +1141,7 @@ fn reopen_connection(
         stop_bits: 1,
     };
 
+    setup::log_opening(config);
     let (reader, new_writer) = Transport::open(&serial_config, config.underlay_mark)?;
     lock_or_recover(writer, "rnode shared writer").replace(new_writer);
     Ok(reader)
@@ -1710,6 +1748,24 @@ mod tests {
         master
             .write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_MCU, &[0x01]))
             .unwrap();
+        master.flush().unwrap();
+    }
+
+    /// Mock RNode: report the radio configured as `sub`, as the firmware
+    /// answers each setting.
+    fn mock_report_configured(master: &mut Transport, sub: &RNodeSubConfig) {
+        for (command, data) in [
+            (rnode_kiss::CMD_FREQUENCY, sub.frequency.to_be_bytes().to_vec()),
+            (rnode_kiss::CMD_BANDWIDTH, sub.bandwidth.to_be_bytes().to_vec()),
+            (rnode_kiss::CMD_TXPOWER, vec![sub.txpower as u8]),
+            (rnode_kiss::CMD_SF, vec![sub.spreading_factor]),
+            (rnode_kiss::CMD_CR, vec![sub.coding_rate]),
+            (rnode_kiss::CMD_RADIO_STATE, vec![rnode_kiss::RADIO_STATE_ON]),
+        ] {
+            master
+                .write_all(&rnode_kiss::rnode_command(command, &data))
+                .unwrap();
+        }
         master.flush().unwrap();
     }
 
@@ -2381,6 +2437,7 @@ mod tests {
             ..Default::default()
         };
         config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
+        let sub = config.subinterfaces[0].clone();
         let (mut writers, control) = start_with_control(config, tx.clone()).unwrap();
         let (_, writer) = writers.remove(0);
         assert!(writer.sends_inline());
@@ -2389,6 +2446,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(2500));
         mock_respond_detect(&mut master);
+        mock_report_configured(&mut master, &sub);
         wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
             matches!(event, Event::InterfaceUp(InterfaceId(43), None, None))
         });
@@ -2568,10 +2626,12 @@ mod tests {
         };
         config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
 
+        let sub = config.subinterfaces[0].clone();
         let (_writers, control) = start_with_control(config, tx).unwrap();
 
         thread::sleep(Duration::from_secs(3));
         mock_respond_detect(&mut master1);
+        mock_report_configured(&mut master1, &sub);
         let up = wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
             matches!(event, Event::InterfaceUp(InterfaceId(41), _, _))
         });
@@ -2598,6 +2658,7 @@ mod tests {
 
         thread::sleep(Duration::from_secs(3));
         mock_respond_detect(&mut master2);
+        mock_report_configured(&mut master2, &sub);
         let up = wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
             matches!(event, Event::InterfaceUp(InterfaceId(41), _, _))
         });
