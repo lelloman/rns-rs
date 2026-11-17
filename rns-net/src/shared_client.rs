@@ -364,8 +364,18 @@ impl RnsNode {
         // application identity. Its path requests carry the transport
         // identity's hash; without one a stamped request has the length of
         // an unstamped one, and an instance that enforces stamps drops it.
+        //
+        // Only a client that uses the stored identity creates it. Otherwise
+        // the instance's own file is only read: a client started with its
+        // instance, as rns-server starts its sidecars and control plane on a
+        // new directory, wrote one of its own while the instance created
+        // another, and the instance's RPC key no longer matched the one the
+        // supervisor derived.
         let stored_identity = match instance_storage.as_deref() {
-            Some(storage_dir) => Some(load_or_create_transport_identity(storage_dir)?),
+            Some(storage_dir) if static_transport_identity => {
+                Some(load_or_create_transport_identity(storage_dir)?)
+            }
+            Some(storage_dir) => load_transport_identity(storage_dir),
             None => None,
         };
         let transport_identity = match stored_identity {
@@ -897,6 +907,14 @@ pub fn bench_shared_client_replay_once(
     Ok(frames.len())
 }
 
+/// The transport identity in the instance's `storage_dir`, if it holds a
+/// valid one.
+fn load_transport_identity(storage_dir: &std::path::Path) -> Option<Identity> {
+    let identity = storage::load_identity(&storage_dir.join("transport_identity")).ok()?;
+    log::info!("Loaded Transport Identity from storage");
+    Some(identity)
+}
+
 /// The transport identity in the instance's `storage_dir`, as upstream's
 /// client loads it, or a new one stored there when it holds none.
 fn load_or_create_transport_identity(storage_dir: &std::path::Path) -> io::Result<Identity> {
@@ -1221,6 +1239,42 @@ mod tests {
         assert_eq!(packet2.context, rns_core::constants::CONTEXT_PATH_RESPONSE);
 
         node.shutdown();
+    }
+
+    /// Only a client with `static_transport_identity` creates the instance's
+    /// transport identity file. One started together with its instance, on
+    /// a directory that holds none yet, must not write one the instance's
+    /// own would race with.
+    #[test]
+    fn only_a_static_transport_identity_client_stores_a_transport_identity() {
+        for static_transport_identity in [false, true] {
+            let port = find_free_port();
+            let listener = std::net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
+            let storage = tempfile::tempdir().unwrap();
+            let node = RnsNode::connect_shared_with_reconnect_wait(
+                SharedClientConfig {
+                    instance_name: format!("test-client-identity-{port}"),
+                    port,
+                    rpc_port: 0,
+                    use_af_unix: true,
+                    force_bitrate: None,
+                },
+                Box::new(NoopCallbacks),
+                Duration::from_secs(8),
+                Some(storage.path().to_path_buf()),
+                &crate::config::StampsSection::default(),
+                rns_core::constants::HOP_LIMITER,
+                static_transport_identity,
+            )
+            .unwrap();
+            assert_eq!(
+                storage.path().join("transport_identity").exists(),
+                static_transport_identity,
+                "static_transport_identity = {static_transport_identity}"
+            );
+            node.shutdown();
+            drop(listener);
+        }
     }
 
     #[test]
