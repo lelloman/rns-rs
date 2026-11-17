@@ -1177,4 +1177,99 @@ mod tests {
         // 0xc1 is unused/never valid
         assert_eq!(unpack(&[0xc1]), Err(Error::UnsupportedFormat(0xc1)));
     }
+
+    #[test]
+    fn nesting_up_to_the_maximum_depth_is_accepted() {
+        let mut data = Vec::new();
+        data.extend(core::iter::repeat_n(0x91, MAX_DEPTH));
+        data.push(0x01);
+        assert!(unpack(&data).is_ok());
+        data.insert(0, 0x91);
+        assert_eq!(unpack(&data), Err(Error::MaxDepthExceeded));
+    }
+
+    #[test]
+    fn floats_decode_from_both_widths() {
+        let mut f32_data = vec![0xca];
+        f32_data.extend_from_slice(&1.5f32.to_be_bytes());
+        assert_eq!(unpack(&f32_data), Ok((Value::Float(1.5), 5)));
+        let mut f64_data = vec![0xcb];
+        f64_data.extend_from_slice(&(-2.25f64).to_be_bytes());
+        assert_eq!(unpack(&f64_data), Ok((Value::Float(-2.25), 9)));
+        assert_eq!(pack(&Value::Float(-2.25)), f64_data);
+    }
+
+    #[test]
+    fn str32_decodes() {
+        let mut data = vec![0xdb, 0, 0, 0, 3];
+        data.extend_from_slice(b"abc");
+        assert_eq!(unpack(&data), Ok((Value::Str(String::from("abc")), 8)));
+    }
+
+    #[test]
+    fn int32_range_packs_as_int32() {
+        for v in [-32_769i64, -40_000, -2_147_483_648] {
+            let packed = pack(&Value::Int(v));
+            let mut expected = vec![0xd2];
+            expected.extend_from_slice(&(v as i32).to_be_bytes());
+            assert_eq!(packed, expected, "{v}");
+            assert_eq!(unpack(&packed), Ok((Value::Int(v), 5)));
+        }
+        assert_eq!(pack(&Value::Int(-2_147_483_649))[0], 0xd3);
+    }
+
+    #[test]
+    fn pack_bin_into_appends_a_bin() {
+        let mut buf = vec![0x90];
+        pack_bin_into(b"ab", &mut buf);
+        assert_eq!(buf, [0x90, 0xc4, 2, b'a', b'b']);
+    }
+
+    #[test]
+    fn values_compare_by_kind_and_content() {
+        assert_ne!(Value::Nil, Value::Bool(false));
+        assert_ne!(Value::UInt(1), Value::Int(1));
+        assert_eq!(Value::Float(1.5), Value::Float(1.5));
+        assert_ne!(Value::Float(1.5), Value::Float(2.5));
+        // Floats compare by their bits.
+        assert_eq!(Value::Float(f64::NAN), Value::Float(f64::NAN));
+        assert_ne!(Value::Float(0.0), Value::Float(-0.0));
+    }
+
+    #[test]
+    fn numeric_accessors_take_their_kinds() {
+        assert_eq!(Value::Int(-5).as_int(), Some(-5));
+        assert_eq!(Value::UInt(5).as_int(), None);
+        assert_eq!(Value::Float(2.5).as_float(), Some(2.5));
+        assert_eq!(Value::UInt(2).as_float(), None);
+        assert_eq!(Value::Float(2.5).as_number(), Some(2.5));
+        assert_eq!(Value::UInt(7).as_number(), Some(7.0));
+        assert_eq!(Value::Int(-3).as_number(), Some(-3.0));
+        assert_eq!(Value::Nil.as_number(), None);
+    }
+
+    #[test]
+    fn map_get_by_reference_finds_the_first_matching_key() {
+        let data = pack(&Value::Map(vec![
+            (Value::Str(String::from("a")), Value::UInt(1)),
+            (Value::Str(String::from("b")), Value::UInt(2)),
+            (Value::Str(String::from("b")), Value::UInt(3)),
+        ]));
+        let value = unpack_exact_ref(&data).unwrap();
+        assert_eq!(value.map_get("b").and_then(|v| v.as_uint()), Some(2));
+        assert_eq!(value.map_get("a").and_then(|v| v.as_uint()), Some(1));
+        assert!(value.map_get("c").is_none());
+    }
+
+    #[test]
+    fn errors_describe_themselves() {
+        assert_eq!(
+            Error::UnsupportedFormat(0xc1).to_string(),
+            "Unsupported msgpack format: 0xc1"
+        );
+        assert_eq!(
+            Error::MaxDepthExceeded.to_string(),
+            "Maximum nesting depth exceeded"
+        );
+    }
 }
