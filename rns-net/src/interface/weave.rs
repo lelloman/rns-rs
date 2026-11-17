@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use rns_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
 use rns_crypto::sha256::sha256;
-use rns_crypto::OsRng;
 
 use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer};
 use crate::event::{
@@ -308,7 +307,16 @@ struct WeaveSession {
 
 impl WeaveSession {
     fn new(config: WeaveConfig, ctx: &StartContext) -> Arc<Self> {
-        let identity = Ed25519PrivateKey::generate(&mut OsRng);
+        // Upstream's switch identity is a full RNS.Identity, whose
+        // creation it logs; the switch uses its signing key.
+        let switch_identity = crate::node::create_identity();
+        let mut signing_key = [0u8; 32];
+        signing_key.copy_from_slice(
+            &switch_identity
+                .get_private_key()
+                .expect("a new identity has a private key")[32..],
+        );
+        let identity = Ed25519PrivateKey::from_bytes(&signing_key);
         let host_public = identity.public_key().public_bytes();
         Arc::new(Self {
             config,

@@ -706,3 +706,70 @@ fn shared_clients_log_their_identities_as_upstream() {
         None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
     }
 }
+
+/// The `[Level]  message` lines of a utility's Python-style output, with
+/// timestamps and spinners dropped.
+fn utility_log_lines(stdout: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(stdout)
+        .split(['\r', '\n'])
+        .filter_map(|line| {
+            let rest = line.strip_prefix('[')?;
+            let (_, message) = rest.split_once("] ")?;
+            message.starts_with('[').then(|| message.to_string())
+        })
+        .collect()
+}
+
+/// rncp logs the identity it creates as upstream's does: "Identity keys
+/// created" at Verbose after "No valid saved identity found" at Info, so
+/// only from -vv on.
+#[cfg(target_os = "linux")]
+#[test]
+fn rncp_logs_the_identity_it_creates_as_upstream() {
+    let dir = tempfile::tempdir().unwrap();
+    let instance = format!("rncp-identity-{}", std::process::id());
+    let mut rnsd = spawn_rnsd(
+        dir.path(),
+        &format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = {instance}\n[logging]\n  loglevel = 4\n[interfaces]\n"
+        ),
+    );
+    wait_for_abstract_socket(&format!("rns/{instance}/rpc"));
+    let file = dir.path().join("file.txt");
+    fs::write(&file, b"payload").unwrap();
+    let identity = dir.path().join("storage/identities/rncp");
+    let rncp = |verbosity: &[&str]| {
+        let _ = fs::remove_file(&identity);
+        Command::new(env!("CARGO_BIN_EXE_rncp"))
+            .args(["--config", dir.path().to_str().unwrap(), "-w", "1"])
+            .args(verbosity)
+            .arg(&file)
+            .arg("00112233445566778899aabbccddeeff")
+            .output()
+            .expect("run rncp")
+    };
+    let quiet = rncp(&[]);
+    let verbose = rncp(&["-vv"]);
+    let _ = rnsd.kill();
+    let _ = rnsd.wait();
+
+    assert!(
+        !String::from_utf8_lossy(&quiet.stdout).contains("Identity keys created"),
+        "{}",
+        String::from_utf8_lossy(&quiet.stdout)
+    );
+    let lines = utility_log_lines(&verbose.stdout);
+    let created = lines
+        .iter()
+        .position(|line| line == "[Info]     No valid saved identity found, creating new...")
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert_eq!(
+        lines.get(created + 1),
+        Some(&format!(
+            "[Verbose]  Identity keys created for <{}>",
+            identity_file_hash(&identity)
+        )),
+        "{lines:?}"
+    );
+}

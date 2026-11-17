@@ -182,6 +182,20 @@ fn strerror(err: &std::io::Error) -> String {
     }
 }
 
+/// `RNS.Identity()`: a new identity, logged at Verbose as upstream's
+/// `Identity.create_keys` logs it.
+pub fn new_identity() -> rns_crypto::identity::Identity {
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+    log(
+        &format!(
+            "Identity keys created for {}",
+            crate::pyfmt::prettyhexrep(identity.hash())
+        ),
+        LOG_VERBOSE,
+    );
+    identity
+}
+
 /// `RNS.Identity.from_file`: the identity in a file of private key bytes,
 /// or `None`, logged as upstream logs it, when it holds none.
 pub fn identity_from_file(path: &str) -> Option<rns_crypto::identity::Identity> {

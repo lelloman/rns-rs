@@ -597,7 +597,9 @@ impl Rnid {
 
     fn get_operating_identity(&mut self, allow_none: bool, no_cache: bool) -> Option<Identity> {
         if let Some(path) = self.args.generate.clone().filter(|p| !p.is_empty()) {
-            let identity = Identity::new(&mut OsRng);
+            // Before any Reticulum instance sets the log level, so at
+            // upstream's default this line is not shown.
+            let identity = pylog::new_identity();
             if !self.args.force && isfile(&path) {
                 println!("Identity file {path} already exists. Not overwriting.");
                 self.exit(R_FILE_EXISTS);

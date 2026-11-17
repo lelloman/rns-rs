@@ -368,7 +368,7 @@ impl Rnx {
         }
         if self.identity.is_none() {
             pylog::log("No valid saved identity found, creating new...", LOG_INFO);
-            let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+            let identity = pylog::new_identity();
             pylog::key_to_file(
                 &identity.get_private_key().unwrap_or([0; 64]),
                 &identity_path,

@@ -2188,10 +2188,23 @@ fn prepare_identity_at(path: &Path) -> Result<Identity, RnshError> {
     {
         fs::create_dir_all(parent)?;
     }
+    // Upstream's prepare_identity: "Loading identity" and the key creation
+    // at Verbose, which this log shows from -v on, "Creating identity" at
+    // Notice.
     if path.exists() {
+        log::debug!("Loading identity from {}", path.display());
         Ok(rns_net::storage::load_identity(path)?)
     } else {
+        log::info!("Creating identity {}", path.display());
         let identity = Identity::new(&mut OsRng);
+        log::debug!(
+            "Identity keys created for <{}>",
+            identity
+                .hash()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
         rns_net::storage::save_identity(&identity, path)?;
         Ok(identity)
     }
