@@ -131,9 +131,9 @@ impl ResourceReceiver {
         // Split advertisements carry the logical size of the complete
         // Resource in data_size, while each receiver only assembles one
         // bounded segment. Aggregate receive policy is enforced by rns-net.
-        if adv.transfer_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64
-            || (!adv.flags.split && adv.data_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64)
-        {
+        // Unpacking already bounds the transfer size to three times the
+        // largest efficient segment.
+        if !adv.flags.split && adv.data_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64 {
             return Err(ResourceError::TooLarge);
         }
 
