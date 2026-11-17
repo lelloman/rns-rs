@@ -111,3 +111,7 @@ impl TransportEngine {
         result
     }
 }
+
+#[cfg(test)]
+#[path = "outbound_engine_tests.rs"]
+mod tests;
