@@ -891,29 +891,33 @@ impl ResourceReceiver {
                 return self.assemble(decrypt_fn, compressor);
             }
 
-            // Compute timeout
-            let eifr = self.compute_eifr();
+            // Upstream's watchdog for an incoming transfer.
             let retries_used = self.max_retries - self.retries_left;
             let extra_wait = retries_used as f64 * RESOURCE_PER_RETRY_DELAY;
-            let expected_hmu_wait =
-                if eifr > 0.0 && (self.waiting_for_hmu || self.outstanding_parts == 0) {
-                    (self.sdu as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr
+            let eifr = self.compute_eifr();
+            let sdu = self.sdu as f64;
+            let sleep_time = if self.req_resp_rtt_rate != 0.0 {
+                // A response measured the link: wait for the parts still
+                // outstanding, and for a hashmap update when one is due or
+                // nothing is outstanding.
+                let expected_hmu_wait = if self.waiting_for_hmu || self.outstanding_parts == 0 {
+                    (sdu * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr
                 } else {
                     0.0
                 };
-            let expected_tof = if self.outstanding_parts > 0 && eifr > 0.0 {
-                (self.outstanding_parts as f64 * self.sdu as f64 * 8.0) / eifr
-            } else if eifr > 0.0 {
-                (3.0 * self.sdu as f64) / eifr
+                let expected_tof = (self.outstanding_parts as f64 * sdu * 8.0) / eifr;
+                self.last_activity
+                    + self.part_timeout_factor * expected_tof
+                    + expected_hmu_wait
+                    + RESOURCE_RETRY_GRACE_TIME
+                    + extra_wait
             } else {
-                10.0 // fallback
+                // No response yet.
+                self.last_activity
+                    + self.part_timeout_factor * ((3.0 * sdu) / eifr)
+                    + RESOURCE_RETRY_GRACE_TIME
+                    + extra_wait
             };
-
-            let sleep_time = self.last_activity
-                + self.part_timeout_factor * expected_tof
-                + expected_hmu_wait
-                + RESOURCE_RETRY_GRACE_TIME
-                + extra_wait;
 
             if now > sleep_time {
                 if self.retries_left > 0 {
@@ -936,7 +940,9 @@ impl ResourceReceiver {
     fn compute_eifr(&mut self) -> f64 {
         let eifr = if self.req_data_rtt_rate > 0.0 {
             self.req_data_rtt_rate * 8.0
-        } else if let Some(prev) = self.previous_eifr {
+        } else if let Some(prev) = self.previous_eifr.filter(|eifr| *eifr > 0.0) {
+            // A previous transfer's rate; one that is not positive could
+            // not time anything.
             prev
         } else {
             // Fallback: use link_rtt as establishment cost estimate
@@ -1001,23 +1007,6 @@ mod tests {
             }
             Ok(out)
         }
-    }
-
-    fn base_timeout(receiver: &ResourceReceiver, eifr: f64) -> f64 {
-        let expected_tof = if receiver.outstanding_parts > 0 {
-            (receiver.outstanding_parts as f64 * receiver.sdu as f64 * 8.0) / eifr
-        } else {
-            (3.0 * receiver.sdu as f64) / eifr
-        };
-
-        receiver.last_activity
-            + receiver.part_timeout_factor * expected_tof
-            + RESOURCE_RETRY_GRACE_TIME
-    }
-
-    fn hmu_timeout(receiver: &ResourceReceiver, eifr: f64) -> f64 {
-        let expected_hmu_wait = (receiver.sdu as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr;
-        base_timeout(receiver, eifr) + expected_hmu_wait
     }
 
     fn make_sender_receiver() -> (ResourceSender, ResourceReceiver) {
@@ -2370,82 +2359,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tick_waiting_for_hmu_gets_extra_timeout() {
-        let (_, mut receiver) = make_sender_receiver();
-        receiver.accept(1000.0);
-        receiver.waiting_for_hmu = true;
-        receiver.outstanding_parts = 0;
-        let eifr = 10_000.0;
-        receiver.previous_eifr = Some(eifr);
-        receiver.last_activity = 1000.0;
-
-        let old_timeout = base_timeout(&receiver, eifr);
-        let now = old_timeout + 0.01;
-
-        let actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
-
-        assert!(actions.is_empty(), "receiver should keep waiting for HMU");
-        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES);
-        assert_eq!(receiver.status, ResourceStatus::Transferring);
-    }
-
-    #[test]
-    fn test_tick_zero_outstanding_parts_gets_extra_timeout_without_hmu_flag() {
-        let (_, mut receiver) = make_sender_receiver();
-        receiver.accept(1000.0);
-        receiver.waiting_for_hmu = false;
-        receiver.outstanding_parts = 0;
-        let eifr = 10_000.0;
-        receiver.previous_eifr = Some(eifr);
-        receiver.last_activity = 1000.0;
-
-        let old_timeout = base_timeout(&receiver, eifr);
-        let now = old_timeout + 0.01;
-
-        let actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
-
-        assert!(
-            actions.is_empty(),
-            "receiver should keep waiting for follow-up hashmap data"
-        );
-        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES);
-        assert_eq!(receiver.status, ResourceStatus::Transferring);
-    }
-
-    #[test]
-    fn test_tick_waiting_for_hmu_retries_after_extended_timeout() {
-        let (_, mut receiver) = make_sender_receiver();
-        receiver.accept(1000.0);
-        receiver.waiting_for_hmu = true;
-        receiver.outstanding_parts = 0;
-        let eifr = 10_000.0;
-        receiver.previous_eifr = Some(eifr);
-        receiver.last_activity = 1000.0;
-
-        let now = hmu_timeout(&receiver, eifr) + 0.01;
-        let _actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
-
-        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES - 1);
-        assert!(!receiver.waiting_for_hmu);
-    }
-
-    #[test]
-    fn test_tick_inflight_parts_do_not_get_hmu_timeout_extension() {
-        let (_, mut receiver) = make_sender_receiver();
-        receiver.accept(1000.0);
-        receiver.waiting_for_hmu = false;
-        receiver.outstanding_parts = 2;
-        let eifr = 10_000.0;
-        receiver.previous_eifr = Some(eifr);
-        receiver.last_activity = 1000.0;
-
-        let now = base_timeout(&receiver, eifr) + 0.01;
-        let _actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
-
-        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES - 1);
-    }
-
-    #[test]
     fn test_tick_max_retries_exceeded() {
         let (_, mut receiver) = make_sender_receiver();
         receiver.accept(1000.0);
@@ -2845,64 +2758,6 @@ mod tests {
         receiver.retries_left < retries
     }
 
-    /// A receiver that requested its single part at 1000.0 and is waiting
-    /// for it, at the given rate estimate.
-    fn waiting_receiver(eifr: f64) -> ResourceReceiver {
-        let (_, mut receiver) = make_sender_receiver();
-        receiver.accept(1000.0);
-        assert_eq!(receiver.outstanding_parts, 1);
-        receiver.previous_eifr = Some(eifr);
-        receiver
-    }
-
-    #[test]
-    fn part_timeout_is_strictly_after_its_deadline() {
-        let eifr = 10_000.0;
-        let deadline = base_timeout(&waiting_receiver(eifr), eifr);
-        assert!(!timed_out(&mut waiting_receiver(eifr), deadline));
-        assert!(timed_out(&mut waiting_receiver(eifr), deadline + 1e-6));
-    }
-
-    #[test]
-    fn each_retry_used_extends_the_part_timeout() {
-        let eifr = 10_000.0;
-        let deadline = base_timeout(&waiting_receiver(eifr), eifr) + 2.0 * RESOURCE_PER_RETRY_DELAY;
-        let retried = || {
-            let mut receiver = waiting_receiver(eifr);
-            receiver.retries_left = RESOURCE_MAX_RETRIES - 2;
-            receiver
-        };
-        assert!(!timed_out(&mut retried(), deadline - 1e-6));
-        assert!(timed_out(&mut retried(), deadline + 1e-6));
-    }
-
-    #[test]
-    fn timeout_with_nothing_outstanding_waits_for_a_hashmap_update() {
-        let eifr = 10_000.0;
-        let idle = || {
-            let mut receiver = waiting_receiver(eifr);
-            receiver.outstanding_parts = 0;
-            receiver
-        };
-        let deadline = hmu_timeout(&idle(), eifr);
-        assert!(!timed_out(&mut idle(), deadline - 1e-6));
-        assert!(timed_out(&mut idle(), deadline + 1e-6));
-    }
-
-    #[test]
-    fn timeout_without_a_rate_estimate_falls_back() {
-        let deadline = 1000.0 + RESOURCE_PART_TIMEOUT_FACTOR * 10.0 + RESOURCE_RETRY_GRACE_TIME;
-        for outstanding in [0, 1] {
-            let unrated = || {
-                let mut receiver = waiting_receiver(0.0);
-                receiver.outstanding_parts = outstanding;
-                receiver
-            };
-            assert!(!timed_out(&mut unrated(), deadline - 1e-6));
-            assert!(timed_out(&mut unrated(), deadline + 1e-6));
-        }
-    }
-
     #[test]
     fn rate_estimate_prefers_measured_data_rate_then_previous_then_rtt() {
         let (_, mut receiver) = make_sender_receiver();
@@ -3006,5 +2861,145 @@ mod tests {
             }
         }
         assert_eq!(receiver.received_count, receiver.total_parts);
+    }
+
+    /// A receiver that requested its single part at 1000.0 and is waiting
+    /// for it, at the given rate estimate.
+    fn waiting_receiver(eifr: f64) -> ResourceReceiver {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        assert_eq!(receiver.outstanding_parts, 1);
+        receiver.previous_eifr = Some(eifr);
+        receiver
+    }
+
+    /// `waiting_receiver` after a response measured the link, with
+    /// `outstanding` parts still to come.
+    fn responded_receiver(
+        eifr: f64,
+        outstanding: usize,
+        waiting_for_hmu: bool,
+    ) -> ResourceReceiver {
+        let mut receiver = waiting_receiver(eifr);
+        receiver.req_resp_rtt_rate = 1000.0;
+        receiver.part_timeout_factor = RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT;
+        receiver.outstanding_parts = outstanding;
+        receiver.waiting_for_hmu = waiting_for_hmu;
+        receiver
+    }
+
+    /// Upstream's deadline before any response: three SDUs at the rate.
+    fn unanswered_deadline(receiver: &ResourceReceiver, eifr: f64, extra_wait: f64) -> f64 {
+        receiver.last_activity
+            + receiver.part_timeout_factor * ((3.0 * receiver.sdu as f64) / eifr)
+            + RESOURCE_RETRY_GRACE_TIME
+            + extra_wait
+    }
+
+    /// Upstream's deadline once a response measured the link.
+    fn answered_deadline(receiver: &ResourceReceiver, eifr: f64) -> f64 {
+        let sdu = receiver.sdu as f64;
+        let hmu_wait = if receiver.waiting_for_hmu || receiver.outstanding_parts == 0 {
+            (sdu * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr
+        } else {
+            0.0
+        };
+        receiver.last_activity
+            + receiver.part_timeout_factor
+                * ((receiver.outstanding_parts as f64 * sdu * 8.0) / eifr)
+            + hmu_wait
+            + RESOURCE_RETRY_GRACE_TIME
+            + 0.0
+    }
+
+    fn assert_times_out_after(make: impl Fn() -> ResourceReceiver, deadline: f64) {
+        assert!(
+            !timed_out(&mut make(), deadline),
+            "timed out at the deadline"
+        );
+        assert!(
+            timed_out(&mut make(), deadline + 1e-6),
+            "no timeout after it"
+        );
+    }
+
+    #[test]
+    fn unanswered_request_times_out_after_three_sdus_at_the_rate() {
+        let eifr = 10_000.0;
+        // Neither the parts outstanding nor a hashmap update due change it.
+        for (outstanding, waiting_for_hmu) in [(1, false), (0, false), (5, true)] {
+            let make = || {
+                let mut receiver = waiting_receiver(eifr);
+                receiver.outstanding_parts = outstanding;
+                receiver.waiting_for_hmu = waiting_for_hmu;
+                receiver
+            };
+            assert_times_out_after(make, unanswered_deadline(&make(), eifr, 0.0));
+        }
+    }
+
+    #[test]
+    fn answered_request_times_out_after_its_outstanding_parts() {
+        let eifr = 10_000.0;
+        let make = || responded_receiver(eifr, 3, false);
+        let deadline = answered_deadline(&make(), eifr);
+        assert_eq!(
+            deadline,
+            1000.0 + 2.0 * (3.0 * RESOURCE_SDU as f64 * 8.0 / eifr) + RESOURCE_RETRY_GRACE_TIME
+        );
+        assert_times_out_after(make, deadline);
+    }
+
+    #[test]
+    fn answered_request_waits_for_a_hashmap_update_when_one_is_due() {
+        let eifr = 10_000.0;
+        let hmu_wait = RESOURCE_SDU as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR / eifr;
+        // Nothing outstanding: only the hashmap update wait.
+        let make = || responded_receiver(eifr, 0, false);
+        let deadline = answered_deadline(&make(), eifr);
+        assert_eq!(deadline, 1000.0 + hmu_wait + RESOURCE_RETRY_GRACE_TIME);
+        assert_times_out_after(make, deadline);
+        // Waiting for one with parts outstanding: both.
+        let make = || responded_receiver(eifr, 2, true);
+        assert_times_out_after(make, answered_deadline(&make(), eifr));
+    }
+
+    #[test]
+    fn each_retry_used_extends_the_timeout() {
+        let eifr = 10_000.0;
+        let retried = || {
+            let mut receiver = waiting_receiver(eifr);
+            receiver.retries_left = RESOURCE_MAX_RETRIES - 2;
+            receiver
+        };
+        let deadline = unanswered_deadline(&retried(), eifr, 2.0 * RESOURCE_PER_RETRY_DELAY);
+        assert_times_out_after(retried, deadline);
+    }
+
+    #[test]
+    fn timeout_retries_with_a_smaller_window_until_the_retries_run_out() {
+        let mut receiver = responded_receiver(10_000.0, 0, true);
+        receiver.window.window = 6;
+        let actions = receiver.tick(2000.0, &identity_decrypt, &NoopCompressor);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendRequest(_))));
+        assert_eq!(receiver.window.window, 5);
+        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES - 1);
+
+        receiver.retries_left = 0;
+        let actions = receiver.tick(5000.0, &identity_decrypt, &NoopCompressor);
+        assert!(actions.contains(&ResourceAction::Failed(ResourceError::MaxRetriesExceeded)));
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+    }
+
+    #[test]
+    fn rate_from_a_previous_transfer_is_used_only_when_positive() {
+        let (_, mut receiver) = make_sender_receiver();
+        let fallback = receiver.compute_eifr();
+        receiver.previous_eifr = Some(0.0);
+        assert_eq!(receiver.compute_eifr(), fallback);
+        receiver.previous_eifr = Some(500.0);
+        assert_eq!(receiver.compute_eifr(), 500.0);
     }
 }
