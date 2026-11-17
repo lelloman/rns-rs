@@ -939,7 +939,7 @@ mod tests {
                 RateEntry {
                     last,
                     rate_violations: u32::from(n),
-                    blocked_until: 3000.0,
+                    blocked_until: 1500.0,
                     timestamps: vec![last],
                 },
             );
@@ -949,10 +949,12 @@ mod tests {
         assert_eq!(
             engine.get_rate_table(),
             [
-                ([1; 16], 1000.0, 1, 3000.0, vec![1000.0]),
-                ([2; 16], 1900.0, 2, 3000.0, vec![1900.0])
+                ([1; 16], 1000.0, 1, 1500.0, vec![1000.0]),
+                ([2; 16], 1900.0, 2, 1500.0, vec![1900.0])
             ]
         );
+        // Only the entry last seen before the horizon, and no longer
+        // blocked, goes.
         let active = alloc::collections::BTreeSet::new();
         assert_eq!(engine.cull_rate_limiter(&active, 2000.0, 500.0), 1);
         assert_eq!(engine.rate_limiter_count(), 1);
