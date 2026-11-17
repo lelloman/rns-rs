@@ -839,8 +839,10 @@ fn handle_rpc_request(
                     let hash = extract_dest_hash(request, "destination_hash")?;
                     let resp =
                         send_query(event_tx, QueryRequest::FirstHopTimeout { dest_hash: hash })?;
+                    // Without a known bitrate upstream answers the
+                    // integer DEFAULT_PER_HOP_TIMEOUT.
                     if let QueryResponse::FirstHopTimeout(timeout) = resp {
-                        Ok(PickleValue::Float(timeout))
+                        Ok(python_number(timeout))
                     } else {
                         Ok(PickleValue::Float(
                             rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
@@ -860,10 +862,12 @@ fn handle_rpc_request(
                     let hash = extract_dest_hash(request, "destination_hash")?;
                     let resp =
                         send_query(event_tx, QueryRequest::NextHopIfName { dest_hash: hash })?;
+                    // Upstream answers str(next_hop_interface): "None"
+                    // when it has none.
                     if let QueryResponse::NextHopIfName(Some(name)) = resp {
                         Ok(PickleValue::String(name))
                     } else {
-                        Ok(PickleValue::None)
+                        Ok(PickleValue::String("None".into()))
                     }
                 }
                 "link_count" => {
@@ -1496,8 +1500,9 @@ fn handle_rpc_request(
                 }
                 "announce_queues" => {
                     let resp = send_query(event_tx, QueryRequest::DropAnnounceQueues)?;
+                    // Upstream's drop_announce_queues returns None.
                     if let QueryResponse::DropAnnounceQueues = resp {
-                        Ok(PickleValue::Bool(true))
+                        Ok(PickleValue::None)
                     } else {
                         Ok(PickleValue::None)
                     }
@@ -1741,7 +1746,28 @@ pub(crate) fn interface_stats_msgpack(stats: &InterfaceStatsResponse) -> Msgpack
     pickle_to_msgpack(&interface_stats_to_pickle(stats))
 }
 
+/// A number upstream starts at the integer 0 and only replaces with a float
+/// once there is something to measure: 0 stays an int.
+fn zero_or_float(value: f64) -> PickleValue {
+    if value == 0.0 {
+        PickleValue::Int(0)
+    } else {
+        PickleValue::Float(value)
+    }
+}
+
 fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
+    // Upstream's traffic totals are sums over the interfaces its traffic
+    // counter measures, the top-level ones but the shared instance's: the
+    // integer 0 when there are none, floats otherwise.
+    let counted = stats.interfaces.iter().any(measured_by_traffic_counter);
+    let speed = |value: f64| {
+        if counted {
+            PickleValue::Float(value)
+        } else {
+            PickleValue::Int(0)
+        }
+    };
     let mut ifaces = Vec::new();
     for iface in &stats.interfaces {
         ifaces.push(single_iface_to_pickle(iface));
@@ -1814,20 +1840,16 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         ),
         (
             PickleValue::String("rxpps".into()),
-            PickleValue::Float(stats.rx_pps),
+            // `int(round(pps))`.
+            PickleValue::Int(stats.rx_pps.round() as i64),
         ),
         (
             PickleValue::String("txpps".into()),
-            PickleValue::Float(stats.tx_pps),
+            // `int(round(pps))`.
+            PickleValue::Int(stats.tx_pps.round() as i64),
         ),
-        (
-            PickleValue::String("rxs".into()),
-            PickleValue::Float(stats.traffic.rxs),
-        ),
-        (
-            PickleValue::String("txs".into()),
-            PickleValue::Float(stats.traffic.txs),
-        ),
+        (PickleValue::String("rxs".into()), speed(stats.traffic.rxs)),
+        (PickleValue::String("txs".into()), speed(stats.traffic.txs)),
         // Filtered traffic (upstream 134dc677). Always present: upstream's
         // `rnstatus -F` reads these keys unguarded.
         (
@@ -1840,11 +1862,11 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         ),
         (
             PickleValue::String("frxs".into()),
-            PickleValue::Float(stats.traffic.frxs),
+            speed(stats.traffic.frxs),
         ),
         (
             PickleValue::String("ftxs".into()),
-            PickleValue::Float(stats.traffic.ftxs),
+            speed(stats.traffic.ftxs),
         ),
         (
             PickleValue::String("arxb".into()),
@@ -1864,11 +1886,11 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         ),
         (
             PickleValue::String("arxs".into()),
-            PickleValue::Float(stats.traffic.arxs),
+            speed(stats.traffic.arxs),
         ),
         (
             PickleValue::String("atxs".into()),
-            PickleValue::Float(stats.traffic.atxs),
+            speed(stats.traffic.atxs),
         ),
         (
             PickleValue::String("prxb".into()),
@@ -1888,27 +1910,27 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         ),
         (
             PickleValue::String("prxs".into()),
-            PickleValue::Float(stats.traffic.prxs),
+            speed(stats.traffic.prxs),
         ),
         (
             PickleValue::String("ptxs".into()),
-            PickleValue::Float(stats.traffic.ptxs),
+            speed(stats.traffic.ptxs),
         ),
         (
             PickleValue::String("arxf".into()),
-            PickleValue::Float(stats.traffic.arxf),
+            zero_or_float(stats.traffic.arxf),
         ),
         (
             PickleValue::String("atxf".into()),
-            PickleValue::Float(stats.traffic.atxf),
+            zero_or_float(stats.traffic.atxf),
         ),
         (
             PickleValue::String("prxf".into()),
-            PickleValue::Float(stats.traffic.prxf),
+            zero_or_float(stats.traffic.prxf),
         ),
         (
             PickleValue::String("ptxf".into()),
-            PickleValue::Float(stats.traffic.ptxf),
+            zero_or_float(stats.traffic.ptxf),
         ),
     ];
 
@@ -2172,23 +2194,23 @@ fn add_inbound_runtime_stats(
         ),
         (
             PickleValue::String("tqpressure".into()),
-            PickleValue::Float(pressure(total_height, total_capacity)),
+            zero_or_float(pressure(total_height, total_capacity)),
         ),
         (
             PickleValue::String("dqpressure".into()),
-            PickleValue::Float(pressure(snapshot.heights[0], snapshot.capacities[0])),
+            zero_or_float(pressure(snapshot.heights[0], snapshot.capacities[0])),
         ),
         (
             PickleValue::String("aqpressure".into()),
-            PickleValue::Float(pressure(snapshot.heights[1], snapshot.capacities[1])),
+            zero_or_float(pressure(snapshot.heights[1], snapshot.capacities[1])),
         ),
         (
             PickleValue::String("pqpressure".into()),
-            PickleValue::Float(pressure(snapshot.heights[2], snapshot.capacities[2])),
+            zero_or_float(pressure(snapshot.heights[2], snapshot.capacities[2])),
         ),
         (
             PickleValue::String("ilqpressure".into()),
-            PickleValue::Float(pressure(snapshot.heights[3], snapshot.capacities[3])),
+            zero_or_float(pressure(snapshot.heights[3], snapshot.capacities[3])),
         ),
         (PickleValue::String("txq".into()), PickleValue::None),
     ]);
@@ -2335,7 +2357,24 @@ fn radio_stats_to_pickle(s: &SingleInterfaceStat, dict: &mut Vec<(PickleValue, P
     ));
 }
 
+/// Whether upstream's traffic counter measures the interface's speeds: a
+/// top-level interface other than the shared instance's. The others keep
+/// the integer 0 it starts them at.
+fn measured_by_traffic_counter(s: &SingleInterfaceStat) -> bool {
+    s.parent_display_name.is_none()
+        && !s.display_name.starts_with("Shared Instance[")
+        && !s.display_name.starts_with("LocalInterface[")
+}
+
 fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
+    let measured = measured_by_traffic_counter(s);
+    let speed = |value: f64| {
+        if measured {
+            PickleValue::Float(value)
+        } else {
+            PickleValue::Int(0)
+        }
+    };
     let remote_info = s.remote_transport_info.as_ref();
     let mut dict = vec![
         (
@@ -2446,14 +2485,8 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String("txbuffered".into()),
             PickleValue::Int(s.tx_buffered as i64),
         ),
-        (
-            PickleValue::String("rxs".into()),
-            PickleValue::Float(s.traffic.rxs),
-        ),
-        (
-            PickleValue::String("txs".into()),
-            PickleValue::Float(s.traffic.txs),
-        ),
+        (PickleValue::String("rxs".into()), speed(s.traffic.rxs)),
+        (PickleValue::String("txs".into()), speed(s.traffic.txs)),
         // Filtered traffic (upstream 134dc677). Always present: upstream's
         // `rnstatus -F` reads these keys unguarded.
         (
@@ -2464,14 +2497,8 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String("ftxb".into()),
             PickleValue::Int(s.traffic.ftxb as i64),
         ),
-        (
-            PickleValue::String("frxs".into()),
-            PickleValue::Float(s.traffic.frxs),
-        ),
-        (
-            PickleValue::String("ftxs".into()),
-            PickleValue::Float(s.traffic.ftxs),
-        ),
+        (PickleValue::String("frxs".into()), speed(s.traffic.frxs)),
+        (PickleValue::String("ftxs".into()), speed(s.traffic.ftxs)),
         (
             PickleValue::String("arxb".into()),
             PickleValue::Int(s.traffic.arxb as i64),
@@ -2492,14 +2519,8 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String("atxc".into()),
             PickleValue::Int(s.traffic.atxc as i64),
         ),
-        (
-            PickleValue::String("arxs".into()),
-            PickleValue::Float(s.traffic.arxs),
-        ),
-        (
-            PickleValue::String("atxs".into()),
-            PickleValue::Float(s.traffic.atxs),
-        ),
+        (PickleValue::String("arxs".into()), speed(s.traffic.arxs)),
+        (PickleValue::String("atxs".into()), speed(s.traffic.atxs)),
         (
             PickleValue::String("prxb".into()),
             PickleValue::Int(s.traffic.prxb as i64),
@@ -2516,14 +2537,8 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String("ptxc".into()),
             PickleValue::Int(s.traffic.ptxc as i64),
         ),
-        (
-            PickleValue::String("prxs".into()),
-            PickleValue::Float(s.traffic.prxs),
-        ),
-        (
-            PickleValue::String("ptxs".into()),
-            PickleValue::Float(s.traffic.ptxs),
-        ),
+        (PickleValue::String("prxs".into()), speed(s.traffic.prxs)),
+        (PickleValue::String("ptxs".into()), speed(s.traffic.ptxs)),
         (
             PickleValue::String("protocol_violations".into()),
             PickleValue::Int(s.protocol_violations as i64),
@@ -2662,12 +2677,22 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
                 .unwrap_or(PickleValue::None),
         ),
         (
+            // None without an announce rate target, as upstream leaves
+            // them unconfigured.
             PickleValue::String("announce_rate_grace".into()),
-            PickleValue::Int(s.announce_rate_grace as i64),
+            if s.announce_rate_target.is_some() {
+                PickleValue::Int(s.announce_rate_grace as i64)
+            } else {
+                PickleValue::None
+            },
         ),
         (
             PickleValue::String("announce_rate_penalty".into()),
-            python_number(s.announce_rate_penalty),
+            if s.announce_rate_target.is_some() {
+                python_number(s.announce_rate_penalty)
+            } else {
+                PickleValue::None
+            },
         ),
         // Upstream's names for the frequencies above, which its rnstatus
         // reads.
@@ -5382,6 +5407,27 @@ mod tests {
     }
 
     #[test]
+    fn idle_stats_keep_upstreams_integer_zeros() {
+        // Upstream starts its traffic totals, frequencies, queue pressures
+        // and the speeds of interfaces its counter skips at the integer 0;
+        // its packet rates are always ints.
+        let stats = InterfaceStatsResponse {
+            rx_pps: 2.6,
+            ..Default::default()
+        };
+        let pickle = interface_stats_to_pickle(&stats);
+        for key in ["rxs", "txs", "frxs", "arxs", "prxs", "arxf", "ptxf"] {
+            assert!(
+                matches!(pickle.get(key), Some(PickleValue::Int(0))),
+                "{key}: {:?}",
+                pickle.get(key)
+            );
+        }
+        assert!(matches!(pickle.get("rxpps"), Some(PickleValue::Int(3))));
+        assert!(matches!(pickle.get("txpps"), Some(PickleValue::Int(0))));
+    }
+
+    #[test]
     fn interface_stats_pickle_format() {
         let traffic = TrafficDetail {
             rxs: 800.0,
@@ -5512,8 +5558,9 @@ mod tests {
         assert_eq!(decoded.get("atxf").unwrap().as_float(), Some(2.0));
         assert_eq!(decoded.get("prxf").unwrap().as_float(), Some(3.0));
         assert_eq!(decoded.get("ptxf").unwrap().as_float(), Some(4.0));
-        assert_eq!(decoded.get("rxpps").unwrap().as_float(), Some(3.0));
-        assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
+        // `int(round(pps))`, as upstream.
+        assert_eq!(decoded.get("rxpps").unwrap().as_int(), Some(3));
+        assert_eq!(decoded.get("txpps").unwrap().as_int(), Some(4));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         // Upstream's `str(interface)`, its config name, and `get_hash()`,
         // the full hash of the former.
