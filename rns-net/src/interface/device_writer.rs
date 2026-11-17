@@ -220,6 +220,11 @@ impl<T: Write + AsRawFd> Write for DeviceWriter<T> {
 }
 
 impl<T> DeviceWriter<T> {
+    /// The connection written to.
+    pub(crate) fn transport(&self) -> &T {
+        &self.transport
+    }
+
     fn unregister(&mut self) {
         if let Some(driven) = &mut self.driven {
             if driven.registered {
