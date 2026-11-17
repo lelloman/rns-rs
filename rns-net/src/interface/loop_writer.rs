@@ -87,8 +87,8 @@ impl LoopEgress {
     }
 
     /// Also judge the peer stalled when it drains too slowly, and drop the
-    /// connection when bytes stay unwritten for `timeout` or the peer makes
-    /// no progress for [`EGRESS_DEAD_TIME`], setting `flag`.
+    /// connection, setting `flag`, when the peer makes no progress for
+    /// `timeout` ([`EGRESS_DEAD_TIME`], upstream's 12 s, when it is `None`).
     pub(crate) fn with_stall_watch(
         mut self,
         timeout: impl Fn() -> Option<Duration> + Send + 'static,
@@ -432,18 +432,22 @@ impl LoopWriter {
         if progressed || buffered == 0 {
             watch.stall_started = None;
         }
-        let dead = watch
-            .controller
-            .evaluate(watch.started.elapsed(), buffered, buffered, sent);
+        let timeout = (watch.timeout)().unwrap_or(EGRESS_DEAD_TIME);
+        let dead = watch.controller.evaluate_with(
+            watch.started.elapsed(),
+            buffered,
+            buffered,
+            sent,
+            timeout,
+        );
         egress.control.set_stalled(watch.controller.stalled());
         let exceeded = if dead {
-            Some(EGRESS_DEAD_TIME)
+            Some(timeout)
         } else if buffered == 0 {
             None
         } else {
             let now = Instant::now();
             let started = *watch.stall_started.get_or_insert(now);
-            let timeout = (watch.timeout)().unwrap_or(EGRESS_DEAD_TIME);
             (now.duration_since(started) >= timeout).then_some(timeout)
         };
         let Some(timeout) = exceeded else {

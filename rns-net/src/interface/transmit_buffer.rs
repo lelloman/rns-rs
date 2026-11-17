@@ -39,13 +39,27 @@ impl EgressController {
     }
 
     /// Evaluate one interval. Returns `true` when the peer made no progress
-    /// for the dead-peer deadline and should be torn down.
+    /// for upstream's dead-peer deadline and should be torn down.
     pub(crate) fn evaluate(
         &mut self,
         now: Duration,
         buffered: usize,
         sendable: usize,
         total_sent: usize,
+    ) -> bool {
+        self.evaluate_with(now, buffered, sendable, total_sent, EGRESS_DEAD_TIME)
+    }
+
+    /// [`Self::evaluate`] with the dead-peer deadline `dead_time`: an
+    /// interface's `write_stall_timeout` when it sets one, so the operator's
+    /// tolerance for a peer that stops reading is the one that applies.
+    pub(crate) fn evaluate_with(
+        &mut self,
+        now: Duration,
+        buffered: usize,
+        sendable: usize,
+        total_sent: usize,
+        dead_time: Duration,
     ) -> bool {
         if now.saturating_sub(self.last_evaluation) < EGRESS_INTERVAL {
             return false;
@@ -60,7 +74,7 @@ impl EgressController {
             self.stalled = false;
             return false;
         }
-        if now.saturating_sub(self.last_drain) >= EGRESS_DEAD_TIME {
+        if now.saturating_sub(self.last_drain) >= dead_time {
             return true;
         }
 
@@ -549,6 +563,47 @@ mod tests {
         assert!(!controller.evaluate(Duration::from_secs(4), buffered, buffered, 0));
         assert!(controller.stalled());
         assert!(controller.evaluate(Duration::from_secs(13), buffered, buffered, 0));
+    }
+
+    #[test]
+    fn a_configured_dead_time_replaces_upstreams_twelve_seconds() {
+        // vps-us and vps-eu set write_stall_timeout = 30, which never took
+        // effect: the 12 s dead-peer check dropped the peer first.
+        let buffered = EGRESS_MID_WATERMARK + 1;
+        let dead_time = Duration::from_secs(30);
+        let mut controller = EgressController::default();
+        for second in [1, 2, 13, 20, 29] {
+            assert!(!controller.evaluate_with(
+                Duration::from_secs(second),
+                buffered,
+                buffered,
+                0,
+                dead_time
+            ));
+        }
+        assert!(controller.evaluate_with(
+            Duration::from_secs(30),
+            buffered,
+            buffered,
+            0,
+            dead_time
+        ));
+        // A shorter one applies as well.
+        let mut quick = EgressController::default();
+        assert!(!quick.evaluate_with(
+            Duration::from_secs(1),
+            buffered,
+            buffered,
+            0,
+            Duration::from_secs(5)
+        ));
+        assert!(quick.evaluate_with(
+            Duration::from_secs(7),
+            buffered,
+            buffered,
+            0,
+            Duration::from_secs(5)
+        ));
     }
 
     #[test]

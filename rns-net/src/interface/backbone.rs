@@ -532,16 +532,18 @@ impl BackboneWriter {
             self.stall_started = None;
         }
         let elapsed = self.egress_started.elapsed();
-        let dead = self.egress_controller.evaluate(
+        let dead_time = write_stall_timeout.unwrap_or(EGRESS_DEAD_TIME);
+        let dead = self.egress_controller.evaluate_with(
             elapsed,
             self.transmit_buffer.buffered_bytes(),
             self.transmit_buffer.sendable_bytes(),
             self.transmit_buffer.total_sent_bytes(),
+            dead_time,
         );
         self.egress_control
             .set_stalled(self.egress_controller.stalled());
         if dead {
-            return Err(self.disconnect_for_write_stall(EGRESS_DEAD_TIME));
+            return Err(self.disconnect_for_write_stall(dead_time));
         }
         if self.transmit_buffer.buffered_bytes() == 0 {
             return Ok(());

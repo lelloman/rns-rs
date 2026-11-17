@@ -413,6 +413,27 @@ its "Protecting Open Networks" page (since `29e5a997`). It states that some
 instances, so applications should register the types they need now; the
 default here stays off until upstream makes that change.
 
+## Backbone write stalls
+
+A Backbone peer that stops reading is dropped once its queued data has not
+drained for 12 seconds, as upstream (`DP_EC_DEAD_TIME`). `write_stall_timeout`,
+an rns-rs extension, sets that time in seconds for a listener's peers or a
+client:
+
+```ini
+  [[Public Backbone]]
+    type = BackboneInterface
+    listen_on = 0.0.0.0
+    port = 4242
+    write_stall_timeout = 30
+```
+
+A longer value keeps peers on slow or lossy links that drain in bursts; a
+shorter one frees a dead peer's buffer sooner. Before 2026-11-17 a value above
+12 had no effect, since the 12-second check dropped the peer first. Separately,
+the kernel drops a peer that leaves sent data unacknowledged for 24 seconds
+(`TCP_USER_TIMEOUT`, as upstream).
+
 ## Announce rate control
 
 On a transport node, the announces received for one destination are only
