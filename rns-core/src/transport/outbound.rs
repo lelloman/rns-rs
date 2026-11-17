@@ -1345,4 +1345,67 @@ mod tests {
             &interfaces,
         ));
     }
+
+    /// An announce attached to an interface that cannot send goes nowhere.
+    #[test]
+    fn attached_announce_is_not_sent_on_an_interface_that_cannot_send() {
+        let mut interfaces = BTreeMap::new();
+        let mut receive_only = make_interface(1, constants::MODE_FULL);
+        receive_only.out_capable = false;
+        interfaces.insert(InterfaceId(1), receive_only);
+        let packet = make_announce_packet(&[0xA1; 16], 0);
+        let actions = route_outbound(
+            &BTreeMap::new(),
+            &interfaces,
+            &BTreeMap::new(),
+            &packet,
+            constants::DESTINATION_SINGLE,
+            Some(InterfaceId(1)),
+            1000.0,
+        );
+        assert!(actions.is_empty());
+    }
+
+    /// The local hops delta applies only to packets this node originates,
+    /// sent with zero hops.
+    #[test]
+    fn local_hops_delta_leaves_packets_with_hops_alone() {
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let options = OutboundRouteOptions {
+            identity_hash: Some([0x42; 16]),
+            local_hops_delta: 2,
+        };
+        for (hops, sent_hops) in [(1, 1), (0, 2)] {
+            let packet = RawPacket::pack(
+                flags,
+                hops,
+                &[0xA2; 16],
+                None,
+                constants::CONTEXT_NONE,
+                b"hi",
+            )
+            .unwrap();
+            let actions = route_outbound_with_options(
+                &BTreeMap::new(),
+                &interfaces,
+                &BTreeMap::new(),
+                &packet,
+                constants::DESTINATION_SINGLE,
+                Some(InterfaceId(1)),
+                options,
+            );
+            match &actions[..] {
+                [TransportAction::SendOnInterface { raw, .. }] => assert_eq!(raw[1], sent_hops),
+                other => panic!("unexpected actions {other:?}"),
+            }
+        }
+    }
 }
