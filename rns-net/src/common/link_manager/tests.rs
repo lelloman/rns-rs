@@ -1195,8 +1195,21 @@ pub(super) fn setup_active_link() -> (LinkManager, LinkManager, LinkId) {
     setup_active_link_with_max_request_size(None)
 }
 
+/// An active link whose initiator signalled `mtu`.
+fn setup_active_link_with_mtu(mtu: u32) -> (LinkManager, LinkManager, LinkId) {
+    let (init_mgr, resp_mgr, link_id, lrrtt_raw) = setup_link_awaiting_rtt_with_mtu(None, mtu);
+    activate_link(init_mgr, resp_mgr, link_id, lrrtt_raw)
+}
+
 fn setup_link_awaiting_rtt(
     max_request_size: Option<usize>,
+) -> (LinkManager, LinkManager, LinkId, Vec<u8>) {
+    setup_link_awaiting_rtt_with_mtu(max_request_size, constants::MTU as u32)
+}
+
+fn setup_link_awaiting_rtt_with_mtu(
+    max_request_size: Option<usize>,
+    mtu: u32,
 ) -> (LinkManager, LinkManager, LinkId, Vec<u8>) {
     let mut rng = OsRng;
     let dest_hash = [0xDD; 16];
@@ -1211,13 +1224,8 @@ fn setup_link_awaiting_rtt(
     assert!(resp_mgr.set_link_destination_max_request_size(&dest_hash, max_request_size));
     let mut init_mgr = LinkManager::new();
 
-    let (link_id, init_actions) = init_mgr.create_link(
-        &dest_hash,
-        &sig_pub_bytes,
-        1,
-        constants::MTU as u32,
-        &mut rng,
-    );
+    let (link_id, init_actions) =
+        init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, mtu, &mut rng);
     let lr_raw = extract_send_packet(&init_actions);
     let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
     let resp_actions = resp_mgr.handle_local_delivery(
@@ -1243,7 +1251,16 @@ fn setup_link_awaiting_rtt(
 fn setup_active_link_with_max_request_size(
     max_request_size: Option<usize>,
 ) -> (LinkManager, LinkManager, LinkId) {
-    let (init_mgr, mut resp_mgr, link_id, lrrtt_raw) = setup_link_awaiting_rtt(max_request_size);
+    let (init_mgr, resp_mgr, link_id, lrrtt_raw) = setup_link_awaiting_rtt(max_request_size);
+    activate_link(init_mgr, resp_mgr, link_id, lrrtt_raw)
+}
+
+fn activate_link(
+    init_mgr: LinkManager,
+    mut resp_mgr: LinkManager,
+    link_id: LinkId,
+    lrrtt_raw: Vec<u8>,
+) -> (LinkManager, LinkManager, LinkId) {
     let mut rng = OsRng;
     let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
     resp_mgr.handle_local_delivery(
@@ -6712,4 +6729,104 @@ fn discovered_direct_mtu_applies_up_to_the_original_mtu() {
     assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
     init_mgr.detach_direct_route(&link_id);
     assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
+}
+
+/// What `peer` makes of the packets in `actions`, and the size of the
+/// largest of them.
+fn delivered_to(
+    peer: &mut LinkManager,
+    actions: &[LinkManagerAction],
+) -> (Vec<LinkManagerAction>, usize) {
+    let mut out = Vec::new();
+    let mut largest = 0;
+    for action in actions {
+        if let LinkManagerAction::SendPacket { raw, .. } = action {
+            largest = largest.max(raw.len());
+            let packet = RawPacket::unpack(raw).unwrap();
+            out.extend(peer.handle_local_delivery(
+                packet.destination_hash,
+                raw,
+                packet.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut OsRng,
+            ));
+        }
+    }
+    (out, largest)
+}
+
+fn channel_payloads(actions: &[LinkManagerAction]) -> Vec<Vec<u8>> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            LinkManagerAction::ChannelMessageReceived { payload, .. } => Some(payload.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn link_data(actions: &[LinkManagerAction]) -> Vec<Vec<u8>> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            LinkManagerAction::LinkDataReceived { data, .. } => Some(data.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn link_packets_and_channel_messages_fill_the_link_mtu() {
+    // A link MTU above the base MTU, as signalled over TCP: a packet and a
+    // channel message up to the link's MDU go out in one packet each, as
+    // upstream packs them against the link MTU.
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link_with_mtu(2000);
+    assert_eq!(init_mgr.links[&link_id].engine.mtu(), 2000);
+    let mdu = init_mgr.links[&link_id].engine.mdu();
+    assert!(mdu > constants::LINK_MDU);
+    let mut rng = OsRng;
+
+    let data = vec![0x11; mdu];
+    let actions = init_mgr
+        .try_send_on_link(&link_id, &data, constants::CONTEXT_NONE, &mut rng)
+        .expect("a packet of the link MDU fits");
+    let (received, largest) = delivered_to(&mut resp_mgr, &actions);
+    assert!(largest > constants::MTU && largest <= 2000);
+    assert_eq!(link_data(&received), vec![data]);
+
+    let message = vec![0x22; mdu - constants::CHANNEL_ENVELOPE_OVERHEAD];
+    let actions = init_mgr
+        .send_channel_message(&link_id, 7, &message, &mut rng)
+        .expect("a channel message of the channel MDU fits");
+    let (received, largest) = delivered_to(&mut resp_mgr, &actions);
+    assert!(largest > constants::MTU && largest <= 2000);
+    assert_eq!(channel_payloads(&received), vec![message]);
+}
+
+#[test]
+fn base_mtu_link_keeps_the_standard_sizes() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let link = &init_mgr.links[&link_id];
+    assert_eq!(link.engine.mtu(), constants::MTU as u32);
+    assert_eq!(link.engine.mdu(), constants::LINK_MDU);
+    assert_eq!(
+        link.channel.as_ref().unwrap().mdu(link.engine.mdu()),
+        constants::LINK_MDU - constants::CHANNEL_ENVELOPE_OVERHEAD
+    );
+    let mut rng = OsRng;
+    let over = vec![0; constants::LINK_MDU + 1];
+    assert!(matches!(
+        init_mgr.try_send_on_link(&link_id, &over, constants::CONTEXT_NONE, &mut rng),
+        Err(crate::event::LinkDatagramError::PayloadTooLarge { maximum, .. })
+            if maximum == constants::LINK_MDU
+    ));
+    let over = vec![0; constants::LINK_MDU - constants::CHANNEL_ENVELOPE_OVERHEAD + 1];
+    assert!(init_mgr
+        .send_channel_message(&link_id, 7, &over, &mut rng)
+        .is_err());
+    let fits = vec![0; constants::LINK_MDU - constants::CHANNEL_ENVELOPE_OVERHEAD];
+    let actions = init_mgr
+        .send_channel_message(&link_id, 7, &fits, &mut rng)
+        .unwrap();
+    assert!(extract_any_send_packet(&actions).len() <= constants::MTU);
 }

@@ -393,6 +393,17 @@ fn python_channel_peer_is_not_signalled_and_its_channel_keeps_working() {
     };
 
     exchange("before the proposal");
+    // Over TCP the link signals a large MTU, and a channel message above
+    // the base MTU's goes both ways in one packet, as upstream sends it.
+    let mdu = node
+        .links()
+        .unwrap()
+        .into_iter()
+        .find(|link| link.link_id == link_id)
+        .unwrap()
+        .mdu;
+    assert!(mdu > 1100, "link MDU {mdu}");
+    exchange(&"m".repeat(1000));
     propose_and_expect_unsupported(&node, &rx, link_id);
     // Keep exchanging past the point where an unacknowledged channel
     // envelope would have exhausted its retries. (Traffic, not silence:

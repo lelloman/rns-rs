@@ -2212,7 +2212,7 @@ impl LinkManager {
             None,
             context,
             link.engine.encrypted_len(plaintext.len()),
-            constants::MTU,
+            link.engine.mtu() as usize,
             |payload| {
                 encrypted = link
                     .engine

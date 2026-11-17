@@ -56,12 +56,13 @@ impl LinkManager {
         for action in actions {
             match action {
                 rns_core::channel::ChannelAction::SendOnLink { raw, sequence } => {
-                    // Encrypt and send as CHANNEL context. If the packet cannot be
+                    // Encrypt and send as CHANNEL context, in a packet as
+                    // large as the link MTU allows. If the packet cannot be
                     // emitted, remove the reserved channel sequence so receivers do
                     // not stall on a gap that never reached the wire.
-                    let encrypted = match self.links.get(link_id) {
+                    let (encrypted, max_mtu) = match self.links.get(link_id) {
                         Some(link) => match link.engine.encrypt(&raw, rng) {
-                            Ok(encrypted) => encrypted,
+                            Ok(encrypted) => (encrypted, link.engine.mtu() as usize),
                             Err(_) => {
                                 if let Some(link_mut) = self.links.get_mut(link_id) {
                                     if let Some(channel) = link_mut.channel.as_mut() {
@@ -80,13 +81,14 @@ impl LinkManager {
                         destination_type: constants::DESTINATION_LINK,
                         packet_type: constants::PACKET_TYPE_DATA,
                     };
-                    match RawPacket::pack_raw_with_hash(
+                    match RawPacket::pack_raw_with_hash_with_max_mtu(
                         flags,
                         0,
                         link_id,
                         None,
                         constants::CONTEXT_CHANNEL,
                         &encrypted,
+                        max_mtu,
                     ) {
                         Ok((raw_bytes, packet_hash)) => {
                             if let Some(link_mut) = self.links.get_mut(link_id) {
