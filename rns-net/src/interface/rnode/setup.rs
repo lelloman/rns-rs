@@ -131,9 +131,19 @@ pub(super) struct RadioReports {
     pub(super) spreading_factor: Option<u8>,
     pub(super) coding_rate: Option<u8>,
     pub(super) state: Option<u8>,
+    /// The radio timing last reported, shared across the interface's
+    /// connections.
+    phy: Arc<Mutex<Option<[u16; 6]>>>,
 }
 
 impl RadioReports {
+    pub(super) fn new(config: &RNodeConfig) -> Self {
+        RadioReports {
+            phy: Arc::clone(&config.reported_phy),
+            ..RadioReports::default()
+        }
+    }
+
     /// Take one report from the device. `name` is the interface as
     /// upstream writes it.
     pub(super) fn apply(&mut self, event: &RNodeEvent, name: &str) {
@@ -189,6 +199,53 @@ impl RadioReports {
                 name,
                 py_float(f64::from(at) / 100.0)
             ),
+            RNodeEvent::PhyStats {
+                symbol_time_us,
+                symbol_rate,
+                preamble_symbols,
+                preamble_ms,
+                csma_slot_ms,
+                difs_ms,
+            } => {
+                let reported = [
+                    symbol_time_us,
+                    symbol_rate,
+                    preamble_symbols,
+                    preamble_ms,
+                    csma_slot_ms,
+                    difs_ms,
+                ];
+                let mut last = lock_or_recover(&self.phy, "rnode reported phy");
+                if *last != Some(reported) {
+                    *last = Some(reported);
+                    let symbol_ms = py_round2(f64::from(symbol_time_us) / 1000.0).unwrap_or(0.0);
+                    log::debug!(
+                        "{} Radio reporting symbol time is {}ms ({} baud)",
+                        name,
+                        py_float(symbol_ms),
+                        symbol_rate
+                    );
+                    log::debug!(
+                        "{} Radio reporting preamble is {} symbols ({}ms)",
+                        name,
+                        preamble_symbols,
+                        preamble_ms
+                    );
+                    log::debug!(
+                        "{} Radio reporting CSMA slot time is {}ms",
+                        name,
+                        csma_slot_ms
+                    );
+                    log::debug!("{} Radio reporting DIFS time is {}ms", name, difs_ms);
+                }
+            }
+            RNodeEvent::ChannelStats { interference, .. } if interference != 0xFF => {
+                log::debug!(
+                    "{} Radio detected interference at {} dBm",
+                    name,
+                    i16::from(interference) - 157
+                );
+            }
             RNodeEvent::Error(code) => log_hardware_error(name, code),
             _ => {}
         }
@@ -305,7 +362,7 @@ fn configure_device(
         io::Error::new(io::ErrorKind::InvalidInput, "No subinterfaces configured")
     })?;
     let mut decoder = rnode_kiss::RNodeDecoder::new();
-    let mut reports = RadioReports::default();
+    let mut reports = RadioReports::new(config);
 
     lock_or_recover(writer, "rnode shared writer").write_all(&detect_command())?;
     let detecting = read_reports(
@@ -486,6 +543,29 @@ mod tests {
     }
 
     #[test]
+    fn radio_timing_is_kept_across_connections() {
+        let config = RNodeConfig::default();
+        let phy = RNodeEvent::PhyStats {
+            symbol_time_us: 2048,
+            symbol_rate: 488,
+            preamble_symbols: 18,
+            preamble_ms: 37,
+            csma_slot_ms: 24,
+            difs_ms: 48,
+        };
+        let mut first = RadioReports::new(&config);
+        first.apply(&phy, "RNodeInterface[t]");
+        // A later connection shares what was reported, so the same timing
+        // is not reported as new.
+        let second = RadioReports::new(&config);
+        assert_eq!(
+            *second.phy.lock().unwrap(),
+            Some([2048, 488, 18, 37, 24, 48])
+        );
+        assert_eq!(py_float(py_round2(2048.0 / 1000.0).unwrap()), "2.05");
+    }
+
+    #[test]
     fn radio_state_must_match_what_was_configured() {
         let sub = RNodeSubConfig {
             name: "test".into(),
@@ -508,6 +588,7 @@ mod tests {
             spreading_factor: Some(8),
             coding_rate: Some(5),
             state: Some(rnode_kiss::RADIO_STATE_ON),
+            phy: Default::default(),
         };
         assert!(radio_state_valid(&reported, &sub));
         // An unreported frequency is not checked, as upstream.
