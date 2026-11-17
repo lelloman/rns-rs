@@ -794,3 +794,57 @@ fn rncp_logs_the_identity_it_creates_as_upstream() {
         "{lines:?}"
     );
 }
+
+/// rnpath starts a Reticulum client for its table modes too, as upstream's
+/// does, so `-t -vv` logs the client's startup.
+#[cfg(target_os = "linux")]
+#[test]
+fn rnpath_table_mode_starts_a_client_as_upstream() {
+    let dir = tempfile::tempdir().unwrap();
+    let instance = format!("rnpath-table-{}", std::process::id());
+    let mut rnsd = spawn_rnsd(
+        dir.path(),
+        &format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
+             instance_name = {instance}\n[logging]\n  loglevel = 4\n[interfaces]\n"
+        ),
+    );
+    wait_for_abstract_socket(&format!("rns/{instance}/rpc"));
+    let config = dir.path().to_str().unwrap();
+    let rust = Command::new(env!("CARGO_BIN_EXE_rnpath"))
+        .args(["--config", config, "-vv", "-t"])
+        .output()
+        .expect("run rnpath");
+    let python = python_reticulum_1_6_1().then(|| {
+        Command::new("python3")
+            .args([
+                "-m",
+                "RNS.Utilities.rnpath",
+                "--config",
+                config,
+                "-vv",
+                "-t",
+            ])
+            .env("PYTHONUNBUFFERED", "1")
+            .output()
+            .expect("run Python rnpath")
+    });
+    let _ = rnsd.kill();
+    let _ = rnsd.wait();
+    let messages = client_startup_messages(&rust.stdout);
+    assert_eq!(
+        messages[1..],
+        [
+            "Loaded Transport Identity from storage",
+            "Identity keys created for <A>",
+            "Initialized ephemeral transport identity <A>",
+            "Identity keys created for <B>",
+        ],
+        "{}",
+        String::from_utf8_lossy(&rust.stdout)
+    );
+    match python {
+        Some(python) => assert_eq!(messages, client_startup_messages(&python.stdout)),
+        None => eprintln!("No Python Reticulum 1.6.1; not compared with upstream"),
+    }
+}

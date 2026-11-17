@@ -225,6 +225,12 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
+    // As upstream's rnpath, a Reticulum client for every local mode, which
+    // logs its startup: whether a path is known, and its hops, also come
+    // from its own path table when looking one up.
+    let node =
+        rns_net::RnsNode::connect_shared_from_config(Some(&config_dir), Box::new(NoCallbacks)).ok();
+
     let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
         Ok(c) => c,
         Err(e) => {
@@ -266,19 +272,13 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                 process::exit(1);
             }
         };
-        // As upstream, a Reticulum client: whether a path is known, and its
-        // hops, come from this program's own path table, which the
-        // instance's announces fill; the next hop and its interface from
-        // the instance.
-        let node =
-            rns_net::RnsNode::connect_shared_from_config(Some(&config_dir), Box::new(NoCallbacks))
-                .ok();
+        // The next hop and its interface come from the instance.
         lookup_path(&connect, node.as_ref(), &hash_str, timeout);
-        if let Some(node) = node {
-            node.shutdown();
-        }
     } else {
         print_usage(usage_name);
+    }
+    if let Some(node) = node {
+        node.shutdown();
     }
 }
 
