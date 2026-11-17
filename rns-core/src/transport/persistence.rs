@@ -824,4 +824,146 @@ mod tests {
         assert!(!engine.has_path(&[1; 16]));
         assert!(engine.has_path(&[2; 16]));
     }
+
+    fn restore_paths(
+        paths: Vec<PersistedPath>,
+        packets: &[&RawPacket],
+    ) -> (RestoreStats, TransportEngine) {
+        let cache: BTreeMap<[u8; 32], Vec<u8>> = packets
+            .iter()
+            .map(|packet| (packet.packet_hash, packet.raw.clone()))
+            .collect();
+        let mut engine = TransportEngine::new(config(8));
+        engine.register_interface(interface(7, "alpha"));
+        let snapshot = TransportStateSnapshot {
+            packet_hashes: Vec::new(),
+            paths,
+            tunnels: Vec::new(),
+            announce_rates: Vec::new(),
+        };
+        let stats =
+            engine.restore_persistence_snapshot(snapshot, 500.0, |hash| cache.get(hash).cloned());
+        (stats, engine)
+    }
+
+    #[test]
+    fn restore_counts_every_skipped_path() {
+        let no_interface_packet = announce([1; 16]);
+        let mut no_interface = persisted_path([1; 16], &no_interface_packet, "alpha");
+        no_interface.interface_hash = None;
+        let expired_packet = announce([2; 16]);
+        let mut expired = persisted_path([2; 16], &expired_packet, "alpha");
+        expired.expires = 499.0;
+        // A path expiring exactly now is still restored.
+        let expiring_packet = announce([3; 16]);
+        let expiring = persisted_path([3; 16], &expiring_packet, "alpha");
+
+        let (stats, engine) = restore_paths(
+            vec![no_interface, expired, expiring],
+            &[&no_interface_packet, &expired_packet, &expiring_packet],
+        );
+        assert_eq!((stats.paths, stats.skipped_paths), (1, 2));
+        assert!(engine.has_path(&[3; 16]));
+    }
+
+    #[test]
+    fn restore_needs_the_cached_announce_of_the_path_itself() {
+        // The cache returns another announce for the same destination under
+        // the path's packet hash.
+        let cached = announce([1; 16]);
+        let mut different = typed_announce([1; 16], [0xA1; 10]);
+        different.packet_hash = cached.packet_hash;
+        let wrong_hash = persisted_path([1; 16], &cached, "alpha");
+        let cache_wrong_hash = vec![(cached.packet_hash, different.raw.clone())];
+
+        // An announce of another destination.
+        let other = announce([2; 16]);
+        let wrong_destination = persisted_path([3; 16], &other, "alpha");
+
+        // A packet that is not an announce.
+        let data_packet = RawPacket::pack(
+            PacketFlags {
+                packet_type: constants::PACKET_TYPE_DATA,
+                ..cached.flags
+            },
+            0,
+            &[4; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &[0x77; 32],
+        )
+        .unwrap();
+        let not_announce = persisted_path([4; 16], &data_packet, "alpha");
+
+        let mut cache: BTreeMap<[u8; 32], Vec<u8>> = cache_wrong_hash.into_iter().collect();
+        cache.insert(other.packet_hash, other.raw.clone());
+        cache.insert(data_packet.packet_hash, data_packet.raw.clone());
+        let mut engine = TransportEngine::new(config(8));
+        engine.register_interface(interface(7, "alpha"));
+        let snapshot = TransportStateSnapshot {
+            packet_hashes: Vec::new(),
+            paths: vec![wrong_hash, wrong_destination, not_announce],
+            tunnels: Vec::new(),
+            announce_rates: Vec::new(),
+        };
+        let stats =
+            engine.restore_persistence_snapshot(snapshot, 100.0, |hash| cache.get(hash).cloned());
+        assert_eq!((stats.paths, stats.skipped_paths), (0, 3));
+    }
+
+    fn tunnel_path(packet: &RawPacket, expires: f64) -> PersistedPath {
+        let mut path = persisted_path(packet.destination_hash, packet, "alpha");
+        path.expires = expires;
+        path.interface_hash = None;
+        path
+    }
+
+    #[test]
+    fn restore_counts_skipped_tunnel_paths_and_keeps_those_expiring_now() {
+        let live = announce([1; 16]);
+        let expired = announce([2; 16]);
+        let uncached = announce([3; 16]);
+        let at_now = announce([4; 16]);
+        let tunnels = vec![
+            PersistedTunnel {
+                tunnel_id: [0x11; 32],
+                interface_hash: None,
+                paths: vec![
+                    tunnel_path(&live, 600.0),
+                    tunnel_path(&expired, 499.0),
+                    tunnel_path(&uncached, 600.0),
+                    tunnel_path(&at_now, 500.0),
+                ],
+                expires: 500.0,
+            },
+            PersistedTunnel {
+                tunnel_id: [0x22; 32],
+                interface_hash: None,
+                paths: vec![
+                    tunnel_path(&live, 600.0),
+                    tunnel_path(&expired, 600.0),
+                    tunnel_path(&at_now, 600.0),
+                ],
+                expires: 499.0,
+            },
+        ];
+        let cache: BTreeMap<[u8; 32], Vec<u8>> = [&live, &expired, &at_now]
+            .iter()
+            .map(|packet| (packet.packet_hash, packet.raw.clone()))
+            .collect();
+        let mut engine = TransportEngine::new(config(8));
+        let snapshot = TransportStateSnapshot {
+            packet_hashes: Vec::new(),
+            paths: Vec::new(),
+            tunnels,
+            announce_rates: Vec::new(),
+        };
+        let stats =
+            engine.restore_persistence_snapshot(snapshot, 500.0, |hash| cache.get(hash).cloned());
+        assert_eq!((stats.tunnels, stats.skipped_paths), (1, 5));
+        let restored = &engine.tunnel_table.get(&[0x11; 32]).unwrap().paths;
+        let restored: Vec<_> = restored.keys().copied().collect();
+        assert_eq!(restored, vec![[1; 16], [4; 16]]);
+        assert!(engine.tunnel_table.get(&[0x22; 32]).is_none());
+    }
 }
