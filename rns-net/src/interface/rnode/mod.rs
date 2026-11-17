@@ -500,7 +500,10 @@ fn start_with_control(
                 if let Err(e) =
                     lock_or_recover(&keepalive_writer, "rnode shared writer").write_all(&detect)
                 {
-                    log::debug!("[{}] keepalive write failed: {}", keepalive_name, e);
+                    // Not while the device is away: that was said already.
+                    if e.kind() != io::ErrorKind::NotConnected {
+                        log::debug!("[{}] keepalive write failed: {}", keepalive_name, e);
+                    }
                 }
             }
         })?;
