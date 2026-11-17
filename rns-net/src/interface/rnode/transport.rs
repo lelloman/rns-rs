@@ -69,8 +69,9 @@ impl Transport {
         target: &super::ble::Target,
         iface: &str,
         state: &super::ble::SharedLinkState,
+        budget: std::time::Duration,
     ) -> io::Result<(Transport, Transport)> {
-        let (notify, session) = super::ble::open(target, iface, state)?;
+        let (notify, session) = super::ble::open(target, iface, state, budget)?;
         Ok((
             Transport::BleNotify(notify, std::sync::Arc::clone(&session)),
             Transport::BleWrite(session),
@@ -83,6 +84,7 @@ impl Transport {
         _target: &super::ble::Target,
         _iface: &str,
         _state: &super::ble::SharedLinkState,
+        _budget: std::time::Duration,
     ) -> io::Result<(Transport, Transport)> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
