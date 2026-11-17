@@ -3,6 +3,7 @@
 //! and check what the device reports back, with upstream's log lines.
 
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -313,7 +314,7 @@ fn py_round2(value: f64) -> Option<f64> {
 /// feeding every report to `reports`. Errs with `UnexpectedEof` when the
 /// connection closes.
 fn read_reports(
-    reader: &mut Transport,
+    reader: &mut (impl Read + AsRawFd),
     decoder: &mut rnode_kiss::RNodeDecoder,
     reports: &mut RadioReports,
     name: &str,
@@ -347,6 +348,29 @@ fn read_reports(
         }
     }
     Ok(())
+}
+
+/// How long the device's answer to turning its radio off is waited for
+/// while a BLE connection closes.
+pub(super) const CLOSING_ANSWER_WAIT: Duration = Duration::from_secs(1);
+
+/// Read what the device answers while its connection closes, logging as
+/// upstream's reader does until the connection is gone: up to the radio
+/// state it reports, or `deadline`.
+pub(super) fn read_closing_answer(
+    reader: &mut (impl Read + AsRawFd),
+    config: &RNodeConfig,
+    deadline: Instant,
+) {
+    let mut reports = RadioReports::new(config);
+    let _ = read_reports(
+        reader,
+        &mut rnode_kiss::RNodeDecoder::new(),
+        &mut reports,
+        &display_name(config),
+        deadline,
+        |reports| reports.state.is_some(),
+    );
 }
 
 /// Detect a single RNode, configure its radio and check what it reports,

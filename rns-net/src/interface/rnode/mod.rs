@@ -525,6 +525,7 @@ fn with_leave_on_finish(
 ) -> super::ListenerControl {
     let multi = config.multi;
     let vports: Vec<u8> = config.subinterfaces.iter().map(|sub| sub.vport).collect();
+    let config = config.clone();
     control.with_on_finish(move || {
         let mut writer = lock_or_recover(&writer, "rnode shared writer");
         let off = [rnode_kiss::RADIO_STATE_OFF];
@@ -543,8 +544,23 @@ fn with_leave_on_finish(
             ));
         }
         let _ = writer.write_all(&rnode_kiss::leave_request());
-        // A BLE device is disconnected, as upstream's detach does.
-        writer.transport().close();
+        // Nothing serves a driven writer any more: send what it holds.
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while writer.holds_unwritten() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+            writer.drain();
+        }
+        // A BLE device is disconnected, as upstream's detach does, and
+        // what it answers meanwhile is read, as upstream's reader keeps
+        // reading until the connection is gone: the radio reporting it is
+        // off.
+        writer.transport().close_reading(|notify| {
+            setup::read_closing_answer(
+                notify,
+                &config,
+                std::time::Instant::now() + setup::CLOSING_ANSWER_WAIT,
+            )
+        });
     })
 }
 
@@ -744,6 +760,11 @@ fn reader_loop_connected(
             if !reader_ready(&reader, Duration::from_millis(200)) {
                 continue;
             }
+            // Once stopped, nothing more is read here: a BLE connection
+            // reads the device's last answers while it closes.
+            if !running.load(Ordering::Relaxed) {
+                return;
+            }
             match reader.read(&mut buf) {
                 Ok(0) => {
                     if !running.load(Ordering::Relaxed) {
@@ -889,7 +910,7 @@ fn reader_loop_connected(
     }
 }
 
-fn reader_ready(reader: &Transport, timeout: Duration) -> bool {
+fn reader_ready(reader: &impl AsRawFd, timeout: Duration) -> bool {
     let mut pfd = libc::pollfd {
         fd: reader.as_raw_fd(),
         events: libc::POLLIN,
@@ -2998,6 +3019,8 @@ mod tests {
         /// Shut the interface down as the driver does, and return the
         /// commands the device got.
         fn shut_down(self) -> Vec<(u8, Vec<u8>)> {
+            // The device is being read when the stop comes.
+            let _ = self.rx.recv_timeout(Duration::from_millis(300));
             self.control.request_stop();
             self.control.finish();
             // Whatever the device still answers has time to be read.
@@ -3058,5 +3081,65 @@ mod tests {
         want.extend(settings);
         assert_eq!(radio_lines(iface), debug_lines(iface, &want));
         rnode.shut_down();
+    }
+
+    /// On shutdown the radio is turned off before the host leaves, as
+    /// upstream's detach. A serial port closes right after, before the
+    /// device's answer is read, so nothing more is logged, as upstream.
+    #[test]
+    fn rnode_turns_its_radio_off_on_shutdown() {
+        let iface = "RNodeInterface[shutdown-serial]";
+        let rnode = MockRNode::start("shutdown-serial", 63, false);
+        let got = rnode.shut_down();
+        let tail: Vec<_> = got.iter().rev().take(2).rev().cloned().collect();
+        assert_eq!(
+            tail,
+            vec![
+                (
+                    rnode_kiss::CMD_RADIO_STATE,
+                    vec![rnode_kiss::RADIO_STATE_OFF]
+                ),
+                (rnode_kiss::CMD_LEAVE, vec![0xFF]),
+            ]
+        );
+        assert!(!radio_lines(iface)
+            .iter()
+            .any(|(_, line)| line.ends_with("Radio reporting state is offline")));
+    }
+
+    /// What a BLE device answers while its connection closes is read up
+    /// to the radio's state, which is logged as upstream's reader does.
+    #[test]
+    fn closing_answer_is_read_up_to_the_radio_state() {
+        logged();
+        let (master_fd, slave_fd) = open_pty_pair().unwrap();
+        let mut master = unsafe { transport_from_raw_fd(master_fd) };
+        let mut slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let config = RNodeConfig {
+            name: "closing-answer".into(),
+            ..Default::default()
+        };
+        master
+            .write_all(&rnode_kiss::rnode_command(
+                rnode_kiss::CMD_RADIO_STATE,
+                &[rnode_kiss::RADIO_STATE_OFF],
+            ))
+            .unwrap();
+        let started = std::time::Instant::now();
+        setup::read_closing_answer(&mut slave, &config, started + setup::CLOSING_ANSWER_WAIT);
+        assert!(started.elapsed() < setup::CLOSING_ANSWER_WAIT);
+        assert_eq!(
+            radio_lines("RNodeInterface[closing-answer]"),
+            vec![(
+                log::Level::Debug,
+                "RNodeInterface[closing-answer] Radio reporting state is offline".to_string()
+            )]
+        );
+
+        // A device that does not answer is waited for no longer than the
+        // deadline.
+        let started = std::time::Instant::now();
+        setup::read_closing_answer(&mut slave, &config, started + Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_millis(700));
     }
 }

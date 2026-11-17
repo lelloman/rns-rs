@@ -130,6 +130,13 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
         }
     }
 
+    /// Whether a driven writer still holds bytes it has not written.
+    pub(crate) fn holds_unwritten(&self) -> bool {
+        self.driven
+            .as_ref()
+            .is_some_and(|driven| !driven.failed && driven.head < driven.out.len())
+    }
+
     /// Write what the transport takes without blocking, and watch for room
     /// exactly while bytes remain. Does nothing when not driven.
     pub(crate) fn drain(&mut self) {
