@@ -584,11 +584,16 @@ fn rnpath_finds_the_instance_s_own_destinations() {
     let instance = format!("own-destinations-{}", std::process::id());
     let network_identity = dir.path().join("network_identity");
     fs::write(&network_identity, transport_identity_key()).unwrap();
+    // The instance answers with its stamped path-response announce. At the
+    // default 25-bit target the stamp search outlasted rnpath's wait on a
+    // busy CI runner; the config cannot turn stamping off, so the target is
+    // kept low enough to grind at once.
     let mut rnsd = spawn_rnsd(
         dir.path(),
         &format!(
             "[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
              instance_name = {instance}\n  network_identity = {}\n\
+             [stamps]\n  destination_value = 8\n  destination_cost = 8\n\
              [logging]\n  loglevel = 4\n[interfaces]\n",
             network_identity.display()
         ),
