@@ -242,6 +242,8 @@ mod bluez {
         payload: usize,
         iface: String,
         closed: AtomicBool,
+        /// The device's notifications, read while the connection closes.
+        notify: File,
     }
 
     impl std::fmt::Debug for Session {
@@ -315,6 +317,13 @@ mod bluez {
         /// Disconnect the device, as upstream's `close`, after BlueZ has
         /// taken every write sent before. Once only.
         pub fn close(&self) {
+            self.close_reading(|_| {});
+        }
+
+        /// Disconnect the device as [`Self::close`] does, letting `read`
+        /// read what the device answers meanwhile: upstream reads the
+        /// device until its connection is gone.
+        pub fn close_reading(&self, read: impl FnOnce(&mut File)) {
             if self.closed.swap(true, Ordering::Relaxed) {
                 return;
             }
@@ -322,7 +331,11 @@ mod bluez {
             let device = self.conn.with_proxy(BLUEZ, &self.device, CALL_TIMEOUT);
             // Answered only once BlueZ has handled the writes before it.
             let _ = device.get::<bool>(DEVICE, "Connected");
-            std::thread::sleep(Duration::from_millis(100));
+            let started = Instant::now();
+            if let Ok(mut notify) = self.notify.try_clone() {
+                read(&mut notify);
+            }
+            std::thread::sleep(Duration::from_millis(100).saturating_sub(started.elapsed()));
             let _: Result<(), _> = device.method_call(DEVICE, "Disconnect", ());
             log::info!(
                 target: crate::logging::NOTICE_TARGET,
@@ -602,10 +615,12 @@ mod bluez {
             } else {
                 DEFAULT_MTU
             });
-            Ok((File::from(fd), rx, mtu))
+            let notify = File::from(fd);
+            let tap = notify.try_clone()?;
+            Ok((notify, tap, rx, mtu))
         })();
         match result {
-            Ok((notify, rx, mtu)) => Ok((
+            Ok((notify, tap, rx, mtu)) => Ok((
                 notify,
                 Session {
                     conn,
@@ -614,6 +629,7 @@ mod bluez {
                     payload: usize::from(mtu).saturating_sub(ATT_WRITE_HEADER).max(1),
                     iface: iface.to_string(),
                     closed: AtomicBool::new(false),
+                    notify: tap,
                 },
             )),
             Err(e) => {

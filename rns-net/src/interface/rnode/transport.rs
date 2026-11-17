@@ -102,6 +102,19 @@ impl Transport {
         }
     }
 
+    /// End the connection as [`Self::close`] does, letting `read` read
+    /// what the device answers while a BLE device disconnects. Other
+    /// connections are not read: they close when dropped.
+    pub fn close_reading(&self, read: impl FnOnce(&mut std::fs::File)) {
+        match self {
+            #[cfg(feature = "iface-rnode-ble")]
+            Transport::BleNotify(_, session) | Transport::BleWrite(session) => {
+                session.close_reading(read)
+            }
+            _ => drop(read),
+        }
+    }
+
     /// Note that the device dropped the connection.
     pub fn lost(&self) {
         match self {
