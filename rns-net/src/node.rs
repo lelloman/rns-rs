@@ -1553,10 +1553,19 @@ impl RnsNode {
         // before only hold storage/identities/identity: carry that over.
         let transport_identity_path = storage::transport_identity_path(&paths);
         let identity = if transport_identity_path.exists() {
-            storage::load_identity(&transport_identity_path)?
+            let identity = storage::load_identity(&transport_identity_path)?;
+            log::info!("Loaded Transport Identity from storage");
+            identity
         } else {
+            let carried_over = paths.identities.join("identity").exists();
+            if !carried_over {
+                log::info!("No valid Transport Identity in storage, creating...");
+            }
             let identity = storage::load_or_create_identity(&paths.identities)?;
             storage::save_identity(&identity, &transport_identity_path)?;
+            if carried_over {
+                log::info!("Loaded Transport Identity from storage");
+            }
             identity
         };
         // Python clients derive their RPC key from the persisted transport
@@ -2227,7 +2236,12 @@ impl RnsNode {
                     .expect("node identity must expose a private key"),
             )
         } else {
-            Identity::new(&mut OsRng)
+            let identity = Identity::new(&mut OsRng);
+            log::info!(
+                "Initialized ephemeral transport identity <{}>",
+                hex_string(identity.hash())
+            );
+            identity
         };
 
         let local_hops_delta = if config.local_hops_delta {
