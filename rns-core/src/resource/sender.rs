@@ -1117,4 +1117,160 @@ mod tests {
         assert_eq!(sender.original_hash, orig_hash);
         assert!(sender.flags.split);
     }
+
+    fn request_for(sender: &ResourceSender, parts: core::ops::Range<usize>) -> Vec<u8> {
+        let mut request = vec![RESOURCE_HASHMAP_IS_NOT_EXHAUSTED];
+        request.extend_from_slice(&sender.resource_hash);
+        for index in parts {
+            request.extend_from_slice(&sender.part_hashes[index]);
+        }
+        request
+    }
+
+    #[test]
+    fn first_request_measures_rtt_from_the_advertisement() {
+        let data = varying_data(3 * RESOURCE_SDU);
+        let mut sender = make_sender(&data);
+        sender.advertise(1000.0);
+        assert_eq!(sender.status, ResourceStatus::Advertised);
+        sender.handle_request(&request_for(&sender, 0..1), 1000.5);
+        assert_eq!(sender.status, ResourceStatus::Transferring);
+        assert_eq!(sender.rtt, Some(0.5));
+        // Later requests leave it.
+        sender.handle_request(&request_for(&sender, 1..2), 1003.0);
+        assert_eq!(sender.rtt, Some(0.5));
+    }
+
+    #[test]
+    fn part_data_is_each_part_as_sent() {
+        let data = varying_data(3 * RESOURCE_SDU);
+        let mut sender = make_sender(&data);
+        sender.advertise(1000.0);
+        let total = sender.total_parts();
+        assert!(total > 1);
+        let sent: Vec<Vec<u8>> = sender
+            .handle_request(&request_for(&sender, 0..total), 1001.0)
+            .into_iter()
+            .filter_map(|action| match action {
+                ResourceAction::SendPart(part) => Some(part),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent.len(), total);
+        for (index, part) in sent.iter().enumerate() {
+            assert_eq!(sender.part_data(index), Some(part.as_slice()));
+        }
+        assert_eq!(sender.part_data(total), None);
+    }
+
+    #[test]
+    fn hashmap_update_moves_the_receiver_search_window() {
+        let data = varying_data((2 * RESOURCE_HASHMAP_MAX_LEN + 10) * RESOURCE_SDU);
+        let mut sender = make_sender(&data);
+        sender.advertise(1000.0);
+        let last = 2 * RESOURCE_HASHMAP_MAX_LEN - 1;
+        let request = exhausted_request(&sender, sender.part_hashes[last]);
+
+        let actions = sender.handle_request(&request, 1001.0);
+
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendHmu(_))));
+        // Upstream: max(part_index - 1 - WINDOW_MAX, 0), part_index being
+        // one past the last map hash the receiver holds.
+        assert_eq!(
+            sender.receiver_min_consecutive_height,
+            last + 1 - 1 - RESOURCE_WINDOW_MAX
+        );
+    }
+
+    #[test]
+    fn hashmap_update_near_the_start_keeps_the_search_at_the_start() {
+        let data = varying_data((2 * RESOURCE_HASHMAP_MAX_LEN + 10) * RESOURCE_SDU);
+        let mut sender = make_sender(&data);
+        sender.advertise(1000.0);
+        // The last held map hash ends exactly WINDOW_MAX parts in, which is
+        // not a hashmap segment boundary.
+        let request = exhausted_request(&sender, sender.part_hashes[RESOURCE_WINDOW_MAX - 1]);
+
+        let actions = sender.handle_request(&request, 1001.0);
+
+        assert_eq!(sender.receiver_min_consecutive_height, 0);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelInitiator(_))));
+    }
+
+    #[test]
+    fn advertisement_is_resent_strictly_after_its_timeout() {
+        let advertised = || {
+            let mut sender = make_sender(b"data");
+            sender.advertise(1000.0);
+            sender
+        };
+        let deadline = 1000.0 + 0.5 * 6.0 + RESOURCE_PROCESSING_GRACE;
+        let mut sender = advertised();
+        assert!(sender.tick(deadline).is_empty());
+        let retries = sender.retries_left;
+        let actions = sender.tick(deadline + 1e-6);
+        assert!(matches!(
+            actions.as_slice(),
+            [ResourceAction::SendAdvertisement(_)]
+        ));
+        assert_eq!(sender.retries_left, retries - 1);
+        assert_eq!(sender.adv_sent, deadline + 1e-6);
+    }
+
+    #[test]
+    fn transferring_sender_gives_up_strictly_after_the_longest_wait() {
+        let data = varying_data(3 * RESOURCE_SDU);
+        let transferring = || {
+            let mut sender = make_sender(&data);
+            sender.advertise(1000.0);
+            sender.handle_request(&request_for(&sender, 0..1), 1000.5);
+            assert_eq!(sender.status, ResourceStatus::Transferring);
+            sender
+        };
+        // Upstream: rtt * timeout factor * retries, the sender's grace time,
+        // and the delay each retry adds.
+        let max_extra_wait: f64 = (1..=RESOURCE_MAX_RETRIES)
+            .map(|r| r as f64 * RESOURCE_PER_RETRY_DELAY)
+            .sum();
+        let deadline = 1000.5
+            + (0.5 * 6.0 * RESOURCE_MAX_RETRIES as f64
+                + RESOURCE_SENDER_GRACE_TIME
+                + max_extra_wait);
+        assert!(transferring().tick(deadline).is_empty());
+        let mut sender = transferring();
+        assert_eq!(
+            sender.tick(deadline + 1e-6),
+            vec![ResourceAction::Failed(ResourceError::Timeout)]
+        );
+        assert_eq!(sender.status, ResourceStatus::Failed);
+    }
+
+    #[test]
+    fn sender_awaiting_proof_retries_strictly_after_its_timeout() {
+        let mut sender = make_sender(b"hi");
+        sender.advertise(1000.0);
+        let total = sender.total_parts();
+        sender.handle_request(&request_for(&sender, 0..total), 1000.5);
+        assert_eq!(sender.status, ResourceStatus::AwaitingProof);
+        assert_eq!(sender.retries_left, 3);
+
+        let deadline = 1000.5 + 0.5 * RESOURCE_PROOF_TIMEOUT_FACTOR + RESOURCE_SENDER_GRACE_TIME;
+        assert!(sender.tick(deadline).is_empty());
+        assert_eq!(sender.retries_left, 3);
+        assert!(sender.tick(deadline + 1e-6).is_empty());
+        assert_eq!(sender.retries_left, 2);
+        assert_eq!(sender.status, ResourceStatus::AwaitingProof);
+        assert_eq!(sender.last_part_sent, deadline + 1e-6);
+
+        sender.retries_left = 0;
+        assert_eq!(
+            sender.tick(deadline + 100.0),
+            vec![ResourceAction::Failed(ResourceError::Timeout)]
+        );
+        assert_eq!(sender.status, ResourceStatus::Failed);
+    }
 }
