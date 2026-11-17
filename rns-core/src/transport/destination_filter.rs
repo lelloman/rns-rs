@@ -315,4 +315,16 @@ mod tests {
         assert!(!filter.is_wanted(&rncp));
         assert!(filter.is_wanted(&rnx));
     }
+
+    #[test]
+    fn required_only_and_blocks_read_back_the_settings() {
+        let mut filter = DestinationTypeFilter::default();
+        let node = destination_type("rnstransport.discovery.interface");
+        assert!(!filter.required_only());
+        assert!(!filter.blocks(&node));
+        filter.set_required_only(true);
+        assert!(filter.required_only());
+        filter.block(node);
+        assert!(filter.blocks(&node));
+    }
 }
