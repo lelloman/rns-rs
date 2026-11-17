@@ -402,6 +402,10 @@ pub enum Event<W: Send> {
         destination: Box<crate::destination::Destination>,
         identity_prv_key: [u8; 64],
     },
+    /// Announce a destination of `RegisterPathResponder` as a path
+    /// response, sent a moment after its registration, as upstream's
+    /// `Transport.register_destination` does on a shared instance client.
+    AnnounceRegisteredDestination { dest_hash: [u8; 16] },
     /// Deregister a local destination.
     DeregisterDestination { dest_hash: [u8; 16] },
     /// Deregister a link destination (stop accepting incoming links).
@@ -1707,6 +1711,10 @@ impl<W: Send> fmt::Debug for Event<W> {
             Event::RegisterPathResponder { destination, .. } => f
                 .debug_struct("RegisterPathResponder")
                 .field("dest_hash", &destination.hash.0)
+                .finish(),
+            Event::AnnounceRegisteredDestination { dest_hash } => f
+                .debug_struct("AnnounceRegisteredDestination")
+                .field("dest_hash", dest_hash)
                 .finish(),
             Event::DeregisterDestination { dest_hash } => f
                 .debug_struct("DeregisterDestination")

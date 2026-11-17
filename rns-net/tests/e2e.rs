@@ -5973,6 +5973,61 @@ fn test_issue4_shared_client_announce_reaches_remote() {
     daemon.shutdown();
 }
 
+/// A shared client that registers a destination and announces it at once
+/// has its announce rebroadcast: the path response its registration sends
+/// the instance follows the announce, as upstream's does a quarter of a
+/// second later, instead of going first in the same second and having the
+/// instance reject the announce as not newer.
+#[test]
+fn shared_client_announce_right_after_registration_reaches_remote() {
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("register-ann-{}", tcp_port);
+    let daemon = start_shared_daemon(tcp_port, shared_port, &instance_name);
+
+    let bob_id = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_node = start_client_node(tcp_port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice_node = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    wait_for_event(&alice_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    let alice_id = Identity::new(&mut OsRng);
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["register", "announce"],
+        IdentityHash(*alice_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    alice_node
+        .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
+        .unwrap();
+    alice_node
+        .announce_queued(&alice_dest, &alice_id, None)
+        .unwrap();
+
+    assert!(
+        wait_for_announce(&bob_rx, &alice_dest.hash, Duration::from_secs(5)).is_some(),
+        "Bob should receive the announce Alice made right after registering"
+    );
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    daemon.shutdown();
+}
+
 #[test]
 fn test_issue4_shared_client_message_to_remote_peer() {
     // This test demonstrates the core bug: a shared instance client sends

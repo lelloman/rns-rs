@@ -16,6 +16,11 @@ const FOLDED_WORK_BUSY_EVENTS: u32 = 64;
 /// its sockets even though its queue has not emptied yet.
 const WRITER_FLUSH_EVENTS: usize = 1024;
 
+/// How long a shared instance client waits after registering a destination
+/// before announcing it to the instance as a path response (upstream's
+/// `Transport.register_destination`).
+const REGISTRATION_ANNOUNCE_DELAY: Duration = Duration::from_millis(250);
+
 impl Driver {
     #[cfg(test)]
     pub(crate) fn handle_frame_event(
@@ -1805,7 +1810,26 @@ impl Driver {
                     // instance announces a new SINGLE IN destination as a
                     // path response, so the instance has a path to it and
                     // can answer, or relay its response to, path requests
-                    // from other interfaces.
+                    // from other interfaces. It does so a quarter of a
+                    // second later, so an announce the program makes right
+                    // after creating the destination goes first: in the
+                    // same second, the instance would take the path
+                    // response and reject the announce as not newer, and
+                    // not rebroadcast it.
+                    if self.connected_to_shared_instance {
+                        let tx = self.event_tx.clone();
+                        let spawned = std::thread::Builder::new()
+                            .name("rns-register-announce".into())
+                            .spawn(move || {
+                                std::thread::sleep(REGISTRATION_ANNOUNCE_DELAY);
+                                let _ = tx.send(Event::AnnounceRegisteredDestination { dest_hash });
+                            });
+                        if spawned.is_err() {
+                            self.send_path_responder_announce(dest_hash);
+                        }
+                    }
+                }
+                Event::AnnounceRegisteredDestination { dest_hash } => {
                     if self.connected_to_shared_instance {
                         self.send_path_responder_announce(dest_hash);
                     }
