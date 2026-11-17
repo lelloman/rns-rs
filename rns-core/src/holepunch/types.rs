@@ -113,6 +113,11 @@ pub const READY_TIMEOUT: f64 = 10.0;
 /// Total time for the punch phase.
 pub const PUNCH_TIMEOUT: f64 = 10.0;
 
+/// Most host candidates (addresses of the sender's own interfaces, for a
+/// peer on the same network) one `UPGRADE_REQUEST` or `UPGRADE_READY`
+/// carries; any beyond are ignored.
+pub const MAX_HOST_CANDIDATES: usize = 2;
+
 /// Minimum interval between hole-punch proposals on the same link.
 pub const PROPOSAL_COOLDOWN: f64 = 60.0;
 
@@ -168,9 +173,11 @@ pub enum HolePunchAction {
         probe_addr: Endpoint,
         protocol: ProbeProtocol,
     },
-    /// Start UDP hole punching to the given peer endpoint.
+    /// Start UDP hole punching to the given peer endpoint, and to the
+    /// peer's host candidates.
     StartUdpPunch {
         peer_public: Endpoint,
+        peer_hosts: Vec<Endpoint>,
         punch_token: [u8; 32],
         session_id: [u8; 16],
     },

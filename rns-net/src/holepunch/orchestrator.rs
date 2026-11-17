@@ -246,6 +246,9 @@ pub struct HolePunchManager {
     /// Upgrade counts over the node's life, and per link while it is open.
     totals: Counters,
     history: HashMap<[u8; 16], LinkHistory>,
+    /// This host's networks as tests want them seen.
+    #[cfg(test)]
+    networks: Option<Vec<super::candidates::LocalNetwork>>,
 }
 
 /// Actions produced by HolePunchManager for the driver to dispatch.
@@ -318,6 +321,8 @@ impl HolePunchManager {
             event_tx: None,
             totals: Counters::default(),
             history: HashMap::new(),
+            #[cfg(test)]
+            networks: None,
         }
     }
 
@@ -608,6 +613,15 @@ impl HolePunchManager {
             return Some("of another address family than the probed mapping");
         }
         None
+    }
+
+    /// The networks of this host's interfaces.
+    fn local_networks(&self) -> Vec<super::candidates::LocalNetwork> {
+        #[cfg(test)]
+        if let Some(networks) = &self.networks {
+            return networks.clone();
+        }
+        super::candidates::local_networks()
     }
 
     /// Whether a peer-supplied endpoint may be probed or punched.
@@ -1565,6 +1579,7 @@ impl HolePunchManager {
         for action in actions {
             if let HolePunchAction::StartUdpPunch {
                 peer_public,
+                peer_hosts,
                 punch_token,
                 ..
             } = action
@@ -1573,6 +1588,7 @@ impl HolePunchManager {
                     link_id,
                     session_id,
                     peer_public,
+                    peer_hosts,
                     punch_token,
                 ));
             }
@@ -1585,6 +1601,7 @@ impl HolePunchManager {
         link_id: [u8; 16],
         session_id: &[u8; 16],
         peer_public: &Endpoint,
+        peer_hosts: &[Endpoint],
         punch_token: &[u8; 32],
     ) -> Vec<HolePunchManagerAction> {
         let refusal = self.sessions.get(session_id).and_then(|session| {
@@ -1603,6 +1620,11 @@ impl HolePunchManager {
             .endpoint_allowed(peer_public)
             .filter(|_| refusal.is_none());
         let running = self.sessions.values().filter(|s| s.is_punching()).count();
+        let networks = if peer_hosts.is_empty() {
+            Vec::new()
+        } else {
+            self.local_networks()
+        };
         let target_busy = peer_addr
             .map(|addr| self.target_in_use(addr, Some(session_id)))
             .unwrap_or(false);
@@ -1639,7 +1661,44 @@ impl HolePunchManager {
             }
         };
         session.punch_target = Some(peer_addr);
-        session.candidates = vec![(peer_addr, DirectCandidateKind::Reflexive)];
+
+        // The peer's host candidates, if it is a neighbour behind our NAT.
+        let facilitator = session.facilitator;
+        let hosts: Vec<SocketAddr> = match session.observed {
+            Some(observed) => peer_hosts
+                .iter()
+                .filter_map(endpoint_to_socket_addr)
+                .filter(|host| {
+                    let refusal = super::candidates::host_candidate_refusal(
+                        *host, &networks, observed, peer_addr,
+                    )
+                    .or_else(|| {
+                        facilitator
+                            .into_iter()
+                            .chain(self.probe_addrs.iter().copied())
+                            .any(|f| canonical(f) == canonical(*host))
+                            .then_some("a facilitator")
+                    });
+                    if let Some(why) = refusal {
+                        log::debug!(
+                            "Not punching host candidate {} of session {:02x?}: {}",
+                            host,
+                            &session_id[..4],
+                            why
+                        );
+                    }
+                    refusal.is_none()
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let session = match self.sessions.get_mut(session_id) {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        session.candidates = std::iter::once((peer_addr, DirectCandidateKind::Reflexive))
+            .chain(hosts.iter().map(|h| (*h, DirectCandidateKind::Host)))
+            .collect();
 
         if !self.spawn_workers {
             return Vec::new();
@@ -1666,7 +1725,7 @@ impl HolePunchManager {
             Some(tx) if crate::engine::FOLD_SERVICES => puncher::start_udp_punch_on_loop(
                 socket,
                 vec![peer_addr],
-                vec![],
+                hosts,
                 session_id_copy,
                 punch_token_copy,
                 tx,
@@ -1674,7 +1733,7 @@ impl HolePunchManager {
             _ => puncher::start_udp_punch(
                 socket,
                 vec![peer_addr],
-                vec![],
+                hosts,
                 session_id_copy,
                 punch_token_copy,
             ),
@@ -1699,10 +1758,34 @@ impl HolePunchManager {
         socket: UdpSocket,
         probe_server: SocketAddr,
     ) -> Vec<HolePunchManagerAction> {
+        let networks = self.local_networks();
         let session = match self.sessions.get_mut(&session_id) {
             Some(s) => s,
             None => return Vec::new(),
         };
+
+        // Our host candidates, for a peer on the same network.
+        let hosts = match socket.local_addr() {
+            Ok(local) => super::candidates::host_candidates(
+                &networks,
+                self.device.as_deref(),
+                local.port(),
+                observed_addr,
+            ),
+            Err(_) => Vec::new(),
+        };
+        session.engine.set_host_endpoints(
+            hosts
+                .iter()
+                .map(|host| Endpoint {
+                    addr: match host {
+                        SocketAddr::V4(v4) => v4.ip().octets().to_vec(),
+                        SocketAddr::V6(v6) => v6.ip().octets().to_vec(),
+                    },
+                    port: host.port(),
+                })
+                .collect(),
+        );
 
         // Store the socket for reuse during punching (same NAT mapping)
         session.socket = Some(socket);
@@ -2207,6 +2290,104 @@ mod tests {
                 .any(|a| matches!(a, HolePunchManagerAction::DirectConnectFailed { .. }))
         );
         punching
+    }
+
+    /// Run a proposal to the point of punching, the responder offering
+    /// `hosts`: the candidates punched, and the host candidates the request
+    /// carried.
+    fn punch_candidates_with_hosts(
+        observed: &str,
+        responder: &str,
+        hosts: &[&str],
+    ) -> (Vec<(SocketAddr, DirectCandidateKind)>, Vec<Endpoint>) {
+        let mut mgr = HolePunchManager::new(
+            vec!["9.9.9.9:4343".parse().unwrap()],
+            ProbeProtocol::Rnsp,
+            None,
+        );
+        mgr.set_spawn_workers(false);
+        mgr.networks = Some(vec![super::super::candidates::LocalNetwork {
+            interface: "eth0".into(),
+            addr: "192.168.1.20".parse().unwrap(),
+            prefix: 24,
+        }]);
+        let (tx, _rx) = make_tx();
+        let link_id = [0x5a; 16];
+        let mut rng = make_rng(0x42);
+        mgr.propose_to_supported(link_id, &test_derived_key(), &mut rng, &tx);
+        let session_id = *mgr.link_to_session.get(&link_id).unwrap();
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let request = mgr.handle_probe_result(
+            link_id,
+            session_id,
+            observed.parse().unwrap(),
+            socket,
+            "9.9.9.9:4343".parse().unwrap(),
+        );
+        let request_payload = match &request[0] {
+            HolePunchManagerAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        let mut responder_engine = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
+        let r_actions = responder_engine
+            .handle_signal(
+                UPGRADE_REQUEST,
+                &request_payload,
+                Some(&test_derived_key()),
+                1.0,
+            )
+            .unwrap();
+        let offered = responder_engine.peer_host_endpoints().to_vec();
+        let accept = match &r_actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        responder_engine.set_host_endpoints(hosts.iter().map(|h| ep(h)).collect());
+        let ready_actions = responder_engine
+            .endpoints_discovered(ep(responder), 2.0)
+            .unwrap();
+        let ready = match &ready_actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => unreachable!(),
+        };
+        mgr.handle_signal(link_id, UPGRADE_ACCEPT, accept, None, &tx);
+        mgr.handle_signal(link_id, UPGRADE_READY, ready, None, &tx);
+        let candidates = mgr.sessions.get(&session_id).unwrap().candidates.clone();
+        (candidates, offered)
+    }
+
+    #[test]
+    fn host_candidates_are_offered_and_punched_only_for_a_neighbour() {
+        // Our LAN address goes out with the request.
+        let (_, offered) = punch_candidates_with_hosts("1.2.3.4:41000", "5.6.7.8:41001", &[]);
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].addr, vec![192, 168, 1, 20]);
+
+        // Behind the same NAT: the peer's host candidate on our network is
+        // punched after its public endpoint; one elsewhere is not.
+        let (candidates, _) = punch_candidates_with_hosts(
+            "1.2.3.4:41000",
+            "1.2.3.4:41001",
+            &["192.168.1.30:5000", "192.168.9.9:5000"],
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                (
+                    "1.2.3.4:41001".parse().unwrap(),
+                    DirectCandidateKind::Reflexive
+                ),
+                (
+                    "192.168.1.30:5000".parse().unwrap(),
+                    DirectCandidateKind::Host
+                ),
+            ]
+        );
+
+        // Behind another NAT, the same candidate is not punched.
+        let (candidates, _) =
+            punch_candidates_with_hosts("1.2.3.4:41000", "5.6.7.8:41001", &["192.168.1.30:5000"]);
+        assert_eq!(candidates.len(), 1);
     }
 
     #[test]

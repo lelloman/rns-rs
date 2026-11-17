@@ -70,13 +70,15 @@ The decrypted payload is
 | Kind | Name | Body |
 |------|------|------|
 | `0x00` | `HELLO` | `{"v": highest version spoken, "r": reply wanted}` |
-| `0x01` | `UPGRADE_REQUEST` | `{"s": session id, "f": facilitator, "a": initiator public, "p": probe protocol (omitted for RNSP), "m": largest link packet accepted on the direct path}` |
+| `0x01` | `UPGRADE_REQUEST` | `{"s": session id, "f": facilitator, "a": initiator public, "p": probe protocol (omitted for RNSP), "m": largest link packet accepted on the direct path, "h": initiator host candidates (omitted when none)}` |
 | `0x02` | `UPGRADE_ACCEPT` | `{"s": session id}` |
 | `0x03` | `UPGRADE_REJECT` | `{"s": session id, "r": reason}` |
-| `0x04` | `UPGRADE_READY` | `{"s": session id, "a": responder public, "m": largest link packet accepted on the direct path}` |
+| `0x04` | `UPGRADE_READY` | `{"s": session id, "a": responder public, "m": largest link packet accepted on the direct path, "h": responder host candidates (omitted when none)}` |
 | `0x05` | `FALLBACK` | `{"s": session id of the direct path, "r": reply wanted}` (see [Fallback](#fallback)) |
 
-Endpoints are `[address bytes (4 or 16), port]`. The version is `1`. A
+Endpoints are `[address bytes (4 or 16), port]`, and `"h"` is a list of at
+most 2 of them (see [Host candidates](#host-candidates)); a receiver keeps
+the first 2 well-formed entries and ignores the rest. The version is `1`. A
 message framed in any other version is dropped; a later version must keep
 sending `HELLO` in version 1 framing and advertise its highest version in
 `v`, and fields a receiver does not know are ignored.
@@ -252,9 +254,9 @@ The hole punch procedure:
    (see [Punch packets](#punch-packets)).
 2. Packets are sent at a regular interval (e.g. every 100ms) for a bounded
    duration (e.g. 10 seconds). rns-rs also caps a session at 128 punch packets
-   and 128 acknowledgements, sends to at most 4 candidate endpoints (today
-   only the one the peer signalled), and never to an unspecified, multicast
-   or broadcast address. Until a valid punch or acknowledgement has arrived
+   and 128 acknowledgements, sends to at most 4 candidate endpoints (the
+   peer's public endpoint and its usable [host candidates](#host-candidates)),
+   and never to an unspecified, multicast or broadcast address. Until a valid punch or acknowledgement has arrived
    from an endpoint's IP, that endpoint gets a burst of 16 packets and then
    one a second, at most 25 in the 10 seconds (see
    [Reflection](#reflection)).
@@ -299,6 +301,41 @@ unchanged.
 
 Each side creates its `DirectUdpInterface` as soon as its punch succeeds and
 routes the link over it. There is no separate confirmation message.
+
+### Host candidates
+
+Two peers behind the same NAT see the same public address with different
+ports, and can only reach each other's public endpoint if their NAT
+forwards a packet from inside back inside ("hairpinning"), which many do
+not. So each side also offers host candidates: the LAN addresses of its own
+interfaces (IPv4 private, 10/8, 172.16/12 and 192.168/16, or IPv6
+unique-local, fc00::/7, of the probed mapping's family, at most 2) with the
+port of its punch socket. The initiator sends them in `UPGRADE_REQUEST`
+(`"h"`), the responder in `UPGRADE_READY`. A node whose mapping is one of
+its own addresses is not behind a NAT and offers none, and no other
+address (global, shared, link-local) is ever offered.
+
+A peer's host candidates are private addresses chosen by the peer, so a
+side punches one only if all of these hold, and otherwise ignores it
+(the punch goes ahead without it):
+
+- the peer's public endpoint is at this node's own public address, as its
+  probe saw it (the two are behind the same NAT);
+- the candidate is a LAN address of the same family, with a non-zero port;
+- it is on a network one of this node's interfaces is on (within that
+  interface's prefix), and not an address of this node;
+- it is not a facilitator.
+
+Host candidates are punched after the public endpoint, under the same
+per-endpoint budget (16 packets, then one a second, until one answers) and
+the same cap of 4 candidates and 128 packets. A host candidate that is
+acknowledged is preferred: when the punch has succeeded over the public
+endpoint while a host candidate has not answered yet, the side waits up to
+500 ms more for it, then uses the public endpoint. The peer's address on
+the direct path is the one an acknowledgement came from.
+
+Revealing host candidates tells the peer the node's LAN addresses; it is
+sent only to a peer the node is already revealing its public endpoint to.
 
 ## DirectUdpInterface
 
@@ -628,10 +665,15 @@ to a third party. What such a target can receive is bounded instead:
 - the pacing of Phase 2 (one request per link per 60 seconds, 4 responder
   sessions node-wide, one session per target address);
 - per session, one probe request (21 bytes, or 20 for STUN) to the named
-  facilitator, and at most 25 punch packets of 56 bytes (about 1.4 KB) to a
+  facilitator, and at most 25 punch packets of 52 bytes (about 1.3 KB) to a
   target that never answers with a packet tagged with the session's punch
   token. Only a target that does answer, which is then the peer,
-  gets the full rate of the punch.
+  gets the full rate of the punch;
+- a peer's host candidates, the only private addresses punched without
+  `direct_connect_allow_private_endpoints`, are punched only for a peer
+  behind the node's own NAT and only on a network the node is on, at most
+  2 of them, under the same per-target budget (see
+  [Host candidates](#host-candidates)).
 
 Loopback is always refused because it would make the node send to services
 on its own host; link-local addresses are only meaningful on the local

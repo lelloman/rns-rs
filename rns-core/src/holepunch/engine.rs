@@ -72,6 +72,12 @@ pub struct HolePunchEngine {
     /// Responder: received from UPGRADE_REQUEST.
     peer_public_endpoint: Option<Endpoint>,
 
+    /// Our host candidates, sent with our public endpoint.
+    our_host_endpoints: Vec<Endpoint>,
+
+    /// The peer's host candidates, received with its public endpoint.
+    peer_host_endpoints: Vec<Endpoint>,
+
     /// Facilitator (STUN probe) address.
     /// Initiator: our configured probe address.
     /// Responder: received from UPGRADE_REQUEST.
@@ -123,6 +129,8 @@ impl HolePunchEngine {
             is_initiator: false,
             our_public_endpoint: None,
             peer_public_endpoint: None,
+            our_host_endpoints: Vec::new(),
+            peer_host_endpoints: Vec::new(),
             facilitator_addr: None,
             punch_token: [0u8; 32],
             keepalive_key: [0u8; 32],
@@ -137,7 +145,7 @@ impl HolePunchEngine {
 
     /// The session an UPGRADE_REQUEST belongs to, without creating a session.
     pub fn request_session_id(payload: &[u8]) -> Result<[u8; 16], HolePunchError> {
-        decode_upgrade_request(payload).map(|(session_id, _, _, _)| session_id)
+        decode_upgrade_request(payload).map(|request| request.session_id)
     }
 
     /// Responder: the replies already sent for this session (ACCEPT, and
@@ -161,7 +169,7 @@ impl HolePunchEngine {
             actions.push(HolePunchAction::SendSignal {
                 link_id: self.link_id,
                 msgtype: UPGRADE_READY,
-                payload: encode_upgrade_ready(&self.session_id, ours),
+                payload: encode_upgrade_ready(&self.session_id, ours, &self.our_host_endpoints),
             });
         }
         actions
@@ -205,6 +213,19 @@ impl HolePunchEngine {
     /// advertised one (see [`DIRECT_MAX_PACKET`]).
     pub fn peer_max_packet(&self) -> Option<u32> {
         self.peer_max_packet
+    }
+
+    /// The peer's host candidates (at most [`MAX_HOST_CANDIDATES`]).
+    pub fn peer_host_endpoints(&self) -> &[Endpoint] {
+        &self.peer_host_endpoints
+    }
+
+    /// Set the host candidates sent with our public endpoint, before
+    /// [`endpoints_discovered`](Self::endpoints_discovered). At most
+    /// [`MAX_HOST_CANDIDATES`] are kept.
+    pub fn set_host_endpoints(&mut self, mut hosts: Vec<Endpoint>) {
+        hosts.truncate(MAX_HOST_CANDIDATES);
+        self.our_host_endpoints = hosts;
     }
 
     /// Propose a direct connection (initiator side).
@@ -273,6 +294,7 @@ impl HolePunchEngine {
                 &facilitator,
                 &public_endpoint,
                 self.probe_protocol,
+                &self.our_host_endpoints,
             );
 
             self.state = HolePunchState::Proposing;
@@ -287,7 +309,8 @@ impl HolePunchEngine {
             }])
         } else {
             // Responder: Phase 3 complete -> send UPGRADE_READY, start punching
-            let payload = encode_upgrade_ready(&self.session_id, &public_endpoint);
+            let payload =
+                encode_upgrade_ready(&self.session_id, &public_endpoint, &self.our_host_endpoints);
 
             let peer_public = self
                 .peer_public_endpoint
@@ -305,6 +328,7 @@ impl HolePunchEngine {
                 },
                 HolePunchAction::StartUdpPunch {
                     peer_public,
+                    peer_hosts: self.peer_host_endpoints.clone(),
                     punch_token: self.punch_token,
                     session_id: self.session_id,
                 },
@@ -453,7 +477,7 @@ impl HolePunchEngine {
         request_payload: &[u8],
         reason: u8,
     ) -> Result<HolePunchAction, HolePunchError> {
-        let (session_id, _, _, _) = decode_upgrade_request(request_payload)?;
+        let session_id = decode_upgrade_request(request_payload)?.session_id;
         let payload = encode_upgrade_reject(&session_id, reason);
         Ok(HolePunchAction::SendSignal {
             link_id,
@@ -493,7 +517,7 @@ impl HolePunchEngine {
     ) -> Result<Vec<HolePunchAction>, HolePunchError> {
         if self.state != HolePunchState::Idle {
             // Already busy — reject
-            let (session_id, _, _, _) = decode_upgrade_request(payload)?;
+            let session_id = decode_upgrade_request(payload)?.session_id;
             let reject_payload = encode_upgrade_reject(&session_id, REJECT_BUSY);
             return Ok(alloc::vec![HolePunchAction::SendSignal {
                 link_id: self.link_id,
@@ -503,8 +527,13 @@ impl HolePunchEngine {
         }
 
         let derived_key = derived_key.ok_or(HolePunchError::NoDerivedKey)?;
-        let (session_id, facilitator, initiator_public, protocol) =
-            decode_upgrade_request(payload)?;
+        let UpgradeRequest {
+            session_id,
+            facilitator,
+            initiator_public,
+            protocol,
+            hosts,
+        } = decode_upgrade_request(payload)?;
 
         self.session_id = session_id;
         self.is_initiator = false;
@@ -515,6 +544,7 @@ impl HolePunchEngine {
         // Store A's public address (we'll punch this later)
         self.peer_public_endpoint = Some(initiator_public);
         self.peer_max_packet = decode_max_packet(payload);
+        self.peer_host_endpoints = hosts;
 
         // Use facilitator from the request for our own STUN discovery
         self.facilitator_addr = Some(facilitator.clone());
@@ -610,7 +640,7 @@ impl HolePunchEngine {
         payload: &[u8],
         now: f64,
     ) -> Result<Vec<HolePunchAction>, HolePunchError> {
-        let (session_id, responder_public) = decode_upgrade_ready(payload)?;
+        let (session_id, responder_public, hosts) = decode_upgrade_ready(payload)?;
         // A repeated READY answers a retransmitted request.
         if self.is_initiator
             && session_id == self.session_id
@@ -631,12 +661,14 @@ impl HolePunchEngine {
 
         self.peer_public_endpoint = Some(responder_public.clone());
         self.peer_max_packet = decode_max_packet(payload);
+        self.peer_host_endpoints = hosts.clone();
 
         self.state = HolePunchState::Punching;
         self.state_entered_at = now;
 
         Ok(alloc::vec![HolePunchAction::StartUdpPunch {
             peer_public: responder_public,
+            peer_hosts: hosts,
             punch_token: self.punch_token,
             session_id: self.session_id,
         }])
@@ -710,6 +742,7 @@ fn encode_upgrade_request(
     facilitator: &Endpoint,
     initiator_public: &Endpoint,
     protocol: ProbeProtocol,
+    hosts: &[Endpoint],
 ) -> Vec<u8> {
     let mut fields = alloc::vec![
         (
@@ -733,13 +766,53 @@ fn encode_upgrade_request(
             Value::UInt(protocol as u64),
         ));
     }
+    push_hosts(&mut fields, hosts);
     let val = Value::Map(fields);
     msgpack::pack(&val)
 }
 
-fn decode_upgrade_request(
-    data: &[u8],
-) -> Result<([u8; 16], Endpoint, Endpoint, ProbeProtocol), HolePunchError> {
+/// Add host candidates as `"h"`, when there are any.
+fn push_hosts(fields: &mut Vec<(Value, Value)>, hosts: &[Endpoint]) {
+    if !hosts.is_empty() {
+        fields.push((
+            Value::Str(alloc::string::String::from("h")),
+            Value::Array(
+                hosts
+                    .iter()
+                    .take(MAX_HOST_CANDIDATES)
+                    .map(encode_endpoint)
+                    .collect(),
+            ),
+        ));
+    }
+}
+
+/// The host candidates in `"h"`: none when it is absent or not a list,
+/// and entries that are not endpoints are skipped. At most
+/// [`MAX_HOST_CANDIDATES`] are kept.
+fn decode_hosts(val: &Value) -> Vec<Endpoint> {
+    val.map_get("h")
+        .and_then(|h| h.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(decode_endpoint)
+                .take(MAX_HOST_CANDIDATES)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A decoded `UPGRADE_REQUEST`.
+struct UpgradeRequest {
+    session_id: [u8; 16],
+    facilitator: Endpoint,
+    initiator_public: Endpoint,
+    protocol: ProbeProtocol,
+    hosts: Vec<Endpoint>,
+}
+
+fn decode_upgrade_request(data: &[u8]) -> Result<UpgradeRequest, HolePunchError> {
     let (val, _) = msgpack::unpack(data).map_err(|_| HolePunchError::InvalidPayload)?;
     let session_id = extract_session_id(&val)?;
     let facilitator = val
@@ -759,7 +832,13 @@ fn decode_upgrade_request(
             _ => ProbeProtocol::Rnsp,
         })
         .unwrap_or(ProbeProtocol::Rnsp);
-    Ok((session_id, facilitator, initiator_public, protocol))
+    Ok(UpgradeRequest {
+        session_id,
+        facilitator,
+        initiator_public,
+        protocol,
+        hosts: decode_hosts(&val),
+    })
 }
 
 fn encode_upgrade_accept(session_id: &[u8; 16]) -> Vec<u8> {
@@ -799,8 +878,12 @@ fn decode_upgrade_reject(data: &[u8]) -> Result<([u8; 16], u8), HolePunchError> 
     Ok((session_id, reason))
 }
 
-fn encode_upgrade_ready(session_id: &[u8; 16], responder_public: &Endpoint) -> Vec<u8> {
-    let val = Value::Map(alloc::vec![
+fn encode_upgrade_ready(
+    session_id: &[u8; 16],
+    responder_public: &Endpoint,
+    hosts: &[Endpoint],
+) -> Vec<u8> {
+    let mut fields = alloc::vec![
         (
             Value::Str(alloc::string::String::from("s")),
             Value::Bin(session_id.to_vec())
@@ -810,18 +893,21 @@ fn encode_upgrade_ready(session_id: &[u8; 16], responder_public: &Endpoint) -> V
             encode_endpoint(responder_public)
         ),
         max_packet_field(),
-    ]);
-    msgpack::pack(&val)
+    ];
+    push_hosts(&mut fields, hosts);
+    msgpack::pack(&Value::Map(fields))
 }
 
-fn decode_upgrade_ready(data: &[u8]) -> Result<([u8; 16], Endpoint), HolePunchError> {
+fn decode_upgrade_ready(
+    data: &[u8],
+) -> Result<([u8; 16], Endpoint, Vec<Endpoint>), HolePunchError> {
     let (val, _) = msgpack::unpack(data).map_err(|_| HolePunchError::InvalidPayload)?;
     let session_id = extract_session_id(&val)?;
     let responder_public = val
         .map_get("a")
         .and_then(decode_endpoint)
         .ok_or(HolePunchError::InvalidPayload)?;
-    Ok((session_id, responder_public))
+    Ok((session_id, responder_public, decode_hosts(&val)))
 }
 
 /// The `m` field of UPGRADE_REQUEST and UPGRADE_READY: the largest link
@@ -962,7 +1048,13 @@ mod tests {
             } => {
                 assert_eq!(*msgtype, UPGRADE_REQUEST);
                 // Verify payload contains facilitator and initiator_public
-                let (sid, facilitator, init_pub, _proto) = decode_upgrade_request(payload).unwrap();
+                let UpgradeRequest {
+                    session_id: sid,
+                    facilitator,
+                    initiator_public: init_pub,
+                    protocol: _proto,
+                    ..
+                } = decode_upgrade_request(payload).unwrap();
                 assert_eq!(sid, *initiator.session_id());
                 assert_eq!(facilitator, test_probe_addr());
                 assert_eq!(init_pub, test_public_addr_a());
@@ -1113,6 +1205,105 @@ mod tests {
         assert_eq!(initiator.peer_max_packet(), None);
         initiator.reset();
         assert_eq!(initiator.peer_max_packet(), None);
+    }
+
+    fn host(a: u8, port: u16) -> Endpoint {
+        Endpoint {
+            addr: alloc::vec![192, 168, 1, a],
+            port,
+        }
+    }
+
+    #[test]
+    fn host_candidates_travel_both_ways() {
+        let link_id = [0x23; 16];
+        let derived_key = test_derived_key();
+        let mut rng = make_rng(0x43);
+
+        let mut initiator =
+            HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
+        initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
+        // Only the first MAX_HOST_CANDIDATES are kept.
+        initiator.set_host_endpoints(alloc::vec![host(10, 4000), host(11, 4000), host(12, 4000)]);
+        let actions = initiator
+            .endpoints_discovered(test_public_addr_a(), 101.0)
+            .unwrap();
+        let request = signal(&actions[0]).unwrap().1;
+
+        let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
+        responder
+            .handle_signal(UPGRADE_REQUEST, &request, Some(&derived_key), 102.0)
+            .unwrap();
+        assert_eq!(
+            responder.peer_host_endpoints(),
+            &[host(10, 4000), host(11, 4000)]
+        );
+        responder.set_host_endpoints(alloc::vec![host(20, 5000)]);
+        let actions = responder
+            .endpoints_discovered(test_public_addr_b(), 103.0)
+            .unwrap();
+        match &actions[1] {
+            HolePunchAction::StartUdpPunch { peer_hosts, .. } => {
+                assert_eq!(peer_hosts, &[host(10, 4000), host(11, 4000)]);
+            }
+            other => panic!("expected StartUdpPunch, got {other:?}"),
+        }
+        let ready = signal(&actions[0]).unwrap().1;
+        // A replayed READY carries them too.
+        let replayed = responder.replay_replies();
+        assert_eq!(signal(&replayed[1]).unwrap().1, ready);
+
+        initiator
+            .handle_signal(
+                UPGRADE_ACCEPT,
+                &encode_upgrade_accept(initiator.session_id()),
+                None,
+                104.0,
+            )
+            .unwrap();
+        let actions = initiator
+            .handle_signal(UPGRADE_READY, &ready, None, 105.0)
+            .unwrap();
+        match &actions[0] {
+            HolePunchAction::StartUdpPunch { peer_hosts, .. } => {
+                assert_eq!(peer_hosts, &[host(20, 5000)]);
+            }
+            other => panic!("expected StartUdpPunch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_host_candidates_are_skipped_not_fatal() {
+        let session_id = [0x61; 16];
+        let mut fields = alloc::vec![
+            (
+                Value::Str(alloc::string::String::from("s")),
+                Value::Bin(session_id.to_vec())
+            ),
+            (
+                Value::Str(alloc::string::String::from("a")),
+                encode_endpoint(&test_public_addr_b())
+            ),
+        ];
+        // Not a list: ignored.
+        let mut not_a_list = fields.clone();
+        not_a_list.push((Value::Str(alloc::string::String::from("h")), Value::UInt(7)));
+        let (_, _, hosts) = decode_upgrade_ready(&msgpack::pack(&Value::Map(not_a_list))).unwrap();
+        assert!(hosts.is_empty());
+        // Junk entries are skipped, the rest kept.
+        fields.push((
+            Value::Str(alloc::string::String::from("h")),
+            Value::Array(alloc::vec![
+                Value::Str(alloc::string::String::from("junk")),
+                Value::Array(alloc::vec![Value::UInt(1)]),
+                encode_endpoint(&host(30, 6000)),
+            ]),
+        ));
+        let (sid, public, hosts) =
+            decode_upgrade_ready(&msgpack::pack(&Value::Map(fields))).unwrap();
+        assert_eq!(sid, session_id);
+        assert_eq!(public, test_public_addr_b());
+        assert_eq!(hosts, alloc::vec![host(30, 6000)]);
     }
 
     #[test]
@@ -1310,9 +1501,20 @@ mod tests {
         // UPGRADE_REQUEST (RNSP)
         let facilitator = test_probe_addr();
         let init_pub = test_public_addr_a();
-        let data =
-            encode_upgrade_request(&session_id, &facilitator, &init_pub, ProbeProtocol::Rnsp);
-        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
+        let data = encode_upgrade_request(
+            &session_id,
+            &facilitator,
+            &init_pub,
+            ProbeProtocol::Rnsp,
+            &[],
+        );
+        let UpgradeRequest {
+            session_id: sid,
+            facilitator: f,
+            initiator_public: a,
+            protocol: proto,
+            ..
+        } = decode_upgrade_request(&data).unwrap();
         assert_eq!(sid, session_id);
         assert_eq!(f, facilitator);
         assert_eq!(a, init_pub);
@@ -1331,8 +1533,9 @@ mod tests {
 
         // UPGRADE_READY
         let resp_pub = test_public_addr_b();
-        let data = encode_upgrade_ready(&session_id, &resp_pub);
-        let (sid, rp) = decode_upgrade_ready(&data).unwrap();
+        let data = encode_upgrade_ready(&session_id, &resp_pub, &[]);
+        let (sid, rp, hosts) = decode_upgrade_ready(&data).unwrap();
+        assert!(hosts.is_empty());
         assert_eq!(sid, session_id);
         assert_eq!(rp, resp_pub);
 
@@ -1444,9 +1647,20 @@ mod tests {
         let init_pub = test_public_addr_a();
 
         // Encode with STUN protocol
-        let data =
-            encode_upgrade_request(&session_id, &facilitator, &init_pub, ProbeProtocol::Stun);
-        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
+        let data = encode_upgrade_request(
+            &session_id,
+            &facilitator,
+            &init_pub,
+            ProbeProtocol::Stun,
+            &[],
+        );
+        let UpgradeRequest {
+            session_id: sid,
+            facilitator: f,
+            initiator_public: a,
+            protocol: proto,
+            ..
+        } = decode_upgrade_request(&data).unwrap();
         assert_eq!(sid, session_id);
         assert_eq!(f, facilitator);
         assert_eq!(a, init_pub);
@@ -1460,9 +1674,20 @@ mod tests {
         let init_pub = test_public_addr_a();
 
         // Encode with RNSP (default) — should NOT include "p" field
-        let data =
-            encode_upgrade_request(&session_id, &facilitator, &init_pub, ProbeProtocol::Rnsp);
-        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
+        let data = encode_upgrade_request(
+            &session_id,
+            &facilitator,
+            &init_pub,
+            ProbeProtocol::Rnsp,
+            &[],
+        );
+        let UpgradeRequest {
+            session_id: sid,
+            facilitator: f,
+            initiator_public: a,
+            protocol: proto,
+            ..
+        } = decode_upgrade_request(&data).unwrap();
         assert_eq!(sid, session_id);
         assert_eq!(f, facilitator);
         assert_eq!(a, init_pub);
@@ -1493,7 +1718,13 @@ mod tests {
         ]);
         let data = msgpack::pack(&val);
 
-        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
+        let UpgradeRequest {
+            session_id: sid,
+            facilitator: f,
+            initiator_public: a,
+            protocol: proto,
+            ..
+        } = decode_upgrade_request(&data).unwrap();
         assert_eq!(sid, session_id);
         assert_eq!(f, facilitator);
         assert_eq!(a, init_pub);
@@ -1610,7 +1841,7 @@ mod tests {
             .unwrap()
             .is_empty());
 
-        let ready = encode_upgrade_ready(initiator.session_id(), &test_public_addr_b());
+        let ready = encode_upgrade_ready(initiator.session_id(), &test_public_addr_b(), &[]);
         let punch = initiator
             .handle_signal(UPGRADE_READY, &ready, None, 105.0)
             .unwrap();
@@ -1669,7 +1900,7 @@ mod tests {
             replay.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
             vec![UPGRADE_ACCEPT, UPGRADE_READY]
         );
-        let (_, ready_endpoint) = decode_upgrade_ready(&replay[1].1).unwrap();
+        let (_, ready_endpoint, _) = decode_upgrade_ready(&replay[1].1).unwrap();
         assert_eq!(ready_endpoint, test_public_addr_b());
         // An initiator has nothing to replay.
         assert!(initiator.replay_replies().is_empty());

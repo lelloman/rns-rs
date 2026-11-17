@@ -17,6 +17,12 @@ link (in its own link packet context, not the link's channel, so the
 application's channel is never touched), then a simultaneous hole punch from
 both sides. If any step fails the original link keeps working unchanged.
 
+Two peers behind the same NAT (on the same LAN) also offer each other their
+LAN addresses as host candidates, and use the LAN path when it works, so
+they connect directly even when their NAT does not forward traffic from
+inside back inside (see
+[Host candidates](direct-link-protocol.md#host-candidates)).
+
 ## Roles
 
 - **Facilitator**: a transport node that answers probe requests. It only
@@ -123,10 +129,10 @@ in `rns-net`) reports Direct Link on the node:
   its `last_loss` (`interface_down`, `link_failed` or `peer_fallback`, and
   time), and a scheduled `reupgrade`. On the direct path, `direct` gives the
   interface, session and role, the peer's address and its candidate type
-  (`reflexive`), every candidate the punch tried, the RTT the punch
-  measured, the MTU (`mtu_discovered` once path MTU discovery has
-  reported), and `peer_max_packet`, the largest link packet the peer said
-  it accepts on the path (see
+  (`reflexive`, or `host` for a peer on the same LAN), every candidate the
+  punch tried, the RTT the punch measured, the MTU (`mtu_discovered` once
+  path MTU discovery has reported), and `peer_max_packet`, the largest link
+  packet the peer said it accepts on the path (see
   [Packet size](direct-link-protocol.md#packet-size); `null` from a peer that
   did not say).
 

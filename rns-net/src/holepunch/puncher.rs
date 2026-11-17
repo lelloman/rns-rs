@@ -9,6 +9,12 @@
 //! 36 bytes, keyed with the session's punch token, which never appears on
 //! the wire. An ACK counts only if it echoes a nonce this side sent to the
 //! IP it comes from.
+//!
+//! The candidates are the peer's public (reflexive) endpoint and its host
+//! candidates, addresses of its own interfaces for a peer on the same
+//! network. A host candidate that is acknowledged is preferred: once the
+//! punch has succeeded over another candidate, it waits up to
+//! [`HOST_GRACE`] for a host candidate still unanswered.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -37,6 +43,10 @@ pub const UNVERIFIED_BURST: u32 = 16;
 /// After its burst, an endpoint that has not answered gets one punch
 /// packet per this interval, enough to keep a NAT mapping toward it open.
 const UNVERIFIED_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a punch that succeeded over its public endpoint waits for a
+/// host candidate to answer as well, so that peers on the same network use
+/// it.
+pub const HOST_GRACE: Duration = Duration::from_millis(500);
 
 /// Timing and packet budget for one punch session.
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +57,7 @@ struct PunchLimits {
     max_ack_packets: u32,
     unverified_burst: u32,
     unverified_interval: Duration,
+    host_grace: Duration,
 }
 
 const DEFAULT_LIMITS: PunchLimits = PunchLimits {
@@ -56,6 +67,7 @@ const DEFAULT_LIMITS: PunchLimits = PunchLimits {
     max_ack_packets: MAX_ACK_PACKETS,
     unverified_burst: UNVERIFIED_BURST,
     unverified_interval: UNVERIFIED_INTERVAL,
+    host_grace: HOST_GRACE,
 };
 
 /// Whether `addr` can be a punch target at all: a unicast address with a
@@ -76,13 +88,21 @@ fn plausible_target(addr: &SocketAddr) -> bool {
     addr.port() != 0 && !ip.is_unspecified() && unicast
 }
 
-/// The endpoints a punch sends to: plausible targets, without repeats, at
-/// most [`MAX_PUNCH_CANDIDATES`].
-fn punch_candidates(endpoints: Vec<SocketAddr>) -> io::Result<Vec<SocketAddr>> {
-    let mut candidates: Vec<SocketAddr> = Vec::new();
-    for ep in endpoints {
-        if plausible_target(&ep) && !candidates.contains(&ep) {
-            candidates.push(ep);
+/// The endpoints a punch sends to, each with whether it is a host
+/// candidate: plausible targets, the peer's public ones first, without
+/// repeats, at most [`MAX_PUNCH_CANDIDATES`].
+fn punch_candidates(
+    peer_endpoints: Vec<SocketAddr>,
+    host_endpoints: Vec<SocketAddr>,
+) -> io::Result<Vec<(SocketAddr, bool)>> {
+    let mut candidates: Vec<(SocketAddr, bool)> = Vec::new();
+    let tagged = peer_endpoints
+        .into_iter()
+        .map(|ep| (ep, false))
+        .chain(host_endpoints.into_iter().map(|ep| (ep, true)));
+    for (ep, host) in tagged {
+        if plausible_target(&ep) && !candidates.iter().any(|(c, _)| *c == ep) {
+            candidates.push((ep, host));
         }
     }
     candidates.truncate(MAX_PUNCH_CANDIDATES);
@@ -158,7 +178,9 @@ impl PunchHandle {
 ///
 /// `socket` should be the same socket used for the probe (to preserve NAT mapping).
 /// `peer_endpoints` are the peer's public endpoints discovered via probe.
-/// `local_endpoints` are the peer's LAN endpoints for direct-network fallback.
+/// `local_endpoints` are the peer's host candidates, addresses on a network
+/// this node shares with it, preferred when they answer (see
+/// [`HOST_GRACE`]).
 /// `session_id` and `punch_token` are used for packet authentication.
 ///
 /// Punch and ACK packets are only exchanged with sources whose IP matches one
@@ -193,8 +215,7 @@ fn start_udp_punch_with_limits(
     punch_token: [u8; 32],
     limits: PunchLimits,
 ) -> io::Result<PunchHandle> {
-    let all_endpoints =
-        punch_candidates(peer_endpoints.into_iter().chain(local_endpoints).collect())?;
+    let all_endpoints = punch_candidates(peer_endpoints, local_endpoints)?;
     socket.set_read_timeout(Some(Duration::from_millis(100)))?;
     socket.set_nonblocking(false)?;
 
@@ -236,7 +257,8 @@ pub(crate) fn start_udp_punch_on_loop(
 ) -> io::Result<PunchHandle> {
     start_udp_punch_on_loop_with_limits(
         socket,
-        peer_endpoints.into_iter().chain(local_endpoints).collect(),
+        peer_endpoints,
+        local_endpoints,
         session_id,
         punch_token,
         tx,
@@ -244,16 +266,18 @@ pub(crate) fn start_udp_punch_on_loop(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_udp_punch_on_loop_with_limits(
     socket: UdpSocket,
-    endpoints: Vec<SocketAddr>,
+    peer_endpoints: Vec<SocketAddr>,
+    host_endpoints: Vec<SocketAddr>,
     session_id: [u8; 16],
     punch_token: [u8; 32],
     tx: &crate::event::EventSender,
     limits: PunchLimits,
 ) -> io::Result<PunchHandle> {
     use std::os::fd::AsRawFd;
-    let endpoints = punch_candidates(endpoints)?;
+    let endpoints = punch_candidates(peer_endpoints, host_endpoints)?;
     socket.set_nonblocking(true)?;
     let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -293,14 +317,23 @@ struct PunchState {
     we_got_ack: bool,
     they_got_ack: bool,
     verified_peer: Option<SocketAddr>,
+    /// Where acknowledgements of our punches came from, in order: each
+    /// carries traffic both ways.
+    acked_from: Vec<SocketAddr>,
     first_ack_time: Option<Instant>,
+    /// When both sides had first confirmed.
+    succeeded_at: Option<Instant>,
 }
 
 /// One endpoint a punch sends to.
 struct Candidate {
     addr: SocketAddr,
+    /// A host candidate of the peer, rather than its public endpoint.
+    host: bool,
     /// A valid punch or acknowledgement came from its IP.
     verified: bool,
+    /// An acknowledgement of our punch came from this very address.
+    acked: bool,
     sent: u32,
     last_sent: Option<Instant>,
 }
@@ -318,7 +351,7 @@ impl Candidate {
 
 impl PunchState {
     fn new(
-        endpoints: Vec<SocketAddr>,
+        endpoints: Vec<(SocketAddr, bool)>,
         session_id: [u8; 16],
         punch_token: [u8; 32],
         limits: PunchLimits,
@@ -326,9 +359,11 @@ impl PunchState {
         Self {
             endpoints: endpoints
                 .into_iter()
-                .map(|addr| Candidate {
+                .map(|(addr, host)| Candidate {
                     addr,
+                    host,
                     verified: false,
+                    acked: false,
                     sent: 0,
                     last_sent: None,
                 })
@@ -343,7 +378,9 @@ impl PunchState {
             we_got_ack: false,
             they_got_ack: false,
             verified_peer: None,
+            acked_from: Vec::new(),
             first_ack_time: None,
+            succeeded_at: None,
         }
     }
 
@@ -420,18 +457,45 @@ impl PunchState {
                 if self.verified_peer.is_none() {
                     self.verified_peer = Some(src);
                 }
+                if !self.acked_from.contains(&src) {
+                    self.acked_from.push(src);
+                }
+                for ep in &mut self.endpoints {
+                    if ep.addr == src {
+                        ep.acked = true;
+                    }
+                }
                 self.verify_source(src);
             }
         }
-        // Both sides confirmed → success
-        if self.we_got_ack && self.they_got_ack {
-            let rtt = self
-                .first_ack_time
-                .map(|t| t - self.start)
-                .unwrap_or(self.start.elapsed());
-            return self.verified_peer.map(|peer| (peer, rtt));
+        self.ready(Instant::now())
+    }
+
+    /// The peer address and round trip, once both sides have confirmed:
+    /// an acknowledged host candidate if there is one, otherwise (after
+    /// waiting [`HOST_GRACE`] for a host candidate still unanswered) where
+    /// the first acknowledgement came from.
+    fn ready(&mut self, now: Instant) -> Option<(SocketAddr, Duration)> {
+        if !(self.we_got_ack && self.they_got_ack) {
+            return None;
         }
-        None
+        let succeeded_at = *self.succeeded_at.get_or_insert(now);
+        let rtt = self
+            .first_ack_time
+            .map(|t| t - self.start)
+            .unwrap_or(self.start.elapsed());
+        if let Some(host) = self.endpoints.iter().find(|ep| ep.host && ep.acked) {
+            return Some((host.addr, rtt));
+        }
+        let host_pending = self.endpoints.iter().any(|ep| ep.host && !ep.acked);
+        if host_pending && now < succeeded_at + self.limits.host_grace && now < self.end() {
+            return None;
+        }
+        self.acked_from
+            .first()
+            .copied()
+            .or(self.verified_peer)
+            .map(|peer| (peer, rtt))
     }
 }
 
@@ -450,6 +514,22 @@ struct PunchSource {
 }
 
 impl PunchSource {
+    /// Hand over the socket with the result, then report success.
+    fn succeed(&mut self, peer_addr: SocketAddr, rtt: Duration) -> crate::event::SourceStatus {
+        let Some(socket) = self.socket.take() else {
+            return crate::event::SourceStatus::Remove;
+        };
+        *self
+            .slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PunchResult {
+            socket,
+            peer_addr,
+            rtt,
+        });
+        self.finish(STATUS_SUCCEEDED)
+    }
+
     fn finish(&mut self, outcome: u8) -> crate::event::SourceStatus {
         if self.status.load(Ordering::Relaxed) == STATUS_RUNNING {
             self.status.store(outcome, Ordering::Relaxed);
@@ -491,17 +571,7 @@ impl crate::event::LoopSource for PunchSource {
                 Err(_) => return crate::event::SourceStatus::Rearm,
             };
             if let Some((peer_addr, rtt)) = self.punch.receive(socket, &cx.buf[..len], src) {
-                // The result is in place before success is reported.
-                let socket = self.socket.take().expect("checked above");
-                *self
-                    .slot
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PunchResult {
-                    socket,
-                    peer_addr,
-                    rtt,
-                });
-                return self.finish(STATUS_SUCCEEDED);
+                return self.succeed(peer_addr, rtt);
             }
         }
     }
@@ -524,6 +594,9 @@ impl crate::event::LoopSource for PunchSource {
             return self.finish(STATUS_CANCELLED);
         }
         let now = Instant::now();
+        if let Some((peer_addr, rtt)) = self.punch.ready(now) {
+            return self.succeed(peer_addr, rtt);
+        }
         if now >= self.punch.end() {
             return self.finish(STATUS_FAILED);
         }
@@ -539,7 +612,7 @@ impl crate::event::LoopSource for PunchSource {
 
 fn run_udp_punch(
     socket: UdpSocket,
-    all_endpoints: Vec<SocketAddr>,
+    all_endpoints: Vec<(SocketAddr, bool)>,
     session_id: [u8; 16],
     punch_token: [u8; 32],
     status: Arc<AtomicU8>,
@@ -588,6 +661,15 @@ fn run_udp_punch(
                     rtt,
                 });
             }
+        }
+        if let Some((peer_addr, rtt)) = punch.ready(Instant::now()) {
+            status.store(STATUS_SUCCEEDED, Ordering::Relaxed);
+            let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
+            return Some(PunchResult {
+                socket,
+                peer_addr,
+                rtt,
+            });
         }
     }
 
@@ -686,7 +768,7 @@ mod tests {
         let target = UdpSocket::bind("127.0.0.1:0").unwrap();
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
         let mut punch = PunchState::new(
-            vec![target.local_addr().unwrap()],
+            vec![(target.local_addr().unwrap(), false)],
             [1; 16],
             [2; 32],
             DEFAULT_LIMITS,
@@ -704,7 +786,7 @@ mod tests {
         let token = [4; 32];
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
         let target: SocketAddr = "127.0.0.1:40000".parse().unwrap();
-        let mut punch = PunchState::new(vec![target], session_id, token, DEFAULT_LIMITS);
+        let mut punch = PunchState::new(vec![(target, false)], session_id, token, DEFAULT_LIMITS);
         punch.send_round(&sender);
         let sent = punch.sent_nonces[0].0;
 
@@ -719,6 +801,90 @@ mod tests {
         // The right nonce from where it was sent (the port may differ).
         punch.receive(&sender, &ack, "127.0.0.1:40001".parse().unwrap());
         assert!(punch.we_got_ack);
+    }
+
+    /// A punch toward a public endpoint and a host candidate, both real
+    /// sockets, with its first round sent: the punch, the public socket,
+    /// the host socket.
+    fn punch_with_host_candidate(limits: PunchLimits) -> (PunchState, UdpSocket, UdpSocket) {
+        let public = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let host = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut punch = PunchState::new(
+            vec![
+                (public.local_addr().unwrap(), false),
+                (host.local_addr().unwrap(), true),
+            ],
+            [5; 16],
+            [6; 32],
+            limits,
+        );
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        punch.send_round(&sender);
+        (punch, public, host)
+    }
+
+    #[test]
+    fn an_answering_host_candidate_is_preferred() {
+        let (mut punch, public, host) = punch_with_host_candidate(DEFAULT_LIMITS);
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (session_id, token) = ([5; 16], [6; 32]);
+        let public_addr = public.local_addr().unwrap();
+        let host_addr = host.local_addr().unwrap();
+        // The peer's punch and acknowledgement arrive from its public
+        // endpoint first: the punch has succeeded, but waits for the host
+        // candidate.
+        let nonce = punch.sent_nonces[0].0;
+        let punch_pkt = build_punch_packet(&session_id, &token, &[1; 16]);
+        assert!(punch.receive(&sender, &punch_pkt, public_addr).is_none());
+        let ack = build_ack_packet(&session_id, &token, &nonce);
+        assert!(punch.receive(&sender, &ack, public_addr).is_none());
+        // Then the host candidate answers: it is the peer's address.
+        let host_nonce = punch.sent_nonces[1].0;
+        let ack = build_ack_packet(&session_id, &token, &host_nonce);
+        let (peer, _) = punch.receive(&sender, &ack, host_addr).unwrap();
+        assert_eq!(peer, host_addr);
+    }
+
+    #[test]
+    fn a_silent_host_candidate_is_given_up_after_the_grace() {
+        let limits = PunchLimits {
+            host_grace: Duration::from_millis(50),
+            ..DEFAULT_LIMITS
+        };
+        let (mut punch, public, _host) = punch_with_host_candidate(limits);
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (session_id, token) = ([5; 16], [6; 32]);
+        let public_addr = public.local_addr().unwrap();
+        let nonce = punch.sent_nonces[0].0;
+        let punch_pkt = build_punch_packet(&session_id, &token, &[1; 16]);
+        punch.receive(&sender, &punch_pkt, public_addr);
+        let ack = build_ack_packet(&session_id, &token, &nonce);
+        assert!(punch.receive(&sender, &ack, public_addr).is_none());
+        assert!(punch.ready(Instant::now()).is_none());
+        let later = Instant::now() + Duration::from_millis(60);
+        assert_eq!(punch.ready(later).map(|r| r.0), Some(public_addr));
+    }
+
+    #[test]
+    fn host_candidates_come_after_public_ones_within_the_cap() {
+        let public: SocketAddr = "203.0.113.5:4000".parse().unwrap();
+        let hosts: Vec<SocketAddr> = vec![
+            "192.168.1.5:4000".parse().unwrap(),
+            "203.0.113.5:4000".parse().unwrap(),
+            "192.168.1.6:4000".parse().unwrap(),
+            "192.168.1.7:4000".parse().unwrap(),
+            "192.168.1.8:4000".parse().unwrap(),
+        ];
+        let candidates = punch_candidates(vec![public], hosts).unwrap();
+        assert_eq!(
+            candidates,
+            vec![
+                (public, false),
+                ("192.168.1.5:4000".parse().unwrap(), true),
+                ("192.168.1.6:4000".parse().unwrap(), true),
+                ("192.168.1.7:4000".parse().unwrap(), true),
+            ]
+        );
     }
 
     #[test]
@@ -756,6 +922,7 @@ mod tests {
             max_ack_packets: MAX_ACK_PACKETS,
             unverified_burst: MAX_PUNCH_PACKETS,
             unverified_interval: Duration::from_millis(5),
+            host_grace: HOST_GRACE,
         }
     }
 
@@ -953,6 +1120,7 @@ mod tests {
         let failing = start_udp_punch_on_loop_with_limits(
             UdpSocket::bind("127.0.0.1:0").unwrap(),
             vec![silent_peer.local_addr().unwrap()],
+            vec![],
             [1; 16],
             [2; 32],
             &tx,
@@ -962,6 +1130,7 @@ mod tests {
         let cancelled = start_udp_punch_on_loop_with_limits(
             UdpSocket::bind("127.0.0.1:0").unwrap(),
             vec![silent_peer.local_addr().unwrap()],
+            vec![],
             [3; 16],
             [4; 32],
             &tx,
