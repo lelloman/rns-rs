@@ -525,6 +525,10 @@ impl ResourceSender {
     }
 
     /// Handle proof from receiver.
+    ///
+    /// As upstream's `validate_proof`, a proof that does not match the
+    /// expected one is ignored: the sender keeps waiting for a valid proof
+    /// and, failing that, times out as [`Self::tick`] decides.
     pub fn handle_proof(&mut self, proof_data: &[u8], _now: f64) -> Vec<ResourceAction> {
         if self.status == ResourceStatus::Failed {
             return vec![];
@@ -535,14 +539,7 @@ impl ResourceSender {
                 self.status = ResourceStatus::Complete;
                 vec![ResourceAction::Completed]
             }
-            Ok(false) => {
-                self.status = ResourceStatus::Failed;
-                vec![ResourceAction::Failed(ResourceError::InvalidProof)]
-            }
-            Err(e) => {
-                self.status = ResourceStatus::Failed;
-                vec![ResourceAction::Failed(e)]
-            }
+            Ok(false) | Err(_) => vec![],
         }
     }
 
@@ -983,14 +980,51 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_proof() {
-        let mut sender = make_sender(b"data");
+    fn invalid_proof_is_ignored_and_the_proof_wait_times_out() {
+        let mut sender = make_sender(b"hi");
         sender.advertise(1000.0);
+        let total = sender.total_parts();
+        sender.handle_request(&request_for(&sender, 0..total), 1000.5);
+        assert_eq!(sender.status, ResourceStatus::AwaitingProof);
 
-        let wrong_proof = [0xFF; 32];
-        let proof_data = super::super::proof::build_proof_data(&sender.resource_hash, &wrong_proof);
-        let _actions = sender.handle_proof(&proof_data, 1002.0);
-        assert_eq!(sender.status, ResourceStatus::Failed);
+        // Upstream ignores a proof that does not match, or is malformed.
+        let wrong = super::super::proof::build_proof_data(&sender.resource_hash, &[0xFF; 32]);
+        for proof in [&wrong[..], &wrong[..40]] {
+            assert!(sender.handle_proof(proof, 1001.0).is_empty());
+            assert_eq!(sender.status, ResourceStatus::AwaitingProof);
+            assert_eq!(sender.retries_left, 3);
+        }
+
+        // A valid proof still completes it.
+        let mut completing = make_sender(b"hi");
+        completing.advertise(1000.0);
+        completing.handle_request(&request_for(&completing, 0..total), 1000.5);
+        completing.handle_proof(&wrong, 1001.0);
+        let valid = super::super::proof::build_proof_data(
+            &completing.resource_hash,
+            &completing.expected_proof,
+        );
+        assert_eq!(
+            completing.handle_proof(&valid, 1001.5),
+            vec![ResourceAction::Completed]
+        );
+
+        // Otherwise the proof wait retries three times and then cancels.
+        let deadline = 1000.5 + 0.5 * RESOURCE_PROOF_TIMEOUT_FACTOR + RESOURCE_SENDER_GRACE_TIME;
+        let mut now = deadline;
+        for retries_left in (0..3).rev() {
+            now += 1e-3;
+            assert!(sender.tick(now).is_empty());
+            assert_eq!(sender.retries_left, retries_left);
+            now += 0.5 * RESOURCE_PROOF_TIMEOUT_FACTOR + RESOURCE_SENDER_GRACE_TIME;
+        }
+        assert_eq!(
+            sender.tick(now + 1e-3),
+            vec![
+                ResourceAction::SendCancelInitiator(sender.resource_hash.to_vec()),
+                ResourceAction::Failed(ResourceError::Timeout)
+            ]
+        );
     }
 
     #[test]
