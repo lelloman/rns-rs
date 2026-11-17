@@ -139,7 +139,7 @@ fn start_with_template(
     super::apply_underlay_mark(listener.as_raw_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;
 
-    log::info!("[{}] TCP server listening on {}", config.name, addr);
+    log::debug!("[{}] TCP server listening on {}", config.name, addr);
 
     let name = config.name.clone();
     let ifac_size = dynamic_template
@@ -209,7 +209,7 @@ impl LoopSource for ListenerSource {
     }
 
     fn on_removed(&mut self) {
-        log::info!("[{}] listener stopping", self.name);
+        log::debug!("[{}] listener stopping", self.name);
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
@@ -297,12 +297,20 @@ impl ListenerSource {
         let client_id = InterfaceId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let peer_addr = stream.peer_addr().ok();
 
-        log::info!(
+        log::debug!(
             "[{}] client connected: {:?} → id {}",
             name,
             peer_addr,
             client_id.0
         );
+        // Upstream's TCPServerInterface.incoming_connection.
+        log::info!("Accepting incoming TCP connection");
+        if let Some(peer) = peer_addr {
+            log::info!(
+                "Spawned new TCPClient Interface: {}",
+                crate::interface::display::tcp_server_client(name, peer.ip(), peer.port())
+            );
+        }
 
         // Clone stream for writer
         let writer_stream = match stream.try_clone() {

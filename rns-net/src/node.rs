@@ -1560,6 +1560,11 @@ impl RnsNode {
             Some(ref path) => Some(load_network_identity(path)?),
             None => None,
         };
+        // Upstream brings up the configured interfaces while it reads the
+        // config; here they start with the node, from the configs built
+        // below.
+        log::info!("Bringing up system interfaces...");
+        log::info!("System interfaces are ready");
         log::info!("Configuration loaded from {}", config_file.display());
         // Upstream loads the known destinations next, before Transport.start.
         let known_destinations_db = crate::storage_sqlite::default_path(&paths.storage);
@@ -2948,7 +2953,10 @@ impl RnsNode {
         }
 
         // Restore after static interfaces and the announce cache are available,
-        // but before the driver can process inbound traffic.
+        // but before the driver can process inbound traffic. Upstream logs
+        // the tables it loaded after its management destinations' notices,
+        // so the lines follow those below.
+        let mut restored_tables = None;
         if let Some(ref storage_dir) = transport_state_dir {
             match storage::load_transport_state(storage_dir) {
                 Ok(snapshot) => {
@@ -2962,6 +2970,7 @@ impl RnsNode {
                                 .map(|(raw, _)| raw)
                         },
                     );
+                    restored_tables = Some(stats);
                     log::debug!(
                         "restored transport state: {} packet hashes, {} paths, {} tunnels, {} announce rates ({} paths skipped, {} filtered, {} blackholed)",
                         stats.packet_hashes,
@@ -3105,6 +3114,31 @@ impl RnsNode {
             }
         }
 
+        if let (Some(stats), Some(storage_dir)) = (restored_tables, transport_state_dir.as_ref()) {
+            // Upstream's lines, for the tables it found in storage.
+            let entries = |n: usize| if n == 1 { "entry" } else { "entries" };
+            if storage_dir.join("destination_table").is_file() {
+                let filtered = if stats.filtered_paths > 0 {
+                    format!(", {} filtered", stats.filtered_paths)
+                } else {
+                    String::new()
+                };
+                log::info!(
+                    "Loaded {} path table {} from storage{}",
+                    stats.paths,
+                    entries(stats.paths),
+                    filtered
+                );
+            }
+            if storage_dir.join("tunnels").is_file() {
+                log::info!(
+                    "Loaded {} tunnel table {} from storage",
+                    stats.tunnels,
+                    entries(stats.tunnels)
+                );
+            }
+        }
+
         // Set up probe responder if enabled
         if config.respond_to_probes && config.transport_enabled {
             let identity_hash = *transport_id.hash();
@@ -3137,6 +3171,12 @@ impl RnsNode {
                 "Transport Instance will respond to probe requests on <rnstransport.probe.{}:{}>",
                 hex_string(&identity_hash),
                 hex_string(&probe_dest),
+            );
+        }
+        if config.transport_enabled {
+            log::info!(
+                "Transport instance <{}> started",
+                hex_string(transport_id.hash())
             );
         }
 
@@ -3178,7 +3218,7 @@ impl RnsNode {
                 Ok((control, endpoint)) => {
                     driver.register_listener_control(control);
                     driver.register_shared_instance_listener(listener_id, endpoint);
-                    log::info!(
+                    log::debug!(
                         "Local shared instance server started (instance={}, port={})",
                         config.instance_name,
                         config.shared_instance_port
@@ -3202,7 +3242,7 @@ impl RnsNode {
         let rpc_on_unix = |bound: io::Result<()>| -> bool {
             match bound {
                 Ok(()) => {
-                    log::info!(
+                    log::debug!(
                         "RPC server started on abstract Unix socket for {}",
                         config.instance_name
                     );
@@ -3229,7 +3269,7 @@ impl RnsNode {
                 match std::net::TcpListener::bind(("127.0.0.1", config.rpc_port)).and_then(
                     |listener| service.add_listener(crate::driver::RpcListener::Tcp(listener)),
                 ) {
-                    Ok(()) => log::info!("RPC server started on 127.0.0.1:{}", config.rpc_port),
+                    Ok(()) => log::debug!("RPC server started on 127.0.0.1:{}", config.rpc_port),
                     Err(e) => log::error!("Failed to start RPC server: {}", e),
                 }
             }
@@ -3263,7 +3303,7 @@ impl RnsNode {
             let rpc_addr = crate::rpc::RpcAddr::Tcp("127.0.0.1".into(), config.rpc_port);
             match crate::rpc::RpcServer::start(&rpc_addr, rpc_auth_key, tx.clone()) {
                 Ok(server) => {
-                    log::info!("RPC server started on 127.0.0.1:{}", config.rpc_port);
+                    log::debug!("RPC server started on 127.0.0.1:{}", config.rpc_port);
                     Some(server)
                 }
                 Err(e) => {
@@ -3338,7 +3378,7 @@ impl RnsNode {
         // Spawn the driver after startup has registered local destinations and static interfaces.
         // Interface readers can enqueue frames before this point; the bounded event queue preserves
         // ordering and backpressures instead of dropping startup traffic.
-        log::info!("rns-net {} engine", crate::engine::ENGINE);
+        log::debug!("rns-net {} engine", crate::engine::ENGINE);
         // The compact engine persists transport state on the driver loop.
         if crate::engine::FOLD_TIMERS {
             driver.folded.persist_dir = transport_state_dir.clone();

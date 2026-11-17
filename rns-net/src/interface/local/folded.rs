@@ -205,7 +205,7 @@ impl LoopSource for ListenerSource {
     }
 
     fn on_removed(&mut self) {
-        log::info!("[{}] Local listener stopping", self.name);
+        log::debug!("[{}] Local listener stopping", self.name);
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {

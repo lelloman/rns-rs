@@ -304,6 +304,24 @@ impl Driver {
 
         self.lifecycle_state = LifecycleState::Stopping;
 
+        // Upstream detaches its interfaces on exit, and each TCP connection
+        // logs its teardown.
+        let mut ids: Vec<_> = self.interfaces.keys().copied().collect();
+        ids.sort_by_key(|id| id.0);
+        for id in ids {
+            if let Some(entry) = self.interfaces.get(&id) {
+                if matches!(
+                    entry.interface_type.as_str(),
+                    "TCPClientInterface" | "TCPServerClientInterface"
+                ) {
+                    log::info!(
+                        "The interface {} is being torn down.",
+                        self.interface_display_name(entry)
+                    );
+                }
+            }
+        }
+
         self.accepting_work.store(false, Ordering::Release);
         self.stop_resource_preparations();
         self.stop_listener_accepts();

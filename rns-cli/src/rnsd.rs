@@ -121,7 +121,7 @@ impl Callbacks for DaemonCallbacks {
     }
 
     fn on_interface_up(&mut self, id: InterfaceId) {
-        log::info!("Interface {} up", id.0);
+        log::debug!("Interface {} up", id.0);
     }
 
     fn on_interface_down(&mut self, id: InterfaceId) {
@@ -196,7 +196,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     };
     let _ = crate::pylog::RnsLogger::install(i32::from(log_level), logging.logtimestamps, out);
 
-    log::info!("Starting rnsd {}", VERSION);
+    log::debug!("Starting rnsd {}", VERSION);
     let interactive = args.has("interactive");
     if let Err(err) = register_native_sidecar_hooks() {
         log::error!("Failed to register built-in sidecar hooks: {}", err);
@@ -252,9 +252,9 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     // As upstream's signal handlers, SIGINT stops rnsd at the console too.
     stop_rx.wait();
 
-    log::info!("Shutting down...");
+    log::debug!("Shutting down...");
     node.shutdown();
-    log::info!("rnsd stopped");
+    log::debug!("rnsd stopped");
 }
 
 fn configured_logging(config_path: Option<&str>) -> rns_net::config::LoggingSection {

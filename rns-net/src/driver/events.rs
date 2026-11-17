@@ -1243,7 +1243,7 @@ impl Driver {
         mut info: rns_core::transport::types::InterfaceInfo,
         online: bool,
     ) -> bool {
-        log::info!("[{}] dynamic interface registered", id.0);
+        log::debug!("[{}] dynamic interface registered", id.0);
         if info.is_local_client {
             if let Some(bitrate) = self.forced_local_bitrate {
                 info.bitrate = Some(bitrate);

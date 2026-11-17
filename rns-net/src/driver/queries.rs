@@ -156,7 +156,7 @@ impl Driver {
     }
 
     /// Upstream's `str(interface)` for an interface entry.
-    fn interface_display_name(&self, entry: &InterfaceEntry) -> String {
+    pub(crate) fn interface_display_name(&self, entry: &InterfaceEntry) -> String {
         if let Some(display_name) = self.interface_display_names.get(&entry.info.id) {
             return display_name.clone();
         }

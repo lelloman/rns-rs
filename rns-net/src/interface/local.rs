@@ -336,7 +336,7 @@ fn start_server_with_template(
         match unix_socket::try_bind_unix(&config.instance_name) {
             Ok(listener) => {
                 listener.set_nonblocking(true)?;
-                log::info!(
+                log::debug!(
                     "Local server using Unix socket: rns/{}",
                     config.instance_name
                 );
@@ -429,7 +429,7 @@ fn tcp_server_loop(
     };
     loop {
         if control.should_stop() {
-            log::info!("Local TCP listener stopping");
+            log::debug!("Local TCP listener stopping");
             return;
         }
 
@@ -484,7 +484,7 @@ fn unix_server_loop(
     };
     loop {
         if control.should_stop() {
-            log::info!("[{}] Local Unix listener stopping", name);
+            log::debug!("[{}] Local Unix listener stopping", name);
             return;
         }
 
