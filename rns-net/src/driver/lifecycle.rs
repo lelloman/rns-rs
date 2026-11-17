@@ -626,49 +626,53 @@ impl Driver {
             .map(|packet| packet.raw)
     }
 
+    /// `Transport.shared_connection_reappeared`: once the connection to the
+    /// shared instance is back, every SINGLE IN destination this client can
+    /// announce is announced again as a path response, so the instance
+    /// knows where it is. One that announced is replayed with its latest
+    /// app data; one only registered with its identity is announced
+    /// without any.
     pub(crate) fn replay_shared_announces(&mut self) {
         let records: Vec<([u8; 16], SharedAnnounceRecord)> = self
             .shared_announces
             .iter()
             .map(|(dest_hash, record)| (*dest_hash, record.clone()))
             .collect();
+        let responders: Vec<[u8; 16]> = self
+            .path_responders
+            .keys()
+            .filter(|dest_hash| !self.shared_announces.contains_key(*dest_hash))
+            .copied()
+            .collect();
         for (dest_hash, record) in records {
             if let Some(raw) = self.build_shared_announce_raw(&dest_hash, &record, true) {
-                let event = Event::SendOutbound {
-                    raw,
-                    dest_type: rns_core::constants::DESTINATION_SINGLE,
-                    attached_interface: None,
-                };
-                match event {
-                    Event::SendOutbound {
-                        raw,
-                        dest_type,
-                        attached_interface,
-                    } => match RawPacket::unpack(&raw) {
-                        Ok(packet) => {
-                            let actions = self.engine.handle_outbound(
-                                &packet,
-                                dest_type,
-                                attached_interface,
-                                time::now(),
-                            );
-                            self.dispatch_all(actions);
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "Shared announce replay failed for {:02x?}: {:?}",
-                                &dest_hash[..4],
-                                e
-                            );
-                        }
-                    },
-                    other => {
-                        log::warn!(
-                            "shared announce replay returned unexpected response: {:?}",
-                            other
-                        );
-                    }
-                }
+                self.send_shared_path_response_raw(&dest_hash, &raw);
+            }
+        }
+        for dest_hash in responders {
+            self.send_path_responder_announce(dest_hash);
+        }
+    }
+
+    /// Send a path-response announce for a destination of this shared
+    /// instance client on every interface.
+    pub(super) fn send_shared_path_response_raw(&mut self, dest_hash: &[u8; 16], raw: &[u8]) {
+        match RawPacket::unpack(raw) {
+            Ok(packet) => {
+                let actions = self.engine.handle_outbound(
+                    &packet,
+                    rns_core::constants::DESTINATION_SINGLE,
+                    None,
+                    time::now(),
+                );
+                self.dispatch_all(actions);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Shared announce replay failed for {:02x?}: {:?}",
+                    &dest_hash[..4],
+                    e
+                );
             }
         }
     }

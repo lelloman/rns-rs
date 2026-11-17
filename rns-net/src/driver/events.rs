@@ -1157,8 +1157,14 @@ impl Driver {
                 .get(&id)
                 .map(|entry| entry.info.is_local_client)
                 .unwrap_or(false);
-            replay_shared_announces =
-                is_local_client && self.shared_reconnect_pending.remove(&id).unwrap_or(false);
+            // A shared client announces its destinations whenever its
+            // connection to the instance comes up, the first one included:
+            // the announce of a destination registered before the interface
+            // was online was dropped.
+            let coming_online = self.connected_to_shared_instance
+                && self.interfaces.get(&id).is_some_and(|entry| !entry.online);
+            replay_shared_announces = is_local_client
+                && (self.shared_reconnect_pending.remove(&id).unwrap_or(false) || coming_online);
             let interface_name = self
                 .interfaces
                 .get(&id)
@@ -1786,21 +1792,39 @@ impl Driver {
                     );
                 }
                 Event::RegisterPathResponder {
-                    dest_hash,
-                    name_hash,
+                    destination,
                     identity_prv_key,
                 } => {
+                    let dest_hash = destination.hash.0;
+                    let aspects: Vec<&str> =
+                        destination.aspects.iter().map(String::as_str).collect();
+                    let record = SharedAnnounceRecord {
+                        name_hash: rns_core::destination::name_hash(
+                            &destination.app_name,
+                            &aspects,
+                        ),
+                        identity_prv_key,
+                        app_data: None,
+                    };
                     self.path_responders.insert(
                         dest_hash,
-                        SharedAnnounceRecord {
-                            name_hash,
-                            identity_prv_key,
-                            app_data: None,
+                        PathResponder {
+                            record,
+                            destination: *destination,
                         },
                     );
+                    // Transport.register_destination: a client of a shared
+                    // instance announces a new SINGLE IN destination as a
+                    // path response, so the instance has a path to it and
+                    // can answer, or relay its response to, path requests
+                    // from other interfaces.
+                    if self.connected_to_shared_instance {
+                        self.send_path_responder_announce(dest_hash);
+                    }
                 }
                 Event::DeregisterDestination { dest_hash } => {
                     self.path_responders.remove(&dest_hash);
+                    self.stamp_waiting_path_responses.remove(&dest_hash);
                     self.decrypted_destinations.remove(&dest_hash);
                     self.engine.deregister_destination(&dest_hash);
                     self.local_destinations.remove(&dest_hash);
@@ -1894,6 +1918,7 @@ impl Driver {
                         continue;
                     }
                     self.emit_builtin_announce_for(dest_hash, time::now());
+                    self.send_stamp_waiting_path_responses(dest_hash);
                 }
                 Event::SendStampedPathRequest(request) => {
                     if self.is_draining() {
@@ -3345,7 +3370,11 @@ impl Driver {
         let raw = if let Some((_, raw)) = self.local_path_responses.get(&key) {
             raw.clone()
         } else {
-            let Some(raw) = self.build_local_path_response(&dest_hash, now) else {
+            let waiting = WaitingPathResponse::Answer {
+                tag: key.1.clone(),
+                interface,
+            };
+            let Some(raw) = self.build_local_path_response(&dest_hash, now, Some(waiting)) else {
                 return;
             };
             if self.local_path_responses.len() >= Self::LOCAL_PATH_RESPONSE_MAX_ENTRIES {
@@ -3361,8 +3390,19 @@ impl Driver {
             self.local_path_responses.insert(key, (now, raw.clone()));
             raw
         };
+        self.send_local_path_response(dest_hash, &raw, interface, now);
+    }
 
-        let Ok(packet) = RawPacket::unpack(&raw) else {
+    /// Send a path-response announce for a local destination on the
+    /// interface its path request came from.
+    fn send_local_path_response(
+        &mut self,
+        dest_hash: [u8; 16],
+        raw: &[u8],
+        interface: InterfaceId,
+        now: f64,
+    ) {
+        let Ok(packet) = RawPacket::unpack(raw) else {
             return;
         };
         // Locally originated (hops 0), so the engine applies no announce
@@ -3381,6 +3421,99 @@ impl Driver {
         );
     }
 
+    /// Build the path-response announce of a destination registered with
+    /// its identity, stamped as `Destination.announce` stamps it under
+    /// `STAMP_DESTINATIONS`. Without a stamp store it goes out unstamped,
+    /// as a node's own announces do. Without a stamp yet, a stamper job is
+    /// queued and `waiting`, if any, is sent once the stamp is ready.
+    fn build_path_responder_announce(
+        &mut self,
+        dest_hash: &[u8; 16],
+        waiting: Option<WaitingPathResponse>,
+    ) -> Option<Vec<u8>> {
+        let responder = self.path_responders.get(dest_hash)?;
+        let mut record = responder.record.clone();
+        let store = self
+            .stamper
+            .stamp_store()
+            .filter(|_| self.stamp_destinations.load(Ordering::Relaxed));
+        if let Some(store) = store {
+            let identity =
+                rns_crypto::identity::Identity::from_private_key(&record.identity_prv_key);
+            let public_key = identity.get_public_key()?;
+            let material = crate::stamps::destination_stamp_material(
+                dest_hash,
+                &public_key,
+                &record.name_hash,
+            );
+            let target = self
+                .stamper
+                .targets()
+                .destination_target(&responder.destination);
+            match store.load(dest_hash, &material, target) {
+                Some((stamp, _value)) => {
+                    let link_cost = self.link_manager.link_request_costs().get(dest_hash);
+                    record.app_data =
+                        Some(crate::stamps::announce_ext_payload(&stamp, 0, link_cost));
+                }
+                None => {
+                    let waiting = waiting?;
+                    let job = crate::stamper::DestinationStampJob {
+                        dest: responder.destination.clone(),
+                        identity_prv_key: record.identity_prv_key,
+                    };
+                    if self.stamper.enqueue_destination_stamp(job).is_err() {
+                        log::debug!(
+                            "Stamp queue full, dropping path response for {:02x?}",
+                            &dest_hash[..4]
+                        );
+                        return None;
+                    }
+                    self.stamp_waiting_path_responses
+                        .entry(*dest_hash)
+                        .or_default()
+                        .push(waiting);
+                    return None;
+                }
+            }
+        }
+        self.build_shared_announce_raw(dest_hash, &record, true)
+    }
+
+    /// Announce a destination registered with its identity as a path
+    /// response on every interface.
+    pub(crate) fn send_path_responder_announce(&mut self, dest_hash: [u8; 16]) {
+        if let Some(raw) =
+            self.build_path_responder_announce(&dest_hash, Some(WaitingPathResponse::Broadcast))
+        {
+            self.send_shared_path_response_raw(&dest_hash, &raw);
+        }
+    }
+
+    /// Send the path responses that waited for `dest_hash`'s stamp. One
+    /// that still finds no stamp (it could not be persisted) is dropped.
+    fn send_stamp_waiting_path_responses(&mut self, dest_hash: [u8; 16]) {
+        let Some(waiting) = self.stamp_waiting_path_responses.remove(&dest_hash) else {
+            return;
+        };
+        let now = time::now();
+        for waiting in waiting {
+            let Some(raw) = self.build_path_responder_announce(&dest_hash, None) else {
+                continue;
+            };
+            match waiting {
+                WaitingPathResponse::Broadcast => {
+                    self.send_shared_path_response_raw(&dest_hash, &raw);
+                }
+                WaitingPathResponse::Answer { tag, interface } => {
+                    self.local_path_responses
+                        .insert((dest_hash, tag), (now, raw.clone()));
+                    self.send_local_path_response(dest_hash, &raw, interface, now);
+                }
+            }
+        }
+    }
+
     /// Drop path-response announces older than the replay window.
     pub(crate) fn expire_local_path_responses(&mut self, now: f64) {
         self.local_path_responses
@@ -3388,10 +3521,15 @@ impl Driver {
     }
 
     /// Build a fresh `PATH_RESPONSE` announce for a local destination.
+    ///
+    /// A destination registered with its identity but not announced has no
+    /// stamp in its record: when its stamp is not ground yet, `waiting` is
+    /// sent once the stamper has it, and nothing is built now.
     pub(crate) fn build_local_path_response(
         &mut self,
         dest_hash: &[u8; 16],
         now: f64,
+        waiting: Option<WaitingPathResponse>,
     ) -> Option<Vec<u8>> {
         if let Some(destination) = self.enabled_builtin_destination(dest_hash) {
             return self.build_builtin_announce(destination, now, true);
@@ -3403,8 +3541,8 @@ impl Driver {
 
         // Registered with its identity but never announced: announce it on
         // demand, as upstream does from the Destination object.
-        if let Some(record) = self.path_responders.get(dest_hash).cloned() {
-            return self.build_shared_announce_raw(dest_hash, &record, true);
+        if self.path_responders.contains_key(dest_hash) {
+            return self.build_path_responder_announce(dest_hash, waiting);
         }
 
         log::debug!(

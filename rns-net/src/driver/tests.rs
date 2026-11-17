@@ -14114,8 +14114,11 @@ fn path_request_for_a_never_announced_registered_destination_is_answered() {
     })
     .unwrap();
     tx.send(Event::RegisterPathResponder {
-        dest_hash: dest,
-        name_hash: rns_core::destination::name_hash("quiet", &["listener"]),
+        destination: Box::new(crate::destination::Destination::single_in(
+            "quiet",
+            &["listener"],
+            rns_core::types::IdentityHash(*identity.hash()),
+        )),
         identity_prv_key: identity.get_private_key().unwrap(),
     })
     .unwrap();
@@ -15449,6 +15452,107 @@ fn stamped_management_announces_wait_for_their_stamp_and_announce_their_link_cos
     );
 }
 
+/// `Transport.register_destination`: a shared instance client announces a
+/// SINGLE IN destination registered with its identity as a path response,
+/// stamped once the stamper has its stamp, so that its instance knows the
+/// path before anyone asks for it. A node of its own does not.
+#[test]
+fn shared_client_announces_a_registered_path_responder_stamped() {
+    for shared_client in [false, true] {
+        let (tx, rx) = event::channel();
+        let (mut driver, sent) = rediscovery_driver(tx.clone(), rx, false);
+        driver.connected_to_shared_instance = shared_client;
+        driver.stamp_destinations.store(true, Ordering::Relaxed);
+        let dir = tempfile::tempdir().unwrap();
+        driver
+            .stamper
+            .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
+        let identity = Identity::new(&mut OsRng);
+        let destination = crate::destination::Destination::single_in(
+            "quiet",
+            &["listener"],
+            rns_core::types::IdentityHash(*identity.hash()),
+        );
+        let dest_hash = destination.hash.0;
+        tx.send(Event::RegisterDestination {
+            dest_hash,
+            dest_type: constants::DESTINATION_SINGLE,
+        })
+        .unwrap();
+        tx.send(Event::RegisterPathResponder {
+            destination: Box::new(destination),
+            identity_prv_key: identity.get_private_key().unwrap(),
+        })
+        .unwrap();
+        shutdown_after(tx, Duration::from_secs(2));
+        driver.run();
+        driver.flush_writers();
+
+        let frames = sent[0].lock().unwrap().clone();
+        let mut announces = sent_builtin_announces(&frames, &dest_hash);
+        if !shared_client {
+            assert!(announces.is_empty());
+            continue;
+        }
+        assert_eq!(announces.len(), 1);
+        assert_eq!(path_responses_for(&frames, &dest_hash).len(), 1);
+        assert_eq!(
+            announces[0].apply_stamp(&dest_hash, StampCost::from_whole(6)),
+            rns_core::announce::AnnounceStampStatus::Valid
+        );
+    }
+}
+
+/// A path request for a destination registered with its identity is
+/// answered with a stamped path response, once its stamp is ground, on the
+/// interface the request came from.
+#[test]
+fn path_request_for_a_registered_path_responder_is_answered_stamped() {
+    let (tx, rx) = event::channel();
+    let (mut driver, sent) = rediscovery_driver(tx.clone(), rx, false);
+    driver.stamp_destinations.store(true, Ordering::Relaxed);
+    let dir = tempfile::tempdir().unwrap();
+    driver
+        .stamper
+        .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
+    let identity = Identity::new(&mut OsRng);
+    let destination = crate::destination::Destination::single_in(
+        "quiet",
+        &["listener"],
+        rns_core::types::IdentityHash(*identity.hash()),
+    );
+    let dest_hash = destination.hash.0;
+    tx.send(Event::RegisterDestination {
+        dest_hash,
+        dest_type: constants::DESTINATION_SINGLE,
+    })
+    .unwrap();
+    tx.send(Event::RegisterPathResponder {
+        destination: Box::new(destination),
+        identity_prv_key: identity.get_private_key().unwrap(),
+    })
+    .unwrap();
+    tx.send(Event::Frame {
+        interface_id: InterfaceId(1),
+        data: local_path_request_frame(&driver, &dest_hash, &[0xD5; 16]).into(),
+        rssi: None,
+        snr: None,
+    })
+    .unwrap();
+    shutdown_after(tx, Duration::from_secs(2));
+    driver.run();
+    driver.flush_writers();
+
+    let frames = sent[0].lock().unwrap().clone();
+    assert_eq!(path_responses_for(&frames, &dest_hash).len(), 1);
+    let mut announces = sent_builtin_announces(&frames, &dest_hash);
+    assert_eq!(
+        announces[0].apply_stamp(&dest_hash, StampCost::from_whole(6)),
+        rns_core::announce::AnnounceStampStatus::Valid
+    );
+    assert!(path_responses_for(&sent[1].lock().unwrap(), &dest_hash).is_empty());
+}
+
 #[test]
 fn management_announces_stay_unstamped_without_stamp_destinations() {
     let (tx, rx) = event::channel();
@@ -15601,7 +15705,7 @@ fn network_destinations_need_a_network_identity_and_no_shared_instance() {
         // Nor are path requests for them answered.
         for dest in network_destination_hashes(&network_identity) {
             assert!(driver
-                .build_local_path_response(&dest, time::now())
+                .build_local_path_response(&dest, time::now(), None)
                 .is_none());
         }
     }

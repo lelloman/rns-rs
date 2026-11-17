@@ -880,6 +880,57 @@ fn rust_rnsh_delivers_burst_output_and_reuses_listener() {
     assert_eq!(followup_output.stdout, b"rnsh-still-available");
 }
 
+/// An rnsh listener started without `--announce` never announces, but its
+/// destination is still reachable through its shared instance from a client
+/// of another instance: the listener announces it to its instance as a path
+/// response when it registers it.
+#[test]
+fn rust_rnsh_listener_without_announce_is_reachable() {
+    let harness = Harness::start("rust-rnsh-unannounced");
+    let listener_identity = harness.path("rnsh-listener.identity");
+    let client_identity = harness.path("rnsh-client.identity");
+    let listener_app_config = harness.path("rnsh-listener");
+    let client_app_config = harness.path("rnsh-client");
+    fs::create_dir_all(&listener_app_config).unwrap();
+    fs::create_dir_all(&client_app_config).unwrap();
+
+    let mut identity_command =
+        harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
+    identity_command.args(["--listen", "--print-identity"]);
+    let identity_output = run(identity_command);
+    assert_success(&identity_output, "print rnsh listener identity");
+    let destination = parse_destination(&identity_output);
+
+    let mut listener_command =
+        harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
+    listener_command.args(["-vv", "--listen", "--no-auth", "--", "/bin/sh"]);
+    let listener_log = harness.path("rnsh-listener.log");
+    let mut listener = spawn_logged(listener_command, &listener_log);
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        listener.assert_running("rnsh listener");
+        if fs::read_to_string(&listener_log)
+            .unwrap_or_default()
+            .contains("rnsh listening for commands on")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "rnsh listener did not become ready:\n{}",
+            fs::read_to_string(&listener_log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    // The client rnsh requests the path itself, through its own instance.
+    let mut session = harness.rnsh_command(Side::Client, &client_app_config, &client_identity);
+    session.args([&destination, "--", "/bin/printf", "rnsh-unannounced"]);
+    let output = run(session);
+    assert_success_with_process(&output, "rnsh session", &listener, &harness);
+    assert_eq!(output.stdout, b"rnsh-unannounced");
+}
+
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_rncp_client_sends_to_rust_listener() {

@@ -399,8 +399,7 @@ pub enum Event<W: Send> {
     /// can be answered with a fresh announce before it ever announced, as
     /// upstream's `Destination.announce(path_response=True)` does.
     RegisterPathResponder {
-        dest_hash: [u8; 16],
-        name_hash: [u8; 10],
+        destination: Box<crate::destination::Destination>,
         identity_prv_key: [u8; 64],
     },
     /// Deregister a local destination.
@@ -1705,14 +1704,9 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("name_hash", name_hash)
                 .field("app_data_len", &app_data.as_ref().map(|d| d.len()))
                 .finish(),
-            Event::RegisterPathResponder {
-                dest_hash,
-                name_hash,
-                ..
-            } => f
+            Event::RegisterPathResponder { destination, .. } => f
                 .debug_struct("RegisterPathResponder")
-                .field("dest_hash", dest_hash)
-                .field("name_hash", name_hash)
+                .field("dest_hash", &destination.hash.0)
                 .finish(),
             Event::DeregisterDestination { dest_hash } => f
                 .debug_struct("DeregisterDestination")

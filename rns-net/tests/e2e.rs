@@ -5435,12 +5435,21 @@ fn discovery_announce_through_relay() {
 /// Start a daemon with share_instance=true, a TCP server for remote peers,
 /// and a local server for shared instance clients.
 fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> RnsNode {
+    start_shared_daemon_with_transport(tcp_port, shared_port, instance_name, true)
+}
+
+fn start_shared_daemon_with_transport(
+    tcp_port: u16,
+    shared_port: u16,
+    instance_name: &str,
+    transport_enabled: bool,
+) -> RnsNode {
     let node = RnsNode::start(
         NodeConfig {
             panic_on_interface_error: true,
             link_proof_verify_threads: Default::default(),
             stamps: unstamped(),
-            transport_enabled: true,
+            transport_enabled,
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
@@ -5740,6 +5749,161 @@ fn test_remote_management_status_query_over_shared_instance() {
             .and_then(|value| value.as_bool()),
         Some(true),
     );
+}
+
+/// Wait until `node` has a path to `dest_hash`, requesting it once.
+fn request_and_wait_for_path(node: &RnsNode, dest_hash: [u8; 16], timeout: Duration) -> bool {
+    let dest_hash = rns_core::types::DestHash(dest_hash);
+    node.request_path(&dest_hash).unwrap();
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if node.has_path(&dest_hash).unwrap() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// A destination a shared instance client registers with its identity and
+/// never announces is reachable from beyond the instance: the client
+/// announces it to the instance as a path response once registered, so the
+/// instance answers a remote path request for it.
+fn unannounced_shared_client_destination_answers_remote_path_request(transport_enabled: bool) {
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("unannounced-pr-{}", tcp_port);
+    let daemon = start_shared_daemon_with_transport(
+        tcp_port,
+        shared_port,
+        &instance_name,
+        transport_enabled,
+    );
+
+    let listener_id = Identity::new(&mut OsRng);
+    let (listener_tx, listener_rx) = mpsc::channel();
+    let listener = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(listener_tx)),
+    );
+    // Registered as soon as the client is connected, possibly before its
+    // interface to the instance is online.
+    let listener_dest = Destination::single_in(
+        APP_NAME,
+        &["unannounced", "pr"],
+        IdentityHash(*listener_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    listener
+        .register_destination_with_proof(
+            &listener_dest,
+            Some(listener_id.get_private_key().unwrap()),
+        )
+        .unwrap();
+
+    let remote_id = Identity::new(&mut OsRng);
+    let (remote_tx, remote_rx) = mpsc::channel();
+    let remote = start_client_node(
+        tcp_port,
+        &remote_id,
+        Box::new(TestCallbacks::new(remote_tx)),
+    );
+    wait_for_event(&listener_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("listener InterfaceUp timed out");
+    wait_for_event(&remote_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("remote InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    assert!(
+        request_and_wait_for_path(&remote, listener_dest.hash.0, Duration::from_secs(5)),
+        "remote node found no path to the unannounced shared client destination"
+    );
+
+    listener.shutdown();
+    remote.shutdown();
+    daemon.shutdown();
+}
+
+#[test]
+fn unannounced_shared_client_destination_answers_remote_path_request_with_transport() {
+    unannounced_shared_client_destination_answers_remote_path_request(true);
+}
+
+#[test]
+fn unannounced_shared_client_destination_answers_remote_path_request_without_transport() {
+    unannounced_shared_client_destination_answers_remote_path_request(false);
+}
+
+/// The neighbouring case: a remote node answers a shared client's path
+/// request for its unannounced destination, and the instance relays the
+/// path response to the client.
+fn remote_path_response_reaches_shared_client(transport_enabled: bool) {
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("remote-pr-{}", tcp_port);
+    let daemon = start_shared_daemon_with_transport(
+        tcp_port,
+        shared_port,
+        &instance_name,
+        transport_enabled,
+    );
+
+    let remote_id = Identity::new(&mut OsRng);
+    let (remote_tx, remote_rx) = mpsc::channel();
+    let remote = start_client_node(
+        tcp_port,
+        &remote_id,
+        Box::new(TestCallbacks::new(remote_tx)),
+    );
+    let remote_dest = Destination::single_in(
+        APP_NAME,
+        &["unannounced", "remote"],
+        IdentityHash(*remote_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    remote
+        .register_destination_with_proof(&remote_dest, Some(remote_id.get_private_key().unwrap()))
+        .unwrap();
+
+    let (client_tx, client_rx) = mpsc::channel();
+    let client = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(client_tx)),
+    );
+    wait_for_event(&remote_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("remote InterfaceUp timed out");
+    wait_for_event(&client_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("client InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    assert!(
+        request_and_wait_for_path(&client, remote_dest.hash.0, Duration::from_secs(5)),
+        "shared client found no path to the unannounced remote destination"
+    );
+
+    client.shutdown();
+    remote.shutdown();
+    daemon.shutdown();
+}
+
+#[test]
+fn remote_path_response_reaches_shared_client_with_transport() {
+    remote_path_response_reaches_shared_client(true);
+}
+
+#[test]
+fn remote_path_response_reaches_shared_client_without_transport() {
+    remote_path_response_reaches_shared_client(false);
 }
 
 #[test]

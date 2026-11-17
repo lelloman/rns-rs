@@ -4799,11 +4799,9 @@ impl RnsNode {
             dest.dest_type,
             dest.direction == rns_core::types::Direction::In,
         ) {
-            let aspects: Vec<&str> = dest.aspects.iter().map(String::as_str).collect();
             self.tx
                 .send(Event::RegisterPathResponder {
-                    dest_hash: dest.hash.0,
-                    name_hash: rns_core::destination::name_hash(&dest.app_name, &aspects),
+                    destination: Box::new(dest.clone()),
                     identity_prv_key,
                 })
                 .map_err(|_| SendError)?;
