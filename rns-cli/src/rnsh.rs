@@ -16,13 +16,13 @@ use std::time::{Duration, Instant};
 use rns_core::buffer::StreamDataMessage;
 use rns_core::types::{DestHash, IdentityHash};
 use rns_crypto::identity::Identity;
-use rns_crypto::OsRng;
 use rns_net::compressor::Bzip2Compressor;
 use rns_net::destination::Destination;
 use rns_net::{Callbacks, ChannelSendError, RnsNode, SendError};
 
 use crate::args::{Args, Opt, OptionSpec};
-use crate::format::{prettyb256rep, prettyhexrep};
+use crate::format::prettyb256rep;
+use crate::pyfmt::prettyhexrep;
 
 const APP_NAME: &str = "rnsh";
 const DEFAULT_SERVICE_NAME: &str = "default";
@@ -168,10 +168,6 @@ pub fn main() -> i32 {
                 println!("rnsh {} (protocol {})", VERSION, PROTOCOL_VERSION);
                 return 0;
             }
-            if let Err(err) = init_rnsh_logging(&opts) {
-                eprintln!("{err}");
-                return 1;
-            }
             if opts.print_identity {
                 return match print_identity(&opts) {
                     Ok(()) => 0,
@@ -188,7 +184,7 @@ pub fn main() -> i32 {
                 let mirror = opts.mirror_exit;
                 let result = initiate(opts).map(|code| if mirror { code } else { 0 });
                 if result.is_ok() {
-                    log::info!("Session with <{destination}> ended");
+                    log::info!(target: crate::pylog::INFO_TARGET, "Sesssion with <{destination}> ended");
                 }
                 result
             } else {
@@ -327,22 +323,6 @@ fn print_usage() {
     );
 }
 
-fn init_rnsh_logging(opts: &CliOptions) -> Result<(), RnshError> {
-    let dir = rnsh_config_dir(opts)?;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(rnsh_log_path(&dir, opts.listen))?;
-    let mut builder = env_logger::Builder::new();
-    builder
-        .filter_level(rnsh_log_level(opts.listen, opts.verbose, opts.quiet))
-        .format_timestamp_secs()
-        .target(env_logger::Target::Pipe(Box::new(file)));
-    builder
-        .try_init()
-        .map_err(|err| RnshError::Protocol(format!("failed to initialize rnsh logging: {err}")))
-}
-
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -360,23 +340,27 @@ fn expand_user_path(path: &str, home: &Path) -> PathBuf {
 }
 
 fn resolve_rnsh_config_dir(explicit: Option<&str>, home: &Path) -> Result<PathBuf, RnshError> {
+    // Upstream's ensure_config_directory, which logs the directories it
+    // creates at the default level.
+    let create = |dir: PathBuf| -> Result<PathBuf, RnshError> {
+        if !dir.is_dir() {
+            crate::pylog::log(
+                &format!("Creating configuration directory: {}", dir.display()),
+                crate::pylog::LOG_NOTICE,
+            );
+            fs::create_dir_all(&dir)?;
+        }
+        Ok(dir)
+    };
     if let Some(explicit) = explicit {
-        let selected = expand_user_path(explicit, home);
-        fs::create_dir_all(&selected)?;
-        return Ok(selected);
+        return create(expand_user_path(explicit, home));
     }
 
     let xdg = home.join(".config").join("rnsh");
     if xdg.is_dir() {
         return Ok(xdg);
     }
-    let legacy = home.join(".rnsh");
-    fs::create_dir_all(&legacy)?;
-    Ok(legacy)
-}
-
-fn rnsh_config_dir(opts: &CliOptions) -> Result<PathBuf, RnshError> {
-    resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home_dir())
+    create(home.join(".rnsh"))
 }
 
 fn resolve_rns_config_dir(explicit: Option<&str>, home: &Path) -> PathBuf {
@@ -393,16 +377,11 @@ fn rnsh_log_path(config_dir: &Path, listen: bool) -> PathBuf {
     })
 }
 
-fn rnsh_log_level(_listen: bool, verbose: u8, quiet: u8) -> log::LevelFilter {
-    let base: i16 = 3;
-    match (base + verbose as i16 - quiet as i16).clamp(0, 5) {
-        0 => log::LevelFilter::Off,
-        1 => log::LevelFilter::Error,
-        2 => log::LevelFilter::Warn,
-        3 => log::LevelFilter::Info,
-        4 => log::LevelFilter::Debug,
-        _ => log::LevelFilter::Trace,
-    }
+/// `compute_target_rns_loglevel`: `LOG_INFO` raised by each -v and
+/// lowered by each -q, within `LOG_NONE..=LOG_EXTREME`.
+fn rnsh_log_level(verbose: u8, quiet: u8) -> i32 {
+    (crate::pylog::LOG_INFO + i32::from(verbose) - i32::from(quiet))
+        .clamp(crate::pylog::LOG_NONE, 7)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1483,7 +1462,8 @@ impl ListenerSession {
             return;
         }
         log::info!(
-            "Initiator identified {} on link {}",
+            target: crate::pylog::INFO_TARGET,
+            "Initiator identified {} on link Outlet on {}",
             prettyhexrep(&identity_hash.0),
             prettyhexrep(&self.link_id)
         );
@@ -1495,7 +1475,7 @@ impl ListenerSession {
             return;
         }
         if !self.config.allow_all && !self.config.allowed.contains(&identity_hash.0) {
-            log::info!("Identity {} not allowed", prettyhexrep(&identity_hash.0));
+            log::info!(target: crate::pylog::NOTICE_TARGET, "Identity {} not allowed", prettyhexrep(&identity_hash.0));
             let _ = send_message(
                 transport,
                 self.link_id,
@@ -1508,7 +1488,7 @@ impl ListenerSession {
             self.state = ListenerState::Closed;
             return;
         }
-        log::info!("Identity {} authenticated", prettyhexrep(&identity_hash.0));
+        log::info!(target: crate::pylog::NOTICE_TARGET, "Identity {} authenticated", prettyhexrep(&identity_hash.0));
         self.remote_identity = Some(identity_hash);
         if self.state == ListenerState::WaitIdent {
             self.state = ListenerState::WaitVersion;
@@ -1618,7 +1598,19 @@ impl ListenerSession {
             .as_ref()
             .map(|ih| prettyhexrep(&ih.0))
             .unwrap_or_default();
-        log::debug!("Remote {remote_identity} executing: {argv:?}");
+        // Python's str() of the identity and of the command line list.
+        log::info!(
+            "Remote {} executing: [{}]",
+            if remote_identity.is_empty() {
+                "None"
+            } else {
+                remote_identity.as_str()
+            },
+            argv.iter()
+                .map(|arg| crate::argparse::repr(arg))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         let env = [
             (
                 "TERM",
@@ -1768,6 +1760,24 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
     let home = home_dir();
     let rnsh_config = resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home)?;
     let rns_config = resolve_rns_config_dir(opts.rns_config.as_deref(), &home);
+    // Upstream's listen: it logs to stdout until it listens, then to the
+    // log file in the rnsh config directory.
+    let service = opts.service.as_deref().unwrap_or(DEFAULT_SERVICE_NAME);
+    crate::pylog::log(
+        &format!("Using service name {service}"),
+        crate::pylog::LOG_INFO,
+    );
+    let logfile = rnsh_log_path(&rnsh_config, true);
+    crate::pylog::log(
+        &format!("Logging to {}", logfile.display()),
+        crate::pylog::LOG_NOTICE,
+    );
+    crate::pylog::install_utility_logging(
+        rns_config.to_str(),
+        Some(rnsh_log_level(opts.verbose, opts.quiet)),
+        0,
+        false,
+    );
     let node = RnsNode::connect_shared_from_config(
         Some(&rns_config),
         Box::new(RnshCallbacks {
@@ -1775,7 +1785,6 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
         }),
     )?;
 
-    let service = opts.service.as_deref().unwrap_or(DEFAULT_SERVICE_NAME);
     let identity = prepare_identity(
         &rnsh_config,
         &rns_config,
@@ -1796,18 +1805,41 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
     )?;
     node.register_link_destination(dest.hash.0, sig_prv, sig_pub, 0)?;
 
-    eprintln!("rnsh listening on {}", prettyhexrep(&dest.hash.0));
+    crate::pylog::log(
+        &format!(
+            "rnsh listening for commands on {}",
+            prettyhexrep(&dest.hash.0)
+        ),
+        crate::pylog::LOG_NOTICE,
+    );
+    crate::pylog::set_logfile(Some(logfile));
+
+    let default_command = if opts.command.is_empty() {
+        let shell = login_shell();
+        crate::pylog::log(
+            &format!(
+                "Using {} for default command.",
+                shell.as_deref().unwrap_or("None")
+            ),
+            crate::pylog::LOG_INFO,
+        );
+        vec![shell
+            .filter(|shell| !shell.is_empty())
+            .unwrap_or_else(|| "/bin/sh".into())]
+    } else {
+        crate::pylog::log(
+            &format!("Using command {}", shlex_join(&opts.command)),
+            crate::pylog::LOG_INFO,
+        );
+        opts.command.clone()
+    };
 
     let allowed = load_allowed_identities(&opts, &rnsh_config)?;
     if allowed.is_empty() && !opts.no_auth {
-        eprintln!("warning: no allowed identities configured; no initiators will be accepted");
+        log::warn!(
+            "Warning: No allowed identities configured, rnsh will not accept any connections!"
+        );
     }
-
-    let default_command = if opts.command.is_empty() {
-        vec![std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())]
-    } else {
-        opts.command.clone()
-    };
     let config = ListenerConfig {
         default_command,
         allow_all: opts.no_auth,
@@ -1873,6 +1905,41 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
     Ok(())
 }
 
+/// The login shell of the user running rnsh (`pwd.getpwuid(os.getuid())
+/// .pw_shell`).
+fn login_shell() -> Option<String> {
+    // SAFETY: getpwuid returns a pointer into static storage, read at once.
+    unsafe {
+        let entry = libc::getpwuid(libc::getuid());
+        if entry.is_null() || (*entry).pw_shell.is_null() {
+            return None;
+        }
+        Some(
+            std::ffi::CStr::from_ptr((*entry).pw_shell)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+/// Python's `shlex.join`.
+fn shlex_join(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| {
+            let safe = !arg.is_empty()
+                && arg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+            if safe {
+                arg.clone()
+            } else {
+                format!("'{}'", arg.replace('\'', "'\"'\"'"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     let dest_hash = parse_hash_16(
         opts.destination
@@ -1885,6 +1952,14 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     let home = home_dir();
     let rnsh_config = resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home)?;
     let rns_config = resolve_rns_config_dir(opts.rns_config.as_deref(), &home);
+    // Upstream's initiator logs only to `logfile.initiator`.
+    crate::pylog::set_logfile(Some(rnsh_log_path(&rnsh_config, false)));
+    crate::pylog::install_utility_logging(
+        rns_config.to_str(),
+        Some(rnsh_log_level(opts.verbose, opts.quiet)),
+        0,
+        false,
+    );
     let node = RnsNode::connect_shared_from_config(
         Some(&rns_config),
         Box::new(RnshCallbacks {
@@ -1901,7 +1976,7 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     )?;
 
     if !node.has_path(&DestHash(dest_hash))? {
-        log::info!("Requesting path to {}", prettyhexrep(&dest_hash));
+        log::info!(target: crate::pylog::INFO_TARGET, "Requesting path to {}", prettyhexrep(&dest_hash));
     }
     wait_for_path(&node, dest_hash, &event_rx, timeout)?;
     let recalled = node
@@ -1910,10 +1985,10 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     let mut sig_pub = [0u8; 32];
     sig_pub.copy_from_slice(&recalled.public_key[32..64]);
 
-    log::info!("Establishing link with {}", prettyhexrep(&dest_hash));
+    log::info!(target: crate::pylog::INFO_TARGET, "Establishing link with {}", prettyhexrep(&dest_hash));
     let link_id = node.create_link(dest_hash, sig_pub)?;
     wait_for_link(&event_rx, link_id, timeout)?;
-    log::info!("Link established with {}", prettyhexrep(&dest_hash));
+    log::info!(target: crate::pylog::INFO_TARGET, "Link established with {}", prettyhexrep(&dest_hash));
     if !opts.no_id {
         node.identify_on_link(
             link_id,
@@ -1925,7 +2000,7 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
 
     send_message(&node, link_id, &version_message())?;
     let (remote_version, protocol_version) = wait_for_version(&event_rx, timeout)?;
-    log::info!("Connected server version info: sw {remote_version}, proto {protocol_version}");
+    log::info!(target: crate::pylog::INFO_TARGET, "Connected server version info: sw {remote_version}, proto {protocol_version}");
 
     let stdin_is_tty = io::stdin().is_terminal();
     let stdout_is_tty = io::stdout().is_terminal();
@@ -2189,22 +2264,13 @@ fn prepare_identity_at(path: &Path) -> Result<Identity, RnshError> {
         fs::create_dir_all(parent)?;
     }
     // Upstream's prepare_identity: "Loading identity" and the key creation
-    // at Verbose, which this log shows from -v on, "Creating identity" at
-    // Notice.
+    // at Verbose, "Creating identity" at Notice.
     if path.exists() {
-        log::debug!("Loading identity from {}", path.display());
+        log::info!("Loading identity from {}", path.display());
         Ok(rns_net::storage::load_identity(path)?)
     } else {
-        log::info!("Creating identity {}", path.display());
-        let identity = Identity::new(&mut OsRng);
-        log::debug!(
-            "Identity keys created for <{}>",
-            identity
-                .hash()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
+        log::info!(target: crate::pylog::NOTICE_TARGET, "Creating identity {}", path.display());
+        let identity = crate::pylog::new_identity();
         rns_net::storage::save_identity(&identity, path)?;
         Ok(identity)
     }
@@ -2214,6 +2280,16 @@ fn print_identity(opts: &CliOptions) -> Result<(), RnshError> {
     let home = home_dir();
     let rnsh_config = resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home)?;
     let rns_config = resolve_rns_config_dir(opts.rns_config.as_deref(), &home);
+    // `RNS.Reticulum(configdir, loglevel=RNS.LOG_INFO)`, logging to stdout.
+    crate::pylog::install_utility_logging(
+        rns_config.to_str(),
+        Some(crate::pylog::LOG_INFO),
+        0,
+        false,
+    );
+    if let Some(service) = opts.service.as_deref().filter(|s| !s.is_empty()) {
+        println!("Using service name \"{service}\"");
+    }
     let identity = prepare_identity(
         &rnsh_config,
         &rns_config,
@@ -3045,12 +3121,11 @@ mod tests {
     }
 
     #[test]
-    fn rnsh_logging_uses_file_oriented_levels() {
-        assert_eq!(rnsh_log_level(false, 0, 0), log::LevelFilter::Info);
-        assert_eq!(rnsh_log_level(true, 0, 0), log::LevelFilter::Info);
-        assert_eq!(rnsh_log_level(false, 1, 0), log::LevelFilter::Debug);
-        assert_eq!(rnsh_log_level(true, 2, 0), log::LevelFilter::Trace);
-        assert_eq!(rnsh_log_level(true, 0, 4), log::LevelFilter::Off);
+    fn rnsh_logs_at_upstreams_levels() {
+        assert_eq!(rnsh_log_level(0, 0), crate::pylog::LOG_INFO);
+        assert_eq!(rnsh_log_level(1, 0), crate::pylog::LOG_VERBOSE);
+        assert_eq!(rnsh_log_level(9, 0), 7);
+        assert_eq!(rnsh_log_level(0, 9), crate::pylog::LOG_NONE);
     }
 
     #[test]

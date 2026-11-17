@@ -48,7 +48,16 @@ fn print_identity_creates_upstream_paths_in_selected_rnsh_directory() {
     ]);
     assert!(initiator.status.success());
     assert!(app.join("identity").is_file());
-    assert!(app.join("logfile.initiator").is_file());
+    // As upstream's, printing the identity logs to stdout, not to a file.
+    assert!(!app.join("logfile.initiator").exists());
+    let stdout = String::from_utf8_lossy(&initiator.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "] [Notice]   Creating identity {}",
+            app.join("identity").display()
+        )),
+        "{stdout}"
+    );
 
     let listener = rnsh(&[
         "-c",

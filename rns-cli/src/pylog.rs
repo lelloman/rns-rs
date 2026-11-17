@@ -39,18 +39,92 @@ fn loglevelname(level: i32) -> &'static str {
     }
 }
 
-/// `RNS.log(msg, level)` to stdout, as upstream's utilities log.
+/// `RNS.logtimestamps` and `RNS.compact_log_fmt`, as the utility's
+/// logging set them.
+static TIMESTAMPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static COMPACT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `RNS.logfile` while `RNS.logdest` is `LOG_FILE`; stdout otherwise.
+static LOGFILE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// Send `RNS.log` lines to `path` (`RNS.logdest = RNS.LOG_FILE` with
+/// `RNS.logfile = path`), or back to stdout with `None`.
+pub fn set_logfile(path: Option<std::path::PathBuf>) {
+    *LOGFILE.lock().unwrap_or_else(|p| p.into_inner()) = path;
+}
+
+/// Write a finished log line where `RNS.log` writes it: appended to the
+/// log file, or printed.
+fn emit(line: &str) {
+    let logfile = LOGFILE.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    match logfile {
+        Some(path) => {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = file.write_all(line.as_bytes());
+            }
+        }
+        None => {
+            use std::io::Write;
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(line.as_bytes());
+            let _ = out.flush();
+        }
+    }
+}
+
+/// `RNS.log`'s line for `msg` at `level`, with a trailing newline.
+fn format_line(level: i32, msg: &dyn std::fmt::Display, timestamps: bool, compact: bool) -> String {
+    let stamp = if timestamps {
+        format!("[{}] ", timestamp())
+    } else {
+        String::new()
+    };
+    if compact {
+        format!("{stamp}{msg}\n")
+    } else {
+        format!("{stamp}{} {}\n", loglevelname(level), msg)
+    }
+}
+
+/// `RNS.log(msg, level)`, as upstream's utilities log.
 pub fn log(msg: &str, level: i32) {
     let current = loglevel();
     if current == LOG_NONE || current < level {
         return;
     }
-    println!("[{}] {} {}", timestamp(), loglevelname(level), msg);
+    emit(&format_line(
+        level,
+        &msg,
+        TIMESTAMPS.load(Ordering::Relaxed),
+        COMPACT.load(Ordering::Relaxed),
+    ));
+}
+
+/// Writes to wherever `RNS.log` currently writes.
+struct RnsLogDestination;
+
+impl std::io::Write for RnsLogDestination {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        emit(&String::from_utf8_lossy(buf));
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Log target for messages upstream logs at `LOG_NOTICE`: shown at the
 /// default level, where this implementation's `info` messages are not.
 pub use rns_net::logging::NOTICE_TARGET;
+
+/// Log target for messages upstream logs at `LOG_INFO`.
+pub const INFO_TARGET: &str = "rns::info";
 
 /// The RNS level of a `log` record: errors, warnings, notices (by target),
 /// pathing (by target); `info` is upstream's Verbose, `debug` its Debug,
@@ -59,6 +133,9 @@ pub use rns_net::logging::NOTICE_TARGET;
 pub fn rns_level(metadata: &log::Metadata) -> i32 {
     if metadata.target() == NOTICE_TARGET {
         return LOG_NOTICE;
+    }
+    if metadata.target() == INFO_TARGET {
+        return LOG_INFO;
     }
     if metadata.target() == rns_net::logging::PATHING_LOG_TARGET {
         return 7;
@@ -117,11 +194,13 @@ pub fn install_utility_logging(
     let logging = configured_logging(config_dir);
     let level = loglevel.unwrap_or_else(|| (i32::from(logging.loglevel) + verbosity).clamp(0, 8));
     set_loglevel(level);
+    TIMESTAMPS.store(logging.logtimestamps, Ordering::Relaxed);
+    COMPACT.store(compact, Ordering::Relaxed);
     let _ = RnsLogger::install_with(
         level,
         logging.logtimestamps,
         compact,
-        Box::new(std::io::stdout()),
+        Box::new(RnsLogDestination),
     );
 }
 
@@ -160,16 +239,7 @@ impl RnsLogger {
     }
 
     fn line(&self, level: i32, msg: &std::fmt::Arguments) -> String {
-        let stamp = if self.timestamps {
-            format!("[{}] ", timestamp())
-        } else {
-            String::new()
-        };
-        if self.compact {
-            format!("{stamp}{msg}\n")
-        } else {
-            format!("{stamp}{} {}\n", loglevelname(level), msg)
-        }
+        format_line(level, msg, self.timestamps, self.compact)
     }
 }
 

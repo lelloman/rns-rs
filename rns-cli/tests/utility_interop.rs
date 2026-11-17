@@ -797,6 +797,10 @@ fn rust_rnsh_delivers_burst_output_and_reuses_listener() {
     let client_identity = harness.path("rnsh-client.identity");
     let listener_app_config = harness.path("rnsh-listener");
     let client_app_config = harness.path("rnsh-client");
+    // As upstream's, rnsh logs creating its config directory to stdout,
+    // which the sessions below carry.
+    fs::create_dir_all(&listener_app_config).unwrap();
+    fs::create_dir_all(&client_app_config).unwrap();
 
     let mut identity_command =
         harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
@@ -808,7 +812,8 @@ fn rust_rnsh_delivers_burst_output_and_reuses_listener() {
     let mut listener_command =
         harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
     listener_command.args([
-        "--verbose",
+        // Debug, where the channel backpressure is logged.
+        "-vv",
         "--listen",
         "--no-auth",
         "--announce",
@@ -823,7 +828,7 @@ fn rust_rnsh_delivers_burst_output_and_reuses_listener() {
         listener.assert_running("rnsh listener");
         if fs::read_to_string(&listener_log)
             .unwrap_or_default()
-            .contains("rnsh listening on")
+            .contains("rnsh listening for commands on")
         {
             break;
         }
