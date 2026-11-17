@@ -606,7 +606,16 @@ fn open_until_configured(
     running: &AtomicBool,
 ) -> Option<Transport> {
     loop {
-        if !wait_while_running(running, OPEN_RETRY_WAIT) {
+        let attempt_at = std::time::Instant::now() + OPEN_RETRY_WAIT;
+        let early = if setup::is_ble(config) {
+            connect_ble_meanwhile(config, running, attempt_at)
+        } else {
+            None
+        };
+        if !wait_while_running(
+            running,
+            attempt_at.saturating_duration_since(std::time::Instant::now()),
+        ) {
             return None;
         }
         if config.multi {
@@ -622,7 +631,16 @@ fn open_until_configured(
                 setup::display_name(config)
             );
         }
-        match reopen_connection(config, writer) {
+        let opened = match early {
+            // Connected while waiting: upstream's attempt finds it open.
+            Some((reader, new_writer)) => {
+                setup::log_opening(config);
+                lock_or_recover(writer, "rnode shared writer").replace(new_writer);
+                Ok(reader)
+            }
+            None => reopen_connection(config, writer),
+        };
+        match opened {
             Ok(mut reader) => {
                 reset_flow_states(flow_states);
                 match setup::setup_device(&mut reader, writer, config, running) {
@@ -648,6 +666,25 @@ fn open_until_configured(
             Err(e) => log_reconnect_error(config, &e),
         }
     }
+}
+
+/// Look for and connect a BLE device while waiting for the next attempt
+/// at `attempt_at`, as upstream's connection job keeps doing between
+/// attempts (unless looking for it failed outright, which ends the job).
+fn connect_ble_meanwhile(
+    config: &RNodeConfig,
+    running: &AtomicBool,
+    attempt_at: std::time::Instant,
+) -> Option<(Transport, Transport)> {
+    if ble::job_ended(&config.ble) || !wait_while_running(running, ble::JOB_INTERVAL) {
+        return None;
+    }
+    let budget = attempt_at.saturating_duration_since(std::time::Instant::now());
+    if budget.is_zero() {
+        return None;
+    }
+    let target = ble::Target::parse(&config.port).unwrap_or_default();
+    Transport::open_ble(&target, &setup::display_name(config), &config.ble, budget).ok()
 }
 
 /// Whether setting a single RNode up already said why it failed.
@@ -1177,7 +1214,12 @@ fn open_device(config: &RNodeConfig) -> io::Result<(Transport, Transport)> {
     setup::log_opening(config);
     if setup::is_ble(config) {
         let target = ble::Target::parse(&config.port).unwrap_or_default();
-        return Transport::open_ble(&target, &setup::display_name(config), &config.ble);
+        return Transport::open_ble(
+            &target,
+            &setup::display_name(config),
+            &config.ble,
+            ble::CONNECT_TIMEOUT,
+        );
     }
     let serial_config = SerialConfig {
         path: config.port.clone(),

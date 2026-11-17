@@ -153,8 +153,22 @@ pub struct LinkState {
     pub(super) ended: bool,
 }
 
+/// Upstream's `BLEConnection.CONNECT_TIMEOUT`: how long opening waits for
+/// a connection.
+pub(super) const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long after the last attempt upstream's connection job, which keeps
+/// looking for the device between attempts, starts looking again.
+pub(super) const JOB_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Shared between an interface's connections.
 pub type SharedLinkState = Arc<Mutex<LinkState>>;
+
+/// Whether looking for the device failed outright, so that upstream's
+/// connection job no longer looks for it between attempts.
+pub(super) fn job_ended(state: &SharedLinkState) -> bool {
+    crate::interface::lock_or_recover(state, "rnode ble state").ended
+}
 
 /// The port as upstream names it in its log lines: `None` until a device
 /// was connected to, then `ble://<address>`.
@@ -183,7 +197,9 @@ mod bluez {
     use dbus::channel::{BusType, Channel};
     use dbus::{Message, Path};
 
-    use super::{SharedLinkState, Target, Verdict, UART_RX_CHAR_UUID, UART_TX_CHAR_UUID};
+    use super::{
+        SharedLinkState, Target, Verdict, JOB_INTERVAL, UART_RX_CHAR_UUID, UART_TX_CHAR_UUID,
+    };
     use crate::interface::lock_or_recover;
 
     const BLUEZ: &str = "org.bluez";
@@ -193,11 +209,6 @@ mod bluez {
 
     /// Upstream's `BLEConnection.SCAN_TIMEOUT`.
     const SCAN_TIMEOUT: Duration = Duration::from_secs(2);
-    /// Upstream's `BLEConnection.CONNECT_TIMEOUT`: how long opening waits
-    /// for a connection.
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-    /// How long upstream's connection job sleeps between attempts.
-    const JOB_INTERVAL: Duration = Duration::from_secs(1);
     /// How long connecting and resolving services may take (bleak's
     /// default client timeout).
     const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -351,12 +362,13 @@ mod bluez {
     }
 
     /// Find and connect the device `target` names, for the interface
-    /// upstream calls `iface`, within upstream's connect timeout. Returns
+    /// upstream calls `iface`, looking for it for up to `budget`. Returns
     /// the notification descriptor to read and the session to write.
     pub fn open(
         target: &Target,
         iface: &str,
         state: &SharedLinkState,
+        budget: Duration,
     ) -> io::Result<(File, std::sync::Arc<Session>)> {
         {
             let mut state = lock_or_recover(state, "rnode ble state");
@@ -369,7 +381,7 @@ mod bluez {
                 state.ended = false;
             }
         }
-        let deadline = Instant::now() + CONNECT_TIMEOUT;
+        let deadline = Instant::now() + budget;
         let conn = match system_bus() {
             Ok(conn) => conn,
             Err(e) => return Err(job_ended(iface, state, e)),
