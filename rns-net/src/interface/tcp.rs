@@ -583,6 +583,7 @@ impl InterfaceFactory for TcpClientFactory {
             mtu_upgradable: true,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
+            ia_samples: 0,
             ip_freq: 0.0,
             op_freq: 0.0,
             op_samples: 0,

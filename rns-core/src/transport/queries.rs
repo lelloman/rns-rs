@@ -423,12 +423,14 @@ impl TransportEngine {
         &mut self,
         id: InterfaceId,
         ia_freq: f64,
+        ia_samples: usize,
         ip_freq: f64,
         op_freq: f64,
         op_samples: usize,
     ) {
         if let Some(info) = self.interfaces.get_mut(&id) {
             info.ia_freq = ia_freq;
+            info.ia_samples = ia_samples;
             info.ip_freq = ip_freq;
             info.op_freq = op_freq;
             info.op_samples = op_samples;
@@ -998,11 +1000,17 @@ mod tests {
         engine.register_interface(make_interface(1, constants::MODE_FULL));
         engine.update_interface_freq(InterfaceId(1), 2.5);
         assert_eq!(engine.interface_info(&InterfaceId(1)).unwrap().ia_freq, 2.5);
-        engine.update_interface_freqs(InterfaceId(1), 3.0, 4.0, 5.0, 6);
+        engine.update_interface_freqs(InterfaceId(1), 3.0, 7, 4.0, 5.0, 6);
         let info = engine.interface_info(&InterfaceId(1)).unwrap();
         assert_eq!(
-            (info.ia_freq, info.ip_freq, info.op_freq, info.op_samples),
-            (3.0, 4.0, 5.0, 6)
+            (
+                info.ia_freq,
+                info.ia_samples,
+                info.ip_freq,
+                info.op_freq,
+                info.op_samples
+            ),
+            (3.0, 7, 4.0, 5.0, 6)
         );
 
         let default_limiter = engine.hop_limiter();
@@ -1013,9 +1021,14 @@ mod tests {
 
         let config = crate::transport::types::IngressControlConfig::enabled();
         assert!(!engine.burst_active(&InterfaceId(1)));
-        engine
-            .ingress_control
-            .should_ingress_limit(InterfaceId(1), &config, 36.0, 0.0, 10_000.0);
+        engine.ingress_control.should_ingress_limit(
+            InterfaceId(1),
+            &config,
+            36.0,
+            3,
+            0.0,
+            10_000.0,
+        );
         engine.ingress_control.should_ingress_limit_pr(
             InterfaceId(1),
             &config,

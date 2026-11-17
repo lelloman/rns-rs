@@ -68,11 +68,14 @@ impl IngressControl {
     /// Determine whether to ingress-limit an announce on this interface.
     ///
     /// Returns true if the announce should be held (burst is active or just activated).
+    /// As upstream, a burst ends only once the interface has at least
+    /// `IC_DEQUE_MIN_SAMPLE` incoming announce samples (`ia_samples`).
     pub fn should_ingress_limit(
         &mut self,
         interface: InterfaceId,
         config: &IngressControlConfig,
         ia_freq: f64,
+        ia_samples: usize,
         interface_started: f64,
         now: f64,
     ) -> bool {
@@ -98,7 +101,9 @@ impl IngressControl {
                 && now > state.burst_activated + config.burst_hold
                 && now > state.burst_sustained + config.burst_hold
             {
-                state.burst_active = false;
+                if ia_samples >= crate::constants::IC_DEQUE_MIN_SAMPLE {
+                    state.burst_active = false;
+                }
             } else if ia_freq >= threshold {
                 state.burst_sustained = now;
             }
@@ -222,8 +227,9 @@ impl IngressControl {
 
     /// Try to release one held announce from this interface.
     ///
-    /// Conditions: not currently limiting, held announces exist,
-    /// now >= held_release, freq < threshold.
+    /// Conditions: held announces exist, now > held_release, freq <
+    /// threshold. As upstream, releasing does not end the burst; only
+    /// `should_ingress_limit` does.
     /// First drops every held announce for which `keep` returns false: one
     /// that can no longer update its destination's path frees its slot
     /// without being released (upstream 85d36979). Then selects the
@@ -264,7 +270,6 @@ impl IngressControl {
         if ia_freq >= threshold {
             return None;
         }
-        state.burst_active = false;
 
         state
             .held_announces
@@ -367,6 +372,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             5.0,
+            3,
             started,
             now
         ));
@@ -382,6 +388,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             36.0,
+            3,
             started,
             now
         ));
@@ -397,6 +404,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::disabled(),
             100.0,
+            3,
             started,
             now
         ));
@@ -412,6 +420,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             7.0,
+            3,
             started,
             now
         ));
@@ -428,6 +437,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             36.0,
+            3,
             started,
             now
         ));
@@ -438,6 +448,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             1.0,
+            3,
             started,
             now2
         ));
@@ -454,6 +465,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             36.0,
+            3,
             started,
             now
         ));
@@ -465,6 +477,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             1.0,
+            3,
             started,
             now2
         ));
@@ -473,8 +486,42 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             1.0,
+            3,
             started,
             now2 + 1.0
+        ));
+    }
+
+    /// As upstream, a burst ends only once the interface has at least
+    /// `IC_DEQUE_MIN_SAMPLE` incoming announce samples.
+    #[test]
+    fn burst_ends_only_with_enough_announce_samples() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        let now = 10_000.0;
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, 0.0, now));
+
+        let later = now + config.burst_hold + 1.0;
+        for samples in 0..constants::IC_DEQUE_MIN_SAMPLE {
+            assert!(ic.should_ingress_limit(iface(1), &config, 0.0, samples, 0.0, later));
+            assert!(ic.burst_active(&iface(1)), "{samples} samples");
+        }
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &config,
+            0.0,
+            constants::IC_DEQUE_MIN_SAMPLE,
+            0.0,
+            later
+        ));
+        assert!(!ic.burst_active(&iface(1)));
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &config,
+            0.0,
+            constants::IC_DEQUE_MIN_SAMPLE,
+            0.0,
+            later
         ));
     }
 
@@ -484,14 +531,15 @@ mod tests {
         let config = IngressControlConfig::enabled();
         let started = 0.0;
         let activated = 10_000.0;
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, started, activated));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, started, activated));
 
         let sustained = activated + config.burst_hold + 1.0;
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, started, sustained));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, started, sustained));
         assert!(ic.should_ingress_limit(
             iface(1),
             &config,
             1.0,
+            3,
             started,
             sustained + config.burst_hold - 1.0
         ));
@@ -499,6 +547,7 @@ mod tests {
             iface(1),
             &config,
             1.0,
+            3,
             started,
             sustained + config.burst_hold + 1.0
         ));
@@ -535,6 +584,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             36.0,
+            3,
             started,
             now,
         );
@@ -559,6 +609,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             1.0,
+            3,
             started,
             now2,
         );
@@ -607,7 +658,7 @@ mod tests {
         let mut ic = IngressControl::new();
         let config = IngressControlConfig::enabled();
         let now = 10_000.0;
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, now));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, 0.0, now));
         assert!(ic.hold_announce(iface(1), &config, [1; 16], held(3, now)));
         let penalty_end = now + config.burst_penalty;
         assert!(ic
@@ -634,7 +685,7 @@ mod tests {
             let now = started + age;
             let mut ic = IngressControl::new();
             assert_eq!(
-                ic.should_ingress_limit(iface(1), &config, freq, started, now),
+                ic.should_ingress_limit(iface(1), &config, freq, 3, started, now),
                 new
             );
             assert_eq!(
@@ -659,15 +710,15 @@ mod tests {
         let config = IngressControlConfig::enabled();
         let now = 10_000.0;
         let mut ic = IngressControl::new();
-        assert!(!ic.should_ingress_limit(iface(1), &config, config.burst_freq, 0.0, now));
+        assert!(!ic.should_ingress_limit(iface(1), &config, config.burst_freq, 3, 0.0, now));
         assert!(!ic.should_ingress_limit_pr(iface(1), &config, config.pr_burst_freq, 0.0, now));
         assert!(!ic.burst_active(&iface(1)));
         assert!(!ic.pr_burst_active(&iface(1)));
 
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, now));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, 0.0, now));
         assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, now));
         let later = now + config.burst_hold + 1.0;
-        assert!(ic.should_ingress_limit(iface(1), &config, config.burst_freq, 0.0, later));
+        assert!(ic.should_ingress_limit(iface(1), &config, config.burst_freq, 3, 0.0, later));
         assert!(ic.burst_active(&iface(1)));
         for step in 1..=5 {
             let at = later + f64::from(step);
@@ -683,14 +734,14 @@ mod tests {
         let config = IngressControlConfig::enabled();
         let now = 10_000.0;
         let mut ic = IngressControl::new();
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, now));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, 0.0, now));
         assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, now));
         // Sustained by a later high sample.
         let sustained = now + 5.0;
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, sustained));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, 0.0, sustained));
         assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, sustained));
         let hold_end = sustained + config.burst_hold;
-        assert!(ic.should_ingress_limit(iface(1), &config, 1.0, 0.0, hold_end));
+        assert!(ic.should_ingress_limit(iface(1), &config, 1.0, 3, 0.0, hold_end));
         assert!(ic.burst_active(&iface(1)));
         // The path request burst would count down its cooldown here.
         for _ in 0..5 {
@@ -706,7 +757,7 @@ mod tests {
         assert!(!ic.burst_active(&iface(1)));
         assert_eq!(ic.burst_activated(&iface(1)), 0.0);
         assert_eq!(ic.pr_burst_activated(&iface(1)), 0.0);
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, 10_000.0));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, 0.0, 10_000.0));
         assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, 0.0, 10_500.0));
         assert!(ic.burst_active(&iface(1)));
         assert!(!ic.burst_active(&iface(2)));
@@ -719,7 +770,7 @@ mod tests {
     fn clear_drops_bursts_and_held_announces() {
         let config = IngressControlConfig::enabled();
         let mut ic = IngressControl::new();
-        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, 10_000.0));
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 3, 0.0, 10_000.0));
         assert!(ic.hold_announce(iface(1), &config, [1; 16], held(3, 10_000.0)));
         ic.clear();
         assert!(!ic.burst_active(&iface(1)));
@@ -765,6 +816,9 @@ mod tests {
     }
 
     #[test]
+    /// A short burst releases its held announce without waiting for
+    /// another announce, but, as upstream, releasing does not end the
+    /// burst: the released announce meets it again in the inbound path.
     fn short_burst_releases_without_waiting_for_another_announce() {
         let mut ic = IngressControl::new();
         let started = 0.0;
@@ -774,6 +828,7 @@ mod tests {
             iface(1),
             &IngressControlConfig::enabled(),
             36.0,
+            3,
             started,
             now
         ));
@@ -801,7 +856,7 @@ mod tests {
         );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 3);
-        assert!(!ic.burst_active(&iface(1)));
+        assert!(ic.burst_active(&iface(1)));
     }
 
     #[test]
@@ -1156,6 +1211,7 @@ mod tests {
             iface(1),
             &config,
             constants::IC_BURST_FREQ - 1.0,
+            3,
             started,
             now
         ));

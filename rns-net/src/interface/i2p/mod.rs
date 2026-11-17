@@ -234,6 +234,7 @@ fn peer_info(
         mtu: HW_MTU as u32,
         mtu_upgradable: false,
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,

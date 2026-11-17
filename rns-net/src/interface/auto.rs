@@ -1462,6 +1462,7 @@ fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
         mtu: HW_MTU as u32,
         mtu_upgradable: true,
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,

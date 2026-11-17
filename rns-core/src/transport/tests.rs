@@ -54,6 +54,7 @@ pub(super) fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         mtu_upgradable: false,
         ingress_control: crate::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,
@@ -1976,6 +1977,7 @@ pub(super) fn make_local_client_interface(id: u64) -> InterfaceInfo {
         mtu_upgradable: false,
         ingress_control: crate::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,
@@ -2573,6 +2575,7 @@ pub(super) fn make_tunnel_interface(id: u64) -> InterfaceInfo {
         mtu_upgradable: false,
         ingress_control: crate::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,
@@ -4367,6 +4370,7 @@ fn test_ingress_held_announce_preserves_rx_metadata_on_release() {
     let mut inbound = make_interface(1, constants::MODE_FULL);
     inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
     inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.ia_samples = constants::IC_DEQUE_MIN_SAMPLE + 1;
     inbound.started = 0.0;
     engine.register_interface(inbound);
 
@@ -4395,7 +4399,15 @@ fn test_ingress_held_announce_preserves_rx_metadata_on_release() {
         .expect("interface must exist")
         .ia_freq = 0.0;
 
-    let released_actions = engine.tick(10000.0 + constants::IC_BURST_PENALTY + 1.0, &mut rng);
+    // As upstream, the first release ends the burst and is held again, with
+    // its metadata; the next one is accepted.
+    let first_release = 10000.0 + constants::IC_BURST_PENALTY + 1.0;
+    engine.tick(first_release, &mut rng);
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    let released_actions = engine.tick(
+        first_release + constants::IC_HELD_RELEASE_INTERVAL + 1.0,
+        &mut rng,
+    );
 
     let released_rx = released_actions.iter().find_map(|action| match action {
         TransportAction::AnnounceReceived(announce) if announce.destination_hash == dest_hash => {
@@ -7418,6 +7430,7 @@ fn held_and_released_announces_count_as_received() {
     let mut inbound = make_interface(1, constants::MODE_FULL);
     inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
     inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.ia_samples = constants::IC_DEQUE_MIN_SAMPLE + 1;
     inbound.started = 0.0;
     engine.register_interface(inbound);
     let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
@@ -7430,8 +7443,19 @@ fn held_and_released_announces_count_as_received() {
     assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
     assert_eq!(engine.take_announce_receipts(), vec![(InterfaceId(1), 0)]);
 
+    // As upstream, the first release meets the burst, which it ends, and is
+    // held again; the next one is accepted.
     engine.interfaces.get_mut(&InterfaceId(1)).unwrap().ia_freq = 0.0;
-    engine.tick(10_000.0 + constants::IC_BURST_PENALTY + 1.0, &mut rng);
+    let first_release = 10_000.0 + constants::IC_BURST_PENALTY + 1.0;
+    engine.tick(first_release, &mut rng);
+    assert!(!engine.has_path(&dest));
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    assert_eq!(engine.take_announce_receipts(), vec![(InterfaceId(1), 0)]);
+
+    engine.tick(
+        first_release + constants::IC_HELD_RELEASE_INTERVAL + 1.0,
+        &mut rng,
+    );
     assert!(engine.has_path(&dest));
     assert_eq!(
         engine.take_announce_receipts(),
@@ -7447,6 +7471,7 @@ fn held_announces_that_cannot_update_a_path_are_culled() {
     let mut limited = make_interface(1, constants::MODE_FULL);
     limited.ingress_control = crate::transport::types::IngressControlConfig::enabled();
     limited.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    limited.ia_samples = constants::IC_DEQUE_MIN_SAMPLE + 1;
     limited.started = 0.0;
     engine.register_interface(limited);
     engine.register_interface(make_interface(2, constants::MODE_FULL));
@@ -7488,8 +7513,19 @@ fn held_announces_that_cannot_update_a_path_are_culled() {
     engine.tick(now + constants::IC_BURST_PENALTY + 1.0, &mut rng);
     assert_eq!(engine.held_announce_count(&InterfaceId(1)), 2);
 
+    // The stale one is culled and the fresh one released; as upstream, it
+    // meets the burst, which it ends, and is held again.
     engine.interfaces.get_mut(&InterfaceId(1)).unwrap().ia_freq = 0.0;
-    engine.tick(now + constants::IC_BURST_PENALTY + 2.0, &mut rng);
+    let first_release = now + constants::IC_BURST_PENALTY + 2.0;
+    engine.tick(first_release, &mut rng);
+    assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+    assert!(!engine.has_path(&fresh));
+    assert_eq!(engine.take_released_traffic().len(), 1);
+
+    engine.tick(
+        first_release + constants::IC_HELD_RELEASE_INTERVAL + 1.0,
+        &mut rng,
+    );
     assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
     assert!(engine.has_path(&fresh));
     let released = engine.take_released_traffic();
@@ -7571,6 +7607,7 @@ fn held_frames_are_filtered_and_releases_are_charged_again() {
     let mut inbound = make_interface(1, constants::MODE_FULL);
     inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
     inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+    inbound.ia_samples = constants::IC_DEQUE_MIN_SAMPLE + 1;
     inbound.started = 0.0;
     engine.register_interface(inbound);
     let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);

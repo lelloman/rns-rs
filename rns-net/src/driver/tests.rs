@@ -2175,6 +2175,7 @@ fn make_interface_info(id: u64) -> InterfaceInfo {
         mtu: constants::MTU as u32,
         mtu_upgradable: false,
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,
@@ -4866,7 +4867,7 @@ fn driver_holding_one_announce(max_held: usize) -> Driver {
     // An announce burst: the engine holds announces from now on.
     driver
         .engine
-        .update_interface_freqs(InterfaceId(1), 1000.0, 0.0, 0.0, 0);
+        .update_interface_freqs(InterfaceId(1), 1000.0, 3, 0.0, 0.0, 0);
     let raw = build_announce_packet(&Identity::new(&mut OsRng));
     driver.engine.handle_inbound(
         rns_core::transport::InboundFrame {
@@ -4948,7 +4949,7 @@ fn released_announces_are_charged_as_received_traffic() {
     // as `handle_tick_event` does.
     driver
         .engine
-        .update_interface_freqs(InterfaceId(1), 0.0, 0.0, 0.0, 0);
+        .update_interface_freqs(InterfaceId(1), 0.0, 3, 0.0, 0.0, 0);
     let mut now = time::now() + constants::IC_BURST_PENALTY + 1.0;
     while driver.engine.held_announce_count(&InterfaceId(1)) > 0 {
         let actions = driver.engine.tick(now, &mut driver.rng);
@@ -4958,8 +4959,10 @@ fn released_announces_are_charged_as_received_traffic() {
         now += constants::IC_HELD_RELEASE_INTERVAL + 1.0;
     }
 
+    // As upstream, the first release meets the burst, which it ends, and
+    // is held again, its frame filtered once more.
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
-    assert_eq!(stats.frxb, frxb_held);
+    assert_eq!(stats.frxb, frxb_held + len);
     assert_eq!(stats.rx_packets, 2);
     assert!(stats.rxb >= len);
     assert_eq!(stats.afrxc, 0);

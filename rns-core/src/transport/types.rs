@@ -207,6 +207,8 @@ pub struct InterfaceInfo {
     pub stamp_costs: InterfaceStampCosts,
     /// Current incoming announce frequency (announces/sec), synced from driver.
     pub ia_freq: f64,
+    /// Current incoming announce sample count, synced from driver.
+    pub ia_samples: usize,
     /// Current incoming path request frequency (requests/sec), synced from driver.
     pub ip_freq: f64,
     /// Current outgoing path request frequency (requests/sec), synced from driver.

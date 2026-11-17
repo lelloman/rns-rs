@@ -918,6 +918,7 @@ impl TransportEngine {
             iface,
             &info.ingress_control,
             info.ia_freq,
+            info.ia_samples,
             info.started,
             now,
         )

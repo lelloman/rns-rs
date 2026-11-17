@@ -278,6 +278,7 @@ pub fn start_direct_interface(
         mtu: DIRECT_MTU,
         mtu_upgradable: false,
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,

@@ -207,6 +207,11 @@ impl InterfaceStats {
         Self::compute_frequency(&self.ia_timestamps, INCOMING_ANNOUNCE_MIN_SAMPLE)
     }
 
+    /// Number of incoming announce samples currently held.
+    pub fn incoming_announce_samples(&self) -> usize {
+        self.ia_timestamps.len()
+    }
+
     /// Outgoing announce frequency (per second).
     pub fn outgoing_announce_freq(&self) -> f64 {
         Self::compute_frequency(&self.oa_timestamps, 1)
@@ -244,6 +249,10 @@ mod tests {
             stats.incoming_announce_freq(),
             0.0,
             "incoming announce frequency must stay zero until more than the minimum samples exist"
+        );
+        assert_eq!(
+            stats.incoming_announce_samples(),
+            INCOMING_ANNOUNCE_MIN_SAMPLE
         );
     }
 

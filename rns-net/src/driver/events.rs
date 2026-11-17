@@ -400,6 +400,7 @@ impl Driver {
             self.engine.update_interface_freqs(
                 interface_id,
                 entry.stats.incoming_announce_freq(),
+                entry.stats.incoming_announce_samples(),
                 entry.stats.incoming_path_request_freq(),
                 entry.stats.outgoing_path_request_freq(),
                 entry.stats.outgoing_path_request_samples(),
@@ -783,6 +784,7 @@ impl Driver {
             self.engine.update_interface_freqs(
                 *id,
                 entry.stats.incoming_announce_freq(),
+                entry.stats.incoming_announce_samples(),
                 entry.stats.incoming_path_request_freq(),
                 entry.stats.outgoing_path_request_freq(),
                 entry.stats.outgoing_path_request_samples(),

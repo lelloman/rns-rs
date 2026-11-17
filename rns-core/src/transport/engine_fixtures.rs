@@ -55,6 +55,7 @@ pub(super) fn interface(id: u64, mode: u8) -> InterfaceInfo {
         mtu_upgradable: false,
         ingress_control: types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,

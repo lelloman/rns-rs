@@ -66,6 +66,7 @@ fn make_interface(id: u64, mode: u8, is_local_client: bool) -> InterfaceInfo {
         mtu_upgradable: false,
         ingress_control: IngressControlConfig::disabled(),
         ia_freq: 0.0,
+        ia_samples: 0,
         ip_freq: 0.0,
         op_freq: 0.0,
         op_samples: 0,

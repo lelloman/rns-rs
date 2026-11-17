@@ -207,6 +207,7 @@ impl Driver {
             ingress_control: Default::default(),
             stamp_costs: Default::default(),
             ia_freq: 0.0,
+            ia_samples: 0,
             ip_freq: 0.0,
             op_freq: 0.0,
             op_samples: 0,

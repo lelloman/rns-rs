@@ -451,6 +451,9 @@ pub const IC_BURST_HOLD: f64 = 15.0;
 pub const IC_BURST_PENALTY: f64 = 15.0;
 /// Interval between individual held announce releases (seconds).
 pub const IC_HELD_RELEASE_INTERVAL: f64 = 5.0;
+/// Incoming announce samples an interface needs before an announce burst
+/// on it can end.
+pub const IC_DEQUE_MIN_SAMPLE: usize = 2;
 /// Minimum path request samples before egress limiting.
 pub const EC_BURST_MIN_SAMPLES: usize = 2;
 /// Default egress path request limit (requests/sec).
