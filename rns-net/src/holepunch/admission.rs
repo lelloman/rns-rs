@@ -27,13 +27,20 @@ const MAX_TRACKED_LINKS: usize = 1024;
 /// (::ffff:0:a.b.c.d, RFC 2765) and the deprecated IPv4-compatible
 /// addresses (::a.b.c.d). Traffic to one goes through a translator to some
 /// IPv4 address, possibly a private one, so it is never a direct endpoint.
+///
+/// The tunnelled transition prefixes count too: 6to4 (2002::/16, RFC 3056)
+/// and Teredo (2001::/32, RFC 4380). Traffic to them is relayed over IPv4
+/// by third-party gateways, whose embedded IPv4 address and port a peer
+/// chooses freely, so they are no more a direct path than a NAT64 address.
 pub fn is_synthesized_ipv6(ip: &Ipv6Addr) -> bool {
     let s = ip.segments();
     let nat64_wkp = s[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
     let nat64_local = s[..3] == [0x64, 0xff9b, 1];
     let translated = s[..6] == [0, 0, 0, 0, 0xffff, 0];
     let compatible = s[..6] == [0; 6] && !ip.is_unspecified() && !ip.is_loopback();
-    nat64_wkp || nat64_local || translated || compatible
+    let six_to_four = s[0] == 0x2002;
+    let teredo = s[..2] == [0x2001, 0];
+    nat64_wkp || nat64_local || translated || compatible || six_to_four || teredo
 }
 
 /// Whether `ip` is a synthesized IPv6 address (see [`is_synthesized_ipv6`]).
@@ -208,9 +215,16 @@ mod tests {
             ("[64:ff9b:1:ffff::1]:4343", false, false),
             ("[::ffff:0:808:808]:4343", false, false),
             ("[::808:808]:4343", false, false),
+            // Relayed transition addresses (6to4, Teredo): never
+            ("[2002:808:808::1]:4343", false, false),
+            ("[2002:a00:1::1]:4343", false, false),
+            ("[2001:0:4136:e378:8000:63bf:3fff:fdd2]:4343", false, false),
             // ...but their neighbours are ordinary addresses
             ("[64:ff9c::808:808]:4343", true, true),
             ("[64:ff9b:2::1]:4343", true, true),
+            ("[2001:1::1]:4343", true, true),
+            ("[2001:4860:4860::8888]:4343", true, true),
+            ("[2003::1]:4343", true, true),
             // Neighbours of the private ranges stay public
             ("172.32.0.1:4343", true, true),
             ("100.128.0.1:4343", true, true),

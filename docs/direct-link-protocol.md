@@ -219,10 +219,11 @@ anything:
   `[reticulum]`. IPv4-mapped IPv6 addresses are checked as their IPv4 form.
   IPv6 addresses synthesized from IPv4 ones are always declined: the NAT64
   prefixes 64:ff9b::/96 and 64:ff9b:1::/48, IPv4-translated
-  (::ffff:0:a.b.c.d) and IPv4-compatible (::a.b.c.d) addresses. Traffic to
-  one goes through a translator to an IPv4 address that could be anything,
-  private ones included, so it is never a direct endpoint (see
-  [IPv6](#ipv6)).
+  (::ffff:0:a.b.c.d) and IPv4-compatible (::a.b.c.d) addresses, and the
+  relayed transition prefixes 6to4 (2002::/16) and Teredo (2001::/32).
+  Traffic to one goes through a translator or relay to an IPv4 address that
+  could be anything, private ones included, so it is never a direct endpoint
+  (see [IPv6](#ipv6)).
   The initiator applies the same check to `responder_public` in
   `UPGRADE_READY` before punching. Out-of-range requests receive
   `UPGRADE_REJECT` with reason `0x01`.
@@ -648,7 +649,7 @@ the punch then runs over that family: the peer's endpoint must be of the
 same family as the mapping the probe found, and host candidates are of
 that family too.
 
-Addresses synthesized by NAT64 and the like (see the endpoint ranges of
+Addresses synthesized by NAT64 and the like, and 6to4 and Teredo ones (see the endpoint ranges of
 Phase 2) are never used: a configured facilitator with such an address is
 ignored, with a warning; a peer's facilitator, public endpoint or host
 candidate with one is declined; the punch never sends to one; and a probe
