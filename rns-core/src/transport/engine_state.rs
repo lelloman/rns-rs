@@ -455,10 +455,11 @@ impl TransportEngine {
         self.blackholed_identities.remove(identity_hash).is_some()
     }
 
-    /// Check if an identity hash is blackholed (and not expired).
+    /// Check if an identity hash is blackholed (and not expired). As
+    /// upstream, an entry expires once its time has passed, not at it.
     pub fn is_blackholed(&self, identity_hash: &[u8; 16], now: f64) -> bool {
         if let Some(entry) = self.blackholed_identities.get(identity_hash) {
-            if entry.expires == 0.0 || entry.expires > now {
+            if entry.expires == 0.0 || entry.expires >= now {
                 return true;
             }
         }
@@ -470,10 +471,11 @@ impl TransportEngine {
         self.blackholed_identities.iter()
     }
 
-    /// Cull expired blackhole entries.
+    /// Cull expired blackhole entries: those whose time has passed, as
+    /// upstream's `time.time() > until`.
     pub(super) fn cull_blackholed(&mut self, now: f64) {
         self.blackholed_identities
-            .retain(|_, entry| entry.expires == 0.0 || entry.expires > now);
+            .retain(|_, entry| entry.expires == 0.0 || entry.expires >= now);
     }
 
     // =========================================================================
@@ -770,5 +772,27 @@ impl TransportEngine {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::tests::make_config;
+
+    #[test]
+    fn blackhole_lasts_through_its_expiry_time() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let identity = [0x11; 16];
+        assert!(engine.blackhole_identity(identity, 1000.0, Some(2.0), None));
+        let expires = 1000.0 + 2.0 * 3600.0;
+        assert!(engine.is_blackholed(&identity, expires - 100.0));
+        assert!(engine.is_blackholed(&identity, expires));
+        assert!(!engine.is_blackholed(&identity, expires + 1.0));
+
+        engine.cull_blackholed(expires);
+        assert_eq!(engine.blackholed_entries().count(), 1);
+        engine.cull_blackholed(expires + 1.0);
+        assert_eq!(engine.blackholed_entries().count(), 0);
     }
 }

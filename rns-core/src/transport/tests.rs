@@ -1,7 +1,7 @@
 use super::*;
 use crate::packet::PacketFlags;
 
-fn make_config(transport_enabled: bool) -> TransportConfig {
+pub(super) fn make_config(transport_enabled: bool) -> TransportConfig {
     TransportConfig {
         transport_enabled,
         identity_hash: if transport_enabled {
@@ -28,7 +28,7 @@ fn make_config(transport_enabled: bool) -> TransportConfig {
     }
 }
 
-fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
+pub(super) fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
     InterfaceInfo {
         stamp_costs: Default::default(),
         id: InterfaceId(id),
@@ -78,7 +78,7 @@ fn make_announce_entry(dest_hash: [u8; 16], timestamp: f64, fill_len: usize) -> 
     }
 }
 
-fn make_path_entry(
+pub(super) fn make_path_entry(
     timestamp: f64,
     hops: u8,
     receiving_interface: InterfaceId,
@@ -105,7 +105,7 @@ fn make_unique_tag(dest_hash: [u8; 16], tag: &[u8]) -> [u8; 32] {
     unique_tag
 }
 
-fn make_random_blob(timebase: u64) -> [u8; 10] {
+pub(super) fn make_random_blob(timebase: u64) -> [u8; 10] {
     let mut blob = [0u8; 10];
     let bytes = timebase.to_be_bytes();
     blob[5..10].copy_from_slice(&bytes[3..8]);
@@ -1950,7 +1950,7 @@ fn test_tick_culls_expired_path() {
 // Phase 7b: Local client transport tests
 // =========================================================================
 
-fn make_local_client_interface(id: u64) -> InterfaceInfo {
+pub(super) fn make_local_client_interface(id: u64) -> InterfaceInfo {
     InterfaceInfo {
         stamp_costs: Default::default(),
         id: InterfaceId(id),
@@ -2547,7 +2547,7 @@ fn test_local_client_exclude_from_forward() {
 // Phase 7d: Tunnel tests
 // =========================================================================
 
-fn make_tunnel_interface(id: u64) -> InterfaceInfo {
+pub(super) fn make_tunnel_interface(id: u64) -> InterfaceInfo {
     InterfaceInfo {
         stamp_costs: Default::default(),
         id: InterfaceId(id),
