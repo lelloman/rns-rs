@@ -19,6 +19,13 @@ use rns_net::{RpcAddr, RpcClient};
 const CHEAP_STAMPS: &str = "[stamps]\n  destination_value = 8\n  destination_cost = 8\n  \
                             pr_value = 8\n  pr_cost = 8\n\n";
 
+/// [`CHEAP_STAMPS`] for an instance whose announces must reach a
+/// stamp-enforcing peer: 1.6.0 stamps them only when configured to, 1.6.1
+/// and rns-rs by default.
+const CHEAP_STAMPS_EMITTED: &str = "[stamps]\n  stamp_destinations = Yes\n  \
+                                    destination_value = 8\n  destination_cost = 8\n  \
+                                    pr_value = 8\n  pr_cost = 8\n\n";
+
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 const FILE_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1351,7 +1358,11 @@ fn rust_rnx_client_executes_on_python_listener() {
 const ANNOUNCE_THEN_PATH_RESPONSE: &str = r#"
 import os, socket, sys, time
 import RNS
-from RNS.Interfaces.util.HDLC import HDLC
+
+# RNS.Interfaces.util.HDLC is only in 1.6.0 and later.
+def frame(data):
+    data = data.replace(b"\x7d", b"\x7d\x5d").replace(b"\x7e", b"\x7d\x5e")
+    return b"\x7e" + data + b"\x7e"
 
 config, instance = sys.argv[1], sys.argv[2]
 os.makedirs(config, exist_ok=True)
@@ -1363,17 +1374,19 @@ with open(os.path.join(config, "config"), "w") as f:
 RNS.Reticulum(config)
 destination = RNS.Destination(RNS.Identity(), RNS.Destination.IN,
                               RNS.Destination.SINGLE, "order", "check")
+# 1.6.0 moved building the packet to _announce; announce queues a stamp.
+build = getattr(destination, "_announce", destination.announce)
 while True:
     second = int(time.time())
-    announce = destination._announce(send=False)
-    response = destination._announce(path_response=True, send=False)
+    announce = build(send=False)
+    response = build(path_response=True, send=False)
     if int(time.time()) == second:
         break
 announce.pack()
 response.pack()
 connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 connection.connect("\0rns/" + instance)
-connection.sendall(HDLC.frame(announce.raw) + HDLC.frame(response.raw))
+connection.sendall(frame(announce.raw) + frame(response.raw))
 print(destination.hash.hex(), flush=True)
 time.sleep(2)
 connection.close()
@@ -2446,8 +2459,12 @@ while pending and time.time() < deadline:
                 "name": name,
                 "hash": destination_hash.hex(),
                 "identity": identity.hash.hex(),
-                "stamp_value": RNS.Identity.recall_stamp_value(destination_hash),
-                "link_cost": RNS.Identity.recall_link_cost(destination_hash),
+                # Stamp values and link costs are recalled since 1.6.0.
+                "stamps": hasattr(RNS.Identity, "recall_stamp_value"),
+                "stamp_value": RNS.Identity.recall_stamp_value(destination_hash)
+                    if hasattr(RNS.Identity, "recall_stamp_value") else None,
+                "link_cost": RNS.Identity.recall_link_cost(destination_hash)
+                    if hasattr(RNS.Identity, "recall_link_cost") else None,
             }), flush=True)
             del pending[name]
     if request and time.time() > last_request + 3:
@@ -2533,8 +2550,11 @@ fn python_validates_rust_network_destination_announces() {
                 .find(|line| line["name"] == name)
                 .unwrap_or_else(|| panic!("no {name} line in {stdout}"));
             assert_eq!(line["identity"], network_id.as_str(), "{stdout}");
-            assert!(line["stamp_value"].as_f64().unwrap() >= 8.0, "{stdout}");
-            assert_eq!(line["link_cost"], 12.5, "{stdout}");
+            // Releases before 1.6.0 do not recall stamps or link costs.
+            if line["stamps"] == true {
+                assert!(line["stamp_value"].as_f64().unwrap() >= 8.0, "{stdout}");
+                assert_eq!(line["link_cost"], 12.5, "{stdout}");
+            }
         }
     };
 
@@ -2573,6 +2593,19 @@ fn python_validates_rust_network_destination_announces() {
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn rust_accepts_python_network_destination_announces() {
+    // The receiver enforces stamps: releases before 1.6.0 cannot stamp, and
+    // 1.6.0 stamps when configured to, as 1.6.1 does by default.
+    let mut probe = Command::new("python3");
+    probe.args([
+        "-c",
+        "import RNS; print(hasattr(RNS.Transport, 'STAMP_DESTINATIONS'))",
+    ]);
+    let probe = run(probe);
+    assert_success(&probe, "probe RNS.Transport.STAMP_DESTINATIONS");
+    if String::from_utf8_lossy(&probe.stdout).trim() != "True" {
+        eprintln!("Python Reticulum predates destination stamps; skipping");
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let publisher_dir = root.path().join("publisher");
     let receiver_dir = root.path().join("receiver");
@@ -2585,7 +2618,7 @@ fn rust_accepts_python_network_destination_announces() {
     fs::write(
         publisher_dir.join("config"),
         format!(
-            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = No\n  \
+            "{CHEAP_STAMPS_EMITTED}[reticulum]\n  enable_transport = No\n  share_instance = No\n  \
              network_identity = {}\n\
              [logging]\n  loglevel = 4\n\
              [interfaces]\n  [[network server]]\n    type = TCPServerInterface\n    \
@@ -2705,7 +2738,9 @@ if RNS.Transport.has_path(destination_hash):
                          failed_callback=lambda receipt: outcome.append("failed"))
             until = time.time() + 8
             while not outcome and time.time() < until: time.sleep(0.1)
-            result[path] = outcome[0] if outcome else "none"
+            # Whether the request's failure is reported within the wait
+            # varies between releases; only an answer matters.
+            result[path] = "response" if "response" in outcome else "unanswered"
         result["active"] = link.status == RNS.Link.ACTIVE
 print(json.dumps(result), flush=True)
 os._exit(0)
@@ -2727,7 +2762,7 @@ fn network_destination_link(publisher: Daemon) {
     fs::write(
         publisher_dir.join("config"),
         format!(
-            "{CHEAP_STAMPS}[reticulum]\n  enable_transport = Yes\n  share_instance = No\n  \
+            "{CHEAP_STAMPS_EMITTED}[reticulum]\n  enable_transport = Yes\n  share_instance = No\n  \
              network_identity = {}\n  enable_remote_management = Yes\n  \
              publish_blackhole = Yes\n\
              [logging]\n  loglevel = 4\n\
@@ -2761,9 +2796,9 @@ fn network_destination_link(publisher: Daemon) {
         result,
         serde_json::json!({
             "established": true,
-            "/status": "failed",
-            "/path": "failed",
-            "/list": "failed",
+            "/status": "unanswered",
+            "/path": "unanswered",
+            "/list": "unanswered",
             "active": true,
         }),
         "publisher log:\n{}",
