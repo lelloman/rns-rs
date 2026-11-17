@@ -25,6 +25,7 @@ impl TransportEngine {
             announce_sig_cache: AnnounceSignatureCache::new(sig_cache_max, sig_cache_ttl),
             rate_limiter: AnnounceRateLimiter::new(),
             path_states: BTreeMap::new(),
+            lrproof_verdict: None,
             interfaces: BTreeMap::new(),
             interface_hashes: BTreeMap::new(),
             local_tunnel_ids: BTreeMap::new(),
@@ -174,7 +175,24 @@ impl TransportEngine {
             .insert(*dest_hash, constants::STATE_UNRESPONSIVE);
     }
 
-    pub fn mark_path_responsive(&mut self, dest_hash: &[u8; 16]) {
+    /// `Transport.mark_path_responsive`: an event that proves the
+    /// destination alive, such as a validated link request proof, refreshes
+    /// its path as a fresh announce would (timestamp, expiry and use) and
+    /// marks it responsive.
+    pub fn mark_path_responsive(&mut self, dest_hash: &[u8; 16], now: f64) {
+        if let Some(entry) = self
+            .path_table
+            .get_mut(dest_hash)
+            .and_then(|paths| paths.primary_mut())
+        {
+            let mode = self
+                .interfaces
+                .get(&entry.receiving_interface)
+                .map_or(constants::MODE_FULL, |info| info.mode);
+            entry.timestamp = now;
+            entry.expires = super::announce_proc::compute_path_expires(now, mode);
+            entry.used = now;
+        }
         self.path_states
             .insert(*dest_hash, constants::STATE_RESPONSIVE);
     }
@@ -251,6 +269,70 @@ impl TransportEngine {
         let destination_hash =
             self.link_rebalance_destination(&link_id, hops, receiving_interface)?;
         Some((link_id, destination_hash, hops, packet.data().to_vec()))
+    }
+
+    /// An LRPROOF this node would transport (`Transport.inbound`: received
+    /// on the link's next-hop interface with the expected hops): its link,
+    /// the link's destination, and the proof data. The caller checks the
+    /// signature against the destination's identity and reports it with
+    /// [`Self::set_lrproof_verdict`] before handing the packet in.
+    pub fn decoded_transported_lrproof(
+        &self,
+        decoded: &DecodedPacket,
+        receiving_interface: InterfaceId,
+    ) -> Option<super::LrproofRebalanceCandidate> {
+        let packet = &decoded.packet;
+        if packet.flags.packet_type != constants::PACKET_TYPE_PROOF
+            || packet.context != constants::CONTEXT_LRPROOF
+        {
+            return None;
+        }
+        let (hops, from_local_client) = self.filtered_inbound_hops(packet, receiving_interface)?;
+        let link_id = packet.destination_hash;
+        let entry = self.link_table.get(&link_id)?;
+        let for_local_client_link = self.interface_is_local_client(entry.next_hop_interface)
+            || self.interface_is_local_client(entry.received_interface);
+        (self.config.transport_enabled || from_local_client || for_local_client_link)
+            .then_some(())?;
+        (hops == entry.remaining_hops && receiving_interface == entry.next_hop_interface).then(
+            || {
+                (
+                    link_id,
+                    entry.destination_hash,
+                    hops,
+                    packet.data().to_vec(),
+                )
+            },
+        )
+    }
+
+    /// Whether `proof_data` is a valid LRPROOF for `link_id`, signed by the
+    /// destination whose Ed25519 signing key is `destination_sig_pub_bytes`.
+    pub fn lrproof_is_valid(
+        link_id: &[u8; 16],
+        proof_data: &[u8],
+        destination_sig_pub_bytes: &[u8; 32],
+    ) -> bool {
+        let Ok(destination_sig_pub) =
+            rns_crypto::ed25519::Ed25519PublicKey::from_bytes(destination_sig_pub_bytes)
+        else {
+            return false;
+        };
+        crate::link::handshake::validate_lrproof(
+            proof_data,
+            link_id,
+            &destination_sig_pub,
+            destination_sig_pub_bytes,
+        )
+        .is_ok()
+    }
+
+    /// Record whether the next LRPROOF for `link_id` is validly signed. A
+    /// transported proof with a verdict is forwarded only when valid, as
+    /// upstream, which also drops it when the destination's identity is
+    /// unknown; without one it is routed unchecked.
+    pub fn set_lrproof_verdict(&mut self, link_id: [u8; 16], valid: bool) {
+        self.lrproof_verdict = Some((link_id, valid));
     }
 
     /// Validate a mismatched-hop LRPROOF and update the relay link route and

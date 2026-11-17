@@ -266,6 +266,10 @@ pub struct TransportEngine {
     announce_sig_cache: AnnounceSignatureCache,
     rate_limiter: AnnounceRateLimiter,
     path_states: BTreeMap<[u8; 16], u8>,
+    /// Whether the next LRPROOF for this link carries a valid signature, as
+    /// checked by the caller with the destination's identity
+    /// ([`TransportEngine::set_lrproof_verdict`]).
+    lrproof_verdict: Option<([u8; 16], bool)>,
     interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
     interface_hashes: BTreeMap<InterfaceId, [u8; 32]>,
     /// Tunnels this node synthesized, by the interface it synthesized them

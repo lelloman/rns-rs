@@ -342,7 +342,7 @@ fn test_path_state() {
     engine.mark_path_unresponsive(&dest, None);
     assert!(engine.path_is_unresponsive(&dest));
 
-    engine.mark_path_responsive(&dest);
+    engine.mark_path_responsive(&dest, 1000.0);
     assert!(!engine.path_is_unresponsive(&dest));
 }
 
@@ -774,6 +774,141 @@ fn valid_lrproof_rebalances_relay_link_and_destination_path() {
             ..
         }
     )));
+}
+
+fn lrproof_packet(link_id: &[u8; 16], hops: u8, proof: &[u8]) -> RawPacket {
+    RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        },
+        hops,
+        link_id,
+        None,
+        constants::CONTEXT_LRPROOF,
+        proof,
+    )
+    .unwrap()
+}
+
+fn handle_lrproof(
+    engine: &mut TransportEngine,
+    packet: &RawPacket,
+    now: f64,
+) -> Vec<TransportAction> {
+    let mut rng = rns_crypto::FixedRng::new(&[0x61; 32]);
+    engine.handle_inbound(
+        InboundFrame {
+            raw: &packet.raw,
+            iface: InterfaceId(2),
+            now,
+            rx: RxMetadata::default(),
+        },
+        &mut rng,
+    )
+}
+
+#[test]
+fn a_transported_lrproof_is_picked_only_when_the_engine_would_transport_it() {
+    let (engine, link_id, destination_hash, _, proof) = lrproof_rebalance_fixture();
+    // Two hops on the wire are three on arrival: the link's remaining hops.
+    let matched = DecodedPacket::unpack(&lrproof_packet(&link_id, 2, &proof).raw).unwrap();
+    let candidate = engine
+        .decoded_transported_lrproof(&matched, InterfaceId(2))
+        .expect("a proof from the next hop with the expected hops");
+    assert_eq!(
+        (candidate.0, candidate.1, candidate.2),
+        (link_id, destination_hash, 3)
+    );
+    assert_eq!(candidate.3, proof);
+    assert!(engine
+        .decoded_transported_lrproof(&matched, InterfaceId(1))
+        .is_none());
+    let mismatched = DecodedPacket::unpack(&lrproof_packet(&link_id, 4, &proof).raw).unwrap();
+    assert!(engine
+        .decoded_transported_lrproof(&mismatched, InterfaceId(2))
+        .is_none());
+}
+
+#[test]
+fn a_valid_transported_lrproof_refreshes_the_destination_path() {
+    let (mut engine, link_id, destination_hash, signing_public, proof) =
+        lrproof_rebalance_fixture();
+    engine.mark_path_unresponsive(&destination_hash, None);
+    assert!(TransportEngine::lrproof_is_valid(
+        &link_id,
+        &proof,
+        &signing_public
+    ));
+    engine.set_lrproof_verdict(link_id, true);
+
+    let actions = handle_lrproof(&mut engine, &lrproof_packet(&link_id, 2, &proof), 500.0);
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        TransportAction::SendOnInterface {
+            interface: InterfaceId(1),
+            ..
+        }
+    )));
+    assert!(engine.link_table[&link_id].validated);
+    // Transport.mark_path_responsive: as fresh as a new announce.
+    let path = engine.path_table[&destination_hash].primary().unwrap();
+    assert_eq!(path.timestamp, 500.0);
+    assert_eq!(path.expires, 500.0 + constants::PATHFINDER_E);
+    assert_eq!(path.used, 500.0);
+    assert!(!engine.path_is_unresponsive(&destination_hash));
+}
+
+#[test]
+fn an_invalid_transported_lrproof_is_dropped_as_a_protocol_violation() {
+    use rns_crypto::ed25519::Ed25519PrivateKey;
+    let (mut engine, link_id, destination_hash, _, proof) = lrproof_rebalance_fixture();
+    let mut other_rng = rns_crypto::FixedRng::new(&[0x52; 128]);
+    let other_public = Ed25519PrivateKey::generate(&mut other_rng)
+        .public_key()
+        .public_bytes();
+    assert!(!TransportEngine::lrproof_is_valid(
+        &link_id,
+        &proof,
+        &other_public
+    ));
+    engine.set_lrproof_verdict(link_id, false);
+
+    let actions = handle_lrproof(&mut engine, &lrproof_packet(&link_id, 2, &proof), 500.0);
+    assert!(!actions
+        .iter()
+        .any(|action| matches!(action, TransportAction::SendOnInterface { .. })));
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        TransportAction::ProtocolViolation {
+            interface: InterfaceId(2)
+        }
+    )));
+    assert!(!engine.link_table[&link_id].validated);
+    assert_eq!(
+        engine.path_table[&destination_hash]
+            .primary()
+            .unwrap()
+            .timestamp,
+        99.0
+    );
+
+    // Without a verdict the proof is routed as before, and nothing is
+    // refreshed: the engine alone cannot recall the identity.
+    let actions = handle_lrproof(&mut engine, &lrproof_packet(&link_id, 2, &proof), 501.0);
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, TransportAction::SendOnInterface { .. })));
+    assert_eq!(
+        engine.path_table[&destination_hash]
+            .primary()
+            .unwrap()
+            .timestamp,
+        99.0
+    );
 }
 
 #[test]

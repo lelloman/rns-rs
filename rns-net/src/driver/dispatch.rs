@@ -2205,6 +2205,11 @@ impl Driver {
                         self.engine
                             .rebalance_destination_path_hops(&dest_hash, hops);
                     }
+                    // Link.validate_proof: the destination proved itself
+                    // alive by signing the proof of our link request.
+                    if is_initiator {
+                        self.engine.mark_path_responsive(&dest_hash, time::now());
+                    }
                     #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {

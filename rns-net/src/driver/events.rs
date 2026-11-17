@@ -434,6 +434,30 @@ impl Driver {
             }
         }
 
+        // Transport.py transports a link request proof only once it verifies
+        // against the destination's identity, and drops it when the identity
+        // cannot be recalled; a valid one proves the destination alive.
+        if let Some((link_id, destination_hash, _, proof_data)) = self
+            .engine
+            .decoded_transported_lrproof(&decoded_packet, interface_id)
+        {
+            let valid = self
+                .known_destination_announced(&destination_hash)
+                .is_some_and(|announced| {
+                    let mut sig_pub = [0u8; 32];
+                    sig_pub.copy_from_slice(&announced.public_key[32..64]);
+                    rns_core::transport::TransportEngine::lrproof_is_valid(
+                        &link_id,
+                        &proof_data,
+                        &sig_pub,
+                    )
+                });
+            self.engine.set_lrproof_verdict(link_id, valid);
+            if valid && !self.connected_to_shared_instance {
+                self.mark_known_destination_used(&destination_hash);
+            }
+        }
+
         // The engine consumes the packet; the hooks after it need the bytes.
         #[cfg(feature = "hooks")]
         let dispatch_hook_packet = self

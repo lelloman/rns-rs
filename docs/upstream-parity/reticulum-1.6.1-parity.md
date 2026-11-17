@@ -119,10 +119,14 @@ its destination, where rns-rs refreshed the path's timestamp only. On a busy
 transport node, paths that carried only relayed traffic counted as never used,
 and the unused path pool culled them first: vps-us lost its direct path to
 vps-eu between announces (`transport: mark a path used when forwarding along
-it`). Still open: upstream's `mark_path_responsive` also refreshes a path's
-timestamp, expiry and use when a link proof proves the destination alive;
-rns-rs keeps only the responsive state, and its transport link proof routing
-does not validate the proof's signature, which that refresh requires.
+it`). Upstream's `mark_path_responsive` also refreshes a path's timestamp,
+expiry and use when a link request proof proves the destination alive, and a
+transport node forwards such a proof only once its signature verifies against
+the destination's recalled identity, dropping it as a protocol violation
+otherwise. rns-rs kept only the responsive state and forwarded proofs
+unchecked; both now follow upstream, for transported proofs and for a link
+this node initiated (`transport: verify transported link proofs and refresh
+the proven path`).
 
 ## Promotion Result
 

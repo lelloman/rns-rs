@@ -1515,10 +1515,27 @@ impl TransportEngine {
                         self.interface_is_local_client(entry.next_hop_interface)
                             || self.interface_is_local_client(entry.received_interface)
                     });
+            let verdict = self
+                .lrproof_verdict
+                .take()
+                .filter(|(link_id, _)| *link_id == packet.destination_hash)
+                .map(|(_, valid)| valid);
             if (self.config.transport_enabled || ctx.from_local_client || for_local_client_link)
                 && self.link_table.contains_key(&packet.destination_hash)
             {
                 let link_entry = self.link_table.get(&packet.destination_hash).cloned();
+                if verdict == Some(false) {
+                    // Transport.py drops a transported proof whose signature
+                    // does not verify, as a protocol violation.
+                    log::debug!(
+                        "Invalid link request proof in transport for link {:02x?}, dropping proof",
+                        &packet.destination_hash[..4]
+                    );
+                    actions.push(TransportAction::ProtocolViolation {
+                        interface: ctx.iface,
+                    });
+                    return;
+                }
                 if let Some(entry) = link_entry {
                     let instance_local_link = self
                         .interface_is_local_client(entry.next_hop_interface)
@@ -1533,12 +1550,14 @@ impl TransportEngine {
                             skip_local_hops_delta: instance_local_link,
                         },
                     ) {
-                        // Forward the proof (simplified: skip signature validation
-                        // which requires Identity recall)
-
-                        // Mark link as validated
+                        // The caller checked the signature when it could recall
+                        // the destination's identity (`verdict`); a proof from
+                        // the destination proves it alive.
                         if let Some(le) = self.link_table.get_mut(&packet.destination_hash) {
                             le.validated = true;
+                        }
+                        if verdict == Some(true) {
+                            self.mark_path_responsive(&entry.destination_hash, ctx.now);
                         }
 
                         actions.push(TransportAction::LinkEstablished {
