@@ -27,6 +27,19 @@ pub struct AnnounceQueueEntry {
     pub raw: PacketBytes,
 }
 
+/// When the announce in `raw` was emitted, from its random blob, as
+/// upstream's `Transport.announce_emitted` reads it.
+pub fn announce_emitted(raw: &[u8]) -> Option<f64> {
+    let header_type = (*raw.first()? >> 6) & 0x03;
+    let data_start = if header_type == constants::HEADER_2 {
+        2 + 2 * (constants::TRUNCATED_HASHLENGTH / 8) + 1
+    } else {
+        2 + constants::TRUNCATED_HASHLENGTH / 8 + 1
+    };
+    let blob = super::pathfinder::extract_random_blob(raw.get(data_start..)?)?;
+    Some(super::pathfinder::timebase_from_random_blob(&blob) as f64)
+}
+
 /// Per-interface announce queue with bandwidth tracking.
 #[derive(Debug, Clone)]
 pub struct InterfaceAnnounceQueue {
@@ -762,6 +775,31 @@ mod tests {
 
         let queue = queues.queue_for(&InterfaceId(1)).unwrap();
         assert_eq!(queue.entries.len(), 1);
+    }
+
+    #[test]
+    fn announce_emitted_reads_the_random_blob_timebase() {
+        let mut data = vec![0u8; constants::KEYSIZE / 8 + constants::NAME_HASH_LENGTH / 8];
+        data.extend_from_slice(&[0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0, 0, 0, 0x12, 0x34]);
+        data.extend_from_slice(&[0x55; 64]);
+        let mut h1 = vec![constants::PACKET_TYPE_ANNOUNCE, 3];
+        h1.extend_from_slice(&[0xAA; 16]);
+        h1.push(constants::CONTEXT_NONE);
+        h1.extend_from_slice(&data);
+        assert_eq!(announce_emitted(&h1), Some(f64::from(0x1234)));
+
+        let mut h2 = vec![
+            (constants::HEADER_2 << 6) | constants::PACKET_TYPE_ANNOUNCE,
+            3,
+        ];
+        h2.extend_from_slice(&[0xBB; 16]);
+        h2.extend_from_slice(&[0xAA; 16]);
+        h2.push(constants::CONTEXT_NONE);
+        h2.extend_from_slice(&data);
+        assert_eq!(announce_emitted(&h2), Some(f64::from(0x1234)));
+
+        assert_eq!(announce_emitted(&h1[..40]), None);
+        assert_eq!(announce_emitted(&[]), None);
     }
 
     /// Upstream's `Transport.outbound` sends a forwarded announce at once

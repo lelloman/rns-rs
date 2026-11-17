@@ -89,12 +89,13 @@ impl TransportEngine {
                         } else {
                             (None, None, constants::ANNOUNCE_CAP)
                         };
+                    let emitted = announce_queue::announce_emitted(&raw).unwrap_or(now);
                     if let Some(send_action) = self.announce_queues.gate_announce(
                         interface,
                         raw,
                         *dest_hash,
                         hops,
-                        now,
+                        emitted,
                         now,
                         bitrate,
                         airtime_profile,
