@@ -1302,7 +1302,7 @@ impl TransportEngine {
 
         let is_path_response = ctx.packet.context == constants::CONTEXT_PATH_RESPONSE;
 
-        let (path_entry, announce_entry) = announce_proc::process_validated_announce(
+        let (mut path_entry, announce_entry) = announce_proc::process_validated_announce(
             ctx.packet.destination_hash,
             ctx.packet.hops,
             ctx.packet.data(),
@@ -1329,6 +1329,14 @@ impl TransportEngine {
             raw: ctx.original_raw.to_vec().into(),
         });
 
+        // As upstream, the new path keeps when the destination's path was
+        // last used.
+        path_entry.used = self
+            .path_table
+            .get(&ctx.packet.destination_hash)
+            .and_then(|ps| ps.primary())
+            .map_or(0.0, |path| path.used);
+
         // Store path via upsert into PathSet
         match mp_decision {
             MultiPathDecision::ReplacePrimary => self.upsert_primary_path_destination(
@@ -1344,11 +1352,13 @@ impl TransportEngine {
 
         // If receiving interface has a tunnel_id, store path in tunnel table too
         if let Some(tunnel_id) = self.interfaces.get(&ctx.iface).and_then(|i| i.tunnel_id) {
-            let blobs = self
+            // As upstream, the tunnel keeps the path's random blobs and
+            // when it was last used.
+            let (blobs, used) = self
                 .path_table
                 .get(&ctx.packet.destination_hash)
                 .and_then(|ps| ps.find_by_next_hop(&ctx.received_from))
-                .map(|e| e.random_blobs.clone())
+                .map(|e| (e.random_blobs.clone(), e.used))
                 .unwrap_or_default();
             self.tunnel_table.store_tunnel_path(
                 &tunnel_id,
@@ -1360,6 +1370,7 @@ impl TransportEngine {
                     expires,
                     random_blobs: blobs,
                     packet_hash: ctx.packet.packet_hash,
+                    used,
                 },
                 ctx.now,
                 self.config.destination_timeout_secs,

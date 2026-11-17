@@ -545,15 +545,23 @@ impl TransportEngine {
             };
 
             if should_restore {
+                // As upstream, the restored entry keeps when the path was
+                // last used and drops duplicate random blobs.
+                let mut random_blobs: Vec<[u8; 10]> = Vec::new();
+                for blob in &tunnel_path.random_blobs {
+                    if !random_blobs.contains(blob) {
+                        random_blobs.push(*blob);
+                    }
+                }
                 let entry = PathEntry {
                     timestamp: tunnel_path.timestamp,
                     next_hop: tunnel_path.received_from,
                     hops: tunnel_path.hops,
                     expires: tunnel_path.expires,
-                    random_blobs: tunnel_path.random_blobs.clone(),
+                    random_blobs,
                     receiving_interface: interface,
                     packet_hash: tunnel_path.packet_hash,
-                    used: 0.0,
+                    used: tunnel_path.used,
                     announce_raw: None,
                 };
                 // As upstream, the restored path takes the place of the one
@@ -972,6 +980,7 @@ mod tests {
             expires,
             random_blobs: vec![make_random_blob(blob_time)],
             packet_hash: [0xFF; 32],
+            used: 0.0,
         }
     }
 
@@ -1053,6 +1062,36 @@ mod tests {
             (Some(TUNNEL_HOP), true)
         );
         assert_eq!(restore(None, tunnel_path(2, now, 100), now), (None, false));
+    }
+
+    /// As upstream, a restored path keeps when it was last used and drops
+    /// duplicate random blobs.
+    #[test]
+    fn tunnel_reattach_keeps_use_time_and_drops_duplicate_blobs() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+        let tunnel_id = [0xCC; 32];
+        let dest = [0xDD; 16];
+        let (first, second) = (make_random_blob(100), make_random_blob(90));
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
+        engine.tunnel_table.store_tunnel_path(
+            &tunnel_id,
+            dest,
+            TunnelPath {
+                random_blobs: vec![first, second, first, second],
+                used: 1500.0,
+                ..tunnel_path(2, 5000.0, 100)
+            },
+            1000.0,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
+        );
+        engine.void_tunnel_interface(&tunnel_id);
+        engine.path_table.remove(&dest);
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 2000.0);
+        let restored = engine.path_table[&dest].primary().unwrap();
+        assert_eq!(restored.used, 1500.0);
+        assert_eq!(restored.random_blobs, vec![first, second]);
     }
 
     /// The tunnel keeps the paths it restores and drops the others, and

@@ -1008,8 +1008,9 @@ pub fn load_transport_state(
     use rns_core::transport::persistence::TransportStateSnapshot;
 
     let packet_hashes = load_packet_hashlist(&storage_dir.join("packet_hashlist.raw"))?;
-    let paths = load_path_table(&storage_dir.join("destination_table"))?;
-    let tunnels = load_tunnel_table(&storage_dir.join("tunnels"))?;
+    let now = crate::time::now();
+    let paths = load_path_table(&storage_dir.join("destination_table"), now)?;
+    let tunnels = load_tunnel_table(&storage_dir.join("tunnels"), now)?;
     // Like upstream, an unreadable rate table starts empty without failing
     // the rest of the restore.
     let announce_rates = match load_announce_rate_table(&storage_dir.join(ANNOUNCE_RATE_TABLE_FILE))
@@ -1049,6 +1050,7 @@ fn load_packet_hashlist(path: &Path) -> io::Result<Vec<[u8; 32]>> {
 
 fn load_path_table(
     path: &Path,
+    now: f64,
 ) -> io::Result<Vec<rns_core::transport::persistence::PersistedPath>> {
     let Some(value) = load_optional_msgpack(path)? else {
         return Ok(Vec::new());
@@ -1057,12 +1059,13 @@ fn load_path_table(
         .as_array()
         .ok_or_else(|| invalid_transport_data("destination table must be an array"))?
         .iter()
-        .map(decode_persisted_path)
+        .map(|value| decode_persisted_path(value, now))
         .collect()
 }
 
 fn load_tunnel_table(
     path: &Path,
+    now: f64,
 ) -> io::Result<Vec<rns_core::transport::persistence::PersistedTunnel>> {
     use rns_core::transport::persistence::PersistedTunnel;
 
@@ -1084,7 +1087,7 @@ fn load_tunnel_table(
                 .as_array()
                 .ok_or_else(|| invalid_transport_data("tunnel paths must be an array"))?
                 .iter()
-                .map(decode_persisted_path)
+                .map(|value| decode_persisted_path(value, now))
                 .collect::<io::Result<Vec<_>>>()?;
             let expires = fields[3]
                 .as_number()
@@ -1099,8 +1102,12 @@ fn load_tunnel_table(
         .collect()
 }
 
+/// Decode a path or tunnel path entry. One written without the time it was
+/// last used, as older upstream versions write them, counts as used `now`,
+/// as upstream loads it.
 fn decode_persisted_path(
     value: &rns_core::msgpack::Value,
+    now: f64,
 ) -> io::Result<rns_core::transport::persistence::PersistedPath> {
     use rns_core::transport::persistence::PersistedPath;
 
@@ -1133,7 +1140,7 @@ fn decode_persisted_path(
         packet_hash: fixed_bin::<32>(&fields[7], "packet hash")?,
         used: fields
             .get(8)
-            .and_then(|value| value.as_number())
+            .map_or(Some(now), |value| value.as_number())
             .unwrap_or(0.0),
     })
 }
@@ -1718,6 +1725,7 @@ mod tests {
                 paths: vec![PersistedPath {
                     destination_hash: [0x88; 16],
                     interface_hash: None,
+                    used: 12.5,
                     ..path
                 }],
                 expires: 30.75,
@@ -1863,6 +1871,49 @@ mod tests {
             tunnel.as_array().unwrap()[1],
             rns_core::msgpack::Value::Nil
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// As upstream loads them, a path or tunnel path entry written without
+    /// the time it was last used, as older versions write them, counts as
+    /// used at load time.
+    #[test]
+    fn entries_without_a_use_time_load_as_used_now() {
+        use rns_core::msgpack::Value;
+        let dir = temp_dir();
+        let entry = |destination: u8| {
+            Value::Array(vec![
+                Value::Bin(vec![destination; 16]),
+                Value::Float(10.0),
+                Value::Bin(vec![0x22; 16]),
+                Value::UInt(3),
+                Value::Float(20.0),
+                Value::Array(vec![Value::Bin(vec![0x33; 10])]),
+                Value::Nil,
+                Value::Bin(vec![0x66; 32]),
+            ])
+        };
+        fs::write(
+            dir.join("destination_table"),
+            rns_core::msgpack::pack(&Value::Array(vec![entry(0x11)])),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("tunnels"),
+            rns_core::msgpack::pack(&Value::Array(vec![Value::Array(vec![
+                Value::Bin(vec![0x77; 32]),
+                Value::Nil,
+                Value::Array(vec![entry(0x88)]),
+                Value::Float(30.0),
+            ])])),
+        )
+        .unwrap();
+        let before = crate::time::now();
+        let loaded = load_transport_state(&dir).unwrap();
+        let after = crate::time::now();
+        for used in [loaded.paths[0].used, loaded.tunnels[0].paths[0].used] {
+            assert!((before..=after).contains(&used), "{used}");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 

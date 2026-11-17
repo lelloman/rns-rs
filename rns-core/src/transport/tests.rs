@@ -2604,6 +2604,39 @@ fn test_handle_tunnel_new() {
     assert_eq!(engine.tunnel_table().len(), 1);
 }
 
+/// As upstream, an announce that updates a path keeps when the
+/// destination's path was last used, in the path table and in the tunnel.
+#[test]
+fn updated_path_keeps_its_use_time_in_the_table_and_the_tunnel() {
+    let mut engine = TransportEngine::new(make_config(false));
+    let mut iface = make_tunnel_interface(1);
+    let tunnel_id = [0xBB; 32];
+    iface.tunnel_id = Some(tunnel_id);
+    engine.register_interface(iface);
+    engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
+    let mut rng = rns_crypto::FixedRng::new(&[0xDD; 32]);
+
+    let (dest, first) =
+        signed_announce_with(0x51, "used", blob_emitted_at(900), constants::CONTEXT_NONE);
+    engine.handle_inbound(InboundFrame::new(&first, InterfaceId(1), 1000.0), &mut rng);
+    assert_eq!(engine.path_table[&dest].primary().unwrap().used, 0.0);
+    engine
+        .path_table
+        .get_mut(&dest)
+        .unwrap()
+        .primary_mut()
+        .unwrap()
+        .used = 1100.0;
+
+    let (_, newer) =
+        signed_announce_with(0x51, "used", blob_emitted_at(1150), constants::CONTEXT_NONE);
+    engine.handle_inbound(InboundFrame::new(&newer, InterfaceId(1), 1200.0), &mut rng);
+    let path = engine.path_table[&dest].primary().unwrap();
+    assert_eq!((path.timestamp, path.used), (1200.0, 1100.0));
+    let tunnel = engine.tunnel_table().get(&tunnel_id).unwrap();
+    assert_eq!(tunnel.paths[&dest].used, 1100.0);
+}
+
 #[test]
 fn test_announce_stores_tunnel_path() {
     use crate::announce::AnnounceData;
@@ -2687,6 +2720,7 @@ fn test_tunnel_reattach_restores_paths() {
             expires: 1000.0 + constants::DESTINATION_TIMEOUT,
             random_blobs: Vec::new(),
             packet_hash: [0xFF; 32],
+            used: 0.0,
         },
         1000.0,
         constants::DESTINATION_TIMEOUT,
@@ -2735,6 +2769,7 @@ fn test_active_packet_hashes_include_detached_tunnel_paths() {
             expires: 1000.0 + constants::DESTINATION_TIMEOUT,
             random_blobs: Vec::new(),
             packet_hash,
+            used: 0.0,
         },
         1000.0,
         constants::DESTINATION_TIMEOUT,
@@ -2768,6 +2803,7 @@ fn test_tunnel_reattach_does_not_overwrite_newer_path() {
             expires: 1000.0 + constants::DESTINATION_TIMEOUT,
             random_blobs: vec![older_blob],
             packet_hash: [0x11; 32],
+            used: 0.0,
         },
         1000.0,
         constants::DESTINATION_TIMEOUT,

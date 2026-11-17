@@ -39,6 +39,9 @@ pub struct TunnelPath {
     pub expires: f64,
     pub random_blobs: Vec<[u8; 10]>,
     pub packet_hash: [u8; 32],
+    /// When the path was last used, carried from the path table entry the
+    /// announce updated; 0 means never.
+    pub used: f64,
 }
 
 /// Result of validating tunnel synthesis data.
@@ -642,6 +645,7 @@ mod tests {
                 expires: now + constants::DESTINATION_TIMEOUT,
                 random_blobs: Vec::new(),
                 packet_hash: [0xCC; 32],
+                used: 0.0,
             },
             now,
             constants::DESTINATION_TIMEOUT,
@@ -691,6 +695,7 @@ mod tests {
                 expires: now + constants::DESTINATION_TIMEOUT,
                 random_blobs: Vec::new(),
                 packet_hash: [0xFF; 32],
+                used: 0.0,
             },
             now,
             constants::DESTINATION_TIMEOUT,
@@ -774,6 +779,7 @@ mod tests {
                 expires: now + 100.0, // expires soon
                 random_blobs: Vec::new(),
                 packet_hash: [0; 32],
+                used: 0.0,
             },
             now,
             constants::DESTINATION_TIMEOUT,
@@ -789,6 +795,7 @@ mod tests {
                 expires: now + constants::DESTINATION_TIMEOUT, // expires later
                 random_blobs: Vec::new(),
                 packet_hash: [0; 32],
+                used: 0.0,
             },
             now,
             constants::DESTINATION_TIMEOUT,
@@ -851,6 +858,7 @@ mod tests {
                 expires: now + constants::DESTINATION_TIMEOUT,
                 random_blobs: Vec::new(),
                 packet_hash: [0xCC; 32],
+                used: 0.0,
             },
             now,
             constants::DESTINATION_TIMEOUT,
@@ -944,6 +952,7 @@ mod tests {
                 expires: now + constants::DESTINATION_TIMEOUT,
                 random_blobs: Vec::new(),
                 packet_hash: [0; 32],
+                used: 0.0,
             },
             now,
             constants::DESTINATION_TIMEOUT,
@@ -971,6 +980,7 @@ mod tests {
                 expires: 2000.0,
                 random_blobs: Vec::new(),
                 packet_hash: [0; 32],
+                used: 0.0,
             },
             1000.0,
             constants::DESTINATION_TIMEOUT,
@@ -999,6 +1009,7 @@ mod tests {
             expires,
             random_blobs: Vec::new(),
             packet_hash: [packet_hash_byte; 32],
+            used: 0.0,
         };
 
         let dest1 = [0xA1; 16];
@@ -1064,6 +1075,7 @@ mod tests {
                 expires: now + 1.0,
                 random_blobs: Vec::new(),
                 packet_hash: [0x11; 32],
+                used: 0.0,
             },
             now,
             constants::DESTINATION_TIMEOUT,
@@ -1079,6 +1091,7 @@ mod tests {
                 expires: now + 100.0,
                 random_blobs: Vec::new(),
                 packet_hash: [0x22; 32],
+                used: 0.0,
             },
             now + 1.0,
             constants::DESTINATION_TIMEOUT,
@@ -1095,6 +1108,7 @@ mod tests {
                 expires: now + 200.0,
                 random_blobs: Vec::new(),
                 packet_hash: [0x33; 32],
+                used: 0.0,
             },
             now + 2.0,
             constants::DESTINATION_TIMEOUT,
@@ -1116,6 +1130,7 @@ mod tests {
             expires: timestamp + constants::TUNNEL_PATH_TIMEOUT,
             random_blobs: Vec::new(),
             packet_hash: [0x22; 32],
+            used: 0.0,
         }
     }
 

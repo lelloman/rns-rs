@@ -113,7 +113,7 @@ impl TransportEngine {
                         random_blobs: tail_random_blobs(&path.random_blobs),
                         interface_hash,
                         packet_hash: path.packet_hash,
-                        used: 0.0,
+                        used: path.used,
                     })
                     .collect();
                 PersistedTunnel {
@@ -233,6 +233,7 @@ impl TransportEngine {
                         expires: path.expires,
                         random_blobs: path.random_blobs,
                         packet_hash: path.packet_hash,
+                        used: path.used,
                     },
                 );
             }
@@ -667,6 +668,7 @@ mod tests {
                 expires: 500.0,
                 random_blobs: vec![[7; 10]],
                 packet_hash: packet.packet_hash,
+                used: 150.0,
             },
             100.0,
             constants::DESTINATION_TIMEOUT,
@@ -698,6 +700,8 @@ mod tests {
         );
         assert_eq!(round_trip.tunnels[0].paths[0].expires, 500.0);
         assert_eq!(round_trip.tunnels[0].paths[0].destination_hash, [5; 16]);
+        // When the path was last used survives the round trip.
+        assert_eq!(round_trip.tunnels[0].paths[0].used, 150.0);
 
         // An expiry already inside the window is kept.
         let mut snapshot = restored.persistence_snapshot();
