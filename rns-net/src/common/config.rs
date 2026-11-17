@@ -105,6 +105,9 @@ pub struct ReticulumSection {
     /// Automatic re-upgrade after a direct path is lost
     /// (`direct_connect_reupgrade*`).
     pub direct_connect_reupgrade: crate::event::DirectReupgradeConfig,
+    /// Rate limits of the probe server (`probe_source_rate`,
+    /// `probe_source_burst`, `probe_total_rate`).
+    pub probe_rate_limit: crate::event::ProbeRateLimit,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
@@ -261,6 +264,7 @@ impl Default for ReticulumSection {
             direct_connect_allow_private_endpoints: false,
             direct_connect_allowed_identities: Vec::new(),
             direct_connect_reupgrade: Default::default(),
+            probe_rate_limit: Default::default(),
             device: None,
             underlay_mark: None,
             discover_interfaces: false,
@@ -1192,6 +1196,37 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             key: "probe_port".into(),
             value: v.clone(),
         })?);
+    }
+    if let Some(v) = kvs.get("probe_source_rate") {
+        section.probe_rate_limit.per_source_rate = v
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|rate| rate.is_finite() && *rate >= 0.0)
+            .ok_or_else(|| ConfigError::InvalidValue {
+                key: "probe_source_rate".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = kvs.get("probe_source_burst") {
+        section.probe_rate_limit.per_source_burst = v
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|burst| *burst > 0)
+            .ok_or_else(|| ConfigError::InvalidValue {
+                key: "probe_source_burst".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = kvs.get("probe_total_rate") {
+        section.probe_rate_limit.total_rate =
+            v.trim()
+                .parse::<u32>()
+                .map_err(|_| ConfigError::InvalidValue {
+                    key: "probe_total_rate".into(),
+                    value: v.clone(),
+                })?;
     }
     if let Some(v) = kvs.get("probe_addr") {
         section.probe_addr = Some(v.clone());
@@ -3334,6 +3369,32 @@ direct_connect_policy = identified_only
             "direct_connect_reupgrade_delay = soon",
             "direct_connect_reupgrade_max_delay = -5",
             "direct_connect_reupgrade_max_delay = inf",
+        ] {
+            assert!(parse(&format!("[reticulum]\n{bad}\n")).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn probe_rate_limits_parse_and_default() {
+        let config = parse("[reticulum]\nprobe_port = 4343\n").unwrap();
+        assert_eq!(
+            config.reticulum.probe_rate_limit,
+            crate::event::ProbeRateLimit::default()
+        );
+        let config = parse(
+            "[reticulum]\nprobe_source_rate = 0.5\nprobe_source_burst = 4\n\
+             probe_total_rate = 0\n",
+        )
+        .unwrap();
+        let limit = config.reticulum.probe_rate_limit;
+        assert_eq!(limit.per_source_rate, 0.5);
+        assert_eq!(limit.per_source_burst, 4);
+        assert_eq!(limit.total_rate, 0);
+        for bad in [
+            "probe_source_rate = -1",
+            "probe_source_rate = nan",
+            "probe_source_burst = 0",
+            "probe_total_rate = lots",
         ] {
             assert!(parse(&format!("[reticulum]\n{bad}\n")).is_err(), "{bad}");
         }

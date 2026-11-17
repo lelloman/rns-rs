@@ -5,15 +5,21 @@
 //! Request:  [MAGIC:"RNSP" 4B] [VERSION:1B] [NONCE:16B]          = 21 bytes
 //! Response: [MAGIC:"RNSP" 4B] [VERSION:1B] [NONCE:16B (echo)]
 //!           [ADDR_TYPE:1B (4=IPv4,6=IPv6)] [ADDR:4|16B] [PORT:2B] = 24 or 36 bytes
+//!
+//! The server answers each source within the limits of a
+//! [`ProbeRateLimit`] and drops what is over them (see [`ProbeLimiter`]).
 
+use std::collections::HashMap;
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+pub use crate::event::ProbeRateLimit;
 
 use crate::engine::service_keys::PROBE_SERVER as PROBE_SERVER_KEY;
 use crate::poll::{Event as Interest, Events, Poller};
@@ -28,12 +34,13 @@ const ADDR_TYPE_IPV6: u8 = 6;
 ///
 /// Returns a handle to stop the server.
 pub fn start_probe_server(listen_addr: SocketAddr) -> io::Result<ProbeServerHandle> {
-    start_probe_server_with_mark(listen_addr, None)
+    start_probe_server_with_mark(listen_addr, None, ProbeRateLimit::default())
 }
 
 pub fn start_probe_server_with_mark(
     listen_addr: SocketAddr,
     underlay_mark: Option<u32>,
+    limit: ProbeRateLimit,
 ) -> io::Result<ProbeServerHandle> {
     let socket = UdpSocket::bind(listen_addr)?;
     crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
@@ -47,7 +54,7 @@ pub fn start_probe_server_with_mark(
     let handle = thread::Builder::new()
         .name("probe-server".into())
         .spawn(move || {
-            run_probe_server(socket, running_clone);
+            run_probe_server(socket, running_clone, ProbeLimiter::new(limit));
         })?;
 
     Ok(ProbeServerHandle {
@@ -60,7 +67,11 @@ pub fn start_probe_server_with_mark(
 
 /// Answer probes on a non-blocking socket, waiting in its poller between
 /// them, until `running` is cleared and the poller woken.
-fn run_probe_server(mut socket: crate::listen::Listener<UdpSocket>, running: Arc<AtomicBool>) {
+fn run_probe_server(
+    mut socket: crate::listen::Listener<UdpSocket>,
+    running: Arc<AtomicBool>,
+    mut limiter: ProbeLimiter,
+) {
     let mut buf = [0u8; 64];
     while running.load(Ordering::Relaxed) {
         let (len, src) = match socket.get().recv_from(&mut buf) {
@@ -80,7 +91,7 @@ fn run_probe_server(mut socket: crate::listen::Listener<UdpSocket>, running: Arc
         };
         let socket = socket.get();
 
-        if let Some(response) = answer_probe(&buf[..len], &src) {
+        if let Some(response) = limiter.answer(&buf[..len], &src, Instant::now()) {
             if let Err(e) = socket.send_to(&response, src) {
                 log::debug!("Probe server send error: {}", e);
             }
@@ -91,13 +102,171 @@ fn run_probe_server(mut socket: crate::listen::Listener<UdpSocket>, running: Arc
 /// The response to a probe request from `src`, or `None` if `request` is
 /// not one.
 fn answer_probe(request: &[u8], src: &SocketAddr) -> Option<Vec<u8>> {
-    if request.len() != PROBE_REQUEST_LEN
-        || &request[..4] != PROBE_MAGIC
-        || request[4] != PROBE_VERSION
-    {
+    if !is_probe_request(request) {
         return None;
     }
     Some(build_probe_response(&request[5..21], src))
+}
+
+/// Whether `data` is a probe request.
+fn is_probe_request(data: &[u8]) -> bool {
+    data.len() == PROBE_REQUEST_LEN && &data[..4] == PROBE_MAGIC && data[4] == PROBE_VERSION
+}
+
+/// Most sources a [`ProbeLimiter`] tracks at once.
+const MAX_TRACKED_SOURCES: usize = 4096;
+
+/// Seconds between log lines about refused requests.
+const REFUSAL_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// A token bucket: up to `capacity` tokens, refilled at `rate` a second.
+#[derive(Debug, Clone, Copy)]
+struct Bucket {
+    tokens: f64,
+    at: Instant,
+}
+
+impl Bucket {
+    fn full(capacity: f64, now: Instant) -> Self {
+        Bucket {
+            tokens: capacity,
+            at: now,
+        }
+    }
+
+    fn refill(&mut self, capacity: f64, rate: f64, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.at).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * rate).min(capacity);
+        self.at = now;
+    }
+
+    /// Take a token if there is one.
+    fn take(&mut self, capacity: f64, rate: f64, now: Instant) -> bool {
+        self.refill(capacity, rate, now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// The rate limits of a probe server (see [`ProbeRateLimit`]): a token
+/// bucket per source (an IPv4 address, or an IPv6 /64) and one over all
+/// of them. At most [`MAX_TRACKED_SOURCES`] sources are tracked; when the
+/// table is full, sources whose bucket has refilled are forgotten, and a
+/// new source is refused while every tracked one is still limited.
+pub(crate) struct ProbeLimiter {
+    limit: ProbeRateLimit,
+    sources: HashMap<IpAddr, Bucket>,
+    total: Option<Bucket>,
+    refused: u64,
+    last_report: Option<Instant>,
+}
+
+impl ProbeLimiter {
+    pub(crate) fn new(limit: ProbeRateLimit) -> Self {
+        ProbeLimiter {
+            limit,
+            sources: HashMap::new(),
+            total: None,
+            refused: 0,
+            last_report: None,
+        }
+    }
+
+    /// The source a request from `src` counts against.
+    fn source_key(src: &SocketAddr) -> IpAddr {
+        match super::canonical(*src).ip() {
+            IpAddr::V6(v6) => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+            v4 => v4,
+        }
+    }
+
+    fn per_source_limited(&self) -> bool {
+        self.limit.per_source_rate > 0.0 && self.limit.per_source_rate.is_finite()
+    }
+
+    /// Whether a request from `src` at `now` may be answered; takes its
+    /// tokens if so.
+    pub(crate) fn allow(&mut self, src: &SocketAddr, now: Instant) -> bool {
+        let allowed = self.check(src, now);
+        if !allowed {
+            self.refused += 1;
+            if self
+                .last_report
+                .is_none_or(|last| now.saturating_duration_since(last) >= REFUSAL_REPORT_INTERVAL)
+            {
+                log::info!(
+                    "Probe server dropped {} request(s) over its rate limits (latest from {})",
+                    self.refused,
+                    src.ip()
+                );
+                self.refused = 0;
+                self.last_report = Some(now);
+            }
+        }
+        allowed
+    }
+
+    fn check(&mut self, src: &SocketAddr, now: Instant) -> bool {
+        let rate = self.limit.per_source_rate;
+        let burst = f64::from(self.limit.per_source_burst.max(1));
+        let key = Self::source_key(src);
+        if self.per_source_limited() {
+            if !self.sources.contains_key(&key) && self.sources.len() >= MAX_TRACKED_SOURCES {
+                self.sources.retain(|_, bucket| {
+                    bucket.refill(burst, rate, now);
+                    bucket.tokens < burst
+                });
+                if self.sources.len() >= MAX_TRACKED_SOURCES {
+                    return false;
+                }
+            }
+            let bucket = self
+                .sources
+                .entry(key)
+                .or_insert_with(|| Bucket::full(burst, now));
+            // Look before taking: a request refused overall does not use
+            // up the source's allowance.
+            bucket.refill(burst, rate, now);
+            if bucket.tokens < 1.0 {
+                return false;
+            }
+        }
+        if self.limit.total_rate > 0 {
+            let total_rate = f64::from(self.limit.total_rate);
+            let total = self
+                .total
+                .get_or_insert_with(|| Bucket::full(total_rate, now));
+            if !total.take(total_rate, total_rate, now) {
+                return false;
+            }
+        }
+        if let Some(bucket) = self.sources.get_mut(&key) {
+            bucket.tokens -= 1.0;
+        }
+        true
+    }
+
+    /// The response to `request` from `src`, if it is a probe request
+    /// within the limits.
+    pub(crate) fn answer(
+        &mut self,
+        request: &[u8],
+        src: &SocketAddr,
+        now: Instant,
+    ) -> Option<Vec<u8>> {
+        // Datagrams that are not probe requests cost no tokens.
+        if !is_probe_request(request) || !self.allow(src, now) {
+            return None;
+        }
+        answer_probe(request, src)
+    }
 }
 
 /// Datagrams answered per wake-up, so that a flood of probes cannot hold
@@ -110,12 +279,14 @@ const FOLDED_PROBES_PER_WAKE: usize = 64;
 pub(crate) struct FoldedProbeServer {
     socket: UdpSocket,
     poller: Arc<Poller>,
+    limiter: ProbeLimiter,
 }
 
 impl FoldedProbeServer {
     pub(crate) fn bind(
         listen_addr: SocketAddr,
         underlay_mark: Option<u32>,
+        limit: ProbeRateLimit,
         poller: Arc<Poller>,
     ) -> io::Result<Self> {
         let socket = UdpSocket::bind(listen_addr)?;
@@ -124,11 +295,15 @@ impl FoldedProbeServer {
         // SAFETY: the socket is kept, open, until `Drop` removes the
         // registration.
         unsafe { poller.add(socket.as_raw_fd(), Interest::readable(PROBE_SERVER_KEY))? };
-        Ok(Self { socket, poller })
+        Ok(Self {
+            socket,
+            poller,
+            limiter: ProbeLimiter::new(limit),
+        })
     }
 
     /// Answer pending requests if `ready` holds the server's key.
-    pub(crate) fn serve(&self, ready: &Events) {
+    pub(crate) fn serve(&mut self, ready: &Events) {
         if !ready.iter().any(|event| event.key == PROBE_SERVER_KEY) {
             return;
         }
@@ -153,7 +328,8 @@ impl FoldedProbeServer {
                     break;
                 }
             };
-            if let Some(response) = answer_probe(&buf[..len], &src) {
+            let response = self.limiter.answer(&buf[..len], &src, Instant::now());
+            if let Some(response) = response {
                 // A response the socket cannot take now is dropped, as a
                 // lost datagram would be; the client asks again.
                 if let Err(e) = self.socket.send_to(&response, src) {
@@ -737,7 +913,11 @@ pub(crate) mod tests {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
         let server_thread = thread::spawn(move || {
-            run_probe_server(socket, running_clone);
+            run_probe_server(
+                socket,
+                running_clone,
+                ProbeLimiter::new(ProbeRateLimit::default()),
+            );
         });
 
         // Give server a moment to start
@@ -853,11 +1033,170 @@ pub(crate) mod tests {
         }
     }
 
+    fn request() -> Vec<u8> {
+        ProbeRequest::new(rns_core::holepunch::ProbeProtocol::Rnsp)
+            .bytes()
+            .to_vec()
+    }
+
+    #[test]
+    fn each_source_gets_its_burst_then_its_rate() {
+        let mut limiter = ProbeLimiter::new(ProbeRateLimit {
+            per_source_rate: 2.0,
+            per_source_burst: 3,
+            total_rate: 0,
+        });
+        let t0 = Instant::now();
+        let a: SocketAddr = "198.51.100.1:4000".parse().unwrap();
+        let b: SocketAddr = "198.51.100.2:4000".parse().unwrap();
+        for _ in 0..3 {
+            assert!(limiter.answer(&request(), &a, t0).is_some());
+        }
+        assert!(limiter.answer(&request(), &a, t0).is_none());
+        // Another port of the same address is the same source.
+        let a2: SocketAddr = "198.51.100.1:4001".parse().unwrap();
+        assert!(limiter.answer(&request(), &a2, t0).is_none());
+        // Another address has a bucket of its own.
+        assert!(limiter.answer(&request(), &b, t0).is_some());
+        // Half a second refills one request at two a second.
+        let t1 = t0 + Duration::from_millis(500);
+        assert!(limiter.answer(&request(), &a, t1).is_some());
+        assert!(limiter.answer(&request(), &a, t1).is_none());
+        // A refill never exceeds the burst.
+        let t2 = t1 + Duration::from_secs(60);
+        for _ in 0..3 {
+            assert!(limiter.allow(&a, t2));
+        }
+        assert!(!limiter.allow(&a, t2));
+    }
+
+    #[test]
+    fn junk_costs_no_tokens() {
+        let mut limiter = ProbeLimiter::new(ProbeRateLimit {
+            per_source_rate: 1.0,
+            per_source_burst: 1,
+            total_rate: 1,
+        });
+        let now = Instant::now();
+        let src: SocketAddr = "198.51.100.1:4000".parse().unwrap();
+        for _ in 0..10 {
+            assert!(limiter.answer(b"not a probe", &src, now).is_none());
+        }
+        assert!(limiter.answer(&request(), &src, now).is_some());
+    }
+
+    #[test]
+    fn an_ipv6_slash_64_is_one_source() {
+        let mut limiter = ProbeLimiter::new(ProbeRateLimit {
+            per_source_rate: 1.0,
+            per_source_burst: 1,
+            total_rate: 0,
+        });
+        let now = Instant::now();
+        let a: SocketAddr = "[2001:db8:1:2::1]:4000".parse().unwrap();
+        let same_64: SocketAddr = "[2001:db8:1:2:ffff::9]:4000".parse().unwrap();
+        let other_64: SocketAddr = "[2001:db8:1:3::1]:4000".parse().unwrap();
+        assert!(limiter.allow(&a, now));
+        assert!(!limiter.allow(&same_64, now));
+        assert!(limiter.allow(&other_64, now));
+        // An IPv4-mapped address counts as its IPv4 form.
+        let v4: SocketAddr = "198.51.100.7:1".parse().unwrap();
+        let mapped: SocketAddr = "[::ffff:198.51.100.7]:2".parse().unwrap();
+        assert!(limiter.allow(&v4, now));
+        assert!(!limiter.allow(&mapped, now));
+    }
+
+    #[test]
+    fn the_total_rate_bounds_all_sources_together() {
+        let mut limiter = ProbeLimiter::new(ProbeRateLimit {
+            per_source_rate: 1.0,
+            per_source_burst: 5,
+            total_rate: 4,
+        });
+        let now = Instant::now();
+        let answered = (0..10u8)
+            .filter(|i| {
+                let src = SocketAddr::from(([198, 51, 100, *i], 4000));
+                limiter.allow(&src, now)
+            })
+            .count();
+        assert_eq!(answered, 4);
+        // A source refused overall kept its own allowance.
+        let later = now + Duration::from_secs(1);
+        let src = SocketAddr::from(([198, 51, 100, 9], 4000));
+        for _ in 0..4 {
+            assert!(limiter.allow(&src, later));
+        }
+    }
+
+    #[test]
+    fn zero_rates_turn_the_limits_off() {
+        let mut limiter = ProbeLimiter::new(ProbeRateLimit {
+            per_source_rate: 0.0,
+            per_source_burst: 1,
+            total_rate: 0,
+        });
+        let now = Instant::now();
+        let src: SocketAddr = "198.51.100.1:4000".parse().unwrap();
+        for _ in 0..1000 {
+            assert!(limiter.allow(&src, now));
+        }
+        assert!(limiter.sources.is_empty());
+    }
+
+    #[test]
+    fn a_full_source_table_forgets_refilled_sources_and_refuses_the_rest() {
+        let mut limiter = ProbeLimiter::new(ProbeRateLimit {
+            per_source_rate: 1.0,
+            per_source_burst: 2,
+            total_rate: 0,
+        });
+        let t0 = Instant::now();
+        let src = |i: usize| SocketAddr::from(([10, (i >> 16) as u8, (i >> 8) as u8, i as u8], 1));
+        for i in 0..MAX_TRACKED_SOURCES {
+            assert!(limiter.allow(&src(i), t0));
+        }
+        // Every tracked source is still short of its burst: a new one is
+        // refused rather than evicting one.
+        let newcomer = src(MAX_TRACKED_SOURCES);
+        assert!(!limiter.allow(&newcomer, t0));
+        // Once they have refilled they are forgotten and it gets in.
+        let t1 = t0 + Duration::from_secs(2);
+        assert!(limiter.allow(&newcomer, t1));
+        assert_eq!(limiter.sources.len(), 1);
+    }
+
+    #[test]
+    fn threaded_probe_server_drops_requests_over_the_limit() {
+        let mut server = start_probe_server_with_mark(
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+            ProbeRateLimit {
+                per_source_rate: 0.001,
+                per_source_burst: 2,
+                total_rate: 0,
+            },
+        )
+        .unwrap();
+        let addr = server.local_addr();
+        assert!(probe_endpoint(addr, None, Duration::from_secs(3), None).is_ok());
+        assert!(probe_endpoint(addr, None, Duration::from_secs(3), None).is_ok());
+        // Unanswered: the probe times out (WouldBlock from the socket's
+        // read timeout on some platforms).
+        assert!(probe_endpoint(addr, None, Duration::from_millis(300), None).is_err());
+        server.stop();
+    }
+
     #[test]
     fn folded_probe_server_answers_on_its_poller_and_ignores_junk() {
         let poller = Arc::new(Poller::new().unwrap());
-        let server =
-            FoldedProbeServer::bind("127.0.0.1:0".parse().unwrap(), None, poller.clone()).unwrap();
+        let mut server = FoldedProbeServer::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+            ProbeRateLimit::default(),
+            poller.clone(),
+        )
+        .unwrap();
         let addr = server.local_addr().unwrap();
 
         let client = thread::spawn(move || {

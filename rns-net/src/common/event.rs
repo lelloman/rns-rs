@@ -159,6 +159,34 @@ impl Default for DirectReupgradeConfig {
     }
 }
 
+/// Rate limits of the probe server (the facilitator side of Direct Link).
+///
+/// Each source gets a token bucket: `per_source_burst` requests at once,
+/// refilled at `per_source_rate` a second. A source is an IPv4 address or
+/// an IPv6 /64, since a host usually holds a whole /64. Over all sources
+/// the server answers at most `total_rate` requests a second. A request
+/// over either limit is dropped without an answer, as a lost datagram
+/// would be. A rate of 0 turns that limit off.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProbeRateLimit {
+    /// Requests a second each source may sustain (default 1).
+    pub per_source_rate: f64,
+    /// Requests a source may send at once (default 10).
+    pub per_source_burst: u32,
+    /// Requests a second answered over all sources (default 1000).
+    pub total_rate: u32,
+}
+
+impl Default for ProbeRateLimit {
+    fn default() -> Self {
+        ProbeRateLimit {
+            per_source_rate: 1.0,
+            per_source_burst: 10,
+            total_rate: 1000,
+        }
+    }
+}
+
 /// Scalar runtime-config value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeConfigValue {

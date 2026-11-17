@@ -95,6 +95,7 @@ fn main() {
             direct_connect_allow_private_endpoints: false,
             direct_connect_allowed_identities: Vec::new(),
             direct_connect_reupgrade: Default::default(),
+            probe_rate_limit: Default::default(),
             device: None,
             underlay_mark: None,
             hooks: Vec::new(),

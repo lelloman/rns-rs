@@ -512,6 +512,18 @@ adds the observed address), 12 random bytes of transaction id for STUN
 out after 3 seconds. A facilitator must therefore answer from the address
 it is asked at (bind it to that address on a multi-homed host).
 
+An rns-rs facilitator answers each source within a rate limit: a token
+bucket per source address (an IPv4 address, or an IPv6 /64), by default
+10 requests at once refilled at one a second, and at most 1000 answers a
+second over all sources (`probe_source_rate`, `probe_source_burst` and
+`probe_total_rate` in `[reticulum]`). A request over a limit, and any
+datagram that is not a probe request, gets no answer. It tracks at most
+4096 sources; when that table is full it forgets the sources whose bucket
+has refilled, and refuses new sources while all are still limited. Since
+a response (24 or 36 bytes) is barely larger than a request (21 bytes),
+the limits keep a facilitator from being used to flood a third party with
+spoofed requests.
+
 Properties of the facilitator:
 - **Stateless** — each request/response is independent. The facilitator does
   not track relationships between peers.

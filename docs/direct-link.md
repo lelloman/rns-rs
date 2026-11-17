@@ -44,6 +44,9 @@ known identities:
 | Key | Values | Meaning |
 |-----|--------|---------|
 | `probe_port` | port | Serve STUN-like probe requests on this UDP port |
+| `probe_source_rate` | requests a second, default `1` | Requests the probe server answers per source (an IPv4 address or an IPv6 /64) once its burst is used up. `0` turns the per-source limit off |
+| `probe_source_burst` | count, default `10` | Requests a source may send at once |
+| `probe_total_rate` | requests a second, default `1000` | Requests the probe server answers over all sources. `0` turns the limit off |
 | `probe_addr` | `host:port` | Facilitator to use for endpoint discovery. Needed to propose |
 | `direct_connect_policy` | `reject` (default), `accept_all`, `identified_only`, `ask_app` | How a responder treats incoming upgrade requests from peers not on the allowlist. `identified_only` accepts any peer that completed Reticulum `LINKIDENTIFY`, which anyone can do with a throwaway identity. `ask_app` asks the application callback, which rejects unless it is overridden |
 | `direct_connect_allowed_identities` | comma-separated identity hashes | Peers whose upgrade requests are accepted whatever the policy, once they identify on the link with that identity |
@@ -62,7 +65,7 @@ Prefer an allowlist of identities you trust over `accept_all` or
 `identified_only`.
 
 In `rns-net`, the same settings are the `NodeConfig` fields `probe_addrs`,
-`direct_connect_policy`, `direct_connect_allowed_identities`,
+`probe_rate_limit` (a `ProbeRateLimit`), `direct_connect_policy`, `direct_connect_allowed_identities`,
 `direct_connect_allow_private_endpoints` and `direct_connect_reupgrade`
 (a `DirectReupgradeConfig`).
 

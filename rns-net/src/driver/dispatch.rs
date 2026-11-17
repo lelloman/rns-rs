@@ -723,7 +723,7 @@ impl Driver {
         if let Some(bridge) = &self.provider_bridge {
             bridge.serve(ready);
         }
-        if let Some(probe_server) = &self.probe_server {
+        if let Some(probe_server) = &mut self.probe_server {
             probe_server.serve(ready);
         }
         for event in ready.iter() {

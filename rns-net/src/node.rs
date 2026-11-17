@@ -968,6 +968,8 @@ pub struct NodeConfig {
     /// Re-upgrade a link by itself after losing the direct path it
     /// proposed (see [`crate::event::DirectReupgradeConfig`]).
     pub direct_connect_reupgrade: crate::event::DirectReupgradeConfig,
+    /// Rate limits of the probe server started by `probe_port`.
+    pub probe_rate_limit: crate::event::ProbeRateLimit,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
@@ -1109,6 +1111,7 @@ impl Default for NodeConfig {
             direct_connect_allow_private_endpoints: false,
             direct_connect_allowed_identities: Vec::new(),
             direct_connect_reupgrade: Default::default(),
+            probe_rate_limit: Default::default(),
             device: None,
             underlay_mark: None,
             hooks: Vec::new(),
@@ -2021,6 +2024,7 @@ impl RnsNode {
                 .direct_connect_allowed_identities
                 .clone(),
             direct_connect_reupgrade: rns_config.reticulum.direct_connect_reupgrade,
+            probe_rate_limit: rns_config.reticulum.probe_rate_limit,
             device: rns_config.reticulum.device.clone(),
             underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
             hooks: if private {
@@ -2394,6 +2398,7 @@ impl RnsNode {
                 match crate::holepunch::probe::FoldedProbeServer::bind(
                     listen_addr,
                     config.underlay_mark,
+                    config.probe_rate_limit,
                     Arc::clone(tx.poller()),
                 ) {
                     Ok(server) => {
@@ -2407,6 +2412,7 @@ impl RnsNode {
                 match crate::holepunch::probe::start_probe_server_with_mark(
                     listen_addr,
                     config.underlay_mark,
+                    config.probe_rate_limit,
                 ) {
                     Ok(handle) => {
                         log::info!("Probe server started on 0.0.0.0:{}", port);
@@ -6665,6 +6671,7 @@ mod tests {
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -7029,6 +7036,7 @@ share_instance = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -7108,6 +7116,7 @@ share_instance = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8075,6 +8084,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8163,6 +8173,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8247,6 +8258,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8328,6 +8340,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8449,6 +8462,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8538,6 +8552,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8625,6 +8640,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8725,6 +8741,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
@@ -8815,6 +8832,7 @@ enable_transport = False
                 direct_connect_allow_private_endpoints: false,
                 direct_connect_allowed_identities: Vec::new(),
                 direct_connect_reupgrade: Default::default(),
+                probe_rate_limit: Default::default(),
                 device: None,
                 underlay_mark: None,
                 hooks: Vec::new(),
