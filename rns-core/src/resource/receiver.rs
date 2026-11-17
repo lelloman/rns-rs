@@ -434,12 +434,14 @@ impl ResourceReceiver {
             let rtt = now - self.req_sent;
             self.part_timeout_factor = RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT;
 
-            if self.rtt.is_none() {
-                self.rtt = Some(rtt);
-            } else if let Some(current_rtt) = self.rtt {
-                if rtt < current_rtt {
+            // The first response, which includes the sender's preparation of
+            // the transfer, sets no estimate: it starts from the link's.
+            match self.rtt {
+                None => self.rtt = Some(self.link_rtt),
+                Some(current_rtt) if rtt < current_rtt => {
                     self.rtt = Some(f64::max(current_rtt - current_rtt * 0.05, rtt));
-                } else {
+                }
+                Some(current_rtt) => {
                     self.rtt = Some(f64::min(current_rtt + current_rtt * 0.05, rtt));
                 }
             }
@@ -2453,5 +2455,70 @@ mod tests {
 
         let _actions = receiver.tick(9999.0, &identity_decrypt, &NoopCompressor);
         assert_eq!(receiver.status, ResourceStatus::Failed);
+    }
+
+    /// A sender of `len` bytes in parts of `sdu` bytes, and a receiver of its
+    /// advertisement over a link with an RTT of 0.5 s.
+    fn sender_receiver(len: usize, sdu: usize) -> (ResourceSender, ResourceReceiver) {
+        let mut rng = rns_crypto::FixedRng::new(&[0x42; 64]);
+        let data: Vec<u8> = (0..len).map(|i| (i * 13 + 5) as u8).collect();
+        let sender = ResourceSender::new(
+            &data,
+            None,
+            sdu,
+            &identity_encrypt,
+            &NoopCompressor,
+            &mut rng,
+            1000.0,
+            false,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+        let receiver = ResourceReceiver::from_advertisement(
+            &sender.get_advertisement(0),
+            sdu,
+            0.5,
+            1000.0,
+            None,
+            None,
+        )
+        .unwrap();
+        (sender, receiver)
+    }
+
+    fn request_of(actions: Vec<ResourceAction>) -> Vec<u8> {
+        actions
+            .into_iter()
+            .find_map(|action| match action {
+                ResourceAction::SendRequest(request) => Some(request),
+                _ => None,
+            })
+            .expect("a part request")
+    }
+
+    fn parts_for(sender: &mut ResourceSender, request: &[u8], now: f64) -> Vec<Vec<u8>> {
+        sender
+            .handle_request(request, now)
+            .into_iter()
+            .filter_map(|action| match action {
+                ResourceAction::SendPart(part) => Some(part),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn first_part_starts_the_rtt_estimate_from_the_link() {
+        let (mut sender, mut receiver) = sender_receiver(1000, 100);
+        let request = request_of(receiver.accept(1000.0));
+        let parts = parts_for(&mut sender, &request, 1000.0);
+        receiver.receive_part(&parts[0], 1002.0);
+        assert_eq!(receiver.rtt, Some(0.5));
     }
 }
