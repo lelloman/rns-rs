@@ -600,3 +600,451 @@ impl TransportEngine {
         &self.reverse_table
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packet::{PacketFlags, RawPacket};
+    use crate::transport::tables::{RateEntry, ReverseEntry};
+    use crate::transport::tests::{
+        make_config, make_interface, make_local_client_interface, make_path_entry,
+        make_tunnel_interface,
+    };
+
+    fn packet(
+        destination_type: u8,
+        packet_type: u8,
+        hops: u8,
+        dest: &[u8; 16],
+        context: u8,
+    ) -> RawPacket {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type,
+            packet_type,
+        };
+        RawPacket::pack(flags, hops, dest, None, context, b"data").unwrap()
+    }
+
+    fn link(validated: bool, next_hop_interface: u64, received_interface: u64) -> LinkEntry {
+        LinkEntry {
+            timestamp: 1000.0,
+            next_hop_transport_id: [0x33; 16],
+            next_hop_interface: InterfaceId(next_hop_interface),
+            remaining_hops: 1,
+            received_interface: InterfaceId(received_interface),
+            taken_hops: 1,
+            destination_hash: [0xD0; 16],
+            validated,
+            proof_timeout: 2000.0,
+        }
+    }
+
+    /// As upstream, link traffic other than announces, link requests and
+    /// link request proofs is a protocol violation before its link is
+    /// validated.
+    #[test]
+    fn unvalidated_link_packets_are_recognised_as_upstream() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let pending = [0x01; 16];
+        let validated = [0x02; 16];
+        engine.register_link(pending, link(false, 1, 2));
+        engine.register_link(validated, link(true, 1, 2));
+        let link_type = constants::DESTINATION_LINK;
+        let cases = [
+            (
+                packet(link_type, constants::PACKET_TYPE_DATA, 0, &pending, 0),
+                true,
+            ),
+            (
+                packet(link_type, constants::PACKET_TYPE_PROOF, 0, &pending, 0),
+                true,
+            ),
+            (
+                packet(link_type, constants::PACKET_TYPE_ANNOUNCE, 0, &pending, 0),
+                false,
+            ),
+            (
+                packet(
+                    link_type,
+                    constants::PACKET_TYPE_LINKREQUEST,
+                    0,
+                    &pending,
+                    0,
+                ),
+                false,
+            ),
+            (
+                packet(
+                    link_type,
+                    constants::PACKET_TYPE_PROOF,
+                    0,
+                    &pending,
+                    constants::CONTEXT_LRPROOF,
+                ),
+                false,
+            ),
+            (
+                packet(link_type, constants::PACKET_TYPE_DATA, 0, &validated, 0),
+                false,
+            ),
+            (
+                packet(link_type, constants::PACKET_TYPE_DATA, 0, &[0x03; 16], 0),
+                false,
+            ),
+        ];
+        for (n, (packet, expected)) in cases.iter().enumerate() {
+            assert_eq!(
+                engine.is_unvalidated_link_packet(packet),
+                *expected,
+                "case {n}"
+            );
+        }
+    }
+
+    /// As upstream's packet_filter: a transported PLAIN or GROUP packet,
+    /// one arriving with more than one hop, and an announce for anything
+    /// but a SINGLE destination are protocol violations.
+    #[test]
+    fn packet_filter_protocol_violations_are_classified_as_upstream() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_local_client_interface(2));
+        let dest = [0x0D; 16];
+        let data = constants::PACKET_TYPE_DATA;
+        let announce = constants::PACKET_TYPE_ANNOUNCE;
+        let cases = [
+            (constants::DESTINATION_PLAIN, data, 0, 1, false),
+            (constants::DESTINATION_PLAIN, data, 1, 1, true),
+            (constants::DESTINATION_GROUP, data, 0, 1, false),
+            (constants::DESTINATION_GROUP, data, 1, 1, true),
+            // A local client's hops are not incremented.
+            (constants::DESTINATION_PLAIN, data, 1, 2, false),
+            (constants::DESTINATION_PLAIN, data, 2, 2, true),
+            (constants::DESTINATION_SINGLE, data, 5, 1, false),
+            (constants::DESTINATION_SINGLE, announce, 5, 1, false),
+            (constants::DESTINATION_PLAIN, announce, 0, 1, true),
+            (constants::DESTINATION_LINK, announce, 0, 1, true),
+        ];
+        for (n, (destination_type, packet_type, hops, iface, expected)) in
+            cases.into_iter().enumerate()
+        {
+            let packet = packet(destination_type, packet_type, hops, &dest, 0);
+            assert_eq!(
+                engine.is_packet_filter_protocol_violation(&packet, InterfaceId(iface)),
+                expected,
+                "case {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn path_table_rows_respect_max_hops() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        for hops in 1..=3u8 {
+            engine.upsert_path_destination(
+                [hops; 16],
+                make_path_entry(1000.0, hops, InterfaceId(1), [0x70 + hops; 16]),
+                1000.0,
+            );
+        }
+        let rows = engine.get_path_table(Some(2));
+        assert_eq!(
+            rows.iter().map(|row| row.0).collect::<Vec<_>>(),
+            [[1; 16], [2; 16]]
+        );
+        let row = &rows[1];
+        assert_eq!(
+            (row.1, row.2, row.3, row.4, row.5, row.6.as_str()),
+            (1000.0, [0x72; 16], 2, 11_000.0, 0.0, "test")
+        );
+        assert_eq!(engine.get_path_table(None).len(), 3);
+        assert!(engine.get_path_table(Some(0)).is_empty());
+    }
+
+    #[test]
+    fn path_pool_counts_never_used_paths() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.upsert_path_destination(
+            [1; 16],
+            make_path_entry(1000.0, 1, InterfaceId(1), [0x71; 16]),
+            1000.0,
+        );
+        engine.upsert_path_destination(
+            [2; 16],
+            PathEntry {
+                used: 1500.0,
+                ..make_path_entry(1000.0, 1, InterfaceId(1), [0x72; 16])
+            },
+            1000.0,
+        );
+        engine.upsert_path_destination(
+            [3; 16],
+            make_path_entry(1000.0, 1, InterfaceId(1), [0x73; 16]),
+            1000.0,
+        );
+        assert_eq!(engine.path_pool_counts(), (3, 2));
+        assert_eq!(engine.active_destination_hashes().len(), 3);
+    }
+
+    #[test]
+    fn redirected_path_is_a_fresh_one_hop_path() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let dest = [0x0E; 16];
+        engine.upsert_path_destination(
+            dest,
+            make_path_entry(1000.0, 4, InterfaceId(1), [0x71; 16]),
+            1000.0,
+        );
+        // A known path is redirected, an unknown one created.
+        for dest in [dest, [0x0F; 16]] {
+            engine.redirect_path(&dest, InterfaceId(2), 2000.0);
+            let path = engine.path_table[&dest].primary().unwrap();
+            assert_eq!(
+                (
+                    path.hops,
+                    path.next_hop,
+                    path.receiving_interface,
+                    path.timestamp,
+                    path.expires
+                ),
+                (1, dest, InterfaceId(2), 2000.0, 5600.0)
+            );
+        }
+    }
+
+    #[test]
+    fn dropping_an_interface_counts_what_it_removes() {
+        let mut engine = TransportEngine::new(make_config(true));
+        for (n, iface) in [(1u8, 1u64), (2, 1), (3, 2)] {
+            engine.upsert_path_destination(
+                [n; 16],
+                make_path_entry(1000.0, 1, InterfaceId(iface), [0x70 + n; 16]),
+                1000.0,
+            );
+        }
+        assert_eq!(engine.drop_paths_for_interface(InterfaceId(1)), 2);
+        assert_eq!(engine.path_table_count(), 1);
+
+        for (n, (receiving, outbound)) in [(1, 2), (3, 1), (2, 3), (4, 5)].into_iter().enumerate() {
+            engine.reverse_table.insert(
+                [n as u8; 16],
+                ReverseEntry {
+                    receiving_interface: InterfaceId(receiving),
+                    outbound_interface: InterfaceId(outbound),
+                    timestamp: 1000.0,
+                },
+            );
+        }
+        assert_eq!(engine.drop_reverse_for_interface(InterfaceId(1)), 2);
+        assert_eq!(engine.reverse_table_count(), 2);
+
+        for (n, (next_hop, received)) in [(1, 2), (3, 1), (2, 3), (4, 5)].into_iter().enumerate() {
+            engine.register_link([n as u8; 16], link(true, next_hop, received));
+        }
+        assert_eq!(engine.drop_links_for_interface(InterfaceId(1)), 2);
+        assert_eq!(engine.link_table_count(), 2);
+    }
+
+    #[test]
+    fn tunnel_ids_name_their_interfaces() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+        engine.register_interface(make_tunnel_interface(2));
+        let remote = [0xAA; 32];
+        assert_eq!(engine.tunnel_count(), 0);
+        engine.handle_tunnel(remote, InterfaceId(1), 1000.0);
+        engine.handle_tunnel([0xAC; 32], InterfaceId(2), 1000.0);
+        assert_eq!(engine.tunnel_count(), 2);
+        assert_eq!(
+            engine.interface_for_tunnel_id(&remote),
+            Some(InterfaceId(1))
+        );
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+        engine.synthesize_tunnel(&identity, InterfaceId(2), &[], false, &mut rng);
+        let local = engine.local_tunnel_id(&InterfaceId(2)).unwrap();
+        assert_eq!(engine.local_tunnel_id(&InterfaceId(1)), None);
+        assert_eq!(engine.interface_for_tunnel_id(&local), Some(InterfaceId(2)));
+        assert_eq!(engine.interface_for_tunnel_id(&[0xBB; 32]), None);
+        assert!(engine.synthesis_emitted(&InterfaceId(2)));
+        assert!(!engine.synthesis_emitted(&InterfaceId(1)));
+
+        assert_eq!(engine.remote_transport(&InterfaceId(1)), None);
+        engine.set_remote_transport(InterfaceId(1), [0x77; 16]);
+        assert_eq!(engine.remote_transport(&InterfaceId(1)), Some([0x77; 16]));
+        assert!(engine.remote_transport_info(&InterfaceId(1)).is_none());
+    }
+
+    #[test]
+    fn counts_follow_the_tables() {
+        let mut engine = TransportEngine::new(make_config(true));
+        assert_eq!(engine.interface_count(), 0);
+        assert_eq!(engine.local_destinations_count(), 0);
+        assert_eq!(engine.blackholed_count(), 0);
+        assert_eq!(engine.discovery_path_requests_count(), 0);
+        assert_eq!(engine.path_destination_cap_evict_count(), 0);
+        assert_eq!(engine.identity_hash(), Some(&[0x42; 16]));
+        assert!(engine.transport_enabled());
+        assert!(!TransportEngine::new(make_config(false)).transport_enabled());
+
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(InterfaceInfo {
+            out_capable: false,
+            ..make_interface(2, constants::MODE_FULL)
+        });
+        engine.register_destination([1; 16], constants::DESTINATION_SINGLE);
+        engine.register_destination([2; 16], constants::DESTINATION_SINGLE);
+        engine.blackhole_identity([1; 16], 1000.0, None, None);
+        engine.blackhole_identity([2; 16], 1000.0, Some(1.0), Some("spam".into()));
+        for n in 1..=2u8 {
+            engine.discovery_path_requests.insert(
+                [n; 16],
+                DiscoveryPathRequest {
+                    timestamp: 1000.0,
+                    requesting_interfaces: Vec::new(),
+                    engaged: false,
+                },
+            );
+        }
+        assert_eq!(engine.interface_count(), 2);
+        assert_eq!(
+            engine.out_capable_interfaces().collect::<Vec<_>>(),
+            [InterfaceId(1)]
+        );
+        assert_eq!(engine.local_destinations_count(), 2);
+        assert_eq!(engine.blackholed_count(), 2);
+        assert_eq!(
+            engine.get_blackholed(),
+            [
+                ([1; 16], 1000.0, 0.0, None),
+                ([2; 16], 1000.0, 4600.0, Some("spam".into()))
+            ]
+        );
+        assert_eq!(engine.discovery_path_requests_count(), 2);
+    }
+
+    #[test]
+    fn rate_table_rows_and_culling() {
+        let mut engine = TransportEngine::new(make_config(true));
+        assert_eq!(engine.rate_limiter_count(), 0);
+        for (n, last) in [(1u8, 1000.0), (2, 1900.0)] {
+            engine.rate_limiter.restore(
+                [n; 16],
+                RateEntry {
+                    last,
+                    rate_violations: u32::from(n),
+                    blocked_until: 3000.0,
+                    timestamps: vec![last],
+                },
+            );
+        }
+        assert_eq!(engine.rate_limiter_count(), 2);
+        assert_eq!(engine.rate_limiter().len(), 2);
+        assert_eq!(
+            engine.get_rate_table(),
+            [
+                ([1; 16], 1000.0, 1, 3000.0, vec![1000.0]),
+                ([2; 16], 1900.0, 2, 3000.0, vec![1900.0])
+            ]
+        );
+        let active = alloc::collections::BTreeSet::new();
+        assert_eq!(engine.cull_rate_limiter(&active, 2000.0, 500.0), 1);
+        assert_eq!(engine.rate_limiter_count(), 1);
+    }
+
+    #[test]
+    fn announce_queue_counts() {
+        let mut config = make_config(true);
+        config.announce_queue_max_interfaces = 1;
+        let mut engine = TransportEngine::new(config);
+        let raw: PacketBytes = vec![0u8; 100].into();
+        let gate = |engine: &mut TransportEngine, iface: u64, dest: u8| {
+            engine.announce_queues.gate_announce(
+                InterfaceId(iface),
+                raw.clone(),
+                [dest; 16],
+                1,
+                1000.0,
+                1000.0,
+                Some(1000),
+                None,
+                constants::ANNOUNCE_CAP,
+            )
+        };
+        // The first is sent, the next two wait, and two more interfaces
+        // exceed the queue cap.
+        assert!(gate(&mut engine, 1, 1).is_some());
+        assert!(gate(&mut engine, 1, 2).is_none());
+        assert!(gate(&mut engine, 1, 3).is_none());
+        assert!(gate(&mut engine, 2, 4).is_none());
+        assert!(gate(&mut engine, 3, 5).is_none());
+        assert_eq!(engine.queued_announce_count_for(&InterfaceId(1)), 2);
+        assert_eq!(engine.queued_announce_count_for(&InterfaceId(2)), 0);
+        assert_eq!(engine.queued_announce_bytes(), 200);
+        assert_eq!(engine.announce_queue_interface_cap_drop_count(), 2);
+    }
+
+    #[test]
+    fn interface_state_setters_and_getters() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.update_interface_freq(InterfaceId(1), 2.5);
+        assert_eq!(engine.interface_info(&InterfaceId(1)).unwrap().ia_freq, 2.5);
+        engine.update_interface_freqs(InterfaceId(1), 3.0, 4.0, 5.0, 6);
+        let info = engine.interface_info(&InterfaceId(1)).unwrap();
+        assert_eq!(
+            (info.ia_freq, info.ip_freq, info.op_freq, info.op_samples),
+            (3.0, 4.0, 5.0, 6)
+        );
+
+        let default_limiter = engine.hop_limiter();
+        engine.set_hop_limiter(default_limiter / 2);
+        assert_eq!(engine.hop_limiter(), default_limiter / 2);
+        engine.set_hop_limiter(7);
+        assert_eq!(engine.hop_limiter(), 7);
+
+        let config = crate::transport::types::IngressControlConfig::enabled();
+        assert!(!engine.burst_active(&InterfaceId(1)));
+        engine
+            .ingress_control
+            .should_ingress_limit(InterfaceId(1), &config, 36.0, 0.0, 10_000.0);
+        engine.ingress_control.should_ingress_limit_pr(
+            InterfaceId(1),
+            &config,
+            36.0,
+            0.0,
+            10_500.0,
+        );
+        assert!(engine.burst_active(&InterfaceId(1)));
+        assert!(engine.pr_burst_active(&InterfaceId(1)));
+        assert_eq!(engine.burst_activated(&InterfaceId(1)), 10_000.0);
+        assert_eq!(engine.pr_burst_activated(&InterfaceId(1)), 10_500.0);
+    }
+
+    #[test]
+    fn forgetting_a_packet_hash_reports_whether_it_was_retained() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let hash = [0x5A; 32];
+        assert!(!engine.forget_packet_hash(&hash));
+        engine.packet_hashlist.add(hash);
+        assert!(engine.forget_packet_hash(&hash));
+        assert!(!engine.packet_hashlist.is_duplicate(&hash));
+    }
+
+    #[test]
+    fn resizing_the_packet_hashlist_applies_the_new_limit() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.set_packet_hashlist_max_entries(2);
+        assert_eq!(engine.config().packet_hashlist_max_entries, 2);
+        for n in 1..=3u8 {
+            engine.packet_hashlist.add([n; 32]);
+        }
+        assert_eq!(engine.packet_hashlist_len(), 2);
+    }
+}
