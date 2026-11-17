@@ -248,8 +248,9 @@ impl IngressControl {
             return None;
         }
 
-        // Wait for penalty period
-        if now < state.held_release {
+        // Wait for penalty period: as upstream, release only once it has
+        // passed.
+        if now <= state.held_release {
             return None;
         }
 
@@ -587,6 +588,34 @@ mod tests {
         );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 3);
+    }
+
+    fn held(hops: u8, timestamp: f64) -> HeldAnnounce {
+        HeldAnnounce {
+            raw: vec![0; 10],
+            hops,
+            receiving_interface: iface(1),
+            rx: RxMetadata::default(),
+            timestamp,
+        }
+    }
+
+    /// As upstream, a held announce is released only after the penalty
+    /// has passed, not at the instant it ends.
+    #[test]
+    fn release_waits_until_penalty_has_passed() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        let now = 10_000.0;
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, 0.0, now));
+        assert!(ic.hold_announce(iface(1), &config, [1; 16], held(3, now)));
+        let penalty_end = now + config.burst_penalty;
+        assert!(ic
+            .process_held_announces(iface(1), &config, 1.0, 0.0, penalty_end, |_, _| true)
+            .is_none());
+        assert!(ic
+            .process_held_announces(iface(1), &config, 1.0, 0.0, penalty_end + 0.5, |_, _| true)
+            .is_some());
     }
 
     #[test]
