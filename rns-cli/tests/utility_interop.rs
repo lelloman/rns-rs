@@ -70,6 +70,7 @@ struct Harness {
     client_home: PathBuf,
     listener_home: PathBuf,
     client_control_port: u16,
+    listener_control_port: u16,
     client_instance: String,
     listener_instance: String,
     /// Whether listeners wait until the client daemon learns their path. A
@@ -199,6 +200,7 @@ impl Harness {
             client_home,
             listener_home,
             client_control_port,
+            listener_control_port,
             client_instance,
             listener_instance,
             wait_for_client_paths: client_sections.is_empty(),
@@ -310,20 +312,52 @@ impl Harness {
 
     /// The client daemon's RPC address and key.
     fn client_rpc(&self) -> (RpcAddr, [u8; 32]) {
-        let identity_path = self
-            .client_config
-            .join("storage")
-            .join("identities")
-            .join("identity");
+        self.daemon_rpc(
+            &self.client_config,
+            &self.client_instance,
+            self.client_control_port,
+        )
+    }
+
+    /// The listener daemon's RPC address and key.
+    fn listener_rpc(&self) -> (RpcAddr, [u8; 32]) {
+        self.daemon_rpc(
+            &self.listener_config,
+            &self.listener_instance,
+            self.listener_control_port,
+        )
+    }
+
+    /// The RPC address and key of the daemon run from `config`.
+    fn daemon_rpc(&self, config: &Path, instance: &str, control_port: u16) -> (RpcAddr, [u8; 32]) {
+        let identity_path = config.join("storage").join("identities").join("identity");
         let identity = rns_net::storage::load_identity(&identity_path)
-            .unwrap_or_else(|error| panic!("load client daemon identity: {error}"));
+            .unwrap_or_else(|error| panic!("load daemon identity: {error}"));
         let auth_key = derive_auth_key(
             &identity
                 .get_private_key()
-                .expect("client daemon identity has a private key"),
+                .expect("daemon identity has a private key"),
         );
-        let address = RpcAddr::local(self.client_instance.clone(), self.client_control_port);
+        let address = RpcAddr::local(instance.to_string(), control_port);
         (address, auth_key)
+    }
+
+    /// Wait until the listener daemon has a path to `destination`, without
+    /// asking for it: a shared client announces a destination it registers
+    /// to its instance a quarter of a second later, as upstream does.
+    fn wait_for_listener_path(&self, destination: &str, listener: &ProcessGuard) {
+        let destination = parse_destination_hash(destination);
+        let (address, auth_key) = self.listener_rpc();
+        let deadline = Instant::now() + START_TIMEOUT;
+        while !query_has_path(&address, &auth_key, &destination).unwrap_or(false) {
+            assert!(
+                Instant::now() < deadline,
+                "listener daemon did not learn its client's destination:\nlistener:\n{}\nlistener daemon:\n{}",
+                fs::read_to_string(&listener.log).unwrap_or_default(),
+                fs::read_to_string(&self._listener_daemon.log).unwrap_or_default()
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     fn wait_for_client_path(&self, destination: &str, listener: &ProcessGuard) {
@@ -930,6 +964,13 @@ fn rust_rnsh_listener_without_announce_is_reachable() {
         );
         thread::sleep(Duration::from_millis(25));
     }
+
+    // The listener's instance learns the destination from the path response
+    // the listener sends it a quarter of a second after registering it, as
+    // upstream's does. A path request reaching the instance before that is
+    // passed to its local clients, and their answer is relayed only to a
+    // request made once the path was known, also as upstream's: wait for it.
+    harness.wait_for_listener_path(&destination, &listener);
 
     // The client rnsh requests the path itself, through its own instance.
     let mut session = harness.rnsh_command(Side::Client, &client_app_config, &client_identity);
