@@ -88,3 +88,31 @@ path = "fuzz_targets/msgpack_unpack.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "direct_link_signal"
+path = "fuzz_targets/direct_link_signal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "direct_link_punch"
+path = "fuzz_targets/direct_link_punch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "direct_link_probe"
+path = "fuzz_targets/direct_link_probe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "direct_link_keepalive"
+path = "fuzz_targets/direct_link_keepalive.rs"
+test = false
+doc = false
+bench = false

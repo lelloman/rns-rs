@@ -737,6 +737,20 @@ pub fn decode_hello(data: &[u8]) -> Result<Hello, HolePunchError> {
     })
 }
 
+/// Whether `body` decodes as a signalling message of `kind`, without
+/// acting on it.
+pub fn validate_signal(kind: u8, body: &[u8]) -> Result<(), HolePunchError> {
+    match kind {
+        HELLO => decode_hello(body).map(|_| ()),
+        UPGRADE_REQUEST => decode_upgrade_request(body).map(|_| ()),
+        UPGRADE_ACCEPT => decode_upgrade_accept(body).map(|_| ()),
+        UPGRADE_REJECT => decode_upgrade_reject(body).map(|_| ()),
+        UPGRADE_READY => decode_upgrade_ready(body).map(|_| ()),
+        FALLBACK => decode_fallback(body).map(|_| ()),
+        _ => Err(HolePunchError::InvalidPayload),
+    }
+}
+
 fn encode_upgrade_request(
     session_id: &[u8; 16],
     facilitator: &Endpoint,
@@ -874,7 +888,8 @@ fn decode_upgrade_reject(data: &[u8]) -> Result<([u8; 16], u8), HolePunchError> 
     let reason = val
         .map_get("r")
         .and_then(|v| v.as_uint())
-        .ok_or(HolePunchError::InvalidPayload)? as u8;
+        .and_then(|r| u8::try_from(r).ok())
+        .ok_or(HolePunchError::InvalidPayload)?;
     Ok((session_id, reason))
 }
 
@@ -939,7 +954,8 @@ fn decode_endpoint(val: &Value) -> Option<Endpoint> {
         return None;
     }
     let addr = arr[0].as_bin()?.to_vec();
-    let port = arr[1].as_uint()? as u16;
+    // A port beyond 16 bits is malformed, not to be truncated into another.
+    let port = u16::try_from(arr[1].as_uint()?).ok()?;
     Some(Endpoint { addr, port })
 }
 
@@ -1269,6 +1285,85 @@ mod tests {
                 assert_eq!(peer_hosts, &[host(20, 5000)]);
             }
             other => panic!("expected StartUdpPunch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_of_range_ports_and_reasons_are_malformed_not_truncated() {
+        let endpoint = |port: u64| {
+            Value::Array(alloc::vec![
+                Value::Bin(alloc::vec![203, 0, 113, 1]),
+                Value::UInt(port)
+            ])
+        };
+        assert_eq!(decode_endpoint(&endpoint(65535)).unwrap().port, 65535);
+        // 65536 + 4343 would otherwise read as port 4343.
+        assert!(decode_endpoint(&endpoint(65536 + 4343)).is_none());
+        let ready = msgpack::pack(&Value::Map(alloc::vec![
+            (
+                Value::Str(alloc::string::String::from("s")),
+                Value::Bin(alloc::vec![1; 16])
+            ),
+            (
+                Value::Str(alloc::string::String::from("a")),
+                endpoint(70000)
+            ),
+        ]));
+        assert!(validate_signal(UPGRADE_READY, &ready).is_err());
+        let reject = |reason: u64| {
+            msgpack::pack(&Value::Map(alloc::vec![
+                (
+                    Value::Str(alloc::string::String::from("s")),
+                    Value::Bin(alloc::vec![1; 16])
+                ),
+                (
+                    Value::Str(alloc::string::String::from("r")),
+                    Value::UInt(reason)
+                ),
+            ]))
+        };
+        assert_eq!(decode_upgrade_reject(&reject(2)).unwrap().1, REJECT_BUSY);
+        // 0x102 would otherwise read as REJECT_BUSY.
+        assert!(decode_upgrade_reject(&reject(0x102)).is_err());
+    }
+
+    #[test]
+    fn an_unusable_max_packet_is_ignored_not_fatal() {
+        for m in [
+            Value::UInt(u64::MAX),
+            Value::UInt(u64::from(u32::MAX) + 1),
+            Value::Str(alloc::string::String::from("big")),
+            Value::Nil,
+        ] {
+            let ready = msgpack::pack(&Value::Map(alloc::vec![
+                (
+                    Value::Str(alloc::string::String::from("s")),
+                    Value::Bin(alloc::vec![1; 16])
+                ),
+                (
+                    Value::Str(alloc::string::String::from("a")),
+                    encode_endpoint(&test_public_addr_b())
+                ),
+                (Value::Str(alloc::string::String::from("m")), m.clone()),
+            ]));
+            assert!(validate_signal(UPGRADE_READY, &ready).is_ok(), "{m:?}");
+            assert_eq!(decode_max_packet(&ready), None, "{m:?}");
+        }
+        let ready = encode_upgrade_ready(&[1; 16], &test_public_addr_b(), &[]);
+        assert_eq!(decode_max_packet(&ready), Some(DIRECT_MAX_PACKET));
+    }
+
+    #[test]
+    fn every_signal_kind_validates_its_own_encoding_only() {
+        let session = [9; 16];
+        assert!(validate_signal(HELLO, &encode_hello(true)).is_ok());
+        assert!(validate_signal(UPGRADE_ACCEPT, &encode_upgrade_accept(&session)).is_ok());
+        assert!(validate_signal(FALLBACK, &encode_fallback(&session, false)).is_ok());
+        assert!(validate_signal(UPGRADE_REQUEST, &encode_upgrade_accept(&session)).is_err());
+        assert!(validate_signal(0x7f, &encode_hello(true)).is_err());
+        for kind in 0..=6 {
+            assert!(validate_signal(kind, &[]).is_err());
+            assert!(validate_signal(kind, &[0xc1]).is_err());
         }
     }
 

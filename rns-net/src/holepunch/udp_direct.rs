@@ -557,6 +557,24 @@ impl LoopSource for DirectSource {
     }
 }
 
+/// Take `data` as a keepalive, raw and with a valid tag over its first 28
+/// bytes. For fuzzing.
+pub(crate) fn fuzz_keepalive(data: &[u8]) {
+    let key = [0x3c; 32];
+    let session_id = [0x4d; 16];
+    let mut keepalives = Keepalives::new(key, session_id);
+    let _ = keepalives.accept(data);
+    if data.len() >= KEEPALIVE_LEN - KEEPALIVE_TAG_LEN {
+        let mut packet = data[..KEEPALIVE_LEN - KEEPALIVE_TAG_LEN].to_vec();
+        let tag = rns_crypto::hmac::hmac_sha256(&key, &packet);
+        packet.extend_from_slice(&tag[..KEEPALIVE_TAG_LEN]);
+        let _ = keepalives.accept(&packet);
+        let _ = keepalives.accept(&packet);
+    }
+    let _ = is_control_datagram(data);
+    let _ = carries_link(data, &[0x4c; 16]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

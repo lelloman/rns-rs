@@ -271,6 +271,32 @@ pub(crate) fn set_probing(socket: &std::net::UdpSocket, probing: bool) {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn set_probing(_socket: &std::net::UdpSocket, _probing: bool) {}
 
+/// Feed `data` to a path's MTU discovery, raw and sealed as a probe or
+/// acknowledgement of the session (its first byte choosing which) with the
+/// rest of `data` as nonce, size and padding. For fuzzing.
+pub(crate) fn fuzz_datagram(data: &[u8]) {
+    let key = [0x6e; 32];
+    let session_id = [0x7f; 16];
+    let now = Instant::now();
+    let mut pmtu = PathMtu::new(key, session_id, ([192, 0, 2, 1], 4000).into(), now);
+    let _ = pmtu.on_timer(now);
+    let _ = pmtu.receive(data);
+    let _ = is_pmtu_datagram(data);
+    if let Some((first, rest)) = data.split_first() {
+        let magic = if first & 1 == 1 {
+            ACK_MAGIC
+        } else {
+            PROBE_MAGIC
+        };
+        let mut packet = Vec::with_capacity(20 + rest.len() + TAG_LEN);
+        packet.extend_from_slice(magic);
+        packet.extend_from_slice(&session_id);
+        packet.extend_from_slice(rest);
+        let sealed = seal(&key, packet);
+        let _ = pmtu.receive(&sealed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

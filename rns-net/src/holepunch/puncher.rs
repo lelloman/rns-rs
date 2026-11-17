@@ -770,6 +770,44 @@ fn build_ack_packet(session_id: &[u8; 16], punch_token: &[u8; 32], nonce: &[u8; 
     build_control(ACK_MAGIC, session_id, punch_token, nonce)
 }
 
+/// Feed `data` to a punch session as a datagram from a candidate's address
+/// and from an unknown port of its IP, as raw bytes and with a valid tag
+/// around its first 16 bytes as the nonce. For fuzzing.
+pub(crate) fn fuzz_datagram(data: &[u8]) {
+    static SOCKET: std::sync::OnceLock<Option<UdpSocket>> = std::sync::OnceLock::new();
+    let Some(socket) = SOCKET
+        .get_or_init(|| UdpSocket::bind("127.0.0.1:0").ok())
+        .as_ref()
+    else {
+        return;
+    };
+    let session_id = [0x5a; 16];
+    let token = [0xa5; 32];
+    let peer: SocketAddr = ([127, 0, 0, 1], 9).into();
+    let other: SocketAddr = ([127, 0, 0, 1], 11).into();
+    let mut punch = PunchState::new(
+        vec![(peer, false), (([127, 0, 0, 1], 10).into(), true)],
+        session_id,
+        token,
+        DEFAULT_LIMITS,
+    );
+    punch.receive(socket, data, peer);
+    punch.receive(socket, data, other);
+    let _ = open_control(data, PUNCH_MAGIC, &session_id, &token);
+    let _ = open_control(data, ACK_MAGIC, &session_id, &token);
+    if let Some(nonce) = data.first_chunk::<NONCE_LEN>() {
+        let magic = if data.len() > NONCE_LEN && data[NONCE_LEN] & 1 == 1 {
+            ACK_MAGIC
+        } else {
+            PUNCH_MAGIC
+        };
+        let valid = build_control(magic, &session_id, &token, nonce);
+        punch.receive(socket, &valid, other);
+        punch.receive(socket, &valid, peer);
+    }
+    let _ = punch.ready(Instant::now());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -78,7 +78,9 @@ The decrypted payload is
 
 Endpoints are `[address bytes (4 or 16), port]`, and `"h"` is a list of at
 most 2 of them (see [Host candidates](#host-candidates)); a receiver keeps
-the first 2 well-formed entries and ignores the rest. The version is `1`. A
+the first 2 well-formed entries and ignores the rest. A port above 65535
+or a reason above 255 makes a message malformed; it is dropped. The
+version is `1`. A
 message framed in any other version is dropped; a later version must keep
 sending `HELLO` in version 1 framing and advertise its highest version in
 `v`, and fields a receiver does not know are ignored.

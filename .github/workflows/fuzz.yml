@@ -2,7 +2,8 @@ name: Fuzz
 
 # Nightly coverage-guided fuzzing of the parsers that read untrusted input:
 # network frames, announces, link handshakes, resource advertisements, IFAC,
-# HDLC/KISS framing, msgpack, the RPC pickle decoder and config files. Each
+# HDLC/KISS framing, msgpack, the RPC pickle decoder, config files, and
+# Direct Link's signalling, punch, probe, keepalive and path MTU datagrams. Each
 # target keeps its corpus in the Actions cache, so runs build on each other;
 # a crash fails the job and uploads the reproducer.
 
@@ -41,6 +42,10 @@ jobs:
           - link_handshake
           - config_parse
           - msgpack_unpack
+          - direct_link_signal
+          - direct_link_punch
+          - direct_link_probe
+          - direct_link_keepalive
 
     steps:
       - name: Checkout

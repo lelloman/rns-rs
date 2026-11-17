@@ -2,8 +2,8 @@ pub mod engine;
 pub mod types;
 
 pub use engine::{
-    decode_fallback, decode_hello, derive_keepalive_key, encode_fallback, encode_hello, Hello,
-    HolePunchEngine,
+    decode_fallback, decode_hello, derive_keepalive_key, encode_fallback, encode_hello,
+    validate_signal, Hello, HolePunchEngine,
 };
 pub use types::{
     decode_signal, encode_signal, Endpoint, HolePunchAction, HolePunchError, HolePunchState,

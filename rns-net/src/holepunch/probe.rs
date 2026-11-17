@@ -927,6 +927,29 @@ fn parse_probe_response(data: &[u8], expected_nonce: &[u8; 16]) -> Option<Socket
     }
 }
 
+/// Take `data` as a probe request at a rate-limited server, and as a
+/// reply to an RNSP and a STUN request, with fixed ids and with ids taken
+/// from `data`. For fuzzing.
+pub(crate) fn fuzz_request(data: &[u8]) {
+    let mut limiter = ProbeLimiter::new(ProbeRateLimit::default());
+    let src: SocketAddr = ([198, 51, 100, 1], 4000).into();
+    let _ = limiter.answer(data, &src, Instant::now());
+    let mapped: SocketAddr = "[::ffff:198.51.100.1]:4000".parse().expect("valid");
+    let _ = answer_probe(data, &mapped);
+}
+
+/// See [`fuzz_request`].
+pub(crate) fn fuzz_reply(data: &[u8]) {
+    let _ = parse_probe_response(data, &[0x11; 16]);
+    let _ = parse_stun_binding_response(data, &[0x22; 12]);
+    if let Some(nonce) = data.get(5..21).and_then(|n| <&[u8; 16]>::try_from(n).ok()) {
+        let _ = parse_probe_response(data, nonce);
+    }
+    if let Some(txn) = data.get(8..20).and_then(|t| <&[u8; 12]>::try_from(t).ok()) {
+        let _ = parse_stun_binding_response(data, txn);
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
