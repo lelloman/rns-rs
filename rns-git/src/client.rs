@@ -960,14 +960,22 @@ mod tests {
             .unwrap()
     }
 
+    /// Whether Python RNS is importable. A run that names an upstream
+    /// checkout in `RETICULUM_UPSTREAM_DIR` (the interop jobs) must have it,
+    /// so these tests fail there instead of skipping.
     fn python_rns_available() -> bool {
-        Command::new("python3")
+        let available = Command::new("python3")
             .args(["-c", "import RNS; print('ok')"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .map(|status| status.success())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        assert!(
+            available || std::env::var_os("RETICULUM_UPSTREAM_DIR").is_none(),
+            "RETICULUM_UPSTREAM_DIR is set but Python RNS cannot be imported"
+        );
+        available
     }
 
     fn parse_hex_16(input: &str) -> [u8; 16] {

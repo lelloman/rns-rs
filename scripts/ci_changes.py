@@ -92,8 +92,9 @@ JOB_ROOT_CRATES = {
         "rns-ctl",
         "rns-server",
     ),
-    # python_interop, utility_interop, placeholders and rnodeconf tests.
-    "interop": ("rns-net", "rns-cli", "rns-rnodeconf"),
+    # python_interop, utility_interop, placeholders, rnodeconf and rns-git's
+    # Python-peer tests.
+    "interop": ("rns-net", "rns-cli", "rns-rnodeconf", "rns-git"),
     # tests/docker/Dockerfile and rns-server/Dockerfile.rns-server.
     "docker": ("rns-ctl", "rns-cli", "rns-tun", "rns-server"),
     "armv7": ("rns-cli", "rns-ctl", "rns-server"),

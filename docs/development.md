@@ -51,14 +51,18 @@ RETICULUM_UPSTREAM_DIR=/path/to/Reticulum python3 tests/generate_vectors.py
 ### Live Python interop
 
 These need a Python Reticulum checkout on `PYTHONPATH`. CI runs them against
-Reticulum 1.4.2, 1.5.4, and 1.5.5 pinned by commit and `RNS` tree hash.
+Reticulum 1.4.2, 1.5.4, 1.5.5, 1.6.0 and 1.6.1 pinned by commit and `RNS` tree hash.
 
 ```bash
 export RETICULUM_UPSTREAM_DIR=/path/to/Reticulum
 export PYTHONPATH=$RETICULUM_UPSTREAM_DIR
 cargo test -p rns-net --test python_interop -- --nocapture
 cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
+cargo test -p rns-git --lib -- --nocapture
 ```
+
+rns-git's Python-peer tests skip themselves when `RNS` cannot be imported,
+unless `RETICULUM_UPSTREAM_DIR` is set, in which case they fail.
 
 ### Docker end-to-end suites
 
@@ -118,7 +122,7 @@ The operator scripts have their own tests, run by CI with
 | Cargo Test | WASM example build, interface-selection `cargo check`, `cargo test --workspace` (on a pull request, the crates the change reaches) |
 | Cargo Test (rns-hooks) | Workspace tests with `--features rns-hooks`, built-in hook integration tests |
 | Cargo Test (rns-ctl tls) | `cargo test -p rns-ctl --features tls` |
-| Reticulum Interop | Live interop against three pinned Python versions |
+| Reticulum Interop | Live interop against five pinned Python versions |
 | Docker E2E | `./tests/docker/run-all.sh` |
 | Rustfmt, Clippy | `cargo fmt --check`, `bash scripts/lint-host.sh` |
 | ARMv7 Build Smoke | Cross-builds of `rnsd`, `rns-ctl`, and `rns-server` with and without hooks |

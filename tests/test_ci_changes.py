@@ -51,7 +51,8 @@ class SelectTests(unittest.TestCase):
         out = self.select("rns-git/src/server.rs")
         self.assertEqual(out["crates"], "rns-git")
         self.assertEqual(out["cargo_test_args"], "-p rns-git")
-        self.assertEqual(self.jobs(out), set())
+        # Its Python-peer tests run only in the interop jobs.
+        self.assertEqual(self.jobs(out), {"interop"})
         self.assertEqual(out["no_std"], "false")
         self.assertEqual(out["compact_engine"], "false")
 

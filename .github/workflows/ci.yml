@@ -332,6 +332,9 @@ jobs:
           cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
           cargo test -p rns-cli --test placeholders -- --ignored --nocapture
           cargo test -p rns-rnodeconf --test rnodeconf -- --ignored --nocapture
+          # rns-git's Python-peer tests skip themselves without Python RNS,
+          # so they only really run here.
+          cargo test -p rns-git --lib -- --nocapture
 
   cargo-test-hooks:
     name: Cargo Test (rns-hooks)
