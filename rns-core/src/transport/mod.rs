@@ -228,6 +228,9 @@ pub struct AcceptedPathRequest {
     interface_id: InterfaceId,
     now: f64,
     destination_hash: [u8; 16],
+    /// Transport id of the requesting node, carried by every request but
+    /// the legacy `destination_hash || tag` form.
+    requestor_transport_id: Option<[u8; 16]>,
     already_in_flight: bool,
     /// Stamp extension payload carried by a 64-byte path request, preserved
     /// verbatim when the request is relayed.
@@ -360,5 +363,7 @@ mod inbound_engine;
 mod maintenance;
 mod outbound_engine;
 
+#[cfg(test)]
+mod engine_fixtures;
 #[cfg(test)]
 mod tests;

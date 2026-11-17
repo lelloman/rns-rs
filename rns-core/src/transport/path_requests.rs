@@ -260,11 +260,14 @@ impl TransportEngine {
         } else {
             None
         };
-        let tag_bytes = if data.len() == constants::PATH_REQUEST_LEGACY_LENGTH {
-            &data[16..32]
-        } else {
-            &data[32..48]
-        };
+        let (requestor_transport_id, tag_bytes) =
+            if data.len() == constants::PATH_REQUEST_LEGACY_LENGTH {
+                (None, &data[16..32])
+            } else {
+                let mut transport_id = [0u8; 16];
+                transport_id.copy_from_slice(&data[16..32]);
+                (Some(transport_id), &data[32..48])
+            };
 
         let tag_len = tag_bytes.len();
 
@@ -356,6 +359,7 @@ impl TransportEngine {
             interface_id,
             now,
             destination_hash,
+            requestor_transport_id,
             already_in_flight,
             ext_payload,
             stamp_value: carried_stamp_value,
@@ -498,6 +502,16 @@ impl TransportEngine {
         let Some(raw) = path.announce_raw.as_ref() else {
             return false;
         };
+        // Transport.py:3976-3984: a request from the node that is this
+        // path's next hop is not answered, as it would only be told of a
+        // path through itself; it still counts as answered.
+        if ctx.requestor_transport_id == Some(path.next_hop) {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Not answering path request for {:02x?}, since next hop is the requestor",
+                &ctx.destination_hash[..4],
+            );
+            return true;
+        }
         // Leave the active entry in place until replacement so insertion can
         // preserve its pending send deadline under repeated path requests.
         if let Some(existing) = self.announce_table.get(&ctx.destination_hash).cloned() {
@@ -759,3 +773,7 @@ fn build_path_request_packet(
     .ok()
     .map(|packet| (packet.raw, data_len))
 }
+
+#[cfg(test)]
+#[path = "path_requests_tests.rs"]
+mod tests;
