@@ -148,12 +148,9 @@ impl PathSet {
         // Check for existing same-next_hop path
         if let Some(pos) = self.paths.iter().position(|p| p.next_hop == entry.next_hop) {
             self.paths[pos] = entry;
-        } else if self.paths.len() < self.capacity {
-            self.paths.push(entry);
         } else {
-            // At capacity — evict worst (last after sort, but we haven't sorted
-            // the new entry yet).  Replace worst if new entry is better.
-            // We push then sort then truncate, which is simple and correct.
+            // Add it, and at capacity let the truncation below drop the worst
+            // path, which may be the new one.
             self.paths.push(entry);
         }
         self.sort();
