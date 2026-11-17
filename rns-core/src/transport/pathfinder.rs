@@ -1097,4 +1097,47 @@ mod tests {
             MultiPathDecision::Reject
         );
     }
+
+    #[test]
+    fn random_blob_is_read_from_data_just_long_enough() {
+        let offset = constants::KEYSIZE / 8 + constants::NAME_HASH_LENGTH / 8;
+        let mut data = vec![0u8; offset];
+        data.extend_from_slice(&[7; 10]);
+        assert_eq!(extract_random_blob(&data), Some([7; 10]));
+        assert_eq!(extract_random_blob(&data[..offset + 9]), None);
+    }
+
+    /// A destination whose every path is gone takes the announce as its
+    /// primary path.
+    #[test]
+    fn announce_for_an_emptied_path_set_replaces_the_primary() {
+        let mut set = PathSet::from_single(
+            PathEntry {
+                timestamp: 1000.0,
+                next_hop: [1; 16],
+                hops: 2,
+                expires: 9999.0,
+                random_blobs: vec![[0x11; 10]],
+                receiving_interface: super::super::types::InterfaceId(1),
+                packet_hash: [0; 32],
+                used: 0.0,
+                announce_raw: None,
+            },
+            2,
+        );
+        set.retain(|_| false);
+        assert_eq!(
+            decide_announce_multipath(
+                Some(&set),
+                3,
+                500,
+                &[0x22; 10],
+                &[2; 16],
+                false,
+                1000.0,
+                false
+            ),
+            MultiPathDecision::ReplacePrimary
+        );
+    }
 }
