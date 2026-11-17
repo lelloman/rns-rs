@@ -25,11 +25,14 @@ const DETECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) enum Link {
     Serial,
     Tcp,
+    Ble,
 }
 
 impl Link {
     pub(super) fn of(port: &str) -> Link {
-        if port.starts_with("tcp:") {
+        if super::ble::is_ble_port(port) {
+            Link::Ble
+        } else if port.starts_with("tcp:") {
             Link::Tcp
         } else {
             Link::Serial
@@ -41,7 +44,23 @@ impl Link {
         match self {
             Link::Serial => Duration::from_millis(250),
             Link::Tcp => Duration::from_millis(1500),
+            Link::Ble => Duration::from_secs(1),
         }
+    }
+}
+
+/// Whether `config` is a single RNode over BLE, which upstream opens,
+/// loses and reopens in ways of its own.
+pub(super) fn is_ble(config: &RNodeConfig) -> bool {
+    !config.multi && config.pre_opened_fd.is_none() && Link::of(&config.port) == Link::Ble
+}
+
+/// The port as upstream names it in its log lines.
+pub(super) fn port_display(config: &RNodeConfig) -> String {
+    if is_ble(config) {
+        super::ble::port_display(&config.ble)
+    } else {
+        config.port.clone()
     }
 }
 
@@ -66,6 +85,11 @@ pub(super) fn log_opening(config: &RNodeConfig) {
             "Opening TCP connection for {}...",
             display_name(config)
         ),
+        Link::Ble => log::info!(
+            target: crate::logging::NOTICE_TARGET,
+            "Opening BLE connection for {}...",
+            display_name(config)
+        ),
     }
 }
 
@@ -86,7 +110,13 @@ pub(super) fn setup_device(
     if config.multi {
         detect_and_configure(reader, writer, config)
     } else {
-        configure_device(reader, writer, config)
+        let result = configure_device(reader, writer, config);
+        if result.is_err() {
+            // As upstream closes the connection: a BLE device is
+            // disconnected.
+            reader.close();
+        }
+        result
     }
 }
 
@@ -223,7 +253,8 @@ fn py_round2(value: f64) -> Option<f64> {
 }
 
 /// Read what the device sends until `deadline`, or until `done` says so,
-/// feeding every report to `reports`. Errs when the connection closes.
+/// feeding every report to `reports`. Errs with `UnexpectedEof` when the
+/// connection closes.
 fn read_reports(
     reader: &mut Transport,
     decoder: &mut rnode_kiss::RNodeDecoder,
@@ -277,17 +308,28 @@ fn configure_device(
     let mut reports = RadioReports::default();
 
     lock_or_recover(writer, "rnode shared writer").write_all(&detect_command())?;
-    read_reports(
+    let detecting = read_reports(
         reader,
         &mut decoder,
         &mut reports,
         &name,
         Instant::now() + DETECT_TIMEOUT,
         |reports| reports.detected,
-    )?;
+    );
+    match detecting {
+        Ok(()) => {}
+        // A BLE device that goes away is noticed only once detecting it
+        // timed out.
+        Err(e) if link == Link::Ble && e.kind() == io::ErrorKind::UnexpectedEof => {
+            reader.lost();
+        }
+        Err(e) => return Err(e),
+    }
     if !reports.detected {
-        if link == Link::Tcp {
-            log::error!("RNode detect timed out over TCP");
+        match link {
+            Link::Tcp => log::error!("RNode detect timed out over TCP"),
+            Link::Ble => log::error!("RNode detect timed out over BLE"),
+            Link::Serial => {}
         }
         log::error!("Could not detect device for {}", name);
         return Err(io::Error::new(
@@ -302,19 +344,48 @@ fn configure_device(
             "TCP connection to {} is now open",
             config.port.trim_start_matches("tcp:")
         ),
+        Link::Ble => log::info!("BLE connection to {} is now open", name),
     }
     log::info!("Configuring RNode interface...");
     configure_subinterface(writer, sub.vport, sub, false)?;
 
+    let mut disappeared = false;
+    let mut settle = |wait: Duration, reports: &mut RadioReports| -> io::Result<()> {
+        if disappeared {
+            return Ok(());
+        }
+        match read_reports(
+            reader,
+            &mut decoder,
+            reports,
+            &name,
+            Instant::now() + wait,
+            |_| false,
+        ) {
+            Err(e) if link == Link::Ble && e.kind() == io::ErrorKind::UnexpectedEof => {
+                reader.lost();
+                disappeared = true;
+                Ok(())
+            }
+            other => other,
+        }
+    };
+    if link == Link::Ble {
+        // Upstream gives a radio over BLE two seconds to take its settings.
+        settle(Duration::from_secs(2), &mut reports)?;
+    }
     log::info!("Waiting for radio configuration validation for {}...", name);
-    read_reports(
-        reader,
-        &mut decoder,
-        &mut reports,
-        &name,
-        Instant::now() + link.validation_wait(),
-        |_| false,
-    )?;
+    settle(link.validation_wait(), &mut reports)?;
+    if disappeared {
+        log::error!(
+            "Device disappeared during radio state validation for {}",
+            name
+        );
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the device disappeared during radio state validation",
+        ));
+    }
 
     if !radio_state_valid(&reports, sub) {
         log::error!(

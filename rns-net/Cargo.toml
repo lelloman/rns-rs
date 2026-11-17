@@ -24,6 +24,9 @@ iface-kiss = []
 iface-ax25-kiss = ["iface-kiss"]
 iface-pipe = []
 iface-rnode = []
+# RNodes over BLE (`port = ble://...`) through BlueZ on D-Bus: links
+# libdbus-1 (build: pkg-config and its headers), so it is not a default.
+iface-rnode-ble = ["iface-rnode", "dep:dbus"]
 iface-backbone = []
 iface-i2p = []
 iface-weave = []
@@ -71,6 +74,7 @@ bzip2 = { version = "0.6", default-features = false, features = ["bzip2-sys", "s
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"], optional = true }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"], optional = true }
+dbus = { version = "0.9", features = ["stdfd"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -98,6 +102,10 @@ name = "rnode_lora"
 
 [[example]]
 name = "rnode_hil"
+
+[[test]]
+name = "rnode_ble_hil"
+required-features = ["iface-rnode-ble"]
 
 [[example]]
 name = "weave_hil"

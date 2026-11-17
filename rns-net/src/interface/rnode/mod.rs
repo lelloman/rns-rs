@@ -6,9 +6,12 @@
 //!
 //! Matches Python `RNodeInterface.py` and `RNodeMultiInterface.py`.
 
+mod ble;
 mod folded;
 mod setup;
 mod transport;
+
+pub use ble::LinkState as BleLinkState;
 
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
@@ -83,6 +86,9 @@ pub struct RNodeConfig {
     pub pre_opened_fd: Option<i32>,
     pub underlay_mark: Option<u32>,
     pub runtime: Arc<Mutex<RNodeRuntime>>,
+    /// What a BLE connection (`port = ble://...`) remembers between
+    /// connections.
+    pub ble: Arc<Mutex<BleLinkState>>,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +159,7 @@ impl Default for RNodeConfig {
                 },
                 writer: None,
             })),
+            ble: Default::default(),
         };
         let startup = RNodeRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));
@@ -386,32 +393,17 @@ fn start_with_control(
         // Pre-opened fd from USB bridge — dup for independent reader/writer handles
         let (reader, writer) = Transport::open_from_fd(fd)?;
         (Some(reader), writer)
+    } else if setup::is_ble(&config) {
+        // Finding and connecting a BLE device takes seconds: the setup
+        // thread opens it.
+        (None, Transport::Offline)
     } else {
-        let serial_config = SerialConfig {
-            path: config.port.clone(),
-            baud: config.speed,
-            data_bits: 8,
-            parity: Parity::None,
-            stop_bits: 1,
-        };
-        setup::log_opening(&config);
-        match Transport::open(&serial_config, config.underlay_mark) {
+        match open_device(&config) {
             Ok((reader, writer)) => (Some(reader), writer),
             // As upstream, the interface still comes up, offline, and
             // keeps trying to open its device.
             Err(e) => {
-                let kind = if config.multi {
-                    "RNodeMultiInterface"
-                } else {
-                    "RNodeInterface"
-                };
-                log::error!(
-                    "Could not open serial port for interface {}[{}]",
-                    kind,
-                    config.name
-                );
-                log::error!("The contained exception was: {}", e);
-                log::error!("Reticulum will attempt to bring up this interface periodically");
+                log_open_failure(&config, &e);
                 (None, Transport::Offline)
             }
         }
@@ -522,8 +514,10 @@ fn with_leave_on_finish(
     writer: Arc<Mutex<DeviceWriter>>,
 ) -> super::ListenerControl {
     control.with_on_finish(move || {
-        let _ =
-            lock_or_recover(&writer, "rnode shared writer").write_all(&rnode_kiss::leave_request());
+        let mut writer = lock_or_recover(&writer, "rnode shared writer");
+        let _ = writer.write_all(&rnode_kiss::leave_request());
+        // A BLE device is disconnected, as upstream's detach does.
+        writer.transport().close();
     })
 }
 
@@ -548,6 +542,11 @@ fn reader_loop(
     flow_states: Vec<Arc<Mutex<SubFlowState>>>,
     running: Arc<AtomicBool>,
 ) {
+    let reader = reader.or_else(|| {
+        setup::is_ble(&config)
+            .then(|| first_ble_open(&config, &writer))
+            .flatten()
+    });
     let configured = reader.and_then(|mut reader| {
         match setup::setup_device(&mut reader, &writer, &config, &running) {
             Ok(()) => Some(reader),
@@ -595,7 +594,7 @@ fn open_until_configured(
         } else {
             log::info!(
                 "Attempting to reconnect serial port {} for {}...",
-                config.port,
+                setup::port_display(config),
                 setup::display_name(config)
             );
         }
@@ -686,7 +685,11 @@ fn reader_loop_connected(
                     if !running.load(Ordering::Relaxed) {
                         return;
                     }
-                    log::warn!("[{}] serial port closed", config.name);
+                    if setup::is_ble(&config) {
+                        reader.lost();
+                    } else {
+                        log::warn!("[{}] serial port closed", config.name);
+                    }
                     signal_interface_down(&tx, &config);
                     break true;
                 }
@@ -762,7 +765,11 @@ fn reader_loop_connected(
                     if !running.load(Ordering::Relaxed) {
                         return;
                     }
-                    log::error!("[{}] serial read error: {}", config.name, e);
+                    if setup::is_ble(&config) {
+                        reader.lost();
+                    } else {
+                        log::error!("[{}] serial read error: {}", config.name, e);
+                    }
                     signal_interface_down(&tx, &config);
                     break true;
                 }
@@ -774,6 +781,18 @@ fn reader_loop_connected(
 
         if !running.load(Ordering::Relaxed) || !disconnected || config.pre_opened_fd.is_some() {
             return;
+        }
+
+        if setup::is_ble(&config) {
+            // As upstream: wait, then try again, until the device is back.
+            match open_until_configured(&config, &writer, &flow_states, &running) {
+                Some(new_reader) => {
+                    reader = new_reader;
+                    signal_interface_up(&tx, &config, &writer, &flow_states, true);
+                    continue;
+                }
+                None => return,
+            }
         }
 
         let mut backoff = RECONNECT_INITIAL_DELAY;
@@ -1129,10 +1148,13 @@ fn clear_pending_rx_metadata(last_rssi: &mut Option<i16>, last_snr: &mut Option<
     *last_snr = None;
 }
 
-fn reopen_connection(
-    config: &RNodeConfig,
-    writer: &Arc<Mutex<DeviceWriter>>,
-) -> io::Result<Transport> {
+/// Open the device's connection, saying so as upstream does.
+fn open_device(config: &RNodeConfig) -> io::Result<(Transport, Transport)> {
+    setup::log_opening(config);
+    if setup::is_ble(config) {
+        let target = ble::Target::parse(&config.port).unwrap_or_default();
+        return Transport::open_ble(&target, &setup::display_name(config), &config.ble);
+    }
     let serial_config = SerialConfig {
         path: config.port.clone(),
         baud: config.speed,
@@ -1140,9 +1162,42 @@ fn reopen_connection(
         parity: Parity::None,
         stop_bits: 1,
     };
+    Transport::open(&serial_config, config.underlay_mark)
+}
 
-    setup::log_opening(config);
-    let (reader, new_writer) = Transport::open(&serial_config, config.underlay_mark)?;
+/// Upstream's lines when the device cannot be opened at start.
+fn log_open_failure(config: &RNodeConfig, error: &io::Error) {
+    let kind = if config.multi {
+        "RNodeMultiInterface"
+    } else {
+        "RNodeInterface"
+    };
+    log::error!(
+        "Could not open serial port for interface {}[{}]",
+        kind,
+        config.name
+    );
+    log::error!("The contained exception was: {}", error);
+    log::error!("Reticulum will attempt to bring up this interface periodically");
+}
+
+/// Open a BLE device the interface just started with, as upstream opens
+/// it at start.
+fn first_ble_open(config: &RNodeConfig, writer: &Arc<Mutex<DeviceWriter>>) -> Option<Transport> {
+    match reopen_connection(config, writer) {
+        Ok(reader) => Some(reader),
+        Err(e) => {
+            log_open_failure(config, &e);
+            None
+        }
+    }
+}
+
+fn reopen_connection(
+    config: &RNodeConfig,
+    writer: &Arc<Mutex<DeviceWriter>>,
+) -> io::Result<Transport> {
+    let (reader, new_writer) = open_device(config)?;
     lock_or_recover(writer, "rnode shared writer").replace(new_writer);
     Ok(reader)
 }
@@ -1422,6 +1477,7 @@ impl InterfaceFactory for RNodeFactory {
                 },
                 writer: None,
             })),
+            ble: Default::default(),
         }))
     }
 
@@ -1755,12 +1811,21 @@ mod tests {
     /// answers each setting.
     fn mock_report_configured(master: &mut Transport, sub: &RNodeSubConfig) {
         for (command, data) in [
-            (rnode_kiss::CMD_FREQUENCY, sub.frequency.to_be_bytes().to_vec()),
-            (rnode_kiss::CMD_BANDWIDTH, sub.bandwidth.to_be_bytes().to_vec()),
+            (
+                rnode_kiss::CMD_FREQUENCY,
+                sub.frequency.to_be_bytes().to_vec(),
+            ),
+            (
+                rnode_kiss::CMD_BANDWIDTH,
+                sub.bandwidth.to_be_bytes().to_vec(),
+            ),
             (rnode_kiss::CMD_TXPOWER, vec![sub.txpower as u8]),
             (rnode_kiss::CMD_SF, vec![sub.spreading_factor]),
             (rnode_kiss::CMD_CR, vec![sub.coding_rate]),
-            (rnode_kiss::CMD_RADIO_STATE, vec![rnode_kiss::RADIO_STATE_ON]),
+            (
+                rnode_kiss::CMD_RADIO_STATE,
+                vec![rnode_kiss::RADIO_STATE_ON],
+            ),
         ] {
             master
                 .write_all(&rnode_kiss::rnode_command(command, &data))
@@ -2623,6 +2688,7 @@ mod tests {
                 },
                 writer: None,
             })),
+            ble: Default::default(),
         };
         config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
 

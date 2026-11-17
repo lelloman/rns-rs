@@ -21,8 +21,8 @@ use super::setup::{self, RadioReports};
 use super::transport::Transport;
 use super::DeviceWriter;
 use super::{
-    clear_pending_rx_metadata, open_until_configured, phy_telemetry, process_flow_queue,
-    radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
+    clear_pending_rx_metadata, first_ble_open, open_until_configured, phy_telemetry,
+    process_flow_queue, radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
     update_pending_rx_metadata, update_radio_stats, wait_while_running, RNodeConfig, SubFlowState,
 };
 use crate::common::interface_stats::RadioStats;
@@ -75,6 +75,11 @@ impl RNodeLink {
         thread::Builder::new()
             .name(format!("rnode-setup-{}", self.config.base_interface_id.0))
             .spawn(move || {
+                let reader = reader.or_else(|| {
+                    setup::is_ble(&self.config)
+                        .then(|| first_ble_open(&self.config, &self.writer))
+                        .flatten()
+                });
                 let configured = reader.and_then(|mut reader| {
                     match setup::setup_device(
                         &mut reader,
@@ -161,6 +166,22 @@ impl RNodeLink {
     /// Reopen and reconfigure the connection until it is served again or
     /// the interface stops. Runs on a reconnect thread.
     fn reconnect(self: &Arc<Self>) {
+        if setup::is_ble(&self.config) {
+            // As upstream: wait, then try again, until the device is back.
+            if let Some(reader) =
+                open_until_configured(&self.config, &self.writer, &self.flow_states, &self.running)
+            {
+                signal_interface_up(
+                    &self.tx,
+                    &self.config,
+                    &self.writer,
+                    &self.flow_states,
+                    true,
+                );
+                self.serve_or_reconnect(reader);
+            }
+            return;
+        }
         let mut backoff = RECONNECT_INITIAL_DELAY;
         while self.running() {
             match reopen_connection(&self.config, &self.writer) {
@@ -361,9 +382,14 @@ impl LoopSource for RNodeSource {
                     return SourceStatus::Remove;
                 }
                 let name = &self.link.config.name;
-                match error {
-                    Some(e) => log::error!("[{}] serial read error: {}", name, e),
-                    None => log::warn!("[{}] serial port closed", name),
+                if setup::is_ble(&self.link.config) {
+                    // Upstream's disconnect callback says so.
+                    self.reader.lost();
+                } else {
+                    match error {
+                        Some(e) => log::error!("[{}] serial read error: {}", name, e),
+                        None => log::warn!("[{}] serial port closed", name),
+                    }
                 }
                 self.link.connection_lost();
                 SourceStatus::Remove

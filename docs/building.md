@@ -51,6 +51,20 @@ Both packages expose `iface-tcp`, `iface-udp`, `iface-auto`, `iface-serial`,
 KISS; Weave is Linux-only. The local interface stays enabled because the CLI
 tools need the shared-instance and remote-management APIs.
 
+RNodes over BLE (`port = ble://`, `ble://<address>` or `ble://<name>`, as
+upstream) need the `iface-rnode-ble` feature, which is not in the default
+set: it talks to BlueZ over D-Bus and links `libdbus-1` (build with
+`pkg-config` and `libdbus-1-dev` installed). It is Linux-only.
+
+```bash
+cargo build --release -p rns-cli --bin rnsd --features iface-rnode-ble
+```
+
+As upstream, only an RNode bonded with the host is connected to. Turn its
+Bluetooth on and put it in pairing mode with `rnodeconf <port> --bluetooth-on`
+and `rnodeconf <port> --bluetooth-pair`, then pair it from the host (for
+example `bluetoothctl pair <address>`), entering the PIN the device shows.
+
 Things to keep in mind:
 
 - Configure only interfaces compiled into the binary. Disabling a feature does

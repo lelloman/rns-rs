@@ -71,10 +71,14 @@ enabled by default:
 | `iface-kiss` | `KISSInterface` |
 | `iface-ax25-kiss` | `AX25KISSInterface` (implies `iface-kiss`) |
 | `iface-pipe` | `PipeInterface` |
-| `iface-rnode` | `RNodeInterface` over serial, TCP, or BLE |
+| `iface-rnode` | `RNodeInterface` over serial or TCP |
 | `iface-backbone` | `BackboneInterface` with peer pool and discovery |
 | `iface-i2p` | `I2PInterface` via SAM |
 | `iface-weave` | `WeaveInterface` (Linux only) |
+
+One more is opt-in: `iface-rnode-ble` adds `RNodeInterface` over BLE
+(`port = ble://...`) through BlueZ, Linux only. It links `libdbus-1`, so
+building it needs `pkg-config` and the D-Bus headers (`libdbus-1-dev`).
 
 [Building](building.md) shows how to select a subset for `rns-cli` and
 `rns-ctl`.

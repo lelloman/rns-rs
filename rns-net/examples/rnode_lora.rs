@@ -98,6 +98,7 @@ fn main() {
                 writer: None,
             },
         )),
+        ble: Default::default(),
     };
     rnode.runtime = std::sync::Arc::new(std::sync::Mutex::new(
         rns_net::interface::rnode::RNodeRuntime::from_config(&rnode),

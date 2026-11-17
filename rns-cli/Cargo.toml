@@ -25,6 +25,8 @@ iface-kiss = ["rns-net/iface-kiss"]
 iface-ax25-kiss = ["rns-net/iface-ax25-kiss"]
 iface-pipe = ["rns-net/iface-pipe"]
 iface-rnode = ["rns-net/iface-rnode"]
+# RNodes over BLE through BlueZ; links libdbus-1, so not a default.
+iface-rnode-ble = ["rns-net/iface-rnode-ble"]
 iface-backbone = ["rns-net/iface-backbone"]
 iface-i2p = ["rns-net/iface-i2p"]
 iface-weave = ["rns-net/iface-weave"]
